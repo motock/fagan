@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.pipeline.advance-scheduler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv/bin/python3</string>
+        <string>-c</string>
+        <string>import pipeline_mcp_server as p; p.advance_all_plans()</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jessecarroll/.claude/mcp-servers/pipeline</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/Users/jessecarroll/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>REPO_ROOT</key>
+        <string>/nonexistent-repo-root-set-per-plan-only</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jessecarroll/.claude/mcp-servers/pipeline/advance-scheduler.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jessecarroll/.claude/mcp-servers/pipeline/advance-scheduler.err.log</string>
+</dict>
+</plist>

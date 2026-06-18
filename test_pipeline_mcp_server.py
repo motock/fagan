@@ -1,0 +1,1465 @@
+"""Tests for the pipeline MCP server.
+
+Run with the project venv:
+    cd ~/.claude/mcp-servers/pipeline && .venv/bin/python -m pytest -q
+
+External boundaries (the `claude` subprocess, git, gh, Plane HTTP) are mocked;
+internal logic is exercised directly. Tools are plain callables after the
+@mcp.tool() decorator, so they are imported and called as functions.
+"""
+
+import json
+
+import pytest
+
+import pipeline_mcp_server as p
+
+
+# ---------- Fixtures ----------
+@pytest.fixture(autouse=True)
+def _clear_caches():
+    p._state_cache.clear()
+    p._label_cache.clear()
+    yield
+
+
+@pytest.fixture
+def agents_dir(tmp_path, monkeypatch):
+    d = tmp_path / "agents"
+    d.mkdir()
+    (d / "overlord.md").write_text(
+        '---\nname: "overlord"\nmodel: opus\nmemory: user\n---\n\n'
+        "You are the Overlord body text.\n"
+    )
+    (d / "software-engineer.md").write_text(
+        '---\nname: "software-engineer"\nmodel: sonnet\n---\n\nEngineer body.\n'
+    )
+    (d / "code-reviewer.md").write_text(
+        '---\nname: "code-reviewer"\nmodel: sonnet\n---\n\nReviewer body.\n'
+    )
+    monkeypatch.setattr(p, "AGENTS_DIR", d)
+    return d
+
+
+@pytest.fixture
+def plan_dir(tmp_path, monkeypatch):
+    d = tmp_path / "plans"
+    d.mkdir()
+    monkeypatch.setattr(p, "PLAN_DIR", d)
+    return d
+
+
+@pytest.fixture
+def worktree_root(tmp_path, monkeypatch):
+    d = tmp_path / "worktrees"
+    d.mkdir()
+    monkeypatch.setattr(p, "WORKTREE_ROOT", d)
+    return d
+
+
+@pytest.fixture
+def usage_state_path(tmp_path, monkeypatch):
+    path = tmp_path / "usage_state.json"
+    monkeypatch.setattr(p, "USAGE_STATE_PATH", path)
+    return path
+
+
+SAMPLE_USAGE_TEXT = (
+    "You are currently using your subscription to power your Claude Code usage\n\n"
+    "Current session: 9% used · resets Jun 18 at 11:59am (America/Chicago)\n"
+    "Current week (all models): 48% used · resets Jun 23 at 9am (America/Chicago)\n\n"
+    "What's contributing to your limits usage?\n"
+)
+
+
+# ---------- Test runner detection ----------
+def test_detect_test_command_finds_root_package_json(tmp_path):
+    (tmp_path / "package.json").write_text("{}")
+    test_dir, cmd = p.detect_test_command(tmp_path)
+    assert test_dir == tmp_path
+    assert cmd == ["npm", "test"]
+
+
+def test_detect_test_command_falls_back_to_subdirectory(tmp_path):
+    # Project lives in a subdirectory (e.g. engine/) rather than repo root.
+    sub = tmp_path / "engine"
+    sub.mkdir()
+    (sub / "package.json").write_text("{}")
+    test_dir, cmd = p.detect_test_command(tmp_path)
+    assert test_dir == sub
+    assert cmd == ["npm", "test"]
+
+
+def test_detect_test_command_prefers_root_over_subdirectory(tmp_path):
+    (tmp_path / "package.json").write_text("{}")
+    sub = tmp_path / "engine"
+    sub.mkdir()
+    (sub / "package.json").write_text("{}")
+    test_dir, cmd = p.detect_test_command(tmp_path)
+    assert test_dir == tmp_path
+
+
+def test_detect_test_command_no_marker_anywhere_falls_back_to_npm_test(tmp_path):
+    test_dir, cmd = p.detect_test_command(tmp_path)
+    assert test_dir == tmp_path
+    assert cmd == ["npm", "test"]
+
+
+# ---------- Persona helpers ----------
+def test_persona_body_strips_frontmatter(agents_dir):
+    body = p._persona_body("software-engineer")
+    assert "Engineer body." in body
+    assert "name:" not in body
+    assert not body.startswith("---")
+
+
+def test_persona_default_model_reads_frontmatter(agents_dir):
+    assert p._persona_default_model("software-engineer") == "sonnet"
+    assert p._persona_default_model("overlord") == "opus"
+
+
+def test_persona_body_unknown_raises(agents_dir):
+    with pytest.raises(FileNotFoundError):
+        p._persona_body("does-not-exist")
+
+
+def test_persona_default_model_unknown_returns_none(agents_dir):
+    assert p._persona_default_model("does-not-exist") is None
+
+
+# ---------- request_decision / list_decisions ----------
+def test_request_decision_records_and_returns(plan_dir, agents_dir, monkeypatch):
+    canned = (
+        "RULING: Use the existing http client; do not add a new dependency.\n"
+        "TIER: routine\n"
+        "RISK: low\n"
+        "RATIONALE: The stack already includes httpx; adding requests duplicates it.\n"
+        "NOTIFY_USER: no\n"
+    )
+    monkeypatch.setattr(p, "_invoke_overlord", lambda prompt: canned)
+
+    result = p.request_decision(
+        "myplan", "PIPE-7",
+        "Should I add the requests library?",
+        ["add requests", "use existing httpx"],
+        context="parser story",
+    )
+    assert result["ruling"].startswith("Use the existing http client")
+    assert result["tier"] == "routine"
+    assert result["risk"] == "low"
+    assert result["notify_user"] is False
+    assert result["decided_by"] == "overlord"
+
+    log = json.loads((plan_dir / "myplan.decisions.json").read_text())
+    assert len(log) == 1
+    assert log[0]["story_key"] == "PIPE-7"
+    assert "decided_at" in log[0]
+
+
+def test_request_decision_notify_and_high_risk_parsed(plan_dir, agents_dir, monkeypatch):
+    canned = (
+        "RULING: Hold for human review.\n"
+        "TIER: park-and-ping\n"
+        "RISK: high\n"
+        "RATIONALE: Touches auth.\n"
+        "NOTIFY_USER: yes\n"
+    )
+    monkeypatch.setattr(p, "_invoke_overlord", lambda prompt: canned)
+    result = p.request_decision("myplan", "PIPE-9", "q", ["a", "b"])
+    assert result["notify_user"] is True
+    assert result["risk"] == "high"
+    assert result["tier"] == "park-and-ping"
+
+
+def test_list_decisions_empty_then_populated(plan_dir, agents_dir, monkeypatch):
+    assert p.list_decisions("emptyplan") == []
+    monkeypatch.setattr(
+        p, "_invoke_overlord",
+        lambda prompt: "RULING: x\nTIER: routine\nRISK: low\nRATIONALE: y\nNOTIFY_USER: no\n",
+    )
+    p.request_decision("myplan", "S1", "q", ["a"])
+    p.request_decision("myplan", "S2", "q", ["a"])
+    items = p.list_decisions("myplan")
+    assert len(items) == 2
+    assert {i["story_key"] for i in items} == {"S1", "S2"}
+
+
+# ---------- Persona/model-aware dispatch ----------
+def _story(**over):
+    base = {"summary": "Do the thing", "agent_instructions": "Build it with tests."}
+    base.update(over)
+    return base
+
+
+def test_dispatch_command_uses_persona_body_and_model(agents_dir):
+    cmd = p._build_dispatch_command(_story(persona="software-engineer", model="opus"), "PIPE-1")
+    assert cmd[0] == "claude"
+    assert "--append-system-prompt" in cmd
+    assert "Engineer body." in cmd[cmd.index("--append-system-prompt") + 1]
+    assert cmd[cmd.index("--model") + 1] == "opus"
+
+
+def test_dispatch_command_falls_back_to_persona_default_model(agents_dir):
+    cmd = p._build_dispatch_command(_story(persona="software-engineer"), "PIPE-2")
+    assert cmd[cmd.index("--model") + 1] == "sonnet"
+
+
+def test_dispatch_command_no_persona_uses_default_model_and_no_system_prompt(agents_dir):
+    cmd = p._build_dispatch_command(_story(), "PIPE-3")
+    assert cmd[cmd.index("--model") + 1] == p.DEFAULT_MODEL
+    assert "--append-system-prompt" not in cmd
+
+
+def test_dispatch_command_unknown_persona_raises(agents_dir):
+    with pytest.raises(FileNotFoundError):
+        p._build_dispatch_command(_story(persona="no-such-persona"), "PIPE-4")
+
+
+def test_dispatch_command_reviewer_tools_are_read_only(agents_dir):
+    cmd = p._build_dispatch_command(_story(persona="code-reviewer"), "PIPE-5")
+    assert cmd[cmd.index("--allowedTools") + 1] == "Bash,Read"
+
+
+def test_dispatch_command_resume_includes_completed_steps_and_hint(agents_dir):
+    journal = [
+        {"step": "step-1", "summary": "Wrote the parser",
+         "next_hint": "add validation", "commit": "sha-1", "ts": "x"},
+    ]
+    cmd = p._build_dispatch_command(_story(), "PIPE-1", resume_journal=journal)
+    prompt = cmd[cmd.index("-p") + 1]
+    assert "RESUMING" in prompt
+    assert "Wrote the parser" in prompt
+    assert "add validation" in prompt
+    assert "do not redo" in prompt.lower()
+
+
+def test_dispatch_command_no_resume_journal_uses_original_prompt(agents_dir):
+    cmd = p._build_dispatch_command(_story(), "PIPE-1")
+    prompt = cmd[cmd.index("-p") + 1]
+    assert "RESUMING" not in prompt
+    assert "completing issue" in prompt
+
+
+def test_dispatch_command_includes_checkpoint_instruction_when_plan_name_given(agents_dir):
+    cmd = p._build_dispatch_command(_story(), "PIPE-1", plan_name="myplan")
+    prompt = cmd[cmd.index("-p") + 1]
+    assert "checkpoint" in prompt.lower()
+    assert "myplan" in prompt
+    assert "PIPE-1" in prompt
+
+
+def test_dispatch_command_omits_checkpoint_instruction_without_plan_name(agents_dir):
+    cmd = p._build_dispatch_command(_story(), "PIPE-1")
+    prompt = cmd[cmd.index("-p") + 1]
+    assert "checkpoint tool" not in prompt.lower()
+
+
+def test_dispatch_command_resume_also_includes_checkpoint_instruction(agents_dir):
+    journal = [
+        {"step": "step-1", "summary": "Wrote the parser",
+         "next_hint": "add validation", "commit": "sha-1", "ts": "x"},
+    ]
+    cmd = p._build_dispatch_command(
+        _story(), "PIPE-1", plan_name="myplan", resume_journal=journal,
+    )
+    prompt = cmd[cmd.index("-p") + 1]
+    assert "checkpoint" in prompt.lower()
+    assert "myplan" in prompt
+
+
+def test_dispatch_command_default_tools(agents_dir):
+    cmd = p._build_dispatch_command(_story(persona="software-engineer"), "PIPE-6")
+    assert cmd[cmd.index("--allowedTools") + 1] == "Bash,Edit,Write,Read"
+
+
+# ---------- Plan schema carry-through ----------
+def test_save_plan_preserves_persona_model_risk(plan_dir):
+    plan = {
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(persona="security-engineer", model="opus", risk="high")],
+        }]
+    }
+    p.save_plan("carry", json.dumps(plan))
+    saved = json.loads((plan_dir / "carry.json").read_text())
+    story = saved["epics"][0]["stories"][0]
+    assert story["persona"] == "security-engineer"
+    assert story["model"] == "opus"
+    assert story["risk"] == "high"
+
+
+def _fake_plane(method, path, **kwargs):
+    if path.endswith("/states/"):
+        return {"results": [
+            {"group": "backlog", "id": "st-backlog"},
+            {"group": "started", "id": "st-started"},
+            {"group": "completed", "id": "st-done"},
+        ]}
+    if path.endswith("/labels/") and method == "GET":
+        return {"results": []}
+    if path.endswith("/labels/") and method == "POST":
+        return {"id": "label-1"}
+    if path.endswith("/epics/") and method == "POST":
+        return {"id": "epic-1"}
+    if path.endswith("/work-items/") and method == "POST":
+        return {"id": "issue-1"}
+    return {}
+
+
+def test_ingest_plan_carries_persona_model_risk_into_manifest(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(persona="security-engineer", model="opus", risk="high")],
+        }]
+    }
+    (plan_dir / "ing.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("ing")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "ing.manifest.json").read_text())
+    story = manifest["stories"]["issue-1"]
+    assert story["persona"] == "security-engineer"
+    assert story["model"] == "opus"
+    assert story["risk"] == "high"
+
+
+def test_ingest_plan_remaps_local_keys_to_issue_ids_in_dependencies(plan_dir, monkeypatch):
+    issue_ids = iter(["issue-1", "issue-2", "issue-3"])
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda method, path, **kw: (
+            _fake_plane(method, path, **kw) if not path.endswith("/work-items/")
+            else {"id": next(issue_ids)}
+        ),
+    )
+    plan = {
+        "epics": [{
+            "summary": "E1",
+            "stories": [
+                _story(key="S1"),
+                _story(key="S2", dependencies=["S1"]),
+                _story(key="S3", dependencies=["S1", "S2"]),
+            ],
+        }]
+    }
+    (plan_dir / "deps.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("deps")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "deps.manifest.json").read_text())
+    stories = manifest["stories"]
+    assert stories["issue-1"]["dependencies"] == []
+    assert stories["issue-2"]["dependencies"] == ["issue-1"]
+    assert stories["issue-3"]["dependencies"] == ["issue-1", "issue-2"]
+
+
+def test_ingest_plan_leaves_unresolvable_dependency_keys_unchanged(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(key="S1", dependencies=["no-such-key"])],
+        }]
+    }
+    (plan_dir / "dangling.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("dangling")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "dangling.manifest.json").read_text())
+    assert manifest["stories"]["issue-1"]["dependencies"] == ["no-such-key"]
+
+
+# ---------- Review gate + auto-PR ----------
+def _write_manifest(plan_dir, plan_name, stories):
+    (plan_dir / f"{plan_name}.manifest.json").write_text(
+        json.dumps({"epics": {}, "stories": stories}, indent=2)
+    )
+
+
+def _read_manifest(plan_dir, plan_name):
+    return json.loads((plan_dir / f"{plan_name}.manifest.json").read_text())
+
+
+def test_open_pr_pushes_branch_before_creating_pr(monkeypatch, tmp_path):
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            stdout = "https://gh/pr/1\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    url = p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+    assert url == "https://gh/pr/1"
+    push_calls = [c for c in calls if c[:2] == ["git", "push"]]
+    pr_calls = [c for c in calls if c[:2] == ["gh", "pr"]]
+    assert push_calls, "expected the branch to be pushed before opening a PR"
+    assert calls.index(push_calls[0]) < calls.index(pr_calls[0])
+    assert "agent/s1" in push_calls[0]
+
+
+def test_open_pr_reuses_existing_pr_when_one_already_exists(monkeypatch, tmp_path):
+    """A dispatched agent may have already run `gh pr create` itself before
+    review_story gets to it. _open_pr must recover the existing PR's URL
+    instead of bubbling up gh's "already exists" failure."""
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "pr", "create"]:
+            raise p.subprocess.CalledProcessError(
+                1, cmd,
+                output="",
+                stderr=(
+                    'a pull request for branch "agent/s1" into branch "main" '
+                    "already exists:\nhttps://github.com/org/repo/pull/4\n"
+                ),
+            )
+        class Result:
+            stdout = "https://github.com/org/repo/pull/4\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    url = p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+    assert url == "https://github.com/org/repo/pull/4"
+    view_calls = [c for c in calls if c[:2] == ["gh", "pr"] and "view" in c]
+    assert view_calls, "expected a fallback `gh pr view` lookup"
+
+
+def test_open_pr_reraises_other_gh_pr_create_failures(monkeypatch, tmp_path):
+    def _fake_run(cmd, **kwargs):
+        if cmd[:3] == ["gh", "pr", "create"]:
+            raise p.subprocess.CalledProcessError(
+                1, cmd, output="", stderr="some other failure",
+            )
+        class Result:
+            stdout = ""
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    with pytest.raises(p.subprocess.CalledProcessError):
+        p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+
+def test_parse_verdict_variants():
+    assert p._parse_verdict("...\nVERDICT: APPROVE\n") == "APPROVE"
+    assert p._parse_verdict("VERDICT: REQUEST_CHANGES") == "REQUEST_CHANGES"
+    assert p._parse_verdict("no verdict here") == "UNKNOWN"
+
+
+def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
+    _write_manifest(plan_dir, "rv", {
+        "S1": {"summary": "Add thing", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    result = p.review_story("rv", "S1")
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+    assert result["pr_url"] == "https://gh/pr/1"
+    story = _read_manifest(plan_dir, "rv")["stories"]["S1"]
+    assert story["status"] == "pr_open"
+    assert story["pr_url"] == "https://gh/pr/1"
+
+
+def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypatch):
+    _write_manifest(plan_dir, "rv", {
+        "S1": {"summary": "Add thing", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: REQUEST_CHANGES")
+
+    def _boom(*a, **k):
+        raise AssertionError("PR must not be opened on REQUEST_CHANGES")
+
+    monkeypatch.setattr(p, "_open_pr", _boom)
+
+    result = p.review_story("rv", "S1")
+    assert result["verdict"] == "REQUEST_CHANGES"
+    assert result["status"] == "changes_requested"
+    assert result.get("pr_url") is None
+    story = _read_manifest(plan_dir, "rv")["stories"]["S1"]
+    assert "pr_url" not in story
+
+
+def test_merge_pr_does_not_pass_delete_branch_to_gh(monkeypatch, tmp_path):
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            stdout = "merged\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "REPO_ROOT", tmp_path)
+    result = p._merge_pr(str(tmp_path / "wt"), "S1")
+
+    assert result == "merged"
+    gh_calls = [c for c in calls if c[:2] == ["gh", "pr"]]
+    assert "--delete-branch" not in gh_calls[0]
+
+
+def test_merge_pr_cleans_up_worktree_and_branches_after_merge(monkeypatch, tmp_path):
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs.get("cwd")))
+        class Result:
+            stdout = "merged\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "REPO_ROOT", tmp_path)
+    worktree = str(tmp_path / "wt")
+    p._merge_pr(worktree, "S1")
+
+    cmds = [c for c, _cwd in calls]
+    assert ["git", "worktree", "remove", "--force", worktree] in cmds
+    assert ["git", "branch", "-D", "agent/s1"] in cmds
+    assert ["git", "push", "origin", "--delete", "agent/s1"] in cmds
+    # Cleanup must run from REPO_ROOT, not the worktree being removed.
+    cleanup_cwds = [cwd for cmd, cwd in calls if cmd[:2] == ["git", "worktree"]]
+    assert all(cwd == tmp_path for cwd in cleanup_cwds)
+
+
+# ---------- Per-plan repo_root ----------
+def test_repo_root_for_returns_manifest_value_when_present(plan_dir):
+    _write_manifest(plan_dir, "rr1", {})
+    manifest_path = plan_dir / "rr1.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = "/some/specific/repo"
+    manifest_path.write_text(json.dumps(manifest))
+
+    assert p._repo_root_for("rr1") == p.Path("/some/specific/repo")
+
+
+def test_repo_root_for_falls_back_to_global_when_absent_in_manifest(plan_dir, monkeypatch, tmp_path):
+    _write_manifest(plan_dir, "rr2", {})
+    monkeypatch.setattr(p, "REPO_ROOT", tmp_path)
+    assert p._repo_root_for("rr2") == tmp_path
+
+
+def test_repo_root_for_falls_back_when_no_manifest_exists(plan_dir, monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "REPO_ROOT", tmp_path)
+    assert p._repo_root_for("does-not-exist") == tmp_path
+
+
+def test_scoped_repo_root_sets_and_restores(plan_dir, monkeypatch, tmp_path):
+    _write_manifest(plan_dir, "sr1", {})
+    manifest_path = plan_dir / "sr1.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(tmp_path / "the-repo")
+    manifest_path.write_text(json.dumps(manifest))
+
+    original = p.Path("/original/repo")
+    monkeypatch.setattr(p, "REPO_ROOT", original)
+
+    with p._scoped_repo_root("sr1") as scoped:
+        assert scoped == tmp_path / "the-repo"
+        assert p.REPO_ROOT == tmp_path / "the-repo"
+    assert p.REPO_ROOT == original
+
+
+def test_scoped_repo_root_restores_on_exception(plan_dir, monkeypatch, tmp_path):
+    _write_manifest(plan_dir, "sr2", {})
+    manifest_path = plan_dir / "sr2.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(tmp_path / "the-repo")
+    manifest_path.write_text(json.dumps(manifest))
+
+    original = p.Path("/original/repo")
+    monkeypatch.setattr(p, "REPO_ROOT", original)
+
+    with pytest.raises(RuntimeError):
+        with p._scoped_repo_root("sr2"):
+            raise RuntimeError("boom")
+    assert p.REPO_ROOT == original
+
+
+def test_default_branch_does_not_leak_cache_across_repos(monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "_default_branch_cache", {})
+    repo_a = tmp_path / "a"
+    repo_b = tmp_path / "b"
+
+    def _fake_run(cmd, cwd=None, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = ("origin/feature-a\n" if cwd == repo_a
+                       else "origin/feature-b\n")
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    monkeypatch.setattr(p, "REPO_ROOT", repo_a)
+    branch_a = p._default_branch()
+    monkeypatch.setattr(p, "REPO_ROOT", repo_b)
+    branch_b = p._default_branch()
+
+    assert branch_a == "feature-a"
+    assert branch_b == "feature-b"
+
+
+def test_ingest_plan_carries_repo_root_into_manifest(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "epics": [{"summary": "E1", "stories": [_story()]}],
+        "repo_root": "/Users/jessecarroll/git/some-project",
+    }
+    (plan_dir / "rrplan.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("rrplan")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "rrplan.manifest.json").read_text())
+    assert manifest["repo_root"] == "/Users/jessecarroll/git/some-project"
+
+
+def test_dispatch_story_uses_manifest_repo_root_for_git_commands(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    real_repo = tmp_path / "real-repo"
+    _write_manifest(plan_dir, "rrds", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    manifest_path = plan_dir / "rrds.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(real_repo)
+    manifest_path.write_text(json.dumps(manifest))
+
+    monkeypatch.setattr(p, "REPO_ROOT", p.Path("/wrong/default/repo"))
+
+    cwds_used = []
+
+    def _fake_run(cmd, cwd=None, **kwargs):
+        cwds_used.append(cwd)
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p.subprocess, "Popen", lambda cmd, **kw: _FakeProc(123))
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+
+    p.dispatch_story("rrds", "S1")
+
+    assert any(c == real_repo for c in cwds_used), cwds_used
+    assert all(c != p.Path("/wrong/default/repo") for c in cwds_used)
+    assert p.REPO_ROOT == p.Path("/wrong/default/repo")
+
+
+def test_advance_pipeline_merge_uses_plan_repo_root(plan_dir, monkeypatch, tmp_path):
+    real_repo = tmp_path / "real-repo"
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "REPO_ROOT", p.Path("/wrong/default/repo"))
+    _write_manifest(plan_dir, "rrmerge", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": str(tmp_path / "wt")},
+    })
+    manifest_path = plan_dir / "rrmerge.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(real_repo)
+    manifest_path.write_text(json.dumps(manifest))
+
+    cleanup_cwds = []
+
+    def _fake_run(cmd, cwd=None, **kwargs):
+        if cmd[:2] == ["git", "worktree"] or cmd[:2] == ["git", "branch"] or cmd[:2] == ["git", "push"]:
+            cleanup_cwds.append(cwd)
+        class Result:
+            returncode = 0
+            stdout = "merged\n"
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    p.advance_pipeline("rrmerge")
+
+    assert cleanup_cwds, "expected cleanup git commands to run"
+    assert all(c == real_repo for c in cleanup_cwds)
+    assert p.REPO_ROOT == p.Path("/wrong/default/repo")
+
+
+def test_request_decision_loads_policy_override_from_plan_repo_root(
+    plan_dir, agents_dir, monkeypatch, tmp_path,
+):
+    real_repo = tmp_path / "real-repo"
+    real_repo.mkdir()
+    (real_repo / ".overlord-policy.md").write_text("Per-repo override text.")
+    monkeypatch.setattr(p, "REPO_ROOT", p.Path("/wrong/default/repo"))
+    monkeypatch.setattr(p, "POLICY_PATH", tmp_path / "nonexistent-global-policy.md")
+    _write_manifest(plan_dir, "rrdec", {})
+    manifest_path = plan_dir / "rrdec.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(real_repo)
+    manifest_path.write_text(json.dumps(manifest))
+
+    captured_prompt = {}
+
+    def _fake_invoke(prompt):
+        captured_prompt["text"] = prompt
+        return "RULING: x\nTIER: routine\nRISK: low\nRATIONALE: y\nNOTIFY_USER: no\n"
+
+    monkeypatch.setattr(p, "_invoke_overlord", _fake_invoke)
+
+    p.request_decision("rrdec", "S1", "q", ["a"])
+
+    assert "Per-repo override text." in captured_prompt["text"]
+    assert p.REPO_ROOT == p.Path("/wrong/default/repo")
+
+
+# ---------- Usage probe ----------
+def test_parse_usage_output_extracts_session_and_week():
+    result = p._parse_usage_output(SAMPLE_USAGE_TEXT)
+    assert result["session_pct"] == 9
+    assert result["session_reset"] == "Jun 18 at 11:59am (America/Chicago)"
+    assert result["week_pct"] == 48
+    assert result["week_reset"] == "Jun 23 at 9am (America/Chicago)"
+
+
+def test_parse_usage_output_handles_100_percent():
+    text = (
+        "Current session: 100% used · resets Jun 18 at 11:59am (America/Chicago)\n"
+        "Current week (all models): 100% used · resets Jun 23 at 9am (America/Chicago)\n"
+    )
+    result = p._parse_usage_output(text)
+    assert result["session_pct"] == 100
+    assert result["week_pct"] == 100
+
+
+def test_parse_usage_output_raises_on_unparseable_text():
+    with pytest.raises(ValueError):
+        p._parse_usage_output("some unexpected format with no usage lines")
+
+
+def test_run_usage_probe_parses_and_stamps_checked_at(monkeypatch):
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": SAMPLE_USAGE_TEXT})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p._run_usage_probe()
+
+    assert calls == [["claude", "-p", "/usage", "--output-format", "json"]]
+    assert result["session_pct"] == 9
+    assert result["week_pct"] == 48
+    assert "checked_at" in result
+
+
+def test_run_usage_probe_raises_on_invalid_json(monkeypatch):
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "not json"
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    with pytest.raises(RuntimeError):
+        p._run_usage_probe()
+
+
+def test_write_and_read_usage_state_roundtrip(usage_state_path):
+    p._write_usage_state({"session_pct": 9, "week_pct": 48, "checked_at": "x"})
+    assert p._read_usage_state() == {"session_pct": 9, "week_pct": 48, "checked_at": "x"}
+
+
+def test_read_usage_state_missing_file_returns_empty_dict(usage_state_path):
+    assert p._read_usage_state() == {}
+
+
+@pytest.mark.parametrize("prev_paused,session_pct,week_pct,expected", [
+    (False, 50, 10, False),
+    (False, 90, 10, True),
+    (False, 10, 90, True),
+    (False, 89, 10, False),
+    (True, 80, 10, True),
+    (True, 70, 10, True),
+    (True, 69, 10, False),
+    (True, 10, 75, True),
+])
+def test_usage_gate(prev_paused, session_pct, week_pct, expected):
+    assert p._usage_gate(prev_paused, session_pct, week_pct) is expected
+
+
+def test_check_usage_carries_paused_hysteresis_from_previous_state(usage_state_path, monkeypatch):
+    usage_state_path.write_text(json.dumps(
+        {"session_pct": 95, "week_pct": 10, "paused": True, "checked_at": "x"}
+    ))
+
+    def _fake_run(cmd, **kwargs):
+        text = (
+            "Current session: 80% used · resets Jun 18 at 11:59am (America/Chicago)\n"
+            "Current week (all models): 10% used · resets Jun 23 at 9am (America/Chicago)\n"
+        )
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"result": text})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_usage()
+    assert result["paused"] is True
+
+
+def test_check_usage_clears_paused_once_below_resume_threshold(usage_state_path, monkeypatch):
+    usage_state_path.write_text(json.dumps(
+        {"session_pct": 95, "week_pct": 10, "paused": True, "checked_at": "x"}
+    ))
+
+    def _fake_run(cmd, **kwargs):
+        text = (
+            "Current session: 50% used · resets Jun 18 at 11:59am (America/Chicago)\n"
+            "Current week (all models): 10% used · resets Jun 23 at 9am (America/Chicago)\n"
+        )
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"result": text})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_usage()
+    assert result["paused"] is False
+
+
+def test_check_usage_tool_probes_and_persists_state(usage_state_path, monkeypatch):
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": SAMPLE_USAGE_TEXT})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_usage()
+
+    assert result["session_pct"] == 9
+    assert result["week_pct"] == 48
+    persisted = json.loads(usage_state_path.read_text())
+    assert persisted["session_pct"] == 9
+    assert persisted["week_pct"] == 48
+
+
+# ---------- Merge adjudication (pure decision) ----------
+@pytest.mark.parametrize("autonomy,threshold,verdict,risk,expected", [
+    ("gated", "low", "APPROVE", "low", "merge"),
+    ("gated", "low", "APPROVE", "medium", "park"),
+    ("gated", "medium", "APPROVE", "medium", "merge"),
+    ("gated", "low", "REQUEST_CHANGES", "low", "park"),
+    ("full", "low", "APPROVE", "medium", "merge"),
+    ("full", "low", "APPROVE", "high", "park"),
+    ("dry-run", "high", "APPROVE", "low", "park"),
+])
+def test_merge_decision(monkeypatch, autonomy, threshold, verdict, risk, expected):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", autonomy)
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", threshold)
+    story = {"review_verdict": verdict, "risk": risk}
+    assert p._merge_decision(story)["action"] == expected
+
+
+# ---------- advance_pipeline orchestration ----------
+# advance_pipeline is a coordinator; the per-story operations (dispatch_story,
+# check_story_status, review_story, gh merge) are exercised by their own tests
+# above, so here we substitute test doubles to verify routing and gating.
+def test_advance_pipeline_dry_run_has_no_side_effects(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "dry-run")
+    _write_manifest(plan_dir, "dr", {
+        "T1": {"summary": "todo one", "status": "todo", "dependencies": []},
+        "P1": {"summary": "ready pr", "status": "pr_open",
+               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("dry-run must not take actions")
+
+    monkeypatch.setattr(p, "dispatch_story", _boom)
+    monkeypatch.setattr(p, "_merge_pr", _boom)
+
+    result = p.advance_pipeline("dr")
+    assert result["dry_run"] is True
+    assert "T1" in result["would_dispatch"]
+    assert "P1" in result["would_merge_decisions"]
+
+
+def test_advance_pipeline_gated_dispatches_merges_and_parks(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    _write_manifest(plan_dir, "go", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+        "P1": {"summary": "low approved", "status": "pr_open",
+               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+        "P2": {"summary": "high approved", "status": "pr_open",
+               "review_verdict": "APPROVE", "risk": "high", "worktree": "/y"},
+    })
+
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+    merged = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    result = p.advance_pipeline("go")
+    assert dispatched == ["T1"]
+    assert merged == ["P1"]
+    assert "P1" in result["merged"]
+    assert "P2" in result["parked"]
+    assert "P2" in result["notify"]
+
+    manifest = _read_manifest(plan_dir, "go")
+    assert manifest["stories"]["P1"]["status"] == "done"
+    assert manifest["stories"]["P2"]["status"] == "parked"
+
+
+def test_advance_pipeline_paused_interrupts_running_and_skips_new_work(
+    plan_dir, usage_state_path, monkeypatch,
+):
+    usage_state_path.write_text(json.dumps({"session_pct": 95, "week_pct": 10, "paused": True}))
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    _write_manifest(plan_dir, "pause", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+        "R1": {"summary": "running", "status": "in_progress", "pid": 111, "worktree": "/x"},
+        "TP1": {"summary": "awaiting review", "status": "tests_passed",
+                "worktree": "/y", "risk": "low"},
+    })
+
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+    reviewed = []
+    monkeypatch.setattr(
+        p, "review_story",
+        lambda plan, key: reviewed.append(key) or {"status": "pr_open"},
+    )
+    interrupted = []
+    monkeypatch.setattr(
+        p, "interrupt_story",
+        lambda plan, key: interrupted.append(key) or {"ok": True},
+    )
+
+    result = p.advance_pipeline("pause")
+
+    assert result["paused"] is True
+    assert dispatched == []
+    assert reviewed == []
+    assert interrupted == ["R1"]
+    assert "R1" in result["interrupted"]
+
+
+def test_advance_pipeline_paused_still_processes_merges(plan_dir, usage_state_path, monkeypatch):
+    usage_state_path.write_text(json.dumps({"session_pct": 95, "week_pct": 10, "paused": True}))
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    _write_manifest(plan_dir, "pausemerge", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    merged = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
+
+    result = p.advance_pipeline("pausemerge")
+    assert merged == ["P1"]
+    assert "P1" in result["merged"]
+
+
+def test_advance_pipeline_not_paused_redispatches_interrupted_stories(
+    plan_dir, usage_state_path, monkeypatch,
+):
+    usage_state_path.write_text(json.dumps({"session_pct": 20, "week_pct": 10, "paused": False}))
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    _write_manifest(plan_dir, "resume", {
+        "S1": {"summary": "interrupted one", "status": "interrupted",
+               "worktree": "/x", "dependencies": []},
+    })
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+
+    result = p.advance_pipeline("resume")
+    assert dispatched == ["S1"]
+
+
+def test_advance_all_plans_runs_every_manifest(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "p1", {})
+    _write_manifest(plan_dir, "p2", {})
+
+    calls = []
+    monkeypatch.setattr(
+        p, "advance_pipeline",
+        lambda plan_name: calls.append(plan_name) or {"ok": True, "plan": plan_name},
+    )
+
+    result = p.advance_all_plans()
+
+    assert result["ok"] is True
+    assert sorted(calls) == ["p1", "p2"]
+    assert result["plans"]["p1"]["ok"] is True
+    assert result["plans"]["p2"]["ok"] is True
+
+
+def test_advance_all_plans_isolates_failures_and_continues(plan_dir, monkeypatch):
+    """One plan crashing (e.g. a bad repo_root, a missing dependency tool)
+    must not abort the whole batch -- other plans still need their tick."""
+    _write_manifest(plan_dir, "p1", {})
+    _write_manifest(plan_dir, "p2", {})
+
+    def _fake_advance(plan_name):
+        if plan_name == "p1":
+            raise RuntimeError("boom")
+        return {"ok": True, "plan": plan_name}
+
+    monkeypatch.setattr(p, "advance_pipeline", _fake_advance)
+
+    result = p.advance_all_plans()
+
+    assert result["ok"] is True
+    assert result["plans"]["p1"]["ok"] is False
+    assert "boom" in result["plans"]["p1"]["error"]
+    assert result["plans"]["p2"]["ok"] is True
+
+
+def test_advance_all_plans_with_no_manifests_returns_empty(plan_dir):
+    result = p.advance_all_plans()
+    assert result == {"ok": True, "plans": {}}
+
+
+def test_advance_all_plans_ignores_unignested_plan_json(plan_dir, monkeypatch):
+    (plan_dir / "p3.json").write_text(json.dumps({"epics": []}))
+
+    calls = []
+    monkeypatch.setattr(
+        p, "advance_pipeline",
+        lambda plan_name: calls.append(plan_name) or {"ok": True},
+    )
+
+    result = p.advance_all_plans()
+    assert calls == []
+    assert result["plans"] == {}
+
+
+def test_check_story_status_passing_tests_is_not_done(plan_dir, monkeypatch):
+    """"done" must mean merged. A story whose tests just passed is only
+    ready for review — conflating the two lets it both skip review (never
+    retried, since advance_pipeline only re-checks "in_progress" stories)
+    and falsely satisfy other stories' dependency gate before it merges."""
+    _write_manifest(plan_dir, "cs", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(plan_dir / "wt")},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+
+    class Result:
+        stdout = ""
+        returncode = 0
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    result = p.check_story_status("cs", "S1")
+    assert result["status"] == "tests_passed"
+    manifest = _read_manifest(plan_dir, "cs")
+    assert manifest["stories"]["S1"]["status"] == "tests_passed"
+
+
+def test_checkpoint_commits_and_records_journal_entry(plan_dir, tmp_path, monkeypatch):
+    worktree = str(tmp_path / "wt")
+    _write_manifest(plan_dir, "ck", {
+        "S1": {"summary": "thing", "status": "in_progress", "worktree": worktree},
+    })
+
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            returncode = 0
+            stdout = "abc123\n" if cmd[:2] == ["git", "rev-parse"] else ""
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.checkpoint(
+        "ck", "S1", "step-1", "Implemented the parser",
+        next_hint="write tests for edge cases",
+    )
+
+    assert result["ok"] is True
+    assert result["commit"] == "abc123"
+    assert result["step"] == "step-1"
+
+    assert ["git", "add", "-A"] in calls
+    commit_calls = [c for c in calls if c[:2] == ["git", "commit"]]
+    assert commit_calls and commit_calls[0][-1] == "wip(S1): step-1"
+
+    journal = json.loads((plan_dir / "ck.S1.journal.json").read_text())
+    assert len(journal) == 1
+    assert journal[0]["step"] == "step-1"
+    assert journal[0]["summary"] == "Implemented the parser"
+    assert journal[0]["next_hint"] == "write tests for edge cases"
+    assert journal[0]["commit"] == "abc123"
+    assert "ts" in journal[0]
+
+
+def test_checkpoint_appends_multiple_entries_in_order(plan_dir, tmp_path, monkeypatch):
+    worktree = str(tmp_path / "wt")
+    _write_manifest(plan_dir, "ck2", {
+        "S1": {"summary": "thing", "status": "in_progress", "worktree": worktree},
+    })
+
+    shas = iter(["sha-1", "sha-2"])
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = (next(shas) + "\n") if cmd[:2] == ["git", "rev-parse"] else ""
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    p.checkpoint("ck2", "S1", "step-1", "first")
+    p.checkpoint("ck2", "S1", "step-2", "second")
+
+    journal = json.loads((plan_dir / "ck2.S1.journal.json").read_text())
+    assert [e["step"] for e in journal] == ["step-1", "step-2"]
+    assert [e["commit"] for e in journal] == ["sha-1", "sha-2"]
+
+
+def test_checkpoint_unknown_story_returns_error(plan_dir):
+    _write_manifest(plan_dir, "ck3", {})
+    result = p.checkpoint("ck3", "NOPE", "step-1", "summary")
+    assert result["ok"] is False
+    assert "NOPE" in result["error"]
+
+
+def test_checkpoint_nothing_to_commit_still_records_journal(plan_dir, tmp_path, monkeypatch):
+    """If the agent already committed its own work (e.g. via Bash), git commit
+    finds nothing staged. The checkpoint must still succeed and record the
+    current HEAD sha rather than failing the whole call."""
+    worktree = str(tmp_path / "wt")
+    _write_manifest(plan_dir, "ck4", {
+        "S1": {"summary": "thing", "status": "in_progress", "worktree": worktree},
+    })
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        if cmd[:2] == ["git", "commit"]:
+            Result.returncode = 1
+            Result.stdout = "nothing to commit, working tree clean\n"
+        elif cmd[:2] == ["git", "rev-parse"]:
+            Result.stdout = "existing-sha\n"
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.checkpoint("ck4", "S1", "step-1", "no new changes")
+    assert result["ok"] is True
+    assert result["commit"] == "existing-sha"
+
+
+def test_checkpoint_raises_on_real_commit_failure(plan_dir, tmp_path, monkeypatch):
+    worktree = str(tmp_path / "wt")
+    _write_manifest(plan_dir, "ck5", {
+        "S1": {"summary": "thing", "status": "in_progress", "worktree": worktree},
+    })
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        if cmd[:2] == ["git", "commit"]:
+            Result.returncode = 1
+            Result.stderr = "fatal: unable to write new index file"
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    with pytest.raises(RuntimeError):
+        p.checkpoint("ck5", "S1", "step-1", "summary")
+
+
+def test_check_story_status_skips_test_run_for_interrupted_story(plan_dir):
+    """An interrupted story is incomplete by definition — running its test
+    suite would just record a spurious failure instead of staying resumable."""
+    _write_manifest(plan_dir, "intr", {
+        "S1": {"summary": "thing", "status": "interrupted", "pid": 999,
+               "worktree": str(plan_dir / "wt"), "last_commit": "abc123"},
+    })
+    result = p.check_story_status("intr", "S1")
+    assert result == {"status": "interrupted", "pid": 999}
+
+
+class _FakeProc:
+    def __init__(self, pid):
+        self.pid = pid
+
+
+def test_dispatch_story_fresh_creates_worktree_and_dispatches(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    _write_manifest(plan_dir, "ds", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    run_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: run_calls.append(cmd))
+    monkeypatch.setattr(p.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("ds", "S1")
+
+    assert result["ok"] is True
+    assert result["pid"] == 1234
+    assert result["resumed"] is False
+    assert ["git", "worktree", "add", "-b", "agent/s1", str(worktree_root / "S1")] in run_calls
+    assert any(c[:2] == ["git", "pull"] for c in run_calls)
+
+    manifest = _read_manifest(plan_dir, "ds")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "in_progress"
+    assert story["pid"] == 1234
+    assert story["worktree"] == str(worktree_root / "S1")
+
+
+def test_dispatch_story_fresh_seeds_checkpoint_instruction_with_plan_name(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    _write_manifest(plan_dir, "ds4", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    popen_calls = []
+
+    def _fake_popen(cmd, **kw):
+        popen_calls.append(cmd)
+        return _FakeProc(9999)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(p.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("ds4", "S1")
+
+    prompt = popen_calls[0][popen_calls[0].index("-p") + 1]
+    assert "checkpoint" in prompt.lower()
+    assert "ds4" in prompt
+    assert "S1" in prompt
+
+
+def test_dispatch_story_resume_reuses_worktree_and_seeds_journal(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    _write_manifest(plan_dir, "ds2", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "interrupted", "worktree": str(worktree_path),
+               "last_commit": "sha-1"},
+    })
+    (plan_dir / "ds2.S1.journal.json").write_text(json.dumps([
+        {"step": "step-1", "summary": "Wrote the parser",
+         "next_hint": "add validation", "commit": "sha-1", "ts": "x"},
+    ]))
+
+    run_calls = []
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: run_calls.append(cmd))
+
+    def _fake_popen(cmd, **kw):
+        popen_calls.append(cmd)
+        return _FakeProc(5555)
+
+    monkeypatch.setattr(p.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("ds2", "S1")
+
+    assert result["ok"] is True
+    assert result["resumed"] is True
+    assert not any(c[:3] == ["git", "worktree", "add"] for c in run_calls)
+    assert not any(c[:2] == ["git", "pull"] for c in run_calls)
+
+    prompt = popen_calls[0][popen_calls[0].index("-p") + 1]
+    assert "RESUMING" in prompt
+    assert "Wrote the parser" in prompt
+    assert "add validation" in prompt
+
+    manifest = _read_manifest(plan_dir, "ds2")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "in_progress"
+    assert story["pid"] == 5555
+    assert story["worktree"] == str(worktree_path)
+
+
+def test_dispatch_story_resumes_when_worktree_exists_even_without_interrupted_status(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A story can be re-dispatched manually after a kill that never reached
+    interrupt_story. Detect the leftover worktree and resume rather than
+    failing on `git worktree add` for a path that already exists."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    _write_manifest(plan_dir, "ds3", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "failed", "worktree": str(worktree_path)},
+    })
+
+    run_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: run_calls.append(cmd))
+    monkeypatch.setattr(p.subprocess, "Popen", lambda cmd, **kw: _FakeProc(7777))
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("ds3", "S1")
+
+    assert result["resumed"] is True
+    assert not any(c[:3] == ["git", "worktree", "add"] for c in run_calls)
+
+
+# ---------- Interrupt path ----------
+def test_interrupt_story_sends_sigterm_and_checkpoints(plan_dir, tmp_path, monkeypatch):
+    worktree = str(tmp_path / "wt")
+    _write_manifest(plan_dir, "it", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": worktree},
+    })
+
+    killed = []
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "sha-int\n" if cmd[:2] == ["git", "rev-parse"] else ""
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.interrupt_story("it", "S1")
+
+    assert killed == [(4242, p.signal.SIGTERM)]
+    assert result["ok"] is True
+    assert result["status"] == "interrupted"
+    assert result["commit"] == "sha-int"
+
+    manifest = _read_manifest(plan_dir, "it")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "interrupted"
+    assert story["last_commit"] == "sha-int"
+    assert "interrupted_at" in story
+
+    journal = json.loads((plan_dir / "it.S1.journal.json").read_text())
+    assert journal[-1]["step"] == "interrupted"
+
+
+def test_interrupt_story_handles_already_dead_process(plan_dir, tmp_path, monkeypatch):
+    worktree = str(tmp_path / "wt")
+    _write_manifest(plan_dir, "it2", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": worktree},
+    })
+
+    def _raise_kill(pid, sig):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(p.os, "kill", _raise_kill)
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "sha-dead\n" if cmd[:2] == ["git", "rev-parse"] else ""
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.interrupt_story("it2", "S1")
+    assert result["ok"] is True
+    assert result["status"] == "interrupted"
+    manifest = _read_manifest(plan_dir, "it2")
+    assert manifest["stories"]["S1"]["status"] == "interrupted"
+
+
+def test_interrupt_story_unknown_story_returns_error(plan_dir):
+    _write_manifest(plan_dir, "it3", {})
+    result = p.interrupt_story("it3", "NOPE")
+    assert result["ok"] is False
+    assert "NOPE" in result["error"]
+
+
+def test_interrupt_story_not_dispatched_returns_error(plan_dir):
+    _write_manifest(plan_dir, "it4", {
+        "S1": {"summary": "thing", "status": "todo"},
+    })
+    result = p.interrupt_story("it4", "S1")
+    assert result["ok"] is False
+    assert "not dispatched" in result["error"].lower()
+
+
+def test_advance_pipeline_retries_review_for_orphaned_tests_passed_story(plan_dir, monkeypatch):
+    """A story stuck at tests_passed (e.g. review_story crashed mid-tick on
+    a prior run) must be retried on the next tick, not silently ignored."""
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    _write_manifest(plan_dir, "orphan", {
+        "S1": {"summary": "thing", "status": "tests_passed",
+               "worktree": "/x", "risk": "low"},
+    })
+
+    reviewed = []
+    monkeypatch.setattr(
+        p, "review_story",
+        lambda plan, key: reviewed.append(key) or {"status": "pr_open"},
+    )
+
+    result = p.advance_pipeline("orphan")
+    assert reviewed == ["S1"]
+    assert {"S1": "pr_open"} in result["advanced"]

@@ -532,6 +532,25 @@ def test_merge_pr_cleans_up_worktree_and_branches_after_merge(monkeypatch, tmp_p
     assert all(cwd == tmp_path for cwd in cleanup_cwds)
 
 
+def test_commit_wip_does_not_track_real_agent_log_file(tmp_path):
+    p.subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    (tmp_path / "feature.ts").write_text("export const x = 1;\n")
+    p.subprocess.run(["git", "add", "feature.ts"], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    (tmp_path / "feature.ts").write_text("export const x = 2;\n")
+    (tmp_path / "agent.log").write_text("session narration, not project code\n")
+
+    p._commit_wip(str(tmp_path), "S1", "interrupted")
+
+    tracked = p.subprocess.run(
+        ["git", "ls-files"], cwd=tmp_path, check=True, capture_output=True, text=True,
+    ).stdout
+    assert "agent.log" not in tracked
+    assert "feature.ts" in tracked
+
+
 # ---------- Per-plan repo_root ----------
 def test_repo_root_for_returns_manifest_value_when_present(plan_dir):
     _write_manifest(plan_dir, "rr1", {})
@@ -762,7 +781,7 @@ def test_run_usage_probe_parses_and_stamps_checked_at(monkeypatch):
 
     result = p._run_usage_probe()
 
-    assert calls == [["claude", "-p", "/usage", "--output-format", "json"]]
+    assert calls == [["claude", "-p", "/cost", "--output-format", "json"]]
     assert result["session_pct"] == 9
     assert result["week_pct"] == 48
     assert "checked_at" in result
@@ -866,6 +885,58 @@ def test_check_usage_tool_probes_and_persists_state(usage_state_path, monkeypatc
     persisted = json.loads(usage_state_path.read_text())
     assert persisted["session_pct"] == 9
     assert persisted["week_pct"] == 48
+
+
+def test_check_usage_falls_back_to_last_known_state_when_cli_omits_percentages(
+    usage_state_path, monkeypatch,
+):
+    usage_state_path.write_text(json.dumps(
+        {"session_pct": 91, "week_pct": 60, "paused": True, "checked_at": "old"}
+    ))
+    blackout_text = (
+        "You are currently using your subscription to power your Claude Code usage\n\n"
+        "What's contributing to your limits usage?\n"
+        "Last 24h · 540 requests · 9 sessions\n"
+    )
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": blackout_text})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_usage()
+
+    assert result["session_pct"] == 91
+    assert result["week_pct"] == 60
+    assert result["paused"] is True
+    assert result["checked_at"] != "old"
+    persisted = json.loads(usage_state_path.read_text())
+    assert persisted["session_pct"] == 91
+
+
+def test_check_usage_raises_on_cli_omitting_percentages_with_no_prior_state(
+    usage_state_path, monkeypatch,
+):
+    blackout_text = (
+        "You are currently using your subscription to power your Claude Code usage\n\n"
+        "What's contributing to your limits usage?\n"
+    )
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": blackout_text})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    with pytest.raises(ValueError):
+        p.check_usage()
 
 
 # ---------- Merge adjudication (pure decision) ----------
@@ -1114,7 +1185,7 @@ def test_checkpoint_commits_and_records_journal_entry(plan_dir, tmp_path, monkey
     assert result["commit"] == "abc123"
     assert result["step"] == "step-1"
 
-    assert ["git", "add", "-A"] in calls
+    assert ["git", "add", "-A", "--", ".", ":!agent.log"] in calls
     commit_calls = [c for c in calls if c[:2] == ["git", "commit"]]
     assert commit_calls and commit_calls[0][-1] == "wip(S1): step-1"
 

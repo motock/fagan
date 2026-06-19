@@ -568,14 +568,16 @@ def _parse_usage_output(text: str) -> dict[str, Any]:
 
 
 def _run_usage_probe() -> dict[str, Any]:
-    """Check current subscription usage via a headless `/usage` call.
+    """Check current subscription usage via a headless `/cost` call.
 
     External boundary: spawns the `claude` CLI. Tests mock subprocess.run.
-    `/usage` is answered from local session data without invoking the model,
-    so this is fast and free to poll frequently.
+    `/cost` is answered from local session data without invoking the model,
+    so this is fast and free to poll frequently. (The percentage summary
+    used to be on `/usage`, but that command dropped it in favor of a
+    "what's contributing to your usage" breakdown; `/cost` still has it.)
     """
     proc = subprocess.run(
-        ["claude", "-p", "/usage", "--output-format", "json"],
+        ["claude", "-p", "/cost", "--output-format", "json"],
         capture_output=True, text=True, check=True,
     )
     try:
@@ -619,9 +621,13 @@ def _commit_wip(worktree: str, story_key: str, step: str) -> str:
     nothing to commit (the agent already committed its own work), this is
     not an error — the existing HEAD sha is returned so the journal still
     records a checkpoint marker.
+
+    Excludes agent.log: it's the dispatcher's own session-narration file
+    written into the worktree root, not project code, and must never be
+    swept into a commit.
     """
-    subprocess.run(["git", "add", "-A"], cwd=worktree, check=True,
-                    capture_output=True, text=True)
+    subprocess.run(["git", "add", "-A", "--", ".", ":!agent.log"], cwd=worktree,
+                    check=True, capture_output=True, text=True)
     commit = subprocess.run(
         ["git", "commit", "-m", f"wip({story_key}): {step}"],
         cwd=worktree, capture_output=True, text=True,
@@ -987,14 +993,27 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
 def check_usage() -> dict[str, Any]:
     """
     Probe current subscription usage (current session + current week) via a
-    headless `/usage` call and persist it to USAGE_STATE_PATH.
+    headless `/cost` call and persist it to USAGE_STATE_PATH.
 
     Intended to be called every ~60s by an external poller (cron/launchd or
     /loop). advance_pipeline reads the persisted state rather than probing
     itself, decoupling the pipeline's tick cadence from the poller's.
+
+    The CLI occasionally omits the percentage summary lines (observed near
+    session-reset boundaries) without erroring, so a parse failure falls
+    back to the last persisted reading rather than crashing the caller's
+    tick - unless there is no prior reading to fall back to.
     """
-    state = _run_usage_probe()
     prev = _read_usage_state()
+    try:
+        state = _run_usage_probe()
+    except ValueError:
+        if not prev:
+            raise
+        state = dict(prev)
+        state["checked_at"] = datetime.now(timezone.utc).isoformat()
+        _write_usage_state(state)
+        return state
     state["paused"] = _usage_gate(
         prev.get("paused", False), state["session_pct"], state["week_pct"],
     )

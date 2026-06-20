@@ -15,6 +15,8 @@ Per-project overrides (set in project .mcp.json env block):
   REPO_ROOT    absolute path to the git repo being worked on
   PLAN_DIR     override plan storage location (default: ~/.claude/plans)
   WORKTREE_ROOT override worktree location (default: ~/.claude/worktrees)
+  PIPELINE_MAX_CONCURRENT_AGENTS  cap on agents dispatched/running at once
+    across all plans in this session (default: 3; <=0 disables the cap)
 """
 
 import json
@@ -53,11 +55,24 @@ _RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
 # Default model per persona when a story does not override it.
 DEFAULT_MODEL = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
 
-# Usage gate: pause new dispatch/review at PAUSE_THRESHOLD%; once paused, stay
-# paused until usage drops back below RESUME_THRESHOLD% (hysteresis prevents
-# flapping right at the boundary).
-PAUSE_THRESHOLD = int(os.environ.get("PIPELINE_PAUSE_THRESHOLD", "90"))
-RESUME_THRESHOLD = int(os.environ.get("PIPELINE_RESUME_THRESHOLD", "70"))
+# Usage gate: pause new dispatch/review when either window reaches its own
+# PAUSE_THRESHOLD%; once paused, stay paused until both windows drop back
+# below their own RESUME_THRESHOLD% (hysteresis prevents flapping right at
+# the boundary). Session and week have independent thresholds because the
+# week window resets far less often, so a high weekly total shouldn't gate
+# session-level work as tightly as a high session total should.
+SESSION_PAUSE_THRESHOLD = int(os.environ.get("PIPELINE_PAUSE_THRESHOLD", "90"))
+SESSION_RESUME_THRESHOLD = int(os.environ.get("PIPELINE_RESUME_THRESHOLD", "70"))
+WEEK_PAUSE_THRESHOLD = int(os.environ.get("PIPELINE_WEEK_PAUSE_THRESHOLD", "90"))
+WEEK_RESUME_THRESHOLD = int(os.environ.get("PIPELINE_WEEK_RESUME_THRESHOLD", "70"))
+
+# Cap on agents dispatched and running at once, across all plans in this
+# session. The usage gate above reacts to a polled /cost snapshot, which lags
+# real spend — dispatching every ready story in one tick can let that many
+# agents collectively burn through the window before the next poll trips the
+# pause. Capping concurrency bounds how much can be spent between polls.
+# <=0 disables the cap (dispatch every ready story each tick).
+MAX_CONCURRENT_AGENTS = int(os.environ.get("PIPELINE_MAX_CONCURRENT_AGENTS", "3"))
 
 PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -602,16 +617,32 @@ def _read_usage_state() -> dict[str, Any]:
 def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
     """Decide the paused state for this probe, with hysteresis.
 
-    Trips paused when either window reaches PAUSE_THRESHOLD. Once paused, it
-    stays paused until both windows drop back below RESUME_THRESHOLD — using
-    the max of the two means "either window still high" keeps it paused.
+    Trips paused when either window reaches its own PAUSE_THRESHOLD. Once
+    paused, it stays paused until both windows drop back below their own
+    RESUME_THRESHOLD — "either window still high (by its own bar)" keeps
+    it paused.
     """
-    pct = max(session_pct, week_pct)
-    if pct >= PAUSE_THRESHOLD:
+    if session_pct >= SESSION_PAUSE_THRESHOLD or week_pct >= WEEK_PAUSE_THRESHOLD:
         return True
-    if prev_paused and pct >= RESUME_THRESHOLD:
+    if prev_paused and (
+        session_pct >= SESSION_RESUME_THRESHOLD or week_pct >= WEEK_RESUME_THRESHOLD
+    ):
         return True
     return False
+
+
+def _count_in_progress_agents() -> int:
+    """Count dispatched agents (status in_progress with a pid) across every
+    plan's manifest, not just one plan — the usage window MAX_CONCURRENT_AGENTS
+    protects is shared across all plans running in this session.
+    """
+    count = 0
+    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
+        manifest = json.loads(manifest_path.read_text())
+        for story in manifest.get("stories", {}).values():
+            if story.get("status") == "in_progress" and "pid" in story:
+                count += 1
+    return count
 
 
 def _commit_wip(worktree: str, story_key: str, step: str) -> str:
@@ -632,7 +663,9 @@ def _commit_wip(worktree: str, story_key: str, step: str) -> str:
         ["git", "commit", "-m", f"wip({story_key}): {step}"],
         cwd=worktree, capture_output=True, text=True,
     )
-    if commit.returncode != 0 and "nothing to commit" not in (commit.stdout + commit.stderr):
+    output = commit.stdout + commit.stderr
+    nothing_to_commit = "nothing to commit" in output or "nothing added to commit" in output
+    if commit.returncode != 0 and not nothing_to_commit:
         raise RuntimeError(f"git commit failed: {commit.stderr}")
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
@@ -1113,6 +1146,12 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
     review is started, since both spend usage. Merge adjudication still runs,
     since it costs no model usage. "interrupted" stories are dispatch-eligible
     like "todo" ones, so they resume automatically once usage allows.
+
+    Also honors MAX_CONCURRENT_AGENTS: dispatch is capped to the number of
+    free slots remaining (limit minus agents already in_progress across all
+    plans), so a tick never starts more agents than the configured ceiling.
+    Stories left undispatched this tick stay "todo"/"interrupted" and are
+    picked up on a later tick as slots free up.
     """
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     if not manifest_path.exists():
@@ -1164,8 +1203,14 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
             _notify_user(plan_name, "Usage gate paused: deferring dispatch/review.")
             summary["notify"].append("paused")
         else:
-            # 1. Dispatch ready (and resumable-interrupted) stories.
-            for key in ready:
+            # 1. Dispatch ready (and resumable-interrupted) stories, capped to
+            # the slots still free under MAX_CONCURRENT_AGENTS. <=0 means no cap.
+            if MAX_CONCURRENT_AGENTS > 0:
+                slots = max(0, MAX_CONCURRENT_AGENTS - _count_in_progress_agents())
+                to_dispatch = ready[:slots]
+            else:
+                to_dispatch = ready
+            for key in to_dispatch:
                 dispatch_story(plan_name, key)
                 summary["dispatched"].append(key)
 

@@ -632,16 +632,30 @@ def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
 
 
 def _count_in_progress_agents() -> int:
-    """Count dispatched agents (status in_progress with a pid) across every
-    plan's manifest, not just one plan — the usage window MAX_CONCURRENT_AGENTS
-    protects is shared across all plans running in this session.
+    """Count *actually running* dispatched agents (status in_progress with a
+    live pid) across every plan's manifest, not just one plan — the usage
+    window MAX_CONCURRENT_AGENTS protects is shared across all plans running
+    in this session.
+
+    Checks each pid is still alive rather than trusting the status field: a
+    story can be stuck at in_progress with a pid whose process already
+    exited (e.g. a plan whose own advance_pipeline tick never ran again to
+    notice, or a zombie left by a crashed agent) - left uncorrected, that
+    permanently consumes a concurrency slot for every other plan forever.
     """
     count = 0
     for manifest_path in PLAN_DIR.glob("*.manifest.json"):
         manifest = json.loads(manifest_path.read_text())
         for story in manifest.get("stories", {}).values():
-            if story.get("status") == "in_progress" and "pid" in story:
-                count += 1
+            if story.get("status") != "in_progress" or "pid" not in story:
+                continue
+            try:
+                os.kill(story["pid"], 0)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                pass
+            count += 1
     return count
 
 

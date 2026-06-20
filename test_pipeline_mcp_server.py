@@ -1084,7 +1084,8 @@ def test_advance_pipeline_paused_still_processes_merges(plan_dir, usage_state_pa
     assert "P1" in result["merged"]
 
 
-def test_count_in_progress_agents_counts_across_plans(plan_dir):
+def test_count_in_progress_agents_counts_across_plans(plan_dir, monkeypatch):
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: None)
     _write_manifest(plan_dir, "cnt1", {
         "A1": {"summary": "a", "status": "in_progress", "pid": 1},
         "A2": {"summary": "b", "status": "in_progress", "pid": 2},
@@ -1104,6 +1105,25 @@ def test_count_in_progress_agents_ignores_status_without_pid(plan_dir):
         "A1": {"summary": "a", "status": "in_progress"},
     })
     assert p._count_in_progress_agents() == 0
+
+
+def test_count_in_progress_agents_skips_dead_pids(plan_dir, monkeypatch):
+    # A story can be stuck at in_progress with a pid whose process already
+    # exited (e.g. another plan whose own advance_pipeline tick never ran
+    # again to notice) - it must not permanently consume a concurrency slot.
+    _write_manifest(plan_dir, "cnt4", {
+        "A1": {"summary": "alive", "status": "in_progress", "pid": 111},
+        "A2": {"summary": "dead", "status": "in_progress", "pid": 222},
+    })
+
+    def _fake_kill(pid, sig):
+        if pid == 222:
+            raise ProcessLookupError
+        return None
+
+    monkeypatch.setattr(p.os, "kill", _fake_kill)
+
+    assert p._count_in_progress_agents() == 1
 
 
 def test_advance_pipeline_caps_dispatch_at_max_concurrent_agents(plan_dir, monkeypatch):
@@ -1126,6 +1146,7 @@ def test_advance_pipeline_caps_dispatch_at_max_concurrent_agents(plan_dir, monke
 def test_advance_pipeline_cap_accounts_for_already_running_agents(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: None)
     _write_manifest(plan_dir, "cap2", {
         "R1": {"summary": "running", "status": "in_progress", "pid": 111, "worktree": "/x"},
         "T1": {"summary": "one", "status": "todo", "dependencies": []},

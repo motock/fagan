@@ -824,6 +824,30 @@ def test_usage_gate(prev_paused, session_pct, week_pct, expected):
     assert p._usage_gate(prev_paused, session_pct, week_pct) is expected
 
 
+def test_usage_gate_session_and_week_have_independent_pause_thresholds(monkeypatch):
+    monkeypatch.setattr(p, "SESSION_PAUSE_THRESHOLD", 80)
+    monkeypatch.setattr(p, "WEEK_PAUSE_THRESHOLD", 95)
+
+    # Week at 85% would have tripped the old shared 80% threshold, but
+    # week's own threshold (95) is not yet reached, and session is low.
+    assert p._usage_gate(False, session_pct=10, week_pct=85) is False
+    # Session alone crossing its own (lower) threshold still trips it.
+    assert p._usage_gate(False, session_pct=80, week_pct=10) is True
+    # Week crossing its own (higher) threshold also trips it.
+    assert p._usage_gate(False, session_pct=10, week_pct=95) is True
+
+
+def test_usage_gate_session_and_week_have_independent_resume_thresholds(monkeypatch):
+    monkeypatch.setattr(p, "SESSION_RESUME_THRESHOLD", 60)
+    monkeypatch.setattr(p, "WEEK_RESUME_THRESHOLD", 75)
+
+    # Already paused; week is still above its own resume threshold even
+    # though it's below the (lower) session resume threshold - stays paused.
+    assert p._usage_gate(True, session_pct=10, week_pct=80) is True
+    # Both windows have dropped below their own resume thresholds - resumes.
+    assert p._usage_gate(True, session_pct=10, week_pct=70) is False
+
+
 def test_check_usage_carries_paused_hysteresis_from_previous_state(usage_state_path, monkeypatch):
     usage_state_path.write_text(json.dumps(
         {"session_pct": 95, "week_pct": 10, "paused": True, "checked_at": "x"}
@@ -1060,6 +1084,81 @@ def test_advance_pipeline_paused_still_processes_merges(plan_dir, usage_state_pa
     assert "P1" in result["merged"]
 
 
+def test_count_in_progress_agents_counts_across_plans(plan_dir):
+    _write_manifest(plan_dir, "cnt1", {
+        "A1": {"summary": "a", "status": "in_progress", "pid": 1},
+        "A2": {"summary": "b", "status": "in_progress", "pid": 2},
+        "A3": {"summary": "c", "status": "todo"},
+    })
+    _write_manifest(plan_dir, "cnt2", {
+        "B1": {"summary": "d", "status": "in_progress", "pid": 3},
+        "B2": {"summary": "e", "status": "done"},
+    })
+    assert p._count_in_progress_agents() == 3
+
+
+def test_count_in_progress_agents_ignores_status_without_pid(plan_dir):
+    # A story can be marked in_progress by mark_story_in_progress without
+    # ever having been dispatched (no pid) - must not count as a running agent.
+    _write_manifest(plan_dir, "cnt3", {
+        "A1": {"summary": "a", "status": "in_progress"},
+    })
+    assert p._count_in_progress_agents() == 0
+
+
+def test_advance_pipeline_caps_dispatch_at_max_concurrent_agents(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    _write_manifest(plan_dir, "cap1", {
+        "T1": {"summary": "one", "status": "todo", "dependencies": []},
+        "T2": {"summary": "two", "status": "todo", "dependencies": []},
+        "T3": {"summary": "three", "status": "todo", "dependencies": []},
+    })
+
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+
+    result = p.advance_pipeline("cap1")
+    assert dispatched == ["T1", "T2"]
+    assert result["dispatched"] == ["T1", "T2"]
+
+
+def test_advance_pipeline_cap_accounts_for_already_running_agents(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    _write_manifest(plan_dir, "cap2", {
+        "R1": {"summary": "running", "status": "in_progress", "pid": 111, "worktree": "/x"},
+        "T1": {"summary": "one", "status": "todo", "dependencies": []},
+        "T2": {"summary": "two", "status": "todo", "dependencies": []},
+    })
+
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+    monkeypatch.setattr(
+        p, "check_story_status", lambda plan, key: {"status": "running"},
+    )
+
+    result = p.advance_pipeline("cap2")
+    assert dispatched == ["T1"]
+    assert result["dispatched"] == ["T1"]
+
+
+def test_advance_pipeline_zero_max_concurrent_agents_means_unlimited(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 0)
+    _write_manifest(plan_dir, "cap3", {
+        "T1": {"summary": "one", "status": "todo", "dependencies": []},
+        "T2": {"summary": "two", "status": "todo", "dependencies": []},
+        "T3": {"summary": "three", "status": "todo", "dependencies": []},
+    })
+
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+
+    result = p.advance_pipeline("cap3")
+    assert dispatched == ["T1", "T2", "T3"]
+
+
 def test_advance_pipeline_not_paused_redispatches_interrupted_stories(
     plan_dir, usage_state_path, monkeypatch,
 ):
@@ -1254,6 +1353,43 @@ def test_checkpoint_nothing_to_commit_still_records_journal(plan_dir, tmp_path, 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
 
     result = p.checkpoint("ck4", "S1", "step-1", "no new changes")
+    assert result["ok"] is True
+    assert result["commit"] == "existing-sha"
+
+
+def test_checkpoint_nothing_to_commit_due_to_excluded_agent_log_still_records_journal(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """When the only untracked file is the excluded agent.log, git's "clean"
+    message is "nothing added to commit but untracked files present" rather
+    than "nothing to commit, working tree clean" - this must also count as
+    a successful no-op, not an error."""
+    worktree = str(tmp_path / "wt")
+    _write_manifest(plan_dir, "ck5", {
+        "S1": {"summary": "thing", "status": "in_progress", "worktree": worktree},
+    })
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        if cmd[:2] == ["git", "commit"]:
+            Result.returncode = 1
+            Result.stdout = (
+                "On branch agent/x\n\nUntracked files:\n"
+                '  (use "git add <file>..." to include in what will be committed)\n'
+                "\tagent.log\n\n"
+                "nothing added to commit but untracked files present "
+                '(use "git add" to track)\n'
+            )
+        elif cmd[:2] == ["git", "rev-parse"]:
+            Result.stdout = "existing-sha\n"
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.checkpoint("ck5", "S1", "step-1", "no new changes")
     assert result["ok"] is True
     assert result["commit"] == "existing-sha"
 

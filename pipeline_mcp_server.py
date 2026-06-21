@@ -659,6 +659,21 @@ def _count_in_progress_agents() -> int:
     return count
 
 
+def _mark_plane_done(story_key: str) -> None:
+    """Best-effort transition of a Plane issue to Done.
+
+    Mirrors dispatch_story's in-progress transition: swallows errors rather
+    than raising, since not every plan is Plane-backed and a Plane outage
+    must not block a local merge that has already happened in git.
+    """
+    try:
+        issue_uuid = _resolve_issue_uuid(story_key)
+        plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
+                      json={"state": _get_state("completed")})
+    except Exception as e:
+        print(f"Warning: could not transition {story_key} to done: {e}")
+
+
 def _commit_wip(worktree: str, story_key: str, step: str) -> str:
     """Commit any uncommitted work in the worktree as a WIP checkpoint.
 
@@ -1257,6 +1272,7 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
             if decision["action"] == "merge":
                 _merge_pr(story.get("worktree", ""), key)
                 story["status"] = "done"
+                _mark_plane_done(key)
                 summary["merged"].append(key)
             else:
                 story["status"] = "parked"

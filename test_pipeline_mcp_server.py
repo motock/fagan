@@ -1034,6 +1034,53 @@ def test_advance_pipeline_gated_dispatches_merges_and_parks(plan_dir, monkeypatc
     assert manifest["stories"]["P2"]["status"] == "parked"
 
 
+def test_advance_pipeline_merge_transitions_plane_issue_to_done(plan_dir, monkeypatch):
+    # A story merged via advance_pipeline's automatic path must move the
+    # Plane issue to Done too - otherwise it stays "In Progress" forever,
+    # since dispatch_story is the only other place that touches Plane state.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    story_key = "11111111-1111-1111-1111-111111111111"
+    _write_manifest(plan_dir, "planedone", {
+        story_key: {"summary": "approved", "status": "pr_open",
+                     "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_get_state", lambda group: f"state-{group}")
+
+    patches = []
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda method, path, **kw: patches.append((method, path, kw)),
+    )
+
+    p.advance_pipeline("planedone")
+
+    assert ("PATCH", f"/projects/{p.PLANE_PROJECT}/work-items/{story_key}/",
+            {"json": {"state": "state-completed"}}) in patches
+
+
+def test_advance_pipeline_merge_tolerates_plane_failure(plan_dir, monkeypatch):
+    # Mirrors dispatch_story's resilience: not every plan is Plane-backed, so
+    # a Plane error must not block the local merge from completing.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    _write_manifest(plan_dir, "planefail", {
+        "P1": {"summary": "approved", "status": "pr_open",
+               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+
+    result = p.advance_pipeline("planefail")
+
+    assert result["merged"] == ["P1"]
+    assert _read_manifest(plan_dir, "planefail")["stories"]["P1"]["status"] == "done"
+
+
 def test_advance_pipeline_paused_interrupts_running_and_skips_new_work(
     plan_dir, usage_state_path, monkeypatch,
 ):

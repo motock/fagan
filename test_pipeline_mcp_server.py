@@ -1039,6 +1039,90 @@ def test_check_usage_clears_pause_when_blackout_outlasts_staleness_window(
     assert persisted["paused"] is False
 
 
+def test_check_usage_repeated_blackouts_do_not_reset_the_staleness_clock(
+    usage_state_path, monkeypatch,
+):
+    """Each fallback call bumps checked_at to "now" (it's still useful as
+    "last time we tried"), so checked_at alone can't be the staleness clock -
+    a poller calling check_usage every 60s would perpetually look "fresh" by
+    that measure even though the actual session_pct/week_pct have not been
+    re-measured in hours. The real measurement time (measured_at) must be
+    carried forward unchanged across fallback calls instead."""
+    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=7200)).isoformat()
+    recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    usage_state_path.write_text(json.dumps({
+        "session_pct": 91, "week_pct": 60, "paused": True,
+        "checked_at": recent, "measured_at": long_ago,
+    }))
+    blackout_text = (
+        "You are currently using your subscription to power your Claude Code usage\n\n"
+        "What's contributing to your limits usage?\n"
+    )
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": blackout_text})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
+
+    result = p.check_usage()
+
+    assert result["paused"] is False
+    assert result["stale"] is True
+
+
+def test_check_usage_fallback_preserves_measured_at_for_the_next_call(
+    usage_state_path, monkeypatch,
+):
+    """measured_at must itself be persisted on every fallback call, not just
+    read - otherwise it silently disappears after one call and the next
+    call falls back to the (just-bumped) checked_at, recreating the exact
+    bug this guards against one call later."""
+    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    usage_state_path.write_text(json.dumps({
+        "session_pct": 91, "week_pct": 60, "paused": True,
+        "checked_at": long_ago, "measured_at": long_ago,
+    }))
+    blackout_text = (
+        "You are currently using your subscription to power your Claude Code usage\n\n"
+        "What's contributing to your limits usage?\n"
+    )
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": blackout_text})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
+
+    p.check_usage()
+    persisted = json.loads(usage_state_path.read_text())
+
+    assert persisted["measured_at"] == long_ago
+
+
+def test_check_usage_success_path_sets_measured_at(usage_state_path, monkeypatch):
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": SAMPLE_USAGE_TEXT})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_usage()
+
+    assert result["measured_at"] == result["checked_at"]
+
+
 # ---------- Merge adjudication (pure decision) ----------
 @pytest.mark.parametrize("autonomy,threshold,verdict,risk,expected", [
     ("gated", "low", "APPROVE", "low", "merge"),

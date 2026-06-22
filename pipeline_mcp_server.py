@@ -1330,6 +1330,37 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
+    """
+    Manually merge a story a human has approved out-of-band, typically one
+    "parked" by the risk gate (medium/high risk always parks regardless of
+    autonomy level - this is the human's explicit override for that gate,
+    not a way to bypass review). Also works on a still-"pr_open" story, for
+    approving before the gate has even adjudicated it.
+
+    Refuses unless the story already carries an APPROVE review verdict, and
+    refuses any status other than "parked"/"pr_open" - this merges reviewed
+    work, it does not re-review or fast-track anything.
+    """
+    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    story = manifest["stories"].get(story_key)
+    if not story:
+        return {"ok": False, "error": f"No such story {story_key}"}
+    if story["status"] not in ("parked", "pr_open"):
+        return {"ok": False, "error": f"Story is {story['status']}, not parked/pr_open"}
+    if story.get("review_verdict") != "APPROVE":
+        return {"ok": False, "error": "Story was never reviewer-approved"}
+
+    with _scoped_repo_root(plan_name):
+        _merge_pr(story.get("worktree", ""), story_key)
+    story["status"] = "done"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    _mark_plane_done(story_key)
+    return {"ok": True, "story_key": story_key, "status": "done"}
+
+
+@mcp.tool()
 def advance_all_plans() -> dict[str, Any]:
     """
     Run advance_pipeline on every plan that has been ingested (has a

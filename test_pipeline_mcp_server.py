@@ -1155,6 +1155,104 @@ def test_advance_pipeline_merge_tolerates_plane_failure(plan_dir, monkeypatch):
     assert _read_manifest(plan_dir, "planefail")["stories"]["P1"]["status"] == "done"
 
 
+def test_approve_merge_merges_a_parked_approved_story(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "am", {
+        "P1": {"summary": "approved but medium risk", "status": "parked",
+               "review_verdict": "APPROVE", "risk": "medium", "worktree": "/x"},
+    })
+    merged = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
+    plane_calls = []
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key: plane_calls.append(key))
+
+    result = p.approve_merge("am", "P1")
+
+    assert result["ok"] is True
+    assert result["status"] == "done"
+    assert merged == ["P1"]
+    assert plane_calls == ["P1"]
+    assert _read_manifest(plan_dir, "am")["stories"]["P1"]["status"] == "done"
+
+
+def test_approve_merge_merges_a_pr_open_approved_story(plan_dir, monkeypatch):
+    # A human may approve before the gate even runs (status still pr_open),
+    # not only after it's been parked.
+    _write_manifest(plan_dir, "am2", {
+        "P1": {"summary": "approved, not yet adjudicated", "status": "pr_open",
+               "review_verdict": "APPROVE", "risk": "high", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key: None)
+
+    result = p.approve_merge("am2", "P1")
+
+    assert result["ok"] is True
+    assert _read_manifest(plan_dir, "am2")["stories"]["P1"]["status"] == "done"
+
+
+def test_approve_merge_rejects_story_without_approve_verdict(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "am3", {
+        "P1": {"summary": "changes requested", "status": "parked",
+               "review_verdict": "REQUEST_CHANGES", "risk": "medium", "worktree": "/x"},
+    })
+    merge_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merge_calls.append(key))
+
+    result = p.approve_merge("am3", "P1")
+
+    assert result["ok"] is False
+    assert merge_calls == []
+    assert _read_manifest(plan_dir, "am3")["stories"]["P1"]["status"] == "parked"
+
+
+@pytest.mark.parametrize("status", ["todo", "in_progress", "done", "failed", "interrupted"])
+def test_approve_merge_rejects_story_in_non_mergeable_status(plan_dir, monkeypatch, status):
+    _write_manifest(plan_dir, "am4", {
+        "P1": {"summary": "not ready", "status": status,
+               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
+    })
+    merge_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merge_calls.append(key))
+
+    result = p.approve_merge("am4", "P1")
+
+    assert result["ok"] is False
+    assert merge_calls == []
+
+
+def test_approve_merge_unknown_story_returns_error(plan_dir):
+    _write_manifest(plan_dir, "am5", {})
+    result = p.approve_merge("am5", "nope")
+    assert result["ok"] is False
+
+
+def test_approve_merge_uses_plan_repo_root(plan_dir, monkeypatch, tmp_path):
+    real_repo = tmp_path / "real-repo"
+    monkeypatch.setattr(p, "REPO_ROOT", p.Path("/wrong/default/repo"))
+    _write_manifest(plan_dir, "am6", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": str(tmp_path / "wt")},
+    })
+    manifest_path = plan_dir / "am6.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(real_repo)
+    manifest_path.write_text(json.dumps(manifest))
+
+    seen_repo_roots = []
+
+    def _fake_merge_pr(wt, key):
+        seen_repo_roots.append(p.REPO_ROOT)
+        return "merged"
+
+    monkeypatch.setattr(p, "_merge_pr", _fake_merge_pr)
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key: None)
+
+    p.approve_merge("am6", "P1")
+
+    assert seen_repo_roots == [real_repo]
+    assert p.REPO_ROOT == p.Path("/wrong/default/repo")
+
+
 def test_advance_pipeline_paused_interrupts_running_and_skips_new_work(
     plan_dir, usage_state_path, monkeypatch,
 ):

@@ -9,6 +9,7 @@ internal logic is exercised directly. Tools are plain callables after the
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -963,6 +964,79 @@ def test_check_usage_raises_on_cli_omitting_percentages_with_no_prior_state(
         p.check_usage()
 
 
+def test_usage_state_age_seconds_returns_none_when_checked_at_missing():
+    assert p._usage_state_age_seconds({}) is None
+
+
+def test_usage_state_age_seconds_returns_none_when_checked_at_unparseable():
+    assert p._usage_state_age_seconds({"checked_at": "old"}) is None
+
+
+def test_usage_state_age_seconds_returns_elapsed_seconds_for_valid_timestamp():
+    checked_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    age = p._usage_state_age_seconds({"checked_at": checked_at})
+    assert age is not None
+    assert 110 <= age <= 130
+
+
+def test_check_usage_keeps_paused_when_blackout_is_within_staleness_window(
+    usage_state_path, monkeypatch,
+):
+    recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    usage_state_path.write_text(json.dumps(
+        {"session_pct": 91, "week_pct": 60, "paused": True, "checked_at": recent}
+    ))
+    blackout_text = (
+        "You are currently using your subscription to power your Claude Code usage\n\n"
+        "What's contributing to your limits usage?\n"
+    )
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": blackout_text})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
+
+    result = p.check_usage()
+
+    assert result["paused"] is True
+    assert result.get("stale") is not True
+
+
+def test_check_usage_clears_pause_when_blackout_outlasts_staleness_window(
+    usage_state_path, monkeypatch,
+):
+    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
+    usage_state_path.write_text(json.dumps(
+        {"session_pct": 91, "week_pct": 60, "paused": True, "checked_at": long_ago}
+    ))
+    blackout_text = (
+        "You are currently using your subscription to power your Claude Code usage\n\n"
+        "What's contributing to your limits usage?\n"
+    )
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": blackout_text})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
+
+    result = p.check_usage()
+
+    assert result["paused"] is False
+    assert result["stale"] is True
+    persisted = json.loads(usage_state_path.read_text())
+    assert persisted["paused"] is False
+
+
 # ---------- Merge adjudication (pure decision) ----------
 @pytest.mark.parametrize("autonomy,threshold,verdict,risk,expected", [
     ("gated", "low", "APPROVE", "low", "merge"),
@@ -1323,6 +1397,62 @@ def test_check_story_status_passing_tests_is_not_done(plan_dir, monkeypatch):
     assert result["status"] == "tests_passed"
     manifest = _read_manifest(plan_dir, "cs")
     assert manifest["stories"]["S1"]["status"] == "tests_passed"
+
+
+def test_check_story_status_treats_empty_agent_log_as_infra_failure(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A 0-byte agent.log after the process has exited means the headless
+    agent never produced any output - almost certainly a failed launch, not
+    a real attempt at the story. Running the test suite against the
+    untouched worktree in that case just records a misleading "failed" for
+    work that was never tried, and (unlike "failed") nothing ever retries
+    it. Treat it like "interrupted" instead, which advance_pipeline already
+    redispatches automatically."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("")
+    _write_manifest(plan_dir, "es", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("test command should not run against an untouched worktree")
+    monkeypatch.setattr(p, "detect_test_command", _fail_if_called)
+
+    result = p.check_story_status("es", "S1")
+
+    assert result["status"] == "interrupted"
+    manifest = _read_manifest(plan_dir, "es")
+    assert manifest["stories"]["S1"]["status"] == "interrupted"
+
+
+def test_check_story_status_runs_tests_normally_when_agent_log_has_content(
+    plan_dir, tmp_path, monkeypatch,
+):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("Implemented the thing.\nCommitted.\n")
+    _write_manifest(plan_dir, "ns", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["false"]))
+
+    class Result:
+        stdout = "1 test failed"
+        returncode = 1
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    result = p.check_story_status("ns", "S1")
+
+    assert result["status"] == "failed"
+    manifest = _read_manifest(plan_dir, "ns")
+    assert manifest["stories"]["S1"]["status"] == "failed"
 
 
 def test_checkpoint_commits_and_records_journal_entry(plan_dir, tmp_path, monkeypatch):

@@ -8,7 +8,9 @@ internal logic is exercised directly. Tools are plain callables after the
 @mcp.tool() decorator, so they are imported and called as functions.
 """
 
+import fcntl
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -1052,6 +1054,87 @@ def test_merge_decision(monkeypatch, autonomy, threshold, verdict, risk, expecte
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", threshold)
     story = {"review_verdict": verdict, "risk": risk}
     assert p._merge_decision(story)["action"] == expected
+
+
+# ---------- advance_pipeline concurrency lock ----------
+# Overlapping advance_pipeline ticks for the same plan (e.g. launchd firing a
+# burst of missed StartIntervals after the machine wakes from sleep) must not
+# both see the same ready story and dispatch duplicate, colliding agents into
+# the same worktree - that's what actually caused repeated zero-output agent
+# deaths in production, not per-story flakiness.
+def test_advance_pipeline_skips_when_another_tick_holds_the_lock(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "lk", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("a locked-out tick must not dispatch anything")
+    monkeypatch.setattr(p, "dispatch_story", _boom)
+
+    lock_path = plan_dir / "lk.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = p.advance_pipeline("lk")
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert result["ok"] is True
+    assert result.get("skipped") == "locked"
+    manifest = _read_manifest(plan_dir, "lk")
+    assert manifest["stories"]["T1"]["status"] == "todo"
+
+
+def test_advance_pipeline_proceeds_when_lock_is_free(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "lk2", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+    })
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+
+    result = p.advance_pipeline("lk2")
+
+    assert result.get("skipped") is None
+    assert dispatched == ["T1"]
+
+
+def test_advance_pipeline_releases_lock_after_each_call(plan_dir, monkeypatch):
+    # A held-then-released lock (the normal case: one tick finishes before
+    # the next starts) must not leak into a permanent skip.
+    _write_manifest(plan_dir, "lk3", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+    })
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+
+    p.advance_pipeline("lk3")
+    result = p.advance_pipeline("lk3")
+
+    assert result.get("skipped") is None
+
+
+def test_advance_pipeline_lock_is_independent_per_plan(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "lkA", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+    })
+    _write_manifest(plan_dir, "lkB", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+    })
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append((plan, key)))
+
+    lock_path = plan_dir / "lkA.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = p.advance_pipeline("lkB")
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert result.get("skipped") is None
+    assert ("lkB", "T1") in dispatched
 
 
 # ---------- advance_pipeline orchestration ----------

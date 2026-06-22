@@ -1103,6 +1103,13 @@ def check_usage() -> dict[str, Any]:
     reading is older than USAGE_STALE_AFTER_SECONDS, it's no longer trusted
     as evidence of being over threshold, so the gate fails open instead of
     blocking the pipeline indefinitely on a permanent CLI output change.
+
+    Staleness is measured from "measured_at" (the last time a probe actually
+    succeeded), not "checked_at" (bumped on every call, success or fallback).
+    A poller calling this every ~60s would otherwise perpetually look fresh
+    by checked_at's measure alone, even after hours of the CLI refusing to
+    parse - measured_at is carried forward unchanged across fallback calls
+    so the staleness clock keeps counting from the last real measurement.
     """
     prev = _read_usage_state()
     try:
@@ -1112,7 +1119,9 @@ def check_usage() -> dict[str, Any]:
             raise
         state = dict(prev)
         state["checked_at"] = datetime.now(timezone.utc).isoformat()
-        age = _usage_state_age_seconds(prev)
+        measured_at = prev.get("measured_at", prev.get("checked_at"))
+        state["measured_at"] = measured_at
+        age = _usage_state_age_seconds({"checked_at": measured_at}) if measured_at else None
         if age is not None and age > USAGE_STALE_AFTER_SECONDS:
             state["paused"] = False
             state["stale"] = True
@@ -1122,6 +1131,7 @@ def check_usage() -> dict[str, Any]:
             )
         _write_usage_state(state)
         return state
+    state["measured_at"] = state["checked_at"]
     state["paused"] = _usage_gate(
         prev.get("paused", False), state["session_pct"], state["week_pct"],
     )

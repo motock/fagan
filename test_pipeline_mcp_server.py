@@ -1582,6 +1582,109 @@ def test_advance_pipeline_not_paused_redispatches_interrupted_stories(
     assert dispatched == ["S1"]
 
 
+def test_advance_pipeline_plan_paused_skips_dispatch_review_and_merge(plan_dir, monkeypatch):
+    # A plan-level pause (pause_plan) must stop a plan from being advanced
+    # at all -- unlike the usage gate, it does not even adjudicate merges,
+    # since the human asked for this specific plan to stop moving.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    (plan_dir / "halted.manifest.json").write_text(json.dumps({
+        "epics": {},
+        "paused": True,
+        "stories": {
+            "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+            "R1": {"summary": "running", "status": "in_progress", "pid": 111, "worktree": "/x"},
+            "TP1": {"summary": "awaiting review", "status": "tests_passed",
+                    "worktree": "/y", "risk": "low"},
+            "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+                   "risk": "low", "worktree": "/z"},
+        },
+    }))
+
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+    reviewed = []
+    monkeypatch.setattr(
+        p, "review_story",
+        lambda plan, key: reviewed.append(key) or {"status": "pr_open"},
+    )
+    merged = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
+    interrupted = []
+    monkeypatch.setattr(
+        p, "interrupt_story",
+        lambda plan, key: interrupted.append(key) or {"ok": True},
+    )
+
+    result = p.advance_pipeline("halted")
+
+    assert result == {"ok": True, "skipped": "plan_paused"}
+    assert dispatched == []
+    assert reviewed == []
+    assert merged == []
+    assert interrupted == ["R1"]
+
+
+def test_advance_pipeline_plan_paused_with_no_running_story_is_a_pure_noop(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    (plan_dir / "halted2.manifest.json").write_text(json.dumps({
+        "epics": {},
+        "paused": True,
+        "stories": {"T1": {"summary": "todo", "status": "todo", "dependencies": []}},
+    }))
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+
+    result = p.advance_pipeline("halted2")
+
+    assert result == {"ok": True, "skipped": "plan_paused"}
+    assert dispatched == []
+
+
+def test_pause_plan_sets_manifest_flag(plan_dir):
+    _write_manifest(plan_dir, "tobehalted", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+    })
+
+    result = p.pause_plan("tobehalted")
+
+    assert result == {"ok": True, "plan_name": "tobehalted", "paused": True}
+    assert _read_manifest(plan_dir, "tobehalted")["paused"] is True
+
+
+def test_resume_plan_clears_manifest_flag(plan_dir):
+    (plan_dir / "halted3.manifest.json").write_text(json.dumps({
+        "epics": {}, "paused": True,
+        "stories": {"T1": {"summary": "todo", "status": "todo", "dependencies": []}},
+    }))
+
+    result = p.resume_plan("halted3")
+
+    assert result == {"ok": True, "plan_name": "halted3", "paused": False}
+    assert _read_manifest(plan_dir, "halted3")["paused"] is False
+
+
+def test_pause_plan_no_such_manifest_returns_error(plan_dir):
+    result = p.pause_plan("never-ingested")
+    assert result == {"ok": False, "error": "No manifest for never-ingested"}
+
+
+def test_resume_plan_no_such_manifest_returns_error(plan_dir):
+    result = p.resume_plan("never-ingested")
+    assert result == {"ok": False, "error": "No manifest for never-ingested"}
+
+
+def test_resume_plan_when_not_paused_is_a_noop(plan_dir):
+    _write_manifest(plan_dir, "neverhalted", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+    })
+
+    result = p.resume_plan("neverhalted")
+
+    assert result == {"ok": True, "plan_name": "neverhalted", "paused": False}
+    assert _read_manifest(plan_dir, "neverhalted")["paused"] is False
+
+
 def test_advance_all_plans_runs_every_manifest(plan_dir, monkeypatch):
     _write_manifest(plan_dir, "p1", {})
     _write_manifest(plan_dir, "p2", {})

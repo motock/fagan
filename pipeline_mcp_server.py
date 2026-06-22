@@ -1288,7 +1288,19 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     if not manifest_path.exists():
         return {"ok": False, "error": f"No manifest for {plan_name}"}
-    stories = json.loads(manifest_path.read_text())["stories"]
+    manifest = json.loads(manifest_path.read_text())
+    stories = manifest["stories"]
+
+    if manifest.get("paused"):
+        # A human-requested pause for this one plan: unlike the usage gate,
+        # this doesn't even adjudicate merges - the plan should sit
+        # completely still until explicitly resumed. Still free up any
+        # running agent so a paused plan isn't quietly burning usage.
+        with _scoped_repo_root(plan_name):
+            for key, story in stories.items():
+                if story["status"] == "in_progress" and "pid" in story:
+                    interrupt_story(plan_name, key)
+        return {"ok": True, "skipped": "plan_paused"}
 
     paused = _read_usage_state().get("paused", False)
 
@@ -1416,6 +1428,41 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest_path.write_text(json.dumps(manifest, indent=2))
     _mark_plane_done(story_key)
     return {"ok": True, "story_key": story_key, "status": "done"}
+
+
+def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {
+                "ok": True, "skipped": "locked",
+                "reason": "an advance_pipeline tick is already running for this plan",
+            }
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+        if not manifest_path.exists():
+            return {"ok": False, "error": f"No manifest for {plan_name}"}
+        manifest = json.loads(manifest_path.read_text())
+        manifest["paused"] = paused
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        return {"ok": True, "plan_name": plan_name, "paused": paused}
+
+
+@mcp.tool()
+def pause_plan(plan_name: str) -> dict[str, Any]:
+    """
+    Stop advance_pipeline/advance_all_plans from touching this one plan -
+    no new dispatch, review, or merge - while leaving every other ingested
+    plan's scheduler ticks unaffected. Any story currently in_progress is
+    interrupted (checkpointed and left resumable) so a paused plan isn't
+    quietly burning usage in the background. Resume with resume_plan.
+    """
+    return _set_plan_paused(plan_name, True)
+
+
+@mcp.tool()
+def resume_plan(plan_name: str) -> dict[str, Any]:
+    """Clear a pause set by pause_plan so this plan's stories are eligible
+    for dispatch/review/merge on the next advance_pipeline tick again."""
+    return _set_plan_paused(plan_name, False)
 
 
 @mcp.tool()

@@ -19,6 +19,7 @@ Per-project overrides (set in project .mcp.json env block):
     across all plans in this session (default: 3; <=0 disables the cap)
 """
 
+import fcntl
 import json
 import os
 import re
@@ -1206,6 +1207,40 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     }
 
 
+@contextmanager
+def _plan_lock(plan_name: str):
+    """Exclusive, non-blocking lock scoped to one plan's advance_pipeline tick.
+
+    Overlapping invocations (e.g. launchd firing a burst of missed
+    StartIntervals after the machine wakes from sleep) would otherwise both
+    read the same "todo"/"interrupted" story before either has written its
+    in_progress status back to the manifest, and both dispatch it - the
+    second dispatch_story call sees the first one's half-built worktree via
+    worktree_path.exists(), treats itself as "resuming", and spawns its own
+    agent into the *same* directory as the first. Multiple agents fighting
+    over one worktree's git state is what actually produced the repeated
+    zero-output agent deaths this guards against, not per-story flakiness.
+
+    Yields whether the lock was acquired; the caller must check it and skip
+    all work if not - this never blocks waiting for the lock.
+    """
+    lock_path = PLAN_DIR / f"{plan_name}.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            acquired = False
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 @mcp.tool()
 def advance_pipeline(plan_name: str) -> dict[str, Any]:
     """
@@ -1226,7 +1261,20 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
     plans), so a tick never starts more agents than the configured ceiling.
     Stories left undispatched this tick stay "todo"/"interrupted" and are
     picked up on a later tick as slots free up.
+
+    Skips entirely (returns {"ok": True, "skipped": "locked"}) if another
+    tick for this same plan is already running - see _plan_lock.
     """
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {
+                "ok": True, "skipped": "locked",
+                "reason": "another advance_pipeline tick is already running for this plan",
+            }
+        return _advance_pipeline_locked(plan_name)
+
+
+def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     if not manifest_path.exists():
         return {"ok": False, "error": f"No manifest for {plan_name}"}

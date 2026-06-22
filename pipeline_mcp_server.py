@@ -24,6 +24,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,10 @@ SESSION_PAUSE_THRESHOLD = int(os.environ.get("PIPELINE_PAUSE_THRESHOLD", "90"))
 SESSION_RESUME_THRESHOLD = int(os.environ.get("PIPELINE_RESUME_THRESHOLD", "70"))
 WEEK_PAUSE_THRESHOLD = int(os.environ.get("PIPELINE_WEEK_PAUSE_THRESHOLD", "90"))
 WEEK_RESUME_THRESHOLD = int(os.environ.get("PIPELINE_WEEK_RESUME_THRESHOLD", "70"))
+# How long a frozen (parse-failure) usage reading is trusted before the gate
+# fails open. Guards against a CLI output-format change turning a transient
+# blackout into a permanent pause.
+USAGE_STALE_AFTER_SECONDS = int(os.environ.get("PIPELINE_USAGE_STALE_AFTER_SECONDS", "1800"))
 
 # Cap on agents dispatched and running at once, across all plans in this
 # session. The usage gate above reacts to a polled /cost snapshot, which lags
@@ -614,6 +619,24 @@ def _read_usage_state() -> dict[str, Any]:
     return json.loads(USAGE_STATE_PATH.read_text())
 
 
+def _usage_state_age_seconds(prev: dict[str, Any]) -> float | None:
+    """Seconds since prev's checked_at, or None if missing/unparseable.
+
+    None means "can't prove staleness" - callers should treat that like a
+    fresh reading (keep existing hysteresis), not like a stale one.
+    """
+    checked_at = prev.get("checked_at")
+    if not checked_at:
+        return None
+    try:
+        ts = datetime.fromisoformat(checked_at)
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - ts).total_seconds()
+
+
 def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
     """Decide the paused state for this probe, with hysteresis.
 
@@ -926,6 +949,17 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         pass
 
     worktree = Path(story["worktree"])
+    agent_log = worktree / "agent.log"
+    if agent_log.exists() and agent_log.stat().st_size == 0:
+        # The agent process exited without ever writing a byte of output -
+        # a failed launch, not a real attempt. Running tests against the
+        # untouched worktree would just record a misleading "failed" for
+        # work that was never tried, and unlike "failed", nothing retries
+        # it automatically. "interrupted" is dispatch-eligible like "todo".
+        story["status"] = "interrupted"
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        return {"status": "interrupted", "pid": pid}
+
     test_dir, test_cmd = detect_test_command(worktree)
     test_result = subprocess.run(
         test_cmd, cwd=test_dir, capture_output=True, text=True,
@@ -1064,7 +1098,10 @@ def check_usage() -> dict[str, Any]:
     The CLI occasionally omits the percentage summary lines (observed near
     session-reset boundaries) without erroring, so a parse failure falls
     back to the last persisted reading rather than crashing the caller's
-    tick - unless there is no prior reading to fall back to.
+    tick - unless there is no prior reading to fall back to. If that frozen
+    reading is older than USAGE_STALE_AFTER_SECONDS, it's no longer trusted
+    as evidence of being over threshold, so the gate fails open instead of
+    blocking the pipeline indefinitely on a permanent CLI output change.
     """
     prev = _read_usage_state()
     try:
@@ -1074,6 +1111,14 @@ def check_usage() -> dict[str, Any]:
             raise
         state = dict(prev)
         state["checked_at"] = datetime.now(timezone.utc).isoformat()
+        age = _usage_state_age_seconds(prev)
+        if age is not None and age > USAGE_STALE_AFTER_SECONDS:
+            state["paused"] = False
+            state["stale"] = True
+            print(
+                f"check_usage: usage data is {age:.0f}s stale and the CLI is "
+                f"still not parseable - failing the gate open", file=sys.stderr,
+            )
         _write_usage_state(state)
         return state
     state["paused"] = _usage_gate(

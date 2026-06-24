@@ -266,6 +266,29 @@ Set global vars in your shell profile; set per-project overrides in the project'
 | `USAGE_STATE_PATH` | `~/.claude/usage_state.json` | Where `check_usage` persists usage/paused state |
 | `PIPELINE_PAUSE_THRESHOLD` | `90` | `%` usage (session or week) that trips the gate |
 | `PIPELINE_RESUME_THRESHOLD` | `70` | `%` usage both windows must drop below to clear it |
+| `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend driver for dispatch (coding) agents |
+| `PIPELINE_BACKEND_REVIEW` | `claude` | Backend driver for the code-reviewer persona |
+| `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend driver for overlord decisions |
+| `PIPELINE_LOCAL_ENDPOINT` | `http://localhost:11434/v1` | OpenAI-compatible endpoint for the `local` driver (Ollama, vLLM, a hosted open-weights API — same driver, different URL) |
+| `PIPELINE_LOCAL_MODEL_DEFAULT` | `devstral:24b` | Local model used for any tier without its own override below |
+| `PIPELINE_LOCAL_MODEL_OPUS` | — | Local model for the `opus` tier (falls back to the default) |
+| `PIPELINE_LOCAL_MODEL_SONNET` | — | Local model for the `sonnet` tier (falls back to the default) |
+| `PIPELINE_LOCAL_MODEL_HAIKU` | — | Local model for the `haiku` tier (falls back to the default) |
+| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Request timeout for local/cloud completions |
+
+**Backend routing:** dispatch, review, and overlord each resolve independently
+via `backend.get_backend(role)` (see `backend.py`) — moving one role off Claude
+never touches the others. Two drivers exist today:
+- `claude` — wraps the `claude` CLI (unchanged behavior).
+- `local` — calls any OpenAI-compatible `/chat/completions` endpoint. It only
+  implements `complete()` (a single prompt/system in, text out): safe for
+  self-contained prompts like the overlord's decision flow, but routing
+  `dispatch` or `review` to it raises `NotImplementedError` — those roles need
+  real tool execution (running tests, editing files), which no driver
+  provides yet.
+
+Setting any `PIPELINE_BACKEND_*` var to a name that isn't registered also
+raises `NotImplementedError` naming the offending var.
 
 **Autonomy levels:**
 - `dry-run` — plan and log only; never dispatch, merge, or take irreversible

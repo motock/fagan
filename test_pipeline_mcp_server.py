@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import backend
 import pipeline_mcp_server as p
 
 
@@ -195,22 +196,20 @@ def _story(**over):
 
 
 def test_dispatch_command_uses_persona_body_and_model(agents_dir):
-    cmd = p._build_dispatch_command(_story(persona="software-engineer", model="opus"), "PIPE-1")
-    assert cmd[0] == "claude"
-    assert "--append-system-prompt" in cmd
-    assert "Engineer body." in cmd[cmd.index("--append-system-prompt") + 1]
-    assert cmd[cmd.index("--model") + 1] == "opus"
+    spec = p._build_dispatch_command(_story(persona="software-engineer", model="opus"), "PIPE-1")
+    assert "Engineer body." in spec["system"]
+    assert spec["model"] == "opus"
 
 
 def test_dispatch_command_falls_back_to_persona_default_model(agents_dir):
-    cmd = p._build_dispatch_command(_story(persona="software-engineer"), "PIPE-2")
-    assert cmd[cmd.index("--model") + 1] == "sonnet"
+    spec = p._build_dispatch_command(_story(persona="software-engineer"), "PIPE-2")
+    assert spec["model"] == "sonnet"
 
 
 def test_dispatch_command_no_persona_uses_default_model_and_no_system_prompt(agents_dir):
-    cmd = p._build_dispatch_command(_story(), "PIPE-3")
-    assert cmd[cmd.index("--model") + 1] == p.DEFAULT_MODEL
-    assert "--append-system-prompt" not in cmd
+    spec = p._build_dispatch_command(_story(), "PIPE-3")
+    assert spec["model"] == p.DEFAULT_MODEL
+    assert spec["system"] is None
 
 
 def test_dispatch_command_unknown_persona_raises(agents_dir):
@@ -219,8 +218,8 @@ def test_dispatch_command_unknown_persona_raises(agents_dir):
 
 
 def test_dispatch_command_reviewer_tools_are_read_only(agents_dir):
-    cmd = p._build_dispatch_command(_story(persona="code-reviewer"), "PIPE-5")
-    assert cmd[cmd.index("--allowedTools") + 1] == "Bash,Read"
+    spec = p._build_dispatch_command(_story(persona="code-reviewer"), "PIPE-5")
+    assert spec["allowed_tools"] == "Bash,Read"
 
 
 def test_dispatch_command_resume_includes_completed_steps_and_hint(agents_dir):
@@ -228,8 +227,8 @@ def test_dispatch_command_resume_includes_completed_steps_and_hint(agents_dir):
         {"step": "step-1", "summary": "Wrote the parser",
          "next_hint": "add validation", "commit": "sha-1", "ts": "x"},
     ]
-    cmd = p._build_dispatch_command(_story(), "PIPE-1", resume_journal=journal)
-    prompt = cmd[cmd.index("-p") + 1]
+    spec = p._build_dispatch_command(_story(), "PIPE-1", resume_journal=journal)
+    prompt = spec["prompt"]
     assert "RESUMING" in prompt
     assert "Wrote the parser" in prompt
     assert "add validation" in prompt
@@ -237,24 +236,23 @@ def test_dispatch_command_resume_includes_completed_steps_and_hint(agents_dir):
 
 
 def test_dispatch_command_no_resume_journal_uses_original_prompt(agents_dir):
-    cmd = p._build_dispatch_command(_story(), "PIPE-1")
-    prompt = cmd[cmd.index("-p") + 1]
+    spec = p._build_dispatch_command(_story(), "PIPE-1")
+    prompt = spec["prompt"]
     assert "RESUMING" not in prompt
     assert "completing issue" in prompt
 
 
 def test_dispatch_command_includes_checkpoint_instruction_when_plan_name_given(agents_dir):
-    cmd = p._build_dispatch_command(_story(), "PIPE-1", plan_name="myplan")
-    prompt = cmd[cmd.index("-p") + 1]
+    spec = p._build_dispatch_command(_story(), "PIPE-1", plan_name="myplan")
+    prompt = spec["prompt"]
     assert "checkpoint" in prompt.lower()
     assert "myplan" in prompt
     assert "PIPE-1" in prompt
 
 
 def test_dispatch_command_omits_checkpoint_instruction_without_plan_name(agents_dir):
-    cmd = p._build_dispatch_command(_story(), "PIPE-1")
-    prompt = cmd[cmd.index("-p") + 1]
-    assert "checkpoint tool" not in prompt.lower()
+    spec = p._build_dispatch_command(_story(), "PIPE-1")
+    assert "checkpoint tool" not in spec["prompt"].lower()
 
 
 def test_dispatch_command_resume_also_includes_checkpoint_instruction(agents_dir):
@@ -262,17 +260,17 @@ def test_dispatch_command_resume_also_includes_checkpoint_instruction(agents_dir
         {"step": "step-1", "summary": "Wrote the parser",
          "next_hint": "add validation", "commit": "sha-1", "ts": "x"},
     ]
-    cmd = p._build_dispatch_command(
+    spec = p._build_dispatch_command(
         _story(), "PIPE-1", plan_name="myplan", resume_journal=journal,
     )
-    prompt = cmd[cmd.index("-p") + 1]
+    prompt = spec["prompt"]
     assert "checkpoint" in prompt.lower()
     assert "myplan" in prompt
 
 
 def test_dispatch_command_default_tools(agents_dir):
-    cmd = p._build_dispatch_command(_story(persona="software-engineer"), "PIPE-6")
-    assert cmd[cmd.index("--allowedTools") + 1] == "Bash,Edit,Write,Read"
+    spec = p._build_dispatch_command(_story(persona="software-engineer"), "PIPE-6")
+    assert spec["allowed_tools"] == "Bash,Edit,Write,Read"
 
 
 # ---------- Plan schema carry-through ----------
@@ -670,7 +668,7 @@ def test_dispatch_story_uses_manifest_repo_root_for_git_commands(
         return Result()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p.subprocess, "Popen", lambda cmd, **kw: _FakeProc(123))
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(123))
     monkeypatch.setattr(
         p, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
@@ -780,7 +778,7 @@ def test_run_usage_probe_parses_and_stamps_checked_at(monkeypatch):
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
 
     result = p._run_usage_probe()
 
@@ -798,7 +796,7 @@ def test_run_usage_probe_raises_on_invalid_json(monkeypatch):
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
 
     with pytest.raises(RuntimeError):
         p._run_usage_probe()
@@ -867,7 +865,7 @@ def test_check_usage_carries_paused_hysteresis_from_previous_state(usage_state_p
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
 
     result = p.check_usage()
     assert result["paused"] is True
@@ -889,7 +887,7 @@ def test_check_usage_clears_paused_once_below_resume_threshold(usage_state_path,
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
 
     result = p.check_usage()
     assert result["paused"] is False
@@ -903,7 +901,7 @@ def test_check_usage_tool_probes_and_persists_state(usage_state_path, monkeypatc
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
 
     result = p.check_usage()
 
@@ -933,7 +931,7 @@ def test_check_usage_falls_back_to_last_known_state_when_cli_omits_percentages(
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
 
     result = p.check_usage()
 
@@ -960,7 +958,7 @@ def test_check_usage_raises_on_cli_omitting_percentages_with_no_prior_state(
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
 
     with pytest.raises(ValueError):
         p.check_usage()
@@ -1000,7 +998,7 @@ def test_check_usage_keeps_paused_when_blackout_is_within_staleness_window(
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
     monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
 
     result = p.check_usage()
@@ -1028,7 +1026,7 @@ def test_check_usage_clears_pause_when_blackout_outlasts_staleness_window(
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
     monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
 
     result = p.check_usage()
@@ -1066,7 +1064,7 @@ def test_check_usage_repeated_blackouts_do_not_reset_the_staleness_clock(
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
     monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
 
     result = p.check_usage()
@@ -1099,7 +1097,7 @@ def test_check_usage_fallback_preserves_measured_at_for_the_next_call(
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
     monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
 
     p.check_usage()
@@ -1116,7 +1114,7 @@ def test_check_usage_success_path_sets_measured_at(usage_state_path, monkeypatch
             stderr = ""
         return Result()
 
-    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
 
     result = p.check_usage()
 
@@ -2008,7 +2006,7 @@ def test_dispatch_story_fresh_creates_worktree_and_dispatches(
 
     run_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: run_calls.append(cmd))
-    monkeypatch.setattr(p.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
     monkeypatch.setattr(
         p, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
@@ -2045,7 +2043,7 @@ def test_dispatch_story_fresh_seeds_checkpoint_instruction_with_plan_name(
         return _FakeProc(9999)
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
-    monkeypatch.setattr(p.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(
         p, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
@@ -2083,7 +2081,7 @@ def test_dispatch_story_resume_reuses_worktree_and_seeds_journal(
         popen_calls.append(cmd)
         return _FakeProc(5555)
 
-    monkeypatch.setattr(p.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(
         p, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
@@ -2124,7 +2122,7 @@ def test_dispatch_story_resumes_when_worktree_exists_even_without_interrupted_st
 
     run_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: run_calls.append(cmd))
-    monkeypatch.setattr(p.subprocess, "Popen", lambda cmd, **kw: _FakeProc(7777))
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(7777))
     monkeypatch.setattr(
         p, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),

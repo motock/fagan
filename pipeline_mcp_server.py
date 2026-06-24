@@ -1033,11 +1033,11 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
 def _checkpoint_impl(
     plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "",
 ) -> dict[str, Any]:
-    """Checkpoint logic, factored out of the `checkpoint` tool so a minimal
-    dedicated MCP server (scripts/checkpoint_mcp_server.py) can expose just
-    this one tool to dispatched agents, instead of this whole server's full
-    orchestration toolset (dispatch_story, approve_merge, advance_pipeline,
-    ...) - which a less reliable local model has no business calling."""
+    """Checkpoint logic, factored out of the `checkpoint` tool so it can be
+    reused directly by the local dispatch agent loop (scripts/local_agent.py
+    calls this in-process for its `checkpoint` tool) without exposing this
+    whole server's orchestration toolset (dispatch_story, approve_merge,
+    advance_pipeline, ...) to a dispatched agent."""
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)

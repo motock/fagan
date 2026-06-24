@@ -476,8 +476,35 @@ dispatch:
   stochastic miss on a trivial task is the documented model ceiling, not a
   driver defect.
 
-Not done (future): routing `review` to local (needs a read-only tool set +
-validation; still raises `NotImplementedError`).
+### Local review (DONE)
+
+Review now runs local too. Subtlety found: review goes through
+`backend.get_backend("review").complete(...)` (with `allowed_tools="Bash,Read"`
++ `cwd=worktree`), **not** `dispatch()` — so the old `dispatch()`
+`NotImplementedError` never actually guarded review, and a local reviewer
+would previously have single-shotted a *hallucinated* verdict without running
+the tests. Fixed by giving `OllamaDriver.complete()` two modes (mirroring
+`ClaudeCliDriver.complete()`): self-contained single-shot (overlord:
+`allowed_tools` without Bash, no cwd) vs. a blocking **read-only tool loop**
+(review: Bash + cwd) that runs the tests / reads files via `bash`+`view_file`
+(no edit tools) and terminates when the model calls a `submit_review` tool,
+returning a `VERDICT:` block for the shared `_parse_verdict`.
+
+First validation pass returned UNKNOWN twice — the model emitted tool calls as
+bare arg objects (`{"command": ...}`, no tool name) and the loop bailed. Fixed
+with an explicit `submit_review` terminator (more reliable than scanning prose
+for a VERDICT line) + key-based tool-name inference + a one-shot nudge. After
+that, validated end-to-end with real devstral on two real repos: a
+passing-tests branch → **APPROVE** (with a sensible PR title/body); a branch
+with a `add` that subtracts → **REQUEST_CHANGES** with accurate root-cause. So
+the local reviewer genuinely runs the tests, reads the code, and judges
+correctly both ways. Failure mode is safe: no clean verdict → UNKNOWN →
+treated as not-APPROVE → parks (never a false auto-merge). 166 tests green.
+
+Per the tiering analysis, route low-risk review local and keep high-risk /
+security review on Claude (`PIPELINE_BACKEND_REVIEW`); local review is also
+slow (multiple devstral calls block the tick) — acceptable given "speed not a
+priority", but a reason to keep it for the bulk low-risk volume.
 
 ## Step 5 — Per-backend resource gate (DONE)
 

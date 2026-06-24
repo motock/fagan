@@ -97,7 +97,7 @@ def test_complete_pins_num_ctx_to_avoid_cpu_gpu_split(monkeypatch):
 
     b.OllamaDriver().complete("p", model="opus")
 
-    assert captured["options"] == {"num_ctx": 8192}
+    assert captured["options"]["num_ctx"] == 8192
 
 
 def test_complete_resolves_tier_to_configured_local_model(monkeypatch):
@@ -144,6 +144,60 @@ def test_complete_raises_clear_runtime_error_when_endpoint_unreachable(monkeypat
 def test_usage_probe_text_raises_not_implemented():
     with pytest.raises(NotImplementedError):
         b.OllamaDriver().usage_probe_text()
+
+
+# ---------- complete() review mode (Bash + cwd -> read-only tool loop) ----------
+def test_complete_runs_readonly_review_loop_when_bash_and_cwd(tmp_path, monkeypatch):
+    """A review call (allowed_tools includes Bash + a worktree cwd) must run a
+    tool loop — run tests / read files — then return text with a VERDICT, not
+    a single-shot hallucinated verdict."""
+    driver = b.OllamaDriver()
+    responses = [
+        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo ran-tests"}}}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+    ]
+    tools_each_call = []
+    monkeypatch.setattr(
+        driver, "_chat",
+        lambda messages, model, tools=None: tools_each_call.append(tools) or responses.pop(0),
+    )
+
+    out = driver.complete("review the branch", system="reviewer body",
+                          model="sonnet", allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" in out
+    assert tools_each_call[0] is not None          # the loop offered tools
+    assert responses == []                          # consumed tool turn + submit_review
+
+
+def test_complete_review_loop_recovers_unnamed_tool_call(tmp_path, monkeypatch):
+    """devstral sometimes emits a bare args object with no tool name; the loop
+    must infer the tool from its keys (here: verdict -> submit_review)."""
+    driver = b.OllamaDriver()
+    responses = [{"content": 'Looks good.\n{"verdict": "APPROVE", "summary": "ok"}'}]
+    monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" in out
+
+
+def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
+    """Overlord-style complete() (allowed_tools='Read', no cwd) must NOT enter
+    the tool loop — one plain completion, no tools offered."""
+    driver = b.OllamaDriver()
+    seen_tools = []
+    monkeypatch.setattr(
+        driver, "_chat",
+        lambda messages, model, tools=None: seen_tools.append(tools) or {"content": "RULING: ROUTINE"},
+    )
+
+    out = driver.complete("adjudicate", system="overlord", model="opus", allowed_tools="Read")
+
+    assert out == "RULING: ROUTINE"
+    assert seen_tools == [None]                      # single call, no tools
 
 
 # ---------- resource_status() (per-backend gate, Step 5) ----------

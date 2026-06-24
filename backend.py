@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,17 @@ class Backend(Protocol):
 
     def usage_probe_text(self) -> str:
         """Return the raw usage/cost report text for the resource gate."""
+        ...
+
+    def resource_status(self) -> dict:
+        """Whether this backend is resource-available to take work right now.
+
+        Returns {"ok": bool, "reason": str}. The orchestrator's per-role gate
+        (advance_pipeline) consults the backend serving each role, so a limit
+        on one backend (e.g. Claude's weekly usage) no longer freezes work on
+        another (e.g. local dispatch). A future vLLM/cloud driver defines its
+        own check here without touching the orchestrator.
+        """
         ...
 
 
@@ -84,6 +96,19 @@ class ClaudeCliDriver:
             raise RuntimeError(f"Usage probe returned invalid JSON: {e}") from e
         return payload.get("result", "")
 
+    def resource_status(self) -> dict:
+        """Claude's gate is the poller-fed, hysteresis-stabilized usage state
+        (see pipeline_mcp_server.check_usage / _usage_gate), not a live /cost
+        probe — reading the cached `paused` flag here is cheap and reflects the
+        same decision the poller already made. Imported locally because the
+        orchestrator imports this module (a top-level import would cycle); by
+        call time pipeline_mcp_server is fully loaded. Failing open (ok) on
+        missing/garbled state matches check_usage's own fail-open behavior.
+        """
+        import pipeline_mcp_server as _p  # local: avoids an import cycle
+        paused = bool(_p._read_usage_state().get("paused", False))
+        return {"ok": not paused, "reason": "Claude usage gate tripped" if paused else ""}
+
 
 # Tier names (opus/sonnet/haiku) come from Claude persona frontmatter and
 # story overrides — see pipeline_mcp_server.py's _persona_default_model. Map
@@ -103,6 +128,71 @@ def _resolve_local_model(tier: str) -> str:
     return os.environ.get(env_var, default) if env_var else default
 
 
+def _recover_tool_calls(content: str | None) -> list | None:
+    """Recover tool calls from message text when the native tool_calls field
+    is empty — the local model intermittently emits well-formed calls as text
+    ([TOOL_CALLS]/bare arrays/```json fences). Mirrors scripts/local_agent.py's
+    parser (kept in sync; both are small)."""
+    if not content:
+        return None
+    text = content.strip().replace("[TOOL_CALLS]", "")
+    candidates = re.findall(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
+    m = re.search(r"(\[\s*\{.*\}\s*\]|\{.*\})", text, re.DOTALL)
+    if m:
+        candidates.append(m.group(1))
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+        except ValueError:
+            continue
+        items = obj if isinstance(obj, list) else [obj]
+        out = [{"function": {"name": it["name"], "arguments": it.get("arguments", it.get("parameters", {}))}}
+               for it in items if isinstance(it, dict) and "name" in it]
+        if out:
+            return out
+    return None
+
+
+def _infer_review_tool_call(content: str | None) -> list | None:
+    """Last-resort recovery for the review loop: the local model sometimes
+    emits a bare arguments object (no tool name) like {"command": "git diff"}.
+    Infer the intended review tool from its keys (unambiguous for this small
+    read-only tool set). Returns None if nothing parseable is found."""
+    if not content:
+        return None
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except ValueError:
+        return None
+    if not isinstance(obj, dict) or "name" in obj:
+        return None  # named calls are handled by _recover_tool_calls
+    if "verdict" in obj:
+        return [{"function": {"name": "submit_review", "arguments": obj}}]
+    if "command" in obj:
+        return [{"function": {"name": "bash", "arguments": obj}}]
+    if "path" in obj:
+        return [{"function": {"name": "view_file", "arguments": obj}}]
+    return None
+
+
+def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
+    """Execute a review (read-only) tool: bash (run commands) or view_file."""
+    if fn == "view_file":
+        path = cwd / args.get("path", "")
+        if not path.exists():
+            return f"ERROR: {args.get('path')} does not exist."
+        lines = path.read_text().splitlines(keepends=True)
+        return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
+    if fn == "bash":
+        pr = subprocess.run(args.get("command", ""), shell=True, cwd=cwd,
+                            capture_output=True, text=True)
+        return (pr.stdout + pr.stderr)[:3000] or "(no output)"
+    return f"unknown tool {fn}"
+
+
 class OllamaDriver:
     """Backend driver for Ollama's native /api/chat endpoint.
 
@@ -116,39 +206,31 @@ class OllamaDriver:
     differently (server-side, e.g. --max-model-len) and would not share this
     class.
 
-    complete() only sends prompt+system text and returns the model's reply -
-    there is no tool execution here. That's fine for self-contained prompts
-    (e.g. the overlord's decision prompts, which embed all needed context as
-    text).
+    complete() has two modes, matching ClaudeCliDriver.complete()'s behavior:
+    a self-contained prompt (overlord-style: allowed_tools without Bash, no
+    cwd) is a single /api/chat round-trip; a review-style call (allowed_tools
+    includes Bash + a worktree cwd, see _run_reviewer) runs a blocking
+    READ-ONLY tool loop (bash to run tests + view_file) and ends when the model
+    calls submit_review, returning a `VERDICT:` block for _parse_verdict. The
+    loop exposes no edit tools, so review cannot modify the tree.
 
-    dispatch() drives the OpenHands CLI (`uv tool install openhands`) headless
-    in `cwd`, giving the model a real tool loop (Bash/Edit/Read/etc.) to edit
-    files, run tests, and use git - verified end-to-end against devstral:24b.
-    Two fixes were needed beyond just pointing OpenHands at Ollama, both baked
-    into a persisted settings file by scripts/setup_openhands_local.py (see
-    that script's docstring for the full story):
-    - devstral errors on OpenHands' default reasoning_effort ("high"); needs
-      reasoning_effort="none".
-    - The same num_ctx problem as complete() recurs here independently
-      (OpenHands' LiteLLM path doesn't set it on its own); needs
-      litellm_extra_body={"options": {"num_ctx": ...}}.
-    OpenHands' CLI has no way to restrict tool access (no read-only mode), so
-    dispatch() refuses any allowed_tools that excludes Edit/Write - that would
-    silently fail to honor a read-only role (e.g. review) and let the agent
-    edit files anyway.
+    dispatch() runs scripts/local_agent.py as a subprocess in `cwd`, giving
+    the model a real native-tool-calling loop (create_file/str_replace/
+    view_file/bash/checkpoint/done) to edit files, run tests, use git, and
+    checkpoint. It deliberately does NOT use OpenHands: a full investigation
+    (Local_LLM_Port_Plan.md §Status/§8) found OpenHands' CLI is the wrong
+    harness for a 24B local model - its ~7 bloated tool schemas collapse
+    devstral's native `[TOOL_CALLS]` adherence and its strict native-only
+    parsing has no recovery when a tool call arrives as text. The minimal
+    loop (clean tool set + tolerant parser + non-destructive editor + loop
+    guard + commit enforcement) was validated end-to-end on real TDD stories.
+    See scripts/local_agent.py for the loop and its guards.
 
-    dispatch() also registers a minimal checkpoint-only MCP server with
-    OpenHands (see _write_mcp_config / scripts/checkpoint_mcp_server.py) so
-    the agent can call the `checkpoint` tool the dispatch prompt instructs it
-    to use - without this, a devstral agent given the checkpoint instruction
-    tries to call a tool that doesn't exist, gets confused, and gives up
-    without doing any work. It's a *separate minimal* server, not this
-    pipeline's full one: registering the full server gave the dispatched
-    agent direct MCP access to orchestration tools (approve_merge,
-    advance_pipeline, ...) it has no business calling, and the extra ~18
-    irrelevant tools also degraded tool selection (an agent hallucinated a
-    "create_file" tool instead of using its own). All found via real
-    end-to-end testing, not theoretical.
+    dispatch() refuses any allowed_tools that excludes Edit/Write: the local
+    *dispatch* harness is write-oriented. Read-only roles don't use dispatch()
+    at all — review goes through complete()'s review-loop mode above — so this
+    guard is just a guard against misconfiguring a write role with read-only
+    tools.
     """
 
     def __init__(self) -> None:
@@ -156,34 +238,143 @@ class OllamaDriver:
             "PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434",
         ).rstrip("/")
         self.timeout = float(os.environ.get("PIPELINE_LOCAL_TIMEOUT_SECONDS", "600"))
-        self.num_ctx = int(os.environ.get("PIPELINE_LOCAL_NUM_CTX", "8192"))
+        # 16384 fits 100% on GPU on a 24GB M4 and gives the agentic loop real
+        # headroom; complete()'s self-contained prompts are smaller so the same
+        # value is safe there too.
+        self.num_ctx = int(os.environ.get("PIPELINE_LOCAL_NUM_CTX", "16384"))
+        self.dispatch_timeout = float(
+            os.environ.get("PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS", "900"))
+        self.max_steps = int(os.environ.get("PIPELINE_LOCAL_MAX_STEPS", "40"))
+        self.temperature = float(os.environ.get("PIPELINE_LOCAL_TEMPERATURE", "0.3"))
+        self.review_max_steps = int(os.environ.get("PIPELINE_LOCAL_REVIEW_MAX_STEPS", "20"))
 
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
     ) -> str:
+        # Review-style call: allowed_tools includes Bash and a worktree cwd is
+        # given (see _run_reviewer). The model must actually run the tests and
+        # read files, then emit a VERDICT — so run a blocking read-only tool
+        # loop, mirroring how ClaudeCliDriver.complete() transparently runs a
+        # tool loop when `claude -p` is given allowed_tools+cwd. Overlord-style
+        # calls (allowed_tools="Read", no cwd) fall through to single-shot.
+        if cwd is not None and allowed_tools and "Bash" in allowed_tools.split(","):
+            return self._review_loop(prompt, system=system, model=model, cwd=cwd)
+
+        resolved_model = _resolve_local_model(model)
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        resolved_model = _resolve_local_model(model)
         try:
-            resp = httpx.post(
-                f"{self.endpoint}/api/chat",
-                json={
-                    "model": resolved_model, "messages": messages, "stream": False,
-                    "options": {"num_ctx": self.num_ctx},
-                },
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
+            payload = self._chat(messages, resolved_model)
         except httpx.HTTPError as e:
             raise RuntimeError(
                 f"Local backend at {self.endpoint} (model={resolved_model}) "
                 f"is unreachable or errored: {e}"
             ) from e
-        payload = resp.json()
-        return payload["message"]["content"]
+        return payload["content"]
+
+    def _chat(self, messages: list, model: str, tools: list | None = None) -> dict:
+        body = {
+            "model": model, "messages": messages, "stream": False,
+            "options": {"num_ctx": self.num_ctx, "temperature": self.temperature},
+        }
+        if tools:
+            body["tools"] = tools
+        resp = httpx.post(f"{self.endpoint}/api/chat", json=body, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()["message"]
+
+    # Read-only tools for the review loop. No create/edit — review must not
+    # modify the tree (the "review does not merge / does not edit" guarantee).
+    # bash is needed to run the test suite; like the Claude reviewer's
+    # Bash+Read, it is not sandboxed, but it runs in the isolated worktree.
+    # submit_review is the explicit terminator (like dispatch's `done`): far
+    # more reliable for a weak local model than scanning free prose for a
+    # VERDICT line, which in testing it failed to emit cleanly.
+    _REVIEW_TOOLS = [
+        {"type": "function", "function": {
+            "name": "bash", "description": "Run a bash command in the worktree (run tests, git diff/log, etc.).",
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {
+            "name": "view_file", "description": "Show a file's contents with line numbers.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+        {"type": "function", "function": {
+            "name": "submit_review", "description": "Submit your final review verdict. Call this once, after running the tests and inspecting the changes.",
+            "parameters": {"type": "object", "properties": {
+                "verdict": {"type": "string", "enum": ["APPROVE", "REQUEST_CHANGES"]},
+                "summary": {"type": "string", "description": "brief justification"},
+                "pr_title": {"type": "string", "description": "PR title (if APPROVE)"},
+                "pr_body": {"type": "string", "description": "PR body (if APPROVE)"}},
+                "required": ["verdict"]}}},
+    ]
+
+    def _review_loop(self, prompt: str, *, system: str | None, model: str, cwd: str) -> str:
+        """Blocking read-only agentic loop for review. The model runs tests and
+        reads files via tools, then calls submit_review with its verdict. Returns
+        a `VERDICT: ...` text block (so pipeline_mcp_server._parse_verdict, shared
+        with the Claude path, scans it unchanged). Uses the same tolerant parsing
+        as dispatch, plus key-based tool inference, since the local model
+        intermittently emits tool calls as text and drops the tool name."""
+        resolved_model = _resolve_local_model(model)
+        preamble = (
+            "You are reviewing code in the current directory, READ-ONLY. First use "
+            "the bash tool to run the test suite and inspect the changes (e.g. "
+            "`git diff`, `git log -p -1`), and view_file to read files — do not edit "
+            "anything. Then call submit_review exactly once with verdict APPROVE or "
+            "REQUEST_CHANGES (REQUEST_CHANGES if the tests fail). Always call a tool; "
+            "do not answer in prose."
+        )
+        system_content = preamble + ("\n\n" + system if system else "")
+        messages = [{"role": "system", "content": system_content},
+                    {"role": "user", "content": prompt}]
+        nudged = False
+        for _ in range(self.review_max_steps):
+            try:
+                m = self._chat(messages, resolved_model, tools=self._REVIEW_TOOLS)
+            except httpx.HTTPError as e:
+                raise RuntimeError(
+                    f"Local backend at {self.endpoint} (model={resolved_model}) "
+                    f"is unreachable or errored during review: {e}"
+                ) from e
+            messages.append(m)
+            tcs = (m.get("tool_calls") or _recover_tool_calls(m.get("content", ""))
+                   or _infer_review_tool_call(m.get("content", "")))
+            if not tcs:
+                if nudged:
+                    break  # still no tool after a nudge -> give up (-> UNKNOWN -> parks)
+                nudged = True
+                messages.append({"role": "user", "content":
+                    "Call a tool (bash/view_file to investigate, or submit_review to finish). Do not reply in prose."})
+                continue
+            nudged = False
+            for tc in tcs:
+                fn = tc["function"]["name"]
+                args = tc["function"]["arguments"]
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except ValueError:
+                        args = {}
+                if fn == "submit_review":
+                    verdict = str(args.get("verdict", "")).upper()
+                    if verdict not in ("APPROVE", "REQUEST_CHANGES"):
+                        verdict = "REQUEST_CHANGES"  # malformed -> safe default
+                    body = args.get("pr_body") or args.get("summary", "")
+                    title = args.get("pr_title", "")
+                    return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
+                messages.append({"role": "tool", "content": _run_readonly_tool(fn, args, Path(cwd))})
+        # No verdict within the step cap: return empty so _parse_verdict yields
+        # UNKNOWN, which the orchestrator treats as not-APPROVE (safe — parks
+        # for a human/Claude rather than auto-merging).
+        return ""
+
+    # The local agent loop lives in a standalone script so it can run as a
+    # pollable subprocess; run it with this project's venv python (which has
+    # httpx and can import pipeline_mcp_server for in-process checkpointing).
+    _AGENT_SCRIPT = Path(__file__).resolve().parent / "scripts" / "local_agent.py"
+    _VENV_PYTHON = Path(__file__).resolve().parent / ".venv" / "bin" / "python3"
 
     def dispatch(
         self, prompt: str, *, system: str | None = None, model: str,
@@ -191,89 +382,48 @@ class OllamaDriver:
     ) -> AgentHandle:
         if allowed_tools and not ({"Edit", "Write"} & set(allowed_tools.split(","))):
             raise NotImplementedError(
-                f"OpenHands has no read-only mode, so OllamaDriver cannot "
-                f"honor allowed_tools={allowed_tools!r} (it would let the "
-                f"agent edit files anyway). Keep this role on claude until "
-                f"tool restriction is verified."
-            )
-        settings_path = self._settings_dir() / "agent_settings.json"
-        if not settings_path.exists():
-            raise RuntimeError(
-                f"No OpenHands settings at {settings_path}. Run the one-time "
-                f"local-dispatch setup first: "
-                f"$(uv tool dir)/openhands/bin/python3 "
-                f"scripts/setup_openhands_local.py"
+                f"OllamaDriver.dispatch is a writing/coding harness and cannot "
+                f"honor read-only allowed_tools={allowed_tools!r} (it would let "
+                f"the agent edit files anyway). Keep this role on claude until a "
+                f"read-only local tool set is implemented and verified."
             )
         resolved_model = _resolve_local_model(model)
-        task = f"{system}\n\n{prompt}" if system else prompt
-        self._write_mcp_config(self._settings_dir())
         env = {
             **os.environ,
-            "LLM_MODEL": f"ollama/{resolved_model}",
-            "LLM_BASE_URL": self.endpoint,
-            "LLM_API_KEY": os.environ.get("PIPELINE_LOCAL_API_KEY", "dummy"),
-            "OPENHANDS_PERSISTENCE_DIR": str(self._settings_dir()),
-            "OPENHANDS_SUPPRESS_BANNER": "1",
-            "NO_COLOR": "1",
+            "LOCAL_AGENT_MODEL": resolved_model,
+            "LOCAL_AGENT_SYSTEM": system or "",
+            "LOCAL_AGENT_TASK": prompt,
+            "LOCAL_AGENT_ENDPOINT": self.endpoint,
+            "LOCAL_AGENT_NUM_CTX": str(self.num_ctx),
+            "LOCAL_AGENT_TIMEOUT": str(self.dispatch_timeout),
+            "LOCAL_AGENT_MAX_STEPS": str(self.max_steps),
+            "LOCAL_AGENT_TEMPERATURE": str(self.temperature),
         }
-        argv = [
-            "openhands", "--headless", "--override-with-envs",
-            "--always-approve", "--exit-without-confirmation",
-            "-t", task,
-        ]
+        argv = [str(self._VENV_PYTHON), str(self._AGENT_SCRIPT)]
         log_file = open(log_path, "a" if append else "w")
         proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log_file, stderr=log_file)
         log_file.close()
         return AgentHandle(pid=proc.pid)
 
-    @staticmethod
-    def _settings_dir() -> Path:
-        return Path(os.environ.get(
-            "PIPELINE_OPENHANDS_PERSISTENCE_DIR", "~/.claude/openhands-pipeline",
-        )).expanduser()
-
-    # _checkpoint_impl only touches PLAN_DIR (manifest/journal lookup) and the
-    # worktree path it's given explicitly - no other pipeline config needed.
-    _MCP_PASSTHROUGH_VARS = ("PLAN_DIR",)
-
-    @classmethod
-    def _write_mcp_config(cls, settings_dir: Path) -> None:
-        """Register the minimal checkpoint-only MCP server (see
-        scripts/checkpoint_mcp_server.py) with OpenHands, so dispatched local
-        agents can checkpoint without getting access to this pipeline's full
-        orchestration toolset (dispatch_story, approve_merge,
-        advance_pipeline, ...) - a privilege-escalation risk for a less
-        reliable local model, and in practice also degraded tool selection
-        (~20 irrelevant tools led an agent to hallucinate a "create_file"
-        tool instead of using its own file-edit tool). Found via real
-        end-to-end testing, not theoretical.
-
-        Rewritten on every dispatch (cheap, idempotent) rather than once at
-        setup time, so it always reflects this process's current PLAN_DIR
-        rather than going stale if that's overridden per-project.
-        """
-        pipeline_dir = Path(__file__).resolve().parent
-        config = {
-            "mcpServers": {
-                "pipeline-checkpoint": {
-                    "transport": "stdio",
-                    "command": str(pipeline_dir / ".venv" / "bin" / "python3"),
-                    "args": [str(pipeline_dir / "scripts" / "checkpoint_mcp_server.py")],
-                    "env": {
-                        k: os.environ[k] for k in cls._MCP_PASSTHROUGH_VARS
-                        if k in os.environ
-                    },
-                }
-            }
-        }
-        settings_dir.mkdir(parents=True, exist_ok=True)
-        (settings_dir / "mcp.json").write_text(json.dumps(config))
-
     def usage_probe_text(self) -> str:
         raise NotImplementedError(
-            "OllamaDriver has no usage/cost concept - the resource gate "
-            "for local backends is a separate, not-yet-implemented check."
+            "OllamaDriver has no usage/cost concept - its resource gate is "
+            "resource_status() (Ollama reachability), not a /cost probe."
         )
+
+    def resource_status(self) -> dict:
+        """Local backend has no usage/cost limit to respect, so the only gate
+        is whether the Ollama endpoint is up. (The concurrency ceiling is
+        enforced separately by advance_pipeline via MAX_CONCURRENT_AGENTS.)
+        This is what unlocks overnight autonomy decoupled from Claude's weekly
+        limit: as long as Ollama is reachable, local dispatch keeps running.
+        """
+        try:
+            resp = httpx.get(f"{self.endpoint}/api/tags", timeout=10)
+            resp.raise_for_status()
+            return {"ok": True, "reason": ""}
+        except httpx.HTTPError as e:
+            return {"ok": False, "reason": f"Ollama endpoint {self.endpoint} unreachable: {e}"}
 
 
 # Registry of available drivers by config name. Register new drivers here -
@@ -297,11 +447,12 @@ def get_backend(role: str | None = None) -> Backend:
     role can move off Claude without touching the others. Defaults to
     "claude".
 
-    "local" (OllamaDriver) implements complete() (overlord-style
-    self-contained prompts) and dispatch() (via OpenHands - real tool
-    execution, requires one-time setup, see scripts/setup_openhands_local.py).
-    It refuses to dispatch with a read-only allowed_tools, so routing "review"
-    to it raises NotImplementedError until tool restriction is verified.
+    "local" (OllamaDriver) implements complete() — both overlord-style
+    single-shot prompts and review-style read-only tool loops (runs tests +
+    reads, then submit_review) — and dispatch() (a native-tool-calling write
+    agent loop, scripts/local_agent.py, run as a subprocess). So all three
+    roles (overlord, review, dispatch) can be routed local via
+    PIPELINE_BACKEND_<ROLE>=local.
     """
     if role is None:
         return ClaudeCliDriver()

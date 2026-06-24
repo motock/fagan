@@ -18,8 +18,11 @@ and safety controls.
 |---|---|---|
 | Persona subagents | `~/.claude/agents/*.md` | The SDLC roles agents play |
 | Decision policy | `~/.claude/overlord-policy.md` | How the overlord decides |
-| Pipeline MCP server | `~/.claude/mcp-servers/pipeline/pipeline_mcp_server.py` | All pipeline tools |
-| Tests | `~/.claude/mcp-servers/pipeline/test_pipeline_mcp_server.py` | `pytest`, run via the venv |
+| Pipeline MCP server | `pipeline_mcp_server.py` | All pipeline tools + orchestration |
+| Backend seam | `backend.py` | Per-role driver routing (`claude` / `local`); single-shot, review, dispatch, resource gate |
+| Local agent loop | `scripts/local_agent.py` | Native-tool-calling write loop for local dispatch (subprocess) |
+| Install / deps | `scripts/install.sh`, `requirements*.txt` | venv + dependency setup |
+| Tests | `test_pipeline_mcp_server.py`, `test_backend.py` | `pytest`, run via the venv |
 | Plans / manifests / logs | `~/.claude/plans/` | Plan, manifest, decisions, notifications |
 | Worktrees | `~/.claude/worktrees/` | Isolated per-story branches |
 | Issue tracker | Plane (external) | Source of truth for stories |
@@ -112,9 +115,10 @@ log as an audit record.
 ### Dispatch & status
 - `list_ready_stories(plan_name)` — stories whose dependencies are all `done`.
 - `dispatch_story(plan_name, story_key)` — create a worktree on
-  `agent/<key>`, spawn a headless `claude -p` agent **with the story's persona
-  system prompt, model, and curated tools**, transition the Plane issue to
-  In Progress. Returns immediately with the PID and a `resumed` flag.
+  `agent/<key>`, spawn a headless agent on the configured dispatch backend
+  (`claude -p`, or the local agent loop) **with the story's persona system
+  prompt, model, and curated tools**, transition the Plane issue to In
+  Progress. Returns immediately with the PID and a `resumed` flag.
   If the story is `interrupted` (or its worktree already exists from a prior
   run), it **reuses** the existing worktree/branch instead of recreating them
   and seeds the prompt with the checkpoint journal so the agent continues
@@ -264,31 +268,50 @@ Set global vars in your shell profile; set per-project overrides in the project'
 | `PIPELINE_RISK_THRESHOLD` | `low` | Highest risk merged unattended in `gated` |
 | `PIPELINE_DEFAULT_MODEL` | `sonnet` | Model when no story/persona model |
 | `USAGE_STATE_PATH` | `~/.claude/usage_state.json` | Where `check_usage` persists usage/paused state |
-| `PIPELINE_PAUSE_THRESHOLD` | `90` | `%` usage (session or week) that trips the gate |
-| `PIPELINE_RESUME_THRESHOLD` | `70` | `%` usage both windows must drop below to clear it |
-| `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend driver for dispatch (coding) agents |
-| `PIPELINE_BACKEND_REVIEW` | `claude` | Backend driver for the code-reviewer persona |
-| `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend driver for overlord decisions |
-| `PIPELINE_LOCAL_ENDPOINT` | `http://localhost:11434/v1` | OpenAI-compatible endpoint for the `local` driver (Ollama, vLLM, a hosted open-weights API — same driver, different URL) |
+| `PIPELINE_MAX_CONCURRENT_AGENTS` | `3` | Cap on dispatched agents running at once (across all plans); `<=0` = unlimited |
+| `PIPELINE_PAUSE_THRESHOLD` | `90` | `%` of the **session** window that trips the Claude usage gate |
+| `PIPELINE_RESUME_THRESHOLD` | `70` | `%` the **session** window must drop below to clear the gate |
+| `PIPELINE_WEEK_PAUSE_THRESHOLD` | `90` | `%` of the **week** window that trips the gate |
+| `PIPELINE_WEEK_RESUME_THRESHOLD` | `70` | `%` the **week** window must drop below to clear the gate |
+| `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `local` |
+| `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `local` |
+| `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `local` |
+| `PIPELINE_LOCAL_ENDPOINT` | `http://localhost:11434` | Ollama base URL for the `local` driver (it uses Ollama's native `/api/chat`, the only surface that accepts `num_ctx`). Point at a remote Ollama to use another box. |
 | `PIPELINE_LOCAL_MODEL_DEFAULT` | `devstral:24b` | Local model used for any tier without its own override below |
 | `PIPELINE_LOCAL_MODEL_OPUS` | — | Local model for the `opus` tier (falls back to the default) |
 | `PIPELINE_LOCAL_MODEL_SONNET` | — | Local model for the `sonnet` tier (falls back to the default) |
 | `PIPELINE_LOCAL_MODEL_HAIKU` | — | Local model for the `haiku` tier (falls back to the default) |
-| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Request timeout for local/cloud completions |
+| `PIPELINE_LOCAL_NUM_CTX` | `16384` | Ollama context window for local calls (sized to fit 100% on a 24GB M4 GPU; raising it risks a slow CPU/GPU split) |
+| `PIPELINE_LOCAL_TEMPERATURE` | `0.3` | Sampling temperature for local model calls |
+| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Per-request timeout for local single-shot `complete()` calls |
+| `PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS` | `900` | Per-request timeout inside the local dispatch/review agent loop |
+| `PIPELINE_LOCAL_MAX_STEPS` | `40` | Max tool-call steps a local **dispatch** run takes before it parks (WIP-commits) |
+| `PIPELINE_LOCAL_REVIEW_MAX_STEPS` | `20` | Max tool-call steps a local **review** takes before returning UNKNOWN (→ parks) |
 
 **Backend routing:** dispatch, review, and overlord each resolve independently
 via `backend.get_backend(role)` (see `backend.py`) — moving one role off Claude
 never touches the others. Two drivers exist today:
 - `claude` — wraps the `claude` CLI (unchanged behavior).
-- `local` — calls any OpenAI-compatible `/chat/completions` endpoint. It only
-  implements `complete()` (a single prompt/system in, text out): safe for
-  self-contained prompts like the overlord's decision flow, but routing
-  `dispatch` or `review` to it raises `NotImplementedError` — those roles need
-  real tool execution (running tests, editing files), which no driver
-  provides yet.
+- `local` — talks to a local **Ollama** server (native `/api/chat`). All three
+  roles can run local:
+  - **overlord** — single-shot `complete()` (self-contained prompt in, ruling out).
+  - **review** — a blocking **read-only** tool loop (the model runs the tests
+    and reads files via `bash`/`view_file` — no edit tools — then submits a
+    verdict). Routing review local is best kept to low-risk stories; see the
+    tiering note in `Local_LLM_Port_Plan.md`.
+  - **dispatch** — a native-tool-calling **write** agent loop
+    (`scripts/local_agent.py`, run as a subprocess: `create_file`/`str_replace`/
+    `view_file`/`bash`/`checkpoint`/`done`, with a non-destructive editor, loop
+    guard, and commit enforcement).
 
-Setting any `PIPELINE_BACKEND_*` var to a name that isn't registered also
-raises `NotImplementedError` naming the offending var.
+  The local driver deliberately does **not** use OpenHands — see
+  `Local_LLM_Port_Plan.md` for the full investigation (why, and the model
+  caveats: local dispatch is reliable on small/mechanical stories but has a
+  reasoning ceiling, so keep `PIPELINE_RISK_THRESHOLD` conservative and let
+  bigger work park or stay on Claude).
+
+Setting any `PIPELINE_BACKEND_*` var to a name that isn't registered raises
+`NotImplementedError` naming the offending var.
 
 **Autonomy levels:**
 - `dry-run` — plan and log only; never dispatch, merge, or take irreversible
@@ -333,10 +356,11 @@ raises `NotImplementedError` naming the offending var.
 
 ## Usage gate & resumability
 
-A dispatched agent runs as a real `claude -p` subprocess against your Claude
-subscription. If usage runs high, you want the pipeline to stop spending more
-without losing whatever a story has already done. Two mechanisms make that
-possible:
+A dispatched agent runs as a real subprocess — `claude -p` against your Claude
+subscription, or a local-model agent loop against Ollama. If a backend's
+resource (Claude usage, or Ollama availability) runs out, you want the pipeline
+to stop spending more on that backend without losing whatever a story has
+already done. Two mechanisms make that possible:
 
 **Checkpointing.** Every dispatch prompt instructs the agent to call
 `checkpoint(plan_name, story_key, step, summary, next_hint)` after each
@@ -347,18 +371,26 @@ only the work since the last checkpoint, not the whole run. **Checkpoint
 granularity is the one knob that matters here**: more frequent checkpoints
 shrink the loss window at a small overhead cost.
 
-**The usage gate.** Run `check_usage()` on an external ~60s cadence (cron,
-launchd, or `/loop`) — it probes `claude -p "/usage"`, computes `paused` with
-hysteresis (trip at `PIPELINE_PAUSE_THRESHOLD`%, clear only once **both** the
-session and week windows drop below `PIPELINE_RESUME_THRESHOLD`%), and
-persists it to `USAGE_STATE_PATH`. `advance_pipeline` reads that flag each
-tick: while paused, it `interrupt_story`s every running agent (checkpoint +
-`SIGTERM`, not a kill -9 — the worktree survives) instead of letting them
-keep burning the quota you're trying to protect, and skips starting new
-dispatch/review. Once usage drops back below the resume threshold, the next
-`advance_pipeline` tick dispatches `interrupted` stories exactly like `todo`
-ones — `dispatch_story` detects the existing worktree and resumes instead of
-recreating it. No separate "resume" step is needed.
+**The resource gate (per-backend).** Each tick, `advance_pipeline` gates
+dispatch and review **independently, by the backend serving each role**
+(`backend.resource_status()`):
+- **Claude-backed roles** consult the usage gate. Run `check_usage()` on an
+  external ~60s cadence (cron, launchd, or `/loop`) — it probes
+  `claude -p "/usage"`, computes `paused` with hysteresis (trip at the
+  session/week `PAUSE_THRESHOLD`%, clear only once **both** windows drop below
+  their `RESUME_THRESHOLD`%), and persists it to `USAGE_STATE_PATH`.
+- **Local-backed roles** consult only Ollama reachability — there's no usage
+  limit, so a local role is "available" whenever Ollama is up. **This is what
+  lets local dispatch keep running while Claude's weekly limit is maxed.**
+
+If the **dispatch** backend is gated, the tick `interrupt_story`s every running
+agent (checkpoint + `SIGTERM`, not a kill -9 — the worktree survives) and starts
+no new dispatch; if the **review** backend is gated, review is deferred. The two
+are independent (so a Claude usage pause with dispatch routed local only defers
+Claude review). Merge adjudication always runs (no model usage). Once a gated
+backend frees up, the next tick dispatches `interrupted` stories exactly like
+`todo` ones — `dispatch_story` detects the existing worktree and resumes instead
+of recreating it. No separate "resume" step is needed.
 
 **What this does not solve:** a resumed agent may redo whatever it was
 mid-way through at its last checkpoint. Git-tracked file edits are naturally
@@ -373,13 +405,15 @@ concern, not something the pipeline can guarantee for you.
 
 ```bash
 cd ~/.claude/mcp-servers/pipeline
+scripts/install.sh --dev               # one-time: create .venv + install runtime + pytest
 .venv/bin/python -m pytest -q          # run the suite
-.venv/bin/python -m py_compile pipeline_mcp_server.py
+.venv/bin/python -m py_compile pipeline_mcp_server.py backend.py
 ```
 
-Tests mock only external boundaries (`claude` CLI, `git`, `gh`, Plane HTTP) and
-exercise internal logic directly; `@mcp.tool()` leaves the functions directly
-callable. `pytest` is installed in the project `.venv` as a dev dependency.
+Tests mock only external boundaries (`claude` CLI, `git`, `gh`, Plane HTTP, and
+the local Ollama HTTP calls) and exercise internal logic directly; `@mcp.tool()`
+leaves the functions directly callable. Runtime deps are in `requirements.txt`;
+`pytest` is added by `requirements-dev.txt`.
 
 When changing behavior, follow TDD (write the failing test first) and do not
 modify existing tests without a deliberate reason — they are the regression
@@ -389,13 +423,21 @@ guard for the pipeline.
 
 ## Prerequisites
 
-- **Plane** instance with API access (issue tracker / source of truth).
+- **Python 3.10+** and the project venv. Run **`scripts/install.sh`** (add
+  `--dev` for the test deps): it creates `.venv`, installs `requirements.txt`
+  (`mcp`, `httpx`), and reports which external tools below are present. The
+  `.venv` is gitignored, so this is the first step on a fresh clone.
+- **git** on PATH — worktrees, branches, merges.
 - **GitHub CLI** (`gh`) installed and authenticated (`gh auth login`) — required
   for the review gate and merges.
-- **Claude Code CLI** (`claude`) on PATH — used for all headless agents.
+- **Claude Code CLI** (`claude`) on PATH — used for any role on the default
+  `claude` backend.
+- **Ollama** + the local model (`ollama pull devstral:24b`) — **only if** you
+  route any role to the `local` backend (`PIPELINE_BACKEND_*=local`). Not needed
+  for an all-Claude setup.
 - The pipeline MCP server registered (globally or per-project `.mcp.json`).
   After editing the server, reload the MCP server (restart the Claude Code
   session) so new tools are picked up.
-- A poller calling `check_usage()` every ~60s, if you want the usage gate
+- A poller calling `check_usage()` every ~60s, if you want the Claude usage gate
   active (see **Usage gate & resumability**). Without it, `paused` simply
-  never gets set and `advance_pipeline` behaves as if usage is always low.
+  never gets set and Claude-backed roles behave as if usage is always low.

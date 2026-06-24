@@ -649,6 +649,16 @@ def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
     return False
 
 
+def _role_resource_ok(role: str) -> tuple[bool, str]:
+    """Whether the backend serving `role` ("dispatch"/"review") can take work
+    right now. Delegates to that backend's resource_status() (Step 5): the
+    Claude driver reports the poller-fed usage gate; the local driver reports
+    Ollama reachability. So a Claude usage pause gates only Claude-backed roles
+    and never freezes local dispatch. Returns (ok, reason)."""
+    status = backend.get_backend(role).resource_status()
+    return bool(status.get("ok", True)), status.get("reason", "")
+
+
 def _count_in_progress_agents() -> int:
     """Count *actually running* dispatched agents (status in_progress with a
     live pid) across every plan's manifest, not just one plan — the usage
@@ -1033,11 +1043,11 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
 def _checkpoint_impl(
     plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "",
 ) -> dict[str, Any]:
-    """Checkpoint logic, factored out of the `checkpoint` tool so a minimal
-    dedicated MCP server (scripts/checkpoint_mcp_server.py) can expose just
-    this one tool to dispatched agents, instead of this whole server's full
-    orchestration toolset (dispatch_story, approve_merge, advance_pipeline,
-    ...) - which a less reliable local model has no business calling."""
+    """Checkpoint logic, factored out of the `checkpoint` tool so it can be
+    reused directly by the local dispatch agent loop (scripts/local_agent.py
+    calls this in-process for its `checkpoint` tool) without exposing this
+    whole server's orchestration toolset (dispatch_story, approve_merge,
+    advance_pipeline, ...) to a dispatched agent."""
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)
@@ -1262,11 +1272,15 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
     a scheduler (/loop or cron). In PIPELINE_AUTONOMY=dry-run it plans and logs
     only, taking no actions.
 
-    Honors the usage gate (see check_usage): while paused, in-progress stories
-    are interrupted (checkpointed and made resumable) and no new dispatch or
-    review is started, since both spend usage. Merge adjudication still runs,
-    since it costs no model usage. "interrupted" stories are dispatch-eligible
-    like "todo" ones, so they resume automatically once usage allows.
+    Honors a per-backend resource gate: dispatch and review are gated
+    independently by their own backend's resource_status() (see
+    _role_resource_ok). If the dispatch backend is gated, in-progress stories
+    are interrupted (checkpointed, resumable) and no new dispatch starts; if
+    the review backend is gated, review is deferred. Each is independent, so a
+    Claude usage pause no longer freezes local-backed dispatch. Merge
+    adjudication always runs (no model usage). "interrupted" stories are
+    dispatch-eligible like "todo" ones, so they resume automatically once the
+    dispatch backend frees up.
 
     Also honors MAX_CONCURRENT_AGENTS: dispatch is capped to the number of
     free slots remaining (limit minus agents already in_progress across all
@@ -1304,7 +1318,12 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     interrupt_story(plan_name, key)
         return {"ok": True, "skipped": "plan_paused"}
 
-    paused = _read_usage_state().get("paused", False)
+    # Per-backend resource gate (Step 5): dispatch and review can run on
+    # different backends, so gate each by ITS backend's availability rather
+    # than one global Claude flag. This is what lets local dispatch keep
+    # running when Claude's weekly limit is hit (and vice versa).
+    dispatch_ok, dispatch_reason = _role_resource_ok("dispatch")
+    review_ok, review_reason = _role_resource_ok("review")
 
     done_keys = {k for k, v in stories.items() if v["status"] == "done"}
     ready = [
@@ -1318,8 +1337,11 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             "ok": True,
             "dry_run": True,
             "autonomy": PIPELINE_AUTONOMY,
-            "paused": paused,
-            "would_dispatch": ready,
+            # "paused" kept for back-compat = dispatch gated.
+            "paused": not dispatch_ok,
+            "dispatch_paused": not dispatch_ok,
+            "review_paused": not review_ok,
+            "would_dispatch": ready if dispatch_ok else [],
             "would_merge_decisions": {
                 k: _merge_decision(v)
                 for k, v in stories.items() if v["status"] == "pr_open"
@@ -1328,7 +1350,9 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
 
     summary: dict[str, Any] = {
         "autonomy": PIPELINE_AUTONOMY,
-        "paused": paused,
+        "paused": not dispatch_ok,
+        "dispatch_paused": not dispatch_ok,
+        "review_paused": not review_ok,
         "dispatched": [], "advanced": [], "merged": [],
         "parked": [], "failed": [], "interrupted": [], "notify": [],
     }
@@ -1338,16 +1362,17 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     # _default_branch read the plain REPO_ROOT global, so this plan's repo
     # must be active for the duration of every action below.
     with _scoped_repo_root(plan_name):
-        if paused:
-            # Usage gate tripped: stop spending more, and free up in-flight
-            # agents (resumable via their checkpoint journal) rather than
-            # letting them keep burning the quota we're trying to protect.
+        if not dispatch_ok:
+            # The dispatch backend is gated: stop spending it, and free up
+            # in-flight agents (they run on the dispatch backend and are
+            # resumable via their checkpoint journal) rather than letting them
+            # keep burning the resource we're protecting.
             for key, story in stories.items():
                 if story["status"] == "in_progress" and "pid" in story:
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
-            _notify_user(plan_name, "Usage gate paused: deferring dispatch/review.")
-            summary["notify"].append("paused")
+            _notify_user(plan_name, f"Dispatch backend gated ({dispatch_reason}): deferring dispatch.")
+            summary["notify"].append("dispatch_paused")
         else:
             # 1. Dispatch ready (and resumable-interrupted) stories, capped to
             # the slots still free under MAX_CONCURRENT_AGENTS. <=0 means no cap.
@@ -1370,14 +1395,21 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         summary["failed"].append(key)
                         summary["notify"].append(key)
 
-            # Review every tests_passed story, including ones orphaned by a
-            # review that crashed (e.g. gh failure) on a prior tick —
-            # review_story is idempotent, so retrying is safe.
+        # Review every tests_passed story (incl. ones orphaned by a crashed
+        # review on a prior tick - review_story is idempotent). Gated by the
+        # REVIEW backend independently of dispatch: a Claude-dispatch pause no
+        # longer blocks reviewing already-finished work on a healthy review
+        # backend, and a local-dispatch run can still defer review if review
+        # is on Claude and Claude is gated.
+        if review_ok:
             stories = json.loads(manifest_path.read_text())["stories"]
             for key, story in stories.items():
                 if story["status"] == "tests_passed":
                     rv = review_story(plan_name, key)
                     summary["advanced"].append({key: rv["status"]})
+        else:
+            _notify_user(plan_name, f"Review backend gated ({review_reason}): deferring review.")
+            summary["notify"].append("review_paused")
 
         # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
         manifest = json.loads(manifest_path.read_text())

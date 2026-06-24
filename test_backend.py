@@ -97,7 +97,7 @@ def test_complete_pins_num_ctx_to_avoid_cpu_gpu_split(monkeypatch):
 
     b.OllamaDriver().complete("p", model="opus")
 
-    assert captured["options"] == {"num_ctx": 8192}
+    assert captured["options"]["num_ctx"] == 8192
 
 
 def test_complete_resolves_tier_to_configured_local_model(monkeypatch):
@@ -146,10 +146,95 @@ def test_usage_probe_text_raises_not_implemented():
         b.OllamaDriver().usage_probe_text()
 
 
+# ---------- complete() review mode (Bash + cwd -> read-only tool loop) ----------
+def test_complete_runs_readonly_review_loop_when_bash_and_cwd(tmp_path, monkeypatch):
+    """A review call (allowed_tools includes Bash + a worktree cwd) must run a
+    tool loop — run tests / read files — then return text with a VERDICT, not
+    a single-shot hallucinated verdict."""
+    driver = b.OllamaDriver()
+    responses = [
+        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo ran-tests"}}}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+    ]
+    tools_each_call = []
+    monkeypatch.setattr(
+        driver, "_chat",
+        lambda messages, model, tools=None: tools_each_call.append(tools) or responses.pop(0),
+    )
+
+    out = driver.complete("review the branch", system="reviewer body",
+                          model="sonnet", allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" in out
+    assert tools_each_call[0] is not None          # the loop offered tools
+    assert responses == []                          # consumed tool turn + submit_review
+
+
+def test_complete_review_loop_recovers_unnamed_tool_call(tmp_path, monkeypatch):
+    """devstral sometimes emits a bare args object with no tool name; the loop
+    must infer the tool from its keys (here: verdict -> submit_review)."""
+    driver = b.OllamaDriver()
+    responses = [{"content": 'Looks good.\n{"verdict": "APPROVE", "summary": "ok"}'}]
+    monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" in out
+
+
+def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
+    """Overlord-style complete() (allowed_tools='Read', no cwd) must NOT enter
+    the tool loop — one plain completion, no tools offered."""
+    driver = b.OllamaDriver()
+    seen_tools = []
+    monkeypatch.setattr(
+        driver, "_chat",
+        lambda messages, model, tools=None: seen_tools.append(tools) or {"content": "RULING: ROUTINE"},
+    )
+
+    out = driver.complete("adjudicate", system="overlord", model="opus", allowed_tools="Read")
+
+    assert out == "RULING: ROUTINE"
+    assert seen_tools == [None]                      # single call, no tools
+
+
+# ---------- resource_status() (per-backend gate, Step 5) ----------
+def test_ollama_resource_status_ok_when_endpoint_reachable(monkeypatch):
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    status = b.OllamaDriver().resource_status()
+    assert status["ok"] is True
+
+
+def test_ollama_resource_status_not_ok_when_endpoint_unreachable(monkeypatch):
+    def _boom(url, timeout):
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(b.httpx, "get", _boom)
+    status = b.OllamaDriver().resource_status()
+    assert status["ok"] is False
+    assert "unreachable" in status["reason"]
+
+
+def test_claude_resource_status_reflects_usage_paused_flag(monkeypatch):
+    import pipeline_mcp_server as p
+    monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": True})
+    assert b.ClaudeCliDriver().resource_status()["ok"] is False
+    monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": False})
+    assert b.ClaudeCliDriver().resource_status()["ok"] is True
+
+
+def test_claude_resource_status_fails_open_when_no_usage_state(monkeypatch):
+    import pipeline_mcp_server as p
+    monkeypatch.setattr(p, "_read_usage_state", lambda: {})
+    assert b.ClaudeCliDriver().resource_status()["ok"] is True
+
+
 # ---------- OllamaDriver.dispatch() ----------
 def test_dispatch_refuses_read_only_allowed_tools():
-    """OpenHands has no read-only mode - routing a read-only role (e.g.
-    review) here would silently let the agent edit files anyway."""
+    """The local agent loop is a writing/coding harness - routing a read-only
+    role (e.g. review) here would silently let the agent edit files anyway."""
     with pytest.raises(NotImplementedError, match="read-only"):
         b.OllamaDriver().dispatch(
             "p", model="opus", allowed_tools="Bash,Read",
@@ -157,18 +242,7 @@ def test_dispatch_refuses_read_only_allowed_tools():
         )
 
 
-def test_dispatch_raises_clear_error_when_settings_not_set_up(tmp_path, monkeypatch):
-    monkeypatch.setenv("PIPELINE_OPENHANDS_PERSISTENCE_DIR", str(tmp_path / "missing"))
-    with pytest.raises(RuntimeError, match="setup_openhands_local"):
-        b.OllamaDriver().dispatch(
-            "p", model="opus", allowed_tools="Bash,Edit,Write,Read",
-            cwd=b.Path("."), log_path=b.Path("x.log"), append=False,
-        )
-
-
-def test_dispatch_allows_default_tools_with_edit_and_write(tmp_path, monkeypatch):
-    monkeypatch.setenv("PIPELINE_OPENHANDS_PERSISTENCE_DIR", str(tmp_path))
-    (tmp_path / "agent_settings.json").write_text("{}")
+def test_dispatch_launches_local_agent_subprocess(tmp_path, monkeypatch):
     captured = {}
 
     def _fake_popen(argv, cwd, env, stdout, stderr):
@@ -187,40 +261,39 @@ def test_dispatch_allows_default_tools_with_edit_and_write(tmp_path, monkeypatch
     )
 
     assert handle.pid == 4242
-    assert captured["argv"][0] == "openhands"
-    assert "--headless" in captured["argv"]
-    assert "--override-with-envs" in captured["argv"]
-    assert captured["argv"][-2:] == ["-t", "be careful\n\nfix the bug"]
-    assert captured["env"]["LLM_MODEL"] == "ollama/devstral:24b"
-    assert captured["env"]["LLM_BASE_URL"] == "http://localhost:11434"
-    assert captured["env"]["OPENHANDS_PERSISTENCE_DIR"] == str(tmp_path)
+    # Runs the standalone agent loop with this project's venv python.
+    assert captured["argv"][0].endswith(".venv/bin/python3")
+    assert captured["argv"][1].endswith("scripts/local_agent.py")
+    assert captured["cwd"] == tmp_path
+    # Config goes through the environment; system and prompt stay separate.
+    assert captured["env"]["LOCAL_AGENT_MODEL"] == "devstral:24b"
+    assert captured["env"]["LOCAL_AGENT_SYSTEM"] == "be careful"
+    assert captured["env"]["LOCAL_AGENT_TASK"] == "fix the bug"
+    assert captured["env"]["LOCAL_AGENT_ENDPOINT"] == "http://localhost:11434"
     assert (tmp_path / "agent.log").exists()
 
 
-def test_dispatch_registers_minimal_checkpoint_only_mcp_server(tmp_path, monkeypatch):
-    """Without this, an agent told (via the dispatch prompt) to call the
-    checkpoint tool finds no such tool, gets confused, and gives up without
-    doing any work. It must be the minimal dedicated server, not the full
-    pipeline server - the full server's ~18 other tools (approve_merge,
-    advance_pipeline, ...) are a privilege-escalation risk for a local model
-    and, found via real end-to-end testing, also degraded tool selection."""
-    monkeypatch.setenv("PIPELINE_OPENHANDS_PERSISTENCE_DIR", str(tmp_path))
-    monkeypatch.setenv("PLAN_DIR", "/some/plan/dir")
-    (tmp_path / "agent_settings.json").write_text("{}")
+def test_dispatch_resolves_model_tier_and_passes_runtime_knobs(tmp_path, monkeypatch):
+    captured = {}
     monkeypatch.setattr(
-        b.subprocess, "Popen", lambda *a, **k: _FakePopenResult(1),
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr: captured.update(env=env, argv=argv)
+        or _FakePopenResult(7),
     )
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_SONNET", "qwen2.5-coder:14b")
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "8192")
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_STEPS", "12")
 
     b.OllamaDriver().dispatch(
-        "p", model="opus", allowed_tools="Bash,Edit,Write,Read",
+        "do it", system=None, model="sonnet", allowed_tools="Bash,Edit,Write,Read",
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    config = b.json.loads((tmp_path / "mcp.json").read_text())
-    server = config["mcpServers"]["pipeline-checkpoint"]
-    assert server["command"].endswith(".venv/bin/python3")
-    assert server["args"][0].endswith("scripts/checkpoint_mcp_server.py")
-    assert server["env"] == {"PLAN_DIR": "/some/plan/dir"}
+    # Logical tier resolves to a concrete local model, knobs pass through.
+    assert captured["env"]["LOCAL_AGENT_MODEL"] == "qwen2.5-coder:14b"
+    assert captured["env"]["LOCAL_AGENT_SYSTEM"] == ""
+    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "8192"
+    assert captured["env"]["LOCAL_AGENT_MAX_STEPS"] == "12"
 
 
 class _FakePopenResult:

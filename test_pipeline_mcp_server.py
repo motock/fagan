@@ -1328,7 +1328,7 @@ def test_approve_merge_merges_a_parked_approved_story(plan_dir, monkeypatch):
     merged = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
     plane_calls = []
-    monkeypatch.setattr(p, "_mark_plane_done", lambda key: plane_calls.append(key))
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: plane_calls.append(key))
 
     result = p.approve_merge("am", "P1")
 
@@ -1347,7 +1347,7 @@ def test_approve_merge_merges_a_pr_open_approved_story(plan_dir, monkeypatch):
                "review_verdict": "APPROVE", "risk": "high", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
-    monkeypatch.setattr(p, "_mark_plane_done", lambda key: None)
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
     result = p.approve_merge("am2", "P1")
 
@@ -1410,7 +1410,7 @@ def test_approve_merge_uses_plan_repo_root(plan_dir, monkeypatch, tmp_path):
         return "merged"
 
     monkeypatch.setattr(p, "_merge_pr", _fake_merge_pr)
-    monkeypatch.setattr(p, "_mark_plane_done", lambda key: None)
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
     p.approve_merge("am6", "P1")
 
@@ -1559,7 +1559,7 @@ def test_advance_pipeline_merge_success_clears_attempt_counter(plan_dir, monkeyp
                "risk": "low", "worktree": "/x", "merge_attempts": 1},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
-    monkeypatch.setattr(p, "_mark_plane_done", lambda key: None)
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
     result = p.advance_pipeline("mergerecover")
 
@@ -1584,6 +1584,134 @@ def test_approve_merge_returns_error_on_merge_failure(plan_dir, monkeypatch):
     assert result["ok"] is False
     assert "gh down" in result["error"]
     assert _read_manifest(plan_dir, "ammergefail")["stories"]["P1"]["status"] == "parked"
+
+
+def test_advance_pipeline_dispatch_failure_retries_within_budget(plan_dir, monkeypatch):
+    # A raising dispatch_story (bad git pull, backend hiccup) must not crash the
+    # tick: the story keeps its dispatch-eligible status, its attempt counter is
+    # bumped, and the user is notified so the next tick retries.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "DISPATCH_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "dispretry", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p, "dispatch_story",
+                        lambda plan, key: (_ for _ in ()).throw(RuntimeError("git pull failed")))
+
+    result = p.advance_pipeline("dispretry")
+
+    story = _read_manifest(plan_dir, "dispretry")["stories"]["T1"]
+    assert story["status"] == "todo"
+    assert story["dispatch_attempts"] == 1
+    assert "T1" not in result["failed"]
+    assert "T1" in result["notify"]
+
+
+def test_advance_pipeline_dispatch_failure_exhausts_budget(plan_dir, monkeypatch):
+    # A persistently failing launch becomes a hard failure (terminal: failed is
+    # not dispatch-eligible) rather than retrying every tick forever.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "DISPATCH_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "dispgiveup", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": [],
+               "dispatch_attempts": 2},
+    })
+    monkeypatch.setattr(p, "dispatch_story",
+                        lambda plan, key: (_ for _ in ()).throw(RuntimeError("still broken")))
+
+    result = p.advance_pipeline("dispgiveup")
+
+    story = _read_manifest(plan_dir, "dispgiveup")["stories"]["T1"]
+    assert story["status"] == "failed"
+    assert story["dispatch_attempts"] == 3
+    assert "still broken" in story.get("dispatch_error", "")
+    assert "T1" in result["failed"]
+    assert "T1" in result["notify"]
+
+
+def test_check_story_status_failed_launch_exhausts_budget(plan_dir, tmp_path, monkeypatch):
+    # An empty agent.log is a failed launch. Within budget it stays interrupted
+    # (redispatched); once the budget is spent it becomes a terminal failure.
+    monkeypatch.setattr(p, "DISPATCH_MAX_ATTEMPTS", 3)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("")
+    _write_manifest(plan_dir, "launchgiveup", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "dispatch_attempts": 2},
+    })
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (_ for _ in ()).throw(AssertionError("must not run tests")))
+
+    result = p.check_story_status("launchgiveup", "S1")
+
+    assert result["status"] == "failed"
+    story = _read_manifest(plan_dir, "launchgiveup")["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert story["dispatch_attempts"] == 3
+
+
+def test_check_story_status_successful_run_clears_dispatch_attempts(plan_dir, tmp_path, monkeypatch):
+    # Once a launch actually produces output and the tests run, the failed-launch
+    # counter is cleared so earlier infra blips don't count against a clean run.
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("the agent did real work\n")
+    _write_manifest(plan_dir, "launchclear", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "dispatch_attempts": 2},
+    })
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    class _Done:
+        returncode = 0
+        stdout = "ok"
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (str(worktree), ["true"]))
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: _Done())
+
+    result = p.check_story_status("launchclear", "S1")
+
+    assert result["status"] == "tests_passed"
+    assert "dispatch_attempts" not in _read_manifest(plan_dir, "launchclear")["stories"]["S1"]
+
+
+def test_plane_set_state_retries_then_succeeds(monkeypatch):
+    # A transient Plane failure is retried within budget rather than dropped.
+    monkeypatch.setattr(p, "PLANE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "_resolve_issue_uuid", lambda key: "uuid-1")
+    monkeypatch.setattr(p, "_get_state", lambda group: f"state-{group}")
+    calls = []
+
+    def _flaky(method, path, **kw):
+        calls.append(path)
+        if len(calls) < 2:
+            raise RuntimeError("502")
+        return {}
+    monkeypatch.setattr(p, "plane_request", _flaky)
+
+    assert p._plane_set_state("S1", "started") is True
+    assert len(calls) == 2
+
+
+def test_plane_set_state_gives_up_after_budget_and_notifies(plan_dir, monkeypatch):
+    # A persistent Plane outage gives up after the budget WITHOUT raising (Plane
+    # is best-effort) and records the drop durably instead of a silent print.
+    monkeypatch.setattr(p, "PLANE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "_resolve_issue_uuid", lambda key: "uuid-1")
+    monkeypatch.setattr(p, "_get_state", lambda group: f"state-{group}")
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("plane down")))
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    result = p._plane_set_state("S1", "completed", plan_name="pl")
+
+    assert result is False
+    assert len(notes) == 1
+    assert "plane down" in notes[0]
 
 
 def test_count_in_progress_agents_counts_across_plans(plan_dir, monkeypatch):

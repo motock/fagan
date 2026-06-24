@@ -121,34 +121,22 @@ class OllamaDriver:
     (e.g. the overlord's decision prompts, which embed all needed context as
     text).
 
-    dispatch() drives the OpenHands CLI (`uv tool install openhands`) headless
-    in `cwd`, giving the model a real tool loop (Bash/Edit/Read/etc.) to edit
-    files, run tests, and use git - verified end-to-end against devstral:24b.
-    Two fixes were needed beyond just pointing OpenHands at Ollama, both baked
-    into a persisted settings file by scripts/setup_openhands_local.py (see
-    that script's docstring for the full story):
-    - devstral errors on OpenHands' default reasoning_effort ("high"); needs
-      reasoning_effort="none".
-    - The same num_ctx problem as complete() recurs here independently
-      (OpenHands' LiteLLM path doesn't set it on its own); needs
-      litellm_extra_body={"options": {"num_ctx": ...}}.
-    OpenHands' CLI has no way to restrict tool access (no read-only mode), so
-    dispatch() refuses any allowed_tools that excludes Edit/Write - that would
-    silently fail to honor a read-only role (e.g. review) and let the agent
-    edit files anyway.
+    dispatch() runs scripts/local_agent.py as a subprocess in `cwd`, giving
+    the model a real native-tool-calling loop (create_file/str_replace/
+    view_file/bash/checkpoint/done) to edit files, run tests, use git, and
+    checkpoint. It deliberately does NOT use OpenHands: a full investigation
+    (Local_LLM_Port_Plan.md §Status/§8) found OpenHands' CLI is the wrong
+    harness for a 24B local model - its ~7 bloated tool schemas collapse
+    devstral's native `[TOOL_CALLS]` adherence and its strict native-only
+    parsing has no recovery when a tool call arrives as text. The minimal
+    loop (clean tool set + tolerant parser + non-destructive editor + loop
+    guard + commit enforcement) was validated end-to-end on real TDD stories.
+    See scripts/local_agent.py for the loop and its guards.
 
-    dispatch() also registers a minimal checkpoint-only MCP server with
-    OpenHands (see _write_mcp_config / scripts/checkpoint_mcp_server.py) so
-    the agent can call the `checkpoint` tool the dispatch prompt instructs it
-    to use - without this, a devstral agent given the checkpoint instruction
-    tries to call a tool that doesn't exist, gets confused, and gives up
-    without doing any work. It's a *separate minimal* server, not this
-    pipeline's full one: registering the full server gave the dispatched
-    agent direct MCP access to orchestration tools (approve_merge,
-    advance_pipeline, ...) it has no business calling, and the extra ~18
-    irrelevant tools also degraded tool selection (an agent hallucinated a
-    "create_file" tool instead of using its own). All found via real
-    end-to-end testing, not theoretical.
+    dispatch() refuses any allowed_tools that excludes Edit/Write: the local
+    agent is a writing/coding harness, so a read-only role (e.g. review) is
+    not yet supported here and would otherwise silently edit files. (A
+    read-only tool set for review is a future addition, noted in §8.)
     """
 
     def __init__(self) -> None:
@@ -156,7 +144,14 @@ class OllamaDriver:
             "PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434",
         ).rstrip("/")
         self.timeout = float(os.environ.get("PIPELINE_LOCAL_TIMEOUT_SECONDS", "600"))
-        self.num_ctx = int(os.environ.get("PIPELINE_LOCAL_NUM_CTX", "8192"))
+        # 16384 fits 100% on GPU on a 24GB M4 and gives the agentic loop real
+        # headroom; complete()'s self-contained prompts are smaller so the same
+        # value is safe there too.
+        self.num_ctx = int(os.environ.get("PIPELINE_LOCAL_NUM_CTX", "16384"))
+        self.dispatch_timeout = float(
+            os.environ.get("PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS", "900"))
+        self.max_steps = int(os.environ.get("PIPELINE_LOCAL_MAX_STEPS", "40"))
+        self.temperature = float(os.environ.get("PIPELINE_LOCAL_TEMPERATURE", "0.3"))
 
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
@@ -185,89 +180,40 @@ class OllamaDriver:
         payload = resp.json()
         return payload["message"]["content"]
 
+    # The local agent loop lives in a standalone script so it can run as a
+    # pollable subprocess; run it with this project's venv python (which has
+    # httpx and can import pipeline_mcp_server for in-process checkpointing).
+    _AGENT_SCRIPT = Path(__file__).resolve().parent / "scripts" / "local_agent.py"
+    _VENV_PYTHON = Path(__file__).resolve().parent / ".venv" / "bin" / "python3"
+
     def dispatch(
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: Path, log_path: Path, append: bool,
     ) -> AgentHandle:
         if allowed_tools and not ({"Edit", "Write"} & set(allowed_tools.split(","))):
             raise NotImplementedError(
-                f"OpenHands has no read-only mode, so OllamaDriver cannot "
-                f"honor allowed_tools={allowed_tools!r} (it would let the "
-                f"agent edit files anyway). Keep this role on claude until "
-                f"tool restriction is verified."
-            )
-        settings_path = self._settings_dir() / "agent_settings.json"
-        if not settings_path.exists():
-            raise RuntimeError(
-                f"No OpenHands settings at {settings_path}. Run the one-time "
-                f"local-dispatch setup first: "
-                f"$(uv tool dir)/openhands/bin/python3 "
-                f"scripts/setup_openhands_local.py"
+                f"OllamaDriver.dispatch is a writing/coding harness and cannot "
+                f"honor read-only allowed_tools={allowed_tools!r} (it would let "
+                f"the agent edit files anyway). Keep this role on claude until a "
+                f"read-only local tool set is implemented and verified."
             )
         resolved_model = _resolve_local_model(model)
-        task = f"{system}\n\n{prompt}" if system else prompt
-        self._write_mcp_config(self._settings_dir())
         env = {
             **os.environ,
-            "LLM_MODEL": f"ollama/{resolved_model}",
-            "LLM_BASE_URL": self.endpoint,
-            "LLM_API_KEY": os.environ.get("PIPELINE_LOCAL_API_KEY", "dummy"),
-            "OPENHANDS_PERSISTENCE_DIR": str(self._settings_dir()),
-            "OPENHANDS_SUPPRESS_BANNER": "1",
-            "NO_COLOR": "1",
+            "LOCAL_AGENT_MODEL": resolved_model,
+            "LOCAL_AGENT_SYSTEM": system or "",
+            "LOCAL_AGENT_TASK": prompt,
+            "LOCAL_AGENT_ENDPOINT": self.endpoint,
+            "LOCAL_AGENT_NUM_CTX": str(self.num_ctx),
+            "LOCAL_AGENT_TIMEOUT": str(self.dispatch_timeout),
+            "LOCAL_AGENT_MAX_STEPS": str(self.max_steps),
+            "LOCAL_AGENT_TEMPERATURE": str(self.temperature),
         }
-        argv = [
-            "openhands", "--headless", "--override-with-envs",
-            "--always-approve", "--exit-without-confirmation",
-            "-t", task,
-        ]
+        argv = [str(self._VENV_PYTHON), str(self._AGENT_SCRIPT)]
         log_file = open(log_path, "a" if append else "w")
         proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log_file, stderr=log_file)
         log_file.close()
         return AgentHandle(pid=proc.pid)
-
-    @staticmethod
-    def _settings_dir() -> Path:
-        return Path(os.environ.get(
-            "PIPELINE_OPENHANDS_PERSISTENCE_DIR", "~/.claude/openhands-pipeline",
-        )).expanduser()
-
-    # _checkpoint_impl only touches PLAN_DIR (manifest/journal lookup) and the
-    # worktree path it's given explicitly - no other pipeline config needed.
-    _MCP_PASSTHROUGH_VARS = ("PLAN_DIR",)
-
-    @classmethod
-    def _write_mcp_config(cls, settings_dir: Path) -> None:
-        """Register the minimal checkpoint-only MCP server (see
-        scripts/checkpoint_mcp_server.py) with OpenHands, so dispatched local
-        agents can checkpoint without getting access to this pipeline's full
-        orchestration toolset (dispatch_story, approve_merge,
-        advance_pipeline, ...) - a privilege-escalation risk for a less
-        reliable local model, and in practice also degraded tool selection
-        (~20 irrelevant tools led an agent to hallucinate a "create_file"
-        tool instead of using its own file-edit tool). Found via real
-        end-to-end testing, not theoretical.
-
-        Rewritten on every dispatch (cheap, idempotent) rather than once at
-        setup time, so it always reflects this process's current PLAN_DIR
-        rather than going stale if that's overridden per-project.
-        """
-        pipeline_dir = Path(__file__).resolve().parent
-        config = {
-            "mcpServers": {
-                "pipeline-checkpoint": {
-                    "transport": "stdio",
-                    "command": str(pipeline_dir / ".venv" / "bin" / "python3"),
-                    "args": [str(pipeline_dir / "scripts" / "checkpoint_mcp_server.py")],
-                    "env": {
-                        k: os.environ[k] for k in cls._MCP_PASSTHROUGH_VARS
-                        if k in os.environ
-                    },
-                }
-            }
-        }
-        settings_dir.mkdir(parents=True, exist_ok=True)
-        (settings_dir / "mcp.json").write_text(json.dumps(config))
 
     def usage_probe_text(self) -> str:
         raise NotImplementedError(
@@ -298,10 +244,11 @@ def get_backend(role: str | None = None) -> Backend:
     "claude".
 
     "local" (OllamaDriver) implements complete() (overlord-style
-    self-contained prompts) and dispatch() (via OpenHands - real tool
-    execution, requires one-time setup, see scripts/setup_openhands_local.py).
-    It refuses to dispatch with a read-only allowed_tools, so routing "review"
-    to it raises NotImplementedError until tool restriction is verified.
+    self-contained prompts) and dispatch() (a native-tool-calling agent loop,
+    scripts/local_agent.py, run as a subprocess - real file edits, tests, and
+    git). It refuses to dispatch with a read-only allowed_tools, so routing
+    "review" to it raises NotImplementedError until a read-only local tool set
+    is implemented and verified.
     """
     if role is None:
         return ClaudeCliDriver()

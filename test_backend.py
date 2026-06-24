@@ -148,8 +148,8 @@ def test_usage_probe_text_raises_not_implemented():
 
 # ---------- OllamaDriver.dispatch() ----------
 def test_dispatch_refuses_read_only_allowed_tools():
-    """OpenHands has no read-only mode - routing a read-only role (e.g.
-    review) here would silently let the agent edit files anyway."""
+    """The local agent loop is a writing/coding harness - routing a read-only
+    role (e.g. review) here would silently let the agent edit files anyway."""
     with pytest.raises(NotImplementedError, match="read-only"):
         b.OllamaDriver().dispatch(
             "p", model="opus", allowed_tools="Bash,Read",
@@ -157,18 +157,7 @@ def test_dispatch_refuses_read_only_allowed_tools():
         )
 
 
-def test_dispatch_raises_clear_error_when_settings_not_set_up(tmp_path, monkeypatch):
-    monkeypatch.setenv("PIPELINE_OPENHANDS_PERSISTENCE_DIR", str(tmp_path / "missing"))
-    with pytest.raises(RuntimeError, match="setup_openhands_local"):
-        b.OllamaDriver().dispatch(
-            "p", model="opus", allowed_tools="Bash,Edit,Write,Read",
-            cwd=b.Path("."), log_path=b.Path("x.log"), append=False,
-        )
-
-
-def test_dispatch_allows_default_tools_with_edit_and_write(tmp_path, monkeypatch):
-    monkeypatch.setenv("PIPELINE_OPENHANDS_PERSISTENCE_DIR", str(tmp_path))
-    (tmp_path / "agent_settings.json").write_text("{}")
+def test_dispatch_launches_local_agent_subprocess(tmp_path, monkeypatch):
     captured = {}
 
     def _fake_popen(argv, cwd, env, stdout, stderr):
@@ -187,40 +176,39 @@ def test_dispatch_allows_default_tools_with_edit_and_write(tmp_path, monkeypatch
     )
 
     assert handle.pid == 4242
-    assert captured["argv"][0] == "openhands"
-    assert "--headless" in captured["argv"]
-    assert "--override-with-envs" in captured["argv"]
-    assert captured["argv"][-2:] == ["-t", "be careful\n\nfix the bug"]
-    assert captured["env"]["LLM_MODEL"] == "ollama/devstral:24b"
-    assert captured["env"]["LLM_BASE_URL"] == "http://localhost:11434"
-    assert captured["env"]["OPENHANDS_PERSISTENCE_DIR"] == str(tmp_path)
+    # Runs the standalone agent loop with this project's venv python.
+    assert captured["argv"][0].endswith(".venv/bin/python3")
+    assert captured["argv"][1].endswith("scripts/local_agent.py")
+    assert captured["cwd"] == tmp_path
+    # Config goes through the environment; system and prompt stay separate.
+    assert captured["env"]["LOCAL_AGENT_MODEL"] == "devstral:24b"
+    assert captured["env"]["LOCAL_AGENT_SYSTEM"] == "be careful"
+    assert captured["env"]["LOCAL_AGENT_TASK"] == "fix the bug"
+    assert captured["env"]["LOCAL_AGENT_ENDPOINT"] == "http://localhost:11434"
     assert (tmp_path / "agent.log").exists()
 
 
-def test_dispatch_registers_minimal_checkpoint_only_mcp_server(tmp_path, monkeypatch):
-    """Without this, an agent told (via the dispatch prompt) to call the
-    checkpoint tool finds no such tool, gets confused, and gives up without
-    doing any work. It must be the minimal dedicated server, not the full
-    pipeline server - the full server's ~18 other tools (approve_merge,
-    advance_pipeline, ...) are a privilege-escalation risk for a local model
-    and, found via real end-to-end testing, also degraded tool selection."""
-    monkeypatch.setenv("PIPELINE_OPENHANDS_PERSISTENCE_DIR", str(tmp_path))
-    monkeypatch.setenv("PLAN_DIR", "/some/plan/dir")
-    (tmp_path / "agent_settings.json").write_text("{}")
+def test_dispatch_resolves_model_tier_and_passes_runtime_knobs(tmp_path, monkeypatch):
+    captured = {}
     monkeypatch.setattr(
-        b.subprocess, "Popen", lambda *a, **k: _FakePopenResult(1),
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr: captured.update(env=env, argv=argv)
+        or _FakePopenResult(7),
     )
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_SONNET", "qwen2.5-coder:14b")
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "8192")
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_STEPS", "12")
 
     b.OllamaDriver().dispatch(
-        "p", model="opus", allowed_tools="Bash,Edit,Write,Read",
+        "do it", system=None, model="sonnet", allowed_tools="Bash,Edit,Write,Read",
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    config = b.json.loads((tmp_path / "mcp.json").read_text())
-    server = config["mcpServers"]["pipeline-checkpoint"]
-    assert server["command"].endswith(".venv/bin/python3")
-    assert server["args"][0].endswith("scripts/checkpoint_mcp_server.py")
-    assert server["env"] == {"PLAN_DIR": "/some/plan/dir"}
+    # Logical tier resolves to a concrete local model, knobs pass through.
+    assert captured["env"]["LOCAL_AGENT_MODEL"] == "qwen2.5-coder:14b"
+    assert captured["env"]["LOCAL_AGENT_SYSTEM"] == ""
+    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "8192"
+    assert captured["env"]["LOCAL_AGENT_MAX_STEPS"] == "12"
 
 
 class _FakePopenResult:

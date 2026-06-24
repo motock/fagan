@@ -89,6 +89,24 @@ MAX_CONCURRENT_AGENTS = int(os.environ.get("PIPELINE_MAX_CONCURRENT_AGENTS", "3"
 # MERGE_MAX_ATTEMPTS the story is marked failed for human intervention.
 MERGE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_MERGE_MAX_ATTEMPTS", "3"))
 
+# Error budget for dispatch (per-story, across ticks). A dispatch can fail two
+# ways: dispatch_story raises (git pull/worktree/backend error), or the agent
+# launches but produces no output (empty agent.log - a failed launch). Either
+# bumps the story's dispatch_attempts; while under budget the story stays
+# dispatch-eligible (todo/interrupted) and the next tick retries it, but once
+# attempts reach DISPATCH_MAX_ATTEMPTS it is marked failed (terminal - failed
+# is not dispatch-eligible) so a story that can never launch stops looping.
+# Cleared once a launch actually produces output. Legitimate usage-gate
+# interrupts go through interrupt_story and never touch this counter.
+DISPATCH_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_DISPATCH_MAX_ATTEMPTS", "3"))
+
+# Error budget for Plane state transitions. Plane sync is a best-effort side
+# effect of an action that already succeeded in git, so its budget is an inline
+# retry (not an across-ticks retry like merge/dispatch): _plane_set_state
+# retries a transient failure up to PLANE_MAX_ATTEMPTS, then records the drop
+# durably (notify, not a silent print) rather than raising.
+PLANE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_PLANE_MAX_ATTEMPTS", "3"))
+
 PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -694,19 +712,41 @@ def _count_in_progress_agents() -> int:
     return count
 
 
-def _mark_plane_done(story_key: str) -> None:
+def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = None) -> bool:
+    """Best-effort Plane state transition with an inline retry budget.
+
+    Plane sync is a side effect of an action that already succeeded in git, so
+    it never raises: a transient failure is retried up to PLANE_MAX_ATTEMPTS,
+    and once the budget is spent the drop is recorded durably (via _notify_user
+    when a plan is known, else a stderr-style print) rather than propagated.
+    Returns True if the transition landed, False if it was given up on.
+    """
+    last_err: Exception | None = None
+    for _ in range(max(1, PLANE_MAX_ATTEMPTS)):
+        try:
+            issue_uuid = _resolve_issue_uuid(story_key)
+            plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
+                          json={"state": _get_state(state_group)})
+            return True
+        except Exception as e:
+            last_err = e
+    msg = (f"Plane sync for {story_key} → {state_group} failed after "
+           f"{PLANE_MAX_ATTEMPTS} attempts: {last_err}")
+    if plan_name:
+        _notify_user(plan_name, msg)
+    else:
+        print(f"Warning: {msg}")
+    return False
+
+
+def _mark_plane_done(story_key: str, plan_name: str | None = None) -> None:
     """Best-effort transition of a Plane issue to Done.
 
     Mirrors dispatch_story's in-progress transition: swallows errors rather
     than raising, since not every plan is Plane-backed and a Plane outage
     must not block a local merge that has already happened in git.
     """
-    try:
-        issue_uuid = _resolve_issue_uuid(story_key)
-        plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
-                      json={"state": _get_state("completed")})
-    except Exception as e:
-        print(f"Warning: could not transition {story_key} to done: {e}")
+    _plane_set_state(story_key, "completed", plan_name)
 
 
 def _commit_wip(worktree: str, story_key: str, step: str) -> str:
@@ -900,12 +940,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 cwd=repo_root, check=True,
             )
 
-    try:
-        issue_uuid = _resolve_issue_uuid(story_key)
-        plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
-                      json={"state": _get_state("started")})
-    except Exception as e:
-        print(f"Warning: could not transition {story_key} to in-progress: {e}")
+    _plane_set_state(story_key, "started", plan_name)
 
     spec = _build_dispatch_command(story, story_key, plan_name=plan_name, resume_journal=journal or None)
     worktree_path.mkdir(parents=True, exist_ok=True)
@@ -963,8 +998,19 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # The agent process exited without ever writing a byte of output -
         # a failed launch, not a real attempt. Running tests against the
         # untouched worktree would just record a misleading "failed" for
-        # work that was never tried, and unlike "failed", nothing retries
-        # it automatically. "interrupted" is dispatch-eligible like "todo".
+        # work that was never tried. Within the dispatch error budget we keep
+        # it "interrupted" (dispatch-eligible like "todo", so the next tick
+        # retries it); once the budget is spent, a launch that never works
+        # becomes a terminal "failed" so it stops looping forever.
+        attempts = story.get("dispatch_attempts", 0) + 1
+        story["dispatch_attempts"] = attempts
+        if attempts >= DISPATCH_MAX_ATTEMPTS:
+            story["status"] = "failed"
+            story["dispatch_error"] = f"agent produced no output in {attempts} launch attempts"
+            _notify_user(plan_name, f"{story_key} failed to launch {attempts}x; "
+                                    f"giving up - needs human intervention.")
+            manifest_path.write_text(json.dumps(manifest, indent=2))
+            return {"status": "failed", "pid": pid}
         story["status"] = "interrupted"
         manifest_path.write_text(json.dumps(manifest, indent=2))
         return {"status": "interrupted", "pid": pid}
@@ -975,6 +1021,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     )
     passed = test_result.returncode == 0
 
+    # The agent produced real output and the tests ran: the launch worked, so
+    # clear any failed-launch attempts accumulated by earlier infra blips.
+    story.pop("dispatch_attempts", None)
     story["status"] = "tests_passed" if passed else "failed"
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
@@ -1389,8 +1438,29 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             else:
                 to_dispatch = ready
             for key in to_dispatch:
-                dispatch_story(plan_name, key)
-                summary["dispatched"].append(key)
+                try:
+                    dispatch_story(plan_name, key)
+                    summary["dispatched"].append(key)
+                except Exception as e:  # git pull/worktree/backend launch failure
+                    # Re-read: dispatch_story only writes the manifest on a
+                    # successful launch, so on a raise the on-disk status is
+                    # still todo/interrupted - bump the attempt counter there.
+                    m = json.loads(manifest_path.read_text())
+                    st = m["stories"][key]
+                    attempts = st.get("dispatch_attempts", 0) + 1
+                    st["dispatch_attempts"] = attempts
+                    if attempts >= DISPATCH_MAX_ATTEMPTS:
+                        st["status"] = "failed"
+                        st["dispatch_error"] = str(e)
+                        _notify_user(plan_name, f"{key} dispatch failed {attempts}x "
+                                                f"({e}); giving up - needs human intervention.")
+                        summary["failed"].append(key)
+                    else:
+                        # leave status dispatch-eligible; the next tick retries.
+                        _notify_user(plan_name, f"{key} dispatch attempt {attempts}/"
+                                                f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.")
+                    summary["notify"].append(key)
+                    manifest_path.write_text(json.dumps(m, indent=2))
 
             # 2. Poll running agents: tests fail -> notify; tests pass -> tests_passed.
             stories = json.loads(manifest_path.read_text())["stories"]
@@ -1445,7 +1515,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     continue
                 story["status"] = "done"
                 story.pop("merge_attempts", None)
-                _mark_plane_done(key)
+                _mark_plane_done(key, plan_name)
                 summary["merged"].append(key)
             else:
                 story["status"] = "parked"
@@ -1487,7 +1557,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"ok": False, "error": str(e), "story_key": story_key}
     story["status"] = "done"
     manifest_path.write_text(json.dumps(manifest, indent=2))
-    _mark_plane_done(story_key)
+    _mark_plane_done(story_key, plan_name)
     return {"ok": True, "story_key": story_key, "status": "done"}
 
 

@@ -477,5 +477,29 @@ dispatch:
   driver defect.
 
 Not done (future): routing `review` to local (needs a read-only tool set +
-validation; still raises `NotImplementedError`), and Step 5 (per-backend
-resource gate, so local dispatch isn't throttled by the Claude usage pause).
+validation; still raises `NotImplementedError`).
+
+## Step 5 — Per-backend resource gate (DONE)
+
+`advance_pipeline` no longer gates the whole tick on one global Claude
+`paused` flag. Each model-spending action is gated by **its own backend**:
+- New `Backend.resource_status() -> {"ok", "reason"}`. `ClaudeCliDriver`
+  reports the poller-fed, hysteresis-stabilized usage gate (reads
+  `_read_usage_state().paused` — cheap, no live `/cost` probe; fails open on
+  missing state). `OllamaDriver` reports **Ollama reachability** only (`GET
+  /api/tags`) — no usage/cost limit, so effectively "always ok" while Ollama
+  is up. This is the change that **decouples local dispatch from the Claude
+  weekly limit** and unlocks overnight autonomy.
+- `advance_pipeline` computes `_role_resource_ok("dispatch")` and
+  `_role_resource_ok("review")` separately. If dispatch's backend is gated,
+  in-flight agents are interrupted (checkpointed) and no new dispatch starts;
+  if review's backend is gated, review is deferred. The two are independent —
+  a Claude usage pause with dispatch routed local now leaves local dispatch
+  running and only defers Claude review. Merge adjudication still always runs
+  (no model usage). Summary gains `dispatch_paused`/`review_paused`; `paused`
+  is kept (= dispatch gated) for back-compat.
+- Verified: 163 tests green (incl. a new integration test asserting local
+  dispatch proceeds while Claude review is gated), and the real
+  `resource_status()` methods checked live (Ollama up → ok; dead endpoint →
+  not ok; Claude driver → reads real usage state). Existing all-Claude gate
+  tests pass unchanged (Claude path still reads the same usage state).

@@ -34,6 +34,8 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+import backend
+
 # ---------- Config ----------
 PLANE_BASE      = os.environ.get("PLANE_BASE", "http://localhost").rstrip("/")
 PLANE_API_KEY   = os.environ.get("PLANE_API_KEY", "")
@@ -311,8 +313,11 @@ def _build_dispatch_command(
     story: dict[str, Any], story_key: str,
     plan_name: str | None = None,
     resume_journal: list[dict[str, Any]] | None = None,
-) -> list[str]:
-    """Build the headless `claude` argv for a story, applying its persona and model.
+) -> dict[str, Any]:
+    """Build the backend-agnostic dispatch spec for a story: its prompt,
+    persona system prompt, model tier, and tool allow-list. The chosen
+    Backend (see backend.py) turns this into whatever it needs to actually
+    run - a `claude` argv, an OpenHands invocation, etc.
 
     If resume_journal is given (a non-empty checkpoint journal from an
     interrupted run), the prompt is seeded with the steps already completed
@@ -360,11 +365,12 @@ def _build_dispatch_command(
         or (_persona_default_model(persona) if persona else None)
         or DEFAULT_MODEL
     )
-    cmd = ["claude", "-p", prompt, "--model", model]
-    if persona:
-        cmd += ["--append-system-prompt", _persona_body(persona)]
-    cmd += ["--allowedTools", _allowed_tools_for(persona)]
-    return cmd
+    return {
+        "prompt": prompt,
+        "system": _persona_body(persona) if persona else None,
+        "model": model,
+        "allowed_tools": _allowed_tools_for(persona),
+    }
 
 
 # ---------- Overlord / decision helpers ----------
@@ -382,18 +388,14 @@ def _load_policy() -> str:
 def _invoke_overlord(prompt: str) -> str:
     """Run the overlord persona headless and return its raw stdout.
 
-    External boundary: spawns the `claude` CLI. Tests mock this function.
+    External boundary: delegates to the configured Backend. Tests mock this
+    function.
     """
     model = _persona_default_model("overlord") or "opus"
     system = _persona_body("overlord")
-    proc = subprocess.run(
-        ["claude", "-p", prompt,
-         "--model", model,
-         "--append-system-prompt", system,
-         "--allowedTools", "Read"],
-        capture_output=True, text=True,
+    return backend.get_backend("overlord").complete(
+        prompt, system=system, model=model, allowed_tools="Read",
     )
-    return proc.stdout
 
 
 def _parse_ruling(text: str) -> dict[str, Any]:
@@ -416,7 +418,8 @@ def _parse_ruling(text: str) -> dict[str, Any]:
 def _run_reviewer(worktree: str, branch: str) -> str:
     """Run the code-reviewer persona over a branch and return its raw output.
 
-    External boundary: spawns the `claude` CLI. Tests mock this function.
+    External boundary: delegates to the configured Backend. Tests mock this
+    function.
     """
     body = _persona_body("code-reviewer")
     model = _persona_default_model("code-reviewer") or DEFAULT_MODEL
@@ -425,12 +428,9 @@ def _run_reviewer(worktree: str, branch: str) -> str:
         f"standards. Run the test suite. End with your VERDICT line; if you "
         f"APPROVE, also include a PR title and body."
     )
-    proc = subprocess.run(
-        ["claude", "-p", prompt, "--model", model,
-         "--append-system-prompt", body, "--allowedTools", "Bash,Read"],
-        cwd=worktree, capture_output=True, text=True,
+    return backend.get_backend("review").complete(
+        prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
     )
-    return proc.stdout
 
 
 def _parse_verdict(text: str) -> str:
@@ -591,21 +591,15 @@ def _parse_usage_output(text: str) -> dict[str, Any]:
 def _run_usage_probe() -> dict[str, Any]:
     """Check current subscription usage via a headless `/cost` call.
 
-    External boundary: spawns the `claude` CLI. Tests mock subprocess.run.
-    `/cost` is answered from local session data without invoking the model,
-    so this is fast and free to poll frequently. (The percentage summary
-    used to be on `/usage`, but that command dropped it in favor of a
-    "what's contributing to your usage" breakdown; `/cost` still has it.)
+    External boundary: delegates to the configured Backend. Tests mock
+    backend.subprocess.run. `/cost` is answered from local session data
+    without invoking the model, so this is fast and free to poll frequently.
+    (The percentage summary used to be on `/usage`, but that command dropped
+    it in favor of a "what's contributing to your usage" breakdown; `/cost`
+    still has it.)
     """
-    proc = subprocess.run(
-        ["claude", "-p", "/cost", "--output-format", "json"],
-        capture_output=True, text=True, check=True,
-    )
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Usage probe returned invalid JSON: {e}") from e
-    usage = _parse_usage_output(payload.get("result", ""))
+    text = backend.get_backend().usage_probe_text()
+    usage = _parse_usage_output(text)
     usage["checked_at"] = datetime.now(timezone.utc).isoformat()
     return usage
 
@@ -896,25 +890,22 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     except Exception as e:
         print(f"Warning: could not transition {story_key} to in-progress: {e}")
 
-    cmd = _build_dispatch_command(story, story_key, plan_name=plan_name, resume_journal=journal or None)
+    spec = _build_dispatch_command(story, story_key, plan_name=plan_name, resume_journal=journal or None)
     worktree_path.mkdir(parents=True, exist_ok=True)
     log_path = worktree_path / "agent.log"
-    log_file = open(log_path, "a" if resuming else "w")
-    proc = subprocess.Popen(
-        cmd,
-        cwd=worktree_path,
-        stdout=log_file,
-        stderr=log_file,
+    handle = backend.get_backend("dispatch").dispatch(
+        spec["prompt"], system=spec["system"], model=spec["model"],
+        allowed_tools=spec["allowed_tools"],
+        cwd=worktree_path, log_path=log_path, append=resuming,
     )
-    log_file.close()
 
     story["status"] = "in_progress"
-    story["pid"] = proc.pid
+    story["pid"] = handle.pid
     story["worktree"] = str(worktree_path)
     story["log"] = str(log_path)
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
-    return {"ok": True, "story_key": story_key, "pid": proc.pid, "branch": branch,
+    return {"ok": True, "story_key": story_key, "pid": handle.pid, "branch": branch,
             "resumed": resuming}
 
 
@@ -1039,18 +1030,14 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
     return {"ok": True}
 
 
-@mcp.tool()
-def checkpoint(
+def _checkpoint_impl(
     plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "",
 ) -> dict[str, Any]:
-    """
-    Record a durable checkpoint for a dispatched agent's progress.
-
-    Commits any uncommitted work in the story's worktree as a WIP commit and
-    appends an entry to the story's journal (plan.story.journal.json). Call
-    this after completing each idempotent step of a story so a killed agent
-    can resume from the last checkpoint instead of starting over.
-    """
+    """Checkpoint logic, factored out of the `checkpoint` tool so a minimal
+    dedicated MCP server (scripts/checkpoint_mcp_server.py) can expose just
+    this one tool to dispatched agents, instead of this whole server's full
+    orchestration toolset (dispatch_story, approve_merge, advance_pipeline,
+    ...) - which a less reliable local model has no business calling."""
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)
@@ -1067,6 +1054,21 @@ def checkpoint(
     }
     _append_journal(plan_name, story_key, record)
     return {"ok": True, **record}
+
+
+@mcp.tool()
+def checkpoint(
+    plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "",
+) -> dict[str, Any]:
+    """
+    Record a durable checkpoint for a dispatched agent's progress.
+
+    Commits any uncommitted work in the story's worktree as a WIP commit and
+    appends an entry to the story's journal (plan.story.journal.json). Call
+    this after completing each idempotent step of a story so a killed agent
+    can resume from the last checkpoint instead of starting over.
+    """
+    return _checkpoint_impl(plan_name, story_key, step, summary, next_hint)
 
 
 @mcp.tool()

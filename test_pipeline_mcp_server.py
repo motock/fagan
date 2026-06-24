@@ -1501,6 +1501,91 @@ def test_advance_pipeline_paused_still_processes_merges(plan_dir, usage_state_pa
     assert "P1" in result["merged"]
 
 
+def test_advance_pipeline_merge_failure_retries_within_budget(plan_dir, monkeypatch):
+    # A transient _merge_pr failure (e.g. gh hiccup) must not crash the tick or
+    # burn the story: it stays pr_open with a bumped attempt counter so the next
+    # tick retries, and the user is notified.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "mergeretry", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_merge_pr",
+                        lambda wt, key: (_ for _ in ()).throw(RuntimeError("gh hiccup")))
+
+    result = p.advance_pipeline("mergeretry")
+
+    story = _read_manifest(plan_dir, "mergeretry")["stories"]["P1"]
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert result["merged"] == []
+    assert result["failed"] == []
+    assert "P1" in result["notify"]
+
+
+def test_advance_pipeline_merge_failure_exhausts_budget(plan_dir, monkeypatch):
+    # Once the attempt budget is spent, a persistently failing merge becomes a
+    # hard failure that needs human intervention rather than retrying forever.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "mergegiveup", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x", "merge_attempts": 2},
+    })
+    monkeypatch.setattr(p, "_merge_pr",
+                        lambda wt, key: (_ for _ in ()).throw(RuntimeError("still broken")))
+
+    result = p.advance_pipeline("mergegiveup")
+
+    story = _read_manifest(plan_dir, "mergegiveup")["stories"]["P1"]
+    assert story["status"] == "failed"
+    assert story["merge_attempts"] == 3
+    assert "still broken" in story.get("merge_error", "")
+    assert result["merged"] == []
+    assert "P1" in result["failed"]
+    assert "P1" in result["notify"]
+
+
+def test_advance_pipeline_merge_success_clears_attempt_counter(plan_dir, monkeypatch):
+    # A merge that finally succeeds after earlier failures must clear the
+    # attempt counter so the story records a clean done.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    _write_manifest(plan_dir, "mergerecover", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x", "merge_attempts": 1},
+    })
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key: None)
+
+    result = p.advance_pipeline("mergerecover")
+
+    story = _read_manifest(plan_dir, "mergerecover")["stories"]["P1"]
+    assert story["status"] == "done"
+    assert "merge_attempts" not in story
+    assert result["merged"] == ["P1"]
+
+
+def test_approve_merge_returns_error_on_merge_failure(plan_dir, monkeypatch):
+    # The manual override surfaces a merge failure as a structured error to the
+    # human invoking it rather than raising an unhandled exception.
+    _write_manifest(plan_dir, "ammergefail", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_merge_pr",
+                        lambda wt, key: (_ for _ in ()).throw(RuntimeError("gh down")))
+
+    result = p.approve_merge("ammergefail", "P1")
+
+    assert result["ok"] is False
+    assert "gh down" in result["error"]
+    assert _read_manifest(plan_dir, "ammergefail")["stories"]["P1"]["status"] == "parked"
+
+
 def test_count_in_progress_agents_counts_across_plans(plan_dir, monkeypatch):
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: None)
     _write_manifest(plan_dir, "cnt1", {

@@ -1452,6 +1452,39 @@ def test_advance_pipeline_paused_interrupts_running_and_skips_new_work(
     assert "R1" in result["interrupted"]
 
 
+def test_advance_pipeline_local_dispatch_runs_while_claude_review_gated(
+    plan_dir, usage_state_path, monkeypatch,
+):
+    """Step 5: dispatch on local + review on Claude. Claude usage is maxed,
+    but local dispatch must still proceed (and not interrupt running local
+    agents); only the Claude-backed review is deferred."""
+    usage_state_path.write_text(json.dumps({"session_pct": 95, "week_pct": 10, "paused": True}))
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)  # -> claude
+    # Local backend reports healthy without hitting a real Ollama.
+    monkeypatch.setattr(backend.OllamaDriver, "resource_status", lambda self: {"ok": True, "reason": ""})
+
+    _write_manifest(plan_dir, "split", {
+        "T1": {"summary": "todo", "status": "todo", "dependencies": []},
+        "R1": {"summary": "running", "status": "in_progress", "pid": 111, "worktree": "/x"},
+        "TP1": {"summary": "awaiting review", "status": "tests_passed", "worktree": "/y", "risk": "low"},
+    })
+    dispatched, reviewed, interrupted = [], [], []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+    monkeypatch.setattr(p, "review_story", lambda plan, key: reviewed.append(key) or {"status": "pr_open"})
+    monkeypatch.setattr(p, "interrupt_story", lambda plan, key: interrupted.append(key) or {"ok": True})
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "in_progress"})
+
+    result = p.advance_pipeline("split")
+
+    assert result["dispatch_paused"] is False     # local dispatch not gated by Claude
+    assert result["review_paused"] is True         # Claude review deferred
+    assert dispatched == ["T1"]                     # dispatch proceeded
+    assert interrupted == []                         # running local agent left alone
+    assert reviewed == []                            # review deferred
+
+
 def test_advance_pipeline_paused_still_processes_merges(plan_dir, usage_state_path, monkeypatch):
     usage_state_path.write_text(json.dumps({"session_pct": 95, "week_pct": 10, "paused": True}))
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")

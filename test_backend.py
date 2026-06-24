@@ -146,6 +146,37 @@ def test_usage_probe_text_raises_not_implemented():
         b.OllamaDriver().usage_probe_text()
 
 
+# ---------- resource_status() (per-backend gate, Step 5) ----------
+def test_ollama_resource_status_ok_when_endpoint_reachable(monkeypatch):
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    status = b.OllamaDriver().resource_status()
+    assert status["ok"] is True
+
+
+def test_ollama_resource_status_not_ok_when_endpoint_unreachable(monkeypatch):
+    def _boom(url, timeout):
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(b.httpx, "get", _boom)
+    status = b.OllamaDriver().resource_status()
+    assert status["ok"] is False
+    assert "unreachable" in status["reason"]
+
+
+def test_claude_resource_status_reflects_usage_paused_flag(monkeypatch):
+    import pipeline_mcp_server as p
+    monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": True})
+    assert b.ClaudeCliDriver().resource_status()["ok"] is False
+    monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": False})
+    assert b.ClaudeCliDriver().resource_status()["ok"] is True
+
+
+def test_claude_resource_status_fails_open_when_no_usage_state(monkeypatch):
+    import pipeline_mcp_server as p
+    monkeypatch.setattr(p, "_read_usage_state", lambda: {})
+    assert b.ClaudeCliDriver().resource_status()["ok"] is True
+
+
 # ---------- OllamaDriver.dispatch() ----------
 def test_dispatch_refuses_read_only_allowed_tools():
     """The local agent loop is a writing/coding harness - routing a read-only

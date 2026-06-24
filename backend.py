@@ -43,6 +43,17 @@ class Backend(Protocol):
         """Return the raw usage/cost report text for the resource gate."""
         ...
 
+    def resource_status(self) -> dict:
+        """Whether this backend is resource-available to take work right now.
+
+        Returns {"ok": bool, "reason": str}. The orchestrator's per-role gate
+        (advance_pipeline) consults the backend serving each role, so a limit
+        on one backend (e.g. Claude's weekly usage) no longer freezes work on
+        another (e.g. local dispatch). A future vLLM/cloud driver defines its
+        own check here without touching the orchestrator.
+        """
+        ...
+
 
 class ClaudeCliDriver:
     """Backend driver wrapping the `claude` CLI."""
@@ -83,6 +94,19 @@ class ClaudeCliDriver:
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Usage probe returned invalid JSON: {e}") from e
         return payload.get("result", "")
+
+    def resource_status(self) -> dict:
+        """Claude's gate is the poller-fed, hysteresis-stabilized usage state
+        (see pipeline_mcp_server.check_usage / _usage_gate), not a live /cost
+        probe — reading the cached `paused` flag here is cheap and reflects the
+        same decision the poller already made. Imported locally because the
+        orchestrator imports this module (a top-level import would cycle); by
+        call time pipeline_mcp_server is fully loaded. Failing open (ok) on
+        missing/garbled state matches check_usage's own fail-open behavior.
+        """
+        import pipeline_mcp_server as _p  # local: avoids an import cycle
+        paused = bool(_p._read_usage_state().get("paused", False))
+        return {"ok": not paused, "reason": "Claude usage gate tripped" if paused else ""}
 
 
 # Tier names (opus/sonnet/haiku) come from Claude persona frontmatter and
@@ -217,9 +241,23 @@ class OllamaDriver:
 
     def usage_probe_text(self) -> str:
         raise NotImplementedError(
-            "OllamaDriver has no usage/cost concept - the resource gate "
-            "for local backends is a separate, not-yet-implemented check."
+            "OllamaDriver has no usage/cost concept - its resource gate is "
+            "resource_status() (Ollama reachability), not a /cost probe."
         )
+
+    def resource_status(self) -> dict:
+        """Local backend has no usage/cost limit to respect, so the only gate
+        is whether the Ollama endpoint is up. (The concurrency ceiling is
+        enforced separately by advance_pipeline via MAX_CONCURRENT_AGENTS.)
+        This is what unlocks overnight autonomy decoupled from Claude's weekly
+        limit: as long as Ollama is reachable, local dispatch keeps running.
+        """
+        try:
+            resp = httpx.get(f"{self.endpoint}/api/tags", timeout=10)
+            resp.raise_for_status()
+            return {"ok": True, "reason": ""}
+        except httpx.HTTPError as e:
+            return {"ok": False, "reason": f"Ollama endpoint {self.endpoint} unreachable: {e}"}
 
 
 # Registry of available drivers by config name. Register new drivers here -

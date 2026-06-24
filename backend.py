@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,6 +128,71 @@ def _resolve_local_model(tier: str) -> str:
     return os.environ.get(env_var, default) if env_var else default
 
 
+def _recover_tool_calls(content: str | None) -> list | None:
+    """Recover tool calls from message text when the native tool_calls field
+    is empty — the local model intermittently emits well-formed calls as text
+    ([TOOL_CALLS]/bare arrays/```json fences). Mirrors scripts/local_agent.py's
+    parser (kept in sync; both are small)."""
+    if not content:
+        return None
+    text = content.strip().replace("[TOOL_CALLS]", "")
+    candidates = re.findall(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
+    m = re.search(r"(\[\s*\{.*\}\s*\]|\{.*\})", text, re.DOTALL)
+    if m:
+        candidates.append(m.group(1))
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+        except ValueError:
+            continue
+        items = obj if isinstance(obj, list) else [obj]
+        out = [{"function": {"name": it["name"], "arguments": it.get("arguments", it.get("parameters", {}))}}
+               for it in items if isinstance(it, dict) and "name" in it]
+        if out:
+            return out
+    return None
+
+
+def _infer_review_tool_call(content: str | None) -> list | None:
+    """Last-resort recovery for the review loop: the local model sometimes
+    emits a bare arguments object (no tool name) like {"command": "git diff"}.
+    Infer the intended review tool from its keys (unambiguous for this small
+    read-only tool set). Returns None if nothing parseable is found."""
+    if not content:
+        return None
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except ValueError:
+        return None
+    if not isinstance(obj, dict) or "name" in obj:
+        return None  # named calls are handled by _recover_tool_calls
+    if "verdict" in obj:
+        return [{"function": {"name": "submit_review", "arguments": obj}}]
+    if "command" in obj:
+        return [{"function": {"name": "bash", "arguments": obj}}]
+    if "path" in obj:
+        return [{"function": {"name": "view_file", "arguments": obj}}]
+    return None
+
+
+def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
+    """Execute a review (read-only) tool: bash (run commands) or view_file."""
+    if fn == "view_file":
+        path = cwd / args.get("path", "")
+        if not path.exists():
+            return f"ERROR: {args.get('path')} does not exist."
+        lines = path.read_text().splitlines(keepends=True)
+        return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
+    if fn == "bash":
+        pr = subprocess.run(args.get("command", ""), shell=True, cwd=cwd,
+                            capture_output=True, text=True)
+        return (pr.stdout + pr.stderr)[:3000] or "(no output)"
+    return f"unknown tool {fn}"
+
+
 class OllamaDriver:
     """Backend driver for Ollama's native /api/chat endpoint.
 
@@ -140,10 +206,13 @@ class OllamaDriver:
     differently (server-side, e.g. --max-model-len) and would not share this
     class.
 
-    complete() only sends prompt+system text and returns the model's reply -
-    there is no tool execution here. That's fine for self-contained prompts
-    (e.g. the overlord's decision prompts, which embed all needed context as
-    text).
+    complete() has two modes, matching ClaudeCliDriver.complete()'s behavior:
+    a self-contained prompt (overlord-style: allowed_tools without Bash, no
+    cwd) is a single /api/chat round-trip; a review-style call (allowed_tools
+    includes Bash + a worktree cwd, see _run_reviewer) runs a blocking
+    READ-ONLY tool loop (bash to run tests + view_file) and ends when the model
+    calls submit_review, returning a `VERDICT:` block for _parse_verdict. The
+    loop exposes no edit tools, so review cannot modify the tree.
 
     dispatch() runs scripts/local_agent.py as a subprocess in `cwd`, giving
     the model a real native-tool-calling loop (create_file/str_replace/
@@ -158,9 +227,10 @@ class OllamaDriver:
     See scripts/local_agent.py for the loop and its guards.
 
     dispatch() refuses any allowed_tools that excludes Edit/Write: the local
-    agent is a writing/coding harness, so a read-only role (e.g. review) is
-    not yet supported here and would otherwise silently edit files. (A
-    read-only tool set for review is a future addition, noted in §8.)
+    *dispatch* harness is write-oriented. Read-only roles don't use dispatch()
+    at all — review goes through complete()'s review-loop mode above — so this
+    guard is just a guard against misconfiguring a write role with read-only
+    tools.
     """
 
     def __init__(self) -> None:
@@ -176,33 +246,129 @@ class OllamaDriver:
             os.environ.get("PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS", "900"))
         self.max_steps = int(os.environ.get("PIPELINE_LOCAL_MAX_STEPS", "40"))
         self.temperature = float(os.environ.get("PIPELINE_LOCAL_TEMPERATURE", "0.3"))
+        self.review_max_steps = int(os.environ.get("PIPELINE_LOCAL_REVIEW_MAX_STEPS", "20"))
 
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
     ) -> str:
+        # Review-style call: allowed_tools includes Bash and a worktree cwd is
+        # given (see _run_reviewer). The model must actually run the tests and
+        # read files, then emit a VERDICT — so run a blocking read-only tool
+        # loop, mirroring how ClaudeCliDriver.complete() transparently runs a
+        # tool loop when `claude -p` is given allowed_tools+cwd. Overlord-style
+        # calls (allowed_tools="Read", no cwd) fall through to single-shot.
+        if cwd is not None and allowed_tools and "Bash" in allowed_tools.split(","):
+            return self._review_loop(prompt, system=system, model=model, cwd=cwd)
+
+        resolved_model = _resolve_local_model(model)
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        resolved_model = _resolve_local_model(model)
         try:
-            resp = httpx.post(
-                f"{self.endpoint}/api/chat",
-                json={
-                    "model": resolved_model, "messages": messages, "stream": False,
-                    "options": {"num_ctx": self.num_ctx},
-                },
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
+            payload = self._chat(messages, resolved_model)
         except httpx.HTTPError as e:
             raise RuntimeError(
                 f"Local backend at {self.endpoint} (model={resolved_model}) "
                 f"is unreachable or errored: {e}"
             ) from e
-        payload = resp.json()
-        return payload["message"]["content"]
+        return payload["content"]
+
+    def _chat(self, messages: list, model: str, tools: list | None = None) -> dict:
+        body = {
+            "model": model, "messages": messages, "stream": False,
+            "options": {"num_ctx": self.num_ctx, "temperature": self.temperature},
+        }
+        if tools:
+            body["tools"] = tools
+        resp = httpx.post(f"{self.endpoint}/api/chat", json=body, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()["message"]
+
+    # Read-only tools for the review loop. No create/edit — review must not
+    # modify the tree (the "review does not merge / does not edit" guarantee).
+    # bash is needed to run the test suite; like the Claude reviewer's
+    # Bash+Read, it is not sandboxed, but it runs in the isolated worktree.
+    # submit_review is the explicit terminator (like dispatch's `done`): far
+    # more reliable for a weak local model than scanning free prose for a
+    # VERDICT line, which in testing it failed to emit cleanly.
+    _REVIEW_TOOLS = [
+        {"type": "function", "function": {
+            "name": "bash", "description": "Run a bash command in the worktree (run tests, git diff/log, etc.).",
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+        {"type": "function", "function": {
+            "name": "view_file", "description": "Show a file's contents with line numbers.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+        {"type": "function", "function": {
+            "name": "submit_review", "description": "Submit your final review verdict. Call this once, after running the tests and inspecting the changes.",
+            "parameters": {"type": "object", "properties": {
+                "verdict": {"type": "string", "enum": ["APPROVE", "REQUEST_CHANGES"]},
+                "summary": {"type": "string", "description": "brief justification"},
+                "pr_title": {"type": "string", "description": "PR title (if APPROVE)"},
+                "pr_body": {"type": "string", "description": "PR body (if APPROVE)"}},
+                "required": ["verdict"]}}},
+    ]
+
+    def _review_loop(self, prompt: str, *, system: str | None, model: str, cwd: str) -> str:
+        """Blocking read-only agentic loop for review. The model runs tests and
+        reads files via tools, then calls submit_review with its verdict. Returns
+        a `VERDICT: ...` text block (so pipeline_mcp_server._parse_verdict, shared
+        with the Claude path, scans it unchanged). Uses the same tolerant parsing
+        as dispatch, plus key-based tool inference, since the local model
+        intermittently emits tool calls as text and drops the tool name."""
+        resolved_model = _resolve_local_model(model)
+        preamble = (
+            "You are reviewing code in the current directory, READ-ONLY. First use "
+            "the bash tool to run the test suite and inspect the changes (e.g. "
+            "`git diff`, `git log -p -1`), and view_file to read files — do not edit "
+            "anything. Then call submit_review exactly once with verdict APPROVE or "
+            "REQUEST_CHANGES (REQUEST_CHANGES if the tests fail). Always call a tool; "
+            "do not answer in prose."
+        )
+        system_content = preamble + ("\n\n" + system if system else "")
+        messages = [{"role": "system", "content": system_content},
+                    {"role": "user", "content": prompt}]
+        nudged = False
+        for _ in range(self.review_max_steps):
+            try:
+                m = self._chat(messages, resolved_model, tools=self._REVIEW_TOOLS)
+            except httpx.HTTPError as e:
+                raise RuntimeError(
+                    f"Local backend at {self.endpoint} (model={resolved_model}) "
+                    f"is unreachable or errored during review: {e}"
+                ) from e
+            messages.append(m)
+            tcs = (m.get("tool_calls") or _recover_tool_calls(m.get("content", ""))
+                   or _infer_review_tool_call(m.get("content", "")))
+            if not tcs:
+                if nudged:
+                    break  # still no tool after a nudge -> give up (-> UNKNOWN -> parks)
+                nudged = True
+                messages.append({"role": "user", "content":
+                    "Call a tool (bash/view_file to investigate, or submit_review to finish). Do not reply in prose."})
+                continue
+            nudged = False
+            for tc in tcs:
+                fn = tc["function"]["name"]
+                args = tc["function"]["arguments"]
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except ValueError:
+                        args = {}
+                if fn == "submit_review":
+                    verdict = str(args.get("verdict", "")).upper()
+                    if verdict not in ("APPROVE", "REQUEST_CHANGES"):
+                        verdict = "REQUEST_CHANGES"  # malformed -> safe default
+                    body = args.get("pr_body") or args.get("summary", "")
+                    title = args.get("pr_title", "")
+                    return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
+                messages.append({"role": "tool", "content": _run_readonly_tool(fn, args, Path(cwd))})
+        # No verdict within the step cap: return empty so _parse_verdict yields
+        # UNKNOWN, which the orchestrator treats as not-APPROVE (safe — parks
+        # for a human/Claude rather than auto-merging).
+        return ""
 
     # The local agent loop lives in a standalone script so it can run as a
     # pollable subprocess; run it with this project's venv python (which has
@@ -281,12 +447,12 @@ def get_backend(role: str | None = None) -> Backend:
     role can move off Claude without touching the others. Defaults to
     "claude".
 
-    "local" (OllamaDriver) implements complete() (overlord-style
-    self-contained prompts) and dispatch() (a native-tool-calling agent loop,
-    scripts/local_agent.py, run as a subprocess - real file edits, tests, and
-    git). It refuses to dispatch with a read-only allowed_tools, so routing
-    "review" to it raises NotImplementedError until a read-only local tool set
-    is implemented and verified.
+    "local" (OllamaDriver) implements complete() — both overlord-style
+    single-shot prompts and review-style read-only tool loops (runs tests +
+    reads, then submit_review) — and dispatch() (a native-tool-calling write
+    agent loop, scripts/local_agent.py, run as a subprocess). So all three
+    roles (overlord, review, dispatch) can be routed local via
+    PIPELINE_BACKEND_<ROLE>=local.
     """
     if role is None:
         return ClaudeCliDriver()

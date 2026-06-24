@@ -82,6 +82,13 @@ USAGE_STALE_AFTER_SECONDS = int(os.environ.get("PIPELINE_USAGE_STALE_AFTER_SECON
 # <=0 disables the cap (dispatch every ready story each tick).
 MAX_CONCURRENT_AGENTS = int(os.environ.get("PIPELINE_MAX_CONCURRENT_AGENTS", "3"))
 
+# Error budget for the merge step. _merge_pr shells out to `gh`/`git push`,
+# any of which can fail transiently (network, a momentary GitHub 5xx). Rather
+# than crash the tick or burn the story on the first hiccup, a failed merge
+# leaves the story pr_open and bumps its attempt counter; once attempts reach
+# MERGE_MAX_ATTEMPTS the story is marked failed for human intervention.
+MERGE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_MERGE_MAX_ATTEMPTS", "3"))
+
 PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -1419,8 +1426,25 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 continue
             decision = _merge_decision(story)
             if decision["action"] == "merge":
-                _merge_pr(story.get("worktree", ""), key)
+                try:
+                    _merge_pr(story.get("worktree", ""), key)
+                except Exception as e:  # gh/git transient failure - see MERGE_MAX_ATTEMPTS
+                    attempts = story.get("merge_attempts", 0) + 1
+                    story["merge_attempts"] = attempts
+                    if attempts >= MERGE_MAX_ATTEMPTS:
+                        story["status"] = "failed"
+                        story["merge_error"] = str(e)
+                        _notify_user(plan_name, f"{key} merge failed {attempts}x "
+                                                f"({e}); giving up - needs human intervention.")
+                        summary["failed"].append(key)
+                    else:
+                        # leave pr_open; the next tick retries within budget.
+                        _notify_user(plan_name, f"{key} merge attempt {attempts}/"
+                                                f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.")
+                    summary["notify"].append(key)
+                    continue
                 story["status"] = "done"
+                story.pop("merge_attempts", None)
                 _mark_plane_done(key)
                 summary["merged"].append(key)
             else:
@@ -1456,8 +1480,11 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
     if story.get("review_verdict") != "APPROVE":
         return {"ok": False, "error": "Story was never reviewer-approved"}
 
-    with _scoped_repo_root(plan_name):
-        _merge_pr(story.get("worktree", ""), story_key)
+    try:
+        with _scoped_repo_root(plan_name):
+            _merge_pr(story.get("worktree", ""), story_key)
+    except Exception as e:  # surface the gh/git failure to the human, don't raise
+        return {"ok": False, "error": str(e), "story_key": story_key}
     story["status"] = "done"
     manifest_path.write_text(json.dumps(manifest, indent=2))
     _mark_plane_done(story_key)

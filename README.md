@@ -165,7 +165,10 @@ log as an audit record.
   plans/logs only. **Honors the usage gate**: while `paused`, it interrupts
   every `in_progress` story instead of letting them keep running, and skips
   new dispatch/review (both spend usage); merge adjudication still runs
-  (git/gh only, no model usage). Returns a summary with `dispatched`,
+  (git/gh only, no model usage). A transient merge failure (`gh`/`git`) does
+  not crash the tick: the story stays `pr_open` and is retried on subsequent
+  ticks up to `PIPELINE_MERGE_MAX_ATTEMPTS`, after which it is marked `failed`
+  and flagged for human intervention. Returns a summary with `dispatched`,
   `advanced`, `merged`, `parked`, `failed`, `interrupted`, `paused`, and
   `notify`. The orchestrating agent surfaces `notify` items (e.g. via
   PushNotification).
@@ -269,6 +272,7 @@ Set global vars in your shell profile; set per-project overrides in the project'
 | `PIPELINE_DEFAULT_MODEL` | `sonnet` | Model when no story/persona model |
 | `USAGE_STATE_PATH` | `~/.claude/usage_state.json` | Where `check_usage` persists usage/paused state |
 | `PIPELINE_MAX_CONCURRENT_AGENTS` | `3` | Cap on dispatched agents running at once (across all plans); `<=0` = unlimited |
+| `PIPELINE_MERGE_MAX_ATTEMPTS` | `3` | Merge error budget: how many ticks a failing `_merge_pr` (transient `gh`/`git`) is retried before the story is marked `failed` for human intervention |
 | `PIPELINE_PAUSE_THRESHOLD` | `90` | `%` of the **session** window that trips the Claude usage gate |
 | `PIPELINE_RESUME_THRESHOLD` | `70` | `%` the **session** window must drop below to clear the gate |
 | `PIPELINE_WEEK_PAUSE_THRESHOLD` | `90` | `%` of the **week** window that trips the gate |

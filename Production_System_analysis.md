@@ -79,10 +79,18 @@ Given the exceptional level of detail, the next steps should focus on tuning beh
       surface, and weaker local models make adherence harder than with Claude — so this
       matters more than when first written.
 3.  **Error Budgeting:** Define acceptable tolerance thresholds for transient errors (e.g., how many times can `_merge_pr` fail before it becomes a critical failure that requires human intervention).
-    - *2026-06-24 status: **done for the merge step.*** A failing `_merge_pr` no longer
-      crashes the tick: the story stays `pr_open` and is retried on subsequent ticks up to
-      `PIPELINE_MERGE_MAX_ATTEMPTS` (default 3), after which it is marked `failed` and
-      flagged for human intervention. `approve_merge` now returns a structured error
-      instead of raising. Other transient boundaries (Plane, dispatch launch) remain
-      fail-open without explicit budgets — a candidate for the same treatment.
+    - *2026-06-24 status: **done across the merge, dispatch, and Plane boundaries.***
+      - **Merge:** a failing `_merge_pr` no longer crashes the tick; the story stays
+        `pr_open` and is retried up to `PIPELINE_MERGE_MAX_ATTEMPTS` (default 3), then
+        marked `failed` for human intervention. `approve_merge` returns a structured
+        error instead of raising.
+      - **Dispatch:** a launch that keeps failing — a raising `dispatch_story` or an agent
+        that produces no output — bumps a per-story `dispatch_attempts` counter and is
+        retried up to `PIPELINE_DISPATCH_MAX_ATTEMPTS` before becoming a terminal `failed`,
+        rather than looping forever as a redispatch-eligible `interrupted`. Legitimate
+        usage-gate interrupts never count against it.
+      - **Plane:** `_plane_set_state` retries a transient transition up to
+        `PIPELINE_PLANE_MAX_ATTEMPTS` inline (Plane sync is a side effect of work already
+        committed in git), then records the drop durably via `_notify_user` instead of a
+        silent `print`.
 

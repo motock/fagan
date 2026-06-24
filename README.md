@@ -168,7 +168,13 @@ log as an audit record.
   (git/gh only, no model usage). A transient merge failure (`gh`/`git`) does
   not crash the tick: the story stays `pr_open` and is retried on subsequent
   ticks up to `PIPELINE_MERGE_MAX_ATTEMPTS`, after which it is marked `failed`
-  and flagged for human intervention. Returns a summary with `dispatched`,
+  and flagged for human intervention. A dispatch that keeps failing (a raising
+  `dispatch_story`, or an agent that launches but produces no output) is
+  likewise retried up to `PIPELINE_DISPATCH_MAX_ATTEMPTS` before the story is
+  marked `failed` rather than looping forever; legitimate usage-gate interrupts
+  do not count against this budget. Plane state transitions are best-effort
+  with their own inline retry (`PIPELINE_PLANE_MAX_ATTEMPTS`) and never block
+  git work. Returns a summary with `dispatched`,
   `advanced`, `merged`, `parked`, `failed`, `interrupted`, `paused`, and
   `notify`. The orchestrating agent surfaces `notify` items (e.g. via
   PushNotification).
@@ -273,6 +279,8 @@ Set global vars in your shell profile; set per-project overrides in the project'
 | `USAGE_STATE_PATH` | `~/.claude/usage_state.json` | Where `check_usage` persists usage/paused state |
 | `PIPELINE_MAX_CONCURRENT_AGENTS` | `3` | Cap on dispatched agents running at once (across all plans); `<=0` = unlimited |
 | `PIPELINE_MERGE_MAX_ATTEMPTS` | `3` | Merge error budget: how many ticks a failing `_merge_pr` (transient `gh`/`git`) is retried before the story is marked `failed` for human intervention |
+| `PIPELINE_DISPATCH_MAX_ATTEMPTS` | `3` | Dispatch error budget: how many times a story whose launch keeps failing (raising `dispatch_story`, or an agent that produces no output) is retried before it is marked `failed` instead of looping forever |
+| `PIPELINE_PLANE_MAX_ATTEMPTS` | `3` | Plane error budget: inline retries for a best-effort Plane state transition before the drop is recorded durably (Plane sync never blocks git work) |
 | `PIPELINE_PAUSE_THRESHOLD` | `90` | `%` of the **session** window that trips the Claude usage gate |
 | `PIPELINE_RESUME_THRESHOLD` | `70` | `%` the **session** window must drop below to clear the gate |
 | `PIPELINE_WEEK_PAUSE_THRESHOLD` | `90` | `%` of the **week** window that trips the gate |

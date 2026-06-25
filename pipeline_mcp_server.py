@@ -775,10 +775,19 @@ def _commit_wip(worktree: str, story_key: str, step: str) -> str:
 
     Excludes agent.log: it's the dispatcher's own session-narration file
     written into the worktree root, not project code, and must never be
-    swept into a commit.
+    swept into a commit. We stage everything, then unstage agent.log, rather
+    than naming it in an exclude pathspec (`:!agent.log`): if the worktree has
+    agent.log locally git-ignored (.git/info/exclude or .gitignore, e.g. a
+    reviewer keeping it out of diffs), naming it in the pathspec makes `git
+    add` reject the whole add ("paths are ignored... use -f", exit 1), which
+    would lose the checkpoint. `git add -A` with no pathspec silently skips
+    ignored files, and the unstage is a no-op when agent.log is absent or
+    ignored.
     """
-    subprocess.run(["git", "add", "-A", "--", ".", ":!agent.log"], cwd=worktree,
+    subprocess.run(["git", "add", "-A"], cwd=worktree,
                     check=True, capture_output=True, text=True)
+    subprocess.run(["git", "reset", "-q", "--", "agent.log"], cwd=worktree,
+                    check=False, capture_output=True, text=True)
     commit = subprocess.run(
         ["git", "commit", "-m", f"wip({story_key}): {step}"],
         cwd=worktree, capture_output=True, text=True,

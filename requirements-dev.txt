@@ -1,4 +1,5 @@
 # Development dependencies (the test suite + lint). Includes the runtime deps.
 -r requirements.txt
+-r requirements-dashboard.txt
 pytest>=9.1.1
 ruff>=0.8.0

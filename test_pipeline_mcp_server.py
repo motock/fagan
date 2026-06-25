@@ -1906,7 +1906,7 @@ def test_advance_pipeline_zero_max_concurrent_agents_means_unlimited(plan_dir, m
     dispatched = []
     monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
 
-    result = p.advance_pipeline("cap3")
+    p.advance_pipeline("cap3")
     assert dispatched == ["T1", "T2", "T3"]
 
 
@@ -1922,7 +1922,7 @@ def test_advance_pipeline_not_paused_redispatches_interrupted_stories(
     dispatched = []
     monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
 
-    result = p.advance_pipeline("resume")
+    p.advance_pipeline("resume")
     assert dispatched == ["S1"]
 
 

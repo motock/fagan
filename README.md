@@ -1,5 +1,7 @@
 # Autonomous SDLC Agent Pipeline
 
+[![CI](https://github.com/fico-jessecarroll/claude-pipeline-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fico-jessecarroll/claude-pipeline-mcp/actions/workflows/ci.yml)
+
 A persona-driven, semi-autonomous software development pipeline for Claude Code.
 It turns a goal into a plan, dispatches headless agents to implement each story
 in isolated git worktrees, reviews their work, and merges it — with an

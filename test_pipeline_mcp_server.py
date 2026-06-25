@@ -672,6 +672,35 @@ def test_commit_wip_does_not_track_real_agent_log_file(tmp_path):
     assert "feature.ts" in tracked
 
 
+def test_commit_wip_checkpoints_when_agent_log_is_git_ignored(tmp_path):
+    """Regression: a worktree may have agent.log locally git-ignored (via
+    .git/info/exclude or .gitignore). The old `git add -A -- . :!agent.log`
+    named agent.log in the pathspec, so git rejected the whole add ("paths are
+    ignored... use -f", exit 1) and _commit_wip raised before committing - the
+    checkpoint was lost even though real work was staged. The commit must
+    succeed and exclude agent.log regardless of whether it is git-ignored."""
+    p.subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    (tmp_path / "feature.ts").write_text("export const x = 1;\n")
+    p.subprocess.run(["git", "add", "feature.ts"], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    # Locally git-ignore agent.log, as a reviewer might to keep it out of diffs.
+    (tmp_path / ".git" / "info" / "exclude").write_text("agent.log\n")
+    (tmp_path / "feature.ts").write_text("export const x = 2;\n")
+    (tmp_path / "agent.log").write_text("session narration, not project code\n")
+
+    sha = p._commit_wip(str(tmp_path), "S1", "interrupted")
+
+    assert sha  # a real commit sha, not a raised RuntimeError
+    committed = p.subprocess.run(
+        ["git", "show", "--name-only", "--format=", "HEAD"],
+        cwd=tmp_path, check=True, capture_output=True, text=True,
+    ).stdout
+    assert "feature.ts" in committed
+    assert "agent.log" not in committed
+
+
 # ---------- Per-plan repo_root ----------
 def test_repo_root_for_returns_manifest_value_when_present(plan_dir):
     _write_manifest(plan_dir, "rr1", {})
@@ -2231,7 +2260,8 @@ def test_checkpoint_commits_and_records_journal_entry(plan_dir, tmp_path, monkey
     assert result["commit"] == "abc123"
     assert result["step"] == "step-1"
 
-    assert ["git", "add", "-A", "--", ".", ":!agent.log"] in calls
+    assert ["git", "add", "-A"] in calls
+    assert ["git", "reset", "-q", "--", "agent.log"] in calls
     commit_calls = [c for c in calls if c[:2] == ["git", "commit"]]
     assert commit_calls and commit_calls[0][-1] == "wip(S1): step-1"
 

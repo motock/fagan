@@ -296,6 +296,34 @@ def test_dispatch_resolves_model_tier_and_passes_runtime_knobs(tmp_path, monkeyp
     assert captured["env"]["LOCAL_AGENT_MAX_STEPS"] == "12"
 
 
+# ---------- ClaudeCliDriver.dispatch() ----------
+def test_dispatch_streams_claude_cli_output_so_log_size_is_a_reliable_signal(
+    tmp_path, monkeypatch,
+):
+    """check_story_status treats a 0-byte agent.log (after the process exits)
+    as a failed launch. claude -p's default text output format only writes
+    once, at the very end, so a long-running-but-legitimate agent looks
+    identical to a launch that never produced anything. --output-format
+    stream-json --verbose makes the CLI emit an event immediately on
+    startup, so 0 bytes after exit reliably means it never even started."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda cmd, cwd, stdout, stderr: captured.update(cmd=cmd) or _FakePopenResult(99),
+    )
+
+    b.ClaudeCliDriver().dispatch(
+        "implement the story", system="be careful", model="sonnet",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    cmd = captured["cmd"]
+    assert "--output-format" in cmd
+    assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+    assert "--verbose" in cmd
+
+
 class _FakePopenResult:
     def __init__(self, pid):
         self.pid = pid

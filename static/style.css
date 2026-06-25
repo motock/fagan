@@ -71,6 +71,51 @@ main {
 .plan-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
 .plan-header h2 { margin: 0; font-size: 18px; }
 
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.filter-group { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.filter-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-right: 4px;
+}
+.filter-chip {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+.filter-chip:hover { border-color: var(--accent); color: var(--text); }
+.filter-chip.active {
+  background: var(--badge-color, var(--accent));
+  border-color: var(--badge-color, var(--accent));
+  color: #0f1115;
+  font-weight: 600;
+}
+.filter-reset {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+.filter-reset:hover { border-color: var(--accent); color: var(--text); }
+
 .board {
   display: flex;
   gap: 10px;

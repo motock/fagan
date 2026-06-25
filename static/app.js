@@ -3,10 +3,56 @@ const STATUS_COLUMNS = [
   "changes_requested", "interrupted", "parked", "failed",
 ];
 
+const SORT_OPTIONS = [
+  ["key", "Key"],
+  ["risk", "Risk"],
+  ["activity", "Activity"],
+];
+
+const RISK_RANK = { high: 3, medium: 2, low: 1 };
+
+const FILTERS_KEY = "pipeline-dashboard-filters";
+
+function defaultFilters() {
+  return {
+    statuses: [...STATUS_COLUMNS], // enabled statuses; default = all
+    personas: [], // [] = no persona filter (show all)
+    risks: [], // [] = no risk filter (show all)
+    sort: "key", // "key" | "risk" | "activity"
+  };
+}
+
 const state = {
   selectedPlan: null,
   pollHandle: null,
+  filters: defaultFilters(),
 };
+
+function loadFilters() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(FILTERS_KEY) || "{}");
+    state.filters = { ...defaultFilters(), ...stored };
+  } catch {
+    state.filters = defaultFilters();
+  }
+}
+
+function saveFilters() {
+  try {
+    localStorage.setItem(FILTERS_KEY, JSON.stringify(state.filters));
+  } catch {
+    /* localStorage unavailable; filters simply won't persist */
+  }
+}
+
+// Toggle a value in one of the array-valued filter dimensions, then persist.
+function toggleFilter(dimension, value) {
+  const list = state.filters[dimension];
+  const idx = list.indexOf(value);
+  if (idx === -1) list.push(value);
+  else list.splice(idx, 1);
+  saveFilters();
+}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
@@ -37,33 +83,99 @@ function renderPlanList(plans) {
   }
 }
 
-function renderBoard(stories) {
-  const counts = {};
-  for (const s of Object.values(stories)) {
-    counts[s.status] = (counts[s.status] || 0) + 1;
-  }
+function riskRank(story) {
+  return RISK_RANK[story.risk] || 0;
+}
 
-  const columns = STATUS_COLUMNS.map((status) => {
-    const cards = Object.entries(stories)
-      .filter(([, s]) => s.status === status)
-      .map(([key, s]) => `
+function activityScore(story) {
+  return (story.dispatch_attempts || 0)
+    + (story.rework_attempts || 0)
+    + (story.merge_attempts || 0);
+}
+
+// Persona/risk-filter the cards of one status column, then sort per state.filters.sort.
+// Status filtering happens at the column level in renderBoard, not here.
+function applyFilters(entries) {
+  const { personas, risks, sort } = state.filters;
+  const filtered = entries.filter(([, s]) =>
+    (personas.length === 0 || personas.includes(s.persona))
+    && (risks.length === 0 || risks.includes(s.risk)));
+
+  const comparators = {
+    key: ([a], [b]) => a.localeCompare(b, undefined, { numeric: true }),
+    risk: ([, a], [, b]) => riskRank(b) - riskRank(a),
+    activity: ([, a], [, b]) => activityScore(b) - activityScore(a),
+  };
+  filtered.sort(comparators[sort] || comparators.key);
+  return filtered;
+}
+
+function renderBoard(stories) {
+  const columns = state.filters.statuses
+    .filter((status) => STATUS_COLUMNS.includes(status))
+    .sort((a, b) => STATUS_COLUMNS.indexOf(a) - STATUS_COLUMNS.indexOf(b))
+    .map((status) => {
+      const entries = applyFilters(
+        Object.entries(stories).filter(([, s]) => s.status === status));
+      const cards = entries.map(([key, s]) => `
         <div class="card" style="--badge-color: var(--c-${status})" data-key="${escapeHtml(key)}">
           <div class="card-key">${escapeHtml(key)}</div>
           <div class="card-summary">${escapeHtml(s.summary || "(no summary)")}</div>
         </div>
       `).join("");
-    return `
-      <div class="column">
-        <div class="column-header">
-          <span>${status}</span>
-          <span class="badge" style="--badge-color: var(--c-${status})">${counts[status] || 0}</span>
+      return `
+        <div class="column">
+          <div class="column-header">
+            <span>${status}</span>
+            <span class="badge" style="--badge-color: var(--c-${status})">${entries.length}</span>
+          </div>
+          <div class="column-body">${cards}</div>
         </div>
-        <div class="column-body">${cards}</div>
-      </div>
-    `;
-  }).join("");
+      `;
+    }).join("");
 
+  if (!columns) {
+    return '<div class="board"><p class="empty-state">No statuses selected.</p></div>';
+  }
   return `<div class="board">${columns}</div>`;
+}
+
+function chip(dim, value, label, active, color) {
+  const style = color ? ` style="--badge-color: var(--c-${color})"` : "";
+  return `<button class="filter-chip${active ? " active" : ""}"`
+    + ` data-dim="${escapeHtml(dim)}" data-value="${escapeHtml(value)}"${style}>`
+    + `${escapeHtml(label)}</button>`;
+}
+
+function renderFilterBar(stories) {
+  const all = Object.values(stories);
+  const personas = [...new Set(all.map((s) => s.persona).filter(Boolean))].sort();
+  const risks = [...new Set(all.map((s) => s.risk).filter(Boolean))]
+    .sort((a, b) => (RISK_RANK[b] || 0) - (RISK_RANK[a] || 0));
+
+  const { filters } = state;
+  const groups = [
+    `<div class="filter-group"><span class="filter-group-label">Status</span>${
+      STATUS_COLUMNS.map((s) =>
+        chip("statuses", s, s, filters.statuses.includes(s), s)).join("")
+    }</div>`,
+  ];
+  if (personas.length) {
+    groups.push(`<div class="filter-group"><span class="filter-group-label">Persona</span>${
+      personas.map((p) => chip("personas", p, p, filters.personas.includes(p))).join("")
+    }</div>`);
+  }
+  if (risks.length) {
+    groups.push(`<div class="filter-group"><span class="filter-group-label">Risk</span>${
+      risks.map((r) => chip("risks", r, r, filters.risks.includes(r))).join("")
+    }</div>`);
+  }
+  groups.push(`<div class="filter-group"><span class="filter-group-label">Sort</span>${
+    SORT_OPTIONS.map(([v, label]) => chip("sort", v, label, filters.sort === v)).join("")
+  }</div>`);
+
+  return `<div class="filter-bar">${groups.join("")}`
+    + `<button class="filter-reset" data-action="reset">Reset</button></div>`;
 }
 
 function renderNotifications(lines) {
@@ -93,6 +205,7 @@ function renderPlanDetail(plan) {
       <h2>${escapeHtml(plan.name)}</h2>
       ${plan.paused ? '<span class="badge" style="--badge-color: var(--c-parked)">paused</span>' : ""}
     </div>
+    ${renderFilterBar(plan.stories)}
     ${renderBoard(plan.stories)}
     <div class="panels">
       <div class="panel">
@@ -109,6 +222,27 @@ function renderPlanDetail(plan) {
   section.querySelectorAll(".card").forEach((card) => {
     card.addEventListener("click", () => showStoryModal(plan.stories[card.dataset.key], card.dataset.key));
   });
+
+  section.querySelectorAll(".filter-chip").forEach((el) => {
+    el.addEventListener("click", () => {
+      const { dim, value } = el.dataset;
+      if (dim === "sort") {
+        state.filters.sort = value;
+        saveFilters();
+      } else {
+        toggleFilter(dim, value);
+      }
+      renderPlanDetail(plan);
+    });
+  });
+  const resetBtn = section.querySelector(".filter-reset");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      state.filters = defaultFilters();
+      saveFilters();
+      renderPlanDetail(plan);
+    });
+  }
 }
 
 function showStoryModal(story, key) {
@@ -190,5 +324,6 @@ document.getElementById("auto-refresh").addEventListener("change", (e) => {
   e.target.checked ? startPolling() : stopPolling();
 });
 
+loadFilters();
 refresh();
 startPolling();

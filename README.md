@@ -278,14 +278,15 @@ honors `PLAN_DIR` the same way the MCP server does.
 }
 ```
 
-- `repo_root` — **absolute path to this plan's git repo.** `ingest_plan` carries
-  it into the manifest. Required if you ever run `advance_all_plans()` (which
-  iterates every plan in shared `PLAN_DIR`, each potentially belonging to a
-  different repo) — without it, dispatch/merge fall back to the server's
-  global `REPO_ROOT`, which is almost certainly the wrong repo for any plan
-  other than the one that env var happens to be set for. Optional if you only
-  ever drive this plan from a session/`.mcp.json` whose `REPO_ROOT` already
-  points at the right repo.
+- `repo_root` — **absolute path to this plan's git repo, required.**
+  `ingest_plan` validates it's present and is an existing directory before
+  doing anything else (no Plane calls on failure) and carries it into the
+  manifest. Without it, `advance_all_plans()` — which iterates every plan in
+  shared `PLAN_DIR`, each potentially belonging to a different repo — would
+  fall back to the server's global `REPO_ROOT`: almost certainly the wrong
+  repo for any plan other than the one that env var happens to be set for
+  (or a deliberately-broken sentinel path, if one's configured to fail
+  loudly instead of silently operating on the wrong repo).
 - `persona` — which agent implements the story (defaults to a generic agent if
   omitted).
 - `model` — `opus | sonnet | haiku`; falls back to the persona's frontmatter

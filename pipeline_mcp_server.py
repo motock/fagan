@@ -839,7 +839,20 @@ def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str
         return {"ok": False, "error": f"No plan named {plan_name}"}
 
     plan = json.loads(path.read_text())
-    manifest = {"epics": {}, "stories": {}, "repo_root": plan.get("repo_root")}
+
+    # advance_all_plans() iterates every plan in shared PLAN_DIR, each
+    # potentially belonging to a different repo, so a manifest without its
+    # own repo_root falls back to the global REPO_ROOT - the wrong repo for
+    # any plan other than the one that env var happens to be set for (or a
+    # deliberately-broken sentinel, if one's configured to fail loudly
+    # instead). Catching it here means a typo'd or missing path surfaces
+    # immediately, not as a cryptic ENOENT after three silent merge-attempt
+    # failures.
+    repo_root = plan.get("repo_root")
+    if not repo_root or not Path(repo_root).is_dir():
+        return {"ok": False, "error": f"Plan repo_root is missing or not a directory: {repo_root!r}"}
+
+    manifest = {"epics": {}, "stories": {}, "repo_root": repo_root}
     label_id = _get_or_create_label("agent-pipeline")
     backlog_state = _get_state("backlog")
 

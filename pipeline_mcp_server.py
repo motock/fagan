@@ -100,6 +100,13 @@ MERGE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_MERGE_MAX_ATTEMPTS", "3"))
 # interrupts go through interrupt_story and never touch this counter.
 DISPATCH_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_DISPATCH_MAX_ATTEMPTS", "3"))
 
+# Rework budget. When the reviewer returns REQUEST_CHANGES the story is sent
+# back for rework (redispatched with the reviewer's feedback). To stop a story
+# the reviewer keeps rejecting from looping through review/rework forever, cap
+# the cycles: once rework_attempts reaches REWORK_MAX_ATTEMPTS the story parks
+# for human review instead of redispatching again. Cleared on APPROVE.
+REWORK_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS", "3"))
+
 # Error budget for Plane state transitions. Plane sync is a best-effort side
 # effect of an action that already succeeded in git, so its budget is an inline
 # retry (not an across-ticks retry like merge/dispatch): _plane_set_state
@@ -338,6 +345,7 @@ def _build_dispatch_command(
     story: dict[str, Any], story_key: str,
     plan_name: str | None = None,
     resume_journal: list[dict[str, Any]] | None = None,
+    review_feedback: str | None = None,
 ) -> dict[str, Any]:
     """Build the backend-agnostic dispatch spec for a story: its prompt,
     persona system prompt, model tier, and tool allow-list. The chosen
@@ -364,6 +372,12 @@ def _build_dispatch_command(
             f"step=<short id>, summary=<what you did>, next_hint=<what to do "
             f"next>) so your progress is resumable if you are interrupted.\n\n"
         )
+    rework_instruction = ""
+    if review_feedback:
+        rework_instruction = (
+            f"The code reviewer REQUESTED CHANGES on the previous attempt. "
+            f"Address this feedback before finishing:\n{review_feedback}\n\n"
+        )
     if resume_journal:
         completed = "\n".join(
             f"  - [{e['step']}] {e['summary']}" for e in resume_journal
@@ -375,6 +389,7 @@ def _build_dispatch_command(
             f"This story was previously interrupted. The following steps are "
             f"already completed and committed — do not redo them:\n{completed}\n\n"
             f"Continue from here: {next_hint}\n\n"
+            f"{rework_instruction}"
             f"{checkpoint_instruction}"
             f"When finished, commit your work, push the branch, and exit."
         )
@@ -382,6 +397,7 @@ def _build_dispatch_command(
         prompt = (
             f"You are completing issue {story_key}: {story['summary']}\n\n"
             f"{story.get('agent_instructions', '')}\n\n"
+            f"{rework_instruction}"
             f"{checkpoint_instruction}"
             f"When finished, commit your work, push the branch, and exit."
         )
@@ -926,7 +942,10 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
     branch = f"agent/{story_key.lower()}"
     worktree_path = WORKTREE_ROOT / story_key
-    resuming = story.get("status") == "interrupted" or worktree_path.exists()
+    resuming = (
+        story.get("status") in ("interrupted", "changes_requested")
+        or worktree_path.exists()
+    )
     journal = _read_journal(plan_name, story_key) if resuming else []
 
     if not resuming:
@@ -942,7 +961,10 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
     _plane_set_state(story_key, "started", plan_name)
 
-    spec = _build_dispatch_command(story, story_key, plan_name=plan_name, resume_journal=journal or None)
+    spec = _build_dispatch_command(
+        story, story_key, plan_name=plan_name, resume_journal=journal or None,
+        review_feedback=story.get("review_feedback"),
+    )
     worktree_path.mkdir(parents=True, exist_ok=True)
     log_path = worktree_path / "agent.log"
     handle = backend.get_backend("dispatch").dispatch(
@@ -1266,15 +1288,32 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"ok": False, "error": f"No such story {story_key}"}
 
     branch = f"agent/{story_key.lower()}"
-    verdict = _parse_verdict(_run_reviewer(story.get("worktree", ""), branch))
+    reviewer_output = _run_reviewer(story.get("worktree", ""), branch)
+    verdict = _parse_verdict(reviewer_output)
     story["review_verdict"] = verdict
 
     if verdict == "APPROVE":
         pr_url = _open_pr(story.get("worktree", ""), story_key, story)
         story["pr_url"] = pr_url
         story["status"] = "pr_open"
+        # The work passed: drop any stale rework state from earlier cycles.
+        story.pop("review_feedback", None)
+        story.pop("rework_attempts", None)
     else:
-        story["status"] = "changes_requested"
+        # Persist the reviewer's reasoning (not just the verdict) so the
+        # redispatched agent knows what to fix, and count the cycle against
+        # the rework budget so a perpetually-rejected story eventually parks
+        # for a human instead of looping review -> rework forever.
+        story["review_feedback"] = reviewer_output
+        attempts = story.get("rework_attempts", 0) + 1
+        story["rework_attempts"] = attempts
+        if attempts >= REWORK_MAX_ATTEMPTS:
+            story["status"] = "parked"
+            story["parked_reason"] = f"rework budget exhausted after {attempts} review cycles"
+            _notify_user(plan_name, f"{story_key} parked: reviewer still requesting changes "
+                                    f"after {attempts} cycles - needs human review.")
+        else:
+            story["status"] = "changes_requested"
 
     manifest_path.write_text(json.dumps(manifest, indent=2))
     return {
@@ -1384,7 +1423,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     done_keys = {k for k, v in stories.items() if v["status"] == "done"}
     ready = [
         k for k, v in stories.items()
-        if v["status"] in ("todo", "interrupted")
+        if v["status"] in ("todo", "interrupted", "changes_requested")
         and all(d in done_keys for d in v.get("dependencies", []))
     ]
 

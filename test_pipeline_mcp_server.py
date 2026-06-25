@@ -61,11 +61,24 @@ def worktree_root(tmp_path, monkeypatch):
     return d
 
 
-@pytest.fixture
-def usage_state_path(tmp_path, monkeypatch):
+@pytest.fixture(autouse=True)
+def _isolate_usage_state(tmp_path, monkeypatch):
+    # Point the usage gate at a non-existent tmp file for EVERY test so none of
+    # them read the developer's live ~/.claude/usage_state.json. That file is
+    # rewritten every ~60s by the real usage poller, so advance_pipeline tests
+    # that don't otherwise stub the gate were flaky - passing or failing purely
+    # on whether the live session/week usage happened to be over the pause
+    # threshold when the suite ran. A missing file reads as "not paused".
     path = tmp_path / "usage_state.json"
     monkeypatch.setattr(p, "USAGE_STATE_PATH", path)
     return path
+
+
+@pytest.fixture
+def usage_state_path(_isolate_usage_state):
+    # Same isolated path as the autouse fixture; tests that want a specific gate
+    # state write to it.
+    return _isolate_usage_state
 
 
 SAMPLE_USAGE_TEXT = (
@@ -271,6 +284,15 @@ def test_dispatch_command_resume_also_includes_checkpoint_instruction(agents_dir
 def test_dispatch_command_default_tools(agents_dir):
     spec = p._build_dispatch_command(_story(persona="software-engineer"), "PIPE-6")
     assert spec["allowed_tools"] == "Bash,Edit,Write,Read"
+
+
+def test_dispatch_command_includes_review_feedback(agents_dir):
+    # A redispatched changes_requested story must carry the reviewer's feedback
+    # into the prompt so the agent knows what to fix.
+    feedback = "The error path is untested and the SQL is injectable."
+    spec = p._build_dispatch_command(_story(), "PIPE-1", review_feedback=feedback)
+    assert feedback in spec["prompt"]
+    assert "REQUESTED CHANGES" in spec["prompt"].upper()
 
 
 # ---------- Plan schema carry-through ----------
@@ -488,6 +510,67 @@ def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypa
     assert result.get("pr_url") is None
     story = _read_manifest(plan_dir, "rv")["stories"]["S1"]
     assert "pr_url" not in story
+
+
+def test_review_story_persists_feedback_on_request_changes(plan_dir, agents_dir, monkeypatch):
+    # The reviewer's reasoning must be stored, not just the verdict, so a
+    # redispatched agent knows what to fix.
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "rvfb", {
+        "S1": {"summary": "Add thing", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    reviewer_output = ("The error path is untested and the SQL is injectable.\n"
+                       "VERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: reviewer_output)
+
+    p.review_story("rvfb", "S1")
+
+    story = _read_manifest(plan_dir, "rvfb")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
+    assert story["review_feedback"] == reviewer_output
+    assert story["rework_attempts"] == 1
+
+
+def test_review_story_clears_feedback_and_rework_on_approve(plan_dir, agents_dir, monkeypatch):
+    # An approval after prior rework cycles must wipe the stale feedback/counter
+    # so the story records a clean approval.
+    _write_manifest(plan_dir, "rvclear", {
+        "S1": {"summary": "Add thing", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "review_feedback": "old gripes", "rework_attempts": 2},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("rvclear", "S1")
+
+    story = _read_manifest(plan_dir, "rvclear")["stories"]["S1"]
+    assert story["status"] == "pr_open"
+    assert "review_feedback" not in story
+    assert "rework_attempts" not in story
+
+
+def test_review_story_parks_after_rework_budget_exhausted(plan_dir, agents_dir, monkeypatch):
+    # A story the reviewer keeps rejecting must eventually park for human review
+    # rather than looping through redispatch forever.
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "rvpark", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "rework_attempts": 2},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "still bad\nVERDICT: REQUEST_CHANGES")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    result = p.review_story("rvpark", "S1")
+
+    story = _read_manifest(plan_dir, "rvpark")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert story["rework_attempts"] == 3
+    assert result["status"] == "parked"
+    assert len(notes) == 1 and "S1" in notes[0]
 
 
 def test_merge_pr_does_not_pass_delete_branch_to_gh(monkeypatch, tmp_path):
@@ -1586,6 +1669,23 @@ def test_approve_merge_returns_error_on_merge_failure(plan_dir, monkeypatch):
     assert _read_manifest(plan_dir, "ammergefail")["stories"]["P1"]["status"] == "parked"
 
 
+def test_advance_pipeline_redispatches_changes_requested(plan_dir, monkeypatch):
+    # A story the reviewer sent back must be dispatch-eligible so the next tick
+    # picks it up and reworks it - otherwise it freezes forever.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    _write_manifest(plan_dir, "cr", {
+        "S1": {"summary": "rework me", "status": "changes_requested",
+               "dependencies": [], "worktree": "/x",
+               "review_feedback": "fix the bug", "rework_attempts": 1},
+    })
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+
+    p.advance_pipeline("cr")
+
+    assert dispatched == ["S1"]
+
+
 def test_advance_pipeline_dispatch_failure_retries_within_budget(plan_dir, monkeypatch):
     # A raising dispatch_story (bad git pull, backend hiccup) must not crash the
     # tick: the story keeps its dispatch-eligible status, its attempt counter is
@@ -2351,6 +2451,35 @@ def test_dispatch_story_resume_reuses_worktree_and_seeds_journal(
     assert story["status"] == "in_progress"
     assert story["pid"] == 5555
     assert story["worktree"] == str(worktree_path)
+
+
+def test_dispatch_story_changes_requested_seeds_review_feedback(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    # Redispatching a changes_requested story must feed the reviewer's stored
+    # feedback into the agent's prompt so it reworks the right thing.
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    _write_manifest(plan_dir, "dscr", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: popen_calls.append(cmd) or _FakeProc(5556))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dscr", "S1")
+
+    assert result["resumed"] is True
+    prompt = popen_calls[0][popen_calls[0].index("-p") + 1]
+    assert "The SQL is injectable; parameterize it." in prompt
+    assert _read_manifest(plan_dir, "dscr")["stories"]["S1"]["status"] == "in_progress"
 
 
 def test_dispatch_story_resumes_when_worktree_exists_even_without_interrupted_status(

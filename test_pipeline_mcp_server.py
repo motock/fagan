@@ -329,9 +329,10 @@ def _fake_plane(method, path, **kwargs):
     return {}
 
 
-def test_ingest_plan_carries_persona_model_risk_into_manifest(plan_dir, monkeypatch):
+def test_ingest_plan_carries_persona_model_risk_into_manifest(plan_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(p, "plane_request", _fake_plane)
     plan = {
+        "repo_root": str(tmp_path),
         "epics": [{
             "summary": "E1",
             "stories": [_story(persona="security-engineer", model="opus", risk="high")],
@@ -347,7 +348,7 @@ def test_ingest_plan_carries_persona_model_risk_into_manifest(plan_dir, monkeypa
     assert story["risk"] == "high"
 
 
-def test_ingest_plan_remaps_local_keys_to_issue_ids_in_dependencies(plan_dir, monkeypatch):
+def test_ingest_plan_remaps_local_keys_to_issue_ids_in_dependencies(plan_dir, monkeypatch, tmp_path):
     issue_ids = iter(["issue-1", "issue-2", "issue-3"])
     monkeypatch.setattr(
         p, "plane_request",
@@ -357,6 +358,7 @@ def test_ingest_plan_remaps_local_keys_to_issue_ids_in_dependencies(plan_dir, mo
         ),
     )
     plan = {
+        "repo_root": str(tmp_path),
         "epics": [{
             "summary": "E1",
             "stories": [
@@ -376,9 +378,10 @@ def test_ingest_plan_remaps_local_keys_to_issue_ids_in_dependencies(plan_dir, mo
     assert stories["issue-3"]["dependencies"] == ["issue-1", "issue-2"]
 
 
-def test_ingest_plan_leaves_unresolvable_dependency_keys_unchanged(plan_dir, monkeypatch):
+def test_ingest_plan_leaves_unresolvable_dependency_keys_unchanged(plan_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(p, "plane_request", _fake_plane)
     plan = {
+        "repo_root": str(tmp_path),
         "epics": [{
             "summary": "E1",
             "stories": [_story(key="S1", dependencies=["no-such-key"])],
@@ -389,6 +392,40 @@ def test_ingest_plan_leaves_unresolvable_dependency_keys_unchanged(plan_dir, mon
     assert result["ok"] is True
     manifest = json.loads((plan_dir / "dangling.manifest.json").read_text())
     assert manifest["stories"]["issue-1"]["dependencies"] == ["no-such-key"]
+
+
+def test_ingest_plan_rejects_missing_repo_root(plan_dir, monkeypatch):
+    """Without repo_root, advance_all_plans() falls back to the global
+    REPO_ROOT for this plan - almost certainly the wrong repo (or a
+    deliberately-broken sentinel, if one's configured to fail loudly rather
+    than silently operate on the wrong repo). Catch it at ingest, not three
+    silent merge-attempt failures later."""
+    called = []
+    monkeypatch.setattr(p, "plane_request", lambda *a, **kw: called.append(1) or _fake_plane(*a, **kw))
+    plan = {"epics": [{"summary": "E1", "stories": [_story()]}]}
+    (plan_dir / "norepo.json").write_text(json.dumps(plan))
+
+    result = p.ingest_plan("norepo")
+
+    assert result["ok"] is False
+    assert "repo_root" in result["error"]
+    assert not (plan_dir / "norepo.manifest.json").exists()
+    assert not called  # must fail before any Plane side effects
+
+
+def test_ingest_plan_rejects_nonexistent_repo_root_directory(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": "/nonexistent-repo-root-set-per-plan-only",
+        "epics": [{"summary": "E1", "stories": [_story()]}],
+    }
+    (plan_dir / "badrepo.json").write_text(json.dumps(plan))
+
+    result = p.ingest_plan("badrepo")
+
+    assert result["ok"] is False
+    assert "repo_root" in result["error"]
+    assert not (plan_dir / "badrepo.manifest.json").exists()
 
 
 # ---------- Review gate + auto-PR ----------
@@ -712,17 +749,17 @@ def test_default_branch_does_not_leak_cache_across_repos(monkeypatch, tmp_path):
     assert branch_b == "feature-b"
 
 
-def test_ingest_plan_carries_repo_root_into_manifest(plan_dir, monkeypatch):
+def test_ingest_plan_carries_repo_root_into_manifest(plan_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(p, "plane_request", _fake_plane)
     plan = {
         "epics": [{"summary": "E1", "stories": [_story()]}],
-        "repo_root": "/Users/jessecarroll/git/some-project",
+        "repo_root": str(tmp_path),
     }
     (plan_dir / "rrplan.json").write_text(json.dumps(plan))
     result = p.ingest_plan("rrplan")
     assert result["ok"] is True
     manifest = json.loads((plan_dir / "rrplan.manifest.json").read_text())
-    assert manifest["repo_root"] == "/Users/jessecarroll/git/some-project"
+    assert manifest["repo_root"] == str(tmp_path)
 
 
 def test_dispatch_story_uses_manifest_repo_root_for_git_commands(

@@ -147,8 +147,13 @@ log as an audit record.
 
 ### Review & merge
 - `review_story(plan_name, story_key)` — run the `code-reviewer` persona on the
-  branch; on `APPROVE` open a PR via `gh` and set status `pr_open`; otherwise set
-  `changes_requested`. Never merges.
+  branch; on `APPROVE` open a PR via `gh` and set status `pr_open`; otherwise
+  persist the reviewer's full feedback on the story and set `changes_requested`.
+  Never merges. A `changes_requested` story is dispatch-eligible again: the next
+  `advance_pipeline` tick redispatches it with that feedback seeded into the
+  agent's prompt so it reworks the right thing. This rework loop is bounded by
+  `PIPELINE_REWORK_MAX_ATTEMPTS` — once the reviewer has rejected the story that
+  many times it is **parked** for human review instead of looping forever.
 
 ### Usage gate
 - `check_usage()` — probes current subscription usage via a headless
@@ -199,8 +204,9 @@ log as an audit record.
 todo ──dispatch──► in_progress ──tests pass──► (review) ──► pr_open ──merge?──► done
   ▲                     │   │                       │                  └park──► parked
   │                     │   └──tests fail──► failed └─REQUEST_CHANGES─► changes_requested
-  │                     └──usage gate trips──► interrupted ──dispatch (resume)──┘
-  └─────────────────────────────────────────────────────────────────────────────┘
+  │                     └──usage gate trips──► interrupted ──dispatch (resume)──┘   │
+  ├──────────────────────────── redispatch (rework, w/ feedback) ─────────────────┘
+  └─ rework budget exhausted ─► parked
 ```
 
 `interrupted` is distinct from `failed`: it means the agent was stopped (by
@@ -208,6 +214,12 @@ todo ──dispatch──► in_progress ──tests pass──► (review) ─�
 it produced a bad result. `dispatch_story` treats it the same as `todo` —
 deps-satisfied and ready — but resumes the existing worktree instead of
 creating a new one.
+
+`changes_requested` is likewise dispatch-eligible: the reviewer's feedback is
+stored on the story and `advance_pipeline` redispatches it (resuming its
+worktree) with that feedback in the prompt, so it reworks in place. After
+`PIPELINE_REWORK_MAX_ATTEMPTS` rejections it is `parked` for human review
+instead of cycling forever. An `APPROVE` clears the stored feedback and counter.
 
 State lives in `~/.claude/plans/<plan>.manifest.json` (one entry per story).
 Checkpoint history lives in `~/.claude/plans/<plan>.<story>.journal.json`.
@@ -280,6 +292,7 @@ Set global vars in your shell profile; set per-project overrides in the project'
 | `PIPELINE_MAX_CONCURRENT_AGENTS` | `3` | Cap on dispatched agents running at once (across all plans); `<=0` = unlimited |
 | `PIPELINE_MERGE_MAX_ATTEMPTS` | `3` | Merge error budget: how many ticks a failing `_merge_pr` (transient `gh`/`git`) is retried before the story is marked `failed` for human intervention |
 | `PIPELINE_DISPATCH_MAX_ATTEMPTS` | `3` | Dispatch error budget: how many times a story whose launch keeps failing (raising `dispatch_story`, or an agent that produces no output) is retried before it is marked `failed` instead of looping forever |
+| `PIPELINE_REWORK_MAX_ATTEMPTS` | `3` | Rework budget: how many times a `changes_requested` story is redispatched (with the reviewer's feedback) before it is `parked` for human review instead of looping through review↔rework |
 | `PIPELINE_PLANE_MAX_ATTEMPTS` | `3` | Plane error budget: inline retries for a best-effort Plane state transition before the drop is recorded durably (Plane sync never blocks git work) |
 | `PIPELINE_PAUSE_THRESHOLD` | `90` | `%` of the **session** window that trips the Claude usage gate |
 | `PIPELINE_RESUME_THRESHOLD` | `70` | `%` the **session** window must drop below to clear the gate |

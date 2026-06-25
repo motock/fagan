@@ -466,3 +466,11 @@ guard for the pipeline.
 - A poller calling `check_usage()` every ~60s, if you want the Claude usage gate
   active (see **Usage gate & resumability**). Without it, `paused` simply
   never gets set and Claude-backed roles behave as if usage is always low.
+
+---
+
+## License
+
+Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE) and
+[NOTICE](NOTICE). Contributions submitted for inclusion in this work are
+licensed under the same terms (Apache-2.0, §5), with no additional conditions.

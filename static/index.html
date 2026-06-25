@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Agent Pipeline Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Agent Pipeline Dashboard</h1>
+    <div class="header-right">
+      <span id="last-updated"></span>
+      <label class="auto-refresh">
+        <input type="checkbox" id="auto-refresh" checked />
+        auto-refresh
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <nav id="plan-list" aria-label="Plans"></nav>
+
+    <section id="plan-detail">
+      <p class="empty-state">Select a plan to see its story lifecycle.</p>
+    </section>
+  </main>
+
+  <div id="story-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-content">
+      <button id="story-modal-close" class="modal-close" aria-label="Close">&times;</button>
+      <div id="story-modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

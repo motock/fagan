@@ -23,8 +23,9 @@ and safety controls.
 | Pipeline MCP server | `pipeline_mcp_server.py` | All pipeline tools + orchestration |
 | Backend seam | `backend.py` | Per-role driver routing (`claude` / `local`); single-shot, review, dispatch, resource gate |
 | Local agent loop | `scripts/local_agent.py` | Native-tool-calling write loop for local dispatch (subprocess) |
+| Monitoring dashboard | `dashboard.py`, `static/` | Read-only FastAPI status/lifecycle viewer |
 | Install / deps | `scripts/install.sh`, `requirements*.txt` | venv + dependency setup |
-| Tests | `test_pipeline_mcp_server.py`, `test_backend.py` | `pytest`, run via the venv |
+| Tests | `test_pipeline_mcp_server.py`, `test_backend.py`, `test_dashboard.py` | `pytest`, run via the venv |
 | Plans / manifests / logs | `~/.claude/plans/` | Plan, manifest, decisions, notifications |
 | Worktrees | `~/.claude/worktrees/` | Isolated per-story branches |
 | Issue tracker | Plane (external) | Source of truth for stories |
@@ -225,6 +226,28 @@ instead of cycling forever. An `APPROVE` clears the stored feedback and counter.
 
 State lives in `~/.claude/plans/<plan>.manifest.json` (one entry per story).
 Checkpoint history lives in `~/.claude/plans/<plan>.<story>.journal.json`.
+
+---
+
+## Monitoring dashboard
+
+`dashboard.py` is a small, **read-only** FastAPI app for watching the
+lifecycle above without polling MCP tools by hand. It only reads the files
+already described in this doc (`<plan>.manifest.json`,
+`<plan>.notifications.log`, `<plan>.decisions.json`) — it never dispatches,
+advances, or mutates anything, so it carries none of the pipeline's risk
+surface and can be left running indefinitely.
+
+```bash
+cd ~/.claude/mcp-servers/pipeline
+pip install -r requirements-dashboard.txt   # one-time: fastapi + uvicorn
+uvicorn dashboard:app --reload              # http://127.0.0.1:8000
+```
+
+It shows, per plan: a kanban board of stories by `status` (click a card for
+persona/model/risk/worktree/PR/attempt counts/errors), the tail of the
+notifications log, and the overlord's decision audit trail. Polls every 4s;
+honors `PLAN_DIR` the same way the MCP server does.
 
 ---
 

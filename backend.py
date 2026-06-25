@@ -75,7 +75,14 @@ class ClaudeCliDriver:
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: Path, log_path: Path, append: bool,
     ) -> AgentHandle:
-        cmd = ["claude", "-p", prompt, "--model", model]
+        # stream-json (+ the verbose it requires) makes claude emit an event
+        # immediately on startup and one per tool call, instead of buffering
+        # everything until the final answer. check_story_status's "0 bytes
+        # after exit -> failed launch" check depends on that: without
+        # streaming, a long-running-but-legitimate agent looks identical to
+        # one that never started.
+        cmd = ["claude", "-p", prompt, "--model", model,
+               "--output-format", "stream-json", "--verbose"]
         if system:
             cmd += ["--append-system-prompt", system]
         if allowed_tools:

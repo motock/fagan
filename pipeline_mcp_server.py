@@ -26,6 +26,7 @@ import re
 import signal
 import subprocess
 import sys
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -120,6 +121,19 @@ WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
 mcp = FastMCP("pipeline")
 
 # ---------- Helpers ----------
+def _plane_enabled() -> bool:
+    """True only when Plane is fully configured (API key + workspace + project).
+
+    When it isn't, the local manifest is the sole source of truth and every
+    Plane call is skipped entirely rather than fired at an unconfigured
+    endpoint. Without this guard an unconfigured deployment (the common case
+    when running purely off manifests) 404s on every scheduled tick — burning
+    the PLANE_MAX_ATTEMPTS retry budget and flooding the logs with dead
+    requests to http://localhost/api/v1/workspaces//projects//...
+    """
+    return bool(PLANE_API_KEY and PLANE_WORKSPACE and PLANE_PROJECT)
+
+
 def plane_request(method: str, path: str, **kwargs) -> dict:
     """Thin wrapper around Plane's REST API."""
     url = f"{PLANE_BASE}/api/v1/workspaces/{PLANE_WORKSPACE}{path}"
@@ -737,6 +751,8 @@ def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = N
     when a plan is known, else a stderr-style print) rather than propagated.
     Returns True if the transition landed, False if it was given up on.
     """
+    if not _plane_enabled():
+        return True  # no Plane to sync to; the manifest is the source of truth
     last_err: Exception | None = None
     for _ in range(max(1, PLANE_MAX_ATTEMPTS)):
         try:
@@ -862,38 +878,52 @@ def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str
         return {"ok": False, "error": f"Plan repo_root is missing or not a directory: {repo_root!r}"}
 
     manifest = {"epics": {}, "stories": {}, "repo_root": repo_root}
-    label_id = _get_or_create_label("agent-pipeline")
-    backlog_state = _get_state("backlog")
 
-    # Maps the plan's local story keys (e.g. "S1") to the Plane issue UUIDs
-    # generated below, so dependencies can be translated to manifest keys.
+    # When Plane isn't configured the manifest is the sole source of truth:
+    # skip every Plane call and synthesize story keys locally instead of
+    # taking them from Plane-issued UUIDs.
+    plane_on = _plane_enabled()
+    label_id = _get_or_create_label("agent-pipeline") if plane_on else None
+    backlog_state = _get_state("backlog") if plane_on else None
+
+    # Maps the plan's local story keys (e.g. "S1") to the manifest story keys
+    # generated below (Plane issue UUIDs, or local keys when Plane is off), so
+    # dependencies can be translated to manifest keys.
     key_to_issue_id: dict[str, str] = {}
 
     for epic in plan["epics"]:
         if only_epics and epic["summary"] not in only_epics:
             continue
 
-        # Epics are an optional Plane module; some instances/API versions do
-        # not expose the /epics/ endpoint. Fall back to ungrouped issues.
-        try:
-            epic_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
-                                      json={"name": epic["summary"]})
-            epic_id = epic_resp["id"]
-            manifest["epics"][epic["summary"]] = epic_id
-        except RuntimeError:
-            epic_id = None
+        epic_id = None
+        if plane_on:
+            # Epics are an optional Plane module; some instances/API versions
+            # do not expose the /epics/ endpoint. Fall back to ungrouped issues.
+            try:
+                epic_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
+                                          json={"name": epic["summary"]})
+                epic_id = epic_resp["id"]
+                manifest["epics"][epic["summary"]] = epic_id
+            except RuntimeError:
+                epic_id = None
 
         for story in epic.get("stories", []):
-            issue_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/work-items/", json={
-                "name": story["summary"],
-                "description": story.get("description", ""),
-                "state": backlog_state,
-                "labels": [label_id],
-            })
-            issue_id = issue_resp["id"]
-            if epic_id is not None:
-                plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
-                              json={"issue_id": issue_id})
+            if plane_on:
+                issue_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/work-items/", json={
+                    "name": story["summary"],
+                    "description": story.get("description", ""),
+                    "state": backlog_state,
+                    "labels": [label_id],
+                })
+                issue_id = issue_resp["id"]
+                if epic_id is not None:
+                    plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
+                                  json={"issue_id": issue_id})
+            else:
+                # No Plane UUID to key on: prefer the plan's own story key
+                # (keeps the manifest readable and lets key-based dependencies
+                # resolve to themselves), else mint a unique synthetic key.
+                issue_id = story.get("key") or str(uuid.uuid4())
             if "key" in story:
                 key_to_issue_id[story["key"]] = issue_id
             manifest["stories"][issue_id] = {
@@ -1127,9 +1157,10 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
     Transition a Plane issue to In Progress and update the local manifest.
     Use this before writing any code for a story.
     """
-    issue_uuid = _resolve_issue_uuid(story_key)
-    plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
-                  json={"state": _get_state("started")})
+    if _plane_enabled():
+        issue_uuid = _resolve_issue_uuid(story_key)
+        plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
+                      json={"state": _get_state("started")})
 
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
@@ -1187,9 +1218,10 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     Transition a Plane issue to Done and update the local manifest.
     Use after you've reviewed and merged the agent's PR.
     """
-    issue_uuid = _resolve_issue_uuid(story_key)
-    plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
-                  json={"state": _get_state("completed")})
+    if _plane_enabled():
+        issue_uuid = _resolve_issue_uuid(story_key)
+        plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
+                      json={"state": _get_state("completed")})
 
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())

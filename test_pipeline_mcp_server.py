@@ -1805,6 +1805,74 @@ def test_advance_pipeline_paused_interrupts_running_and_skips_new_work(
     assert "R1" in result["interrupted"]
 
 
+def test_role_resource_ok_auto_does_not_crash_and_is_ok_when_local_available(
+    usage_state_path, monkeypatch,
+):
+    """PIPELINE_BACKEND_<ROLE>=auto must not reach get_backend with the literal
+    'auto' (which raises ValueError). Under auto the role can take work whenever
+    the local backend is healthy, even with Claude's usage gate tripped."""
+    usage_state_path.write_text(json.dumps({"session_pct": 95, "week_pct": 95, "paused": True}))
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(backend.OllamaDriver, "resource_status",
+                        lambda self: {"ok": True, "reason": ""})
+
+    ok, reason = p._role_resource_ok("dispatch")
+
+    assert ok is True
+    assert reason == ""
+
+
+def test_role_resource_ok_auto_gated_only_when_both_backends_unavailable(
+    usage_state_path, monkeypatch,
+):
+    """Under auto, the role is gated only when BOTH local and Claude are down;
+    it then surfaces Claude's gate reason."""
+    usage_state_path.write_text(json.dumps({"session_pct": 95, "week_pct": 95, "paused": True}))
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(backend.OllamaDriver, "resource_status",
+                        lambda self: {"ok": False, "reason": "Ollama unreachable"})
+
+    ok, reason = p._role_resource_ok("dispatch")
+
+    assert ok is False
+    assert reason == "Claude usage gate tripped"
+
+
+def test_list_ready_stories_resolves_summary_dependencies(plan_dir):
+    """Dependencies expressed as a prerequisite's summary string (the documented
+    save_plan schema) must resolve against done stories even when the manifest is
+    keyed by UUID rather than by summary."""
+    _write_manifest(plan_dir, "sdep", {
+        "uuid-a": {"summary": "Foundation", "status": "done", "dependencies": []},
+        "uuid-b": {"summary": "Builds on foundation", "status": "todo",
+                   "dependencies": ["Foundation"]},
+        "uuid-c": {"summary": "Blocked", "status": "todo",
+                   "dependencies": ["Builds on foundation"]},
+    })
+
+    ready = p.list_ready_stories("sdep")
+
+    assert [r["summary"] for r in ready] == ["Builds on foundation"]
+
+
+def test_advance_pipeline_dispatches_story_with_summary_dependency(plan_dir, monkeypatch):
+    """The dispatch tick must treat a satisfied summary-string dependency as met
+    and dispatch the dependent story, not silently skip it forever."""
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    _write_manifest(plan_dir, "adep", {
+        "uuid-a": {"summary": "Foundation", "status": "done", "dependencies": []},
+        "uuid-b": {"summary": "Next", "status": "todo", "dependencies": ["Foundation"]},
+    })
+    dispatched = []
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: dispatched.append(key))
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "in_progress"})
+
+    p.advance_pipeline("adep")
+
+    assert dispatched == ["uuid-b"]
+
+
 def test_advance_pipeline_local_dispatch_runs_while_claude_review_gated(
     plan_dir, usage_state_path, monkeypatch,
 ):

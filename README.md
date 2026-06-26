@@ -339,7 +339,7 @@ guard an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_RESUME_THRESHOLD` | `70` | `%` the **session** window must drop below to clear the gate |
 | `PIPELINE_WEEK_PAUSE_THRESHOLD` | `90` | `%` of the **week** window that trips the gate |
 | `PIPELINE_WEEK_RESUME_THRESHOLD` | `70` | `%` the **week** window must drop below to clear the gate |
-| `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `local` |
+| `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `local` \| `auto` (layered local-first with Claude fallback — see below) |
 | `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `local` |
 | `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `local` |
 | `PIPELINE_LOCAL_ENDPOINT` | `http://localhost:11434` | Ollama base URL for the `local` driver (it uses Ollama's native `/api/chat`, the only surface that accepts `num_ctx`). Point at a remote Ollama to use another box. |
@@ -353,6 +353,7 @@ guard an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS` | `900` | Per-request timeout inside the local dispatch/review agent loop |
 | `PIPELINE_LOCAL_MAX_STEPS` | `40` | Max tool-call steps a local **dispatch** run takes before it parks (WIP-commits) |
 | `PIPELINE_LOCAL_REVIEW_MAX_STEPS` | `20` | Max tool-call steps a local **review** takes before returning UNKNOWN (→ parks) |
+| `PIPELINE_LOCAL_MAX_RISK` | `low` | Highest story risk the `auto` router sends to the local agent: `low` \| `medium` \| `high`. Stories above this threshold go straight to Claude. Security-persona stories always go to Claude regardless of this setting. |
 
 **Backend routing:** dispatch, review, and overlord each resolve independently
 via `backend.get_backend(role)` (see `backend.py`) — moving one role off Claude
@@ -375,6 +376,24 @@ never touches the others. Two drivers exist today:
   caveats: local dispatch is reliable on small/mechanical stories but has a
   reasoning ceiling, so keep `PIPELINE_RISK_THRESHOLD` conservative and let
   bigger work park or stay on Claude).
+
+**`auto` — layered local-first dispatch:** `PIPELINE_BACKEND_DISPATCH=auto`
+enables a two-layer routing strategy:
+
+1. **A-priori (by story metadata):** before dispatching, the orchestrator checks
+   story `risk` and `persona`. Stories with risk above `PIPELINE_LOCAL_MAX_RISK`
+   (default `low`) or a `security-engineer` persona are sent directly to Claude
+   without attempting local first.
+2. **A-posteriori (escalation on failure):** all other stories start on the local
+   agent. If the local run fails (tests don't pass), the orchestrator wipes the
+   local worktree, resets the story, and re-dispatches it on Claude starting clean.
+   A second failure on Claude is terminal (same behavior as today). The escalation
+   flag (`story["escalated"]`) prevents infinite looping.
+
+To activate, set `PIPELINE_BACKEND_DISPATCH=auto` in your env (e.g.
+`~/.claude.json` `mcpServers.pipeline.env`). Stories already carrying
+`story["backend"]` take that value over the router (used internally to lock an
+escalated story to Claude across ticks).
 
 Setting any `PIPELINE_BACKEND_*` var to a name that isn't registered raises
 `NotImplementedError` naming the offending var.

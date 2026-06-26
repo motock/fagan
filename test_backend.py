@@ -48,6 +48,18 @@ def test_get_backend_unknown_driver_name_raises_not_implemented(monkeypatch):
         b.get_backend("review")
 
 
+def test_get_backend_name_override_skips_env(monkeypatch):
+    """Explicit name= overrides the env var entirely."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "claude")
+    assert isinstance(b.get_backend("dispatch", name="local"), b.OllamaDriver)
+
+
+def test_get_backend_auto_raises_with_helpful_message():
+    """'auto' must never reach get_backend — callers must resolve it first."""
+    with pytest.raises(ValueError, match="auto"):
+        b.get_backend("dispatch", name="auto")
+
+
 # ---------- OllamaDriver.complete() ----------
 class _FakeResponse:
     def __init__(self, payload):

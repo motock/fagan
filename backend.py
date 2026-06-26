@@ -441,18 +441,20 @@ _DRIVERS: dict[str, type] = {
 }
 
 
-def get_backend(role: str | None = None) -> Backend:
+def get_backend(role: str | None = None, *, name: str | None = None) -> Backend:
     """Resolve the active backend.
 
-    role=None returns ClaudeCliDriver unconditionally - used today only by
-    the Claude-specific usage probe (its `/cost` gate is Claude-only until
-    Step 5 replaces it with a per-backend resource check).
+    role=None returns ClaudeCliDriver unconditionally - used only by the
+    Claude-specific usage probe (its `/cost` gate is Claude-only).
 
     For everything else, pass the role being executed: "dispatch", "review",
-    or "overlord". Each is independently routable via
-    PIPELINE_BACKEND_<ROLE> (e.g. PIPELINE_BACKEND_OVERLORD=local), so any
-    role can move off Claude without touching the others. Defaults to
-    "claude".
+    or "overlord". Each is independently routable via PIPELINE_BACKEND_<ROLE>
+    (e.g. PIPELINE_BACKEND_OVERLORD=local). Defaults to "claude".
+
+    name= is a per-call override (e.g. a per-story backend choice stored in
+    the manifest). When given it skips the env lookup entirely, except for the
+    special value "auto" which is not a real driver and must be resolved by the
+    caller before calling get_backend.
 
     "local" (OllamaDriver) implements complete() — both overlord-style
     single-shot prompts and review-style read-only tool loops (runs tests +
@@ -463,13 +465,21 @@ def get_backend(role: str | None = None) -> Backend:
     """
     if role is None:
         return ClaudeCliDriver()
-    env_var = f"PIPELINE_BACKEND_{role.upper()}"
-    name = os.environ.get(env_var, "claude").strip().lower()
-    driver_cls = _DRIVERS.get(name)
+    resolved = (name or "").strip().lower() if name else None
+    if not resolved:
+        env_var = f"PIPELINE_BACKEND_{role.upper()}"
+        resolved = os.environ.get(env_var, "claude").strip().lower()
+    if resolved == "auto":
+        raise ValueError(
+            "get_backend received name='auto', which is not a concrete driver. "
+            "The caller must resolve 'auto' to 'local' or 'claude' via "
+            "_route_dispatch_backend() before calling get_backend()."
+        )
+    driver_cls = _DRIVERS.get(resolved)
     if driver_cls is None:
+        env_var = f"PIPELINE_BACKEND_{role.upper()}" if role else "(no role)"
         raise NotImplementedError(
-            f"{env_var}={name!r} has no registered driver. Only "
-            f"{sorted(_DRIVERS)} are implemented today; additional drivers "
-            f"(e.g. a local-model driver) land in a later step."
+            f"{env_var}={resolved!r} has no registered driver. Only "
+            f"{sorted(_DRIVERS)} are implemented today."
         )
     return driver_cls()

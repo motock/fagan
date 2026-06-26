@@ -1374,6 +1374,106 @@ def test_check_usage_success_path_sets_measured_at(usage_state_path, monkeypatch
     assert result["measured_at"] == result["checked_at"]
 
 
+# ---------- Usage gate blind-state visibility ----------
+_BLACKOUT_TEXT = (
+    "You are currently using your subscription to power your Claude Code usage\n\n"
+    "What's contributing to your limits usage?\n"
+)
+
+
+def _blackout_run(cmd, **kwargs):
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"type": "result", "result": _BLACKOUT_TEXT})
+        stderr = ""
+    return Result()
+
+
+def test_check_usage_marks_gate_blind_when_failing_open(usage_state_path, monkeypatch):
+    """When the probe has been dark past the staleness window, failing the gate
+    open must be recorded visibly (gate_blind + blind_since), not just printed."""
+    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
+    usage_state_path.write_text(json.dumps({
+        "session_pct": 91, "week_pct": 60, "paused": True,
+        "checked_at": long_ago, "measured_at": long_ago,
+    }))
+    monkeypatch.setattr(backend.subprocess, "run", _blackout_run)
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
+
+    result = p.check_usage()
+
+    assert result["paused"] is False
+    assert result["gate_blind"] is True
+    assert result["blind_since"]  # a timestamp was stamped
+    assert result["consecutive_parse_failures"] == 1
+
+
+def test_check_usage_counts_parse_failures_before_going_blind(usage_state_path, monkeypatch):
+    """A parse failure still inside the staleness window bumps the counter but
+    does not (yet) blind the gate — the last measurement is still trusted."""
+    recent = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    usage_state_path.write_text(json.dumps({
+        "session_pct": 91, "week_pct": 60, "paused": True,
+        "checked_at": recent, "measured_at": recent,
+        "consecutive_parse_failures": 2,
+    }))
+    monkeypatch.setattr(backend.subprocess, "run", _blackout_run)
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
+
+    result = p.check_usage()
+
+    assert result["consecutive_parse_failures"] == 3
+    assert result.get("gate_blind") is not True
+    assert result["paused"] is True  # last measurement still trusted
+
+
+def test_check_usage_preserves_blind_since_across_consecutive_blind_polls(
+    usage_state_path, monkeypatch,
+):
+    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
+    blind_since = (datetime.now(timezone.utc) - timedelta(seconds=900)).isoformat()
+    usage_state_path.write_text(json.dumps({
+        "session_pct": 91, "week_pct": 60, "paused": False,
+        "checked_at": long_ago, "measured_at": long_ago,
+        "gate_blind": True, "blind_since": blind_since,
+        "consecutive_parse_failures": 5,
+    }))
+    monkeypatch.setattr(backend.subprocess, "run", _blackout_run)
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 1800)
+
+    result = p.check_usage()
+
+    assert result["gate_blind"] is True
+    assert result["blind_since"] == blind_since  # not reset
+    assert result["consecutive_parse_failures"] == 6
+
+
+def test_check_usage_clears_blind_state_on_successful_probe(usage_state_path, monkeypatch):
+    """A real measurement clears the blind flags so the dashboard stops alerting."""
+    long_ago = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
+    usage_state_path.write_text(json.dumps({
+        "session_pct": 50, "week_pct": 50, "paused": False,
+        "checked_at": long_ago, "measured_at": long_ago,
+        "gate_blind": True, "blind_since": long_ago,
+        "consecutive_parse_failures": 9,
+    }))
+
+    def _ok_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": SAMPLE_USAGE_TEXT})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(backend.subprocess, "run", _ok_run)
+
+    result = p.check_usage()
+
+    assert result["gate_blind"] is False
+    assert result["consecutive_parse_failures"] == 0
+    assert result.get("blind_since") is None
+
+
 # ---------- Merge adjudication (pure decision) ----------
 @pytest.mark.parametrize("autonomy,threshold,verdict,risk,expected", [
     ("gated", "low", "APPROVE", "low", "merge"),

@@ -78,6 +78,45 @@ def test_get_plan_404_when_no_manifest(client, plan_dir):
     assert res.status_code == 404
 
 
+@pytest.fixture
+def usage_state_path(tmp_path, monkeypatch):
+    path = tmp_path / "usage_state.json"
+    monkeypatch.setattr(d, "USAGE_STATE_PATH", path)
+    return path
+
+
+def test_usage_endpoint_when_no_state_file(client, usage_state_path):
+    res = client.get("/api/usage")
+    assert res.status_code == 200
+    assert res.json()["available"] is False
+
+
+def test_usage_endpoint_surfaces_gate_health(client, usage_state_path):
+    usage_state_path.write_text(json.dumps({
+        "session_pct": 91, "week_pct": 82, "paused": True,
+        "measured_at": "2026-06-26T16:40:13+00:00",
+        "gate_blind": False, "consecutive_parse_failures": 0,
+    }))
+    body = client.get("/api/usage").json()
+    assert body["available"] is True
+    assert body["session_pct"] == 91
+    assert body["paused"] is True
+    assert body["gate_blind"] is False
+
+
+def test_usage_endpoint_reports_blind_gate(client, usage_state_path):
+    usage_state_path.write_text(json.dumps({
+        "session_pct": 50, "week_pct": 50, "paused": False,
+        "measured_at": "2026-06-26T10:00:00+00:00",
+        "gate_blind": True, "blind_since": "2026-06-26T10:30:00+00:00",
+        "consecutive_parse_failures": 42,
+    }))
+    body = client.get("/api/usage").json()
+    assert body["gate_blind"] is True
+    assert body["blind_since"] == "2026-06-26T10:30:00+00:00"
+    assert body["consecutive_parse_failures"] == 42
+
+
 def test_get_plan_returns_stories_epics_notifications_decisions(client, plan_dir):
     _write_manifest(
         plan_dir, "demo",

@@ -1271,17 +1271,31 @@ def check_usage() -> dict[str, Any]:
     except ValueError:
         if not prev:
             raise
+        now_iso = datetime.now(timezone.utc).isoformat()
         state = dict(prev)
-        state["checked_at"] = datetime.now(timezone.utc).isoformat()
+        state["checked_at"] = now_iso
+        # Count how many polls in a row have failed to parse, so the blind
+        # window is visible (and quantifiable) rather than a silent stderr line.
+        state["consecutive_parse_failures"] = prev.get("consecutive_parse_failures", 0) + 1
         measured_at = prev.get("measured_at", prev.get("checked_at"))
         state["measured_at"] = measured_at
         age = _usage_state_age_seconds({"checked_at": measured_at}) if measured_at else None
         if age is not None and age > USAGE_STALE_AFTER_SECONDS:
+            # The last real measurement is too old to trust: the gate fails
+            # OPEN (so a permanent CLI change can't freeze the pipeline), but
+            # that means spend is now unguarded — record it loudly (gate_blind
+            # + blind_since) so the dashboard/operator can see the gate is blind
+            # instead of discovering it via an unexpected bill.
             state["paused"] = False
             state["stale"] = True
+            state["gate_blind"] = True
+            if not prev.get("gate_blind"):
+                state["blind_since"] = now_iso  # first poll that went blind
             print(
                 f"check_usage: usage data is {age:.0f}s stale and the CLI is "
-                f"still not parseable - failing the gate open", file=sys.stderr,
+                f"still not parseable ({state['consecutive_parse_failures']} "
+                f"consecutive failures) - failing the gate OPEN; cost gate is "
+                f"now BLIND since {state.get('blind_since')}", file=sys.stderr,
             )
         _write_usage_state(state)
         return state
@@ -1289,6 +1303,10 @@ def check_usage() -> dict[str, Any]:
     state["paused"] = _usage_gate(
         prev.get("paused", False), state["session_pct"], state["week_pct"],
     )
+    # A real measurement clears any blind/stale state from prior failures.
+    state["consecutive_parse_failures"] = 0
+    state["gate_blind"] = False
+    state["stale"] = False
     _write_usage_state(state)
     return state
 

@@ -414,6 +414,15 @@ def test_ingest_plan_leaves_unresolvable_dependency_keys_unchanged(plan_dir, mon
     assert manifest["stories"]["issue-1"]["dependencies"] == ["no-such-key"]
 
 
+# ---------- Logging hygiene ----------
+def test_http_loggers_are_quieted():
+    """Importing the server caps httpx/httpcore at WARNING so the per-tick
+    HTTP probes don't flood the unattended launchd logs at INFO."""
+    import logging
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
+
+
 # ---------- Plane optional (unconfigured) ----------
 def test_plane_enabled_reflects_config(monkeypatch):
     assert p._plane_enabled() is True  # set by _plane_configured fixture

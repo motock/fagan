@@ -102,6 +102,15 @@ MERGE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_MERGE_MAX_ATTEMPTS", "3"))
 # interrupts go through interrupt_story and never touch this counter.
 DISPATCH_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_DISPATCH_MAX_ATTEMPTS", "3"))
 
+# Layered local-first dispatch (PIPELINE_BACKEND_DISPATCH=auto):
+#   1. A-priori: stories with risk above PIPELINE_LOCAL_MAX_RISK (default "low")
+#      or a security persona go straight to Claude.
+#   2. A-posteriori: if the local agent fails (bad code / test failure), the
+#      orchestrator escalates that specific story to Claude and starts clean.
+# Explicit "local" or "claude" values bypass this router entirely.
+PIPELINE_LOCAL_MAX_RISK = os.environ.get("PIPELINE_LOCAL_MAX_RISK", "low").lower()
+_LOCAL_SKIP_PERSONAS = {"security-engineer"}
+
 # Rework budget. When the reviewer returns REQUEST_CHANGES the story is sent
 # back for rework (redispatched with the reviewer's feedback). To stop a story
 # the reviewer keeps rejecting from looping through review/rework forever, cap
@@ -592,6 +601,39 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     return result
 
 
+def _escalate_to_claude(
+    manifest: dict, plan_name: str, story_key: str, manifest_path: Path
+) -> None:
+    """Flip a failed local story to Claude and start clean.
+
+    Tears down the local worktree+branch (the local agent left it dirty/broken;
+    Claude gets a fresh branch from main so it doesn't inherit that state), clears
+    the dispatch counters, and resets status to 'todo' so the next tick
+    re-dispatches on Claude. The journal is also cleared: there's nothing useful
+    to resume from a failed local run when Claude is starting over.
+    """
+    story = manifest["stories"][story_key]
+    worktree = story.get("worktree", "")
+    branch = f"agent/{story_key.lower()}"
+    # Remove worktree and branch — best-effort (may already be gone).
+    if worktree:
+        subprocess.run(["git", "worktree", "remove", "--force", worktree],
+                        cwd=REPO_ROOT, capture_output=True, text=True)
+    subprocess.run(["git", "branch", "-D", branch],
+                    cwd=REPO_ROOT, capture_output=True, text=True)
+    # Clear journal so Claude starts fresh (not from a broken local checkpoint).
+    journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+    if journal_path.exists():
+        journal_path.unlink()
+    # Reset the story: Claude dispatch on next tick.
+    story["backend"] = "claude"
+    story["escalated"] = True
+    story["status"] = "todo"
+    for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error"):
+        story.pop(key, None)
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+
 def _notify_user(plan_name: str, message: str) -> None:
     """Durably record a notice for the user. The orchestrating agent surfaces
     these (e.g. via PushNotification) from advance_pipeline's summary."""
@@ -712,6 +754,27 @@ def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
     ):
         return True
     return False
+
+
+def _route_dispatch_backend(story: dict[str, Any]) -> str:
+    """A-priori backend choice for a new dispatch (called only when
+    PIPELINE_BACKEND_DISPATCH=auto). Returns "local" or "claude".
+
+    Routes to Claude when the story is above the local risk ceiling or uses a
+    security persona; otherwise tries local first (the orchestrator escalates
+    to Claude a-posteriori if the local run fails).
+    """
+    # Read at call time so tests can monkeypatch the env and re-import isn't needed.
+    max_risk = os.environ.get("PIPELINE_LOCAL_MAX_RISK", PIPELINE_LOCAL_MAX_RISK).lower()
+    max_risk_rank = _RISK_ORDER.get(max_risk, _RISK_ORDER["low"])
+    story_risk = (story.get("risk") or "low").lower()
+    risk_rank = _RISK_ORDER.get(story_risk, _RISK_ORDER["high"])
+    if risk_rank > max_risk_rank:
+        return "claude"
+    persona = (story.get("persona") or "").lower()
+    if persona in _LOCAL_SKIP_PERSONAS:
+        return "claude"
+    return "local"
 
 
 def _role_resource_ok(role: str) -> tuple[bool, str]:
@@ -1023,13 +1086,24 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
     _plane_set_state(story_key, "started", plan_name)
 
+    # Resolve concrete backend name for this story. Priority order:
+    #   1. story["backend"] already set (e.g. from an escalation flip)
+    #   2. PIPELINE_BACKEND_DISPATCH=auto  → a-priori router
+    #   3. PIPELINE_BACKEND_DISPATCH=local|claude  → that driver directly
+    env_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+    dispatch_backend = story.get("backend") or (
+        _route_dispatch_backend(story) if env_backend == "auto" else env_backend
+    )
+    # Persist so check_story_status and escalation see which backend ran.
+    story["backend"] = dispatch_backend
+
     spec = _build_dispatch_command(
         story, story_key, plan_name=plan_name, resume_journal=journal or None,
         review_feedback=story.get("review_feedback"),
     )
     worktree_path.mkdir(parents=True, exist_ok=True)
     log_path = worktree_path / "agent.log"
-    handle = backend.get_backend("dispatch").dispatch(
+    handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(
         spec["prompt"], system=spec["system"], model=spec["model"],
         allowed_tools=spec["allowed_tools"],
         cwd=worktree_path, log_path=log_path, append=resuming,
@@ -1583,15 +1657,27 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     summary["notify"].append(key)
                     manifest_path.write_text(json.dumps(m, indent=2))
 
-            # 2. Poll running agents: tests fail -> notify; tests pass -> tests_passed.
-            stories = json.loads(manifest_path.read_text())["stories"]
+            # 2. Poll running agents: tests fail -> notify (or escalate); tests pass -> tests_passed.
+            manifest = json.loads(manifest_path.read_text())
+            stories = manifest["stories"]
             for key, story in stories.items():
                 if story["status"] == "in_progress" and "pid" in story:
                     status = check_story_status(plan_name, key).get("status")
                     if status == "failed":
-                        _notify_user(plan_name, f"{key} tests failed")
-                        summary["failed"].append(key)
-                        summary["notify"].append(key)
+                        # A-posteriori escalation: if the local agent failed
+                        # and has NOT been escalated before, wipe its worktree
+                        # and re-queue for Claude.  A second failure (on Claude,
+                        # or explicitly non-auto) is terminal, as today.
+                        if story.get("backend") == "local" and not story.get("escalated"):
+                            manifest = json.loads(manifest_path.read_text())
+                            _escalate_to_claude(manifest, plan_name, key, manifest_path)
+                            _notify_user(plan_name,
+                                f"{key} local agent failed; escalating to Claude and starting clean.")
+                            summary["notify"].append(key)
+                        else:
+                            _notify_user(plan_name, f"{key} tests failed")
+                            summary["failed"].append(key)
+                            summary["notify"].append(key)
 
         # Review every tests_passed story (incl. ones orphaned by a crashed
         # review on a prior tick - review_story is idempotent). Gated by the

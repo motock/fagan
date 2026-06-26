@@ -2781,6 +2781,227 @@ def test_dispatch_story_resumes_when_worktree_exists_even_without_interrupted_st
     assert not any(c[:3] == ["git", "worktree", "add"] for c in run_calls)
 
 
+# ---------- Local-first routing ----------
+
+def test_route_dispatch_backend_low_risk_goes_local(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "low")
+    assert p._route_dispatch_backend({"risk": "low", "persona": "software-engineer"}) == "local"
+
+
+def test_route_dispatch_backend_medium_risk_above_low_ceiling_goes_claude(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "low")
+    assert p._route_dispatch_backend({"risk": "medium", "persona": "software-engineer"}) == "claude"
+
+
+def test_route_dispatch_backend_medium_risk_within_medium_ceiling_goes_local(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "medium")
+    assert p._route_dispatch_backend({"risk": "medium", "persona": "software-engineer"}) == "local"
+
+
+def test_route_dispatch_backend_high_risk_above_medium_ceiling_goes_claude(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "medium")
+    assert p._route_dispatch_backend({"risk": "high", "persona": "software-engineer"}) == "claude"
+
+
+def test_route_dispatch_backend_high_ceiling_allows_high_risk_local(monkeypatch):
+    """Explicitly setting the ceiling to 'high' lets even high-risk go local."""
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "high")
+    assert p._route_dispatch_backend({"risk": "high", "persona": "software-engineer"}) == "local"
+
+
+def test_route_dispatch_backend_security_persona_always_claude(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "high")
+    assert p._route_dispatch_backend({"risk": "low", "persona": "security-engineer"}) == "claude"
+
+
+def test_route_dispatch_backend_missing_risk_defaults_low(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "low")
+    assert p._route_dispatch_backend({"persona": "software-engineer"}) == "local"
+
+
+def test_dispatch_story_auto_routes_low_risk_local(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_BACKEND_DISPATCH=auto sends a low-risk story to OllamaDriver."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "low")
+    _write_manifest(plan_dir, "auto1", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build it.",
+               "status": "todo", "risk": "low", "dependencies": []},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(11))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("auto1", "S1")
+
+    assert result["ok"] is True
+    manifest = _read_manifest(plan_dir, "auto1")
+    assert manifest["stories"]["S1"]["backend"] == "local"
+    # OllamaDriver uses venv python, not "claude"
+    assert popen_calls[0][0] != "claude"
+
+
+def test_dispatch_story_auto_routes_high_risk_claude(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_BACKEND_DISPATCH=auto sends a high-risk story to ClaudeCliDriver."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "low")
+    _write_manifest(plan_dir, "auto2", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build it.",
+               "status": "todo", "risk": "high", "dependencies": []},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(22))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("auto2", "S1")
+
+    manifest = _read_manifest(plan_dir, "auto2")
+    assert manifest["stories"]["S1"]["backend"] == "claude"
+    assert popen_calls[0][0] == "claude"
+
+
+def test_dispatch_story_persists_backend_to_manifest(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The resolved backend is written to story['backend'] so escalation sees it."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "pb1", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(33))
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("pb1", "S1")
+
+    assert _read_manifest(plan_dir, "pb1")["stories"]["S1"]["backend"] == "local"
+
+
+def test_dispatch_story_honors_stored_backend_override(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """story['backend'] takes precedence over env, used by escalation to lock to Claude."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "pb2", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [], "backend": "claude"},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(44))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("pb2", "S1")
+
+    # Even though env says local, the stored override wins → ClaudeCliDriver
+    assert popen_calls[0][0] == "claude"
+
+
+def test_advance_pipeline_escalates_local_failure_to_claude(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A local agent failure triggers clean Claude escalation (not terminal failure)."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    _write_manifest(plan_dir, "esc1", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "in_progress", "pid": 9001,
+               "worktree": str(worktree_path),
+               "log": str(worktree_path / "agent.log"),
+               "backend": "local", "dependencies": []},
+    })
+
+    class _FailResult:
+        stdout = "test failed"; stderr = ""; returncode = 1
+
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+
+    result = p.advance_pipeline("esc1")
+
+    manifest = _read_manifest(plan_dir, "esc1")
+    story = manifest["stories"]["S1"]
+    assert story["backend"] == "claude"
+    assert story["status"] == "todo"
+    assert story["escalated"] is True
+    assert "pid" not in story
+    assert "S1" not in result.get("failed", [])
+    notif = (plan_dir / "esc1.notifications.log").read_text()
+    assert "escalating to Claude" in notif
+
+
+def test_advance_pipeline_does_not_escalate_claude_failure(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A Claude-run failure is terminal (not escalated again)."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    _write_manifest(plan_dir, "esc2", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "in_progress", "pid": 9002,
+               "worktree": str(worktree_path),
+               "log": str(worktree_path / "agent.log"),
+               "backend": "claude", "dependencies": []},
+    })
+
+    class _FailResult:
+        stdout = "test failed"; stderr = ""; returncode = 1
+
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+
+    result = p.advance_pipeline("esc2")
+
+    manifest = _read_manifest(plan_dir, "esc2")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert "S1" in result.get("failed", [])
+
+
+def test_advance_pipeline_does_not_escalate_already_escalated(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A story that already has escalated=True is not escalated a second time."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    _write_manifest(plan_dir, "esc3", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "in_progress", "pid": 9003,
+               "worktree": str(worktree_path),
+               "log": str(worktree_path / "agent.log"),
+               "backend": "local", "escalated": True, "dependencies": []},
+    })
+
+    class _FailResult:
+        stdout = "test failed"; stderr = ""; returncode = 1
+
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+
+    result = p.advance_pipeline("esc3")
+
+    manifest = _read_manifest(plan_dir, "esc3")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert "S1" in result.get("failed", [])
+
+
 # ---------- Interrupt path ----------
 def test_interrupt_story_sends_sigterm_and_checkpoints(plan_dir, tmp_path, monkeypatch):
     worktree = str(tmp_path / "wt")

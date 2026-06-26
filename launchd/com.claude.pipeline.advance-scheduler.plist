@@ -21,6 +21,13 @@
         <string>/opt/homebrew/bin:/Users/jessecarroll/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>REPO_ROOT</key>
         <string>/nonexistent-repo-root-set-per-plan-only</string>
+        <!-- Route dispatch to the local Ollama backend so overnight runs don't
+             spend the Claude weekly limit (review/overlord stay on Claude
+             unless PIPELINE_BACKEND_REVIEW/OVERLORD are also set to local). -->
+        <key>PIPELINE_BACKEND_DISPATCH</key>
+        <string>local</string>
+        <key>PIPELINE_LOCAL_MODEL_DEFAULT</key>
+        <string>devstral:24b</string>
     </dict>
 
     <key>StartInterval</key>

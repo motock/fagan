@@ -201,6 +201,21 @@ def run_tool(fn, args) -> str:
     return f"unknown tool {fn}"
 
 
+def safe_run_tool(fn, args) -> str:
+    """Run a tool, turning any exception into a recoverable error message.
+
+    A model that omits a required argument (e.g. str_replace without old_str,
+    observed with weaker local models) would otherwise raise an uncaught
+    KeyError and crash the whole unattended agent. Feeding the error back as a
+    tool result lets the model correct itself, bounded by the loop guard / step
+    cap, instead of taking the run down.
+    """
+    try:
+        return run_tool(fn, args)
+    except Exception as e:
+        return f"ERROR running {fn}: {type(e).__name__}: {e}"
+
+
 def main() -> int:
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
@@ -272,7 +287,10 @@ def main() -> int:
                     auto_wip_commit("parked on repetition")
                 return 3
 
-            messages.append({"role": "tool", "content": run_tool(fn, args)})
+            # A malformed tool call (e.g. a model that omits a required arg
+            # like old_str) must nudge the model with a recoverable error, not
+            # crash the whole unattended agent with an uncaught exception.
+            messages.append({"role": "tool", "content": safe_run_tool(fn, args)})
 
     print("[ended without done — step cap reached]", flush=True)
     if worktree_dirty():

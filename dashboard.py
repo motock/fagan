@@ -18,6 +18,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
+USAGE_STATE_PATH = Path(
+    os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_state.json")
+).expanduser()
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
@@ -83,6 +86,18 @@ def _plan_summary(plan_name: str, manifest: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "plan_dir": str(PLAN_DIR)}
+
+
+@app.get("/api/usage")
+def usage() -> dict[str, Any]:
+    """Surface the Claude usage gate's health, including whether it has gone
+    blind (probe stale past the staleness window, so it's failing OPEN and
+    spend is unguarded). The UI alerts on gate_blind so a silent CLI-output
+    change doesn't leave the cost gate quietly disabled."""
+    if not USAGE_STATE_PATH.exists():
+        return {"available": False}
+    state = json.loads(USAGE_STATE_PATH.read_text())
+    return {"available": True, **state}
 
 
 @app.get("/api/plans")

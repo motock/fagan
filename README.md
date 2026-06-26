@@ -249,6 +249,13 @@ persona/model/risk/worktree/PR/attempt counts/errors), the tail of the
 notifications log, and the overlord's decision audit trail. Polls every 4s;
 honors `PLAN_DIR` the same way the MCP server does.
 
+A **usage-gate banner** across the top reads `USAGE_STATE_PATH` (`/api/usage`)
+and shows the current session/week %. If the gate goes **blind** — the usage
+probe has been unparseable past the staleness window, so it's failing *open*
+and spend is unguarded (see below) — the banner turns red and names the blind
+duration / failure count, so a silent CLI-output change can't quietly disable
+the cost gate.
+
 ---
 
 ## Plan / story schema
@@ -435,9 +442,19 @@ dispatch and review **independently, by the backend serving each role**
 (`backend.resource_status()`):
 - **Claude-backed roles** consult the usage gate. Run `check_usage()` on an
   external ~60s cadence (cron, launchd, or `/loop`) — it probes
-  `claude -p "/usage"`, computes `paused` with hysteresis (trip at the
+  `claude -p "/cost"`, computes `paused` with hysteresis (trip at the
   session/week `PAUSE_THRESHOLD`%, clear only once **both** windows drop below
   their `RESUME_THRESHOLD`%), and persists it to `USAGE_STATE_PATH`.
+  The probe parses human-readable CLI output, which Claude Code can reword (and
+  has). When a parse fails, `check_usage` falls back to the last reading;
+  once that reading is older than `PIPELINE_USAGE_STALE_AFTER_SECONDS` (default
+  1800) it stops trusting it and **fails the gate open** — the available
+  default, so a permanent output change can't freeze the pipeline. Because
+  failing open means spend is unguarded, that state is recorded loudly:
+  `gate_blind`/`blind_since`/`consecutive_parse_failures` in `USAGE_STATE_PATH`,
+  surfaced as the red dashboard banner above. (A `claude -p /cost` spawned
+  *inside* a Claude Code session omits the percentages; the poller runs
+  standalone, so it's unaffected.)
 - **Local-backed roles** consult only Ollama reachability — there's no usage
   limit, so a local role is "available" whenever Ollama is up. **This is what
   lets local dispatch keep running while Claude's weekly limit is maxed.**

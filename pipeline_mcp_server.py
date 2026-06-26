@@ -783,6 +783,18 @@ def _role_resource_ok(role: str) -> tuple[bool, str]:
     Claude driver reports the poller-fed usage gate; the local driver reports
     Ollama reachability. So a Claude usage pause gates only Claude-backed roles
     and never freezes local dispatch. Returns (ok, reason)."""
+    env_backend = os.environ.get(f"PIPELINE_BACKEND_{role.upper()}", "claude").strip().lower()
+    if env_backend == "auto":
+        # "auto" is not a concrete driver (get_backend rejects it): the role
+        # routes per-story (local-first; Claude for high-risk or a-posteriori
+        # escalation). It can take work whenever EITHER concrete backend is
+        # available, so a Claude usage pause alone must not freeze local-routed
+        # dispatch. Prefer the local route; fall back to Claude's gate/reason.
+        local = backend.get_backend(role, name="local").resource_status()
+        if local.get("ok", True):
+            return True, ""
+        claude = backend.get_backend(role, name="claude").resource_status()
+        return bool(claude.get("ok", True)), claude.get("reason", "")
     status = backend.get_backend(role).resource_status()
     return bool(status.get("ok", True)), status.get("reason", "")
 
@@ -1024,6 +1036,22 @@ def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str
 
 
 @mcp.tool()
+def _completed_dep_ids(stories: dict[str, Any]) -> set[str]:
+    """Identifiers a dependency string may legitimately reference for a *done*
+    story, covering both forms a dependency can take.
+
+    Ingest only rewrites a summary-string dependency to a manifest key when the
+    source story carried a local `key` (see ingest_plan); plans whose stories
+    have no key — and which therefore express dependencies as the prerequisite's
+    exact summary string, per the documented save_plan schema — keep those
+    summary deps verbatim while the manifest itself is keyed by UUID. Matching a
+    dependency against both done keys and done summaries resolves it regardless
+    of which form it took, so a dependent story is never stranded as unready."""
+    done_keys = {k for k, v in stories.items() if v["status"] == "done"}
+    done_summaries = {v["summary"] for v in stories.values() if v["status"] == "done"}
+    return done_keys | done_summaries
+
+
 def list_ready_stories(plan_name: str) -> list[dict]:
     """
     Return stories whose dependencies are satisfied and that are still in
@@ -1035,13 +1063,13 @@ def list_ready_stories(plan_name: str) -> list[dict]:
 
     manifest = json.loads(manifest_path.read_text())
     stories = manifest["stories"]
-    done_keys = {k for k, v in stories.items() if v["status"] == "done"}
+    done = _completed_dep_ids(stories)
 
     ready = []
     for key, story in stories.items():
         if story["status"] != "todo":
             continue
-        deps_met = all(dep in done_keys for dep in story["dependencies"])
+        deps_met = all(dep in done for dep in story["dependencies"])
         if deps_met:
             ready.append({"key": key, "summary": story["summary"]})
     return ready
@@ -1576,11 +1604,11 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     dispatch_ok, dispatch_reason = _role_resource_ok("dispatch")
     review_ok, review_reason = _role_resource_ok("review")
 
-    done_keys = {k for k, v in stories.items() if v["status"] == "done"}
+    done = _completed_dep_ids(stories)
     ready = [
         k for k, v in stories.items()
         if v["status"] in ("todo", "interrupted", "changes_requested")
-        and all(d in done_keys for d in v.get("dependencies", []))
+        and all(d in done for d in v.get("dependencies", []))
     ]
 
     if PIPELINE_AUTONOMY == "dry-run":

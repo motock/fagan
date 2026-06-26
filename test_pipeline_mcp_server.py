@@ -27,6 +27,26 @@ def _clear_caches():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _plane_configured(monkeypatch):
+    """Default the test world to "Plane is wired up", which is what the
+    existing tests assume (they mock plane_request and expect calls to
+    happen). The Plane-optional path is exercised by the handful of tests
+    that explicitly clear these to "" via _plane_disabled."""
+    monkeypatch.setattr(p, "PLANE_API_KEY", "test-key")
+    monkeypatch.setattr(p, "PLANE_WORKSPACE", "test-ws")
+    monkeypatch.setattr(p, "PLANE_PROJECT", "test-proj")
+
+
+@pytest.fixture
+def _plane_disabled(monkeypatch):
+    """Simulate an unconfigured Plane (no API key / workspace / project), so
+    Plane calls must be skipped rather than fired at a dead endpoint."""
+    monkeypatch.setattr(p, "PLANE_API_KEY", "")
+    monkeypatch.setattr(p, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(p, "PLANE_PROJECT", "")
+
+
 @pytest.fixture
 def agents_dir(tmp_path, monkeypatch):
     d = tmp_path / "agents"
@@ -392,6 +412,81 @@ def test_ingest_plan_leaves_unresolvable_dependency_keys_unchanged(plan_dir, mon
     assert result["ok"] is True
     manifest = json.loads((plan_dir / "dangling.manifest.json").read_text())
     assert manifest["stories"]["issue-1"]["dependencies"] == ["no-such-key"]
+
+
+# ---------- Plane optional (unconfigured) ----------
+def test_plane_enabled_reflects_config(monkeypatch):
+    assert p._plane_enabled() is True  # set by _plane_configured fixture
+    monkeypatch.setattr(p, "PLANE_PROJECT", "")
+    assert p._plane_enabled() is False
+
+
+def _explode_plane(*a, **kw):
+    raise AssertionError("plane_request must not be called when Plane is unconfigured")
+
+
+def test_ingest_plan_without_plane_skips_calls_and_keys_by_story_key(
+    _plane_disabled, plan_dir, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{
+            "summary": "E1",
+            "stories": [
+                _story(key="S1"),
+                _story(key="S2", dependencies=["S1"]),
+            ],
+        }]
+    }
+    (plan_dir / "noplane.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("noplane")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "noplane.manifest.json").read_text())
+    # Stories are keyed by their plan key (no Plane UUID to key on), and
+    # dependencies still resolve to those keys.
+    assert set(manifest["stories"]) == {"S1", "S2"}
+    assert manifest["stories"]["S2"]["dependencies"] == ["S1"]
+
+
+def test_ingest_plan_without_plane_synthesizes_keys_when_absent(
+    _plane_disabled, plan_dir, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [_story(), _story()]}],
+    }
+    (plan_dir / "nokeys.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("nokeys")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "nokeys.manifest.json").read_text())
+    assert len(manifest["stories"]) == 2  # two distinct synthetic keys
+
+
+def test_plane_set_state_noop_when_plane_disabled(_plane_disabled, monkeypatch):
+    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    assert p._plane_set_state("S1", "started") is True
+
+
+def test_mark_story_done_without_plane_skips_patch(_plane_disabled, plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    (plan_dir / "md.manifest.json").write_text(json.dumps(
+        {"stories": {"S1": {"status": "pr_open"}}}))
+    result = p.mark_story_done("md", "S1")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "md.manifest.json").read_text())
+    assert manifest["stories"]["S1"]["status"] == "done"
+
+
+def test_mark_story_in_progress_without_plane_skips_patch(_plane_disabled, plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    (plan_dir / "mip.manifest.json").write_text(json.dumps(
+        {"stories": {"S1": {"status": "todo"}}}))
+    result = p.mark_story_in_progress("mip", "S1")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "mip.manifest.json").read_text())
+    assert manifest["stories"]["S1"]["status"] == "in_progress"
 
 
 def test_ingest_plan_rejects_missing_repo_root(plan_dir, monkeypatch):

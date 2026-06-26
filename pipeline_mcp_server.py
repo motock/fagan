@@ -21,6 +21,7 @@ Per-project overrides (set in project .mcp.json env block):
 
 import fcntl
 import json
+import logging
 import os
 import re
 import signal
@@ -119,6 +120,15 @@ PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
 
 mcp = FastMCP("pipeline")
+
+# FastMCP's constructor calls logging.basicConfig(level=INFO), which the httpx
+# and httpcore loggers (NOTSET) then inherit — so every HTTP call (e.g. the
+# per-tick Ollama /api/tags reachability probe) logs an INFO "HTTP Request: ..."
+# line. Under launchd's stderr redirect that floods the unattended logs (the
+# bulk of advance-scheduler.err.log was these). Cap them at WARNING so genuine
+# HTTP problems still surface but routine request chatter doesn't.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # ---------- Helpers ----------
 def _plane_enabled() -> bool:

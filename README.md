@@ -460,6 +460,31 @@ concern, not something the pipeline can guarantee for you.
 
 ---
 
+## Unattended operation & logs
+
+The two background loops run under launchd (see `launchd/*.plist`):
+`advance-scheduler` (`advance_all_plans()` every 5 min) and `usage-poller`
+(`check_usage()` every 60s). Each writes stdout/stderr to a fixed file beside
+the server (`advance-scheduler{,.err}.log`, `usage-poller{,.err}.log`).
+
+- **HTTP log noise is capped.** `FastMCP`'s constructor sets the root logger to
+  `INFO`, which the `httpx`/`httpcore` loggers inherit — so without intervention
+  every HTTP call (notably the per-tick Ollama `/api/tags` reachability probe)
+  logs an `INFO "HTTP Request: ..."` line. The server caps those two loggers at
+  `WARNING` at import, so routine request chatter stays out of the logs while
+  genuine HTTP failures still surface.
+- **Rotation (recommended for long-running installs).** launchd does not rotate
+  its `StandardError`/`StandardOut` files. Install the bundled `newsyslog` rule
+  to bound them (keeps 5 × ~5 MB, bzip2-compressed):
+
+  ```bash
+  sudo cp launchd/pipeline-logs.newsyslog.conf \
+          /etc/newsyslog.d/com.claude.pipeline.conf
+  sudo newsyslog -nv   # dry-run: verify the rule parses and see what it'd do
+  ```
+
+---
+
 ## Development & testing
 
 ```bash

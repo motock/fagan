@@ -28,7 +28,7 @@ and safety controls.
 | Tests | `test_pipeline_mcp_server.py`, `test_backend.py`, `test_dashboard.py` | `pytest`, run via the venv |
 | Plans / manifests / logs | `~/.claude/plans/` | Plan, manifest, decisions, notifications |
 | Worktrees | `~/.claude/worktrees/` | Isolated per-story branches |
-| Issue tracker | Plane (external) | Source of truth for stories |
+| Issue tracker | Plane (external, optional) | Mirror of story state; skipped entirely when unconfigured (manifest is the source of truth) |
 
 ---
 
@@ -300,12 +300,20 @@ honors `PLAN_DIR` the same way the MCP server does.
 Set global vars in your shell profile; set per-project overrides in the project's
 `.mcp.json` `env` block.
 
+**Plane is optional.** It's an issue-tracker mirror, not load-bearing — the
+manifest (`<plan>.manifest.json`) is the actual source of truth for story state.
+When `PLANE_API_KEY`, `PLANE_WORKSPACE`, and `PLANE_PROJECT` are not all set,
+every Plane call is **skipped** (`ingest_plan` mints local story keys; state
+transitions no-op) rather than fired at an unconfigured endpoint — without that
+guard an unconfigured deployment would 404 on every scheduled tick, burn the
+`PIPELINE_PLANE_MAX_ATTEMPTS` retry budget, and flood the logs.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |
-| `PLANE_API_KEY` | — | Plane token (never commit) |
-| `PLANE_WORKSPACE` | — | Plane workspace slug |
-| `PLANE_PROJECT` | — | Plane project UUID |
+| `PLANE_API_KEY` | — | Plane token (never commit). **Unset ⇒ Plane disabled** |
+| `PLANE_WORKSPACE` | — | Plane workspace slug. **Unset ⇒ Plane disabled** |
+| `PLANE_PROJECT` | — | Plane project UUID. **Unset ⇒ Plane disabled** |
 | `REPO_ROOT` | `.` | Git repo the pipeline operates on |
 | `PLAN_DIR` | `~/.claude/plans` | Plans/manifests/logs |
 | `WORKTREE_ROOT` | `~/.claude/worktrees` | Per-story worktrees |

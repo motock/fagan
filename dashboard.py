@@ -83,9 +83,107 @@ def _plan_summary(plan_name: str, manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# A story is considered "dispatched" if it ever made it past the todo state.
+# This includes interrupted, pr_open, parked/changes_requested/failed, and
+# done — i.e. the orchestrator tried it. Stories with a `backend` field set
+# are also counted even if status is still todo, since the backend was
+# resolved (escalation can flip backend on a still-todo story).
+_DISPATCHED_STATUSES = frozenset({
+    "in_progress", "interrupted", "pr_open", "changes_requested",
+    "parked", "failed", "done",
+})
+
+
+def _story_outcome(story: dict[str, Any]) -> dict[str, Any]:
+    """Bucket a single story into one of the headline outcomes."""
+    status = story.get("status")
+    dispatched = status in _DISPATCHED_STATUSES or bool(story.get("backend"))
+    return {
+        "dispatched": dispatched,
+        "done": status == "done",
+        "escalated": bool(story.get("escalated")),
+    }
+
+
+def _acceptance_slice(stories: dict[str, Any]) -> dict[str, Any]:
+    """Roll up the two headline slices — stories whose plan carried an
+    `acceptance` block vs those that didn't — across every manifest.
+
+    The headline number is `escalation_rate` = escalated / dispatched. With
+    Fix #1's acceptance-oracle harness in place, we expect the
+    `with_acceptance` slice's rate to fall relative to `without_acceptance`
+    over the next week of fleet runs."""
+    with_acc = {"dispatched": 0, "done": 0, "escalated": 0, "stories": 0}
+    without_acc = {"dispatched": 0, "done": 0, "escalated": 0, "stories": 0}
+    for story in stories.values():
+        has_acceptance = bool(story.get("acceptance"))
+        bucket = with_acc if has_acceptance else without_acc
+        bucket["stories"] += 1
+        out = _story_outcome(story)
+        if out["dispatched"]:
+            bucket["dispatched"] += 1
+        if out["done"]:
+            bucket["done"] += 1
+        if out["escalated"]:
+            bucket["escalated"] += 1
+
+    def _rates(b: dict[str, int]) -> dict[str, Any]:
+        d = b["dispatched"]
+        return {
+            **b,
+            "escalation_rate": (b["escalated"] / d) if d else 0.0,
+            "success_rate": (b["done"] / d) if d else 0.0,
+        }
+
+    return {"with_acceptance": _rates(with_acc),
+            "without_acceptance": _rates(without_acc)}
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "plan_dir": str(PLAN_DIR)}
+
+
+@app.get("/api/dispatch_health")
+def dispatch_health() -> dict[str, Any]:
+    """Fleet-wide headline metrics stratified by whether a story carried an
+    `acceptance` block at dispatch time.
+
+    The point of this endpoint: Fix #1 (the harness-owned acceptance oracle,
+    shipped 2026-06-27) is supposed to lift devstral's success rate on
+    stories with `acceptance` while leaving the without-acceptance slice
+    untouched. Watching `escalation_rate` and `success_rate` between the
+    two slices over the next week tells us whether Fix #1 is paying off
+    in production, vs. just in the A/B/C experiment rig.
+
+    Stories are only counted once `dispatched` is True — i.e. they
+    actually got picked up by `advance_pipeline`. The denominator is
+    dispatched, not story_count, because plans accumulate 'todo' stories
+    that haven't been tried yet and would dilute the rate toward zero."""
+    totals = {"dispatched": 0, "done": 0, "escalated": 0, "stories": 0}
+    per_plan: dict[str, Any] = {}
+    for name in _list_plan_names():
+        manifest = _read_manifest(name)
+        if manifest is None:
+            continue
+        stories = manifest.get("stories", {})
+        slice_ = _acceptance_slice(stories)
+        per_plan[name] = slice_
+        for slice_name in ("with_acceptance", "without_acceptance"):
+            s = slice_[slice_name]
+            totals["stories"] += s["stories"]
+            totals["dispatched"] += s["dispatched"]
+            totals["done"] += s["done"]
+            totals["escalated"] += s["escalated"]
+    d_count = totals["dispatched"]
+    return {
+        "totals": {
+            **totals,
+            "escalation_rate": (totals["escalated"] / d_count) if d_count else 0.0,
+            "success_rate": (totals["done"] / d_count) if d_count else 0.0,
+        },
+        "per_plan": per_plan,
+    }
 
 
 @app.get("/api/usage")

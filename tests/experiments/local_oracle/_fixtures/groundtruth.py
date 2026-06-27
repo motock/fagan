@@ -8,7 +8,6 @@ API under test (stated identically to the model in every arm):
     TokenBucket(capacity, refill_rate, now=0.0)
     .allow(tokens=1.0, now=None) -> bool
 """
-import pytest
 from rate_limiter import TokenBucket
 
 

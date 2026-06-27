@@ -166,3 +166,81 @@ def test_get_plan_tails_notifications_to_limit(client, plan_dir):
     assert len(notifications) == 100
     assert notifications[-1] == "2026-06-25T00:00:00+00:00 note 149"
     assert notifications[0] == "2026-06-25T00:00:00+00:00 note 50"
+
+
+# ---------- /api/dispatch_health: escalated-vs-completed rate by acceptance --
+
+def test_dispatch_health_empty_when_no_manifests(client, plan_dir):
+    """No plans ingested -> totals all zero, rates 0.0 (not NaN)."""
+    res = client.get("/api/dispatch_health")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["totals"] == {
+        "dispatched": 0, "done": 0, "escalated": 0, "stories": 0,
+        "escalation_rate": 0.0, "success_rate": 0.0,
+    }
+    assert body["per_plan"] == {}
+
+
+def test_dispatch_health_stratifies_by_acceptance_presence(client, plan_dir):
+    """The headline of Fix #1's measurement: stories with `acceptance` vs
+    those without, each with their own escalation/success rates."""
+    _write_manifest(plan_dir, "p1", {
+        # 2 dispatched, 1 escalated, 1 done — all WITHOUT acceptance
+        "S1": {"summary": "a", "status": "done", "backend": "local",
+               "acceptance": []},
+        "S2": {"summary": "b", "status": "interrupted", "backend": "local",
+               "escalated": True, "acceptance": []},
+        # 2 dispatched, both done — WITH acceptance (the Fix #1 path)
+        "S3": {"summary": "c", "status": "done", "backend": "local",
+               "acceptance": [{"path": "t.py", "source": "x"}]},
+        "S4": {"summary": "d", "status": "done", "backend": "local",
+               "acceptance": [{"path": "t.py", "source": "x"}]},
+    })
+    # A plan with one still-todo story should NOT inflate the dispatched
+    # count — denominator is dispatched, not story_count.
+    _write_manifest(plan_dir, "p2", {
+        "S1": {"summary": "queued", "status": "todo", "acceptance": []},
+    })
+
+    body = client.get("/api/dispatch_health").json()
+
+    # Headline: rates computed off dispatched (not story count).
+    assert body["totals"]["stories"] == 5   # 4 in p1 + 1 in p2
+    assert body["totals"]["dispatched"] == 4
+    assert body["totals"]["done"] == 3
+    assert body["totals"]["escalated"] == 1
+    assert body["totals"]["escalation_rate"] == 0.25
+    assert body["totals"]["success_rate"] == 0.75
+
+    p1 = body["per_plan"]["p1"]
+    assert p1["without_acceptance"] == {
+        "stories": 2, "dispatched": 2, "done": 1, "escalated": 1,
+        "escalation_rate": 0.5, "success_rate": 0.5,
+    }
+    assert p1["with_acceptance"] == {
+        "stories": 2, "dispatched": 2, "done": 2, "escalated": 0,
+        "escalation_rate": 0.0, "success_rate": 1.0,
+    }
+    # p2's still-todo story stays out of the dispatched count.
+    assert body["per_plan"]["p2"]["without_acceptance"]["dispatched"] == 0
+    assert body["per_plan"]["p2"]["without_acceptance"]["escalation_rate"] == 0.0
+
+
+def test_dispatch_health_counts_backend_set_as_dispatched_even_if_todo(
+    client, plan_dir,
+):
+    """Stories whose backend field is set but status is still 'todo' (e.g.
+    escalated via the local-first auto mode but not yet re-tried) should
+    still count as dispatched, otherwise escalation events vanish from the
+    rate until the next tick runs."""
+    _write_manifest(plan_dir, "p", {
+        "S1": {"summary": "x", "status": "todo", "backend": "claude",
+               "escalated": True, "acceptance": []},
+    })
+
+    body = client.get("/api/dispatch_health").json()
+    s = body["per_plan"]["p"]["without_acceptance"]
+    assert s["dispatched"] == 1
+    assert s["escalated"] == 1
+    assert s["escalation_rate"] == 1.0

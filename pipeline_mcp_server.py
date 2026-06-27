@@ -1603,6 +1603,11 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     # running when Claude's weekly limit is hit (and vice versa).
     dispatch_ok, dispatch_reason = _role_resource_ok("dispatch")
     review_ok, review_reason = _role_resource_ok("review")
+    # A-posteriori escalation of a failed local run to Claude is a feature of
+    # auto dispatch only. Under an explicit local (or claude) backend the
+    # operator has pinned the dispatcher on purpose, so a local failure is
+    # terminal rather than silently spending Claude.
+    dispatch_mode = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
 
     done = _completed_dep_ids(stories)
     ready = [
@@ -1692,11 +1697,14 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 if story["status"] == "in_progress" and "pid" in story:
                     status = check_story_status(plan_name, key).get("status")
                     if status == "failed":
-                        # A-posteriori escalation: if the local agent failed
-                        # and has NOT been escalated before, wipe its worktree
-                        # and re-queue for Claude.  A second failure (on Claude,
-                        # or explicitly non-auto) is terminal, as today.
-                        if story.get("backend") == "local" and not story.get("escalated"):
+                        # A-posteriori escalation: under auto dispatch, if the
+                        # local agent failed and has NOT been escalated before,
+                        # wipe its worktree and re-queue for Claude. A second
+                        # failure (on Claude), or any failure under an explicit
+                        # non-auto backend, is terminal.
+                        if (dispatch_mode == "auto"
+                                and story.get("backend") == "local"
+                                and not story.get("escalated")):
                             manifest = json.loads(manifest_path.read_text())
                             _escalate_to_claude(manifest, plan_name, key, manifest_path)
                             _notify_user(plan_name,

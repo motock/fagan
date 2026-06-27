@@ -2978,7 +2978,8 @@ def test_dispatch_story_honors_stored_backend_override(
 def test_advance_pipeline_escalates_local_failure_to_claude(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
-    """A local agent failure triggers clean Claude escalation (not terminal failure)."""
+    """A local agent failure triggers clean Claude escalation (not terminal failure)
+    under auto dispatch, where a-posteriori escalation is the intended fallback."""
     worktree_path = worktree_root / "S1"
     worktree_path.mkdir()
     (worktree_path / "agent.log").write_text("some output\n")
@@ -2993,6 +2994,7 @@ def test_advance_pipeline_escalates_local_failure_to_claude(
     class _FailResult:
         stdout = "test failed"; stderr = ""; returncode = 1
 
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
     monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
@@ -3067,6 +3069,40 @@ def test_advance_pipeline_does_not_escalate_already_escalated(
     manifest = _read_manifest(plan_dir, "esc3")
     story = manifest["stories"]["S1"]
     assert story["status"] == "failed"
+    assert "S1" in result.get("failed", [])
+
+
+def test_advance_pipeline_local_failure_terminal_under_local_mode(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Under explicit PIPELINE_BACKEND_DISPATCH=local, a failed local agent is
+    terminal — it must NOT escalate to Claude (escalation is an auto-mode
+    fallback). This keeps a local-only run from silently spending Claude."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    _write_manifest(plan_dir, "esclocal", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "in_progress", "pid": 9004,
+               "worktree": str(worktree_path),
+               "log": str(worktree_path / "agent.log"),
+               "backend": "local", "dependencies": []},
+    })
+
+    class _FailResult:
+        stdout = "test failed"; stderr = ""; returncode = 1
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+
+    result = p.advance_pipeline("esclocal")
+
+    story = _read_manifest(plan_dir, "esclocal")["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert story["backend"] == "local"        # not flipped to claude
+    assert not story.get("escalated")          # never escalated
     assert "S1" in result.get("failed", [])
 
 

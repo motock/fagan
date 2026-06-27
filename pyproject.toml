@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+# pytest discovery defaults to walking the cwd and collecting every file
+# matching test_*.py / *_test.py. The experiment rig under
+# tests/experiments/local_oracle/ intentionally drops a `test_acceptance.py`
+# file into a per-arm dir at run-time (which is itself a transient git repo);
+# pytest then tries to import it and fails the whole run. Pin the testpaths
+# to the real test files so experiment artifacts can never affect CI again.
+testpaths = [
+    "test_backend.py",
+    "test_pipeline_mcp_server.py",
+    "test_dashboard.py",
+    "test_local_agent.py",
+]

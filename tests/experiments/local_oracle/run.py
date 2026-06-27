@@ -24,7 +24,7 @@ assert (REPO / "scripts" / "local_agent_oracle.py").exists(), (
 EXP = Path(__file__).resolve().parent
 PY = str(REPO / ".venv" / "bin" / "python")
 ORACLE_AGENT = str(REPO / "scripts" / "local_agent_oracle.py")
-GROUNDTRUTH = EXP / "test_groundtruth.py"
+GROUNDTRUTH = EXP / "_fixtures" / "groundtruth.py"
 
 API = (
     "Implement a token-bucket rate limiter in a NEW file rate_limiter.py.\n"

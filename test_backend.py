@@ -308,6 +308,56 @@ def test_dispatch_resolves_model_tier_and_passes_runtime_knobs(tmp_path, monkeyp
     assert captured["env"]["LOCAL_AGENT_MAX_STEPS"] == "12"
 
 
+def test_dispatch_passes_acceptance_to_oracle_harness(tmp_path, monkeypatch):
+    """When dispatch() is given an `acceptance` list, it switches to the
+    oracle-graded harness variant and passes the paths through env. This is
+    the single lever that closed the "model writes buggy self-tests" gap."""
+    import json as _json
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(argv=argv, env=env) or _FakePopenResult(50),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+        acceptance=["tests/test_x.py", "tests/test_y.py"],
+    )
+
+    assert captured["argv"][1].endswith("scripts/local_agent_oracle.py")
+    assert captured["env"]["LOCAL_AGENT_MODE"] == "oracle"
+    assert _json.loads(captured["env"]["LOCAL_AGENT_ACCEPTANCE"]) == [
+        "tests/test_x.py", "tests/test_y.py",
+    ]
+
+
+def test_dispatch_uses_base_harness_when_no_acceptance(tmp_path, monkeypatch):
+    """Regression guard: stories without an `acceptance` block stay on the
+    base local_agent.py harness — same script, no oracle env, no behavior
+    change. Without this, every existing plan would silently switch."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(argv=argv, env=env) or _FakePopenResult(51),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["argv"][1].endswith("scripts/local_agent.py")
+    assert "LOCAL_AGENT_ACCEPTANCE" not in captured["env"]
+    assert "LOCAL_AGENT_MODE" not in captured["env"]
+
+
 # ---------- ClaudeCliDriver.dispatch() ----------
 def test_dispatch_streams_claude_cli_output_so_log_size_is_a_reliable_signal(
     tmp_path, monkeypatch,

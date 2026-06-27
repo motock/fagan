@@ -1,0 +1,3 @@
+# Per-run output dirs (each arm creates its own `git init`).
+# These are reproducible: `python run.py <A|B|C>` regenerates them.
+arms/

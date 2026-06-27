@@ -2992,7 +2992,9 @@ def test_advance_pipeline_escalates_local_failure_to_claude(
     })
 
     class _FailResult:
-        stdout = "test failed"; stderr = ""; returncode = 1
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
 
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
@@ -3028,7 +3030,9 @@ def test_advance_pipeline_does_not_escalate_claude_failure(
     })
 
     class _FailResult:
-        stdout = "test failed"; stderr = ""; returncode = 1
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
 
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
@@ -3058,7 +3062,9 @@ def test_advance_pipeline_does_not_escalate_already_escalated(
     })
 
     class _FailResult:
-        stdout = "test failed"; stderr = ""; returncode = 1
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
 
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
@@ -3090,7 +3096,9 @@ def test_advance_pipeline_local_failure_terminal_under_local_mode(
     })
 
     class _FailResult:
-        stdout = "test failed"; stderr = ""; returncode = 1
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
 
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))

@@ -381,11 +381,13 @@ class OllamaDriver:
     # pollable subprocess; run it with this project's venv python (which has
     # httpx and can import pipeline_mcp_server for in-process checkpointing).
     _AGENT_SCRIPT = Path(__file__).resolve().parent / "scripts" / "local_agent.py"
+    _AGENT_SCRIPT_ORACLE = Path(__file__).resolve().parent / "scripts" / "local_agent_oracle.py"
     _VENV_PYTHON = Path(__file__).resolve().parent / ".venv" / "bin" / "python3"
 
     def dispatch(
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: Path, log_path: Path, append: bool,
+        acceptance: list[str] | None = None,
     ) -> AgentHandle:
         if allowed_tools and not ({"Edit", "Write"} & set(allowed_tools.split(","))):
             raise NotImplementedError(
@@ -395,6 +397,13 @@ class OllamaDriver:
                 f"read-only local tool set is implemented and verified."
             )
         resolved_model = _resolve_local_model(model)
+        # Fix #1: if the story carries an `acceptance` block, switch to the
+        # oracle-graded harness variant (script + MODE env). The list is
+        # passed as a JSON string to keep the env-var contract uniform with
+        # the other LOCAL_AGENT_* knobs.
+        acceptance = acceptance or []
+        oracle_mode = bool(acceptance)
+        agent_script = self._AGENT_SCRIPT_ORACLE if oracle_mode else self._AGENT_SCRIPT
         env = {
             **os.environ,
             "LOCAL_AGENT_MODEL": resolved_model,
@@ -406,7 +415,10 @@ class OllamaDriver:
             "LOCAL_AGENT_MAX_STEPS": str(self.max_steps),
             "LOCAL_AGENT_TEMPERATURE": str(self.temperature),
         }
-        argv = [str(self._VENV_PYTHON), str(self._AGENT_SCRIPT)]
+        if oracle_mode:
+            env["LOCAL_AGENT_ACCEPTANCE"] = json.dumps(acceptance)
+            env["LOCAL_AGENT_MODE"] = "oracle"
+        argv = [str(self._VENV_PYTHON), str(agent_script)]
         log_file = open(log_path, "a" if append else "w")
         proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log_file, stderr=log_file)
         log_file.close()

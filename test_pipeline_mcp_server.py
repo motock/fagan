@@ -3205,3 +3205,184 @@ def test_advance_pipeline_retries_review_for_orphaned_tests_passed_story(plan_di
     result = p.advance_pipeline("orphan")
     assert reviewed == ["S1"]
     assert {"S1": "pr_open"} in result["advanced"]
+
+
+# ---------- Fix #1: harness-owned acceptance oracle ----------
+
+def test_ingest_plan_round_trips_acceptance_field(
+    plan_dir, monkeypatch, tmp_path,
+):
+    """`acceptance` is optional; when present on a source story it must be
+    carried verbatim onto the manifest entry so dispatch_story can later
+    forward it to the local driver."""
+    monkeypatch.setattr(p, "PLANE_API_KEY", "")
+    monkeypatch.setattr(p, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(p, "PLANE_PROJECT", "")
+    (plan_dir / "p.json").write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing",
+             "agent_instructions": "Build.",
+             "acceptance": [
+                 {"path": "tests/test_x.py", "source": "import pytest\n"},
+             ]},
+        ]}],
+        "repo_root": str(tmp_path),
+    }))
+
+    p.ingest_plan("p")
+
+    manifest = json.loads((plan_dir / "p.manifest.json").read_text())
+    story = manifest["stories"]["S1"]
+    assert story["acceptance"] == [
+        {"path": "tests/test_x.py", "source": "import pytest\n"},
+    ]
+
+
+def test_ingest_plan_omits_acceptance_when_source_story_has_none(
+    plan_dir, monkeypatch, tmp_path,
+):
+    """Backwards compat: stories without an acceptance block still work and
+    end up with an empty acceptance list on the manifest."""
+    monkeypatch.setattr(p, "PLANE_API_KEY", "")
+    monkeypatch.setattr(p, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(p, "PLANE_PROJECT", "")
+    (plan_dir / "p.json").write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing"},
+        ]}],
+        "repo_root": str(tmp_path),
+    }))
+
+    p.ingest_plan("p")
+
+    story = json.loads((plan_dir / "p.manifest.json").read_text())["stories"]["S1"]
+    assert story["acceptance"] == []
+
+
+def test_dispatch_story_writes_oracle_files_into_worktree(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When a story carries `acceptance`, dispatch_story materializes each
+    oracle file at its declared path inside the worktree BEFORE invoking the
+    backend, so the local oracle-harness can grade against it on launch."""
+    _write_manifest(plan_dir, "oracle_fresh", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "acceptance": [
+                   {"path": "tests/test_x.py", "source": "import pytest\n"},
+               ]},
+    })
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(4242))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("oracle_fresh", "S1")
+
+    wt = worktree_root / "S1"
+    assert (wt / "tests/test_x.py").exists()
+    assert (wt / "tests/test_x.py").read_text() == "import pytest\n"
+
+
+def test_dispatch_story_forwards_acceptance_paths_to_local_driver(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """With `dispatch=local`, the local driver receives the acceptance paths
+    as JSON via LOCAL_AGENT_ACCEPTANCE and is launched in oracle mode."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "oracle_env", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "acceptance": [
+                   {"path": "tests/test_x.py", "source": "import pytest\n"},
+                   {"path": "tests/test_y.py", "source": "import pytest\n"},
+               ]},
+    })
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(7777)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("oracle_env", "S1")
+
+    assert len(popen_calls) == 1
+    env = popen_calls[0]["env"]
+    assert env["LOCAL_AGENT_MODE"] == "oracle"
+    assert json.loads(env["LOCAL_AGENT_ACCEPTANCE"]) == [
+        "tests/test_x.py", "tests/test_y.py",
+    ]
+
+
+def test_dispatch_story_omits_oracle_env_when_no_acceptance(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Regression guard: stories without an `acceptance` block must keep
+    exactly the same env-var surface as before — no LOCAL_AGENT_ACCEPTANCE,
+    no LOCAL_AGENT_MODE, no oracle script. Otherwise every existing plan
+    silently switches harnesses."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "no_oracle", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": []},
+    })
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(8888)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("no_oracle", "S1")
+
+    env = popen_calls[0]["env"]
+    assert "LOCAL_AGENT_ACCEPTANCE" not in env
+    assert "LOCAL_AGENT_MODE" not in env
+    # base script (not the oracle variant)
+    assert popen_calls[0]["cmd"][1].endswith("scripts/local_agent.py")
+
+
+def test_dispatch_story_skips_oracle_write_when_resumed(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Resumed/interrupted stories must NOT have their oracle files
+    re-overwritten — the agent may have committed an evolved oracle in a WIP
+    and we don't want to silently revert it."""
+    wt = worktree_root / "S1"
+    wt.mkdir()
+    (wt / "tests").mkdir()
+    (wt / "tests/test_x.py").write_text("# evolved by the agent\n")
+    _write_manifest(plan_dir, "oracle_resume", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "interrupted",
+               "dependencies": [],
+               "acceptance": [
+                   {"path": "tests/test_x.py", "source": "import pytest\n"},
+               ]},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("oracle_resume", "S1")
+
+    assert (wt / "tests/test_x.py").read_text() == "# evolved by the agent\n"

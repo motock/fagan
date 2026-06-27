@@ -1017,6 +1017,7 @@ def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str
                 "dependencies": story.get("dependencies", []),
                 "persona": story.get("persona"),
                 "model": story.get("model"),
+                "acceptance": story.get("acceptance", []),
                 "risk": story.get("risk", "low"),
                 "status": "todo",
             }
@@ -1131,11 +1132,34 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     )
     worktree_path.mkdir(parents=True, exist_ok=True)
     log_path = worktree_path / "agent.log"
-    handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(
-        spec["prompt"], system=spec["system"], model=spec["model"],
+
+    # Fix #1: if the story carries an `acceptance` block, materialize the
+    # oracle files into the worktree BEFORE the backend launches so the local
+    # harness can grade against them. On a resumed story skip the write —
+    # the oracle may already be in a committed WIP, and overwriting would
+    # discard whatever test evolution happened mid-run.
+    acceptance = story.get("acceptance") or []
+    acceptance_paths: list[str] = []
+    if acceptance:
+        for entry in acceptance:
+            rel_path = entry["path"]
+            target = worktree_path / rel_path
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(entry["source"])
+            acceptance_paths.append(rel_path)
+
+    dispatch_kwargs: dict[str, Any] = dict(
+        prompt=spec["prompt"], system=spec["system"], model=spec["model"],
         allowed_tools=spec["allowed_tools"],
         cwd=worktree_path, log_path=log_path, append=resuming,
     )
+    # Only the local driver accepts/uses `acceptance`; pass it through when
+    # we're actually invoking that driver so Claude's signature stays clean.
+    if dispatch_backend == "local" and acceptance_paths:
+        dispatch_kwargs["acceptance"] = acceptance_paths
+
+    handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(**dispatch_kwargs)
 
     story["status"] = "in_progress"
     story["pid"] = handle.pid

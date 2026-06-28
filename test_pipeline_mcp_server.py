@@ -9,9 +9,12 @@ internal logic is exercised directly. Tools are plain callables after the
 """
 
 import fcntl
+import importlib.util
 import json
 import os
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -2436,6 +2439,10 @@ def test_check_story_status_passing_tests_is_not_done(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    # Pretend the agent wrote real commits — this test is about the
+    # `tests_passed` vs `done` distinction, not the empty-branch gate
+    # (covered separately by test_check_story_status_*_no_commits).
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
 
     class Result:
         stdout = ""
@@ -2448,6 +2455,278 @@ def test_check_story_status_passing_tests_is_not_done(plan_dir, monkeypatch):
     manifest = _read_manifest(plan_dir, "cs")
     assert manifest["stories"]["S1"]["status"] == "tests_passed"
 
+
+def test_check_story_status_fails_when_agent_made_no_commits(
+    plan_dir, monkeypatch,
+):
+    """The empty-branch guard: tests passing against an untouched
+    worktree (e.g. main's suite against an empty branch because devstral
+    parked in a repetition loop without writing code) is NOT the task
+    being done. Mark `failed`, not `tests_passed`, so the dashboard
+    doesn't count empty branches as success."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("[step 0] bash: pwd\n")
+    _write_manifest(plan_dir, "fp", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: False)
+
+    class Result:
+        stdout = ""
+        returncode = 0
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    result = p.check_story_status("fp", "S1")
+    assert result["status"] == "failed"
+    assert result["reason"] == "empty_agent_branch"
+    manifest = _read_manifest(plan_dir, "fp")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert "no new commits" in story["failure_reason"]
+
+
+def test_check_story_status_passes_when_agent_committed_changes(
+    plan_dir, monkeypatch,
+):
+    """Positive case for the empty-branch guard: tests pass AND the
+    agent wrote real commits -> status `tests_passed`."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("[step 0] bash: pwd\n")
+    _write_manifest(plan_dir, "ok", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class Result:
+        stdout = ""
+        returncode = 0
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    result = p.check_story_status("ok", "S1")
+    assert result["status"] == "tests_passed"
+    manifest = _read_manifest(plan_dir, "ok")
+    assert manifest["stories"]["S1"]["status"] == "tests_passed"
+    assert "failure_reason" not in manifest["stories"]["S1"]
+
+
+def test_check_story_status_handles_git_error_safely(plan_dir, monkeypatch):
+    """If `_worktree_has_new_commits` returns False (covers the
+    `git log` failure case — broken worktree, missing branch, any git
+    hiccup), the gate fires: status `failed`, reason
+    `empty_agent_branch`. We never crash the orchestrator on a git
+    error, and we never accidentally pass a story because git was
+    broken."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("ok\n")
+    _write_manifest(plan_dir, "broken", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    # Simulate git log returning non-zero (helper returns False).
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: False)
+
+    class Result:
+        stdout = ""
+        returncode = 0
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    # Must not raise. Must mark failed, not tests_passed.
+    result = p.check_story_status("broken", "S1")
+    assert result["status"] == "failed"
+    assert result["reason"] == "empty_agent_branch"
+
+
+# ---------- reset_false_positive_tests_passed.py unit tests ----------
+
+_RESET_SCRIPT_PATH = Path(__file__).resolve().parent / "scripts" / "reset_false_positive_tests_passed.py"
+_reset_spec = importlib.util.spec_from_file_location(
+    "reset_false_positive_tests_passed", _RESET_SCRIPT_PATH,
+)
+reset_script = importlib.util.module_from_spec(_reset_spec)
+_reset_spec.loader.exec_module(reset_script)
+sys.modules["reset_false_positive_tests_passed"] = reset_script
+
+
+def _make_story(**overrides) -> dict:
+    """A canonical tests_passed story with full review/dispatch bookkeeping.
+
+    Used as the starting point for reset-script tests; override fields
+    to construct variations (e.g. cleared fields, status='interrupted')."""
+    base = {
+        "summary": "thing",
+        "agent_instructions": "",
+        "dependencies": [],
+        "persona": None,
+        "model": None,
+        "risk": "low",
+        "status": "tests_passed",
+        "backend": "local",
+        "pid": 4242,
+        "worktree": "/tmp/wt",
+        "log": "/tmp/wt/agent.log",
+        "review_verdict": "APPROVE",
+        "review_feedback": "looks good",
+        "rework_attempts": 2,
+        "failure_reason": "old failure",
+        "dispatch_attempts": 1,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_reset_script_resets_empty_branch_false_positive(monkeypatch):
+    """A story at tests_passed with no commits on its agent branch is
+    the false-positive signature -> reset to interrupted and clear the
+    review/dispatch bookkeeping."""
+    manifest = {"stories": {"S1": _make_story()}}
+    monkeypatch.setattr(reset_script.p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(reset_script.p, "_worktree_has_new_commits",
+                        lambda *a, **k: False)
+
+    action = reset_script.reset_story(manifest, "S1")
+
+    assert action.startswith("RESET")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "interrupted"
+    # Cleared fields:
+    for field in ("review_verdict", "review_feedback", "rework_attempts",
+                  "pid", "dispatch_attempts", "failure_reason"):
+        assert field not in story, f"{field} should have been cleared"
+    # Preserved fields (reused by dispatch_story's resume logic):
+    assert story["worktree"] == "/tmp/wt"
+    assert story["log"] == "/tmp/wt/agent.log"
+    assert story["backend"] == "local"
+
+
+def test_reset_script_skips_story_with_real_commits(monkeypatch):
+    """A tests_passed story whose agent branch has real commits is a
+    genuine success, not a false positive. Skip it; don't touch the
+    manifest entry."""
+    manifest = {"stories": {"S1": _make_story()}}
+    monkeypatch.setattr(reset_script.p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(reset_script.p, "_worktree_has_new_commits",
+                        lambda *a, **k: True)
+
+    action = reset_script.reset_story(manifest, "S1")
+
+    assert action.startswith("SKIP")
+    story = manifest["stories"]["S1"]
+    # Untouched:
+    assert story["status"] == "tests_passed"
+    assert story["review_verdict"] == "APPROVE"
+    assert story["rework_attempts"] == 2
+    assert story["pid"] == 4242
+
+
+def test_reset_script_skips_non_tests_passed_stories(monkeypatch):
+    """The script's signature check is `status == tests_passed`. Any
+    other status (todo, in_progress, failed, parked, done, interrupted)
+    is skipped without inspecting the worktree. This makes the script
+    idempotent and safe to re-run after the gate marks a story failed.
+    """
+    manifest = {
+        "stories": {
+            "INTERRUPTED": _make_story(status="interrupted"),
+            "FAILED":      _make_story(status="failed"),
+            "TODO":        _make_story(status="todo"),
+            "IN_PROGRESS": _make_story(status="in_progress", pid=9999),
+        }
+    }
+    monkeypatch.setattr(reset_script.p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(reset_script.p, "_worktree_has_new_commits",
+                        lambda *a, **k: False)
+
+    for key in ("INTERRUPTED", "FAILED", "TODO", "IN_PROGRESS"):
+        action = reset_script.reset_story(manifest, key)
+        assert action.startswith("SKIP"), f"{key}: {action}"
+        assert manifest["stories"][key]["status"] != "interrupted" or key == "INTERRUPTED"
+    # In particular, IN_PROGRESS still has its pid (would have been
+    # cleared if the script had wrongly fired).
+    assert manifest["stories"]["IN_PROGRESS"]["pid"] == 9999
+
+
+def test_reset_script_skips_missing_or_worktree_less_story():
+    """A target UUID that isn't in the manifest, or has no recorded
+    worktree path, is skipped without raising."""
+    manifest_empty = {"stories": {}}
+    assert reset_script.reset_story(manifest_empty, "GHOST").startswith("SKIP")
+
+    manifest_no_wt = {"stories": {"S1": _make_story()}}
+    manifest_no_wt["stories"]["S1"].pop("worktree")
+    assert reset_script.reset_story(manifest_no_wt, "S1").startswith("SKIP")
+
+
+def test_reset_script_main_writes_manifest_and_reports(monkeypatch, tmp_path):
+    """End-to-end of `main()`: builds a tmp manifest with one
+    false-positive and one legit tests_passed, runs main() against it,
+    asserts only the false-positive was reset and the file was
+    written atomically (tmp + rename). The PLAN_DIR/MANIFEST_PATH and
+    TARGETS are redirected to test-local values so we don't touch the
+    real manifest or depend on the production UUIDs."""
+    manifest_path = tmp_path / "e2e-decentralized-messaging-roadmap.manifest.json"
+    manifest_path.write_text(json.dumps({
+        "stories": {
+            "FP":  _make_story(summary="false positive"),
+            "REAL": _make_story(summary="real success"),
+        }
+    }))
+    monkeypatch.setattr(reset_script, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(reset_script, "TARGETS", ["FP", "REAL"])
+    monkeypatch.setattr(reset_script.p, "_default_branch", lambda: "main")
+    # FP has empty branch; REAL has real commits.
+    _has_commits = {"FP": False, "REAL": True}
+
+    def _stub(worktree, story_key, base_branch):
+        return _has_commits.get(story_key, False)
+    monkeypatch.setattr(reset_script.p, "_worktree_has_new_commits", _stub)
+
+    rc = reset_script.main()
+
+    assert rc == 0
+    written = json.loads(manifest_path.read_text())
+    assert written["stories"]["FP"]["status"] == "interrupted"
+    assert written["stories"]["FP"]["worktree"] == "/tmp/wt"
+    assert "review_verdict" not in written["stories"]["FP"]
+    # REAL untouched.
+    assert written["stories"]["REAL"]["status"] == "tests_passed"
+    assert written["stories"]["REAL"]["review_verdict"] == "APPROVE"
+
+
+def test_reset_script_main_is_noop_when_nothing_matches(monkeypatch, tmp_path):
+    """If no target UUID matches the false-positive signature (e.g.
+    all have been reset or never were false-positives), main() must
+    NOT write the manifest — that would be a needless disk churn and
+    would also bump the manifest's mtime, which the orchestrator
+    relies on for change detection."""
+    manifest_path = tmp_path / "e2e-decentralized-messaging-roadmap.manifest.json"
+    original = {"stories": {"S1": _make_story()}}
+    manifest_path.write_text(json.dumps(original))
+    monkeypatch.setattr(reset_script, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(reset_script, "TARGETS", ["S1"])
+    monkeypatch.setattr(reset_script.p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(reset_script.p, "_worktree_has_new_commits",
+                        lambda *a, **k: True)  # everything is "real"
+
+    rc = reset_script.main()
+
+    assert rc == 0
+    # File untouched: same content, no temp file left behind.
+    assert json.loads(manifest_path.read_text()) == original
+    assert not manifest_path.with_suffix(".json.tmp").exists()
 
 def test_check_story_status_treats_empty_agent_log_as_infra_failure(
     plan_dir, tmp_path, monkeypatch,

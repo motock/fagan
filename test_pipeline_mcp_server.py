@@ -13,6 +13,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -1575,6 +1576,165 @@ def test_advance_pipeline_lock_is_independent_per_plan(plan_dir, monkeypatch):
     assert ("lkB", "T1") in dispatched
 
 
+# ---------- dispatch_story / interrupt_story _plan_lock serialization ----------
+# Two Claude sessions (each with their own MCP server PID) calling
+# dispatch_story on the same story in the same window both want to write
+# the same manifest and create the same worktree. Without _plan_lock on
+# these tools, the second caller treats the first's half-built worktree
+# as resumable and spawns a second agent into the same directory. These
+# tests confirm the lock is held for both tools and that a held lock makes
+# the call return cleanly instead of crashing or racing.
+
+def test_dispatch_story_skips_when_lock_held(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "dlk", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("a locked-out dispatch_story must not touch the worktree or manifest")
+    monkeypatch.setattr(p.subprocess, "run", _boom)
+    monkeypatch.setattr(p, "plane_request", _boom)
+
+    lock_path = plan_dir / "dlk.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = p.dispatch_story("dlk", "S1")
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert result["ok"] is True
+    assert result.get("skipped") == "locked"
+    assert "another dispatch/interrupt" in result.get("reason", "")
+    # Manifest untouched (still "todo", no pid written).
+    manifest = _read_manifest(plan_dir, "dlk")
+    assert manifest["stories"]["S1"]["status"] == "todo"
+    assert "pid" not in manifest["stories"]["S1"]
+
+
+def test_interrupt_story_skips_when_lock_held(plan_dir, tmp_path, monkeypatch):
+    worktree = str(tmp_path / "wt")
+    _write_manifest(plan_dir, "ilk", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": worktree},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("a locked-out interrupt_story must not signal or checkpoint")
+    monkeypatch.setattr(p.os, "kill", _boom)
+    monkeypatch.setattr(p.subprocess, "run", _boom)
+
+    lock_path = plan_dir / "ilk.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = p.interrupt_story("ilk", "S1")
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert result["ok"] is True
+    assert result.get("skipped") == "locked"
+    assert "another dispatch/interrupt" in result.get("reason", "")
+    # Manifest untouched: still in_progress with its original pid.
+    manifest = _read_manifest(plan_dir, "ilk")
+    assert manifest["stories"]["S1"]["status"] == "in_progress"
+    assert manifest["stories"]["S1"]["pid"] == 4242
+
+
+def test_dispatch_story_proceeds_when_lock_free(plan_dir, worktree_root, agents_dir, monkeypatch):
+    """Sanity check: with no lock held, dispatch_story runs normally. Catches
+    a regression where the lock is held unconditionally (no caller would ever
+    proceed) or released too early (a second call races in mid-dispatch)."""
+    _write_manifest(plan_dir, "dlk2", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1357))
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dlk2", "S1")
+
+    assert result["ok"] is True
+    assert result["pid"] == 1357
+    assert result.get("skipped") is None
+
+
+# ---------- check_story_status 0-byte log grace period ----------
+# An empty agent.log within the startup grace window is "agent is alive and
+# bootstrapping" (its first print() hasn't flushed — Ollama -np 1 can take
+# 30-90s to respond). Outside the window it's the genuine "agent never
+# produced any output" failed-launch signature.
+
+def test_check_story_status_treats_empty_log_as_running_within_grace(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A 0-byte log with a fresh mtime means the agent is still alive and
+    bootstrapping (e.g. queued on Ollama's -np 1 worker). check_story_status
+    must return "running" so the orchestrator doesn't burn dispatch_attempts
+    on a process that's just slow to print."""
+    monkeypatch.setattr(p, "DISPATCH_STARTUP_GRACE_SECONDS", 90)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("")  # 0-byte, mtime ~= now
+    _write_manifest(plan_dir, "g1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": os.getpid(),  # self → os.kill succeeds, "alive"
+               "worktree": str(worktree), "dispatch_attempts": 0},
+    })
+    # tests must not run — we're declaring it still-running.
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (_ for _ in ()).throw(AssertionError("tests must not run")))
+
+    result = p.check_story_status("g1", "S1")
+
+    assert result["status"] == "running"
+    # Crucially, dispatch_attempts was NOT incremented: a live-but-slow
+    # agent must not be retried/redispatched yet.
+    story = _read_manifest(plan_dir, "g1")["stories"]["S1"]
+    assert story["status"] == "in_progress"
+    assert story["dispatch_attempts"] == 0
+
+
+def test_check_story_status_treats_empty_log_as_failed_launch_after_grace(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Outside the grace window, an empty log is the original failed-launch
+    signature (the agent never produced any output and the process is now
+    dead). Status must advance to "interrupted" (or, after budget exhaustion,
+    "failed") — NOT stay "running" forever."""
+    monkeypatch.setattr(p, "DISPATCH_STARTUP_GRACE_SECONDS", 90)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    log_path = worktree / "agent.log"
+    log_path.write_text("")
+    # Backdate the log's mtime past the grace window.
+    old_time = time.time() - 200
+    os.utime(log_path, (old_time, old_time))
+    _write_manifest(plan_dir, "g2", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree), "dispatch_attempts": 0},
+    })
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (_ for _ in ()).throw(AssertionError("tests must not run")))
+
+    result = p.check_story_status("g2", "S1")
+
+    assert result["status"] == "interrupted"
+    story = _read_manifest(plan_dir, "g2")["stories"]["S1"]
+    assert story["status"] == "interrupted"
+    assert story["dispatch_attempts"] == 1
+
+
 # ---------- advance_pipeline orchestration ----------
 # advance_pipeline is a coordinator; the per-story operations (dispatch_story,
 # check_story_status, review_story, gh merge) are exercised by their own tests
@@ -2071,9 +2231,14 @@ def test_advance_pipeline_dispatch_failure_exhausts_budget(plan_dir, monkeypatch
 
 
 def test_check_story_status_failed_launch_exhausts_budget(plan_dir, tmp_path, monkeypatch):
-    # An empty agent.log is a failed launch. Within budget it stays interrupted
-    # (redispatched); once the budget is spent it becomes a terminal failure.
+    # An empty agent.log past the startup grace window is a failed launch.
+    # Within budget it stays interrupted (redispatched); once the budget is
+    # spent it becomes a terminal failure. The grace window protects
+    # legitimate-but-slow startups (Ollama -np 1 queueing) from being
+    # mis-classified — zero it here so this test still exercises the
+    # failed-launch path without racing the wall clock.
     monkeypatch.setattr(p, "DISPATCH_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "DISPATCH_STARTUP_GRACE_SECONDS", 0)
     worktree = tmp_path / "wt"
     worktree.mkdir()
     (worktree / "agent.log").write_text("")
@@ -2731,13 +2896,14 @@ def test_reset_script_main_is_noop_when_nothing_matches(monkeypatch, tmp_path):
 def test_check_story_status_treats_empty_agent_log_as_infra_failure(
     plan_dir, tmp_path, monkeypatch,
 ):
-    """A 0-byte agent.log after the process has exited means the headless
-    agent never produced any output - almost certainly a failed launch, not
-    a real attempt at the story. Running the test suite against the
-    untouched worktree in that case just records a misleading "failed" for
-    work that was never tried, and (unlike "failed") nothing ever retries
-    it. Treat it like "interrupted" instead, which advance_pipeline already
-    redispatches automatically."""
+    """A 0-byte agent.log past the startup grace window — after the process
+    has exited — means the headless agent never produced any output, almost
+    certainly a failed launch, not a real attempt at the story. Running the
+    test suite against the untouched worktree in that case just records a
+    misleading "failed" for work that was never tried, and (unlike
+    "failed") nothing ever retries it. Treat it like "interrupted" instead,
+    which advance_pipeline already redispatches automatically."""
+    monkeypatch.setattr(p, "DISPATCH_STARTUP_GRACE_SECONDS", 0)
     worktree = tmp_path / "wt"
     worktree.mkdir()
     (worktree / "agent.log").write_text("")

@@ -27,6 +27,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -101,6 +102,17 @@ MERGE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_MERGE_MAX_ATTEMPTS", "3"))
 # Cleared once a launch actually produces output. Legitimate usage-gate
 # interrupts go through interrupt_story and never touch this counter.
 DISPATCH_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_DISPATCH_MAX_ATTEMPTS", "3"))
+
+# How long after Popen to trust that an empty agent.log means the agent is
+# still bootstrapping (alive but its first print() hasn't flushed) rather
+# than genuinely dead. 90s covers Ollama's `-np 1` queue waits for one
+# request against devstral:24b even when 2-3 dispatches collide, while still
+# flagging a script-crash-before-any-print within a couple of polls.
+# Defense-in-depth with local_agent.py's `[boot]` heartbeat - even older
+# agents without the heartbeat still benefit from this grace window.
+DISPATCH_STARTUP_GRACE_SECONDS = int(
+    os.environ.get("PIPELINE_DISPATCH_STARTUP_GRACE_SECONDS", "90")
+)
 
 # Layered local-first dispatch (PIPELINE_BACKEND_DISPATCH=auto):
 #   1. A-priori: stories with risk above PIPELINE_LOCAL_MAX_RISK (default "low")
@@ -1110,88 +1122,102 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     with the checkpoint journal so it continues rather than starting over.
     Transitions the Plane issue to In Progress. Returns the subprocess PID;
     completion is async.
+
+    Acquires `_plan_lock` so direct MCP tool calls serialize across MCP
+    server processes - without this guard, two Claude sessions (each with
+    their own MCP server PID) can both call dispatch_story on the same story
+    in the same window, and the second one treats the first one's
+    half-built worktree as resumable and spawns a second agent into the
+    same directory. That race is what produced the repeated zero-output
+    agent deaths logged in 2026-06-27's e2e-decentralized-messaging run.
     """
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    story = manifest["stories"].get(story_key)
-    if not story:
-        return {"ok": False, "error": f"No such story {story_key}"}
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {
+                "ok": True, "skipped": "locked",
+                "reason": "another dispatch/interrupt is in progress for this plan",
+            }
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        story = manifest["stories"].get(story_key)
+        if not story:
+            return {"ok": False, "error": f"No such story {story_key}"}
 
-    branch = f"agent/{story_key.lower()}"
-    worktree_path = WORKTREE_ROOT / story_key
-    resuming = (
-        story.get("status") in ("interrupted", "changes_requested")
-        or worktree_path.exists()
-    )
-    journal = _read_journal(plan_name, story_key) if resuming else []
+        branch = f"agent/{story_key.lower()}"
+        worktree_path = WORKTREE_ROOT / story_key
+        resuming = (
+            story.get("status") in ("interrupted", "changes_requested")
+            or worktree_path.exists()
+        )
+        journal = _read_journal(plan_name, story_key) if resuming else []
 
-    if not resuming:
-        with _scoped_repo_root(plan_name) as repo_root:
-            subprocess.run(
-                ["git", "pull", "--ff-only", "origin", _default_branch()],
-                cwd=repo_root, check=True,
-            )
-            subprocess.run(
-                ["git", "worktree", "add", "-b", branch, str(worktree_path)],
-                cwd=repo_root, check=True,
-            )
+        if not resuming:
+            with _scoped_repo_root(plan_name) as repo_root:
+                subprocess.run(
+                    ["git", "pull", "--ff-only", "origin", _default_branch()],
+                    cwd=repo_root, check=True,
+                )
+                subprocess.run(
+                    ["git", "worktree", "add", "-b", branch, str(worktree_path)],
+                    cwd=repo_root, check=True,
+                )
 
-    _plane_set_state(story_key, "started", plan_name)
+        _plane_set_state(story_key, "started", plan_name)
 
-    # Resolve concrete backend name for this story. Priority order:
-    #   1. story["backend"] already set (e.g. from an escalation flip)
-    #   2. PIPELINE_BACKEND_DISPATCH=auto  → a-priori router
-    #   3. PIPELINE_BACKEND_DISPATCH=local|claude  → that driver directly
-    env_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
-    dispatch_backend = story.get("backend") or (
-        _route_dispatch_backend(story) if env_backend == "auto" else env_backend
-    )
-    # Persist so check_story_status and escalation see which backend ran.
-    story["backend"] = dispatch_backend
+        # Resolve concrete backend name for this story. Priority order:
+        #   1. story["backend"] already set (e.g. from an escalation flip)
+        #   2. PIPELINE_BACKEND_DISPATCH=auto  → a-priori router
+        #   3. PIPELINE_BACKEND_DISPATCH=local|claude  → that driver directly
+        env_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+        dispatch_backend = story.get("backend") or (
+            _route_dispatch_backend(story) if env_backend == "auto" else env_backend
+        )
+        # Persist so check_story_status and escalation see which backend ran.
+        story["backend"] = dispatch_backend
 
-    spec = _build_dispatch_command(
-        story, story_key, plan_name=plan_name, resume_journal=journal or None,
-        review_feedback=story.get("review_feedback"),
-    )
-    worktree_path.mkdir(parents=True, exist_ok=True)
-    log_path = worktree_path / "agent.log"
+        spec = _build_dispatch_command(
+            story, story_key, plan_name=plan_name, resume_journal=journal or None,
+            review_feedback=story.get("review_feedback"),
+        )
+        worktree_path.mkdir(parents=True, exist_ok=True)
+        log_path = worktree_path / "agent.log"
 
-    # Fix #1: if the story carries an `acceptance` block, materialize the
-    # oracle files into the worktree BEFORE the backend launches so the local
-    # harness can grade against them. On a resumed story skip the write —
-    # the oracle may already be in a committed WIP, and overwriting would
-    # discard whatever test evolution happened mid-run.
-    acceptance = story.get("acceptance") or []
-    acceptance_paths: list[str] = []
-    if acceptance:
-        for entry in acceptance:
-            rel_path = entry["path"]
-            target = worktree_path / rel_path
-            if not target.exists():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(entry["source"])
-            acceptance_paths.append(rel_path)
+        # Fix #1: if the story carries an `acceptance` block, materialize the
+        # oracle files into the worktree BEFORE the backend launches so the local
+        # harness can grade against them. On a resumed story skip the write —
+        # the oracle may already be in a committed WIP, and overwriting would
+        # discard whatever test evolution happened mid-run.
+        acceptance = story.get("acceptance") or []
+        acceptance_paths: list[str] = []
+        if acceptance:
+            for entry in acceptance:
+                rel_path = entry["path"]
+                target = worktree_path / rel_path
+                if not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(entry["source"])
+                acceptance_paths.append(rel_path)
 
-    dispatch_kwargs: dict[str, Any] = dict(
-        prompt=spec["prompt"], system=spec["system"], model=spec["model"],
-        allowed_tools=spec["allowed_tools"],
-        cwd=worktree_path, log_path=log_path, append=resuming,
-    )
-    # Only the local driver accepts/uses `acceptance`; pass it through when
-    # we're actually invoking that driver so Claude's signature stays clean.
-    if dispatch_backend == "local" and acceptance_paths:
-        dispatch_kwargs["acceptance"] = acceptance_paths
+        dispatch_kwargs: dict[str, Any] = dict(
+            prompt=spec["prompt"], system=spec["system"], model=spec["model"],
+            allowed_tools=spec["allowed_tools"],
+            cwd=worktree_path, log_path=log_path, append=resuming,
+        )
+        # Only the local driver accepts/uses `acceptance`; pass it through when
+        # we're actually invoking that driver so Claude's signature stays clean.
+        if dispatch_backend == "local" and acceptance_paths:
+            dispatch_kwargs["acceptance"] = acceptance_paths
 
-    handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(**dispatch_kwargs)
+        handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(**dispatch_kwargs)
 
-    story["status"] = "in_progress"
-    story["pid"] = handle.pid
-    story["worktree"] = str(worktree_path)
-    story["log"] = str(log_path)
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+        story["status"] = "in_progress"
+        story["pid"] = handle.pid
+        story["worktree"] = str(worktree_path)
+        story["log"] = str(log_path)
+        manifest_path.write_text(json.dumps(manifest, indent=2))
 
-    return {"ok": True, "story_key": story_key, "pid": handle.pid, "branch": branch,
-            "resumed": resuming}
+        return {"ok": True, "story_key": story_key, "pid": handle.pid, "branch": branch,
+                "resumed": resuming}
 
 
 @mcp.tool()
@@ -1228,6 +1254,16 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     worktree = Path(story["worktree"])
     agent_log = worktree / "agent.log"
     if agent_log.exists() and agent_log.stat().st_size == 0:
+        # Empty log within the startup grace window means the agent is alive
+        # and bootstrapping - its first print() hasn't flushed yet, especially
+        # when queued on Ollama's -np 1 worker behind another request. The
+        # PID-alive check above already passed, so trust that and don't burn
+        # dispatch_attempts on a process that's just slow to print. After the
+        # grace window elapses with the log still empty, the agent is
+        # presumed genuinely dead (failed launch) and we count it.
+        log_age = time.time() - agent_log.stat().st_mtime
+        if log_age < DISPATCH_STARTUP_GRACE_SECONDS:
+            return {"status": "running", "pid": pid}
         # The agent process exited without ever writing a byte of output -
         # a failed launch, not a real attempt. Running tests against the
         # untouched worktree would just record a misleading "failed" for
@@ -1299,36 +1335,47 @@ def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
     the story "interrupted" rather than "failed" so a later dispatch_story
     call resumes it instead of starting over. The worktree and branch are
     left in place.
+
+    Acquires `_plan_lock` for the same reason dispatch_story does - two MCP
+    servers can race here too, with one calling interrupt while the other
+    calls dispatch on the same story, producing a manifest write race that
+    leaves the worktree in an inconsistent state.
     """
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    story = manifest["stories"].get(story_key)
-    if not story:
-        return {"ok": False, "error": f"No such story {story_key}"}
-    if "pid" not in story:
-        return {"ok": False, "error": "Story not dispatched"}
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {
+                "ok": True, "skipped": "locked",
+                "reason": "another dispatch/interrupt is in progress for this plan",
+            }
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        story = manifest["stories"].get(story_key)
+        if not story:
+            return {"ok": False, "error": f"No such story {story_key}"}
+        if "pid" not in story:
+            return {"ok": False, "error": "Story not dispatched"}
 
-    try:
-        os.kill(story["pid"], signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+        try:
+            os.kill(story["pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
-    sha = _commit_wip(story["worktree"], story_key, "interrupted")
-    interrupted_at = datetime.now(timezone.utc).isoformat()
-    _append_journal(plan_name, story_key, {
-        "step": "interrupted",
-        "summary": "Agent process terminated; checkpointed for resume.",
-        "next_hint": "",
-        "commit": sha,
-        "ts": interrupted_at,
-    })
+        sha = _commit_wip(story["worktree"], story_key, "interrupted")
+        interrupted_at = datetime.now(timezone.utc).isoformat()
+        _append_journal(plan_name, story_key, {
+            "step": "interrupted",
+            "summary": "Agent process terminated; checkpointed for resume.",
+            "next_hint": "",
+            "commit": sha,
+            "ts": interrupted_at,
+        })
 
-    story["status"] = "interrupted"
-    story["last_commit"] = sha
-    story["interrupted_at"] = interrupted_at
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+        story["status"] = "interrupted"
+        story["last_commit"] = sha
+        story["interrupted_at"] = interrupted_at
+        manifest_path.write_text(json.dumps(manifest, indent=2))
 
-    return {"ok": True, "status": "interrupted", "commit": sha}
+        return {"ok": True, "status": "interrupted", "commit": sha}
 
 
 @mcp.tool()
@@ -1578,17 +1625,18 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
 @contextmanager
 def _plan_lock(plan_name: str):
-    """Exclusive, non-blocking lock scoped to one plan's advance_pipeline tick.
+    """Exclusive, non-blocking lock scoped to one plan's mutations.
 
-    Overlapping invocations (e.g. launchd firing a burst of missed
-    StartIntervals after the machine wakes from sleep) would otherwise both
-    read the same "todo"/"interrupted" story before either has written its
-    in_progress status back to the manifest, and both dispatch it - the
-    second dispatch_story call sees the first one's half-built worktree via
-    worktree_path.exists(), treats itself as "resuming", and spawns its own
-    agent into the *same* directory as the first. Multiple agents fighting
-    over one worktree's git state is what actually produced the repeated
-    zero-output agent deaths this guards against, not per-story flakiness.
+    Used by every tool that mutates the manifest or the worktree
+    (advance_pipeline, _set_plan_paused, dispatch_story, interrupt_story).
+    The lock is `flock`-based, so it serializes across MCP server processes
+    too - two Claude sessions with two MCP server PIDs calling
+    dispatch_story on the same story in the same window both want to write
+    to the same manifest and create the same worktree, and without this
+    guard the second one treats the first's half-built worktree as
+    resumable and spawns a second agent into the same directory. Multiple
+    agents fighting over one worktree's git state is what produces the
+    repeated zero-output agent deaths, not per-story flakiness.
 
     Yields whether the lock was acquired; the caller must check it and skip
     all work if not - this never blocks waiting for the lock.

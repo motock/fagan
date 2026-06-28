@@ -217,6 +217,19 @@ def safe_run_tool(fn, args) -> str:
 
 
 def main() -> int:
+    # Startup heartbeat. flush=True is load-bearing: stdout is block-buffered
+    # to a non-tty file (the worktree's agent.log, redirected by Popen), so
+    # without flush the line wouldn't hit disk until the buffer fills or the
+    # process exits. With it, check_story_status's "empty agent.log = failed
+    # launch" check has a precise signal: a 0-byte log means the process
+    # never reached main() (a genuine failed launch), while a log with [boot]
+    # and no further output means the agent is alive and queued (e.g. on
+    # Ollama's -np 1 worker waiting for an inference slot).
+    print(
+        f"[boot] pid={os.getpid()} model={MODEL} endpoint={ENDPOINT} "
+        f"steps={MAX_STEPS} timeout={TIMEOUT}s",
+        flush=True,
+    )
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
     system_content = HARNESS_RULES + ("\n\n" + system if system else "")

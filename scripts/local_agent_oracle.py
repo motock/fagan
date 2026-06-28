@@ -12,9 +12,11 @@ This variant owns the acceptance suite:
   - `LOCAL_AGENT_ACCEPTANCE` is a JSON list of paths the model must NOT
     touch (`create_file`/`str_replace` refuse on those paths with a
     recoverable error message).
-  - After every code-changing tool, the harness runs pytest against the
-    oracle files. First time it passes -> auto-commit -> exit 0. The model
-    cannot author or modify the exam it's graded on.
+  - After every code-changing tool, the harness runs the project's test
+    command (detected via pipeline_mcp_server.detect_test_command — the
+    same detector check_story_status uses) against the oracle files.
+    First time it passes -> auto-commit -> exit 0. The model cannot
+    author or modify the exam it's graded on.
 
 Everything else (native /api/chat loop, tolerant parser, per-target
 repetition guard, read-heavy-pattern guard, runtime-artifact exclusion) is
@@ -186,18 +188,33 @@ def auto_commit(reason: str) -> None:
 def oracle_result() -> tuple[bool, str]:
     """Run the harness-owned acceptance suite. Returns (passed, tail).
 
-    Pytest is run once across every oracle path (most stories will have just
-    one). On a collection error (e.g. a syntax error in the implementation
-    file the model just emitted) pytest returns non-zero AND emits its error
-    to stderr — captured in `tail` so the model can act on it.
+    The suite is whatever test command fits the project — pytest for Python
+    repos (with ACCEPTANCE_PATHS appended), cargo test for Rust, npm test for
+    JS, make test where the Makefile defines one, etc. Detected via
+    pipeline_mcp_server.detect_test_command so the oracle is language-agnostic
+    (matches the same detector the orchestrator's check_story_status uses
+    after the run finishes). On a non-zero exit (compile error, test
+    failure, collection error) the tail is captured so the model can react.
     """
     if not ACCEPTANCE_PATHS:
         return True, "(no acceptance files configured)"
-    r = subprocess.run(
-        [sys.executable, "-m", "pytest", *ACCEPTANCE_PATHS, "-q",
-         "--no-header", "-p", "no:cacheprovider"],
-        cwd=CWD, capture_output=True, text=True,
-    )
+    # Local import: pipeline_mcp_server is heavy and the oracle only needs it
+    # here. Avoiding top-level import keeps the script light for tests that
+    # mock run_tool.
+    import pipeline_mcp_server as p
+    test_dir, test_cmd = p.detect_test_command(CWD)
+    if test_cmd and test_cmd[0] == "pytest":
+        argv = [*test_cmd, *ACCEPTANCE_PATHS, "-q", "--no-header", "-p", "no:cacheprovider"]
+    else:
+        argv = test_cmd
+    # Heavy-build lock: cargo/npm/gradle etc. share the same serialization
+    # contract with check_story_status and the agent's own bash tool.
+    needs_heavy = bool(argv) and p._is_heavy(argv)
+    if needs_heavy:
+        with p._heavy_lock():
+            r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
+    else:
+        r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
     return r.returncode == 0, (r.stdout + r.stderr)[-800:]
 
 

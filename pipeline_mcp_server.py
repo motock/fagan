@@ -1285,9 +1285,20 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"status": "interrupted", "pid": pid}
 
     test_dir, test_cmd = detect_test_command(worktree)
-    test_result = subprocess.run(
-        test_cmd, cwd=test_dir, capture_output=True, text=True,
-    )
+    # Heavy build/test commands (cargo, npm, mvn, gradle, etc.) can run GB-
+    # seconds of memory each. Serialize against other in-flight agents so
+    # we never have N concurrent builds saturating the host. Cheap commands
+    # (pytest, mvn, gradle, make, npm — depending on the project) skip the
+    # lock entirely.
+    if _is_heavy(test_cmd):
+        with _heavy_lock():
+            test_result = subprocess.run(
+                test_cmd, cwd=test_dir, capture_output=True, text=True,
+            )
+    else:
+        test_result = subprocess.run(
+            test_cmd, cwd=test_dir, capture_output=True, text=True,
+        )
     passed = test_result.returncode == 0
 
     # The agent produced real output and the tests ran: the launch worked, so
@@ -1656,6 +1667,73 @@ def _plan_lock(plan_name: str):
                 fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+@contextmanager
+def _heavy_lock():
+    """Serializes heavy build/test invocations across all local-agent
+    dispatch paths.
+
+    Three concurrent cold builds can push a 24GB M4 to its knees (observed
+    in the post-PR #30 e2e rerun: 33GB total pressure, CPU saturated).
+    Each worktree has its own target/ (or build/), so concurrent
+    invocations don't share cache — they multiply memory pressure rather
+    than amortizing it.
+
+    Blocking acquire (LOCK_EX, not LOCK_EX | LOCK_NB) is the right call
+    here: callers are already prepared to wait minutes for a build, and
+    skipping entirely would just give the agent a false "build failed"
+    error and waste more time. The queueing cost is invisible when the
+    model is doing non-build work in the meantime.
+
+    Held by every site that runs a heavy build/test:
+      - check_story_status (orchestrator's post-dispatch grading)
+      - local_agent.py / local_agent_oracle.py `bash` tool (model-invoked)
+      - backend.py reviewer bash (reviewer-invoked)
+    Decide what counts as heavy with `_is_heavy()`.
+    """
+    lock_path = PLAN_DIR / "heavy.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+# Heavy build/test executables: these typically spend GB-seconds of memory
+# running (linkers, type checkers, full compilers). Lock them across
+# dispatchees so we never run more than one at a time, regardless of
+# language. `make` is gated on a build/test target because make is also
+# used for trivial scripts — we don't want to serialize `make clean`.
+HEAVY_EXECUTABLES = frozenset({
+    "cargo", "npm", "yarn", "pnpm", "npx",
+    "mvn", "gradle", "./gradlew",
+    "sbt", "bazel", "buck",
+    "go", "rustc", "swift", "swiftc",
+})
+
+
+def _is_heavy(cmd: list[str]) -> bool:
+    """True iff a subprocess command should acquire the heavy lock.
+
+    Matched by argv[0] against a static list of build/test executables.
+    No parsing of the command body — keep the check O(1) and language-
+    agnostic. `make` is special-cased to only the well-known heavy
+    targets (`test`/`build`/`check`/`all`/`ci`) because make is also
+    used for trivial scripts where the lock would just add latency.
+    """
+    if not cmd:
+        return False
+    exe = cmd[0]
+    if exe in HEAVY_EXECUTABLES:
+        return True
+    if exe == "make" and len(cmd) > 1 and cmd[1] in ("test", "build", "check", "all", "ci"):
+        return True
+    return False
 
 
 @mcp.tool()

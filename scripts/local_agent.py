@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections import deque
@@ -62,6 +63,12 @@ NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
 MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "40"))
 TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
+# Per-bash-invocation timeout. The model can call `cargo fetch` and wedge on
+# a network index update forever; without this the agent loop blocks on a
+# single subprocess.run until cargo eventually times out (if at all).
+# 10 min is generous — most cargo invocations in a worktree finish in <60s
+# on a warm target/ — but bounded so a wedged cargo doesn't pin the agent.
+BASH_TIMEOUT = float(os.environ.get("LOCAL_AGENT_BASH_TIMEOUT_SECONDS", "600"))
 
 # Read-heavy-pattern guard. Tracks the last N tool names the model called and
 # treats "N consecutive non-mutating tools" as paralysis-by-analysis. The
@@ -208,8 +215,28 @@ def run_tool(fn, args) -> str:
         lines = path.read_text().splitlines(keepends=True)
         return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
     if fn == "bash":
-        pr = subprocess.run(args.get("command", ""), shell=True, cwd=CWD,
-                            capture_output=True, text=True)
+        cmd = args.get("command", "")
+        # Acquire the cross-dispatch heavy-build lock for any command whose
+        # first token is a known build/test executable (cargo, npm, mvn,
+        # etc.). The lock lives at PLAN_DIR/heavy.lock; see _heavy_lock
+        # docstring for the rationale (one cold build at a time keeps
+        # memory bounded across concurrent agents).
+        # We shlex-split because the model passes a string; argv[0] of the
+        # split gives us the executable. shlex.split raises on malformed
+        # shell — fall through to the no-lock path in that case so a
+        # weird command doesn't take the agent down.
+        try:
+            argv0 = shlex.split(cmd)[0] if cmd.strip() else ""
+        except ValueError:
+            argv0 = ""
+        is_heavy = bool(argv0) and p._is_heavy([argv0])
+        run_kwargs = dict(shell=True, cwd=CWD, capture_output=True, text=True,
+                          timeout=BASH_TIMEOUT)
+        if is_heavy:
+            with p._heavy_lock():
+                pr = subprocess.run(cmd, **run_kwargs)
+        else:
+            pr = subprocess.run(cmd, **run_kwargs)
         return (pr.stdout + pr.stderr)[:3000] or "(no output)"
     if fn == "checkpoint":
         try:
@@ -305,10 +332,21 @@ def main() -> int:
                 return 0
 
             sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
-            seen[sig] = seen.get(sig, 0) + 1
+            # str_replace calls are excluded from the per-target repetition
+            # guard: each one produces a *different* file state (the
+            # `old_str` next time will differ, or `run_tool` will reject
+            # it as "not found"), so a sequence of edits to the same file
+            # is a legitimate fix-build cycle, not a repetition. The
+            # read-heavy guard (MUTATING_TOOLS) still catches a model stuck
+            # in a bad edit loop — str_replace calls reset that window.
+            above_threshold = False
+            if fn != "str_replace":
+                seen[sig] = seen.get(sig, 0) + 1
+                if seen[sig] >= 3:
+                    above_threshold = True
             print(f"[step {step}] {fn}: {str(args.get('command') or args.get('path') or '')[:120]}", flush=True)
 
-            if seen[sig] >= 3:
+            if above_threshold:
                 if not nudged_repeat:
                     nudged_repeat = True
                     print("   [repetition nudge]", flush=True)

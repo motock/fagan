@@ -16,26 +16,34 @@ This variant owns the acceptance suite:
     oracle files. First time it passes -> auto-commit -> exit 0. The model
     cannot author or modify the exam it's graded on.
 
-Everything else (native /api/chat loop, tolerant parser, loop/repetition
-guard, runtime-artifact exclusion) is copied verbatim from
-scripts/local_agent.py so this is a faithful test of just the one lever.
+Everything else (native /api/chat loop, tolerant parser, per-target
+repetition guard, read-heavy-pattern guard, runtime-artifact exclusion) is
+copied verbatim from scripts/local_agent.py so this is a faithful test of
+just the one lever. PR #30 added the read-heavy guard to the base but
+missed this variant — every story with an `acceptance` block dispatches
+here, which is exactly the cohort that hits the "paralysis by analysis"
+pattern most.
 
 Exit codes:
   0 = oracle green, auto-committed, done
   1 = LLM call failed (no commit)
   2 = step cap reached, WIP-committed
-  3 = repetition guard fired, WIP-committed
+  3 = repetition OR read-heavy guard fired, WIP-committed
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
 
 import httpx
+
+import pipeline_mcp_server as p  # noqa: E402  (reuses _checkpoint_impl, _heavy_lock, _is_heavy)
 
 CWD = Path.cwd()
 MODEL = os.environ["LOCAL_AGENT_MODEL"]
@@ -44,6 +52,27 @@ NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
 MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "30"))
 TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
+# Per-bash-invocation timeout. The model can call `cargo fetch` and wedge on
+# a network index update forever; without this the agent loop blocks on a
+# single subprocess.run until cargo eventually times out (if at all).
+# 10 min is generous — most cargo invocations in a worktree finish in <60s
+# on a warm target/ — but bounded so a wedged cargo doesn't pin the agent.
+BASH_TIMEOUT = float(os.environ.get("LOCAL_AGENT_BASH_TIMEOUT_SECONDS", "600"))
+
+# Read-heavy-pattern guard (ported from local_agent.py PR #30 — this variant
+# missed the original PR because backend routes to it whenever a story carries
+# an `acceptance` block). Tracks the last N tool names the model called and
+# treats "N consecutive non-mutating tools" as paralysis-by-analysis. The
+# per-target repetition guard (see main()) misses this because each call hits
+# a different file/command — every signature is unique, but the model never
+# actually writes anything. Window size 6 catches "5 reads without a write"
+# while still allowing the natural 2-3-step warm-up of `bash pwd` / read PLAN.
+READ_HEAVY_WINDOW = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_WINDOW", "6"))
+# Mutating tools: any that produce new code in the worktree. Anything else
+# (view_file, bash, checkpoint) is read-only — including checkpoint, which
+# commits existing WIP but doesn't add new code; checkpointing without prior
+# edits is itself a sign of "spinning."
+MUTATING_TOOLS = frozenset({"create_file", "str_replace"})
 
 # Oracle paths: the harness owns these, the model cannot author or edit them.
 # Set by backend.OllamaDriver.dispatch as a JSON list when the story carries
@@ -210,8 +239,22 @@ def run_tool(fn, args) -> str:
         lines = path.read_text().splitlines(keepends=True)
         return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
     if fn == "bash":
-        pr = subprocess.run(args.get("command", ""), shell=True, cwd=CWD,
-                            capture_output=True, text=True)
+        cmd = args.get("command", "")
+        # Acquire the cross-dispatch heavy-build lock for any command whose
+        # first token is a known build/test executable (cargo, npm, mvn,
+        # etc.). See _heavy_lock docstring for the rationale.
+        try:
+            argv0 = shlex.split(cmd)[0] if cmd.strip() else ""
+        except ValueError:
+            argv0 = ""
+        is_heavy = bool(argv0) and p._is_heavy([argv0])
+        run_kwargs = dict(shell=True, cwd=CWD, capture_output=True, text=True,
+                          timeout=BASH_TIMEOUT)
+        if is_heavy:
+            with p._heavy_lock():
+                pr = subprocess.run(cmd, **run_kwargs)
+        else:
+            pr = subprocess.run(cmd, **run_kwargs)
         return (pr.stdout + pr.stderr)[:3000] or "(no output)"
     return f"unknown tool {fn}"
 
@@ -258,6 +301,8 @@ def main() -> int:
 
     seen: dict = {}
     nudged_repeat = False
+    nudged_read_heavy = False
+    recent_tools: deque[str] = deque(maxlen=READ_HEAVY_WINDOW)
 
     for step in range(MAX_STEPS):
         try:
@@ -299,10 +344,21 @@ def main() -> int:
                 break
 
             sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
-            seen[sig] = seen.get(sig, 0) + 1
+            # str_replace calls are excluded from the per-target repetition
+            # guard: each one produces a *different* file state (the
+            # `old_str` next time will differ, or `run_tool` will reject
+            # it as "not found"), so a sequence of edits to the same file
+            # is a legitimate fix-build cycle, not a repetition. The
+            # read-heavy guard (MUTATING_TOOLS) still catches a model stuck
+            # in a bad edit loop — str_replace calls reset that window.
+            above_threshold = False
+            if fn != "str_replace":
+                seen[sig] = seen.get(sig, 0) + 1
+                if seen[sig] >= 3:
+                    above_threshold = True
             print(f"[step {step}] {fn}: {str(args.get('command') or args.get('path') or '')[:120]}", flush=True)
 
-            if seen[sig] >= 3:
+            if above_threshold:
                 if not nudged_repeat:
                     nudged_repeat = True
                     print("   [repetition nudge]", flush=True)
@@ -322,6 +378,40 @@ def main() -> int:
             # like old_str) must nudge the model with a recoverable error, not
             # crash the whole unattended agent with an uncaught exception.
             messages.append({"role": "tool", "content": safe_run_tool(fn, args)})
+
+            # Read-heavy-pattern guard. Tracked separately from the per-target
+            # repetition guard: the per-target one misses this case because
+            # every call hits a different file/command (every signature is
+            # unique). The model is still in a paralysis-by-analysis loop if
+            # the last READ_HEAVY_WINDOW tool calls were all non-mutating.
+            # Two-stage response: one corrective nudge, then park if the
+            # pattern persists.
+            recent_tools.append(fn)
+            if (len(recent_tools) == READ_HEAVY_WINDOW
+                    and all(t not in MUTATING_TOOLS for t in recent_tools)):
+                if not nudged_read_heavy:
+                    nudged_read_heavy = True
+                    print(f"   [read-heavy nudge: {READ_HEAVY_WINDOW} reads in a row]", flush=True)
+                    oracle_list = ", ".join(ACCEPTANCE_PATHS) or "(none)"
+                    messages.append({"role": "user", "content": (
+                        f"You've made {READ_HEAVY_WINDOW} tool calls in a row without writing "
+                        "or editing any file (only view_file / bash / checkpoint). "
+                        "STOP READING and make an edit. Either:\n"
+                        "1. create_file for a new module or test,\n"
+                        "2. str_replace to modify an existing file based on what you've "
+                        "already read, or\n"
+                        "3. checkpoint if you need to commit a work-in-progress before "
+                        "deciding the next concrete change.\n"
+                        f"Do not modify the acceptance suite at: {oracle_list}.\n"
+                        "Reading more files without acting is wasting your step budget.")})
+                    # Reset so the next detection needs another full window of reads
+                    # (not whatever happens to be left in the deque).
+                    recent_tools.clear()
+                else:
+                    print("   [parking: read-heavy after nudge]", flush=True)
+                    if worktree_dirty():
+                        auto_commit("WIP (read-heavy parking)")
+                    return 3
 
             # Fix #1: the harness, not the model, decides done. The instant the
             # independent oracle is green, auto-commit and exit. This fires

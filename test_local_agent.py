@@ -98,3 +98,123 @@ def test_local_agent_main_writes_boot_line_before_first_chat(tmp_path, monkeypat
     # regression: a process whose [boot] line never flushed (e.g. someone
     # removed flush=True) is exactly the bug this heartbeat defends
     # against.
+
+
+def _sequence_chat(responses):
+    """Return a fake chat() that yields a tool-call response from `responses`
+    in order. Each entry is a (tool_name, args_dict) tuple. Records every
+    call into the returned `calls` list."""
+    calls = []
+
+    def _fake(messages):
+        calls.append(messages)
+        idx = len(calls) - 1
+        if idx >= len(responses):
+            # ran out of scripted responses — bail to done to end the loop
+            fn, args = "done", {"summary": "out of scripted responses"}
+        else:
+            fn, args = responses[idx]
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": fn, "arguments": args}}]}
+
+    return _fake, calls
+
+
+def test_local_agent_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatch, capsys):
+    """When devstral rotates across many distinct view_file / bash targets
+    without ever calling create_file / str_replace, the per-target
+    repetition guard misses it (every signature is unique), but the
+    read-heavy guard must fire: one corrective nudge after
+    READ_HEAVY_WINDOW reads, then park after another
+    READ_HEAVY_WINDOW if the model ignores the nudge.
+
+    We script 12 distinct bash calls (all unique signatures) and assert
+    that main() returns 3 (parking), the nudge + park log lines fire
+    exactly once each, and chat() is called ~12 times (not the full 40
+    step cap — that would mean the guard failed to stop the run)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    responses = [("bash", {"command": f"cat nonexistent_{i}"}) for i in range(15)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+
+    out = capsys.readouterr().out
+    assert rc == 3, f"expected parking exit 3, got {rc}\noutput: {out!r}"
+    # The nudge fires once, the park fires once.
+    assert out.count("[read-heavy nudge:") == 1, f"expected 1 nudge, output: {out!r}"
+    assert out.count("[parking: read-heavy after nudge]") == 1, f"expected 1 park, output: {out!r}"
+    # chat() called at most 12 times — definitely not the full 40 step cap.
+    # The exact count depends on the iteration between nudge and park, but
+    # the upper bound is 2 * READ_HEAVY_WINDOW (default 12).
+    assert len(calls) <= 12, (
+        f"guard should stop the run well before the 40-step cap, "
+        f"got {len(calls)} chat calls"
+    )
+
+
+def test_local_agent_does_not_nudge_with_regular_writes(tmp_path, monkeypatch, capsys):
+    """The sliding window only fires when the LAST READ_HEAVY_WINDOW calls
+    are all non-mutating. A model that interleaves one write per window
+    (e.g. reads 5, writes 1, reads 5, writes 1, ...) must NOT be flagged —
+    it's making forward progress, just slowly.
+
+    Sequence: read, read, read, read, read, create_file, repeated. The
+    write sits in the deque so the all-non-mutating check never holds.
+
+    Each bash command is unique to dodge the per-target repetition guard,
+    which is testing a different signal and isn't what this test is about."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    responses = [
+        ("bash", {"command": "echo 1 > /dev/null"}),
+        ("view_file", {"path": "fake.py"}),
+        ("bash", {"command": "echo 2 > /dev/null"}),
+        ("view_file", {"path": "fake2.py"}),
+        ("bash", {"command": "echo 3 > /dev/null"}),
+        # write in the middle — keeps the deque mixed.
+        ("create_file", {"path": "new_module.rs", "content": "// real code\n"}),
+        # Continue the pattern. Deque after step 9: [bash, view_file, bash,
+        # view_file, bash, create_file] — one mutating in the window, so
+        # the all-non-mutating check fails.
+        ("bash", {"command": "echo 4 > /dev/null"}),
+        ("view_file", {"path": "fake3.py"}),
+        ("bash", {"command": "echo 5 > /dev/null"}),
+        ("view_file", {"path": "fake4.py"}),
+        ("bash", {"command": "echo 6 > /dev/null"}),
+        # done once rejected, then auto-WIP-commits and accepts.
+        ("done", {"summary": "wrote the module"}),
+        ("done", {"summary": "wrote the module"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+
+    out = capsys.readouterr().out
+    assert "[read-heavy nudge:" not in out, (
+        f"nudge must NOT fire when at least one mutating call sits in "
+        f"the sliding window; output: {out!r}"
+    )
+    # After 1 done rejection, the harness auto-WIP-commits and accepts.
+    assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
+
+
+def test_local_agent_read_heavy_park_does_not_wip_commit_when_clean(tmp_path, monkeypatch, capsys):
+    """When the read-heavy guard parks the run, it should not spuriously
+    WIP-commit if the worktree is clean. (A read-only run by definition
+    hasn't edited any files, so worktree_dirty() is False — auto_wip_commit
+    is a no-op, but the branch must be reachable.)"""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    responses = [("bash", {"command": f"cat nonexistent_{i}"}) for i in range(15)]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+    # Sanity: tmp_path is empty, so worktree_dirty() returns False.
+    assert not la.worktree_dirty()
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 3
+    assert "[parking: read-heavy after nudge]" in out
+    # No spurious commit messages in the log.
+    assert "WIP" not in out, f"no commit should be made on a clean worktree; output: {out!r}"

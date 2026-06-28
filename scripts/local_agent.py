@@ -22,6 +22,12 @@ worse). Three guards proved load-bearing and are implemented here:
 3. Commit enforcement — `done` is rejected while the worktree is dirty; after
    repeated rejections the loop auto-WIP-commits so correct work is never
    lost (the pipeline uses git commits as the done-signal).
+4. Read-heavy-pattern guard — when the model rotates across many distinct
+   `view_file`/`bash` targets without ever calling `create_file` or
+   `str_replace`, the per-target repetition guard misses it (each call has
+   a unique signature) but the model is still in a paralysis-by-analysis
+   loop. A sliding window over recent tool names catches "many reads, zero
+   writes" and parks the run before the step cap is wasted.
 
 Tolerant parser: if the native `tool_calls` field is empty, a tool call is
 recovered from the message content ([TOOL_CALLS]/bare arrays/```json fences) —
@@ -41,6 +47,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
 
 import httpx
@@ -55,6 +62,19 @@ NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
 MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "40"))
 TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
+
+# Read-heavy-pattern guard. Tracks the last N tool names the model called and
+# treats "N consecutive non-mutating tools" as paralysis-by-analysis. The
+# per-target repetition guard (see main()) misses this because each call hits
+# a different file/command — every signature is unique, but the model never
+# actually writes anything. Window size 6 catches "5 reads without a write"
+# while still allowing the natural 2-3-step warm-up of `bash pwd` / read PLAN.
+READ_HEAVY_WINDOW = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_WINDOW", "6"))
+# Mutating tools: any that produce new code in the worktree. Anything else
+# (view_file, bash, checkpoint) is read-only — including checkpoint, which
+# commits existing WIP but doesn't add new code; checkpointing without prior
+# edits is itself a sign of "spinning."
+MUTATING_TOOLS = frozenset({"create_file", "str_replace"})
 
 HARNESS_RULES = (
     "You are working inside a git repository (the current directory). Complete "
@@ -240,6 +260,8 @@ def main() -> int:
 
     seen: dict = {}
     nudged_repeat = False
+    nudged_read_heavy = False
+    recent_tools: deque[str] = deque(maxlen=READ_HEAVY_WINDOW)
     done_rejections = 0
 
     for step in range(MAX_STEPS):
@@ -301,9 +323,42 @@ def main() -> int:
                 return 3
 
             # A malformed tool call (e.g. a model that omits a required arg
-            # like old_str) must nudge the model with a recoverable error, not
-            # crash the whole unattended agent with an uncaught exception.
+            # like str_replace without old_str) must nudge the model with a
+            # recoverable error, not crash the whole unattended agent with an
+            # uncaught exception.
             messages.append({"role": "tool", "content": safe_run_tool(fn, args)})
+
+            # Read-heavy-pattern guard. Tracked separately from the per-target
+            # repetition guard: the per-target one misses this case because
+            # every call hits a different file/command (every signature is
+            # unique). The model is still in a paralysis-by-analysis loop if
+            # the last READ_HEAVY_WINDOW tool calls were all non-mutating.
+            # Two-stage response: one corrective nudge, then park if the
+            # pattern persists.
+            recent_tools.append(fn)
+            if (len(recent_tools) == READ_HEAVY_WINDOW
+                    and all(t not in MUTATING_TOOLS for t in recent_tools)):
+                if not nudged_read_heavy:
+                    nudged_read_heavy = True
+                    print(f"   [read-heavy nudge: {READ_HEAVY_WINDOW} reads in a row]", flush=True)
+                    messages.append({"role": "user", "content": (
+                        f"You've made {READ_HEAVY_WINDOW} tool calls in a row without writing "
+                        "or editing any file (only view_file / bash / checkpoint). "
+                        "STOP READING and make an edit. Either:\n"
+                        "1. create_file for a new module or test,\n"
+                        "2. str_replace to modify an existing file based on what you've "
+                        "already read, or\n"
+                        "3. checkpoint if you need to commit a work-in-progress before "
+                        "deciding the next concrete change.\n"
+                        "Reading more files without acting is wasting your step budget.")})
+                    # Reset so the next detection needs another full window of reads
+                    # (not whatever happens to be left in the deque).
+                    recent_tools.clear()
+                else:
+                    print("   [parking: read-heavy after nudge]", flush=True)
+                    if worktree_dirty():
+                        auto_wip_commit("read-heavy parking")
+                    return 3
 
     print("[ended without done — step cap reached]", flush=True)
     if worktree_dirty():

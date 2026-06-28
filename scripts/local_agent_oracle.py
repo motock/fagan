@@ -45,6 +45,14 @@ from pathlib import Path
 
 import httpx
 
+# The pipeline_mcp_server module lives in this script's parent directory.
+# The agent subprocess runs with cwd=<worktree>, NOT the pipeline repo, so
+# without this path insert the import below fails with ModuleNotFoundError
+# and the harness dies before printing [boot] (which check_story_status
+# reads as "process never reached main()" = a genuine failed launch).
+# local_agent.py has the same line; the oracle variant didn't until PR #32
+# because it didn't depend on pipeline_mcp_server.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pipeline_mcp_server as p  # noqa: E402  (reuses _checkpoint_impl, _heavy_lock, _is_heavy)
 
 CWD = Path.cwd()
@@ -198,10 +206,6 @@ def oracle_result() -> tuple[bool, str]:
     """
     if not ACCEPTANCE_PATHS:
         return True, "(no acceptance files configured)"
-    # Local import: pipeline_mcp_server is heavy and the oracle only needs it
-    # here. Avoiding top-level import keeps the script light for tests that
-    # mock run_tool.
-    import pipeline_mcp_server as p
     test_dir, test_cmd = p.detect_test_command(CWD)
     if test_cmd and test_cmd[0] == "pytest":
         argv = [*test_cmd, *ACCEPTANCE_PATHS, "-q", "--no-header", "-p", "no:cacheprovider"]

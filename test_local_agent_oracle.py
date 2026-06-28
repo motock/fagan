@@ -297,3 +297,38 @@ def test_oracle_returns_true_with_short_circuit_when_no_acceptance_paths(tmp_pat
     assert ok is True
     assert tail == "(no acceptance files configured)"
     assert called["run"] is False, "subprocess.run must not be called when ACCEPTANCE_PATHS is empty"
+
+
+def test_oracle_script_importable_from_non_pipeline_cwd(tmp_path):
+    """Regression guard for the PR #32 fix: the oracle harness must
+    import pipeline_mcp_server at module load (reused for _heavy_lock +
+    _is_heavy + _checkpoint_impl), and the import requires sys.path to
+    contain the pipeline repo. local_agent.py has the sys.path.insert at
+    line 56; the oracle variant was missing it until PR #32. Without the
+    insert, every oracle subprocess failed at import with
+    ModuleNotFoundError — the agent never reached main(), so check_story_status
+    saw an empty agent.log and treated it as a failed launch.
+
+    We assert by running `python -c "import scripts.local_agent_oracle"`
+    with cwd=tmp_path (the worktree) and PYTHONPATH pointing at the
+    pipeline repo. The script's own sys.path.insert handles the
+    pipeline_mcp_server import, so this should succeed silently."""
+    import subprocess
+    repo = str(Path(__file__).resolve().parent)
+    # Use the venv python explicitly so we don't depend on the active env.
+    venv_python = str(Path(repo) / ".venv" / "bin" / "python3")
+    r = subprocess.run(
+        [venv_python, "-c",
+         "import importlib.util, pathlib; "
+         f"spec = importlib.util.spec_from_file_location('lao', {str(Path(repo) / 'scripts' / 'local_agent_oracle.py')!r}); "
+         "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); "
+         "assert hasattr(m, 'p'), 'pipeline_mcp_server alias not bound'; "
+         "assert hasattr(m.p, '_heavy_lock'), 'heavy_lock helper missing'; "
+         "assert hasattr(m.p, '_is_heavy'), 'is_heavy helper missing'"],
+        cwd=tmp_path,
+        capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode == 0, (
+        f"oracle import from non-pipeline cwd failed:\n"
+        f"  stdout: {r.stdout}\n  stderr: {r.stderr}"
+    )

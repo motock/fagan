@@ -2572,25 +2572,24 @@ def test_reap_zombie_in_progress_stories(plan_dir, monkeypatch):
     assert after == after2
 
 
-def test_advance_all_plans_reaps_zombies_before_per_plan_ticks(
-    plan_dir, monkeypatch,
-):
-    """Regression guard for the 2026-06-28 zombie incident: two audio-bugfixes
-    stories were stuck at in_progress with dead pids for ~19h, holding 2 of
-    3 concurrency slots and blocking all e2e dispatch. advance_all_plans must
-    reap before invoking per-plan advance_pipeline so a dead agent in one
-    plan doesn't consume a slot for every other plan indefinitely."""
+def test_advance_all_plans_does_not_pre_reap_zombies(plan_dir, monkeypatch):
+    """Regression guard (2026-06-28): running an external reap pass before
+    the polling phase silently leaves dead-pid stories re-dispatching
+    forever — the polling phase never sees them, so dispatch_attempts is
+    never bumped and the test is never run. advance_all_plans must NOT
+    pre-reap; the polling phase handles dead pids via check_story_status
+    which falls through to test-running on a dead pid.
+    """
     _write_manifest(plan_dir, "zom", {
         "Z1": {"summary": "dead", "status": "in_progress", "pid": 999},
     })
 
     def _fake_kill(pid, sig):
-        raise ProcessLookupError  # every pid is dead
+        raise ProcessLookupError
 
     monkeypatch.setattr(p.os, "kill", _fake_kill)
 
-    # Stub advance_pipeline to verify it was called AFTER the reap
-    # (manifest should already show Z1 as todo, not in_progress).
+    # Stub advance_pipeline to verify it sees the manifest BEFORE any reap.
     captured = {}
 
     def _fake_advance(plan_name):
@@ -2604,12 +2603,13 @@ def test_advance_all_plans_reaps_zombies_before_per_plan_ticks(
     monkeypatch.setattr(p, "advance_pipeline", _fake_advance)
 
     result = p.advance_all_plans()
-    assert result.get("reaped_zombies") == 1
     assert "zom" in result["plans"]
-    # Per-plan tick ran AFTER the reap.
-    assert captured["saw_z1"] == ["todo"]
-    # And the manifest is clean for downstream dispatch sizing.
-    assert p._count_in_progress_agents() == 0
+    # advance_pipeline must have seen Z1 as in_progress (not pre-reaped to todo)
+    # so its polling phase can run check_story_status and bump dispatch_attempts.
+    assert captured["saw_z1"] == ["in_progress"]
+    # And there's no "reaped_zombies" in the response — reap is no longer
+    # wired into advance_all_plans.
+    assert "reaped_zombies" not in result
 
 
 def test_advance_pipeline_caps_dispatch_at_max_concurrent_agents(plan_dir, monkeypatch):
@@ -2826,7 +2826,7 @@ def test_advance_all_plans_isolates_failures_and_continues(plan_dir, monkeypatch
 
 def test_advance_all_plans_with_no_manifests_returns_empty(plan_dir):
     result = p.advance_all_plans()
-    assert result == {"ok": True, "plans": {}, "reaped_zombies": 0}
+    assert result == {"ok": True, "plans": {}}
 
 
 def test_advance_all_plans_ignores_unignested_plan_json(plan_dir, monkeypatch):

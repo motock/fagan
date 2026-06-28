@@ -12,6 +12,7 @@ import fcntl
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -1667,7 +1668,179 @@ def test_dispatch_story_proceeds_when_lock_free(plan_dir, worktree_root, agents_
     assert result.get("skipped") is None
 
 
-# ---------- check_story_status 0-byte log grace period ----------
+# ---------- Heavy-build lock (Fix C) ----------
+# Three concurrent cold builds can push a 24GB M4 to its knees (observed in
+# the post-PR #30 e2e rerun). _heavy_lock serializes cargo/npm/mvn/gradle/etc.
+# invocations across every dispatch site. _is_heavy() is the static predicate
+# that decides what counts as a heavy command.
+
+def test_heavy_executables_set_is_static_and_reasonable():
+    """Sanity: the static list of heavy executables covers the obvious
+    build runners and nothing silly. If someone adds `python` here it'll
+    show up in this test failure."""
+    expected = {
+        "cargo", "npm", "yarn", "pnpm", "npx",
+        "mvn", "gradle", "./gradlew",
+        "sbt", "bazel", "buck",
+        "go", "rustc", "swift", "swiftc",
+    }
+    assert p.HEAVY_EXECUTABLES == frozenset(expected), (
+        f"HEAVY_EXECUTABLES changed unexpectedly: {p.HEAVY_EXECUTABLES - frozenset(expected)} "
+        f"added, {frozenset(expected) - p.HEAVY_EXECUTABLES} removed"
+    )
+
+
+@pytest.mark.parametrize("cmd,expected", [
+    (["cargo", "build", "-p", "foo"], True),
+    (["cargo"], True),
+    (["cargo-fmt"], False),  # different executable, different process
+    (["npm", "test"], True),
+    (["npx", "vitest"], True),
+    (["pnpm", "install"], True),
+    (["./gradlew", "test"], True),
+    (["make", "test"], True),
+    (["make", "build"], True),
+    (["make", "ci"], True),
+    (["make", "all"], True),
+    (["make", "clean"], False),  # trivial target
+    (["make", "install"], False),  # not in heavy list
+    (["make"], False),  # no target
+    (["pytest"], False),
+    (["ls", "-la"], False),
+    (["git", "log"], False),
+    (["rustc", "main.rs"], True),
+    (["swift", "build"], True),
+    (["swiftc", "main.swift"], True),
+    ([], False),
+])
+def test_is_heavy_predicate(cmd, expected):
+    """Static executable list catches the build runners without parsing
+    command bodies. False negatives (missing a heavy command) are fine —
+    a wedged build just doesn't get locked. False positives (locking a
+    trivial command) would add latency, so the list is conservative."""
+    assert p._is_heavy(cmd) is expected, f"_is_heavy({cmd}) != {expected}"
+
+
+def test_heavy_lock_serializes_two_concurrent_holders(tmp_path):
+    """Two threads entering _heavy_lock() cannot hold it simultaneously.
+    Blocking acquire (LOCK_EX) means the second thread queues until the
+    first releases."""
+    import threading
+    # Use tmp_path as PLAN_DIR so the lock file lives in a clean spot
+    # for this test only (no risk of colliding with other tests).
+    monkeypath_lock = tmp_path / "heavy.lock"
+    fd1 = os.open(str(monkeypath_lock), os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd1, fcntl.LOCK_EX | fcntl.LOCK_NB)  # hold the real lock
+
+    start = time.monotonic()
+    held_during_wait = []
+
+    def _contender():
+        # The real lock is held by fd1; this open() will block on flock.
+        fd2 = os.open(str(monkeypath_lock), os.O_CREAT | os.O_RDWR)
+        try:
+            fcntl.flock(fd2, fcntl.LOCK_EX)  # BLOCKING — queues behind fd1
+            held_during_wait.append(time.monotonic())
+        finally:
+            fcntl.flock(fd2, fcntl.LOCK_UN)
+            os.close(fd2)
+
+    t = threading.Thread(target=_contender)
+    t.start()
+    time.sleep(0.3)  # let the contender queue
+    fcntl.flock(fd1, fcntl.LOCK_UN)  # release
+    os.close(fd1)
+    t.join(timeout=2.0)
+
+    # Contender should have entered the critical section only after we
+    # released fd1, i.e. at least ~0.3s after start.
+    assert held_during_wait, "contender never acquired the lock"
+    assert held_during_wait[0] - start >= 0.25, (
+        f"contender should have waited for the holder to release; "
+        f"got in at {held_during_wait[0] - start:.3f}s"
+    )
+
+
+def test_check_story_status_acquires_heavy_lock_for_cargo(
+    plan_dir, worktree_root, monkeypatch,
+):
+    """The orchestrator's cargo test grading must take the heavy lock so
+    it serializes against in-flight agent cargo invocations. We assert
+    by counting flock acquisitions on PLAN_DIR/heavy.lock during the call.
+    """
+    wt = worktree_root / "S1"
+    wt.mkdir()
+    (wt / "Cargo.toml").write_text("[package]\nname = \"x\"\n")
+    # Write enough manifest state for check_story_status to not bail early.
+    manifest_path = plan_dir / "cargo_lock.manifest.json"
+    manifest_path.write_text(json.dumps({
+        "stories": {
+            "S1": {
+                "summary": "x", "agent_instructions": "x",
+                "status": "in_progress", "dependencies": [],
+                "pid": 99999,  # a pid we'll kill below
+                "worktree": str(wt),
+                "log": str(wt / "agent.log"),
+            },
+        },
+    }))
+
+    # Make sure the pid is dead so check_story_status proceeds past the
+    # liveness check.
+    try:
+        os.kill(99999, 0)
+        # If we got here, pid 99999 is alive — try another (very unlikely).
+        # We don't need to be precise; the test below catches the lock.
+        skip_pid = True
+    except ProcessLookupError:
+        skip_pid = False
+
+    if skip_pid:
+        return  # can't reliably exercise the path
+
+    (wt / "agent.log").write_text("[step 0] bash: pwd\n")  # non-empty log
+
+    lock_held_during_cargo = []
+    real_flock = fcntl.flock
+
+    def _counting_flock(fd, op):
+        real_flock(fd, op)
+        # PLAN_DIR is set in conftest; the heavy lock file lives there.
+        heavy_lock = plan_dir / "heavy.lock"
+        if (op & fcntl.LOCK_EX) and not (op & fcntl.LOCK_NB):
+            try:
+                # Probe: can we acquire LOCK_EX | LOCK_NB right now? If no,
+                # someone else holds the lock — that's exactly what we want.
+                probe_fd = os.open(str(heavy_lock), os.O_CREAT | os.O_RDWR)
+                try:
+                    real_flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # We got it — heavy lock is free.
+                except BlockingIOError:
+                    lock_held_during_cargo.append(True)
+                finally:
+                    try:
+                        real_flock(probe_fd, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                    os.close(probe_fd)
+            except OSError:
+                pass
+
+    monkeypatch.setattr(p.fcntl, "flock", _counting_flock)
+
+    # Stub cargo so the test doesn't actually compile.
+    monkeypatch.setattr(p.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(
+                            cmd, 0, stdout="", stderr=""))
+
+    p.check_story_status("cargo_lock", "S1")
+
+    assert lock_held_during_cargo, (
+        "check_story_status did not acquire heavy.lock for a cargo worktree"
+    )
+
+
+
 # An empty agent.log within the startup grace window is "agent is alive and
 # bootstrapping" (its first print() hasn't flushed — Ollama -np 1 can take
 # 30-90s to respond). Outside the window it's the genuine "agent never

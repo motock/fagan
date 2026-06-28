@@ -218,3 +218,72 @@ def test_local_agent_read_heavy_park_does_not_wip_commit_when_clean(tmp_path, mo
     assert "[parking: read-heavy after nudge]" in out
     # No spurious commit messages in the log.
     assert "WIP" not in out, f"no commit should be made on a clean worktree; output: {out!r}"
+
+
+def test_local_agent_str_replace_repetitions_do_not_fire_per_target_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    """Fix B: str_replace calls to the same path are NOT counted by the
+    per-target repetition guard, because each one produces a different file
+    state and the next edit's old_str would differ (or run_tool would
+    reject it as 'not found'). A model iterating to fix build errors is
+    making forward progress, not repeating.
+
+    Without Fix B this script would park at the 4th str_replace (3rd
+    repetition), killing the agent mid-fix (which is exactly what killed
+    421b308b in the post-PR #30 rerun). With Fix B the agent runs to done
+    and exits cleanly."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "pow.rs").write_text("// stub\nfn x() {}\n")
+    responses = [
+        # Three non-mutating calls (no per-target trip — all unique).
+        ("bash", {"command": "echo a > /dev/null"}),
+        ("bash", {"command": "echo b > /dev/null"}),
+        ("bash", {"command": "echo c > /dev/null"}),
+        # Six str_replace calls to the SAME path. Pre-fix code would
+        # park at the 4th. Post-fix code ignores str_replace in the
+        # per-target counter.
+        ("str_replace", {
+            "path": "pow.rs", "old_str": "// stub",
+            "new_str": "// stub 1",
+        }),
+        ("str_replace", {
+            "path": "pow.rs", "old_str": "// stub 1",
+            "new_str": "// stub 2",
+        }),
+        ("str_replace", {
+            "path": "pow.rs", "old_str": "// stub 2",
+            "new_str": "// stub 3",
+        }),
+        ("str_replace", {
+            "path": "pow.rs", "old_str": "// stub 3",
+            "new_str": "// stub 4",
+        }),
+        ("str_replace", {
+            "path": "pow.rs", "old_str": "// stub 4",
+            "new_str": "// stub 5",
+        }),
+        ("str_replace", {
+            "path": "pow.rs", "old_str": "// stub 5",
+            "new_str": "// stub 6",
+        }),
+        # Done once rejected because worktree is dirty, auto-WIP commits
+        # on second attempt.
+        ("done", {"summary": "implemented"}),
+        ("done", {"summary": "implemented"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    # Per-target repetition nudge must NOT fire for str_replace calls.
+    assert "[repetition nudge]" not in out, (
+        f"per-target guard should ignore str_replace repetitions; output: {out!r}"
+    )
+    assert "[parking: repeated action after nudge]" not in out, (
+        f"per-target guard should not park on str_replace; output: {out!r}"
+    )
+    # After 1 done rejection, the harness auto-WIP-commits and accepts.
+    assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"

@@ -194,8 +194,25 @@ def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
         lines = path.read_text().splitlines(keepends=True)
         return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
     if fn == "bash":
-        pr = subprocess.run(args.get("command", ""), shell=True, cwd=cwd,
-                            capture_output=True, text=True)
+        # Acquire the heavy-build lock when the reviewer triggers a build
+        # or test command — review runs cargo/npm/etc. to verify the agent's
+        # claim, and we don't want it stomping on a concurrent in-flight
+        # dispatch's build. Same lock the agent harness uses, see
+        # pipeline_mcp_server._heavy_lock docstring.
+        import pipeline_mcp_server as _p  # local: avoid import cycle at module load
+        import shlex
+        cmd = args.get("command", "")
+        try:
+            argv0 = shlex.split(cmd)[0] if cmd.strip() else ""
+        except ValueError:
+            argv0 = ""
+        if argv0 and _p._is_heavy([argv0]):
+            with _p._heavy_lock():
+                pr = subprocess.run(cmd, shell=True, cwd=cwd,
+                                    capture_output=True, text=True)
+        else:
+            pr = subprocess.run(cmd, shell=True, cwd=cwd,
+                                capture_output=True, text=True)
         return (pr.stdout + pr.stderr)[:3000] or "(no output)"
     return f"unknown tool {fn}"
 

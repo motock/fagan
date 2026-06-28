@@ -903,6 +903,29 @@ def _commit_wip(worktree: str, story_key: str, step: str) -> str:
     ).stdout.strip()
 
 
+def _worktree_has_new_commits(worktree: Path, story_key: str, base_branch: str) -> bool:
+    """True iff the agent branch has any commits not on base_branch.
+
+    `git log <base>..HEAD --oneline` lists commits reachable from HEAD
+    that aren't reachable from <base>. For an empty branch (agent
+    parked without writing code), this list is empty even though the
+    test command would pass against main's untouched suite. That's the
+    false-positive trap this guards against in check_story_status.
+
+    Returns False on any git error — a broken worktree is the
+    orchestrator's problem to surface elsewhere; we'd rather mark a
+    real attempt failed than let a transient git hiccup silently
+    re-dispatch. The branch name follows the same convention as the
+    rest of the orchestrator (line 521 et seq.).
+    """
+    branch = f"agent/{story_key.lower()}"
+    r = subprocess.run(
+        ["git", "log", f"{base_branch}..{branch}", "--oneline"],
+        cwd=str(worktree), capture_output=True, text=True,
+    )
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
 # ---------- Tools ----------
 @mcp.tool()
 def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
@@ -1234,6 +1257,27 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # The agent produced real output and the tests ran: the launch worked, so
     # clear any failed-launch attempts accumulated by earlier infra blips.
     story.pop("dispatch_attempts", None)
+
+    # False-positive guard: tests passing against an untouched worktree
+    # (e.g. main's suite against an empty branch because the agent parked
+    # in a repetition loop without writing code) is not "the task is done."
+    # require at least one commit on the agent branch beyond the base
+    # branch before we count it as `tests_passed`. Mark `failed` (not
+    # `interrupted`) because re-dispatching the same prompt to the same
+    # model on the same empty worktree is unlikely to produce a different
+    # outcome next tick; better to surface it for the dashboard.
+    if passed and not _worktree_has_new_commits(
+        worktree, story_key, base_branch=_default_branch(),
+    ):
+        base = _default_branch()
+        story["status"] = "failed"
+        story["failure_reason"] = (
+            f"tests passed but agent branch has no new commits vs {base}; "
+            "agent likely parked without writing code."
+        )
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        return {"status": "failed", "reason": "empty_agent_branch"}
+
     story["status"] = "tests_passed" if passed else "failed"
     manifest_path.write_text(json.dumps(manifest, indent=2))
 

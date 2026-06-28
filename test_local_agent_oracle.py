@@ -180,3 +180,120 @@ def test_oracle_str_replace_repetitions_do_not_fire_per_target_guard(
     # AND the oracle_result() returns True (which it does in this test
     # because ACCEPTANCE_PATHS is empty -> line 165 short-circuits).
     assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
+
+def test_oracle_detects_pytest_when_pyproject_present(tmp_path, monkeypatch):
+    """When the project has pyproject.toml, detect_test_command returns
+    ['pytest']; the oracle must append ACCEPTANCE_PATHS + the quiet flags."""
+    # ACCEPTANCE_PATHS is read at module import time, so we set it directly
+    # on the module instead of via the env var.
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_x.py"])
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 't'\n")
+
+    captured = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        # Pretend pytest ran and the test passed.
+        class _R:
+            returncode = 0
+            stdout = "1 passed"
+            stderr = ""
+        return _R()
+
+    monkeypatch.setattr(lao.subprocess, "run", _fake_run)
+
+    ok, tail = lao.oracle_result()
+    assert ok is True
+    assert tail.endswith("1 passed"), f"expected tail to include pytest stdout; got {tail!r}"
+    argv = captured["argv"]
+    # detect_test_command returns ['pytest'] for pyproject; oracle appends
+    # acceptance paths + quiet flags.
+    assert argv[0] == "pytest", f"expected pytest as argv[0], got {argv!r}"
+    assert "tests/test_x.py" in argv, f"acceptance path should be appended; got {argv!r}"
+    assert "-q" in argv and "--no-header" in argv and "no:cacheprovider" in argv
+
+
+def test_oracle_detects_cargo_when_cargo_toml_present(tmp_path, monkeypatch):
+    """When the project has Cargo.toml, detect_test_command returns
+    ['cargo', 'test']; the oracle must run it bare (no pytest flags) so the
+    project's [[test]] wiring picks up the acceptance file."""
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/acceptance.rs"])
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "Cargo.toml").write_text("[package]\nname = 't'\n")
+
+    captured = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        class _R:
+            returncode = 0
+            stdout = "test result: ok"
+            stderr = ""
+        return _R()
+
+    monkeypatch.setattr(lao.subprocess, "run", _fake_run)
+
+    ok, tail = lao.oracle_result()
+    assert ok is True
+    assert "ok" in tail
+    argv = captured["argv"]
+    # cargo test runs as-is — no pytest paths, no -q flag, no
+    # no:cacheprovider. The cargo test runner discovers the .rs file via
+    # the project's own [[test]] entries in Cargo.toml.
+    assert argv[:2] == ["cargo", "test"], f"expected ['cargo', 'test'], got {argv!r}"
+    assert "-q" not in argv, f"cargo does not want pytest flags; got {argv!r}"
+    assert "tests/acceptance.rs" not in argv, (
+        f"for cargo we run the bare command, not the acceptance path; got {argv!r}"
+    )
+
+
+def test_oracle_uses_npm_test_when_package_json_present(tmp_path, monkeypatch):
+    """When the project has package.json, detect_test_command returns
+    ['npm', 'test']; the oracle runs it bare."""
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["test/acceptance.test.js"])
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "package.json").write_text('{"name": "t"}\n')
+
+    captured = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        class _R:
+            returncode = 0
+            stdout = "1 passing"
+            stderr = ""
+        return _R()
+
+    monkeypatch.setattr(lao.subprocess, "run", _fake_run)
+
+    ok, _ = lao.oracle_result()
+    assert ok is True
+    argv = captured["argv"]
+    assert argv[:2] == ["npm", "test"], f"expected ['npm', 'test'], got {argv!r}"
+    assert "-q" not in argv
+
+
+def test_oracle_returns_true_with_short_circuit_when_no_acceptance_paths(tmp_path, monkeypatch):
+    """Regression guard: empty ACCEPTANCE_PATHS still short-circuits
+    regardless of the project's test framework. Prevents the
+    detect_test_command path from running when the oracle was launched
+    without an acceptance list (the existing 'fall back to model `done`'
+    warning path in main())."""
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    # pyproject.toml present — without the short-circuit, detect_test_command
+    # would run and pytest would be invoked.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 't'\n")
+    called = {"run": False}
+
+    def _fake_run(*a, **kw):
+        called["run"] = True
+        return None
+
+    monkeypatch.setattr(lao.subprocess, "run", _fake_run)
+    ok, tail = lao.oracle_result()
+    assert ok is True
+    assert tail == "(no acceptance files configured)"
+    assert called["run"] is False, "subprocess.run must not be called when ACCEPTANCE_PATHS is empty"

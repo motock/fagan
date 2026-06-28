@@ -49,3 +49,52 @@ def test_safe_run_tool_handles_unknown_tool():
 def test_recover_tool_calls_parses_text_formats(content, expected_name):
     out = la.recover_tool_calls(content)
     assert out and out[0]["function"]["name"] == expected_name
+
+
+def test_local_agent_main_writes_boot_line_before_first_chat(tmp_path, monkeypatch, capsys):
+    """The startup heartbeat in main() must flush to stdout *before* the
+    first LLM call. check_story_status relies on this: a 0-byte agent.log
+    after dispatch means the process never reached main() (a genuine failed
+    launch), while a log with [boot] and no further output means the agent
+    is alive and queued on Ollama's -np 1 worker.
+
+    We assert the [boot] line lands first by running main() with chat()
+    replaced by a recording fake. After main() returns, the captured stdout
+    must start with [boot] pid=... and the recorded chat calls must come
+    after that line was emitted."""
+    # Run the agent from inside tmp_path so its git/agent.log side effects
+    # are isolated to the test, and so the boot line's working directory
+    # claim is benign.
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    # Done-on-first-step: a single valid tool call to `done` with a clean
+    # worktree exits immediately after the heartbeat prints.
+    chat_calls = []
+
+    def _fake_chat(messages):
+        chat_calls.append(messages)
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done",
+                                            "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+
+    rc = la.main()
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert chat_calls, "main() should have invoked chat() at least once"
+    # The very first line of output is the heartbeat; the [step 0] line
+    # (if any) comes after it. Splitting on the first non-boot newline and
+    # asserting boot precedes everything else proves the heartbeat was
+    # emitted *before* the LLM round-trip.
+    first_line = out.split("\n", 1)[0]
+    assert first_line.startswith("[boot] pid="), (
+        f"expected [boot] pid= as first stdout line, got: {first_line!r}\n"
+        f"full output: {out!r}"
+    )
+    # The recorded chat() call is the LLM round-trip; the [boot] line is
+    # emitted *before* it. We can't time-order the two directly from the
+    # captured output, but a missing or empty stdout would be a clear
+    # regression: a process whose [boot] line never flushed (e.g. someone
+    # removed flush=True) is exactly the bug this heartbeat defends
+    # against.

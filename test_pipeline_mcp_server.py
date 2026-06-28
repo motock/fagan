@@ -2519,7 +2519,9 @@ def test_count_in_progress_agents_ignores_status_without_pid(plan_dir):
 def test_count_in_progress_agents_skips_dead_pids(plan_dir, monkeypatch):
     # A story can be stuck at in_progress with a pid whose process already
     # exited (e.g. another plan whose own advance_pipeline tick never ran
-    # again to notice) - it must not permanently consume a concurrency slot.
+    # again to notice) - the count must not include it, otherwise it would
+    # permanently consume a concurrency slot. The reap itself is a separate
+    # step (see test_reap_zombie_in_progress_stories below).
     _write_manifest(plan_dir, "cnt4", {
         "A1": {"summary": "alive", "status": "in_progress", "pid": 111},
         "A2": {"summary": "dead", "status": "in_progress", "pid": 222},
@@ -2533,6 +2535,81 @@ def test_count_in_progress_agents_skips_dead_pids(plan_dir, monkeypatch):
     monkeypatch.setattr(p.os, "kill", _fake_kill)
 
     assert p._count_in_progress_agents() == 1
+
+
+def test_reap_zombie_in_progress_stories(plan_dir, monkeypatch):
+    """The reap helper reaps in_progress-with-dead-pid stories back to todo,
+    drops their pid, and writes the manifest back to disk. Idempotent: a
+    second call on a clean manifest reaps 0.
+    """
+    _write_manifest(plan_dir, "zap", {
+        "Z1": {"summary": "alive", "status": "in_progress", "pid": 111},
+        "Z2": {"summary": "dead", "status": "in_progress", "pid": 222},
+        "Z3": {"summary": "todo-already", "status": "todo"},
+        "Z4": {"summary": "in-progress-no-pid", "status": "in_progress"},
+    })
+
+    def _fake_kill(pid, sig):
+        if pid == 222:
+            raise ProcessLookupError
+        return None
+
+    monkeypatch.setattr(p.os, "kill", _fake_kill)
+
+    reaped = p._reap_zombie_in_progress_stories()
+    assert reaped == 1, "only Z2 (dead pid) should be reaped"
+    after = json.loads((plan_dir / "zap.manifest.json").read_text())
+    assert after["stories"]["Z1"] == {"summary": "alive", "status": "in_progress", "pid": 111}
+    assert after["stories"]["Z2"] == {"summary": "dead", "status": "todo"}
+    assert after["stories"]["Z3"] == {"summary": "todo-already", "status": "todo"}
+    # Z4 had no pid → not a zombie (just status drift), not reaped.
+    assert after["stories"]["Z4"] == {"summary": "in-progress-no-pid", "status": "in_progress"}
+
+    # Second call is idempotent.
+    assert p._reap_zombie_in_progress_stories() == 0
+    # Manifest unchanged on the no-op reap (no write).
+    after2 = json.loads((plan_dir / "zap.manifest.json").read_text())
+    assert after == after2
+
+
+def test_advance_all_plans_reaps_zombies_before_per_plan_ticks(
+    plan_dir, monkeypatch,
+):
+    """Regression guard for the 2026-06-28 zombie incident: two audio-bugfixes
+    stories were stuck at in_progress with dead pids for ~19h, holding 2 of
+    3 concurrency slots and blocking all e2e dispatch. advance_all_plans must
+    reap before invoking per-plan advance_pipeline so a dead agent in one
+    plan doesn't consume a slot for every other plan indefinitely."""
+    _write_manifest(plan_dir, "zom", {
+        "Z1": {"summary": "dead", "status": "in_progress", "pid": 999},
+    })
+
+    def _fake_kill(pid, sig):
+        raise ProcessLookupError  # every pid is dead
+
+    monkeypatch.setattr(p.os, "kill", _fake_kill)
+
+    # Stub advance_pipeline to verify it was called AFTER the reap
+    # (manifest should already show Z1 as todo, not in_progress).
+    captured = {}
+
+    def _fake_advance(plan_name):
+        captured.setdefault("calls", []).append(plan_name)
+        manifest = json.loads((plan_dir / "zom.manifest.json").read_text())
+        captured.setdefault("saw_z1", []).append(
+            manifest["stories"]["Z1"]["status"]
+        )
+        return {"ok": True, "stub": True}
+
+    monkeypatch.setattr(p, "advance_pipeline", _fake_advance)
+
+    result = p.advance_all_plans()
+    assert result.get("reaped_zombies") == 1
+    assert "zom" in result["plans"]
+    # Per-plan tick ran AFTER the reap.
+    assert captured["saw_z1"] == ["todo"]
+    # And the manifest is clean for downstream dispatch sizing.
+    assert p._count_in_progress_agents() == 0
 
 
 def test_advance_pipeline_caps_dispatch_at_max_concurrent_agents(plan_dir, monkeypatch):
@@ -2749,7 +2826,7 @@ def test_advance_all_plans_isolates_failures_and_continues(plan_dir, monkeypatch
 
 def test_advance_all_plans_with_no_manifests_returns_empty(plan_dir):
     result = p.advance_all_plans()
-    assert result == {"ok": True, "plans": {}}
+    assert result == {"ok": True, "plans": {}, "reaped_zombies": 0}
 
 
 def test_advance_all_plans_ignores_unignested_plan_json(plan_dir, monkeypatch):
@@ -3616,7 +3693,19 @@ def test_advance_pipeline_escalates_local_failure_to_claude(
 
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
+
+    def _fake_subprocess(cmd, **kw):
+        # The internal `ps -p <pid> -o stat=` lookup should return empty so
+        # check_story_status doesn't mistakenly treat the dead process as
+        # "running". The test command itself returns _FailResult.
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
     monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
 
     result = p.advance_pipeline("esc1")
@@ -3652,8 +3741,21 @@ def test_advance_pipeline_does_not_escalate_claude_failure(
         stderr = ""
         returncode = 1
 
+    # Pretend the agent has exited: os.kill throws AND ps reports no such
+    # process (empty stdout). check_story_status falls through both checks
+    # and runs the test command (also mocked to fail). See esc1 for full
+    # context.
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
+
+    def _fake_subprocess(cmd, **kw):
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
     monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
 
     result = p.advance_pipeline("esc2")
@@ -3684,8 +3786,22 @@ def test_advance_pipeline_does_not_escalate_already_escalated(
         stderr = ""
         returncode = 1
 
+    # The story's OWN pid (9003) must look dead (kill raises, ps returns
+    # empty) for check_story_status to grade it. Other (zombie) pids also
+    # raise; the production code's reap path turns this story's dead pid
+    # back to "todo" — which is correct semantics for a real crashed agent.
+    # See esc1 comment for the broader picture.
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
+
+    def _fake_subprocess(cmd, **kw):
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
     monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
 
     result = p.advance_pipeline("esc3")
@@ -3719,8 +3835,21 @@ def test_advance_pipeline_local_failure_terminal_under_local_mode(
         returncode = 1
 
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    # See esc1 comment: agent is dead (kill raises, ps empty), test command
+    # fails. The new reap path will turn this story's dead pid back to "todo"
+    # first — that's why this test asserts the local-failure terminal path,
+    # not the reap.
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _FailResult())
+
+    def _fake_subprocess(cmd, **kw):
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
     monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
 
     result = p.advance_pipeline("esclocal")

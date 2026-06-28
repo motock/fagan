@@ -822,6 +822,13 @@ def _count_in_progress_agents() -> int:
     exited (e.g. a plan whose own advance_pipeline tick never ran again to
     notice, or a zombie left by a crashed agent) - left uncorrected, that
     permanently consumes a concurrency slot for every other plan forever.
+
+    Skips dead-pid stories rather than reaping them here so this function
+    remains a pure read for callers that size dispatch slots. The reap
+    itself runs separately in _reap_zombie_in_progress_stories (called from
+    advance_all_plans before any per-plan tick), so a dead-pid story in one
+    plan doesn't get clobbered before another plan's check_story_status
+    has a chance to grade it.
     """
     count = 0
     for manifest_path in PLAN_DIR.glob("*.manifest.json"):
@@ -837,6 +844,56 @@ def _count_in_progress_agents() -> int:
                 pass
             count += 1
     return count
+
+
+def _reap_zombie_in_progress_stories() -> int:
+    """In-place reap of in_progress stories whose pid has exited, so they
+    stop consuming a MAX_CONCURRENT_AGENTS slot forever.
+
+    Sets status → todo and drops pid. Returns the number reaped. Idempotent:
+    a manifest already free of zombies is rewritten only if at least one
+    reap happened (avoids touching mtime on every tick).
+
+    Called from advance_all_plans before the per-plan advance_pipeline tick,
+    so a freshly crashed agent from plan X doesn't block dispatch sizing
+    for plan Y on the same scheduler tick. Per-plan advance_pipeline callers
+    (e.g. tests, MCP `advance` tool) don't go through here, so a zombie in
+    one plan doesn't get clobbered before another plan's check_story_status
+    has a chance to grade it on the same tick.
+
+    Without this, observed 2026-06-28: two audio-bugfixes stories with dead
+    pids held 2 of 3 concurrency slots for ~19h, blocking all e2e dispatch.
+    """
+    reaped = 0
+    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
+        manifest = json.loads(manifest_path.read_text())
+        changed = False
+        for story in manifest.get("stories", {}).values():
+            if story.get("status") != "in_progress" or "pid" not in story:
+                continue
+            try:
+                os.kill(story["pid"], 0)
+                # pid is alive — leave the story alone.
+                continue
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                # Process exists but we can't signal it (owned by another
+                # user). Trust that it's alive and don't reap.
+                continue
+            # Zombie: agent exited but no one updated the manifest. Reap
+            # so the slot frees up and the story becomes dispatchable on
+            # the next tick. Setting status back to todo is the correct
+            # recovery — the work is unfinished and needs another agent
+            # pass; we don't have signal that it was the model's fault
+            # vs a harness crash, so don't penalize it with 'failed'.
+            story["status"] = "todo"
+            story.pop("pid", None)
+            changed = True
+            reaped += 1
+        if changed:
+            manifest_path.write_text(json.dumps(manifest, indent=2))
+    return reaped
 
 
 def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = None) -> bool:
@@ -2041,7 +2098,12 @@ def advance_all_plans() -> dict[str, Any]:
     manifest) are skipped. Intended for a recurring scheduler (cron/launchd
     or /loop) so newly ingested plans are picked up automatically with no
     hardcoded plan name to maintain.
+
+    Reaps zombie in_progress stories across all plans BEFORE the per-plan
+    ticks so dead agents from one plan don't permanently consume slots for
+    every other plan. See _reap_zombie_in_progress_stories.
     """
+    reaped = _reap_zombie_in_progress_stories()
     plans = {}
     for manifest_path in sorted(PLAN_DIR.glob("*.manifest.json")):
         plan_name = manifest_path.name.removesuffix(".manifest.json")
@@ -2051,7 +2113,7 @@ def advance_all_plans() -> dict[str, Any]:
             # One plan's failure (bad repo_root, missing tool, transient git
             # error, ...) must not stop every other plan from getting its tick.
             plans[plan_name] = {"ok": False, "error": str(e)}
-    return {"ok": True, "plans": plans}
+    return {"ok": True, "plans": plans, "reaped_zombies": reaped}
 
 
 if __name__ == "__main__":

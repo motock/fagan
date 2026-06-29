@@ -763,7 +763,7 @@ function showStoryModal(story, key) {
     ["Escalated", story.escalated],
     ["Worktree", story.worktree, { copy: true, copyField: "worktree" }],
     ["Branch", story.branch],
-    ["PID", story.pid, { copy: true, copyField: "pid" }],
+    ["PID", story.pid, { copy: true, copyField: "pid", mono: true }],
     ["PR URL", story.pr_url, { copy: true, copyField: "pr_url", mono: true }],
     ["Last commit", story.last_commit, { mono: true }],
     ["Interrupted at", story.interrupted_at],
@@ -806,13 +806,16 @@ function showStoryModal(story, key) {
       .filter(Boolean)
       .join("");
     if (!html) return "";
-    return `<h3 class="modal-section">${escapeHtml(title)}</h3><dl>${html}</dl>`;
+    // Section titles are hardcoded literal strings, not user input — emit
+    // them raw so "&" survives as "&" rather than "&amp;" (which would
+    // still render correctly in the browser but makes the markup noisy).
+    return `<h3 class="modal-section">${title}</h3><dl>${html}</dl>`;
   }
 
   const sections = [
     renderSection("Identity", identity),
     renderSection("Lifecycle", lifecycle),
-    renderSection("Dispatch &amp; review", dispatch),
+    renderSection("Dispatch & review", dispatch),
     renderSection("Errors", errors),
   ].filter(Boolean).join("");
 
@@ -915,6 +918,7 @@ function syncPollingWithVisibility() {
 }
 
 document.getElementById("story-modal-close").addEventListener("click", hideStoryModal);
+document.getElementById("story-modal-body").addEventListener("click", handleCopyClick);
 document.getElementById("story-modal").addEventListener("click", (e) => {
   // Click on the backdrop (outside the modal-content) closes the modal.
   if (e.target.id === "story-modal") hideStoryModal();

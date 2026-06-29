@@ -48,6 +48,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from collections import deque
 from pathlib import Path
 
@@ -69,6 +70,19 @@ TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
 # 10 min is generous — most cargo invocations in a worktree finish in <60s
 # on a warm target/ — but bounded so a wedged cargo doesn't pin the agent.
 BASH_TIMEOUT = float(os.environ.get("LOCAL_AGENT_BASH_TIMEOUT_SECONDS", "600"))
+
+# Streaming + retry for the Ollama chat round-trip. The original single
+# blocking httpx.post(stream=False, timeout=900s) with NO retry meant one
+# transient Ollama queue stall (or a network blip) killed the whole run
+# mid-iteration. Streaming means a slow-but-progressing generation never
+# trips a wall-clock timeout (only a true silence stall does); retry means
+# a transient stall doesn't kill the run. With OLLAMA_NUM_PARALLEL matched
+# to MAX_CONCURRENT_AGENTS there's no steady queue, so these guard the
+# residual transients (prefill, network, Ollama 5xx). See the oracle
+# harness's local_agent_oracle.py for the full rationale.
+READ_SILENCE_SECONDS = float(os.environ.get("LOCAL_AGENT_READ_SILENCE_SECONDS", "180"))
+CHAT_MAX_ATTEMPTS = int(os.environ.get("LOCAL_AGENT_CHAT_MAX_ATTEMPTS", "3"))
+CHAT_RETRY_BACKOFF = float(os.environ.get("LOCAL_AGENT_CHAT_RETRY_BACKOFF", "5"))
 
 # Read-heavy-pattern guard. Tracks the last N tool names the model called and
 # treats "N consecutive non-mutating tools" as paralysis-by-analysis. The
@@ -122,12 +136,86 @@ TOOLS = [
 ]
 
 
+def _stream_one_turn(payload):
+    """One streamed chat turn against Ollama's /api/chat. Accumulates the
+    assistant message across newline-delimited JSON chunks and returns the
+    assembled message dict ({role, content, tool_calls?}) — the same shape
+    the non-streaming path returned via r.json()["message"], so main() and
+    recover_tool_calls() work unchanged.
+
+    Streaming lets the per-chunk read timeout (READ_SILENCE_SECONDS) fire
+    only on a genuine stall (no bytes for N seconds), not on a legitimately
+    long generation. A slow-but-progressing gen streams a chunk every ~1-2s
+    and never trips it.
+
+    Raises httpx.HTTPStatusError on a bad response (4xx/5xx) or
+    httpx.TransportError (TimeoutException/ConnectError/ReadError) on a
+    connect/read stall — chat() decides which of those are retryable.
+    """
+    content_parts: list[str] = []
+    tool_calls = None
+    role = "assistant"
+    with httpx.stream(
+        "POST", f"{ENDPOINT}/api/chat", json=payload,
+        timeout=httpx.Timeout(connect=10.0, read=READ_SILENCE_SECONDS,
+                              write=10.0, pool=10.0),
+    ) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msg = chunk.get("message") or {}
+            if msg.get("role"):
+                role = msg["role"]
+            if msg.get("content"):
+                content_parts.append(msg["content"])
+            # Tool calls may land at the top level of a chunk or inside its
+            # message; capture from either. (devstral emits tool calls as
+            # text content, so tool_calls stays None and recover_tool_calls
+            # parses the assembled content downstream.)
+            tc = chunk.get("tool_calls") or msg.get("tool_calls")
+            if tc:
+                tool_calls = tc
+            if chunk.get("done"):
+                break
+    assembled = {"role": role, "content": "".join(content_parts)}
+    if tool_calls:
+        assembled["tool_calls"] = tool_calls
+    return assembled
+
+
 def chat(messages):
-    r = httpx.post(f"{ENDPOINT}/api/chat", json={
-        "model": MODEL, "messages": messages, "tools": TOOLS, "stream": False,
-        "options": {"num_ctx": NUM_CTX, "temperature": TEMPERATURE}}, timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()["message"]
+    """One LLM turn, with streaming + retry.
+
+    A single transient Ollama stall (queue contention, network blip, Ollama
+    5xx) must not kill a 30-minute run. We stream so a slow generation
+    doesn't trip the timeout, and retry the transient failures. 4xx is a
+    bad request (retrying won't help) so it raises immediately; 5xx and
+    transport errors (timeout/connect/read) are retried up to
+    CHAT_MAX_ATTEMPTS. If every attempt fails, the last exception propagates
+    to main()'s except, which commits WIP and returns 1 — same terminal
+    behavior as before, but only after we've genuinely tried.
+    """
+    payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": True,
+               "options": {"num_ctx": NUM_CTX, "temperature": TEMPERATURE}}
+    last_exc: Exception | None = None
+    for attempt in range(1, CHAT_MAX_ATTEMPTS + 1):
+        try:
+            return _stream_one_turn(payload)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code < 500:
+                raise  # 4xx — bad request, retrying is pointless
+            last_exc = e
+        except httpx.TransportError as e:
+            last_exc = e  # timeout / connect / read — transient, retry
+        if attempt < CHAT_MAX_ATTEMPTS:
+            time.sleep(CHAT_RETRY_BACKOFF * attempt)
+    assert last_exc is not None  # loop ran ≥1 attempt; only reachable w/ an exc
+    raise last_exc
 
 
 def recover_tool_calls(content):

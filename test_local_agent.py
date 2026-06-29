@@ -5,9 +5,11 @@ import time, so set that before importing. External boundaries (the Ollama
 HTTP call) are not exercised here — these cover the pure-logic helpers.
 """
 import importlib.util
+import json
 import os
 from pathlib import Path
 
+import httpx
 import pytest
 
 os.environ.setdefault("LOCAL_AGENT_MODEL", "test-model")
@@ -287,3 +289,96 @@ def test_local_agent_str_replace_repetitions_do_not_fire_per_target_guard(
     )
     # After 1 done rejection, the harness auto-WIP-commits and accepts.
     assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
+
+
+# ---------- chat() streaming + retry (2026-06-28 timeout incident) ----------
+# Mirrors the oracle-harness tests: a single transient Ollama stall must not
+# kill the run. chat() streams and retries. The base harness got the same
+# rewrite as the oracle, so we pin its retry contract here too.
+
+class _FakeResp:
+    def __init__(self, code):
+        self.status_code = code
+
+
+def _status_error(code):
+    return httpx.HTTPStatusError(
+        f"HTTP {code}", request=httpx.Request("POST", "http://localhost"),
+        response=_FakeResp(code),
+    )
+
+
+class _FakeStreamResponse:
+    def __init__(self, lines, status_code=200):
+        self._lines = lines
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise _status_error(self.status_code)
+
+    def iter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _FakeStreamCM:
+    def __init__(self, response):
+        self._response = response
+
+    def __enter__(self):
+        return self._response
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_chat_retries_on_timeout_then_succeeds(monkeypatch):
+    """A transient read timeout must not kill the run (2026-06-28 incident:
+    all 3 e2e agents died at "LLM call failed: timed out" mid-iteration)."""
+    monkeypatch.setattr(la.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _flaky(payload):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.TimeoutException("read timed out")
+        return {"role": "assistant", "content": "done"}
+
+    monkeypatch.setattr(la, "_stream_one_turn", _flaky)
+    msg = la.chat([{"role": "user", "content": "hi"}])
+    assert calls["n"] == 3
+    assert msg["content"] == "done"
+
+
+def test_chat_does_not_retry_on_4xx(monkeypatch):
+    monkeypatch.setattr(la.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _bad_request(payload):
+        calls["n"] += 1
+        raise _status_error(404)
+
+    monkeypatch.setattr(la, "_stream_one_turn", _bad_request)
+    try:
+        la.chat([{"role": "user", "content": "hi"}])
+        assert False, "expected HTTPStatusError(404)"
+    except httpx.HTTPStatusError:
+        pass
+    assert calls["n"] == 1, "4xx must NOT be retried"
+
+
+def test_stream_one_turn_assembles_streamed_chunks(monkeypatch):
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "I'll "}}),
+        json.dumps({"message": {"role": "assistant", "content": "create a file."}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    msg = la._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert msg["role"] == "assistant"
+    assert msg["content"] == "I'll create a file."

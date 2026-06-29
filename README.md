@@ -244,10 +244,16 @@ pip install -r requirements-dashboard.txt   # one-time: fastapi + uvicorn
 uvicorn dashboard:app --reload              # http://127.0.0.1:8000
 ```
 
-It shows, per plan: a kanban board of stories by `status` (click a card for
-persona/model/risk/worktree/PR/attempt counts/errors), the tail of the
-notifications log, and the overlord's decision audit trail. Polls every 4s;
-honors `PLAN_DIR` the same way the MCP server does.
+On launch the dashboard opens on a **Fleet Overview** landing page that
+aggregates every plan on disk. From there you drill into any plan to see
+its kanban board.
+
+### Per-plan kanban
+
+Per plan: a kanban board of stories by `status` (click a card for the
+modal — persona / model / risk / worktree / PR / attempt counts / errors,
+the tail of the per-story log, and a checkpoint journal timeline). Polls
+every 4s; honors `PLAN_DIR` the same way the MCP server does.
 
 A **usage-gate banner** across the top reads `USAGE_STATE_PATH` (`/api/usage`)
 and shows the current session/week %. If the gate goes **blind** — the usage
@@ -255,6 +261,53 @@ probe has been unparseable past the staleness window, so it's failing *open*
 and spend is unguarded (see below) — the banner turns red and names the blind
 duration / failure count, so a silent CLI-output change can't quietly disable
 the cost gate.
+
+### Observability surfaces
+
+- **Fleet Overview landing page.** The first thing you see. Loads
+  `/api/plans` and `/api/dispatch_health` and renders a single page with
+  every plan's done/total, a per-plan "paused" tag, a fleet-wide status
+  breakdown bar, and the headline escalation / success rates from
+  `/api/dispatch_health`.
+- **Acceptance-stratified escalation / success rates.** `/api/dispatch_health`
+  splits its rollup into `with_acceptance` (the harness-owned acceptance
+  oracle path) and `without_acceptance` and reports `escalation_rate` and
+  `success_rate` per slice. The Overview surfaces both side-by-side so you
+  can see whether the acceptance fixture is paying off in production vs.
+  the ordinary TDD slice.
+- **Aggregate attempt / failure metrics.** `/api/dispatch_health` totals
+  exposes fleet-wide `dispatch_attempts`, `rework_attempts`,
+  `merge_attempts`, a `failure_reasons` histogram, and a `by_backend`
+  count alongside the existing rates. The Overview renders the attempt
+  totals and the failure-reason histogram; the per-story modal renders
+  the same numbers per story.
+- **Per-story log tail.** Each story modal fetches
+  `/api/plans/{plan}/stories/{key}/log` and appends the tail inline below
+  the story metadata, so you can see the most recent agent output without
+  tailing the file by hand.
+- **Checkpoint journal timeline viewer.** Each story modal also fetches
+  `/api/plans/{plan}/stories/{key}/journal` and renders the
+  `<plan>.<story>.journal.json` entries as a vertical timeline, so you
+  can see what progress has been recorded and when.
+- **Backend and escalated badges + filters.** Cards carry a `claude`
+  backend badge when the story's `backend` is non-local and an `escalated`
+  badge when it was escalated. The board exposes matching multi-select
+  filter chips for `backend` and `escalated` (alongside the existing
+  persona / risk filters and the column-level status filter), so a card
+  only shows up if it matches all active filters.
+- **Story age / staleness indicators.** Cards derive an `ageLabel` from the
+  server-supplied `last_activity` (e.g. "12m", "3h"). `in_progress` stories
+  older than the staleness window get a `stale` class so wedged agents are
+  visible at a glance.
+- **URL deep-linking.** The selected plan and every active filter are
+  encoded into the URL hash (e.g.
+  `#plan=PLAN&status=todo,in_progress&persona=engineer&escalated=yes`).
+  The hash is read on load and replayed on `hashchange`, so back/forward
+  and shared links restore the same view without a server round-trip.
+- **Light / dark theme toggle.** A `theme-toggle` button in the header
+  flips between dark (default) and light themes by setting
+  `data-theme` on `<html>`. The choice is persisted in `localStorage` and
+  re-applied on the next load.
 
 ---
 

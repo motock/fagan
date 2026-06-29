@@ -39,6 +39,17 @@ def _decisions_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.decisions.json"
 
 
+def _journal_path(plan_name: str, story_key: str) -> Path:
+    """Path to a story's checkpoint journal (mirrors pipeline_mcp_server.py).
+
+    The same naming convention is used by both processes: pipeline_mcp_server
+    *writes* `<plan>.<story_key>.journal.json` and the dashboard *reads* it
+    via /api/plans/{plan}/stories/{story}/journal. Locking the naming here
+    keeps the two sides from drifting silently to a 404 in the UI.
+    """
+    return PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+
+
 def _list_plan_names() -> list[str]:
     suffix = ".manifest.json"
     return sorted(p.name[: -len(suffix)] for p in PLAN_DIR.glob(f"*{suffix}"))
@@ -114,7 +125,7 @@ def _journal_final_ts(plan_name: str, story_key: str) -> str | None:
     contains a list of checkpoint records; only the last entry's 'ts'
     is consulted, because that's the most recent observable activity
     the agent left on disk before being interrupted/resumed."""
-    path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+    path = _journal_path(plan_name, story_key)
     if not path.exists():
         return None
     try:
@@ -125,6 +136,46 @@ def _journal_final_ts(plan_name: str, story_key: str) -> str | None:
         return None
     final = entries[-1]
     return final.get("ts") if isinstance(final, dict) else None
+
+
+def _read_journal(plan_name: str, story_key: str) -> tuple[bool, list[dict[str, Any]]]:
+    """Read a story's checkpoint journal safely.
+
+    Returns (available, entries):
+      - available=False, entries=[]  when the journal file is missing,
+        unreadable (malformed JSON / OSError), or empty (an empty list is
+        surfaced the same way as no file at all — see test).
+      - available=True, entries=[...] when the file parses to a non-empty
+        list. Entries are returned in file order; only entries that are
+        dicts are kept so a stray non-object row can't crash the renderer.
+
+    This function never raises — a stray corrupt file in PLAN_DIR must
+    not 500 the dashboard, the same way a missing file mustn't 404."""
+    path = _journal_path(plan_name, story_key)
+    if not path.exists():
+        return False, []
+    try:
+        raw = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False, []
+    if not isinstance(raw, list) or not raw:
+        return False, []
+    entries = [e for e in raw if isinstance(e, dict)]
+    if not entries:
+        return False, []
+    # Normalize optional fields to None so the UI always sees consistent
+    # keys; this lets the render template use `e.next_hint` without a
+    # `hasOwnProperty` guard, matching the test that asserts the key is
+    # still present (not stripped) when an entry lacks it.
+    normalized: list[dict[str, Any]] = []
+    for e in entries:
+        normalized.append({
+            **e,
+            "step": e.get("step"),
+            "summary": e.get("summary"),
+            "next_hint": e.get("next_hint"),
+        })
+    return True, normalized
 
 
 def _story_last_activity(plan_name: str, story_key: str, story: dict[str, Any]) -> str | None:
@@ -308,6 +359,42 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         "notifications": _tail_notifications(plan_name),
         "decisions": _read_decisions(plan_name),
     }
+
+
+@app.get("/api/plans/{plan_name}/stories/{story_key}/journal")
+def get_story_journal(plan_name: str, story_key: str) -> dict[str, Any]:
+    """Return the story's checkpoint journal (the on-disk timeline of every
+    meaningful step the agent took before being interrupted/resumed).
+
+    Response shape:
+      { "available": bool, "entries": [ {step, summary, next_hint, ts, ...} ] }
+
+    Semantics:
+      - 404 only when the plan or story itself doesn't exist. The client
+        treats 404 as 'this story is gone' (render an empty placeholder or
+        toast), distinct from a healthy story that simply hasn't
+        checkpointed yet.
+      - 200 + available:false + entries:[]  when the journal file is
+        missing, malformed, or empty. NEVER 500 — a stray corrupt file in
+        PLAN_DIR must not take the dashboard down; the UI renders the
+        same 'No journal yet' empty state for all three cases.
+      - Entries are returned in file order (chronological as the agent
+        wrote them) so the UI can render them top-to-bottom as a
+        vertical timeline.
+    """
+    manifest = _read_manifest(plan_name)
+    if manifest is None:
+        raise HTTPException(
+            status_code=404, detail=f"No manifest for plan '{plan_name}'"
+        )
+    stories = manifest.get("stories", {})
+    if story_key not in stories:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No story '{story_key}' in plan '{plan_name}'",
+        )
+    available, entries = _read_journal(plan_name, story_key)
+    return {"available": available, "entries": entries}
 
 
 # Mounted last so it never shadows the /api/* routes above; html=True serves

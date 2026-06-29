@@ -77,6 +77,11 @@ const VALID_SORTS = new Set(SORT_OPTIONS.map(([v]) => v));
 // "local" chip, so neither surface ever leaks "undefined" to the user.
 const BACKEND_VALUES = ["local", "claude"];
 const ESCALATED_VALUES = ["yes", "no"];
+// Expose the value lists on `window` so the test harness (and any other
+// out-of-realm consumer) can reference them via dom.window.BACKEND_VALUES
+// rather than relying on the test running inside the same script realm.
+window.BACKEND_VALUES = BACKEND_VALUES;
+window.ESCALATED_VALUES = ESCALATED_VALUES;
 
 function defaultFilters() {
   return {

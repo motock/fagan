@@ -409,6 +409,11 @@ async function test_filter_reset_clears_backends_and_escalated() {
 async function test_backend_and_escalated_combine_with_status_filter() {
   const env = makeEnv();
   const api = await loadApp(env);
+  // Narrow the status filter to "todo" so the combine story is meaningful:
+  // status filters live at the column level (renderBoard skips statuses
+  // that aren't in state.filters.statuses), so we have to set the
+  // dimension explicitly here rather than relying on the default.
+  api.state.filters.statuses = ["todo"];
   api.state.filters.backends = ["claude"];
   api.state.filters.escalated = ["no"];
   const stories = {
@@ -419,9 +424,10 @@ async function test_backend_and_escalated_combine_with_status_filter() {
   };
   const html = await renderWithStories(api, stories);
   const keys = cardsWith(html, () => true).map((c) => c.key);
-  // Status filter keeps everything by default; on top of that
+  // Status filter keeps only "todo" by construction; on top of that
   // backend=claude AND escalated=no leaves "b" only.
   eq(keys, ["b"]);
+  api.state.filters.statuses = ["todo", "in_progress", "tests_passed", "pr_open", "done", "changes_requested", "interrupted", "parked", "failed"];
   api.state.filters.backends = [];
   api.state.filters.escalated = [];
   record("backend + escalated combine with status (default = all)", true);

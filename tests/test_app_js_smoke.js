@@ -227,6 +227,7 @@ function makeDocument(initial = {}) {
 function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
   const close = makeEl("button", { attrs: { id: "story-modal-close" } });
   const modal = makeEl("div", { attrs: { id: "story-modal" } });
+  const body = makeEl("div", { attrs: { id: "story-modal-body" } });
   const ar = makeEl("input", {
     attrs: { id: "auto-refresh", type: "checkbox" },
   });
@@ -235,6 +236,7 @@ function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
   const ub = makeEl("div", { attrs: { id: "usage-banner" } });
   doc.register("story-modal-close", close);
   doc.register("story-modal", modal);
+  doc.register("story-modal-body", body);
   doc.register("auto-refresh", ar);
   doc.register("last-updated", lu);
   doc.register("usage-banner", ub);
@@ -282,16 +284,38 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
   const wrapped = `${src}\nmodule.exports = {
     capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+    showStoryModal, handleCopyClick,
     state,
   };`;
+  // Window stub. The browser app.js hangs state on window and registers a
+  // hashchange listener there; under Node neither exists. Provide a tiny
+  // shim so the module's top-level runs without ReferenceError.
+  const win = {
+    addEventListener() {},
+    removeEventListener() {},
+    location: { hash: "" },
+    state: undefined,
+  };
+  // Window state is populated by app.js (`window.state = { ... }`).
+  // Forward that assignment onto our local `state` export by giving window
+  // a setter-on-state that captures into a closure. Simpler: monkey-patch
+  // via Object.defineProperty so we can mirror the assignment.
+  let capturedState = null;
+  Object.defineProperty(win, "state", {
+    configurable: true,
+    get() { return capturedState; },
+    set(v) { capturedState = v; },
+  });
   const m = { exports: {} };
   // eslint-disable-next-line no-new-func
   const fn = new Function("module", "document", "CSS", "setInterval",
     "clearInterval", "setTimeout", "clearTimeout", "localStorage",
-    "require", "module", wrapped);
+    "require", "module", "window", wrapped);
   fn(m, doc, global.CSS, global.setInterval, global.clearInterval,
     global.setTimeout, global.clearTimeout, global.localStorage,
-    require, m);
+    require, m, win);
+  // Mirror the captured state onto the module exports so callers see it.
+  if (capturedState) m.exports.state = capturedState;
   return m.exports;
 }
 

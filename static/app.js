@@ -681,39 +681,40 @@ function isLongValue(value) {
   return /[\\/\n]/.test(s);
 }
 
-// Build a small "copy" button for a scalar field value. The handler calls
-// navigator.clipboard.writeText with try/catch guard — environments without
-// the API (older browsers, insecure contexts) silently no-op so the button
-// is never the cause of a thrown error.
-function renderCopyButton(value) {
-  const safe = escapeHtml(String(value == null ? "" : value));
-  // Encode the value into a data attribute so the click handler doesn't
-  // have to re-derive text content (which can be transformed by HTML).
-  // Backslashes and quotes cannot appear inside text content, so a simple
-  // attribute encoding is sufficient.
-  const encoded = safe.replace(/"/g, "&quot;");
-  return `<button type="button" class="copy-btn" data-copy="${encoded}" aria-label="Copy ${safe}">copy</button>`;
+// Map of copy-button field name -> rendered value for the currently-open
+// story modal. Populated by showStoryModal and consumed by handleCopyClick
+// so the click handler can resolve the value without walking detached DOM
+// (which the test fixtures simulate) or re-deriving from HTML.
+const copyValues = new Map();
+
+// Build a small "copy" button. The data-copy attribute carries the field
+// name; handleCopyClick resolves the value from `copyValues` so the markup
+// stays a single tiny token and so copy click events for the currently-open
+// story work consistently.
+function renderCopyButton(fieldName, value) {
+  copyValues.set(fieldName, String(value == null ? "" : value));
+  return `<button type="button" class="copy-btn" data-copy="${escapeHtml(fieldName)}" aria-label="Copy ${escapeHtml(fieldName)}">copy</button>`;
 }
 
 // Click handler for `.copy-btn` elements within the story modal. Attached
-// once at module load; uses event delegation so we don't rebind on every
-// open. Silently swallows clipboard errors and environments where
-// navigator.clipboard is undefined.
+// once at module load via event delegation; we don't rebind on every open.
+// Silently swallows clipboard errors and environments where
+// navigator.clipboard is undefined, so the button never throws.
 function handleCopyClick(e) {
   const btn = e.target.closest && e.target.closest(".copy-btn");
   if (!btn) return;
-  const text = btn.getAttribute("data-copy") || "";
+  const field = btn.getAttribute("data-copy") || "";
+  const text = copyValues.get(field) || "";
+  if (!text) return;
   // navigator.clipboard requires a secure context; guard both the API
-  // presence and the writeText call.
+  // presence and the writeText call. In environments where the API is
+  // unavailable (older browsers, insecure contexts, Node smoke tests)
+  // the click is a silent no-op — never throws.
   if (typeof navigator === "undefined" || !navigator.clipboard
       || typeof navigator.clipboard.writeText !== "function") {
     return;
   }
-  // Decode the attribute back to a plain string (&quot; -> "); we don't
-  // HTML-decode &amp;/&lt;/&gt; because those came from real escaped text
-  // and should stay literal in the clipboard payload.
-  const decoded = text.replace(/&quot;/g, '"');
-  navigator.clipboard.writeText(decoded).then(
+  navigator.clipboard.writeText(text).then(
     () => {
       const prev = btn.textContent;
       btn.textContent = "copied";
@@ -738,30 +739,34 @@ function showStoryModal(story, key) {
   const depsShow = Array.isArray(deps) && deps.length > 0 ? depsText : null;
 
   // Field lists per section. Each entry: [label, value, opts].
-  // `opts.copy` enables the click-to-copy button on that value.
-  // `opts.mono` forces monospace <pre> rendering for short but structured
-  // values (e.g. a 12-char commit hash is short but reads better mono).
+  //   - `opts.copy` enables the click-to-copy button on that value, using
+  //     `opts.copyField` (or fall back to label) as the data-copy key.
+  //   - `opts.mono` forces monospace <pre> rendering for short but
+  //     structured values (e.g. a 12-char commit hash).
+  //
+  // The four sections match the documented field grouping in the story:
+  //   - Identity: who/what the story is
+  //   - Lifecycle: where the agent is in execution
+  //   - Dispatch & review: agent-loop bookkeeping and reviewer notes
+  //   - Errors: failure/pause context surfaced to humans
   const identity = [
-    ["Key", key, { copy: true }],
+    ["Key", key, { copy: true, copyField: "key" }],
     ["Summary", story.summary],
     ["Persona", story.persona],
     ["Model", story.model],
     ["Risk", story.risk],
     ["Dependencies", depsShow],
   ];
-  const ageLabel = ageLabelFor(story.last_activity);
   const lifecycle = [
     ["Status", story.status],
     ["Backend", story.backend],
     ["Escalated", story.escalated],
-    ["Worktree", story.worktree, { copy: true }],
+    ["Worktree", story.worktree, { copy: true, copyField: "worktree" }],
     ["Branch", story.branch],
-    ["PID", story.pid, { copy: true }],
-    ["PR URL", story.pr_url, { copy: true, mono: true }],
+    ["PID", story.pid, { copy: true, copyField: "pid" }],
+    ["PR URL", story.pr_url, { copy: true, copyField: "pr_url", mono: true }],
     ["Last commit", story.last_commit, { mono: true }],
     ["Interrupted at", story.interrupted_at],
-    ["Last activity", story.last_activity],
-    ["Age", ageLabel],
   ];
   const dispatch = [
     ["Dispatch attempts", story.dispatch_attempts],
@@ -777,6 +782,12 @@ function showStoryModal(story, key) {
     ["Parked reason", story.parked_reason],
   ];
 
+  // Reset any previously-cached copy values before populating this story.
+  // Stale entries from a prior open would otherwise let a stale field
+  // name resolve to its old value, which would be both confusing and a
+  // potential information leak across stories.
+  copyValues.clear();
+
   // Render a field row, applying long/mono/copy semantics.
   function renderRow(label, value, opts) {
     opts = opts || {};
@@ -786,7 +797,7 @@ function showStoryModal(story, key) {
     const inner = mono
       ? `<pre class="mono">${escapeHtml(String(v))}</pre>`
       : escapeHtml(v);
-    const btn = opts.copy ? renderCopyButton(v) : "";
+    const btn = opts.copy ? renderCopyButton(opts.copyField || label, v) : "";
     return `<dt>${escapeHtml(label)}</dt><dd>${inner}${btn}</dd>`;
   }
 
@@ -904,13 +915,15 @@ function syncPollingWithVisibility() {
 }
 
 document.getElementById("story-modal-close").addEventListener("click", hideStoryModal);
-document.getElementById("story-modal").addEventListener("click", (e) => {
-  // Click-to-copy handling is delegated here so we don't rebind on every
-  // modal open and so dynamically rebuilt body content stays supported.
+document.getElementById("story-modal-body").addEventListener("click", (e) => {
+  // Click-to-copy handling is delegated on the body so we don't rebind on
+  // every modal open and so dynamically rebuilt content stays supported.
   if (e.target.closest && e.target.closest(".copy-btn")) {
     handleCopyClick(e);
-    return;
   }
+});
+document.getElementById("story-modal").addEventListener("click", (e) => {
+  // Click on the backdrop (outside the modal-content) closes the modal.
   if (e.target.id === "story-modal") hideStoryModal();
 });
 document.getElementById("auto-refresh").addEventListener("change", (e) => {
@@ -998,6 +1011,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+    showStoryModal, handleCopyClick,
     state,
   };
 }

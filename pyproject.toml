@@ -10,4 +10,5 @@ testpaths = [
     "test_pipeline_mcp_server.py",
     "test_dashboard.py",
     "test_local_agent.py",
+    "test_local_agent_oracle.py",
 ]

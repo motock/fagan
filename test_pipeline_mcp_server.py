@@ -1998,6 +1998,16 @@ def test_check_story_status_strips_pipeline_env_from_test_subprocess(
         ("PIPELINE_WEEK_PAUSE_THRESHOLD", "100"),
         ("PIPELINE_BACKEND_DISPATCH", "auto"),
         ("PIPELINE_LOCAL_MODEL_DEFAULT", "minimax-m3:cloud"),
+        # LOCAL_AGENT_* harness config the scheduler plist may set for a run
+        # (e.g. READ_HEAVY_DISTINCT_WINDOWS raised so a model can explore
+        # longer). test_local_agent.py asserts the DEFAULTS, so an override
+        # that survives into the graded run false-fails the suite for every
+        # story in a repo that vendors the pipeline's own tests.
+        ("LOCAL_AGENT_READ_HEAVY_DISTINCT_WINDOWS", "6"),
+        ("LOCAL_AGENT_READ_HEAVY_WINDOW", "12"),
+        ("LOCAL_AGENT_CHAT_MAX_ATTEMPTS", "9"),
+        # REPO_ROOT is a per-plan sentinel, not a developer default.
+        ("REPO_ROOT", "/nonexistent-repo-root-set-per-plan-only"),
     ]:
         monkeypatch.setenv(k, v)
 
@@ -2022,6 +2032,13 @@ def test_check_story_status_strips_pipeline_env_from_test_subprocess(
         "inherited the MCP server's PIPELINE_* env unchanged")
     leaked = [k for k in test_env if k.startswith("PIPELINE_")]
     assert not leaked, f"test subprocess inherited PIPELINE_* env: {leaked}"
+    # LOCAL_AGENT_* harness config and the per-plan REPO_ROOT sentinel must
+    # also be stripped — they override defaults the suite asserts against.
+    leaked_local = [k for k in test_env if k.startswith("LOCAL_AGENT_")]
+    assert not leaked_local, (
+        f"test subprocess inherited LOCAL_AGENT_* env: {leaked_local}")
+    assert "REPO_ROOT" not in test_env, (
+        "test subprocess inherited the per-plan REPO_ROOT sentinel")
     # Sanity: the rest of the environment (PATH etc.) is preserved.
     assert "PATH" in test_env
 

@@ -147,6 +147,62 @@ def test_detect_test_command_no_marker_anywhere_falls_back_to_npm_test(tmp_path)
     assert cmd == ["npm", "test"]
 
 
+def test_detect_test_command_pyproject_uses_venv_python_when_present(tmp_path):
+    # A bare `pytest` on PATH may be a different interpreter than the project
+    # venv (e.g. homebrew python missing fastapi) and false-fail the test gate.
+    # When a project venv sits next to pyproject.toml, grade with it.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\nexit 0\n")
+    test_dir, cmd = p.detect_test_command(tmp_path)
+    assert test_dir == tmp_path
+    assert cmd == [str(tmp_path / ".venv" / "bin" / "python"), "-m", "pytest"]
+
+
+def test_detect_test_command_pyproject_falls_back_to_bare_pytest_without_venv(tmp_path):
+    # No venv and not inside a git worktree -> bare `pytest` (existing behavior).
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    test_dir, cmd = p.detect_test_command(tmp_path)
+    assert test_dir == tmp_path
+    assert cmd == ["pytest"]
+
+
+def test_detect_test_command_worktree_uses_main_repo_venv_via_git_common_dir(tmp_path):
+    # The real Mode 5 scenario: the agent ran in a git worktree, which does NOT
+    # contain .venv (it is gitignored). A bare `pytest` there resolves to the
+    # PATH interpreter and false-fails. The detector must follow the worktree's
+    # git link (`git rev-parse --git-common-dir` -> main repo .git) to find the
+    # main repo's .venv and grade with that interpreter.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def _git(*a: str) -> None:
+        subprocess.run(
+            ["git", *a], cwd=repo, check=True, capture_output=True, text=True)
+
+    _git("init")
+    _git("config", "user.email", "t@example.com")
+    _git("config", "user.name", "test")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    _git("add", "-A")
+    _git("commit", "-m", "init")
+    # Main-repo venv (untracked -- not present in the worktree checkout).
+    venv_bin = repo / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\nexit 0\n")
+    worktree = tmp_path / "wt"
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree), "-b", "wt-branch"],
+        cwd=repo, check=True, capture_output=True, text=True)
+    # Sanity: the worktree has pyproject.toml but NOT .venv.
+    assert (worktree / "pyproject.toml").exists()
+    assert not (worktree / ".venv").exists()
+    test_dir, cmd = p.detect_test_command(worktree)
+    assert test_dir == worktree
+    assert cmd == [str(repo / ".venv" / "bin" / "python"), "-m", "pytest"]
+
+
 # ---------- Persona helpers ----------
 def test_persona_body_strips_frontmatter(agents_dir):
     body = p._persona_body("software-engineer")
@@ -1643,6 +1699,73 @@ def test_interrupt_story_skips_when_lock_held(plan_dir, tmp_path, monkeypatch):
     manifest = _read_manifest(plan_dir, "ilk")
     assert manifest["stories"]["S1"]["status"] == "in_progress"
     assert manifest["stories"]["S1"]["pid"] == 4242
+
+
+# ---------- advance_pipeline nested _plan_lock regression ----------
+# advance_pipeline holds _plan_lock for the whole tick and calls dispatch_story
+# and interrupt_story, which each re-acquire the same lock. flock is per
+# open-file-description, so a second os.open of the lock file fails to re-flock
+# within the same process — the nested call used to return skipped:locked and
+# advance_pipeline would falsely count it as dispatched/interrupted while doing
+# nothing. _plan_lock must be reentrant within a tick so the nested call
+# actually runs. These exercise the REAL dispatch_story/interrupt_story (only
+# external boundaries mocked), not stubs.
+
+def test_advance_pipeline_actually_dispatches_ready_story_not_just_reports_it(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    _write_manifest(plan_dir, "nest", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    # check_story_status would try to run tests against an empty mock worktree;
+    # the dispatch itself is what we're asserting, so keep the agent "running".
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
+
+    result = p.advance_pipeline("nest")
+
+    assert result["ok"] is True
+    assert "S1" in result["dispatched"]
+    story = _read_manifest(plan_dir, "nest")["stories"]["S1"]
+    assert story["status"] == "in_progress"
+    assert story["pid"] == 1234
+
+
+def test_advance_pipeline_actually_interrupts_in_progress_when_dispatch_gated(
+    plan_dir, agents_dir, monkeypatch, tmp_path,
+):
+    _write_manifest(plan_dir, "nestint", {
+        "R1": {"summary": "running", "status": "in_progress", "pid": 111,
+               "worktree": str(tmp_path / "wt"), "dependencies": []},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    # Dispatch backend gated -> advance_pipeline interrupts in_progress agents.
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (False, "gate down"))
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
+
+    class _GitResult:
+        returncode = 0
+        stdout = "sha123\n"
+        stderr = ""
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _GitResult())
+
+    result = p.advance_pipeline("nestint")
+
+    assert result["ok"] is True
+    assert result["dispatch_paused"] is True
+    assert "R1" in result["interrupted"]
+    story = _read_manifest(plan_dir, "nestint")["stories"]["R1"]
+    assert story["status"] == "interrupted"
 
 
 def test_dispatch_story_proceeds_when_lock_free(plan_dir, worktree_root, agents_dir, monkeypatch):

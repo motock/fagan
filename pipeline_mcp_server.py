@@ -27,6 +27,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -309,6 +310,40 @@ def _get_or_create_label(name: str) -> str:
     return _label_cache[name]
 
 
+def _venv_python_for(cwd: Path) -> Path | None:
+    """Locate a project venv interpreter for running pytest, or None.
+
+    A git worktree does not contain ``.venv`` (it is gitignored), so a bare
+    ``pytest`` run from a worktree resolves to whatever interpreter is on PATH
+    — which may be a different Python than the project venv and lack its deps
+    (e.g. fastapi). That makes the test gate false-fail on otherwise-green
+    work (collection error / import errors), blocking every Python story.
+
+    Resolve the venv via the worktree's git link: ``git rev-parse
+    --git-common-dir`` points at the main repo's ``.git``, whose parent holds
+    ``.venv``. Also check ``cwd/.venv`` directly for a non-worktree checkout.
+    Returns None when no venv is found so the caller falls back to bare
+    ``pytest`` (preserving the existing contract for repos without a venv).
+    """
+    candidates = [cwd / ".venv" / "bin" / "python"]
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if common:
+            common_path = Path(common)
+            if not common_path.is_absolute():
+                common_path = (cwd / common_path).resolve()
+            candidates.append(common_path.parent / ".venv" / "bin" / "python")
+    except Exception:
+        pass
+    for cand in candidates:
+        if cand.exists():
+            return cand
+    return None
+
+
 def _test_command_for(cwd: Path) -> list[str] | None:
     """Return the test command for cwd if a recognized build marker is present."""
     if (cwd / "pom.xml").exists():
@@ -326,6 +361,9 @@ def _test_command_for(cwd: Path) -> list[str] | None:
         if result.returncode == 0:
             return ["make", "test"]
     if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists():
+        venv_python = _venv_python_for(cwd)
+        if venv_python is not None:
+            return [str(venv_python), "-m", "pytest"]
         return ["pytest"]
     if (cwd / "Cargo.toml").exists():
         return ["cargo", "test"]
@@ -1706,9 +1744,27 @@ def _plan_lock(plan_name: str):
     agents fighting over one worktree's git state is what produces the
     repeated zero-output agent deaths, not per-story flakiness.
 
+    Reentrant within a single thread: advance_pipeline acquires this lock
+    for its whole tick and then calls dispatch_story / interrupt_story,
+    which each re-acquire it. flock locks are held per open-file-description
+    (a fresh os.open makes a new description), so a nested exclusive flock
+    on the same file fails with BlockingIOError *even within the same
+    process* — without reentrance the nested call would return
+    skipped:"locked" and advance_pipeline would falsely count it as
+    dispatched/interrupted while doing nothing. The per-thread held-set
+    lets the nested call proceed without re-flocking; cross-thread and
+    cross-process serialization is still enforced by flock itself.
+
     Yields whether the lock was acquired; the caller must check it and skip
     all work if not - this never blocks waiting for the lock.
     """
+    held = _held_plan_locks()
+    if plan_name in held:
+        # Same thread already holds the flock for this plan (nested call
+        # from within an advance_pipeline tick). Don't re-flock — a second
+        # exclusive flock on a new fd would fail.
+        yield True
+        return
     lock_path = PLAN_DIR / f"{plan_name}.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
     try:
@@ -1717,13 +1773,31 @@ def _plan_lock(plan_name: str):
             acquired = True
         except BlockingIOError:
             acquired = False
+        if acquired:
+            held.add(plan_name)
         try:
             yield acquired
         finally:
             if acquired:
+                held.discard(plan_name)
                 fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+def _held_plan_locks() -> set[str]:
+    """Per-thread set of plan names whose flock this thread currently holds,
+    for _plan_lock reentrance. threading.local keeps each thread's view
+    independent, so thread A holding a plan does not let thread B bypass the
+    flock — B's set is empty, so it hits the real flock and serializes."""
+    held = getattr(_plan_lock_state, "held", None)
+    if held is None:
+        held = set()
+        _plan_lock_state.held = held
+    return held
+
+
+_plan_lock_state = threading.local()
 
 
 @contextmanager

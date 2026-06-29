@@ -25,6 +25,7 @@ function defaultFilters() {
 const state = {
   selectedPlan: null,
   pollHandle: null,
+  refreshIndicatorTimer: null,
   filters: defaultFilters(),
 };
 
@@ -200,6 +201,13 @@ function renderDecisions(decisions) {
 
 function renderPlanDetail(plan) {
   const section = document.getElementById("plan-detail");
+
+  // Snapshot the detail section's state so we can restore it after the full
+  // re-render: scroll position, and any focused filter chip. Capturing a
+  // stable identity (data-dim + data-value) — rather than the raw DOM node —
+  // lets us re-focus the matching chip if it survives the re-render.
+  const snapshot = capturePlanDetailState(section);
+
   section.innerHTML = `
     <div class="plan-header">
       <h2>${escapeHtml(plan.name)}</h2>
@@ -243,6 +251,72 @@ function renderPlanDetail(plan) {
       renderPlanDetail(plan);
     });
   }
+
+  // Restore scroll + focus. Wrapped in try/catch defensively: a missing
+  // focused element or a DOM that didn't survive the re-render must NOT throw.
+  try {
+    restorePlanDetailState(section, snapshot);
+  } catch {
+    /* snapshot stale or focus target gone; nothing to restore */
+  }
+}
+
+// Capture the scroll position and the focused element's identity from the
+// detail section. The identity is just the data-dim + data-value pair of the
+// focused filter chip (or null if nothing meaningful is focused). Plain data
+// attributes survive innerHTML replacement, so we can look the chip back up
+// in the new DOM.
+function capturePlanDetailState(section) {
+  if (!section) return { scrollTop: 0, focusKey: null };
+  const ae = document.activeElement;
+  let focusKey = null;
+  if (ae && ae !== document.body && section.contains(ae) && ae.dataset
+      && ae.dataset.dim !== undefined && ae.dataset.value !== undefined) {
+    focusKey = `${ae.dataset.dim}\u0000${ae.dataset.value}`;
+  }
+  return { scrollTop: section.scrollTop || 0, focusKey };
+}
+
+// Restore scrollTop, and re-focus the matching chip if it still exists.
+// Negative/boundary case: focusKey is null (nothing was focused) or the chip
+// with that identity was removed by the re-render — in both cases we simply
+// skip focusing, never throw.
+function restorePlanDetailState(section, snapshot) {
+  if (!section || !snapshot) return;
+  section.scrollTop = snapshot.scrollTop || 0;
+  if (!snapshot.focusKey) return;
+  const [dim, value] = snapshot.focusKey.split("\u0000");
+  const target = section.querySelector(
+    `.filter-chip[data-dim="${CSS.escape(dim)}"][data-value="${CSS.escape(value)}"]`);
+  if (target && typeof target.focus === "function") {
+    target.focus();
+  }
+}
+
+// Flash the header refresh indicator. Called once per successful refresh so
+// the user sees liveness without staring at the clock. The .flashing class
+// drives the dot's pulse animation; we toggle it off after the animation so
+// the element returns to its idle (invisible) state.
+function flashRefreshIndicator() {
+  const el = document.getElementById("refresh-indicator");
+  if (!el) return;
+  // Re-render contents each time so the animation restarts cleanly even on
+  // back-to-back flashes that would otherwise be coalesced by the browser.
+  el.innerHTML = '<span class="dot" aria-hidden="true"></span>'
+    + '<span class="refresh-indicator-label">updating\u2026</span>';
+  // Force a reflow so removing + re-adding the class restarts the keyframes
+  // when refreshes happen faster than the animation duration.
+  // eslint-disable-next-line no-unused-expressions
+  el.offsetWidth;
+  el.classList.remove("flashing");
+  el.classList.add("flashing");
+  // Schedule fade back to idle. setTimeout ID is held so a faster subsequent
+  // refresh can cancel and reschedule cleanly.
+  if (state.refreshIndicatorTimer) clearTimeout(state.refreshIndicatorTimer);
+  state.refreshIndicatorTimer = setTimeout(() => {
+    el.classList.remove("flashing");
+    state.refreshIndicatorTimer = null;
+  }, 750);
 }
 
 function showStoryModal(story, key) {
@@ -336,6 +410,11 @@ async function refresh() {
 
   document.getElementById("last-updated").textContent =
     `updated ${new Date().toLocaleTimeString()}`;
+
+  // Visible liveness: a brief indicator flash on each successful refresh,
+  // gated by the auto-refresh checkbox so manual, indicator-free refreshes
+  // remain possible while polling is disabled.
+  if (state.pollHandle) flashRefreshIndicator();
 }
 
 function startPolling() {
@@ -348,14 +427,53 @@ function stopPolling() {
   state.pollHandle = null;
 }
 
+// Pause polling while the tab is hidden so we don't burn requests / re-render
+// DOM that nobody is looking at. Resume on visibilitychange, but only if the
+// user has auto-refresh enabled — visibility never overrides the checkbox.
+function syncPollingWithVisibility() {
+  const auto = document.getElementById("auto-refresh");
+  if (!auto || !auto.checked) return;
+  if (document.hidden) {
+    stopPolling();
+  } else if (!state.pollHandle) {
+    startPolling();
+    // Catch up on one immediate refresh so the user sees fresh data the
+    // moment they return to the tab instead of waiting up to 4s for the
+    // next tick.
+    refresh();
+  }
+}
+
 document.getElementById("story-modal-close").addEventListener("click", hideStoryModal);
 document.getElementById("story-modal").addEventListener("click", (e) => {
   if (e.target.id === "story-modal") hideStoryModal();
 });
 document.getElementById("auto-refresh").addEventListener("change", (e) => {
-  e.target.checked ? startPolling() : stopPolling();
+  if (e.target.checked) {
+    // Respect the tab-hidden state on initial enable: don't start polling
+    // into a hidden tab just because the user toggled the checkbox.
+    if (document.hidden) return;
+    startPolling();
+  } else {
+    stopPolling();
+  }
 });
+
+// Pause / resume the polling loop around tab visibility. visibilitychange
+// fires on tab switch, minimize, and on some browsers when the window
+// loses focus to the OS — exactly the moments we want to stop polling.
+document.addEventListener("visibilitychange", syncPollingWithVisibility);
 
 loadFilters();
 refresh();
 startPolling();
+
+// Expose helpers for node-based smoke tests. Guarded so the file still works
+// as a plain browser <script>.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
+    startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+    state,
+  };
+}

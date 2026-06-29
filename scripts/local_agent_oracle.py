@@ -101,6 +101,19 @@ CHAT_RETRY_BACKOFF = float(os.environ.get("LOCAL_AGENT_CHAT_RETRY_BACKOFF", "5")
 # actually writes anything. Window size 6 catches "5 reads without a write"
 # while still allowing the natural 2-3-step warm-up of `bash pwd` / read PLAN.
 READ_HEAVY_WINDOW = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_WINDOW", "6"))
+# Exploration-aware leniency: after the nudge, a run whose recent reads are
+# all DISTINCT targets (each file/command read once) is exploring a multi-
+# file bug, not wedged on one target. Allow up to this many all-distinct
+# post-nudge windows before parking, so a bug fix that needs ~3x the reads
+# to orient can still reach its first edit. Total distinct-read cap before
+# parking = READ_HEAVY_WINDOW + READ_HEAVY_DISTINCT_WINDOWS * READ_HEAVY_WINDOW
+# (6 + 3*6 = 24). A run that re-reads an already-seen target (repetition)
+# still parks at the strict 2 * READ_HEAVY_WINDOW (12) -- only all-distinct
+# exploration gets the longer leash, and it is still bounded, not disabled.
+# Ported verbatim from local_agent.py per the Mode 3a lesson: any loop-guard
+# change in the base harness must be mirrored here or acceptance-bearing
+# stories silently regress.
+READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINCT_WINDOWS", "3"))
 # Mutating tools: any that produce new code in the worktree. Anything else
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior
@@ -420,7 +433,8 @@ def main() -> int:
     seen: dict = {}
     nudged_repeat = False
     nudged_read_heavy = False
-    recent_tools: deque[str] = deque(maxlen=READ_HEAVY_WINDOW)
+    recent_tools: deque[tuple[str, str]] = deque(maxlen=READ_HEAVY_WINDOW)
+    distinct_windows = 0
 
     for step in range(MAX_STEPS):
         try:
@@ -504,9 +518,11 @@ def main() -> int:
             # the last READ_HEAVY_WINDOW tool calls were all non-mutating.
             # Two-stage response: one corrective nudge, then park if the
             # pattern persists.
-            recent_tools.append(fn)
+            recent_tools.append((fn, sig[1]))
             if (len(recent_tools) == READ_HEAVY_WINDOW
-                    and all(t not in MUTATING_TOOLS for t in recent_tools)):
+                    and all(f not in MUTATING_TOOLS for (f, _t) in recent_tools)):
+                distinct_targets = len({_t for (_f, _t) in recent_tools})
+                has_repetition = distinct_targets < READ_HEAVY_WINDOW
                 if not nudged_read_heavy:
                     nudged_read_heavy = True
                     print(f"   [read-heavy nudge: {READ_HEAVY_WINDOW} reads in a row]", flush=True)
@@ -525,11 +541,35 @@ def main() -> int:
                     # Reset so the next detection needs another full window of reads
                     # (not whatever happens to be left in the deque).
                     recent_tools.clear()
-                else:
+                    distinct_windows = 0
+                elif has_repetition:
+                    # Re-reading an already-seen target after being nudged to
+                    # act is wedging, not exploration. Park at the strict
+                    # 2 * READ_HEAVY_WINDOW (12) -- unchanged from the flat
+                    # cutoff for this signal.
                     print("   [parking: read-heavy after nudge]", flush=True)
                     if worktree_dirty():
                         auto_commit("WIP (read-heavy parking)")
                     return 3
+                else:
+                    # All-distinct reads after the nudge: the model is
+                    # exploring multiple files (each read once), not wedged
+                    # on one. A multi-file bug fix legitimately needs more
+                    # than READ_HEAVY_WINDOW reads to orient before its
+                    # first edit. Let it continue, bounded by
+                    # READ_HEAVY_DISTINCT_WINDOWS all-distinct windows -- so
+                    # exploration that reaches an edit is not cut off, but a
+                    # model that reads forever with no mutation is still
+                    # caught (bounded, not disabled). Ported from
+                    # local_agent.py per the Mode 3a lesson.
+                    distinct_windows += 1
+                    if distinct_windows >= READ_HEAVY_DISTINCT_WINDOWS:
+                        print(f"   [parking: read-heavy after {distinct_windows} distinct windows]",
+                              flush=True)
+                        if worktree_dirty():
+                            auto_commit("WIP (read-heavy parking)")
+                        return 3
+                    recent_tools.clear()
 
             # Fix #1: the harness, not the model, decides done. The instant the
             # independent oracle is green, auto-commit and exit. This fires

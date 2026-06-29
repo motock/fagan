@@ -52,18 +52,38 @@ def test_oracle_constants_present():
 
 
 def test_oracle_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatch, capsys):
-    """Fix A: when devstral rotates across many distinct bash/view_file
-    targets without ever calling create_file/str_replace, the per-target
-    repetition guard misses it (every signature is unique), but the
-    read-heavy guard must fire: one nudge after READ_HEAVY_WINDOW reads,
+    """Strict/wedging path on the oracle harness: when devstral RE-READS an
+    already-seen target without ever calling create_file/str_replace, the
+    read-heavy guard must fire — one nudge after READ_HEAVY_WINDOW reads,
     then park after another READ_HEAVY_WINDOW if the model ignores it.
 
     Mirrors test_local_agent.test_local_agent_read_heavy_loop_nudges_once_then_parks
-    but on the oracle harness — which previously had no such guard."""
+    but on the oracle harness — which previously had no such guard. Uses
+    the re-reading scenario (a target repeated within the post-nudge
+    window, each target <= 2 total so the per-target guard stays out of
+    the way) so this pins the strict park at 2 * READ_HEAVY_WINDOW.
+    Distinct-exploration leniency is covered by
+    test_oracle_read_heavy_distinct_exploration_reaches_an_edit."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
     # Oracle harness doesn't have a [boot] line, so we just need any tool
-    # activity in the log. 15 distinct bash calls with no writes.
-    responses = [("bash", {"command": f"cat nonexistent_{i}"}) for i in range(15)]
+    # activity in the log. 6 distinct reads (nudge) + a post-nudge window
+    # of 6 where 'cat g' repeats once (re-reading = wedging).
+    responses = [
+        ("bash", {"command": "cat a"}),
+        ("bash", {"command": "cat b"}),
+        ("bash", {"command": "cat c"}),
+        ("bash", {"command": "cat d"}),
+        ("bash", {"command": "cat e"}),
+        ("bash", {"command": "cat f"}),
+        ("bash", {"command": "cat g"}),
+        ("bash", {"command": "cat g"}),
+        ("bash", {"command": "cat h"}),
+        ("bash", {"command": "cat i"}),
+        ("bash", {"command": "cat j"}),
+        ("bash", {"command": "cat k"}),
+        ("bash", {"command": "cat spare1"}),
+        ("bash", {"command": "cat spare2"}),
+    ]
     fake, calls = _sequence_chat(responses)
     monkeypatch.setattr(lao, "chat", fake)
 
@@ -81,6 +101,66 @@ def test_oracle_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatch, ca
     assert len(calls) <= 12, (
         f"guard should stop the run well before MAX_STEPS=30; got {len(calls)}"
     )
+
+
+def test_oracle_read_heavy_distinct_exploration_reaches_an_edit(tmp_path, monkeypatch, capsys):
+    """Lenient path on the oracle harness: distinct-target exploration
+    (reading many files once each) that reaches an edit must NOT park at
+    2 * READ_HEAVY_WINDOW. Mirrors the base-harness test of the same name.
+
+    Pre-fix (flat 12-read cutoff) this parked at step 12 before the
+    create_file, returning 3. Post-fix it reaches the edit and the empty
+    acceptance oracle accepts done -> exit 0."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(16)]
+    responses.append(("create_file", {"path": "new_module.rs", "content": "// real code\n"}))
+    responses.append(("done", {"summary": "wrote the module"}))
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+    assert rc == 0, (
+        f"distinct exploration that reaches an edit must finish, got rc={rc}\noutput: {out!r}"
+    )
+    assert "[parking: read-heavy" not in out, (
+        f"all-distinct exploration must not park before the bounded cap; output: {out!r}"
+    )
+
+
+def test_oracle_read_heavy_distinct_exploration_is_bounded(tmp_path, monkeypatch, capsys):
+    """The leniency for distinct exploration is BOUNDED on the oracle
+    harness too: a run that keeps reading distinct targets with NO
+    eventual mutation still parks, at ~24 reads (not the flat 12). Mirrors
+    the base-harness test of the same name."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(30)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+    assert rc == 3, f"unbounded distinct reading must still park, got rc={rc}\noutput: {out!r}"
+    assert out.count("[read-heavy nudge:") == 1, f"expected 1 nudge, output: {out!r}"
+    assert "distinct windows" in out, (
+        f"distinct-cap park must log a distinct-windows message; output: {out!r}"
+    )
+    assert len(calls) > 12, (
+        f"distinct exploration must get more than the flat 12 reads; got {len(calls)}"
+    )
+    assert len(calls) <= 24, (
+        f"distinct exploration must be bounded (<= 24 reads); got {len(calls)}"
+    )
+
+
+def test_oracle_read_heavy_distinct_constants():
+    """The exploration-aware guard's leniency constant must be defined on
+    the oracle harness too (the Mode 3a lesson: a loop-guard change in the
+    base harness silently regressed the oracle variant when only the base
+    was patched)."""
+    assert lao.READ_HEAVY_WINDOW == 6
+    assert hasattr(lao, "READ_HEAVY_DISTINCT_WINDOWS")
+    assert lao.READ_HEAVY_DISTINCT_WINDOWS == 3
 
 
 def test_oracle_does_not_nudge_with_regular_writes(tmp_path, monkeypatch, capsys):

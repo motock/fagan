@@ -70,6 +70,70 @@ def _status_counts(stories: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
+def _aggregate_stories(stories: dict[str, Any]) -> dict[str, Any]:
+    """Roll up attempt counters and failure reasons across a plan's stories.
+
+    Field semantics (mirroring pipeline_mcp_server.py):
+      - dispatch_attempts: how many times the orchestrator picked up the story
+      - rework_attempts:   how many times a PR was sent back for changes
+      - merge_attempts:    how many merge attempts against the base branch
+      - escalated:         True if the overlord escalated the story
+      - failure_reason:    free-text bucket the pipeline recorded on failure
+      - backend:           'local' or 'claude' once the orchestrator resolved one
+
+    Robustness contract: stories that are missing any of these fields
+    (or carry null values) contribute 0 to the relevant bucket. The rollup
+    never raises KeyError — a story that's still a bare {status, summary}
+    shell from before any dispatch attempt must not break /api/plans.
+
+    Failure-reason bucketing: an empty string ('') is treated as the
+    '(none)' bucket so the UI never renders a literal blank reason chip.
+    """
+    dispatch = 0
+    rework = 0
+    merge = 0
+    escalated = 0
+    failure_reasons: dict[str, int] = {}
+    by_backend: dict[str, int] = {}
+
+    def _safe_int(value: Any) -> int:
+        if isinstance(value, bool):  # bool is a subclass of int — guard.
+            return int(value)
+        if isinstance(value, int):
+            return value
+        return 0
+
+    for story in stories.values():
+        if not isinstance(story, dict):
+            continue
+        dispatch += _safe_int(story.get("dispatch_attempts"))
+        rework += _safe_int(story.get("rework_attempts"))
+        merge += _safe_int(story.get("merge_attempts"))
+        if story.get("escalated") is True:
+            escalated += 1
+        backend = story.get("backend")
+        if isinstance(backend, str) and backend:
+            by_backend[backend] = by_backend.get(backend, 0) + 1
+        reason = story.get("failure_reason")
+        # Only bucket stories that actually attempted (a still-todo story
+        # with no failure_reason set contributes to '(none)' so the empty
+        # state isn't silently invisible to the rollup).
+        if isinstance(reason, str):
+            key = reason if reason else "(none)"
+        else:
+            key = "(none)"
+        failure_reasons[key] = failure_reasons.get(key, 0) + 1
+
+    return {
+        "dispatch_attempts": dispatch,
+        "rework_attempts": rework,
+        "merge_attempts": merge,
+        "escalated": escalated,
+        "failure_reasons": failure_reasons,
+        "by_backend": by_backend,
+    }
+
+
 def _tail_notifications(plan_name: str, limit: int = 100) -> list[str]:
     path = _notifications_path(plan_name)
     if not path.exists():
@@ -179,6 +243,7 @@ def _plan_summary(plan_name: str, manifest: dict[str, Any]) -> dict[str, Any]:
         "paused": bool(manifest.get("paused", False)),
         "story_count": len(stories),
         "status_counts": _status_counts(stories),
+        "aggregate": _aggregate_stories(stories),
     }
 
 
@@ -374,6 +439,15 @@ def dispatch_health() -> dict[str, Any]:
     that haven't been tried yet and would dilute the rate toward zero."""
     totals = {"dispatched": 0, "done": 0, "escalated": 0, "stories": 0}
     per_plan: dict[str, Any] = {}
+    # Fleet-wide attempt / failure rollup (new aggregate fields). Kept on
+    # `totals` rather than as a sibling key so the UI can read
+    # body.totals.dispatch_attempts alongside body.totals.success_rate
+    # without juggling two levels of nesting.
+    fleet_dispatch = 0
+    fleet_rework = 0
+    fleet_merge = 0
+    fleet_failure_reasons: dict[str, int] = {}
+    fleet_by_backend: dict[str, int] = {}
     for name in _list_plan_names():
         manifest = _read_manifest(name)
         if manifest is None:
@@ -387,12 +461,27 @@ def dispatch_health() -> dict[str, Any]:
             totals["dispatched"] += s["dispatched"]
             totals["done"] += s["done"]
             totals["escalated"] += s["escalated"]
+        agg = _aggregate_stories(stories)
+        fleet_dispatch += agg["dispatch_attempts"]
+        fleet_rework += agg["rework_attempts"]
+        fleet_merge += agg["merge_attempts"]
+        for reason, n in agg["failure_reasons"].items():
+            fleet_failure_reasons[reason] = fleet_failure_reasons.get(reason, 0) + n
+        for backend, n in agg["by_backend"].items():
+            fleet_by_backend[backend] = fleet_by_backend.get(backend, 0) + n
     d_count = totals["dispatched"]
     return {
         "totals": {
             **totals,
             "escalation_rate": (totals["escalated"] / d_count) if d_count else 0.0,
             "success_rate": (totals["done"] / d_count) if d_count else 0.0,
+            # New aggregate rollup — additive only, the keys above remain
+            # byte-for-byte unchanged so existing UI consumers keep working.
+            "dispatch_attempts": fleet_dispatch,
+            "rework_attempts": fleet_rework,
+            "merge_attempts": fleet_merge,
+            "failure_reasons": fleet_failure_reasons,
+            "by_backend": fleet_by_backend,
         },
         "per_plan": per_plan,
     }

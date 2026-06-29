@@ -432,7 +432,8 @@ def test_oracle_script_importable_from_non_pipeline_cwd(tmp_path):
     with cwd=tmp_path (the worktree) and PYTHONPATH pointing at the
     pipeline repo. The script's own sys.path.insert handles the
     pipeline_mcp_server import, so this should succeed silently."""
-    import subprocess, sys
+    import subprocess
+    import sys
     repo = str(Path(__file__).resolve().parent)
     # Prefer the repo's venv python so the test reflects the real launch path;
     # fall back to the active interpreter (sys.executable) in environments

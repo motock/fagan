@@ -375,7 +375,135 @@ def test_story_last_activity_ignores_missing_or_empty_journal(client, plan_dir):
     assert body["stories"]["S1"]["last_activity"] == interrupted_at
 
 
-# ---------- client-side age/staleness helpers in static/app.js ----------
+# ---------- /api/plans/{plan}/stories/{story}/journal endpoint ----------
+#
+# The endpoint surfaces the story's checkpoint journal so the UI can render
+# a timeline of every meaningful step the agent took. Missing journal is NOT
+# an error — it just means the story hasn't checkpointed anything yet, so
+# we return {available:false, entries:[]} with a 200. Malformed JSON is
+# treated the same way (the dashboard never 500s because a stray corrupt
+# file dropped into PLAN_DIR). 404 is reserved for plan/story-not-found.
+
+
+def test_journal_endpoint_returns_entries_in_file_order(client, plan_dir):
+    """(1) journal file present -> available:true, entries returned in the
+    order they appear in the file with step/summary/next_hint/ts preserved."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "story with a journal", "status": "in_progress", "dependencies": []},
+    })
+    entries = [
+        {"step": "read-files", "summary": "read inputs", "next_hint": "compute outputs", "ts": "2026-06-25T12:00:00+00:00"},
+        {"step": "compute-outputs", "summary": "ran the math", "next_hint": "write tests", "ts": "2026-06-25T12:05:00+00:00"},
+        {"step": "write-tests", "summary": "added pytest cases", "ts": "2026-06-25T12:10:00+00:00"},
+    ]
+    _write_journal(plan_dir, "demo", "S1", entries)
+
+    res = client.get("/api/plans/demo/stories/S1/journal")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True
+    assert [e["step"] for e in body["entries"]] == [e["step"] for e in entries]
+    # Each entry exposes the documented UI fields verbatim; missing optional
+    # fields are passed through as undefined rather than being dropped, so
+    # the client can decide how to render (vs. fabricating empty strings).
+    assert body["entries"][0]["summary"] == "read inputs"
+    assert body["entries"][0]["next_hint"] == "compute outputs"
+    assert body["entries"][1]["ts"] == "2026-06-25T12:05:00+00:00"
+    # Entry without next_hint — the key is still present (None), not omitted.
+    assert "next_hint" in body["entries"][2]
+    assert body["entries"][2]["next_hint"] is None
+
+
+def test_journal_endpoint_unavailable_when_no_file(client, plan_dir):
+    """(2) no journal file on disk -> 200 with available:false, empty list.
+    Not a 404 — the story simply hasn't checkpointed yet, which is a normal
+    'no journal yet' state for a brand-new story."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "fresh story", "status": "todo", "dependencies": []},
+    })
+    res = client.get("/api/plans/demo/stories/S1/journal")
+    assert res.status_code == 200
+    assert res.json() == {"available": False, "entries": []}
+
+
+def test_journal_endpoint_404_when_plan_or_story_missing(client, plan_dir):
+    """(3) plan or story not found -> 404 (client can surface a real 'not
+    found' rather than rendering an empty timeline)."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "exists", "status": "todo", "dependencies": []},
+    })
+    # Plan missing entirely.
+    res = client.get("/api/plans/nope/stories/S1/journal")
+    assert res.status_code == 404
+    # Plan exists, story key does not.
+    res = client.get("/api/plans/demo/stories/NOPE/journal")
+    assert res.status_code == 404
+
+
+def test_journal_endpoint_unavailable_on_malformed_json(client, plan_dir):
+    """(4) malformed JSON in the journal file -> available:false (NOT a
+    500). A stray corrupt file in PLAN_DIR must never crash the dashboard;
+    the client renders the 'No journal yet' empty state and the user can
+    investigate on disk without the whole UI going red."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "journal got corrupted", "status": "in_progress", "dependencies": []},
+    })
+    (plan_dir / "demo.S1.journal.json").write_text("{this is not valid json")
+    res = client.get("/api/plans/demo/stories/S1/journal")
+    assert res.status_code == 200
+    assert res.json() == {"available": False, "entries": []}
+
+
+def test_journal_endpoint_empty_entries_array_means_unavailable(client, plan_dir):
+    """Boundary: a journal file that exists but is an empty list -> the UI
+    should render the same 'No journal yet' empty state as a missing file.
+    Distinguishing an empty list from a missing file would leak an internal
+    detail (the file was touched but nothing was checkpointed) for no gain."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "touched but empty", "status": "todo", "dependencies": []},
+    })
+    (plan_dir / "demo.S1.journal.json").write_text("[]")
+    res = client.get("/api/plans/demo/stories/S1/journal")
+    assert res.status_code == 200
+    assert res.json() == {"available": False, "entries": []}
+
+
+def test_journal_path_helper_mirrors_pipeline_mcp_naming(plan_dir):
+    """The helper must produce the same '<plan>.<story>.journal.json' path
+    pipeline_mcp_server.py uses, since both processes read the same file.
+    Locking this in as a test so a refactor that splits naming conventions
+    fails loudly instead of silently producing a 404 in the UI."""
+    name, key = "demo", "8cad8e4d-8f0f-4f6e-8d68-86bacb908bcc"
+    assert d._journal_path(name, key) == (
+        plan_dir / f"{name}.{key}.journal.json"
+    )
+
+
+def test_journal_path_helper_uses_journal_dir_from_dashboard(plan_dir):
+    """Boundary: the helper reads PLAN_DIR at call time (not import time),
+    so monkeypatching PLAN_DIR in fixtures like `plan_dir` is reflected —
+    keeps the test suite's PLAN_DIR substitution pattern viable."""
+    assert d._journal_path("p", "s") == plan_dir / "p.s.journal.json"
+
+
+def test_journal_endpoint_passes_through_unknown_extra_fields(client, plan_dir):
+    """Positive/boundary: extra unknown fields on each entry are preserved
+    verbatim, not stripped, so future schema additions flow through without
+    needing a dashboard change. Only `entries` is required to be a list."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "forward-compat", "status": "in_progress", "dependencies": []},
+    })
+    entries = [
+        {"step": "x", "summary": "y", "next_hint": "z", "ts": "t",
+         "extra_field": {"nested": True}, "score": 42},
+    ]
+    _write_journal(plan_dir, "demo", "S1", entries)
+    body = client.get("/api/plans/demo/stories/S1/journal").json()
+    assert body["entries"][0]["extra_field"] == {"nested": True}
+    assert body["entries"][0]["score"] == 42
+
+
+# ---------- journal timeline rendering in static/app.js ----------
 #
 # The dashboard hands the UI a `last_activity` ISO string per story and the
 # browser computes the age + staleness class from there so cards stay
@@ -902,3 +1030,134 @@ def test_index_html_references_static_assets_re_render_safe(client):
     body = client.get("/").text
     assert "/style.css" in body
     assert "/app.js" in body
+
+
+# --- Journal timeline rendering in app.js -------------------------------
+#
+# These pin down the contract of renderJournal / renderJournalEntry so the
+# story modal's "Journal" section keeps rendering the empty state for the
+# four unavailable cases (null data, !available, no entries array, empty
+# entries array) and renders a <ol class="timeline"> with one
+# <li class="timeline-item"> per entry otherwise. Tested by shelling to
+# Node — same approach as the age/relative-time helpers above.
+
+
+def test_render_journal_shows_empty_state_for_null_data():
+    """No response object at all (e.g. fetch threw before resolving) ->
+    the 'No journal yet' empty state, never an exception."""
+    html = _run_app_js("renderJournal(null)")
+    assert "Journal" in html
+    assert "No journal yet" in html
+    assert "data-journal-empty" in html
+    assert "class=\"timeline\"" not in html
+
+
+def test_render_journal_shows_empty_state_when_unavailable():
+    """The endpoint contract: 200 with available:false -> the same empty
+    state a missing-file response would produce."""
+    data = {"available": False, "entries": []}
+    html = _run_app_js(f"renderJournal({json.dumps(data)})")
+    assert "No journal yet" in html
+    assert "data-journal-empty" in html
+    assert "class=\"timeline\"" not in html
+
+
+def test_render_journal_shows_empty_state_for_empty_entries_array():
+    """Boundary: an empty entries list (file exists but has no rows) is
+    visually indistinguishable from a missing file — both render the
+    'No journal yet' empty state."""
+    data = {"available": True, "entries": []}
+    html = _run_app_js(f"renderJournal({json.dumps(data)})")
+    assert "No journal yet" in html
+    assert "data-journal-empty" in html
+    assert "class=\"timeline\"" not in html
+
+
+def test_render_journal_renders_timeline_in_entry_order():
+    """Positive: a populated response renders an <ol class="timeline">
+    with one <li class="timeline-item"> per entry, in file order, with the
+    step label / summary / next_hint / timestamp fields appearing in the
+    rendered HTML."""
+    entries = [
+        {"step": "analyze", "summary": "read the spec", "next_hint": "draft tests"},
+        {"step": "tests",   "summary": "wrote 3 failing tests", "ts": "2026-06-29T14:00:00Z"},
+    ]
+    data = {"available": True, "entries": entries}
+    html = _run_app_js(f"renderJournal({json.dumps(data)})")
+    # Section heading + timeline container present
+    assert "Journal" in html
+    assert "data-journal-list" in html
+    assert "class=\"timeline\"" in html
+    # Both entries rendered, in order
+    assert html.count("class=\"timeline-item\"") == 2
+    analyze_idx = html.find("analyze")
+    tests_idx = html.find("tests")
+    assert 0 <= analyze_idx < tests_idx, (analyze_idx, tests_idx, html)
+    # Summary and next_hint visible in the markup
+    assert "read the spec" in html
+    assert "draft tests" in html
+    assert "wrote 3 failing tests" in html
+    # next_hint rendered with the 'next:' prefix and the muted class
+    assert "next:" in html
+    assert "muted" in html
+
+
+def test_render_journal_entry_omits_next_hint_block_when_missing():
+    """Negative: an entry without next_hint must render WITHOUT the
+    'next:' line — never the literal string 'undefined', and never an
+    empty <div class="timeline-next">."""
+    entry = {"step": "implement", "summary": "did the work"}
+    html = _run_app_js(f"renderJournalEntry({json.dumps(entry)})")
+    assert "timeline-next" not in html
+    assert "undefined" not in html
+    # step + summary still rendered
+    assert "implement" in html
+    assert "did the work" in html
+
+
+def test_render_journal_entry_omits_ts_block_when_missing():
+    """Boundary: ts is optional on a checkpoint; an entry without one
+    should not render an empty timestamp line."""
+    entry = {"step": "ship", "summary": "merged", "next_hint": "monitor"}
+    html = _run_app_js(f"renderJournalEntry({json.dumps(entry)})")
+    assert "timeline-ts" not in html
+    assert "monitor" in html  # next_hint still present
+
+
+def test_render_journal_entry_returns_empty_for_garbage_row():
+    """Defensive: corrupt / null entries leave no visual artifact. A row
+    that's neither an object nor has any of step/summary shouldn't render
+    anything (filter(Boolean) downstream drops it)."""
+    assert _run_app_js("renderJournalEntry(null)") == ""
+    assert _run_app_js("renderJournalEntry(undefined)") == ""
+    assert _run_app_js("renderJournalEntry({})") == ""
+    assert _run_app_js("renderJournalEntry('not an object')") == ""
+
+
+def test_render_journal_escapes_html_in_entry_text():
+    """Security: a checkpoint entry could contain user-supplied text
+    (reviewer notes, etc.). The summary / step / next_hint must be HTML-
+    escaped so a stray <script> tag doesn't execute in the modal."""
+    entries = [{"step": "<script>", "summary": "<img onerror=x>",
+                "next_hint": "\">injected"}]
+    data = {"available": True, "entries": entries}
+    html = _run_app_js(f"renderJournal({json.dumps(data)})")
+    assert "&lt;script&gt;" in html
+    assert "&lt;img onerror=x&gt;" in html
+    assert "&quot;&gt;injected" in html
+    # And no raw un-escaped tags from the entry fields
+    assert "<script>" not in html
+    assert "<img onerror=" not in html
+
+
+def test_static_style_css_defines_journal_timeline_classes(client):
+    """The rendered HTML uses .timeline / .timeline-item / .timeline-step /
+    .timeline-summary / .timeline-next / .timeline-ts / .muted — the CSS
+    must actually define those selectors so the section renders visibly
+    rather than as unstyled bullets."""
+    css = client.get("/style.css").text
+    for sel in (".timeline", ".timeline-item", ".timeline-step",
+                ".timeline-summary", ".timeline-next", ".timeline-ts"):
+        assert sel in css, f"missing CSS selector: {sel}"
+    # And the muted utility class used inside timeline entries
+    assert ".muted" in css

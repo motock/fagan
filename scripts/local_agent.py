@@ -106,6 +106,37 @@ READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINC
 # commits existing WIP but doesn't add new code; checkpointing without prior
 # edits is itself a sign of "spinning."
 MUTATING_TOOLS = frozenset({"create_file", "str_replace"})
+# Destructive git ops an agent must never run — they discard the branch's WIP
+# commits or working-tree changes. A blind-rework agent once ran
+# `git reset --hard <master>` mid-story and threw away its own tests-passed
+# WIP; this guard turns those ops into an error the model can react to instead
+# of silently destroying its work. The agent edits files via str_replace, so it
+# has no legitimate need to discard working-tree state. Patterns scan the whole
+# command string so a destructive op inside a `&&`/`;`/`|` chain is still
+# caught; `[^;&|]*` keeps each pattern within its own subcommand.
+DESTRUCTIVE_GIT_PATTERNS = [
+    (re.compile(r"\bgit\s+reset\b[^;&|\n]*--hard"), "git reset --hard"),
+    # `(-f|--force)` as a bare substring misses force-clean clusters where `f`
+    # is not the first flag (`-xf`, `-df`, `-xdf`) — all force-removes. Match
+    # any short-flag cluster containing `f`: `-[a-zA-Z]*f[a-zA-Z]*`.
+    (re.compile(r"\bgit\s+clean\b[^;&|\n]*(--force|-[a-zA-Z]*f[a-zA-Z]*)"), "git clean --force"),
+    # `git checkout -- <paths>` discards working-tree changes; the `\s--(\s|$)`
+    # anchor matches only the pathspec separator, not merge opts like --theirs.
+    (re.compile(r"\bgit\s+checkout\b[^;&|\n]*\s--(\s|$)"), "git checkout -- <paths>"),
+    (re.compile(r"\bgit\s+restore\b"), "git restore"),
+]
+
+
+def destructive_git_op(cmd: str) -> str | None:
+    """Return the name of the destructive git op in `cmd`, or None.
+
+    Scans the whole command string so it catches destructive ops inside
+    compound (`&&`/`;`/`|`) commands, not just a bare git invocation.
+    """
+    for pat, name in DESTRUCTIVE_GIT_PATTERNS:
+        if pat.search(cmd):
+            return name
+    return None
 # Parking kill-switch (env LOCAL_AGENT_PARK_ENABLED, default "1"). When
 # disabled, the loop guards still nudge the model toward writing but never
 # terminate the run (return 3) — the step cap becomes the only bound. A
@@ -324,6 +355,19 @@ def run_tool(fn, args) -> str:
         return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
     if fn == "bash":
         cmd = args.get("command", "")
+        # Refuse destructive git ops before they reach the shell — they discard
+        # the branch's WIP commits / working-tree changes (see
+        # DESTRUCTIVE_GIT_PATTERNS). Tell the model to use str_replace to change
+        # files instead, so a confused rework can't destroy its own work.
+        bad = destructive_git_op(cmd)
+        if bad:
+            return (
+                f"ERROR: '{bad}' is blocked — it would discard your work (WIP "
+                f"commits or uncommitted changes). To change a file, use "
+                f"str_replace; to unstage, use `git reset HEAD <path>` (no "
+                f"--hard). To undo a recent commit but keep the changes, use "
+                f"`git reset HEAD~1` (default --mixed, keeps the working tree)."
+            )
         # Acquire the cross-dispatch heavy-build lock for any command whose
         # first token is a known build/test executable (cargo, npm, mvn,
         # etc.). The lock lives at PLAN_DIR/heavy.lock; see _heavy_lock

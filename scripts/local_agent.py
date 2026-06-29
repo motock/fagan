@@ -106,6 +106,16 @@ READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINC
 # commits existing WIP but doesn't add new code; checkpointing without prior
 # edits is itself a sign of "spinning."
 MUTATING_TOOLS = frozenset({"create_file", "str_replace"})
+# Parking kill-switch (env LOCAL_AGENT_PARK_ENABLED, default "1"). When
+# disabled, the loop guards still nudge the model toward writing but never
+# terminate the run (return 3) — the step cap becomes the only bound. A
+# capable model that demonstrably writes but re-reads aggressively (e.g.
+# minimax-m3:cloud re-viewing a file before editing it) can otherwise hit the
+# strict-repetition park before its first edit on stories where orientation
+# needs repeated reads. Nudges still fire to steer it; only the premature
+# termination is suppressed. Defaults to on so behavior is unchanged unless a
+# run opts in.
+PARK_ENABLED = os.environ.get("LOCAL_AGENT_PARK_ENABLED", "1") != "0"
 
 HARNESS_RULES = (
     "You are working inside a git repository (the current directory). Complete "
@@ -457,6 +467,10 @@ def main() -> int:
                 print("   [parking: repeated action after nudge]", flush=True)
                 if worktree_dirty():
                     auto_wip_commit("parked on repetition")
+                if not PARK_ENABLED:
+                    # Suppressed: let the nudge steer and continue to the next
+                    # step instead of terminating. The step cap bounds the run.
+                    break
                 return 3
 
             # A malformed tool call (e.g. a model that omits a required arg
@@ -502,6 +516,9 @@ def main() -> int:
                     print("   [parking: read-heavy after nudge]", flush=True)
                     if worktree_dirty():
                         auto_wip_commit("read-heavy parking")
+                    if not PARK_ENABLED:
+                        recent_tools.clear()
+                        break
                     return 3
                 else:
                     # All-distinct reads after the nudge: the model is
@@ -519,6 +536,9 @@ def main() -> int:
                               flush=True)
                         if worktree_dirty():
                             auto_wip_commit("read-heavy parking")
+                        if not PARK_ENABLED:
+                            recent_tools.clear()
+                            break
                         return 3
                     recent_tools.clear()
 

@@ -180,6 +180,84 @@ def test_local_agent_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatc
     )
 
 
+def test_local_agent_park_disabled_continues_past_strict_park(tmp_path, monkeypatch, capsys):
+    """PARK_ENABLED=False is the kill-switch for a capable model that re-reads
+    aggressively (e.g. minimax-m3:cloud re-viewing a file before editing): the
+    guards still nudge but never terminate (return 3), so the step cap becomes
+    the only bound and the run keeps its full budget to reach a first edit.
+
+    Same read-heavy-repetition scenario as
+    test_local_agent_read_heavy_loop_nudges_once_then_parks, which parks at
+    call 12 (rc=3) with PARK_ENABLED at its default. With PARK_ENABLED=False
+    the park message still prints (the detection is unchanged) but the run
+    must NOT terminate there — it progresses well past call 12."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    responses = [
+        ("bash", {"command": "cat a"}), ("bash", {"command": "cat b"}),
+        ("bash", {"command": "cat c"}), ("bash", {"command": "cat d"}),
+        ("bash", {"command": "cat e"}), ("bash", {"command": "cat f"}),
+        # Post-nudge window with a repeat (cat g twice) -> strict park signal.
+        ("bash", {"command": "cat g"}), ("bash", {"command": "cat g"}),
+        ("bash", {"command": "cat h"}), ("bash", {"command": "cat i"}),
+        ("bash", {"command": "cat j"}), ("bash", {"command": "cat k"}),
+        ("bash", {"command": "cat spare1"}), ("bash", {"command": "cat spare2"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    # The detection still fires — nudge and park message both print — but the
+    # run does NOT exit 3; it continues until the scripted responses run out
+    # (_sequence_chat then yields `done`, rc=0).
+    assert rc != 3, f"PARK_ENABLED=False must not terminate; got rc={rc}\noutput: {out!r}"
+    assert out.count("[read-heavy nudge:") == 1, f"nudge must still fire, output: {out!r}"
+    assert "[parking: read-heavy after nudge]" in out, (
+        f"detection is unchanged; the park line should still print, output: {out!r}"
+    )
+    # The default-PARK test parks at <= 12 calls; disabled parking must
+    # progress past that point (the whole point of the switch).
+    assert len(calls) > 12, (
+        f"disabled parking should let the run continue past the strict-park "
+        f"point, got {len(calls)} chat calls"
+    )
+
+
+def test_local_agent_park_disabled_continues_past_per_target_park(tmp_path, monkeypatch, capsys):
+    """PARK_ENABLED=False on the per-target repetition site (the third park
+    site, distinct from the read-heavy one above): re-viewing the same file
+    3x nudges, a 4th would park (return 3) by default. With parking disabled
+    the run must continue past that point. Covers the site the
+    read-heavy-repetition test doesn't; the distinct-windows site is
+    mechanically identical (same `if not PARK_ENABLED: recent_tools.clear();
+    break` shape) and verified by reading."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    # view_file the same path repeatedly -> per-target seen >= 3 nudges, then
+    # parks on the next. Not enough reads to trip the read-heavy window (6),
+    # so this isolates the per-target guard.
+    responses = [("view_file", {"path": "static/style.css"}) for _ in range(6)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc != 3, f"PARK_ENABLED=False must not terminate; got rc={rc}\noutput: {out!r}"
+    assert "[repetition nudge]" in out, f"per-target nudge must still fire, output: {out!r}"
+    assert "[parking: repeated action after nudge]" in out, (
+        f"detection is unchanged; the park line should still print, output: {out!r}"
+    )
+    # Default parks at the 4th same-target call; disabled parking continues
+    # past it (the run only ends when scripted responses exhaust -> done).
+    assert len(calls) > 4, (
+        f"disabled parking should let the run continue past the per-target "
+        f"park point, got {len(calls)} chat calls"
+    )
+
+
 def test_local_agent_read_heavy_distinct_exploration_reaches_an_edit(tmp_path, monkeypatch, capsys):
     """Lenient path: a multi-file bug fix legitimately reads many DISTINCT
     targets (each file once) before its first edit. The exploration-aware

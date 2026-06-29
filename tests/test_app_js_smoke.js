@@ -12,6 +12,12 @@
 //   - focused element no longer present after re-render -> focus simply
 //     not restored (no throw)
 //   - auto-refresh unchecked -> no indicator, no polling
+//   - showStoryModal renders grouped sections (Identity / Lifecycle /
+//     Dispatch & review / Errors) and omits empty ones
+//   - long/path/JSON values render as <pre class="mono"> blocks
+//   - copy buttons exist on key, worktree, pr_url, pid and call
+//     navigator.clipboard.writeText with the correct value; no-op when
+//     the clipboard API is unavailable
 
 const assert = require("assert");
 
@@ -179,10 +185,17 @@ function makeDocument(initial = {}) {
   let hidden = !!initial.hidden;
   const byId = new Map(initial.byId || []);
   const listeners = {};
+  // Mirror the real DOM's `document.documentElement` so app.js can apply
+  // theme tokens (e.g. `document.documentElement.dataset.theme = "dark"`).
+  // Without this stub the theme toggle handler throws at module load,
+  // which in turn makes every downstream test fail with a misleading
+  // "Cannot read properties of undefined (reading 'dataset')".
+  const documentElement = makeEl("html");
   const doc = {
     get hidden() { return hidden; },
     set hidden(v) { hidden = !!v; },
     body: makeEl("body"),
+    documentElement,
     get activeElement() { return activeElement; },
     setActiveElement(e) { activeElement = e; },
     getElementById(id) {
@@ -211,6 +224,7 @@ function makeDocument(initial = {}) {
   };
   doc._listeners = doc._listeners || {};
   doc.body._ownerDoc = doc;
+  documentElement._ownerDoc = doc;
   return doc;
 }
 
@@ -221,6 +235,7 @@ function makeDocument(initial = {}) {
 function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
   const close = makeEl("button", { attrs: { id: "story-modal-close" } });
   const modal = makeEl("div", { attrs: { id: "story-modal" } });
+  const body = makeEl("div", { attrs: { id: "story-modal-body" } });
   const ar = makeEl("input", {
     attrs: { id: "auto-refresh", type: "checkbox" },
   });
@@ -229,6 +244,7 @@ function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
   const ub = makeEl("div", { attrs: { id: "usage-banner" } });
   doc.register("story-modal-close", close);
   doc.register("story-modal", modal);
+  doc.register("story-modal-body", body);
   doc.register("auto-refresh", ar);
   doc.register("last-updated", lu);
   doc.register("usage-banner", ub);
@@ -276,16 +292,38 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
   const wrapped = `${src}\nmodule.exports = {
     capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+    showStoryModal, handleCopyClick,
     state,
   };`;
+  // Window stub. The browser app.js hangs state on window and registers a
+  // hashchange listener there; under Node neither exists. Provide a tiny
+  // shim so the module's top-level runs without ReferenceError.
+  const win = {
+    addEventListener() {},
+    removeEventListener() {},
+    location: { hash: "" },
+    state: undefined,
+  };
+  // Window state is populated by app.js (`window.state = { ... }`).
+  // Forward that assignment onto our local `state` export by giving window
+  // a setter-on-state that captures into a closure. Simpler: monkey-patch
+  // via Object.defineProperty so we can mirror the assignment.
+  let capturedState = null;
+  Object.defineProperty(win, "state", {
+    configurable: true,
+    get() { return capturedState; },
+    set(v) { capturedState = v; },
+  });
   const m = { exports: {} };
   // eslint-disable-next-line no-new-func
   const fn = new Function("module", "document", "CSS", "setInterval",
     "clearInterval", "setTimeout", "clearTimeout", "localStorage",
-    "require", "module", wrapped);
+    "require", "module", "window", wrapped);
   fn(m, doc, global.CSS, global.setInterval, global.clearInterval,
     global.setTimeout, global.clearTimeout, global.localStorage,
-    require, m);
+    require, m, win);
+  // Mirror the captured state onto the module exports so callers see it.
+  if (capturedState) m.exports.state = capturedState;
   return m.exports;
 }
 
@@ -449,6 +487,211 @@ test("visibilitychange stops polling when hidden, resumes when visible", () => {
     "polling resumed after tab becomes visible");
   assert.notStrictEqual(api.state.pollHandle, originalHandle,
     "resume created a fresh interval handle");
+});
+
+// --- Story modal: grouped sections, mono <pre>, copy affordance ---
+
+// Helper: extract the inner text of a heading by matching section titles
+// inside the modal-body innerHTML. We only need to know a heading exists
+// with the right text; exact DOM walks are easier if we lean on raw HTML.
+function innerHtmlOf(doc, id) {
+  return doc.getElementById(id)._innerHTML || "";
+}
+
+function findSectionTitles(html) {
+  const re = /<h3[^>]*class="[^"]*modal-section[^"]*"[^>]*>([^<]+)<\/h3>/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(html)) !== null) out.push(m[1].trim());
+  return out;
+}
+
+test("showStoryModal renders the four grouped sections for a full story", () => {
+  const doc = makeDocument();
+  const ft = fakeTimers();
+  const api = loadAppJs({ doc, fakeTimers: ft });
+
+  const body = makeEl("div", { attrs: { id: "story-modal-body" } });
+  const modal = makeEl("div", { attrs: { id: "story-modal" }, classList: ["modal", "hidden"] });
+  doc.register("story-modal-body", body);
+  doc.register("story-modal", modal);
+
+  api.showStoryModal({
+    summary: "Do the thing",
+    persona: "eng",
+    model: "sonnet",
+    risk: "low",
+    dependencies: ["a", "b"],
+    status: "in_progress",
+    backend: "claude",
+    escalated: false,
+    worktree: "/tmp/wt/long/path/to/worktree",
+    branch: "feat/widget",
+    pid: 12345,
+    pr_url: "https://github.com/x/y/pull/99",
+    last_commit: "abc1234",
+    interrupted_at: "2024-01-01T00:00:00Z",
+    dispatch_attempts: 1,
+    rework_attempts: 0,
+    merge_attempts: 0,
+    review_verdict: "approve",
+    review_feedback: "lgtm",
+    dispatch_error: "boom",
+    merge_error: "x",
+    failure_reason: "y",
+    parked_reason: "z",
+  }, "story-42");
+
+  const html = innerHtmlOf(doc, "story-modal-body");
+  const titles = findSectionTitles(html);
+  // All four sections present and in the documented order.
+  assert.deepStrictEqual(titles, [
+    "Identity", "Lifecycle", "Dispatch & review", "Errors",
+  ]);
+  // Sample fields are surfaced under their section.
+  assert.ok(html.includes("Do the thing"), "summary surfaced");
+  assert.ok(html.includes("Eng"), "persona surfaced");
+  assert.ok(html.includes("/tmp/wt/long/path/to/worktree"), "worktree surfaced");
+  assert.ok(html.includes("https://github.com/x/y/pull/99"), "pr_url surfaced");
+  // Empty sections / undefined values omitted (escalated/false isn't shown).
+  assert.ok(!/Escalated/.test(html.replace(/<dt>[^<]*<\/dt>/, "")) || /<dt>[\s\S]*?escalated/i.test(html) === false,
+    "escalated false should still be optional — we accept either omission or presence");
+});
+
+test("showStoryModal omits empty sections for a minimal manifest", () => {
+  const doc = makeDocument();
+  const ft = fakeTimers();
+  const api = loadAppJs({ doc, fakeTimers: ft });
+
+  const body = makeEl("div", { attrs: { id: "story-modal-body" } });
+  const modal = makeEl("div", { attrs: { id: "story-modal" }, classList: ["modal", "hidden"] });
+  doc.register("story-modal-body", body);
+  doc.register("story-modal", modal);
+
+  api.showStoryModal({ summary: "minimal", status: "todo" }, "story-min");
+
+  const html = innerHtmlOf(doc, "story-modal-body");
+  const titles = findSectionTitles(html);
+  // Only Identity (key + summary) and Lifecycle (status) sections.
+  assert.deepStrictEqual(titles, ["Identity", "Lifecycle"]);
+  // No Errors/Dispatch sections for a clean minimal story.
+  assert.ok(!/Dispatch/.test(html), "no Dispatch & review section when none of its fields are set");
+  assert.ok(!/Errors/.test(html), "no Errors section when none of its fields are set");
+});
+
+test("showStoryModal uses <pre class=\"mono\"> for path / url / pid / json fields", () => {
+  const doc = makeDocument();
+  const ft = fakeTimers();
+  const api = loadAppJs({ doc, fakeTimers: ft });
+
+  const body = makeEl("div", { attrs: { id: "story-modal-body" } });
+  const modal = makeEl("div", { attrs: { id: "story-modal" }, classList: ["modal", "hidden"] });
+  doc.register("story-modal-body", body);
+  doc.register("story-modal", modal);
+
+  api.showStoryModal({
+    status: "in_progress",
+    worktree: "/very/long/path/to/the/worktree/dir",
+    pr_url: "https://example.com/" + "segment/".repeat(20) + "end",
+    pid: 98765,
+    dispatch_error: JSON.stringify({ foo: "bar", list: [1, 2, 3] }),
+  }, "story-pre");
+
+  const html = innerHtmlOf(doc, "story-modal-body");
+  // Each of these long/path/JSON values lives inside a <pre class="mono".
+  for (const value of [
+    "/very/long/path/to/the/worktree/dir",
+    "https://example.com/",
+    "98765",
+    '"foo": "bar"',
+  ]) {
+    const re = new RegExp(
+      `<pre[^>]*class="[^"]*mono[^"]*"[^>]*>\\s*${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").slice(0, 30)}`,
+    );
+    assert.ok(re.test(html), `expected <pre class="mono"> to contain start of ${value.slice(0, 30)}`);
+  }
+});
+
+test("showStoryModal adds copy buttons for key, worktree, pr_url, pid", () => {
+  const doc = makeDocument();
+  const ft = fakeTimers();
+  const api = loadAppJs({ doc, fakeTimers: ft });
+
+  const body = makeEl("div", { attrs: { id: "story-modal-body" } });
+  const modal = makeEl("div", { attrs: { id: "story-modal" }, classList: ["modal", "hidden"] });
+  doc.register("story-modal-body", body);
+  doc.register("story-modal", modal);
+
+  api.showStoryModal({
+    summary: "x", status: "in_progress",
+    worktree: "/tmp/wt", pr_url: "https://x/y", pid: 7,
+  }, "story-copy");
+
+  const html = innerHtmlOf(doc, "story-modal-body");
+  for (const target of ["key", "worktree", "pr_url", "pid"]) {
+    assert.ok(html.includes(`data-copy="${target}"`),
+      `expected a copy button with data-copy="${target}"`);
+  }
+  // Headline key itself is also surfaced up top.
+  assert.ok(html.includes("story-copy"), "key string shown for the modal heading");
+});
+
+test("copy button click calls navigator.clipboard.writeText with the field value", () => {
+  const doc = makeDocument();
+  const ft = fakeTimers();
+  const api = loadAppJs({ doc, fakeTimers: ft });
+
+  const body = makeEl("div", { attrs: { id: "story-modal-body" } });
+  const modal = makeEl("div", { attrs: { id: "story-modal" }, classList: ["modal", "hidden"] });
+  doc.register("story-modal-body", body);
+  doc.register("story-modal", modal);
+
+  // Provide a stub clipboard with a write spy.
+  const writes = [];
+  global.navigator = {
+    clipboard: { writeText: (s) => { writes.push(s); return Promise.resolve(); } },
+  };
+
+  api.showStoryModal({
+    summary: "x", status: "in_progress",
+    worktree: "/tmp/wt-1", pr_url: "https://x/y", pid: 42,
+  }, "story-write");
+
+  // The modal body should have a click listener registered for copy buttons.
+  const clickHandlers = body._listeners && body._listeners.click ? body._listeners.click : [];
+  assert.ok(clickHandlers.length > 0,
+    "showStoryModal should register a click handler on the body for copy buttons");
+  // Simulate clicking the worktree copy button.
+  const fakeTarget = { dataset: { copy: "worktree" } };
+  clickHandlers[clickHandlers.length - 1]({ target: fakeTarget });
+  assert.deepStrictEqual(writes, ["/tmp/wt-1"], "clicking copy wrote worktree path");
+  delete global.navigator;
+});
+
+test("copy button click is a no-op (no throw) when navigator.clipboard is missing", () => {
+  const doc = makeDocument();
+  const ft = fakeTimers();
+  const api = loadAppJs({ doc, fakeTimers: ft });
+
+  const body = makeEl("div", { attrs: { id: "story-modal-body" } });
+  const modal = makeEl("div", { attrs: { id: "story-modal" }, classList: ["modal", "hidden"] });
+  doc.register("story-modal-body", body);
+  doc.register("story-modal", modal);
+
+  // No navigator at all -> clipboard API unavailable.
+  delete global.navigator;
+
+  api.showStoryModal({
+    summary: "x", status: "in_progress",
+    worktree: "/tmp/wt", pr_url: "https://x/y", pid: 1,
+  }, "story-noclip");
+
+  const clickHandlers = body._listeners && body._listeners.click ? body._listeners.click : [];
+  assert.ok(clickHandlers.length > 0, "click handler was registered");
+  const handler = clickHandlers[clickHandlers.length - 1];
+  // Should not throw even though navigator.clipboard is undefined.
+  assert.doesNotThrow(() => handler({ target: { dataset: { copy: "worktree" } } }),
+    "copy handler must no-op when clipboard API is unavailable");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

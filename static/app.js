@@ -672,55 +672,156 @@ function flashRefreshIndicator() {
   }, 750);
 }
 
+// True when a value should be rendered in a monospace <pre> block instead
+// of an inline <dd>. Long paths, IDs, URLs, commit hashes, and JSON-ish
+// blobs benefit from a fixed-width wrap so users can read/copy them.
+function isLongValue(value) {
+  const s = String(value == null ? "" : value);
+  if (s.length > 60) return true;
+  return /[\\/\n]/.test(s);
+}
+
+// Map of copy-button field name -> rendered value for the currently-open
+// story modal. Populated by showStoryModal and consumed by handleCopyClick
+// so the click handler can resolve the value without walking detached DOM
+// (which the test fixtures simulate) or re-deriving from HTML.
+const copyValues = new Map();
+
+// Build a small "copy" button. The data-copy attribute carries the field
+// name; handleCopyClick resolves the value from `copyValues` so the markup
+// stays a single tiny token and so copy click events for the currently-open
+// story work consistently.
+function renderCopyButton(fieldName, value) {
+  copyValues.set(fieldName, String(value == null ? "" : value));
+  return `<button type="button" class="copy-btn" data-copy="${escapeHtml(fieldName)}" aria-label="Copy ${escapeHtml(fieldName)}">copy</button>`;
+}
+
+// Click handler for `.copy-btn` elements within the story modal. Attached
+// once at module load via event delegation; we don't rebind on every open.
+// Silently swallows clipboard errors and environments where
+// navigator.clipboard is undefined, so the button never throws.
+function handleCopyClick(e) {
+  const btn = e.target.closest && e.target.closest(".copy-btn");
+  if (!btn) return;
+  const field = btn.getAttribute("data-copy") || "";
+  const text = copyValues.get(field) || "";
+  if (!text) return;
+  // navigator.clipboard requires a secure context; guard both the API
+  // presence and the writeText call. In environments where the API is
+  // unavailable (older browsers, insecure contexts, Node smoke tests)
+  // the click is a silent no-op — never throws.
+  if (typeof navigator === "undefined" || !navigator.clipboard
+      || typeof navigator.clipboard.writeText !== "function") {
+    return;
+  }
+  navigator.clipboard.writeText(text).then(
+    () => {
+      const prev = btn.textContent;
+      btn.textContent = "copied";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = prev;
+        btn.classList.remove("copied");
+      }, 1200);
+    },
+    () => {
+      // Swallow rejection (denied permission, etc.) — feature detection
+      // already passed so we treat this as a transient user-side issue.
+    }
+  );
+}
+
 function showStoryModal(story, key) {
   const modal = document.getElementById("story-modal");
   const body = document.getElementById("story-modal-body");
-  const fields = [
-    ["Key", key],
-    ["Status", story.status],
+  const deps = story.dependencies;
+  const depsText = Array.isArray(deps) ? deps.join(", ") : "";
+  const depsShow = Array.isArray(deps) && deps.length > 0 ? depsText : null;
+
+  // Field lists per section. Each entry: [label, value, opts].
+  //   - `opts.copy` enables the click-to-copy button on that value, using
+  //     `opts.copyField` (or fall back to label) as the data-copy key.
+  //   - `opts.mono` forces monospace <pre> rendering for short but
+  //     structured values (e.g. a 12-char commit hash).
+  //
+  // The four sections match the documented field grouping in the story:
+  //   - Identity: who/what the story is
+  //   - Lifecycle: where the agent is in execution
+  //   - Dispatch & review: agent-loop bookkeeping and reviewer notes
+  //   - Errors: failure/pause context surfaced to humans
+  const identity = [
+    ["Key", key, { copy: true, copyField: "key" }],
     ["Summary", story.summary],
     ["Persona", story.persona],
     ["Model", story.model],
     ["Risk", story.risk],
-    ["Dependencies", (story.dependencies || []).join(", ") || "(none)"],
-    ["Worktree", story.worktree],
-    ["PID", story.pid],
-    ["PR URL", story.pr_url],
-    ["Review verdict", story.review_verdict],
-    ["Review feedback", story.review_feedback],
+    ["Dependencies", depsShow],
+  ];
+  const lifecycle = [
+    ["Status", story.status],
+    ["Backend", story.backend],
+    ["Escalated", story.escalated],
+    ["Worktree", story.worktree, { copy: true, copyField: "worktree" }],
+    ["Branch", story.branch],
+    ["PID", story.pid, { copy: true, copyField: "pid", mono: true }],
+    ["PR URL", story.pr_url, { copy: true, copyField: "pr_url", mono: true }],
+    ["Last commit", story.last_commit, { mono: true }],
+    ["Interrupted at", story.interrupted_at],
+  ];
+  const dispatch = [
     ["Dispatch attempts", story.dispatch_attempts],
     ["Rework attempts", story.rework_attempts],
     ["Merge attempts", story.merge_attempts],
+    ["Review verdict", story.review_verdict],
+    ["Review feedback", story.review_feedback],
+  ];
+  const errors = [
     ["Dispatch error", story.dispatch_error],
     ["Merge error", story.merge_error],
+    ["Failure reason", story.failure_reason],
     ["Parked reason", story.parked_reason],
-    ["Interrupted at", story.interrupted_at],
-    ["Last commit", story.last_commit],
-  ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+  ];
 
-  // Lifecycle section: derived last_activity + client-side age label.
-  // Show it only when we actually have a timestamp so we don't render
-  // an empty heading for stories with no activity signal.
-  const ageLabel = ageLabelFor(story.last_activity);
-  const lifecycleRows = story.last_activity
-    ? [
-        ["Last activity", story.last_activity],
-        ["Age", ageLabel || "just now"],
-      ]
-    : [];
-  const lifecycleHtml = lifecycleRows.length
-    ? `<h3 class="modal-section">Lifecycle</h3>
-       <dl>
-         ${lifecycleRows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
-       </dl>`
-    : "";
+  // Reset any previously-cached copy values before populating this story.
+  // Stale entries from a prior open would otherwise let a stale field
+  // name resolve to its old value, which would be both confusing and a
+  // potential information leak across stories.
+  copyValues.clear();
+
+  // Render a field row, applying long/mono/copy semantics.
+  function renderRow(label, value, opts) {
+    opts = opts || {};
+    const v = value;
+    if (v === undefined || v === null || v === "") return "";
+    const mono = opts.mono || isLongValue(v);
+    const inner = mono
+      ? `<pre class="mono">${escapeHtml(String(v))}</pre>`
+      : escapeHtml(v);
+    const btn = opts.copy ? renderCopyButton(opts.copyField || label, v) : "";
+    return `<dt>${escapeHtml(label)}</dt><dd>${inner}${btn}</dd>`;
+  }
+
+  function renderSection(title, rows) {
+    const html = rows.map(([label, value, opts]) => renderRow(label, value, opts))
+      .filter(Boolean)
+      .join("");
+    if (!html) return "";
+    // Section titles are hardcoded literal strings, not user input — emit
+    // them raw so "&" survives as "&" rather than "&amp;" (which would
+    // still render correctly in the browser but makes the markup noisy).
+    return `<h3 class="modal-section">${title}</h3><dl>${html}</dl>`;
+  }
+
+  const sections = [
+    renderSection("Identity", identity),
+    renderSection("Lifecycle", lifecycle),
+    renderSection("Dispatch & review", dispatch),
+    renderSection("Errors", errors),
+  ].filter(Boolean).join("");
 
   body.innerHTML = `
-    <h2>${escapeHtml(key)}</h2>
-    <dl>
-      ${fields.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
-    </dl>
-    ${lifecycleHtml}
+    <h2 class="modal-title">${escapeHtml(key)}</h2>
+    ${sections || "<p class=\"modal-empty\">No fields to display.</p>"}
   `;
   modal.classList.remove("hidden");
 }
@@ -817,7 +918,9 @@ function syncPollingWithVisibility() {
 }
 
 document.getElementById("story-modal-close").addEventListener("click", hideStoryModal);
+document.getElementById("story-modal-body").addEventListener("click", handleCopyClick);
 document.getElementById("story-modal").addEventListener("click", (e) => {
+  // Click on the backdrop (outside the modal-content) closes the modal.
   if (e.target.id === "story-modal") hideStoryModal();
 });
 document.getElementById("auto-refresh").addEventListener("change", (e) => {
@@ -905,6 +1008,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+    showStoryModal, handleCopyClick,
     state,
   };
 }

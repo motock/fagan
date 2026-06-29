@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,79 @@ def _plan_summary(plan_name: str, manifest: dict[str, Any]) -> dict[str, Any]:
         "story_count": len(stories),
         "status_counts": _status_counts(stories),
     }
+
+
+# Staleness threshold (minutes) for the in_progress "aged" indicator on
+# cards. Anything older than this with status=in_progress is presumed to
+# have stalled the agent and gets a muted warning style in the UI.
+STALE_IN_PROGRESS_MINUTES = 30
+
+
+def _parse_iso(ts: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp; tolerate a trailing 'Z' as UTC.
+
+    Returns None if ts is falsy, not a string, or not parseable. The
+    dashboard never raises on malformed timestamps — a bad row should
+    drop out of staleness reporting rather than 500 the endpoint."""
+    if not isinstance(ts, str) or not ts:
+        return None
+    try:
+        # datetime.fromisoformat in 3.11+ accepts trailing 'Z'; older
+        # versions need it swapped for an explicit +00:00 offset.
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _journal_final_ts(plan_name: str, story_key: str) -> str | None:
+    """Return the ISO timestamp of the last entry in the story's
+    checkpoint journal, or None if the journal is missing/empty/unreadable.
+
+    The journal file is named '<plan>.<story_key>.journal.json' and
+    contains a list of checkpoint records; only the last entry's 'ts'
+    is consulted, because that's the most recent observable activity
+    the agent left on disk before being interrupted/resumed."""
+    path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+    if not path.exists():
+        return None
+    try:
+        entries = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(entries, list) or not entries:
+        return None
+    final = entries[-1]
+    return final.get("ts") if isinstance(final, dict) else None
+
+
+def _story_last_activity(plan_name: str, story_key: str, story: dict[str, Any]) -> str | None:
+    """Derive the most recent observable activity timestamp for a story.
+
+    Priority (latest signal wins):
+      1. The story's checkpoint journal final-entry timestamp, if present.
+      2. story['last_commit'].
+      3. story['interrupted_at'].
+    Returns the latest by value (ISO-8601 strings sort chronologically
+    when all use the same offset), or None if no signal is available.
+
+    This derivation is read-only — we never write back to the manifest
+    or journal. The dashboard computes it on every /api/plans/{name}
+    request so the age stays current as the clock advances on the
+    client (UI computes age_seconds = now - last_activity client-side)."""
+    candidates: list[str] = []
+
+    journal_ts = _journal_final_ts(plan_name, story_key)
+    if isinstance(journal_ts, str) and journal_ts:
+        candidates.append(journal_ts)
+
+    for field in ("last_commit", "interrupted_at"):
+        val = story.get(field)
+        if isinstance(val, str) and val:
+            candidates.append(val)
+
+    if not candidates:
+        return None
+    return max(candidates)
 
 
 # A story is considered "dispatched" if it ever made it past the todo state.
@@ -215,11 +289,22 @@ def get_plan(plan_name: str) -> dict[str, Any]:
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     stories = manifest.get("stories", {})
+    # Decorate each story with a server-derived last_activity timestamp the
+    # UI can read to render age labels / staleness without us doing the
+    # math server-side (age is computed client-side from this timestamp).
+    # Existing fields are preserved verbatim — we never rewrite the story.
+    decorated_stories: dict[str, Any] = {}
+    for story_key, story in stories.items():
+        if not isinstance(story, dict):
+            decorated_stories[story_key] = story
+            continue
+        last_activity = _story_last_activity(plan_name, story_key, story)
+        decorated_stories[story_key] = {**story, "last_activity": last_activity}
     summary = _plan_summary(plan_name, manifest)
     return {
         **summary,
         "epics": manifest.get("epics", {}),
-        "stories": stories,
+        "stories": decorated_stories,
         "notifications": _tail_notifications(plan_name),
         "decisions": _read_decisions(plan_name),
     }

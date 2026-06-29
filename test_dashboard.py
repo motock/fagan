@@ -244,3 +244,272 @@ def test_dispatch_health_counts_backend_set_as_dispatched_even_if_todo(
     assert s["dispatched"] == 1
     assert s["escalated"] == 1
     assert s["escalation_rate"] == 1.0
+
+
+# ---------- last_activity derivation on /api/plans/{name} stories ----------
+
+def _write_journal(plan_dir, plan_name, story_key, entries):
+    """Write a checkpoint journal file. `entries` is a list of dicts each
+    with a 'ts' (ISO timestamp) and a 'step' short id, in chronological
+    order.  Only the final entry's timestamp matters for last_activity."""
+    path = plan_dir / f"{plan_name}.{story_key}.journal.json"
+    path.write_text(json.dumps(entries))
+
+
+def test_story_last_activity_uses_interrupted_at_when_only_that_is_set(client, plan_dir):
+    """(1) interrupted_at only -> last_activity == interrupted_at."""
+    interrupted_at = "2026-06-25T12:00:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "interrupted story",
+            "status": "interrupted",
+            "interrupted_at": interrupted_at,
+            "dependencies": [],
+        },
+    })
+    body = client.get("/api/plans/demo").json()
+    assert body["stories"]["S1"]["interrupted_at"] == interrupted_at  # preserved
+    assert body["stories"]["S1"]["last_activity"] == interrupted_at
+
+
+def test_story_last_activity_picks_later_of_interrupted_at_and_last_commit(client, plan_dir):
+    """(2) both present -> last_activity == the later of the two."""
+    earlier = "2026-06-25T10:00:00+00:00"
+    later = "2026-06-25T12:00:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "interrupted with commit history",
+            "status": "interrupted",
+            "interrupted_at": earlier,
+            "last_commit": later,
+            "dependencies": [],
+        },
+        # Reverse case: last_commit is *earlier* than interrupted_at.
+        "S2": {
+            "summary": "commit older than interrupt",
+            "status": "interrupted",
+            "interrupted_at": later,
+            "last_commit": earlier,
+            "dependencies": [],
+        },
+    })
+    body = client.get("/api/plans/demo").json()
+    assert body["stories"]["S1"]["last_activity"] == later
+    assert body["stories"]["S2"]["last_activity"] == later
+
+
+def test_story_last_activity_omitted_when_no_signal(client, plan_dir):
+    """(3) neither interrupted_at nor last_commit (and no journal) ->
+    last_activity is None / absent so the UI doesn't render an age label."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "todo story",
+            "status": "todo",
+            "dependencies": [],
+        },
+    })
+    body = client.get("/api/plans/demo").json()
+    story = body["stories"]["S1"]
+    # Must exist but signal the absence clearly; UI gates on truthiness.
+    assert story.get("last_activity") in (None, "")
+
+
+def test_story_last_activity_uses_journal_final_timestamp_when_latest(client, plan_dir):
+    """(4) journal present -> its final entry's timestamp is considered and
+    wins when it's the latest signal available."""
+    interrupted_at = "2026-06-25T10:00:00+00:00"
+    last_commit = "2026-06-25T11:00:00+00:00"
+    journal_final_ts = "2026-06-25T13:30:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "journal beats both",
+            "status": "interrupted",
+            "interrupted_at": interrupted_at,
+            "last_commit": last_commit,
+            "dependencies": [],
+        },
+    })
+    _write_journal(plan_dir, "demo", "S1", [
+        {"step": "a", "ts": "2026-06-25T09:00:00+00:00", "summary": "early"},
+        {"step": "b", "ts": "2026-06-25T13:30:00+00:00", "summary": "final"},
+    ])
+
+    body = client.get("/api/plans/demo").json()
+    assert body["stories"]["S1"]["last_activity"] == journal_final_ts
+
+
+def test_story_last_activity_does_not_mutate_manifest(client, plan_dir):
+    """The dashboard is read-only and must NOT modify the manifest on disk
+    when deriving last_activity — re-read after the request and assert
+    nothing new was written."""
+    interrupted_at = "2026-06-25T12:00:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "no mutating writes please",
+            "status": "interrupted",
+            "interrupted_at": interrupted_at,
+            "dependencies": [],
+        },
+    })
+    before = json.loads((plan_dir / "demo.manifest.json").read_text())
+    client.get("/api/plans/demo")
+    after = json.loads((plan_dir / "demo.manifest.json").read_text())
+    assert before == after
+
+
+def test_story_last_activity_ignores_missing_or_empty_journal(client, plan_dir):
+    """Boundary: a journal file that exists but has no parseable entries
+    must not produce a last_activity; missing journal is the same."""
+    interrupted_at = "2026-06-25T12:00:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "broken journal",
+            "status": "interrupted",
+            "interrupted_at": interrupted_at,
+            "dependencies": [],
+        },
+    })
+    # Empty list -> parser should fall back to manifest signals.
+    (plan_dir / "demo.S1.journal.json").write_text("[]")
+    body = client.get("/api/plans/demo").json()
+    assert body["stories"]["S1"]["last_activity"] == interrupted_at
+
+
+# ---------- client-side age/staleness helpers in static/app.js ----------
+#
+# The dashboard hands the UI a `last_activity` ISO string per story and the
+# browser computes the age + staleness class from there so cards stay
+# accurate between polls (no re-fetch needed as the clock advances). These
+# tests exercise the pure helpers exposed by app.js by shelling out to Node
+# in a subprocess — no JS test runner / jsdom dependency, just plain pytest.
+import os
+import subprocess
+
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+
+
+def _run_app_js(expr):
+    """Evaluate a JS expression inside an environment where static/app.js
+    has been loaded (so its top-level consts + functions are available).
+    Returns the JSON-serialized result. Keeps the assertion surface area
+    in Python where the rest of the suite already lives.
+
+    app.js touches `document`/`window` at module load to wire DOM event
+    listeners; we stub those out so the pure helpers below are testable
+    without pulling in jsdom."""
+    shim = """
+        const noop = () => {};
+        const fakeEl = {
+            innerHTML: "",
+            classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+            addEventListener: noop,
+            appendChild: noop,
+            querySelectorAll: () => [],
+            dataset: {},
+        };
+        globalThis.document = {
+            getElementById: () => ({ ...fakeEl, dataset: {}, addEventListener: noop }),
+            createElement: () => ({ ...fakeEl, classList: { add: noop, remove: noop, contains: () => false } }),
+        };
+        globalThis.window = {};
+        globalThis.localStorage = { getItem: () => null, setItem: noop };
+        globalThis.fetch = () => new Promise(() => {}); // never resolves
+        process.on("unhandledRejection", () => {});
+        // app.js calls setInterval(refresh, 4000) at module load. In Node
+        // that keeps the event loop alive after we've printed the result;
+        // override so the process can exit naturally.
+        globalThis.setInterval = () => 0;
+        globalThis.setTimeout = (fn, _ms) => { if (typeof fn === "function") { /* dropped */ } return 0; };
+    """
+    script = (
+        shim
+        + "const fs = require('fs');"
+        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
+        + "process.stdout.write(JSON.stringify(" + expr + "));"
+    )
+    proc = subprocess.run(
+        ["node", "-e", script],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def _iso(seconds_ago):
+    """Return an ISO timestamp `seconds_ago` in the past, UTC."""
+    from datetime import datetime, timedelta, timezone
+    dt = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    # datetime.isoformat produces '+00:00'; new Date() handles that fine.
+    return dt.isoformat()
+
+
+def test_relative_age_label_minutes_and_hours_and_days():
+    """The short-form label uses the right unit and floors toward zero."""
+    now = _iso(0)
+    cases = [
+        # age_seconds -> expected label
+        (0, "just now"),
+        (59, "just now"),
+        (60, "1m ago"),
+        (3 * 60, "3m ago"),
+        (59 * 60 + 30, "59m ago"),
+        (60 * 60, "1h ago"),
+        (2 * 60 * 60, "2h ago"),
+        (23 * 60 * 60 + 30 * 60, "23h ago"),
+        (24 * 60 * 60, "1d ago"),
+        (4 * 24 * 60 * 60, "4d ago"),
+    ]
+    for age, expected in cases:
+        assert _run_app_js(f"relativeAgeLabel({age})") == expected, (age, expected)
+
+
+def test_relative_age_label_clamps_future_to_just_now():
+    """Negative age (future timestamp) must NOT surface as '-5m ago'."""
+    assert _run_app_js("relativeAgeLabel(-1)") == "just now"
+    assert _run_app_js("relativeAgeLabel(-3600)") == "just now"
+
+
+def test_age_label_for_returns_null_when_missing_or_unparseable():
+    """No signal -> no label, so the UI doesn't render an empty pill."""
+    assert _run_app_js("ageLabelFor(null)") is None
+    assert _run_app_js("ageLabelFor(undefined)") is None
+    assert _run_app_js("ageLabelFor('')") is None
+    assert _run_app_js("ageLabelFor('not-a-date')") is None
+
+
+def test_age_label_for_uses_last_activity_relative_to_now():
+    """A 3-minute-old last_activity should render as '3m ago' (allowing
+    for the second or two between us computing 'now' and Node computing
+    its own 'now' — but 3m should never collapse to 'just now')."""
+    ts = _iso(3 * 60)
+    label = _run_app_js(f"ageLabelFor({json.dumps(ts)})")
+    assert label == "3m ago", label
+
+
+def test_age_label_for_future_timestamp_is_just_now():
+    """Boundary: a future-dated last_activity clamps to 'just now'
+    rather than producing a negative-looking string."""
+    from datetime import datetime, timedelta, timezone
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    assert _run_app_js(f"ageLabelFor({json.dumps(future)})") == "just now"
+
+
+def test_is_stale_in_progress_only_for_aged_in_progress_stories():
+    """Stale = in_progress AND age > STALE_IN_PROGRESS_MINUTES.
+    Other statuses, missing timestamps, or fresh ages must all be false."""
+    fresh_ts = _iso(5)               # 5 seconds old
+    aged_ts = _iso(45 * 60)          # 45 minutes old
+    fresh_story = {"status": "in_progress", "last_activity": fresh_ts}
+    aged_story = {"status": "in_progress", "last_activity": aged_ts}
+    aged_done = {"status": "done", "last_activity": aged_ts}
+    aged_no_ts = {"status": "in_progress"}
+    no_signal = {"status": "in_progress", "last_activity": None}
+
+    assert _run_app_js(f"isStaleInProgress({json.dumps(fresh_story)})") is False
+    assert _run_app_js(f"isStaleInProgress({json.dumps(aged_story)})") is True
+    assert _run_app_js(f"isStaleInProgress({json.dumps(aged_done)})") is False
+    assert _run_app_js(f"isStaleInProgress({json.dumps(aged_no_ts)})") is False
+    assert _run_app_js(f"isStaleInProgress({json.dumps(no_signal)})") is False
+    # And no story at all.
+    assert _run_app_js("isStaleInProgress(null)") is False

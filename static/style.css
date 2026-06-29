@@ -158,6 +158,31 @@ main {
 .card .card-key { color: var(--text-dim); font-size: 10px; }
 .card .card-summary { margin-top: 3px; }
 
+/* Relative-age pill rendered when the story has a `last_activity`
+   timestamp. Default tone is dim (informational only); the .stale
+   variant shifts to a muted warning amber so aged in_progress cards
+   stand out without looking like a hard error. */
+.card .card-age {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.card .card-age.stale {
+  color: var(--c-parked);
+  font-weight: 600;
+}
+/* Whole-card stale treatment: tinted border + faint amber wash so the
+   card reads as "left running, no recent activity" at a glance. */
+.card.stale {
+  border-left-color: var(--c-parked);
+  background: linear-gradient(
+    90deg,
+    rgba(201, 162, 39, 0.10),
+    var(--panel-2) 40%
+  );
+}
+
 .badge {
   display: inline-block;
   padding: 1px 6px;

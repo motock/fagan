@@ -550,6 +550,58 @@ main {
 }
 .modal-content dd .copy-btn { margin-top: 6px; margin-left: 0; }
 
+/* Journal timeline. Renders checkpoint entries as a vertical list with a
+   rail down the left so consecutive steps read as a progression. The step
+   label sits on the rail as a small uppercase chip; summary below; the
+   next_hint and timestamp render in the muted secondary tone to keep the
+   narrative text dominant. */
+.modal-content .timeline {
+  list-style: none;
+  margin: 6px 0 0 0;
+  padding: 0 0 0 4px;
+  border-left: 2px solid var(--border);
+}
+.modal-content .timeline-item {
+  position: relative;
+  margin: 0 0 12px 0;
+  padding: 0 0 0 14px;
+}
+/* Filled circle on the rail to mark each step. The negative left pulls the
+   dot back onto the rail border so the rail visually connects the dots. */
+.modal-content .timeline-item::before {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-tests_passed, #5dd39e);
+  border: 2px solid var(--panel);
+}
+.modal-content .timeline-step {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.modal-content .timeline-summary {
+  margin: 2px 0 0 0;
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+.modal-content .timeline-next,
+.modal-content .timeline-ts {
+  margin-top: 3px;
+  font-size: 11px;
+}
+.modal-content .muted {
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+
 /* Usage-gate health banner */
 .usage-banner {
   padding: 8px 16px;

@@ -579,7 +579,7 @@ function renderPlanDetail(plan) {
   `;
 
   section.querySelectorAll(".card").forEach((card) => {
-    card.addEventListener("click", () => showStoryModal(plan.stories[card.dataset.key], card.dataset.key));
+    card.addEventListener("click", () => showStoryModal(plan.name, plan.stories[card.dataset.key], card.dataset.key));
   });
 
   section.querySelectorAll(".filter-chip").forEach((el) => {
@@ -687,6 +687,98 @@ function isLongValue(value) {
 // (which the test fixtures simulate) or re-deriving from HTML.
 const copyValues = new Map();
 
+// Currently-open story in the modal: { plan, key } or null. Tracked so the
+// async journal fetch (which races with the user opening a different story
+// or closing the modal) can drop stale responses without racing in late
+// DOM writes. Without this guard, a slow fetch from a prior open could
+// overwrite the new story's journal section with the previous one.
+const openStoryRef = { plan: null, key: null };
+
+// Render a single timeline entry as HTML. Defensive defaults for fields the
+// server may or may not have (entry missing `next_hint` must render nothing,
+// never the literal string 'undefined'). Returns "" for entries with no
+// step AND no summary so corrupt rows leave no visual artifact.
+function renderJournalEntry(entry) {
+  if (!entry || typeof entry !== "object") return "";
+  const step = entry.step ? String(entry.step) : "";
+  const summary = entry.summary ? String(entry.summary) : "";
+  const nextHint = entry.next_hint ? String(entry.next_hint) : "";
+  const ts = entry.ts ? String(entry.ts) : "";
+  if (!step && !summary) return "";
+  // next_hint is muted/caption-tone because it's metadata about what comes
+  // NEXT (process hint), not part of the current entry's narrative. We omit
+  // the block entirely when missing rather than emitting an empty <p>.
+  const nextHtml = nextHint
+    ? `<div class="timeline-next muted">next: ${escapeHtml(nextHint)}</div>`
+    : "";
+  const tsHtml = ts
+    ? `<div class="timeline-ts muted">${escapeHtml(ts)}</div>`
+    : "";
+  return `
+    <li class="timeline-item">
+      <div class="timeline-step">${escapeHtml(step || "(no step)")}</div>
+      <div class="timeline-summary">${escapeHtml(summary)}</div>
+      ${nextHtml}
+      ${tsHtml}
+    </li>
+  `;
+}
+
+// Render the entire Journal section for the story modal. `data` matches the
+// /api/plans/{plan}/stories/{story}/journal response: {available, entries}.
+// The empty state is shown when (a) the file is missing/malformed, or
+// (b) the entries array is empty — both are visually indistinguishable in
+// the UI, matching the endpoint's contract (test: empty list == unavailable).
+function renderJournal(data) {
+  if (!data || !data.available || !Array.isArray(data.entries) || data.entries.length === 0) {
+    return `
+      <h3 class="modal-section">Journal</h3>
+      <p class="modal-empty" data-journal-empty>No journal yet.</p>
+    `;
+  }
+  const items = data.entries.map(renderJournalEntry).filter(Boolean).join("");
+  return `
+    <h3 class="modal-section">Journal</h3>
+    <ol class="timeline" data-journal-list>${items}</ol>
+  `;
+}
+
+// Fetch the journal for the currently-open story and inject the rendered
+// HTML into the modal body. Guards against races with modal close /
+// re-open by checking `openStoryRef` before mutating DOM. Failures (network
+// down, server 500) are silently swallowed — the empty state shows by
+// default. The journal is informational, not critical, so it must never
+// block opening the modal or throw an unhandled promise rejection.
+async function loadStoryJournal(plan, key, container) {
+  if (!plan || !key || !container) return;
+  openStoryRef.plan = plan;
+  openStoryRef.key = key;
+  try {
+    const data = await fetchJson(
+      `/api/plans/${encodeURIComponent(plan)}/stories/${encodeURIComponent(key)}/journal`
+    );
+    // Drop the response if the user closed the modal or opened a
+    // different story in the meantime — late writes would overwrite
+    // the new view with stale data.
+    if (openStoryRef.plan !== plan || openStoryRef.key !== key) return;
+    const html = renderJournal(data);
+    const slot = container.querySelector("[data-journal-slot]");
+    if (slot) slot.innerHTML = html;
+  } catch {
+    // 404 (story/plan gone) or transient network error: keep the empty
+    // state placeholder. Don't rethrow — the modal stays usable.
+    if (openStoryRef.plan !== plan || openStoryRef.key !== key) return;
+    const slot = container.querySelector("[data-journal-slot]");
+    if (slot) {
+      slot.innerHTML = `
+        <h3 class="modal-section">Journal</h3>
+        <p class="modal-empty">No journal yet.</p>
+      `;
+    }
+  }
+}
+
+
 // Build a small "copy" button. The data-copy attribute carries the field
 // name; handleCopyClick resolves the value from `copyValues` so the markup
 // stays a single tiny token and so copy click events for the currently-open
@@ -731,7 +823,7 @@ function handleCopyClick(e) {
   );
 }
 
-function showStoryModal(story, key) {
+function showStoryModal(planName, story, key) {
   const modal = document.getElementById("story-modal");
   const body = document.getElementById("story-modal-body");
   const deps = story.dependencies;
@@ -822,8 +914,19 @@ function showStoryModal(story, key) {
   body.innerHTML = `
     <h2 class="modal-title">${escapeHtml(key)}</h2>
     ${sections || "<p class=\"modal-empty\">No fields to display.</p>"}
+    <div data-journal-slot>
+      <h3 class="modal-section">Journal</h3>
+      <p class="modal-empty" data-journal-empty>No journal yet.</p>
+    </div>
   `;
   modal.classList.remove("hidden");
+
+  // Fire-and-forget journal fetch. The empty-state placeholder is already
+  // in the DOM so the modal opens immediately; the slot is updated by
+  // loadStoryJournal once the response arrives (or stays as the empty
+  // state on error / unavailable). The race guard in loadStoryJournal
+  // ensures a slow prior fetch can't clobber a newly-opened story.
+  if (planName) loadStoryJournal(planName, key, body);
 }
 
 function hideStoryModal() {

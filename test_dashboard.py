@@ -415,7 +415,13 @@ def _run_app_js(expr):
             getElementById: () => ({ ...fakeEl, dataset: {}, addEventListener: noop }),
             createElement: () => ({ ...fakeEl, classList: { add: noop, remove: noop, contains: () => false } }),
         };
-        globalThis.window = {};
+        globalThis.window = {
+            // app.js reads window.location.hash at boot (applyHashToState) and
+            // assigns it back; stub a plain location with an empty hash. The
+            // hashchange listener is wired at module load too.
+            location: { hash: "" },
+            addEventListener: noop,
+        };
         globalThis.localStorage = { getItem: () => null, setItem: noop };
         globalThis.fetch = () => new Promise(() => {}); // never resolves
         process.on("unhandledRejection", () => {});

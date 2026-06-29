@@ -123,19 +123,44 @@ def _sequence_chat(responses):
 
 
 def test_local_agent_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatch, capsys):
-    """When devstral rotates across many distinct view_file / bash targets
-    without ever calling create_file / str_replace, the per-target
-    repetition guard misses it (every signature is unique), but the
-    read-heavy guard must fire: one corrective nudge after
-    READ_HEAVY_WINDOW reads, then park after another
-    READ_HEAVY_WINDOW if the model ignores the nudge.
+    """Strict/wedging path: when devstral RE-READS an already-seen target
+    without ever calling create_file / str_replace, the read-heavy guard
+    must fire — one corrective nudge after READ_HEAVY_WINDOW reads, then
+    park after another READ_HEAVY_WINDOW if the model ignores the nudge.
 
-    We script 12 distinct bash calls (all unique signatures) and assert
-    that main() returns 3 (parking), the nudge + park log lines fire
-    exactly once each, and chat() is called ~12 times (not the full 40
-    step cap — that would mean the guard failed to stop the run)."""
+    Distinct-target exploration (reading many files once each) is covered
+    by test_local_agent_read_heavy_distinct_exploration_reaches_an_edit —
+    that is the lenient path. This test pins the strict path: a target
+    repeated within the post-nudge window is re-reading (wedging), and
+    parks at 2 * READ_HEAVY_WINDOW (default 12).
+
+    We script 6 distinct reads (nudge), then a post-nudge window of 6
+    reads where one target repeats. Each target appears <= 2 times total
+    so the per-target repetition guard (seen >= 3) does not fire — this
+    test is about the read-heavy guard, not the per-target one."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    responses = [("bash", {"command": f"cat nonexistent_{i}"}) for i in range(15)]
+    responses = [
+        # 6 distinct reads -> nudge at READ_HEAVY_WINDOW (6).
+        ("bash", {"command": "cat a"}),
+        ("bash", {"command": "cat b"}),
+        ("bash", {"command": "cat c"}),
+        ("bash", {"command": "cat d"}),
+        ("bash", {"command": "cat e"}),
+        ("bash", {"command": "cat f"}),
+        # Post-nudge window: 'cat g' repeats once within the window
+        # (re-reading a target = wedging, not exploration). Each target
+        # is still <= 2 total, so the per-target guard (seen >= 3) stays
+        # out of the way.
+        ("bash", {"command": "cat g"}),
+        ("bash", {"command": "cat g"}),
+        ("bash", {"command": "cat h"}),
+        ("bash", {"command": "cat i"}),
+        ("bash", {"command": "cat j"}),
+        ("bash", {"command": "cat k"}),
+        # Spare reads in case of an off-by-one; the park fires at call 12.
+        ("bash", {"command": "cat spare1"}),
+        ("bash", {"command": "cat spare2"}),
+    ]
     fake, calls = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
 
@@ -153,6 +178,80 @@ def test_local_agent_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatc
         f"guard should stop the run well before the 40-step cap, "
         f"got {len(calls)} chat calls"
     )
+
+
+def test_local_agent_read_heavy_distinct_exploration_reaches_an_edit(tmp_path, monkeypatch, capsys):
+    """Lenient path: a multi-file bug fix legitimately reads many DISTINCT
+    targets (each file once) before its first edit. The exploration-aware
+    read-heavy guard must NOT park such a run at 2 * READ_HEAVY_WINDOW —
+    it nudges once (pushing the agent to act) then lets all-distinct
+    exploration continue up to a bounded cap, so a run that reaches an
+    edit finishes cleanly.
+
+    Pre-fix (flat 12-read cutoff) this parked at step 12 before the
+    create_file, returning 3. Post-fix it reaches the edit and exits 0.
+    This is the regression that parked both pipeline-fix agents
+    (3e44b5a7, 900c765b) during fresh bug-fix exploration on 2026-06-28."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(16)]
+    # 16 distinct reads -> nudge at 6, then all-distinct post-nudge windows
+    # (leniency), never reaching the 24-read distinct cap. A mutating call
+    # then resets the streak and the run finishes.
+    responses.append(("create_file", {"path": "new_module.rs", "content": "// real code\n"}))
+    responses.append(("done", {"summary": "wrote the module"}))
+    responses.append(("done", {"summary": "wrote the module"}))
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+    assert rc == 0, (
+        f"distinct exploration that reaches an edit must finish, got rc={rc}\noutput: {out!r}"
+    )
+    assert "[parking: read-heavy" not in out, (
+        f"all-distinct exploration must not park before the bounded cap; output: {out!r}"
+    )
+
+
+def test_local_agent_read_heavy_distinct_exploration_is_bounded(tmp_path, monkeypatch, capsys):
+    """The leniency for distinct exploration is BOUNDED, not disabled: a
+    run that keeps reading distinct targets with NO eventual mutation is
+    still wedging, just a slower kind. It must park after
+    READ_HEAVY_WINDOW + READ_HEAVY_DISTINCT_WINDOWS * READ_HEAVY_WINDOW
+    reads (6 + 3*6 = 24 by default) — not the flat 12, but still bounded.
+
+    Pre-fix this parked at 12 (flat cutoff). Post-fix it parks at ~24 with
+    a distinct-windows park message. Asserting the call count is > 12 pins
+    the leniency; asserting it is <= 24 pins the bound."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(30)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+    assert rc == 3, f"unbounded distinct reading must still park, got rc={rc}\noutput: {out!r}"
+    assert out.count("[read-heavy nudge:") == 1, f"expected 1 nudge, output: {out!r}"
+    assert "distinct windows" in out, (
+        f"distinct-cap park must log a distinct-windows message; output: {out!r}"
+    )
+    # Leniency: parks later than the flat 12. Bound: no later than 24.
+    assert len(calls) > 12, (
+        f"distinct exploration must get more than the flat 12 reads; got {len(calls)}"
+    )
+    assert len(calls) <= 24, (
+        f"distinct exploration must be bounded (<= 24 reads); got {len(calls)}"
+    )
+
+
+def test_local_agent_read_heavy_distinct_constants():
+    """The exploration-aware guard adds a bounded-leniency constant. It
+    must be defined and the nudge threshold stays 6 so the early 'push to
+    act' nudge is preserved (the leniency only relaxes the PARK, not the
+    nudge)."""
+    assert la.READ_HEAVY_WINDOW == 6
+    assert hasattr(la, "READ_HEAVY_DISTINCT_WINDOWS")
+    assert la.READ_HEAVY_DISTINCT_WINDOWS == 3
 
 
 def test_local_agent_does_not_nudge_with_regular_writes(tmp_path, monkeypatch, capsys):
@@ -202,12 +301,30 @@ def test_local_agent_does_not_nudge_with_regular_writes(tmp_path, monkeypatch, c
 
 
 def test_local_agent_read_heavy_park_does_not_wip_commit_when_clean(tmp_path, monkeypatch, capsys):
-    """When the read-heavy guard parks the run, it should not spuriously
-    WIP-commit if the worktree is clean. (A read-only run by definition
-    hasn't edited any files, so worktree_dirty() is False — auto_wip_commit
-    is a no-op, but the branch must be reachable.)"""
+    """When the read-heavy guard parks the run on the strict (re-reading)
+    path, it should not spuriously WIP-commit if the worktree is clean.
+    (A read-only run by definition hasn't edited any files, so
+    worktree_dirty() is False — auto_wip_commit is a no-op, but the branch
+    must be reachable.) Uses the same re-reading scenario as
+    test_local_agent_read_heavy_loop_nudges_once_then_parks so the strict
+    park fires; the reads don't create files so the worktree stays clean."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    responses = [("bash", {"command": f"cat nonexistent_{i}"}) for i in range(15)]
+    responses = [
+        ("bash", {"command": "cat a"}),
+        ("bash", {"command": "cat b"}),
+        ("bash", {"command": "cat c"}),
+        ("bash", {"command": "cat d"}),
+        ("bash", {"command": "cat e"}),
+        ("bash", {"command": "cat f"}),
+        ("bash", {"command": "cat g"}),
+        ("bash", {"command": "cat g"}),
+        ("bash", {"command": "cat h"}),
+        ("bash", {"command": "cat i"}),
+        ("bash", {"command": "cat j"}),
+        ("bash", {"command": "cat k"}),
+        ("bash", {"command": "cat spare1"}),
+        ("bash", {"command": "cat spare2"}),
+    ]
     fake, _ = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
     # Sanity: tmp_path is empty, so worktree_dirty() returns False.

@@ -25,6 +25,24 @@
 import { JSDOM } from "jsdom";
 import assert from "node:assert/strict";
 
+// JSDOM exposes its own realm: arrays evaluated inside the window have a
+// different Array.prototype than the test's. `node:assert/strict` uses
+// prototype-aware deepEqual, so cross-realm arrays fail with a misleading
+// "same structure, not reference-equal" error. Normalize before assertions.
+function toLocal(value) {
+  if (Array.isArray(value)) return value.map(toLocal);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = toLocal(value[k]);
+    return out;
+  }
+  return value;
+}
+
+function eq(actual, expected, label) {
+  assert.deepEqual(toLocal(actual), expected, label);
+}
+
 const results = [];
 function record(name, ok, detail) {
   results.push({ name, ok, detail });
@@ -128,11 +146,11 @@ async function test_default_filters_include_new_dims_with_show_all() {
   const env = makeEnv();
   const api = await loadApp(env);
   const d = api.defaultFilters();
-  assert.deepEqual(d.backends, [], "backends default to [] (show all)");
-  assert.deepEqual(d.escalated, [], "escalated default to [] (show all)");
+  eq(d.backends, [], "backends default to [] (show all)");
+  eq(d.escalated, [], "escalated default to [] (show all)");
   // Existing dims remain untouched.
-  assert.deepEqual(d.personas, [], "personas default to []");
-  assert.deepEqual(d.risks, [], "risks default to []");
+  eq(d.personas, [], "personas default to []");
+  eq(d.risks, [], "risks default to []");
   assert.equal(d.sort, "key", "sort defaults to key");
   record("defaultFilters seeds backends + escalated as []", true);
 }
@@ -140,8 +158,8 @@ async function test_default_filters_include_new_dims_with_show_all() {
 async function test_backend_values_and_escalated_values_constants() {
   const env = makeEnv();
   const api = await loadApp(env);
-  assert.deepEqual(api.BACKEND_VALUES, ["local", "claude"]);
-  assert.deepEqual(api.ESCALATED_VALUES, ["yes", "no"]);
+  eq(api.BACKEND_VALUES, ["local", "claude"]);
+  eq(api.ESCALATED_VALUES, ["yes", "no"]);
   record("BACKEND_VALUES + ESCALATED_VALUES constants are stable", true);
 }
 
@@ -187,7 +205,7 @@ async function test_apply_filters_escalated_yes_and_no() {
   out = api.applyFilters(entries);
   assert.equal(out.length, 2, "no + missing both match 'no'");
   const keys = out.map(([k]) => k).sort();
-  assert.deepEqual(keys, ["missing", "no"]);
+  eq(keys, ["missing", "no"]);
 
   api.state.filters.escalated = [];
   assert.equal(api.applyFilters(entries).length, 3, "no filter = all pass");
@@ -209,7 +227,7 @@ async function test_apply_filters_combine_with_persona_risk() {
   api.state.filters.backends = ["claude"];
   api.state.filters.escalated = ["yes"];
   const out = api.applyFilters(stories).map(([k]) => k);
-  assert.deepEqual(out, ["a"]);
+  eq(out, ["a"]);
   record("applyFilters combines backend + escalated with persona + risk", true);
 }
 
@@ -346,7 +364,7 @@ async function test_backend_chip_filters_narrow_the_board() {
   });
   const rendered = cardsWith(html, () => true);
   const keys = rendered.map((c) => c.key);
-  assert.deepEqual(keys, ["claude"], "only the claude story remains");
+  eq(keys, ["claude"], "only the claude story remains");
   api.state.filters.backends = [];
   record("filtering by backend=claude narrows the board", true);
 }
@@ -360,7 +378,7 @@ async function test_escalated_chip_filters_narrow_the_board() {
     b: { status: "todo", summary: "y", escalated: true },
   });
   const keys = cardsWith(html, () => true).map((c) => c.key);
-  assert.deepEqual(keys, ["b"]);
+  eq(keys, ["b"]);
   api.state.filters.escalated = [];
   record("filtering by escalated=yes narrows the board", true);
 }
@@ -372,11 +390,11 @@ async function test_filter_reset_clears_backends_and_escalated() {
   const f = api.defaultFilters();
   f.backends = ["claude"];
   f.escalated = ["yes"];
-  assert.deepEqual(f.backends, ["claude"]);
-  assert.deepEqual(f.escalated, ["yes"]);
+  eq(f.backends, ["claude"]);
+  eq(f.escalated, ["yes"]);
   const d = api.defaultFilters();
-  assert.deepEqual(d.backends, []);
-  assert.deepEqual(d.escalated, []);
+  eq(d.backends, []);
+  eq(d.escalated, []);
   record("defaultFilters returns empty backends/escalated (reset clears them)", true);
 }
 
@@ -395,7 +413,7 @@ async function test_backend_and_escalated_combine_with_status_filter() {
   const keys = cardsWith(html, () => true).map((c) => c.key);
   // Status filter keeps everything by default; on top of that
   // backend=claude AND escalated=no leaves "b" only.
-  assert.deepEqual(keys, ["b"]);
+  eq(keys, ["b"]);
   api.state.filters.backends = [];
   api.state.filters.escalated = [];
   record("backend + escalated combine with status (default = all)", true);
@@ -421,11 +439,11 @@ async function test_legacy_localstorage_blob_loads_without_throwing() {
   const api = await loadApp(env);
   // The init code already called loadFilters via window.eval; verify
   // the actual state.
-  assert.deepEqual(api.state.filters.backends, [], "backends defaulted to []");
-  assert.deepEqual(api.state.filters.escalated, [], "escalated defaulted to []");
+  eq(api.state.filters.backends, [], "backends defaulted to []");
+  eq(api.state.filters.escalated, [], "escalated defaulted to []");
   // And original dims were preserved.
   assert.equal(api.state.filters.sort, "risk");
-  assert.deepEqual(api.state.filters.statuses, ["todo", "in_progress"]);
+  eq(api.state.filters.statuses, ["todo", "in_progress"]);
   record("legacy localStorage blob loads missing new keys as []", true);
 }
 
@@ -442,8 +460,8 @@ async function test_garbage_legacy_blob_does_not_throw() {
     },
   });
   const api = await loadApp(env);
-  assert.deepEqual(api.state.filters.backends, []);
-  assert.deepEqual(api.state.filters.escalated, []);
+  eq(api.state.filters.backends, []);
+  eq(api.state.filters.escalated, []);
   record("garbage legacy blob still loads missing new keys as []", true);
 }
 
@@ -458,8 +476,8 @@ async function test_encode_and_parse_backend_escalated_round_trip() {
   assert.ok(hash.includes("backend=claude"), `backend in hash: ${hash}`);
   assert.ok(hash.includes("escalated=yes"), `escalated in hash: ${hash}`);
   const parsed = api.parseHash(hash);
-  assert.deepEqual(parsed.filters.backends, ["claude"]);
-  assert.deepEqual(parsed.filters.escalated, ["yes"]);
+  eq(parsed.filters.backends, ["claude"]);
+  eq(parsed.filters.escalated, ["yes"]);
   record("encodeHashState -> parseHash round-trips backend + escalated", true);
 }
 
@@ -467,7 +485,7 @@ async function test_parse_unknown_backend_value_is_dropped() {
   const env = makeEnv();
   const api = await loadApp(env);
   const parsed = api.parseHash("backend=claude,banana,local");
-  assert.deepEqual(parsed.filters.backends, ["claude", "local"]);
+  eq(parsed.filters.backends, ["claude", "local"]);
   record("parseHash drops unknown backend values", true);
 }
 
@@ -475,7 +493,7 @@ async function test_parse_unknown_escalated_value_is_dropped() {
   const env = makeEnv();
   const api = await loadApp(env);
   const parsed = api.parseHash("escalated=yes,maybe");
-  assert.deepEqual(parsed.filters.escalated, ["yes"]);
+  eq(parsed.filters.escalated, ["yes"]);
   record("parseHash drops unknown escalated values", true);
 }
 

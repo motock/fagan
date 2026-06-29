@@ -414,11 +414,18 @@ class OllamaDriver:
         # NOT be trusted: _parse_verdict's match is unanchored, so returning such
         # prose would false-positive an APPROVE and auto-merge unreviewed code
         # (fail-open). Fail-closed: no terminal verdict line -> "" -> UNKNOWN ->
-        # park for a human/Claude rather than auto-merge.
+        # park for a human/Claude rather than auto-merge. Return ONLY the terminal
+        # verdict line, not the full prose: _parse_verdict is an unanchored
+        # re.search that matches the FIRST "VERDICT:" substring, so returning
+        # prose with an inline "VERDICT: APPROVE" mention earlier and a terminal
+        # "VERDICT: REQUEST_CHANGES" line would parse to APPROVE and auto-merge
+        # unreviewed code (a second fail-open). The terminal line is the model's
+        # actual conclusion; handing just that to _parse_verdict leaves it nothing
+        # else to false-match on.
         lines = [ln.strip() for ln in last_prose.splitlines() if ln.strip()]
         if lines and re.search(r"^VERDICT:\s*(APPROVE|REQUEST_CHANGES)\s*$",
                                lines[-1], re.IGNORECASE):
-            return last_prose
+            return lines[-1]
         return ""
 
     # The local agent loop lives in a standalone script so it can run as a

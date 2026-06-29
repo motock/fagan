@@ -354,7 +354,23 @@ class OllamaDriver:
         messages = [{"role": "system", "content": system_content},
                     {"role": "user", "content": prompt}]
         nudged = False
-        for _ in range(self.review_max_steps):
+        final_nudged = False
+        last_prose = ""
+        for i in range(self.review_max_steps):
+            # The local model investigates thoroughly but rarely converges to
+            # the submit_review terminator on its own. It will call it when
+            # pushed (the same model calls `done` in dispatch mode), so when the
+            # step budget is nearly spent without a verdict, nudge once to press
+            # for a verdict. Without this the loop exhausts into UNKNOWN, the
+            # orchestrator records changes_requested with empty feedback, and
+            # the redispatched agent re-runs blind -> review/rework loop -> park.
+            if (self.review_max_steps - i) <= 5 and not final_nudged:
+                messages.append({"role": "user", "content":
+                    "You have few review steps left. Stop investigating and call "
+                    "submit_review now with verdict APPROVE or REQUEST_CHANGES "
+                    "(or end your reply with a 'VERDICT: APPROVE' or "
+                    "'VERDICT: REQUEST_CHANGES' line)."})
+                final_nudged = True
             try:
                 m = self._chat(messages, resolved_model, tools=self._REVIEW_TOOLS)
             except httpx.HTTPError as e:
@@ -363,11 +379,13 @@ class OllamaDriver:
                     f"is unreachable or errored during review: {e}"
                 ) from e
             messages.append(m)
+            if m.get("content"):
+                last_prose = m["content"]
             tcs = (m.get("tool_calls") or _recover_tool_calls(m.get("content", ""))
                    or _infer_review_tool_call(m.get("content", "")))
             if not tcs:
                 if nudged:
-                    break  # still no tool after a nudge -> give up (-> UNKNOWN -> parks)
+                    break  # still no tool after a nudge -> give up (-> salvage/park)
                 nudged = True
                 messages.append({"role": "user", "content":
                     "Call a tool (bash/view_file to investigate, or submit_review to finish). Do not reply in prose."})
@@ -389,9 +407,25 @@ class OllamaDriver:
                     title = args.get("pr_title", "")
                     return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
                 messages.append({"role": "tool", "content": _run_readonly_tool(fn, args, Path(cwd))})
-        # No verdict within the step cap: return empty so _parse_verdict yields
-        # UNKNOWN, which the orchestrator treats as not-APPROVE (safe — parks
-        # for a human/Claude rather than auto-merging).
+        # No submit_review within the step cap. Salvage ONLY an explicit terminal
+        # verdict line — the model's actual conclusion, written last. An inline
+        # mention of "VERDICT: APPROVE" earlier in the prose (the model echoing
+        # the convergence nudge, or describing what an approve would require) must
+        # NOT be trusted: _parse_verdict's match is unanchored, so returning such
+        # prose would false-positive an APPROVE and auto-merge unreviewed code
+        # (fail-open). Fail-closed: no terminal verdict line -> "" -> UNKNOWN ->
+        # park for a human/Claude rather than auto-merge. Return ONLY the terminal
+        # verdict line, not the full prose: _parse_verdict is an unanchored
+        # re.search that matches the FIRST "VERDICT:" substring, so returning
+        # prose with an inline "VERDICT: APPROVE" mention earlier and a terminal
+        # "VERDICT: REQUEST_CHANGES" line would parse to APPROVE and auto-merge
+        # unreviewed code (a second fail-open). The terminal line is the model's
+        # actual conclusion; handing just that to _parse_verdict leaves it nothing
+        # else to false-match on.
+        lines = [ln.strip() for ln in last_prose.splitlines() if ln.strip()]
+        if lines and re.search(r"^VERDICT:\s*(APPROVE|REQUEST_CHANGES)\s*$",
+                               lines[-1], re.IGNORECASE):
+            return lines[-1]
         return ""
 
     # The local agent loop lives in a standalone script so it can run as a

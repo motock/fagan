@@ -435,6 +435,11 @@ def _run_app_js(expr):
         shim
         + "const fs = require('fs');"
         + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
+        # After eval, app.js has populated window.state. Alias it as a bare
+        # `state` global so test expressions can write `state.filters.X = ...`
+        # without going through window. (Stripped from JSON output by
+        # JSON.stringify which only sees the test expression's return value.)
+        + "globalThis.state = globalThis.window.state;"
         + "process.stdout.write(JSON.stringify(" + expr + "));"
     )
     proc = subprocess.run(

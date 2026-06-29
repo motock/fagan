@@ -271,13 +271,14 @@ the cost gate.
       "stories": [
         {
           "summary": "Story title",
-          "description": "What and why",
-          "agent_instructions": "Precise instructions, incl. the TDD expectation",
-          "acceptance_criteria": ["testable condition", "..."],
+          "description": "What and why (Plane issue body when Plane is enabled; otherwise unused)",
+          "agent_instructions": "Implementation brief the agent receives — incl. the TDD expectation and the testable success criteria (what tests to write)",
+          "acceptance": [{"path": "tests/acceptance_foo.rs", "source": "// optional read-only test fixture"}],
           "dependencies": ["<other story key/summary>"],
           "persona": "software-engineer",
           "model": "sonnet",
-          "risk": "low"
+          "risk": "low",
+          "key": "optional explicit story key; omit to auto-mint a UUID"
         }
       ]
     }
@@ -299,6 +300,9 @@ the cost gate.
 - `model` — `opus | sonnet | haiku`; falls back to the persona's frontmatter
   model, then to `PIPELINE_DEFAULT_MODEL`.
 - `risk` — `low | medium | high`; drives the overlord's gating (default `low`).
+- `agent_instructions` — the implementation brief the dispatched agent receives. This is where the testable success criteria belong (what tests to write, including negative/boundary cases); it is the single most influential field on outcome quality.
+- `acceptance` — *optional* array of `{path, source}` read-only test fixtures. When present, the harness writes each `source` to `path` in the worktree (read-only — the agent may not edit them) and the oracle grades the run on whether the implementation makes them pass. Omit it for ordinary TDD stories where the agent writes its own tests per `agent_instructions`; the story then runs on the base harness with a "tests pass" bar. Do **not** use `acceptance_criteria` or a list of strings — `ingest_plan` reads `acceptance` and expects `{path, source}` dicts; a list of strings raises `TypeError: string indices must be integers` in `dispatch_story`.
+- `key` — optional explicit story key; omit to auto-mint a UUID. `dependencies` may reference a story by its exact `summary` string or its explicit `key`.
 
 ---
 
@@ -350,7 +354,12 @@ guard an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_LOCAL_NUM_CTX` | `16384` | Ollama context window for local calls (sized to fit 100% on a 24GB M4 GPU; raising it risks a slow CPU/GPU split) |
 | `PIPELINE_LOCAL_TEMPERATURE` | `0.3` | Sampling temperature for local model calls |
 | `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Per-request timeout for local single-shot `complete()` calls |
-| `PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS` | `900` | Per-request timeout inside the local dispatch/review agent loop |
+| `PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS` | `900` | Legacy. Was the per-request timeout for the dispatch/review chat loop; since streaming landed this only seeds the harness boot log (`steps=… timeout=…s`). The live timeout is `LOCAL_AGENT_READ_SILENCE_SECONDS` below — kept set by `backend.py` for back-compat. |
+| `LOCAL_AGENT_READ_SILENCE_SECONDS` | `180` | Per-chunk read timeout for the streamed `chat()`. Fires only on a genuine stall (no bytes for N s), not on a legitimately long generation that emits a chunk every ~1–2 s. Passed through from the shell/MCP env by `backend.py` (`**os.environ`). |
+| `LOCAL_AGENT_CHAT_MAX_ATTEMPTS` | `3` | Retry attempts for a transient `chat()` failure (`httpx.TransportError` or 5xx). 4xx raises immediately. Passed through from the shell/MCP env. |
+| `LOCAL_AGENT_CHAT_RETRY_BACKOFF` | `5` | Linear backoff seconds between chat retries (× attempt). Passed through from the shell/MCP env. |
+| `LOCAL_AGENT_BASH_TIMEOUT_SECONDS` | `600` | Per-bash-command timeout in the dispatch loop, so a wedged build (e.g. a hung network index fetch) can't hang the agent. Passed through from the shell/MCP env. |
+| `LOCAL_AGENT_READ_HEAVY_WINDOW` | `6` | Read-heavy guard window: this many consecutive non-mutating tool calls (reads / non-unique bash) triggers a nudge, then a park, so the loop can't burn the step budget on inspection. Passed through from the shell/MCP env. |
 | `PIPELINE_LOCAL_MAX_STEPS` | `40` | Max tool-call steps a local **dispatch** run takes before it parks (WIP-commits) |
 | `PIPELINE_LOCAL_REVIEW_MAX_STEPS` | `20` | Max tool-call steps a local **review** takes before returning UNKNOWN (→ parks) |
 | `PIPELINE_LOCAL_MAX_RISK` | `low` | Highest story risk the `auto` router sends to the local agent: `low` \| `medium` \| `high`. Stories above this threshold go straight to Claude. Security-persona stories always go to Claude regardless of this setting. |
@@ -369,7 +378,10 @@ never touches the others. Two drivers exist today:
   - **dispatch** — a native-tool-calling **write** agent loop
     (`scripts/local_agent.py`, run as a subprocess: `create_file`/`str_replace`/
     `view_file`/`bash`/`checkpoint`/`done`, with a non-destructive editor, loop
-    guard, and commit enforcement).
+    guard, and commit enforcement). `chat()` **streams** the Ollama response
+    (per-chunk read timeout `LOCAL_AGENT_READ_SILENCE_SECONDS`) and **retries**
+    transient failures (`LOCAL_AGENT_CHAT_MAX_ATTEMPTS`), so a single Ollama
+    queue stall or network blip can't kill a run mid-iteration.
 
   The local driver deliberately does **not** use OpenHands — see
   `Local_LLM_Port_Plan.md` for the full investigation (why, and the model
@@ -538,6 +550,11 @@ leaves the functions directly callable. Runtime deps are in `requirements.txt`;
 When changing behavior, follow TDD (write the failing test first) and do not
 modify existing tests without a deliberate reason — they are the regression
 guard for the pipeline.
+
+See [`CLAUDE.md`](CLAUDE.md) for the full engineering standards (code quality,
+testing, security, observability) and the mandatory agent workflow for
+pipeline-tracked work (claim a story → TDD → detect the test runner → full
+suite green → `review_story` → prompt before committing).
 
 ---
 

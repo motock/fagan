@@ -41,6 +41,31 @@ header h1 { font-size: 16px; margin: 0; font-weight: 600; }
 .header-right { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-dim); }
 .auto-refresh { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 
+/* Subtle liveness indicator that flashes on each successful refresh. */
+.refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 200ms ease;
+  font-variant-numeric: tabular-nums;
+}
+.refresh-indicator.flashing { opacity: 1; }
+.refresh-indicator .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: refresh-pulse 700ms ease-in-out;
+}
+@keyframes refresh-pulse {
+  0%   { transform: scale(0.6); opacity: 0.2; }
+  40%  { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1);   opacity: 0.85; }
+}
+
 main {
   display: flex;
   height: calc(100vh - 49px);

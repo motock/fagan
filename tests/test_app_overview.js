@@ -124,6 +124,8 @@ function makeDocument() {
   let hidden = false;
   const doc = {
     body: makeEl("body"),
+    documentElement: makeEl("html"),
+    createElement(tag) { return makeEl(tag); },
     get hidden() { return hidden; },
     set hidden(v) { hidden = !!v; },
     get activeElement() { return activeElement; },
@@ -182,9 +184,13 @@ function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
   const ub = makeEl("div", { attrs: { id: "usage-banner" } });
   doc.register("story-modal-close", close);
   doc.register("story-modal", modal);
+  const smb = makeEl("div", { attrs: { id: "story-modal-body" } });
+  doc.register("story-modal-body", smb);
   doc.register("auto-refresh", ar);
   doc.register("last-updated", lu);
   doc.register("usage-banner", ub);
+  const pl = makeEl("nav", { attrs: { id: "plan-list" } });
+  doc.register("plan-list", pl);
 }
 
 // Capture fetch URLs seen during refresh() so we can assert what was called.

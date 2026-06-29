@@ -339,11 +339,26 @@ async function fetchJson(url) {
 function renderPlanList(plans) {
   const nav = document.getElementById("plan-list");
   nav.innerHTML = "";
+
+  // "Overview" always sits at the top of the plan sidebar so the user has
+  // a one-click escape hatch back to the fleet landing view, independent
+  // of the currently selected plan.
+  const overview = document.createElement("div");
+  overview.className = "plan-item overview-item"
+    + (state.selectedPlan ? "" : " active");
+  overview.setAttribute("data-overview", "true");
+  overview.innerHTML = `
+    <div class="plan-name">Overview</div>
+    <div class="plan-meta">fleet landing</div>
+  `;
+  overview.addEventListener("click", () => selectOverview());
+  nav.appendChild(overview);
+
   for (const plan of plans) {
     const div = document.createElement("div");
     div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "");
-    const total = plan.story_count;
-    const done = plan.status_counts.done || 0;
+    const total = plan.story_count || 0;
+    const done = (plan.status_counts && plan.status_counts.done) || 0;
     div.innerHTML = `
       <div class="plan-name">${escapeHtml(plan.name)}</div>
       <div class="plan-meta">${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}</div>
@@ -1036,6 +1051,202 @@ function hideStoryModal() {
   modal.classList.add("hidden");
 }
 
+// Format a fractional rate (0..1, or 0.0 from the backend when dispatched
+// count is zero) as a percentage string. We never want to render "NaN%" or
+// "undefined%" — a denominator of 0 must still produce "0%".
+function fmtPct(rate) {
+  const v = Number(rate);
+  if (!Number.isFinite(v)) return "0%";
+  return `${Math.round(v * 100)}%`;
+}
+
+// Render the fleet Overview landing view into #plan-detail. This is the
+// default view whenever no plan is selected and is also what selectOverview
+// navigates back to from a selected plan.
+//
+// `plansPayload` is the body of /api/plans ({plans: [...]}) and
+// `healthPayload` is the body of /api/dispatch_health ({totals, per_plan}).
+// Both are passed in (rather than re-fetched) so renderOverview can be
+// unit-tested by callers that already have the JSON in hand.
+//
+// Empty/zero payloads must render cleanly — no NaN, no throws — so the
+// dashboard looks sensible before any plan has shipped a story.
+function renderOverview(plansPayload, healthPayload) {
+  const section = document.getElementById("plan-detail");
+  if (!section) return;
+
+  const plans = (plansPayload && Array.isArray(plansPayload.plans))
+    ? plansPayload.plans
+    : [];
+  const health = healthPayload || {};
+  const withAcc = health.with_acceptance
+    || { dispatched: 0, done: 0, escalated: 0, stories: 0,
+         escalation_rate: 0.0, success_rate: 0.0 };
+  const withoutAcc = health.without_acceptance
+    || { dispatched: 0, done: 0, escalated: 0, stories: 0,
+         escalation_rate: 0.0, success_rate: 0.0 };
+
+  // Fleet totals. Every count is total-stories-derived (the story_count
+  // field), so a plan with no stories simply contributes 0 to totals and
+  // an empty status_counts object — the breakdown bar handles missing
+  // keys by treating them as zero.
+  let totalPlans = plans.length;
+  let totalStories = 0;
+  let totalDone = 0;
+  const statusTotals = Object.create(null);
+  for (const plan of plans) {
+    const sc = plan.status_counts || {};
+    totalStories += plan.story_count || 0;
+    totalDone += sc.done || 0;
+    for (const [k, v] of Object.entries(sc)) {
+      statusTotals[k] = (statusTotals[k] || 0) + (v || 0);
+    }
+  }
+
+  // Per-status breakdown bar — a single horizontal bar split into the
+  // STATUS_COLUMNS, each segment proportional to its share of totalStories.
+  // Zero totalStories -> an empty-state placeholder rather than a 0-width
+  // bar with bogus percentages.
+  let breakdownBarHtml;
+  if (totalStories === 0) {
+    breakdownBarHtml =
+      `<div class="overview-empty">No stories yet.</div>`;
+  } else {
+    const segments = STATUS_COLUMNS
+      .map((s) => {
+        const n = statusTotals[s] || 0;
+        if (!n) return "";
+        const pct = (n / totalStories) * 100;
+        return `<div class="overview-bar-seg" data-status="${s}"
+            style="width:${pct.toFixed(2)}%;background:var(--c-${s})"
+            title="${s}: ${n}"></div>`;
+      })
+      .join("");
+    const legend = STATUS_COLUMNS
+      .filter((s) => statusTotals[s])
+      .map((s) => `<span class="overview-legend-item">
+          <span class="overview-legend-dot" style="background:var(--c-${s})"></span>
+          ${escapeHtml(s)} ${statusTotals[s]}
+        </span>`)
+      .join("");
+    breakdownBarHtml = `
+      <div class="overview-bar">${segments}</div>
+      <div class="overview-legend">${legend}</div>
+    `;
+  }
+
+  // Compact plan list — every plan with done/total and a paused flag.
+  const planListHtml = plans.length
+    ? plans.map((plan) => {
+        const total = plan.story_count || 0;
+        const done = (plan.status_counts && plan.status_counts.done) || 0;
+        const pausedTag = plan.paused
+          ? ` <span class="plan-paused">paused</span>`
+          : "";
+        return `
+        <li class="overview-plan-row" data-plan="${escapeHtml(plan.name)}">
+          <span class="overview-plan-name">${escapeHtml(plan.name)}</span>
+          <span class="overview-plan-meta">${done}/${total}${pausedTag}</span>
+        </li>`;
+      }).join("")
+    : `<li class="overview-empty">No plans yet.</li>`;
+
+  section.innerHTML = `
+    <div class="overview">
+      <h2 class="overview-title">Fleet Overview</h2>
+
+      <section class="overview-section overview-totals">
+        <div class="overview-stat">
+          <div class="overview-stat-value">${totalPlans}</div>
+          <div class="overview-stat-label">plans</div>
+        </div>
+        <div class="overview-stat">
+          <div class="overview-stat-value">${totalStories}</div>
+          <div class="overview-stat-label">stories</div>
+        </div>
+        <div class="overview-stat">
+          <div class="overview-stat-value">${totalDone}</div>
+          <div class="overview-stat-label">done</div>
+        </div>
+      </section>
+
+      <section class="overview-section">
+        <h3 class="overview-section-title">Status breakdown</h3>
+        ${breakdownBarHtml}
+      </section>
+
+      <section class="overview-section overview-health">
+        <h3 class="overview-section-title">Dispatch health by acceptance</h3>
+        <p class="overview-section-help">
+          Stories are split by whether their plan carried an
+          <code>acceptance</code> block at dispatch time. Watch the
+          <em>with_acceptance</em> rate trend down relative to
+          <em>without_acceptance</em> &mdash; that's the Fix #1 oracle paying off.
+        </p>
+        <div class="overview-stat-cards">
+          <div class="overview-stat-card">
+            <div class="overview-stat-card-title">with acceptance</div>
+            <div class="overview-stat-card-metric">
+              <span class="overview-stat-card-num">${fmtPct(withAcc.escalation_rate)}</span>
+              <span class="overview-stat-card-kind">escalation</span>
+            </div>
+            <div class="overview-stat-card-metric">
+              <span class="overview-stat-card-num">${fmtPct(withAcc.success_rate)}</span>
+              <span class="overview-stat-card-kind">success</span>
+            </div>
+            <div class="overview-stat-card-foot">
+              ${withAcc.dispatched || 0} dispatched &middot;
+              ${withAcc.escalated || 0} escalated &middot;
+              ${withAcc.done || 0} done
+            </div>
+          </div>
+          <div class="overview-stat-card">
+            <div class="overview-stat-card-title">without acceptance</div>
+            <div class="overview-stat-card-metric">
+              <span class="overview-stat-card-num">${fmtPct(withoutAcc.escalation_rate)}</span>
+              <span class="overview-stat-card-kind">escalation</span>
+            </div>
+            <div class="overview-stat-card-metric">
+              <span class="overview-stat-card-num">${fmtPct(withoutAcc.success_rate)}</span>
+              <span class="overview-stat-card-kind">success</span>
+            </div>
+            <div class="overview-stat-card-foot">
+              ${withoutAcc.dispatched || 0} dispatched &middot;
+              ${withoutAcc.escalated || 0} escalated &middot;
+              ${withoutAcc.done || 0} done
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="overview-section">
+        <h3 class="overview-section-title">Plans</h3>
+        <ul class="overview-plan-list">${planListHtml}</ul>
+      </section>
+    </div>
+  `;
+}
+
+// Navigate back to the fleet Overview landing view. Clears the selected
+// plan and re-renders the sidebar so the Overview item shows as active.
+function selectOverview() {
+  state.selectedPlan = null;
+  updateHash();
+  const nav = document.getElementById("plan-list");
+  if (nav) {
+    for (const child of nav.children) {
+      const isOverview = child.dataset && child.dataset.overview === "true";
+      child.classList.toggle("active", isOverview);
+    }
+  }
+  // Render with whatever data we already have in state so the click is
+  // instant. The next refresh() will swap in fresh numbers.
+  renderOverview(
+    state.lastPlans || { plans: [] },
+    state.lastHealth || null,
+  );
+}
+
 async function selectPlan(name) {
   state.selectedPlan = name;
   updateHash();
@@ -1076,7 +1287,20 @@ async function refresh() {
   }
 
   const { plans } = await fetchJson("/api/plans");
+  state.lastPlans = { plans };
   renderPlanList(plans);
+
+  // Fleet dispatch health is consumed by the Overview landing view. Fetch
+  // it every refresh so the headline rates stay live alongside the plan
+  // list. Failure here must not block the rest of the refresh — we
+  // gracefully fall back to all-zeros on the Overview.
+  let health = null;
+  try {
+    health = await fetchJson("/api/dispatch_health");
+  } catch {
+    health = null;
+  }
+  state.lastHealth = health;
 
   if (state.selectedPlan) {
     try {
@@ -1085,6 +1309,9 @@ async function refresh() {
     } catch {
       state.selectedPlan = null;
     }
+  } else {
+    // No plan selected -> render the fleet Overview into #plan-detail.
+    renderOverview({ plans }, health);
   }
 
   document.getElementById("last-updated").textContent =
@@ -1215,6 +1442,6 @@ if (typeof module !== "undefined" && module.exports) {
     capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
     showStoryModal, handleCopyClick,
-    state,
+    renderOverview, selectOverview, refresh, state,
   };
 }

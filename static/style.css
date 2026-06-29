@@ -1,45 +1,186 @@
 :root {
-  --bg: #0f1115;
-  --panel: #181b21;
-  --panel-2: #20242c;
-  --border: #2a2f3a;
-  --text: #e6e8eb;
-  --text-dim: #9aa1ad;
-  --accent: #5b8cff;
+  /* === Refined dark palette === */
+  /* deeper panel contrast: bg <- panel <- panel-2; softer borders */
+  --bg:           #0c0e12;
+  --panel:        #13161c;
+  --panel-2:      #1b1f27;
+  --panel-3:      #242933;
+  --border:       #232833;
+  --border-soft:  #1c2029;
+  --text:         #e8eaef;
+  --text-dim:     #9aa3b2;
+  --text-muted:   #6b7382;
+  --accent:       #6b9bff;
+  --accent-hover: #84adff;
+  --accent-soft:  rgba(107, 155, 255, 0.12);
 
-  --c-todo: #555c69;
-  --c-in_progress: #3b7ddb;
-  --c-tests_passed: #2c9b8f;
-  --c-pr_open: #8a5cf6;
-  --c-done: #34a853;
-  --c-changes_requested: #d98c2b;
-  --c-interrupted: #8a8f99;
-  --c-parked: #c9a227;
-  --c-failed: #d64545;
-  --c-unknown: #6b7280;
+  /* === Status colors (dark-tuned for contrast on dark bg) === */
+  --c-todo:               #7a8290;
+  --c-in_progress:        #4f8fe0;
+  --c-tests_passed:       #34b3a4;
+  --c-pr_open:            #9d72f6;
+  --c-done:               #44c66f;
+  --c-changes_requested:  #e8a04a;
+  --c-interrupted:        #a0a6b0;
+  --c-parked:             #d4b13e;
+  --c-failed:             #e75858;
+  --c-unknown:            #7e8694;
+
+  /* === 8px spacing scale === */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+
+  /* === Typography scale === */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --fs-xs:   11px;
+  --fs-sm:   12px;
+  --fs-base: 13px;
+  --fs-md:   14px;
+  --fs-lg:   16px;
+  --fs-xl:   18px;
+  --fs-2xl:  22px;
+  --fs-3xl:  28px;
+
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-semibold: 600;
+  --fw-bold:    700;
+
+  --lh-tight:   1.25;
+  --lh-snug:    1.4;
+  --lh-normal:  1.5;
+  --lh-relaxed: 1.7;
+
+  /* === Elevation (dark uses shadow + inner highlight for depth) === */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.02);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
+
+  /* === Radii === */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* === Transitions === */
+  --t-fast: 120ms ease;
+  --t-base: 180ms ease;
+}
+
+/* === Light theme overrides === */
+[data-theme="light"] {
+  --bg:           #f6f7fa;
+  --panel:        #ffffff;
+  --panel-2:      #f1f3f7;
+  --panel-3:      #e6eaf1;
+  --border:       #d9dee6;
+  --border-soft:  #e7eaef;
+  --text:         #1a1f2a;
+  --text-dim:     #56607a;
+  --text-muted:   #8893a8;
+  --accent:       #2f6fe0;
+  --accent-hover: #1d5ed0;
+  --accent-soft:  rgba(47, 111, 224, 0.10);
+
+  /* Status colors tuned for legibility on light surfaces (deeper saturations,
+     dark borders behind the swatch via border-left pattern handled below). */
+  --c-todo:               #5b6473;
+  --c-in_progress:        #2563c4;
+  --c-tests_passed:       #1f8d80;
+  --c-pr_open:            #7a3fde;
+  --c-done:               #2c9849;
+  --c-changes_requested:  #b87014;
+  --c-interrupted:        #6c7384;
+  --c-parked:             #9a7c12;
+  --c-failed:             #c33333;
+  --c-unknown:            #6b7280;
+
+  /* Lighter, softer shadows read better on light surfaces */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(15, 23, 42, 0.04);
+  --shadow-2: 0 4px 12px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(15, 23, 42, 0.05);
+  --shadow-3: 0 12px 32px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.06);
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   background: var(--bg);
   color: var(--text);
+  transition: background var(--t-base), color var(--t-base);
 }
 
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  padding: var(--sp-3) var(--sp-5);
   border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  position: relative;
+  z-index: 1;
 }
 
-header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+header h1 {
+  font-size: var(--fs-lg);
+  margin: 0;
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.005em;
+}
 
-.header-right { display: flex; align-items: center; gap: 14px; font-size: 12px; color: var(--text-dim); }
-.auto-refresh { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.auto-refresh { display: flex; align-items: center; gap: var(--sp-1); cursor: pointer; }
+
+/* Theme toggle: sun/moon glyph, persistent across reloads via app.js */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
+}
+.theme-toggle:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.theme-toggle .icon-sun,
+.theme-toggle .icon-moon { display: none; }
+[data-theme="dark"]  .theme-toggle .icon-moon,
+[data-theme="light"] .theme-toggle .icon-sun { display: inline; }
+/* Default (theme unset): show moon to suggest "switch to light" */
+.theme-toggle .icon-moon { display: inline; }
 
 /* Subtle liveness indicator that flashes on each successful refresh. */
 .refresh-indicator {

@@ -43,6 +43,83 @@ def test_safe_run_tool_handles_unknown_tool():
     assert la.safe_run_tool("bogus", {}) == "unknown tool bogus"
 
 
+class _FakeProc:
+    """A stand-in CompletedProcess so the bash handler can format output."""
+
+    def __init__(self):
+        self.stdout = "ok"
+        self.stderr = ""
+
+
+@pytest.mark.parametrize("cmd", [
+    "git reset --hard",
+    "git reset --hard HEAD",
+    "git reset --hard b5063c7",
+    "git reset  --hard origin/master",
+    "git clean -f",
+    "git clean -fd",
+    "git clean -fdx",
+    "git clean --force",
+    "git clean -xf",      # force, f not first — must still be caught
+    "git clean -df",
+    "git clean -xdf",
+    "git checkout -- .",
+    "git checkout -- src/app.py",
+    "git checkout HEAD -- src/app.py",
+    "git restore src/app.py",
+    # Destructive op buried in a compound command must still be caught.
+    "git status && git reset --hard b5063c7",
+    "cd sub && git clean -fd && git status",
+    "git status\ngit reset --hard b5063c7",   # destructive on its own line IS caught
+])
+def test_bash_blocks_destructive_git_ops(tmp_path, monkeypatch, cmd):
+    """A destructive git op (one that discards the branch's WIP commits or
+    working-tree changes) must be refused before subprocess.run is reached —
+    a blind-rework agent running `git reset --hard <master>` once threw away
+    its own tests-passed WIP."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+
+    def _boom(*a, **k):
+        raise AssertionError("subprocess.run must not be called for a destructive git op")
+
+    monkeypatch.setattr(la.subprocess, "run", _boom)
+    result = la.run_tool("bash", {"command": cmd})
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "blocked" in result.lower()
+
+
+@pytest.mark.parametrize("cmd", [
+    "git status",
+    "git add -A",
+    "git commit -m 'WIP'",
+    "git diff",
+    "git log --oneline",
+    "git checkout feature-branch",   # branch switch is NOT a discard
+    "git reset HEAD src/app.py",      # unstage only, no --hard
+    "git checkout --theirs src/app.py",  # merge opt, not the pathsep `--`
+    "pytest -q",
+    "git stash",
+    "git rebase origin/master",
+    # Multi-line: a safe `git reset HEAD <path>` on one line must not be
+    # attributed to a `--hard` token on an unrelated later line.
+    "git reset HEAD src/app.py\necho --hard-done-here\ngit status",
+])
+def test_bash_passes_non_destructive_commands_through(tmp_path, monkeypatch, cmd):
+    """Non-destructive git ops and ordinary commands must still run."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    seen = {}
+
+    def _fake_run(c, **k):
+        seen["cmd"] = c
+        return _FakeProc()
+
+    monkeypatch.setattr(la.subprocess, "run", _fake_run)
+    result = la.run_tool("bash", {"command": cmd})
+    assert seen["cmd"] == cmd          # actually dispatched
+    assert result == "ok"              # ran and returned output
+
+
 @pytest.mark.parametrize("content,expected_name", [
     ('```json\r\n{"name": "bash", "parameters": {"command": "ls"}}\r\n```', "bash"),
     ('{"name": "done", "arguments": {"summary": "ok"}}', "done"),

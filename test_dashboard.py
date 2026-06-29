@@ -576,3 +576,196 @@ def test_index_html_has_theme_toggle_button(client):
     body = client.get("/").text
     assert 'id="theme-toggle"' in body
     assert "icon-sun" in body and "icon-moon" in body
+
+
+# === Kanban board rendering regression ================================
+# The board is the heart of the dashboard; these tests pin down the
+# structural contract of renderBoard (one column per selected status,
+# correct counts, empty column-body preserved for layout stability, empty
+# state when no statuses are selected, and that filter/sort logic in
+# applyFilters still behaves correctly). Each test uses _run_app_js so we
+# evaluate real app.js source, not a duplicate copy.
+
+def test_render_board_one_column_per_selected_status():
+    """With three selected statuses, renderBoard emits exactly three
+    .column nodes — never more, never fewer."""
+    expr = (
+        "(() => { state.filters.statuses = ['in_progress','todo','done'];"
+        " return JSON.stringify(renderBoard({"
+        " 'k1':{status:'in_progress',summary:''},"
+        " 'k2':{status:'in_progress',summary:''},"
+        " 'k3':{status:'todo',summary:''}})); })()"
+    )
+    html = _run_app_js(expr)
+    # exactly one column per status (case-sensitive status label)
+    assert html.count('class="column"') == 3
+    assert "in_progress</span>" in html
+    assert "todo</span>" in html
+    assert "done</span>" in html
+
+
+def test_render_board_counts_match_filtered_cards_per_column():
+    """The count pill in the column header must equal the number of cards
+    the persona/risk filters let through (filter logic unchanged)."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['in_progress'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return JSON.stringify(renderBoard({"
+        "  'k1':{status:'in_progress', summary:'a'},"  # default persona/risk
+        "  'k2':{status:'in_progress', summary:'b'},"  # default persona/risk
+        "  'k3':{status:'todo',       summary:'c'},"  # wrong column
+        "  'k4':{status:'in_progress', summary:'d', persona:'p'}"  # filtered
+        " })); })()"
+    )
+    html = _run_app_js(expr)
+    # exactly one column (in_progress)
+    assert html.count('class="column"') == 1
+    # the count badge inside that column reads '2'
+    assert ">2</span>" in html or ">2<" in html
+    # two cards (k1, k2); k3 lives in a different column, k4 persona-filtered
+    assert html.count('class="card') == 2
+
+
+def test_render_board_empty_column_renders_empty_body_not_absent():
+    """A status with zero matching stories still renders the column shell
+    so the layout stays stable as filters change."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['in_progress', 'todo'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return JSON.stringify(renderBoard({"
+        "  'k1':{status:'in_progress', summary:'only one'}"
+        " })); })()"
+    )
+    html = _run_app_js(expr)
+    # both columns present
+    assert html.count('class="column"') == 2
+    # but the 'todo' column has an empty body, not zero columns
+    assert html.count('class="column-body">') == 2
+    # count badge for the empty todo column reads '0'
+    todo_idx = html.index("todo</span>")
+    tail = html[todo_idx:todo_idx + 400]
+    assert ">0<" in tail
+
+
+def test_render_board_deselected_statuses_shows_empty_state():
+    """All-statuses-deselected -> the empty-state copy, NOT a board of
+    zero columns. (The text 'No statuses selected.' is the contract.)"""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = [];"
+        " return JSON.stringify(renderBoard({"
+        "  'k1':{status:'in_progress', summary:'a'}"
+        " })); })()"
+    )
+    html = _run_app_js(expr)
+    assert html.count('class="column"') == 0
+    assert "No statuses selected." in html
+
+
+def test_render_board_completion_hint_on_done_column():
+    """Done column gets a small completion hint like '2/5' so the user
+    sees plan progress at a glance, without changing filter logic."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['done'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return JSON.stringify(renderBoard({"
+        "  'a':{status:'done',         summary:'a'},"
+        "  'b':{status:'done',         summary:'b'},"
+        "  'c':{status:'in_progress',  summary:'c'},"
+        "  'd':{status:'todo',         summary:'d'},"
+        "  'e':{status:'tests_passed', summary:'e'}"
+        " })); })()"
+    )
+    html = _run_app_js(expr)
+    # a column-completion element with the done/total ratio
+    assert 'class="column-completion"' in html
+    assert "2/5" in html
+
+
+def test_apply_filters_persona_filter_excludes_non_matching_stories():
+    """applyFilters still filters on persona — the column count must
+    reflect the persona-filtered subset."""
+    expr = (
+        "(() => {"
+        " state.filters.personas = ['lead'];"
+        " state.filters.risks = [];"
+        " return JSON.stringify(applyFilters(["
+        "  ['k1',{persona:'lead',   risk:'low'}],"
+        "  ['k2',{persona:'junior', risk:'low'}],"
+        "  ['k3',{persona:'lead',   risk:'high'}]"
+        " ]).map(([k,_])=>k));"
+        "})()"
+    )
+    result = _run_app_js(expr)
+    assert json.loads(result) == ["k1", "k3"]
+
+
+def test_apply_filters_risk_filter_excludes_non_matching_stories():
+    """applyFilters still filters on risk."""
+    expr = (
+        "(() => {"
+        " state.filters.personas = [];"
+        " state.filters.risks = ['high'];"
+        " return JSON.stringify(applyFilters(["
+        "  ['k1',{persona:'a', risk:'high'}],"
+        "  ['k2',{persona:'a', risk:'low'}]"
+        " ]).map(([k,_])=>k));"
+        "})()"
+    )
+    result = _run_app_js(expr)
+    assert json.loads(result) == ["k1"]
+
+
+def test_apply_filters_sorts_by_key_risk_activity():
+    """Sort contract: `key` is locale-numeric, `risk` is high>medium>low,
+    `activity` is total attempts desc. Each branch must be verified."""
+    expr_key = (
+        "(() => {"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " state.filters.sort = 'key';"
+        " return JSON.stringify(applyFilters(["
+        "  ['k10',{persona:'',risk:'',dispatch_attempts:0,rework_attempts:0,merge_attempts:0}],"
+        "  ['k2', {persona:'',risk:'',dispatch_attempts:0,rework_attempts:0,merge_attempts:0}],"
+        "  ['k1', {persona:'',risk:'',dispatch_attempts:0,rework_attempts:0,merge_attempts:0}]"
+        " ]).map(([k,_])=>k));"
+        "})()"
+    )
+    assert json.loads(_run_app_js(expr_key)) == ["k1", "k2", "k10"]
+
+    expr_risk = (
+        "(() => {"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " state.filters.sort = 'risk';"
+        " return JSON.stringify(applyFilters(["
+        "  ['low',    {persona:'',risk:'low'}],"
+        "  ['high',   {persona:'',risk:'high'}],"
+        "  ['medium', {persona:'',risk:'medium'}]"
+        " ]).map(([k,_])=>k));"
+        "})()"
+    )
+    assert json.loads(_run_app_js(expr_risk)) == ["high", "medium", "low"]
+
+    expr_act = (
+        "(() => {"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " state.filters.sort = 'activity';"
+        " return JSON.stringify(applyFilters(["
+        "  ['quiet',  {persona:'',risk:'',dispatch_attempts:0,rework_attempts:0,merge_attempts:0}],"
+        "  ['loud',   {persona:'',risk:'',dispatch_attempts:5,rework_attempts:2,merge_attempts:1}],"
+        "  ['medium', {persona:'',risk:'',dispatch_attempts:1,rework_attempts:0,merge_attempts:0}]"
+        " ]).map(([k,_])=>k));"
+        "})()"
+    )
+    assert json.loads(_run_app_js(expr_act)) == ["loud", "medium", "quiet"]
+
+
+def test_index_html_references_static_assets_re_render_safe(client):
+    """Light regression: the dashboard's static asset references must still
+    be present so the new board CSS/JS ships together. Pinning here keeps
+    the marker on a stable line in the suite."""
+    body = client.get("/").text
+    assert "/style.css" in body
+    assert "/app.js" in body

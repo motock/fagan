@@ -915,13 +915,6 @@ function syncPollingWithVisibility() {
 }
 
 document.getElementById("story-modal-close").addEventListener("click", hideStoryModal);
-document.getElementById("story-modal-body").addEventListener("click", (e) => {
-  // Click-to-copy handling is delegated on the body so we don't rebind on
-  // every modal open and so dynamically rebuilt content stays supported.
-  if (e.target.closest && e.target.closest(".copy-btn")) {
-    handleCopyClick(e);
-  }
-});
 document.getElementById("story-modal").addEventListener("click", (e) => {
   // Click on the backdrop (outside the modal-content) closes the modal.
   if (e.target.id === "story-modal") hideStoryModal();

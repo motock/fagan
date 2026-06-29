@@ -185,10 +185,17 @@ function makeDocument(initial = {}) {
   let hidden = !!initial.hidden;
   const byId = new Map(initial.byId || []);
   const listeners = {};
+  // Mirror the real DOM's `document.documentElement` so app.js can apply
+  // theme tokens (e.g. `document.documentElement.dataset.theme = "dark"`).
+  // Without this stub the theme toggle handler throws at module load,
+  // which in turn makes every downstream test fail with a misleading
+  // "Cannot read properties of undefined (reading 'dataset')".
+  const documentElement = makeEl("html");
   const doc = {
     get hidden() { return hidden; },
     set hidden(v) { hidden = !!v; },
     body: makeEl("body"),
+    documentElement,
     get activeElement() { return activeElement; },
     setActiveElement(e) { activeElement = e; },
     getElementById(id) {
@@ -217,6 +224,7 @@ function makeDocument(initial = {}) {
   };
   doc._listeners = doc._listeners || {};
   doc.body._ownerDoc = doc;
+  documentElement._ownerDoc = doc;
   return doc;
 }
 

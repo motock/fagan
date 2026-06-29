@@ -8,8 +8,11 @@ External boundaries (Ollama HTTP, pytest) are not exercised — these cover
 the pure-logic helpers.
 """
 import importlib.util
+import json
 import os
 from pathlib import Path
+
+import httpx
 
 os.environ.setdefault("LOCAL_AGENT_MODEL", "test-model")
 _spec = importlib.util.spec_from_file_location(
@@ -332,3 +335,186 @@ def test_oracle_script_importable_from_non_pipeline_cwd(tmp_path):
         f"oracle import from non-pipeline cwd failed:\n"
         f"  stdout: {r.stdout}\n  stderr: {r.stderr}"
     )
+
+
+# ---------- chat() streaming + retry (2026-06-28 timeout incident) ----------
+# The original chat() was a single blocking httpx.post(stream=False, timeout=900s)
+# with NO retry. One transient Ollama queue stall killed the whole run after 7-11
+# steps of real progress (all 3 e2e agents died at "LLM call failed: timed out"
+# mid-iteration). The new chat() streams (per-chunk silence timeout) and retries
+# transient failures. These tests pin that contract by mocking _stream_one_turn
+# (the per-attempt seam) and httpx.stream (the streaming seam).
+
+class _FakeResp:
+    """Minimal stand-in for an httpx.Response — only status_code is read."""
+    def __init__(self, code):
+        self.status_code = code
+
+
+def _status_error(code):
+    return httpx.HTTPStatusError(
+        f"HTTP {code}", request=httpx.Request("POST", "http://localhost"),
+        response=_FakeResp(code),
+    )
+
+
+def test_chat_retries_on_timeout_then_succeeds(monkeypatch):
+    """A transient read timeout must not kill the run: chat() retries and
+    returns the message once the stall clears."""
+    monkeypatch.setattr(lao.time, "sleep", lambda s: None)  # no real backoff in tests
+    calls = {"n": 0}
+
+    def _flaky(payload):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.TimeoutException("read timed out")
+        return {"role": "assistant", "content": "done", "tool_calls": []}
+
+    monkeypatch.setattr(lao, "_stream_one_turn", _flaky)
+    msg = lao.chat([{"role": "user", "content": "hi"}])
+    assert calls["n"] == 3, f"expected 3 attempts (2 timeouts + success), got {calls['n']}"
+    assert msg["content"] == "done"
+
+
+def test_chat_raises_after_max_attempts_on_persistent_timeout(monkeypatch):
+    """If every attempt times out, chat() exhausts CHAT_MAX_ATTEMPTS then
+    re-raises — main()'s except then commits WIP and returns 1. This matches
+    the old terminal behavior, but only after genuinely trying."""
+    monkeypatch.setattr(lao.time, "sleep", lambda s: None)
+    monkeypatch.setattr(lao, "CHAT_MAX_ATTEMPTS", 3)
+    calls = {"n": 0}
+
+    def _always_timeout(payload):
+        calls["n"] += 1
+        raise httpx.TimeoutException("read timed out")
+
+    monkeypatch.setattr(lao, "_stream_one_turn", _always_timeout)
+    try:
+        lao.chat([{"role": "user", "content": "hi"}])
+        assert False, "expected TimeoutException after exhausting attempts"
+    except httpx.TimeoutException:
+        pass
+    assert calls["n"] == 3, f"expected exactly CHAT_MAX_ATTEMPTS=3 attempts, got {calls['n']}"
+
+
+def test_chat_does_not_retry_on_4xx(monkeypatch):
+    """4xx is a bad request — retrying is pointless and just burns time.
+    chat() must raise immediately on the first 4xx."""
+    monkeypatch.setattr(lao.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _bad_request(payload):
+        calls["n"] += 1
+        raise _status_error(404)
+
+    monkeypatch.setattr(lao, "_stream_one_turn", _bad_request)
+    try:
+        lao.chat([{"role": "user", "content": "hi"}])
+        assert False, "expected HTTPStatusError(404)"
+    except httpx.HTTPStatusError:
+        pass
+    assert calls["n"] == 1, f"4xx must NOT be retried; got {calls['n']} attempts"
+
+
+def test_chat_retries_on_5xx_then_succeeds(monkeypatch):
+    """5xx is a transient server error (Ollama model-not-loaded, OOM) —
+    chat() retries it like a transport error."""
+    monkeypatch.setattr(lao.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _flaky_5xx(payload):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _status_error(503)
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(lao, "_stream_one_turn", _flaky_5xx)
+    msg = lao.chat([{"role": "user", "content": "hi"}])
+    assert calls["n"] == 2
+    assert msg["content"] == "ok"
+
+
+class _FakeStreamResponse:
+    """Stand-in for the response object httpx.stream() yields. raise_for_status
+    honors the status code; iter_lines yields the canned JSON lines."""
+    def __init__(self, lines, status_code=200):
+        self._lines = lines
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise _status_error(self.status_code)
+
+    def iter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _FakeStreamCM:
+    def __init__(self, response):
+        self._response = response
+
+    def __enter__(self):
+        return self._response
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_stream_one_turn_assembles_streamed_chunks(monkeypatch):
+    """_stream_one_turn accumulates content across streamed JSON chunks and
+    returns the assembled message (same shape the old r.json()['message']
+    returned). A done:true chunk terminates the stream."""
+    # Simulate Ollama streaming: content split across 3 chunks, then a
+    # done:true terminator. devstral emits tool calls as text content, so
+    # tool_calls stays None and recover_tool_calls parses content downstream.
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "I'll "}}),
+        json.dumps({"message": {"role": "assistant", "content": "create "}}),
+        json.dumps({"message": {"role": "assistant", "content": "a file."}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(lao.httpx, "stream", _fake_stream)
+    msg = lao._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert msg["role"] == "assistant"
+    assert msg["content"] == "I'll create a file."
+    assert "tool_calls" not in msg  # none emitted in this stream
+
+
+def test_stream_one_turn_captures_native_tool_calls(monkeypatch):
+    """For models that use native tool_calls (not devstral's text style),
+    _stream_one_turn captures them from the done chunk and attaches them to
+    the assembled message so main()'s m.get('tool_calls') sees them."""
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": ""}}),
+        json.dumps({"message": {"role": "assistant", "content": ""},
+                     "tool_calls": [{"function": {"name": "bash",
+                                                   "arguments": {"command": "ls"}}}],
+                     "done": True}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(lao.httpx, "stream", _fake_stream)
+    msg = lao._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert msg["tool_calls"] == [{"function": {"name": "bash",
+                                                "arguments": {"command": "ls"}}}]
+
+
+def test_stream_one_turn_raises_on_5xx(monkeypatch):
+    """A 5xx response makes raise_for_status raise HTTPStatusError, which
+    chat() then retries. _stream_one_turn itself must surface it."""
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse([], status_code=500))
+
+    monkeypatch.setattr(lao.httpx, "stream", _fake_stream)
+    try:
+        lao._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+        assert False, "expected HTTPStatusError(500)"
+    except httpx.HTTPStatusError as e:
+        assert e.response.status_code == 500

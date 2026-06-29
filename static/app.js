@@ -672,55 +672,142 @@ function flashRefreshIndicator() {
   }, 750);
 }
 
+// True when a value should be rendered in a monospace <pre> block instead
+// of an inline <dd>. Long paths, IDs, URLs, commit hashes, and JSON-ish
+// blobs benefit from a fixed-width wrap so users can read/copy them.
+function isLongValue(value) {
+  const s = String(value == null ? "" : value);
+  if (s.length > 60) return true;
+  return /[\\/\n]/.test(s);
+}
+
+// Build a small "copy" button for a scalar field value. The handler calls
+// navigator.clipboard.writeText with try/catch guard — environments without
+// the API (older browsers, insecure contexts) silently no-op so the button
+// is never the cause of a thrown error.
+function renderCopyButton(value) {
+  const safe = escapeHtml(String(value == null ? "" : value));
+  // Encode the value into a data attribute so the click handler doesn't
+  // have to re-derive text content (which can be transformed by HTML).
+  // Backslashes and quotes cannot appear inside text content, so a simple
+  // attribute encoding is sufficient.
+  const encoded = safe.replace(/"/g, "&quot;");
+  return `<button type="button" class="copy-btn" data-copy="${encoded}" aria-label="Copy ${safe}">copy</button>`;
+}
+
+// Click handler for `.copy-btn` elements within the story modal. Attached
+// once at module load; uses event delegation so we don't rebind on every
+// open. Silently swallows clipboard errors and environments where
+// navigator.clipboard is undefined.
+function handleCopyClick(e) {
+  const btn = e.target.closest && e.target.closest(".copy-btn");
+  if (!btn) return;
+  const text = btn.getAttribute("data-copy") || "";
+  // navigator.clipboard requires a secure context; guard both the API
+  // presence and the writeText call.
+  if (typeof navigator === "undefined" || !navigator.clipboard
+      || typeof navigator.clipboard.writeText !== "function") {
+    return;
+  }
+  // Decode the attribute back to a plain string (&quot; -> "); we don't
+  // HTML-decode &amp;/&lt;/&gt; because those came from real escaped text
+  // and should stay literal in the clipboard payload.
+  const decoded = text.replace(/&quot;/g, '"');
+  navigator.clipboard.writeText(decoded).then(
+    () => {
+      const prev = btn.textContent;
+      btn.textContent = "copied";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = prev;
+        btn.classList.remove("copied");
+      }, 1200);
+    },
+    () => {
+      // Swallow rejection (denied permission, etc.) — feature detection
+      // already passed so we treat this as a transient user-side issue.
+    }
+  );
+}
+
 function showStoryModal(story, key) {
   const modal = document.getElementById("story-modal");
   const body = document.getElementById("story-modal-body");
-  const fields = [
-    ["Key", key],
-    ["Status", story.status],
+  const deps = story.dependencies;
+  const depsText = Array.isArray(deps) ? deps.join(", ") : "";
+  const depsShow = Array.isArray(deps) && deps.length > 0 ? depsText : null;
+
+  // Field lists per section. Each entry: [label, value, opts].
+  // `opts.copy` enables the click-to-copy button on that value.
+  // `opts.mono` forces monospace <pre> rendering for short but structured
+  // values (e.g. a 12-char commit hash is short but reads better mono).
+  const identity = [
+    ["Key", key, { copy: true }],
     ["Summary", story.summary],
     ["Persona", story.persona],
     ["Model", story.model],
     ["Risk", story.risk],
-    ["Dependencies", (story.dependencies || []).join(", ") || "(none)"],
-    ["Worktree", story.worktree],
-    ["PID", story.pid],
-    ["PR URL", story.pr_url],
-    ["Review verdict", story.review_verdict],
-    ["Review feedback", story.review_feedback],
+    ["Dependencies", depsShow],
+  ];
+  const ageLabel = ageLabelFor(story.last_activity);
+  const lifecycle = [
+    ["Status", story.status],
+    ["Backend", story.backend],
+    ["Escalated", story.escalated],
+    ["Worktree", story.worktree, { copy: true }],
+    ["Branch", story.branch],
+    ["PID", story.pid, { copy: true }],
+    ["PR URL", story.pr_url, { copy: true, mono: true }],
+    ["Last commit", story.last_commit, { mono: true }],
+    ["Interrupted at", story.interrupted_at],
+    ["Last activity", story.last_activity],
+    ["Age", ageLabel],
+  ];
+  const dispatch = [
     ["Dispatch attempts", story.dispatch_attempts],
     ["Rework attempts", story.rework_attempts],
     ["Merge attempts", story.merge_attempts],
+    ["Review verdict", story.review_verdict],
+    ["Review feedback", story.review_feedback],
+  ];
+  const errors = [
     ["Dispatch error", story.dispatch_error],
     ["Merge error", story.merge_error],
+    ["Failure reason", story.failure_reason],
     ["Parked reason", story.parked_reason],
-    ["Interrupted at", story.interrupted_at],
-    ["Last commit", story.last_commit],
-  ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+  ];
 
-  // Lifecycle section: derived last_activity + client-side age label.
-  // Show it only when we actually have a timestamp so we don't render
-  // an empty heading for stories with no activity signal.
-  const ageLabel = ageLabelFor(story.last_activity);
-  const lifecycleRows = story.last_activity
-    ? [
-        ["Last activity", story.last_activity],
-        ["Age", ageLabel || "just now"],
-      ]
-    : [];
-  const lifecycleHtml = lifecycleRows.length
-    ? `<h3 class="modal-section">Lifecycle</h3>
-       <dl>
-         ${lifecycleRows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
-       </dl>`
-    : "";
+  // Render a field row, applying long/mono/copy semantics.
+  function renderRow(label, value, opts) {
+    opts = opts || {};
+    const v = value;
+    if (v === undefined || v === null || v === "") return "";
+    const mono = opts.mono || isLongValue(v);
+    const inner = mono
+      ? `<pre class="mono">${escapeHtml(String(v))}</pre>`
+      : escapeHtml(v);
+    const btn = opts.copy ? renderCopyButton(v) : "";
+    return `<dt>${escapeHtml(label)}</dt><dd>${inner}${btn}</dd>`;
+  }
+
+  function renderSection(title, rows) {
+    const html = rows.map(([label, value, opts]) => renderRow(label, value, opts))
+      .filter(Boolean)
+      .join("");
+    if (!html) return "";
+    return `<h3 class="modal-section">${escapeHtml(title)}</h3><dl>${html}</dl>`;
+  }
+
+  const sections = [
+    renderSection("Identity", identity),
+    renderSection("Lifecycle", lifecycle),
+    renderSection("Dispatch &amp; review", dispatch),
+    renderSection("Errors", errors),
+  ].filter(Boolean).join("");
 
   body.innerHTML = `
-    <h2>${escapeHtml(key)}</h2>
-    <dl>
-      ${fields.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
-    </dl>
-    ${lifecycleHtml}
+    <h2 class="modal-title">${escapeHtml(key)}</h2>
+    ${sections || "<p class=\"modal-empty\">No fields to display.</p>"}
   `;
   modal.classList.remove("hidden");
 }
@@ -818,6 +905,12 @@ function syncPollingWithVisibility() {
 
 document.getElementById("story-modal-close").addEventListener("click", hideStoryModal);
 document.getElementById("story-modal").addEventListener("click", (e) => {
+  // Click-to-copy handling is delegated here so we don't rebind on every
+  // modal open and so dynamically rebuilt body content stays supported.
+  if (e.target.closest && e.target.closest(".copy-btn")) {
+    handleCopyClick(e);
+    return;
+  }
   if (e.target.id === "story-modal") hideStoryModal();
 });
 document.getElementById("auto-refresh").addEventListener("change", (e) => {

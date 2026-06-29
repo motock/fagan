@@ -11,7 +11,62 @@ const SORT_OPTIONS = [
 
 const RISK_RANK = { high: 3, medium: 2, low: 1 };
 
+// Stale threshold (minutes) for the in_progress "aged" indicator on cards.
+// Mirrors STALE_IN_PROGRESS_MINUTES in dashboard.py — the dashboard hands
+// us `last_activity` and the UI does the math so cards stay accurate
+// without re-fetching.
+const STALE_IN_PROGRESS_MINUTES = 30;
+
 const FILTERS_KEY = "pipeline-dashboard-filters";
+
+// Parse an ISO-8601 string into a Date. Returns null for any falsy or
+// unparseable value — the dashboard never promises strict formatting, and
+// a bad row should just hide the age label rather than throw.
+function parseIso(ts) {
+  if (typeof ts !== "string" || !ts) return null;
+  // Date.parse accepts the trailing 'Z' suffix natively, so a direct call
+  // handles both "...+00:00" and "...Z" forms. Any garbage falls through
+  // to NaN and we return null.
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
+// Format a positive (or zero) age in seconds as a short relative-age label
+// like "just now" (<60s), "3m ago" (<1h), "2h ago" (<1d), "4d ago".
+// Future timestamps (negative age) are clamped to "just now" — never show
+// negative durations.
+function relativeAgeLabel(ageSeconds) {
+  if (ageSeconds < 60) return "just now";
+  const minutes = Math.floor(ageSeconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+// Compute the human-readable age for a story's last_activity ISO timestamp,
+// or null if there is no last_activity. Negative ages (future timestamps)
+// are clamped to "just now".
+function ageLabelFor(lastActivity) {
+  const d = parseIso(lastActivity);
+  if (!d) return null;
+  const ageSec = (Date.now() - d.getTime()) / 1000;
+  return relativeAgeLabel(ageSec);
+}
+
+// True when an in_progress story has a last_activity older than the stale
+// threshold. Stories without last_activity, or with other statuses, are
+// never stale here — we only warn about agents that *were* running and
+// appear to have stopped.
+function isStaleInProgress(story) {
+  if (!story || story.status !== "in_progress") return false;
+  const d = parseIso(story.last_activity);
+  if (!d) return false;
+  const ageMin = (Date.now() - d.getTime()) / 60000;
+  return ageMin > STALE_IN_PROGRESS_MINUTES;
+}
 
 function defaultFilters() {
   return {
@@ -117,12 +172,24 @@ function renderBoard(stories) {
     .map((status) => {
       const entries = applyFilters(
         Object.entries(stories).filter(([, s]) => s.status === status));
-      const cards = entries.map(([key, s]) => `
-        <div class="card" style="--badge-color: var(--c-${status})" data-key="${escapeHtml(key)}">
+      const cards = entries.map(([key, s]) => {
+        // Per-card decorations: age label when last_activity exists, and
+        // a stale class on aged in_progress stories so the user can see
+        // at a glance which agents are wedged. Both are derived from
+        // story.last_activity (server-supplied) using client-side time
+        // so they stay correct between polls.
+        const ageLabel = ageLabelFor(s.last_activity);
+        const stale = isStaleInProgress(s);
+        const classes = ["card"];
+        if (stale) classes.push("stale");
+        return `
+        <div class="${classes.join(" ")}" style="--badge-color: var(--c-${status})" data-key="${escapeHtml(key)}">
           <div class="card-key">${escapeHtml(key)}</div>
           <div class="card-summary">${escapeHtml(s.summary || "(no summary)")}</div>
+          ${ageLabel ? `<div class="card-age${stale ? " stale" : ""}">${escapeHtml(ageLabel)}</div>` : ""}
         </div>
-      `).join("");
+      `;
+      }).join("");
       return `
         <div class="column">
           <div class="column-header">
@@ -271,11 +338,29 @@ function showStoryModal(story, key) {
     ["Last commit", story.last_commit],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
 
+  // Lifecycle section: derived last_activity + client-side age label.
+  // Show it only when we actually have a timestamp so we don't render
+  // an empty heading for stories with no activity signal.
+  const ageLabel = ageLabelFor(story.last_activity);
+  const lifecycleRows = story.last_activity
+    ? [
+        ["Last activity", story.last_activity],
+        ["Age", ageLabel || "just now"],
+      ]
+    : [];
+  const lifecycleHtml = lifecycleRows.length
+    ? `<h3 class="modal-section">Lifecycle</h3>
+       <dl>
+         ${lifecycleRows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
+       </dl>`
+    : "";
+
   body.innerHTML = `
     <h2>${escapeHtml(key)}</h2>
     <dl>
       ${fields.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
     </dl>
+    ${lifecycleHtml}
   `;
   modal.classList.remove("hidden");
 }

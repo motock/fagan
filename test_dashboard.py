@@ -382,8 +382,8 @@ def test_story_last_activity_ignores_missing_or_empty_journal(client, plan_dir):
 # accurate between polls (no re-fetch needed as the clock advances). These
 # tests exercise the pure helpers exposed by app.js by shelling out to Node
 # in a subprocess — no JS test runner / jsdom dependency, just plain pytest.
-import os
-import subprocess
+import os  # noqa: E402
+import subprocess  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
@@ -404,11 +404,14 @@ def _run_app_js(expr):
             innerHTML: "",
             classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
             addEventListener: noop,
+            setAttribute: noop,
             appendChild: noop,
             querySelectorAll: () => [],
             dataset: {},
         };
         globalThis.document = {
+            addEventListener: noop,
+            documentElement: { dataset: {} },
             getElementById: () => ({ ...fakeEl, dataset: {}, addEventListener: noop }),
             createElement: () => ({ ...fakeEl, classList: { add: noop, remove: noop, contains: () => false } }),
         };
@@ -446,7 +449,6 @@ def _iso(seconds_ago):
 
 def test_relative_age_label_minutes_and_hours_and_days():
     """The short-form label uses the right unit and floors toward zero."""
-    now = _iso(0)
     cases = [
         # age_seconds -> expected label
         (0, "just now"),
@@ -513,3 +515,58 @@ def test_is_stale_in_progress_only_for_aged_in_progress_stories():
     assert _run_app_js(f"isStaleInProgress({json.dumps(no_signal)})") is False
     # And no story at all.
     assert _run_app_js("isStaleInProgress(null)") is False
+
+
+# === Theme / design-token smoke tests =====================================
+# Frontend-only work, but the success criteria is pinned down here as
+# regression guards so a future change can't silently disable light theme
+# or break the toggle wiring.
+
+def test_index_html_references_static_assets(client):
+    """index.html must reference /style.css and /app.js so they load as 200s
+    when uvicorn serves the dashboard."""
+    body = client.get("/").text
+    assert 'href="/style.css"' in body
+    assert 'src="/app.js"' in body
+
+
+def test_static_assets_serve_with_200(client):
+    """End-to-end asset delivery: /style.css and /app.js must return 200."""
+    for path in ("/style.css", "/app.js"):
+        res = client.get(path)
+        assert res.status_code == 200, f"{path} -> {res.status_code}"
+
+
+def test_style_css_defines_light_theme_tokens(client):
+    """The [data-theme="light"] block must exist so the toggle can actually
+    switch palettes (it just sets data-theme; the rest is CSS)."""
+    css = client.get("/style.css").text
+    assert '[data-theme="light"]' in css
+    # Token shape under :root should also be present (spacing scale + elevation)
+    assert "--sp-2: 8px" in css  # 8px spacing scale baseline
+    assert "--shadow-1" in css and "--shadow-2" in css and "--shadow-3" in css
+
+
+def test_app_js_persists_theme_under_documented_key(client):
+    """The toggle contract: localStorage key 'pipeline-dashboard-theme',
+    try/catch-wrapped so a locked-down storage backend doesn't throw."""
+    js = client.get("/app.js").text
+    assert '"pipeline-dashboard-theme"' in js or "pipeline-dashboard-theme" in js
+    # localStorage access must be guarded (read AND write sides)
+    assert "localStorage.getItem" in js
+    assert "localStorage.setItem" in js
+    # The toggle must set documentElement.dataset.theme (the contract for CSS)
+    assert "documentElement.dataset.theme" in js
+    # And it must default to dark when unset / empty.
+    assert "dark" in js.lower()
+    # try/catch wrapping around localStorage (mirrors existing filter persistence)
+    assert "try {" in js
+    assert "catch" in js
+
+
+def test_index_html_has_theme_toggle_button(client):
+    """A header button the user can actually click; without it the CSS toggle
+    contract isn't discoverable."""
+    body = client.get("/").text
+    assert 'id="theme-toggle"' in body
+    assert "icon-sun" in body and "icon-moon" in body

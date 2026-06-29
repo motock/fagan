@@ -70,11 +70,21 @@ function isStaleInProgress(story) {
 
 const VALID_SORTS = new Set(SORT_OPTIONS.map(([v]) => v));
 
+// Backend filter chip values. Stories whose `backend` field is missing are
+// treated as "local" (the default semantic — the orchestrator hasn't picked
+// anything else yet). Keeps the filter and the badge logic consistent: a
+// story without a backend never shows a "claude" badge and matches the
+// "local" chip, so neither surface ever leaks "undefined" to the user.
+const BACKEND_VALUES = ["local", "claude"];
+const ESCALATED_VALUES = ["yes", "no"];
+
 function defaultFilters() {
   return {
     statuses: [...STATUS_COLUMNS], // enabled statuses; default = all
     personas: [], // [] = no persona filter (show all)
     risks: [], // [] = no risk filter (show all)
+    backends: [], // [] = no backend filter (show all); "local" | "claude"
+    escalated: [], // [] = no escalation filter (show all); "yes" | "no"
     sort: "key", // "key" | "risk" | "activity"
   };
 }
@@ -93,6 +103,8 @@ const HASH_KEYS = {
   status: "statuses",
   persona: "personas",
   risk: "risks",
+  backend: "backends",
+  escalated: "escalated",
   sort: "sort",
 };
 
@@ -106,6 +118,8 @@ function hashStateFrom(s) {
       statuses: [...s.filters.statuses],
       personas: [...s.filters.personas],
       risks: [...s.filters.risks],
+      backends: [...s.filters.backends],
+      escalated: [...s.filters.escalated],
       sort: s.filters.sort,
     },
   };
@@ -137,6 +151,12 @@ function encodeHashState() {
   }
   if (snap.filters.risks.length) {
     parts.push(`risk=${snap.filters.risks.map(encodeURIComponent).join(",")}`);
+  }
+  if (snap.filters.backends.length) {
+    parts.push(`backend=${snap.filters.backends.map(encodeURIComponent).join(",")}`);
+  }
+  if (snap.filters.escalated.length) {
+    parts.push(`escalated=${snap.filters.escalated.map(encodeURIComponent).join(",")}`);
   }
   if (snap.filters.sort !== "key") {
     parts.push(`sort=${encodeURIComponent(snap.filters.sort)}`);
@@ -209,6 +229,12 @@ function parseHash(raw) {
       if (!out.filters.statuses.length) out.filters.statuses = [...STATUS_COLUMNS];
     } else if (dim === "personas" || dim === "risks") {
       out.filters[dim] = items;
+    } else if (dim === "backends") {
+      const valid = new Set(BACKEND_VALUES);
+      out.filters.backends = items.filter((v) => valid.has(v));
+    } else if (dim === "escalated") {
+      const valid = new Set(ESCALATED_VALUES);
+      out.filters.escalated = items.filter((v) => valid.has(v));
     }
   }
 
@@ -332,13 +358,23 @@ function activityScore(story) {
     + (story.merge_attempts || 0);
 }
 
-// Persona/risk-filter the cards of one status column, then sort per state.filters.sort.
-// Status filtering happens at the column level in renderBoard, not here.
+// Persona/risk/backend/escalation-filter the cards of one status column,
+// then sort per state.filters.sort. Status filtering happens at the column
+// level in renderBoard, not here.
 function applyFilters(entries) {
-  const { personas, risks, sort } = state.filters;
+  const { personas, risks, backends, escalated, sort } = state.filters;
+  // A story without a `backend` field is treated as "local" (the orchestrator
+  // hasn't chosen anything else yet). This must agree with the badge logic
+  // in renderBoard so a missing backend never leaks as "undefined".
+  const storyBackend = (s) => (s && s.backend) ? s.backend : "local";
+  const storyEscalated = (s) => !!(s && s.escalated);
   const filtered = entries.filter(([, s]) =>
     (personas.length === 0 || personas.includes(s.persona))
-    && (risks.length === 0 || risks.includes(s.risk)));
+    && (risks.length === 0 || risks.includes(s.risk))
+    && (backends.length === 0 || backends.includes(storyBackend(s)))
+    && (escalated.length === 0
+        || (escalated.includes("yes") && storyEscalated(s))
+        || (escalated.includes("no") && !storyEscalated(s))));
 
   const comparators = {
     key: ([a], [b]) => a.localeCompare(b, undefined, { numeric: true }),
@@ -373,10 +409,27 @@ function renderBoard(stories) {
         const stale = isStaleInProgress(s);
         const classes = ["card"];
         if (stale) classes.push("stale");
+        // Backend / escalation badges. A story without a `backend` field
+        // is treated as local and gets no claude badge; a non-escalated
+        // story gets no escalated badge. Keeping these conditional means
+        // most cards stay visually quiet — the badges surface the
+        // *interesting* cases (claude-bound, escalated) rather than
+        // repeating what the status stripe already conveys.
+        const badges = [];
+        if (s.backend === "claude") {
+          badges.push(`<span class="card-badge card-badge-claude" title="Backend: claude">claude</span>`);
+        }
+        if (s.escalated) {
+          badges.push(`<span class="card-badge card-badge-escalated" title="Escalated to claude">escalated</span>`);
+        }
+        const badgesHtml = badges.length
+          ? `<div class="card-badges">${badges.join("")}</div>`
+          : "";
         return `
         <div class="${classes.join(" ")}" style="--badge-color: var(--c-${status})" data-key="${escapeHtml(key)}">
           <div class="card-key">${escapeHtml(key)}</div>
           <div class="card-summary">${escapeHtml(s.summary || "(no summary)")}</div>
+          ${badgesHtml}
           ${ageLabel ? `<div class="card-age${stale ? " stale" : ""}">${escapeHtml(ageLabel)}</div>` : ""}
         </div>
       `;
@@ -419,6 +472,15 @@ function renderFilterBar(stories) {
   const personas = [...new Set(all.map((s) => s.persona).filter(Boolean))].sort();
   const risks = [...new Set(all.map((s) => s.risk).filter(Boolean))]
     .sort((a, b) => (RISK_RANK[b] || 0) - (RISK_RANK[a] || 0));
+  // Show the Backend / Escalated groups only when at least one story in
+  // this plan has a non-local backend or has been escalated. Most plans
+  // will be all-local, all-non-escalated — surfacing "yes" / "claude"
+  // chips when they would always return zero results just adds noise.
+  // When the relevant field is missing on every story we still render
+  // the group with the default values; a later poll that introduces
+  // escalation will populate it without a code change.
+  const hasClaudeBackend = all.some((s) => s && s.backend === "claude");
+  const hasAnyEscalation = all.some((s) => s && s.escalated);
 
   const { filters } = state;
   const groups = [
@@ -435,6 +497,24 @@ function renderFilterBar(stories) {
   if (risks.length) {
     groups.push(`<div class="filter-group"><span class="filter-group-label">Risk</span>${
       risks.map((r) => chip("risks", r, r, filters.risks.includes(r))).join("")
+    }</div>`);
+  }
+  // Backend group: only render the row when a claude backend actually
+  // exists in the plan. We always offer both "local" and "claude" so the
+  // user can pin to either side; "local" covers the implicit-default
+  // case (no backend field present) plus explicitly-local stories.
+  if (hasClaudeBackend) {
+    groups.push(`<div class="filter-group"><span class="filter-group-label">Backend</span>${
+      BACKEND_VALUES.map((b) =>
+        chip("backends", b, b, filters.backends.includes(b), b === "claude" ? "accent" : null)
+      ).join("")
+    }</div>`);
+  }
+  if (hasAnyEscalation) {
+    groups.push(`<div class="filter-group"><span class="filter-group-label">Escalated</span>${
+      ESCALATED_VALUES.map((e) =>
+        chip("escalated", e, e, filters.escalated.includes(e), e === "yes" ? "parked" : null)
+      ).join("")
     }</div>`);
   }
   groups.push(`<div class="filter-group"><span class="filter-group-label">Sort</span>${

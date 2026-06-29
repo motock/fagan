@@ -367,6 +367,52 @@ main {
 }
 .card .card-summary { margin-top: var(--sp-1); line-height: var(--lh-snug); }
 
+/* Card-level decoration badges (backend + escalation). These sit between
+   the summary and the age pill so the eye picks them up after the title
+   but before the activity timestamp. Each badge uses an accent / warning
+   tone that complements (not duplicates) the status stripe, so a card
+   with a "claude" badge is visually distinct from a card whose status is
+   already claude-tinted. */
+.card .card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: var(--sp-2);
+}
+.card-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: var(--fw-semibold);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  border: 1px solid transparent;
+}
+/* "claude" badge: uses the global accent so it reads as "this is an
+   exception / worth-noting", distinct from the status stripe which uses
+   the per-status palette. */
+.card-badge-claude {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* "escalated" badge: parked / warning tone. Mirrors the existing
+   card-age.stale / card.stale amber treatment so users learn one
+   warning color for "attention required" signals. */
+.card-badge-escalated {
+  background: rgba(212, 177, 62, 0.14);
+  color: var(--c-parked);
+  border-color: var(--c-parked);
+}
+[data-theme="light"] .card-badge-escalated {
+  background: rgba(154, 124, 18, 0.12);
+  color: var(--c-parked);
+}
+
 /* Relative-age pill rendered when the story has a `last_activity`
    timestamp. Default tone is dim (informational only); the .stale
    variant shifts to a muted warning amber so aged in_progress cards

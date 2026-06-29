@@ -196,6 +196,55 @@ def test_complete_review_loop_recovers_unnamed_tool_call(tmp_path, monkeypatch):
     assert "VERDICT: APPROVE" in out
 
 
+def test_complete_review_loop_nudges_to_submit_near_step_cap(tmp_path, monkeypatch):
+    """The local model investigates thoroughly but rarely converges to the
+    submit_review terminator on its own (it WILL call it when pushed — the same
+    model calls `done` in dispatch mode). When the step budget is nearly spent
+    without a verdict, the loop must inject a convergence nudge pressing for
+    submit_review, instead of silently exhausting into UNKNOWN (which parks the
+    story and loops review/rework). Here the model keeps calling bash and never
+    submits; the nudge must appear in the messages sent to the model."""
+    driver = b.OllamaDriver()
+    driver.review_max_steps = 4
+    seen_user_msgs = []
+
+    def chat(messages, model, tools=None):
+        seen_user_msgs.extend(
+            m.get("content") for m in messages if m.get("role") == "user"
+        )
+        return {"tool_calls": [{"function": {"name": "bash",
+                                              "arguments": {"command": "ls"}}}]}
+
+    monkeypatch.setattr(driver, "_chat", chat)
+    driver.complete("review the branch", system="r", model="sonnet",
+                    allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    nudges = [c for c in seen_user_msgs if c and "submit_review" in c]
+    assert nudges, "expected a convergence nudge mentioning submit_review near the cap"
+
+
+def test_complete_review_loop_salvages_prose_verdict_on_cap(tmp_path, monkeypatch):
+    """If the model writes its verdict as prose (VERDICT: APPROVE) instead of
+    calling submit_review, the loop must salvage it from the final assistant
+    message rather than returning empty (empty -> UNKNOWN -> changes_requested
+    with no feedback -> blind rework loop -> park). _parse_verdict stays
+    strict, so prose without an explicit VERDICT line still yields UNKNOWN and
+    parks safely."""
+    driver = b.OllamaDriver()
+    driver.review_max_steps = 2
+    responses = [
+        {"content": "Tests pass and the diff is clean. VERDICT: APPROVE\n\nLGTM."},
+        {"content": "Tests pass and the diff is clean. VERDICT: APPROVE\n\nLGTM."},
+    ]
+    monkeypatch.setattr(driver, "_chat",
+                        lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" in out
+
+
 def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
     """Overlord-style complete() (allowed_tools='Read', no cwd) must NOT enter
     the tool loop — one plain completion, no tools offered."""

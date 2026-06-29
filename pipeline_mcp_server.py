@@ -1387,7 +1387,22 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # against (e.g. usage_gate thresholds, dispatch backend routing) and
     # false-fail the gate for every Python story. Strip them so the suite
     # sees the same defaults a developer runs it under.
-    test_env = {k: v for k, v in os.environ.items() if not k.startswith("PIPELINE_")}
+    #
+    # Also strip LOCAL_AGENT_* and REPO_ROOT: LOCAL_AGENT_* (read-heavy
+    # windows, chat retry, etc.) are harness-config the scheduler's plist may
+    # set for a run (e.g. LOCAL_AGENT_READ_HEAVY_DISTINCT_WINDOWS raised to
+    # let a model explore longer), and test_local_agent.py asserts the
+    # DEFAULTS — an override that survives into the graded run false-fails
+    # the suite for every story in a repo that vendors the pipeline's own
+    # tests (the dashboard worktree is the pipeline repo, so its full suite
+    # includes test_local_agent.py). REPO_ROOT is a per-plan sentinel
+    # (/nonexistent-...) that likewise isn't a developer default.
+    test_env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("PIPELINE_")
+        and not k.startswith("LOCAL_AGENT_")
+        and k != "REPO_ROOT"
+    }
     # Heavy build/test commands (cargo, npm, mvn, gradle, etc.) can run GB-
     # seconds of memory each. Serialize against other in-flight agents so
     # we never have N concurrent builds saturating the host. Cheap commands

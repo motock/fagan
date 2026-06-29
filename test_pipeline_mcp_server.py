@@ -995,6 +995,45 @@ def test_dispatch_story_uses_manifest_repo_root_for_git_commands(
     assert p.REPO_ROOT == p.Path("/wrong/default/repo")
 
 
+def test_dispatch_story_records_resolved_model_on_manifest(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    """dispatch_story writes the RESOLVED model the agent actually boots with
+    to story['dispatched_model'] so the dashboard can show what ran (e.g.
+    minimax-m3:cloud under the local backend) instead of the plan's declared
+    tier ('sonnet'). The declared story['model'] is left unchanged (it's a
+    routing hint the plan specified)."""
+    real_repo = tmp_path / "real-repo"
+    _write_manifest(plan_dir, "drm", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "model": "sonnet"},
+    })
+    manifest_path = plan_dir / "drm.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(real_repo)
+    manifest_path.write_text(json.dumps(manifest))
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, cwd=None, **kw: _R())
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda argv, **kw: _FakeProc(123))
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "minimax-m3:cloud")
+    monkeypatch.delenv("PIPELINE_LOCAL_MODEL_SONNET", raising=False)
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+
+    p.dispatch_story("drm", "S1")
+
+    story = json.loads(manifest_path.read_text())["stories"]["S1"]
+    assert story["model"] == "sonnet"                       # declared tier unchanged
+    assert story["dispatched_model"] == "minimax-m3:cloud"  # actual model recorded
+
+
 def test_advance_pipeline_merge_uses_plan_repo_root(plan_dir, monkeypatch, tmp_path):
     real_repo = tmp_path / "real-repo"
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")

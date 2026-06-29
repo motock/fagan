@@ -23,6 +23,13 @@ import httpx
 class AgentHandle:
     """A non-blocking agentic run (dispatch/review-style), identified by pid."""
     pid: int
+    # The concrete model the agent actually boots with — for the local backend
+    # this is the RESOLVED model (a logical tier like "sonnet" maps to e.g.
+    # "minimax-m3:cloud" via PIPELINE_LOCAL_MODEL_DEFAULT), for the Claude
+    # backend it's the model string passed verbatim. The orchestrator records
+    # this on the manifest so the dashboard shows what really ran, not the
+    # plan's declared tier. None for backends that don't surface it.
+    model: str | None = None
 
 
 class Backend(Protocol):
@@ -90,7 +97,7 @@ class ClaudeCliDriver:
         log_file = open(log_path, "a" if append else "w")
         proc = subprocess.Popen(cmd, cwd=cwd, stdout=log_file, stderr=log_file)
         log_file.close()
-        return AgentHandle(pid=proc.pid)
+        return AgentHandle(pid=proc.pid, model=model)
 
     def usage_probe_text(self) -> str:
         proc = subprocess.run(
@@ -473,7 +480,7 @@ class OllamaDriver:
         log_file = open(log_path, "a" if append else "w")
         proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log_file, stderr=log_file)
         log_file.close()
-        return AgentHandle(pid=proc.pid)
+        return AgentHandle(pid=proc.pid, model=resolved_model)
 
     def usage_probe_text(self) -> str:
         raise NotImplementedError(

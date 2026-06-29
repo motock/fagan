@@ -1407,6 +1407,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         story["pid"] = handle.pid
         story["worktree"] = str(worktree_path)
         story["log"] = str(log_path)
+        # Record the concrete model the agent actually boots with (the local
+        # backend resolves a logical tier like "sonnet" to e.g.
+        # "minimax-m3:cloud"). The dashboard shows this instead of the plan's
+        # declared story["model"] so what's displayed matches what ran. The
+        # declared tier is left untouched (it's a routing hint).
+        if getattr(handle, "model", None):
+            story["dispatched_model"] = handle.model
         manifest_path.write_text(json.dumps(manifest, indent=2))
 
         return {"ok": True, "story_key": story_key, "pid": handle.pid, "branch": branch,

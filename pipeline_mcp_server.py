@@ -1380,6 +1380,14 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"status": "interrupted", "pid": pid}
 
     test_dir, test_cmd = detect_test_command(worktree)
+    # Grade in a clean dev env, not the MCP server's operational one. The
+    # server carries PIPELINE_* (pause/resume thresholds, backend dispatch,
+    # model defaults) so advance_pipeline/check_usage see the real config —
+    # but those same vars override the defaults the test suite asserts
+    # against (e.g. usage_gate thresholds, dispatch backend routing) and
+    # false-fail the gate for every Python story. Strip them so the suite
+    # sees the same defaults a developer runs it under.
+    test_env = {k: v for k, v in os.environ.items() if not k.startswith("PIPELINE_")}
     # Heavy build/test commands (cargo, npm, mvn, gradle, etc.) can run GB-
     # seconds of memory each. Serialize against other in-flight agents so
     # we never have N concurrent builds saturating the host. Cheap commands
@@ -1389,10 +1397,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         with _heavy_lock():
             test_result = subprocess.run(
                 test_cmd, cwd=test_dir, capture_output=True, text=True,
+                env=test_env,
             )
     else:
         test_result = subprocess.run(
             test_cmd, cwd=test_dir, capture_output=True, text=True,
+            env=test_env,
         )
     passed = test_result.returncode == 0
 

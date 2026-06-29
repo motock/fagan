@@ -85,6 +85,93 @@ def _read_decisions(plan_name: str) -> list[dict[str, Any]]:
     return json.loads(path.read_text())
 
 
+# Default line cap when the modal fetches the log tail. Capped at
+# _LOG_TAIL_CAP so an accidental giant log file never gets slurped into
+# a single HTTP response. UI sends ?lines=N to override the default
+# within the [1, _LOG_TAIL_CAP] envelope.
+_LOG_TAIL_DEFAULT = 200
+_LOG_TAIL_CAP = 500
+
+
+def _read_story_log(
+    plan_name: str,
+    story_key: str,
+    manifest: dict[str, Any],
+    lines: int = _LOG_TAIL_DEFAULT,
+) -> dict[str, Any]:
+    """Tail the on-disk log recorded in story['log'] for the redesigned
+    modal. Returns {"available": bool, "lines": [str...]}.
+
+    Hard-restricted to story['log'] in the manifest: a missing or absent
+    'log' field is a normal state and degrades to available=False; a
+    recorded log whose file is missing on disk (deleted, never written)
+    also degrades to available=False. Either path MUST NOT raise 500,
+    because the in-modal log viewer needs to render an "No log available"
+    empty state regardless of why the file isn't there.
+
+    The recorded path is resolved under PLAN_DIR and the resolved target
+    is contained-checked to PLAN_DIR so a manifest that was hand-edited
+    with `../outside.log` cannot be used to read arbitrary files. We do
+    NOT honour a path supplied by the request: only the manifest is
+    trusted.
+
+    Non-UTF-8 bytes are decoded with errors='replace' so the dashboard
+    can still surface whatever was on disk rather than 500'ing on a
+    binary log line.
+    """
+    if not isinstance(lines, int) or lines < 1:
+        lines = _LOG_TAIL_DEFAULT
+    if lines > _LOG_TAIL_CAP:
+        lines = _LOG_TAIL_CAP
+
+    stories = manifest.get("stories") if isinstance(manifest, dict) else None
+    if not isinstance(stories, dict):
+        return {"available": False, "lines": []}
+
+    story = stories.get(story_key)
+    if not isinstance(story, dict):
+        # Plan exists but story key does not. The route layer turns this
+        # into 404 before we ever get here; defended for safety only.
+        return {"available": False, "lines": []}
+
+    raw_log = story.get("log")
+    if not isinstance(raw_log, str) or not raw_log:
+        return {"available": False, "lines": []}
+
+    # Manifest stores paths relative to PLAN_DIR historically; also
+    # accept absolute paths but contain-check them so a hand-edited
+    # manifest pointing outside PLAN_DIR cannot read arbitrary files.
+    log_path = Path(raw_log)
+    if not log_path.is_absolute():
+        log_path = PLAN_DIR / raw_log
+
+    try:
+        log_path = log_path.resolve(strict=False)
+        plan_dir_resolved = PLAN_DIR.resolve()
+        # Path.is_relative_to (3.9+) — also works for the equal-root edge
+        # case. We require the resolved log to live strictly under PLAN_DIR
+        # so an empty/equal path cannot be smuggled in.
+        if log_path != plan_dir_resolved and not log_path.is_relative_to(plan_dir_resolved):
+            return {"available": False, "lines": []}
+    except OSError:
+        return {"available": False, "lines": []}
+
+    if not log_path.exists() or not log_path.is_file():
+        return {"available": False, "lines": []}
+
+    try:
+        # errors="replace" so binary garbage in a log file degrades to a
+        # U+FFFD-per-byte line rather than 500'ing the endpoint. The UI
+        # escapes the result, so replacement chars render harmlessly.
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"available": False, "lines": []}
+
+    all_lines = text.splitlines()
+    tail = all_lines[-lines:]
+    return {"available": True, "lines": tail}
+
+
 def _plan_summary(plan_name: str, manifest: dict[str, Any]) -> dict[str, Any]:
     stories = manifest.get("stories", {})
     return {
@@ -395,6 +482,41 @@ def get_story_journal(plan_name: str, story_key: str) -> dict[str, Any]:
         )
     available, entries = _read_journal(plan_name, story_key)
     return {"available": available, "entries": entries}
+
+
+@app.get("/api/plans/{plan_name}/stories/{story_key}/log")
+def get_story_log(
+    plan_name: str,
+    story_key: str,
+    lines: int = _LOG_TAIL_DEFAULT,
+) -> dict[str, Any]:
+    """Tail the on-disk log recorded in story['log'] for the redesigned
+    modal's "Log" tab.
+
+    Returns {"available": bool, "lines": [str...]} where `lines` is the
+    tail (newest-last). Default length is `_LOG_TAIL_DEFAULT` (200),
+    capped at `_LOG_TAIL_CAP` (500) — a client may pass ?lines=N inside
+    that envelope. Path-traversal protection: the endpoint reads the
+    log path ONLY from the manifest (never from the request), and the
+    resolved path is contain-checked under PLAN_DIR.
+
+    Errors that are NOT errors:
+      * story['log'] missing/empty -> available=False, lines=[].
+      * file gone -> available=False, lines=[] (no 500).
+      * non-UTF-8 bytes -> decoded with replacement chars.
+    """
+    manifest = _read_manifest(plan_name)
+    if manifest is None:
+        raise HTTPException(
+            status_code=404, detail=f"No manifest for plan '{plan_name}'"
+        )
+    stories = manifest.get("stories") if isinstance(manifest, dict) else {}
+    if not isinstance(stories, dict) or story_key not in stories:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No story '{story_key}' in plan '{plan_name}'",
+        )
+    return _read_story_log(plan_name, story_key, manifest, lines=lines)
 
 
 # Mounted last so it never shadows the /api/* routes above; html=True serves

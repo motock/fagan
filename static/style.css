@@ -480,21 +480,75 @@ main {
 .modal-content {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 20px;
-  max-width: 560px;
-  width: 90%;
-  max-height: 80vh;
+  border-radius: 10px;
+  padding: 22px 24px 18px 24px;
+  /* Wider ceiling so long paths / JSON blobs wrap instead of overflowing.
+     800px keeps the modal readable on the typical dashboard viewports
+     while leaving room for pr_url and worktree lines to breathe. */
+  max-width: 800px;
+  width: 92%;
+  max-height: 84vh;
   overflow-y: auto;
   position: relative;
+  /* Use the highest elevation token so the modal reads as clearly above
+     the board surface. Falls back gracefully if --shadow-3 is undefined
+     in older themes. */
+  box-shadow: var(--shadow-3, 0 12px 32px rgba(0,0,0,0.55));
 }
 .modal-close {
   position: absolute; top: 10px; right: 14px;
   background: none; border: none; color: var(--text-dim);
   font-size: 20px; cursor: pointer;
 }
-.modal-content dt { color: var(--text-dim); font-size: 11px; margin-top: 10px; }
+.modal-content .modal-title { margin: 0 24px 12px 0; font-size: 18px; }
+.modal-content .modal-section {
+  margin: 14px 0 6px 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.modal-content dt { color: var(--text-dim); font-size: 11px; margin-top: 8px; }
 .modal-content dd { margin: 2px 0 0 0; word-break: break-word; }
+.modal-content .modal-empty { color: var(--text-dim); font-size: 12px; }
+/* Monospace block for long values (paths, URLs, JSON, hashes). Wraps so
+   long lines never overflow the modal width. */
+.modal-content pre.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: var(--panel-2, rgba(255,255,255,0.03));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 2px 0 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+/* Click-to-copy button. Sits to the right of the field value (or below
+   in the long-value case) and gives transient "copied" feedback. */
+.modal-content .copy-btn {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--panel-2, rgba(255,255,255,0.04));
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.modal-content .copy-btn:hover { color: var(--text); }
+.modal-content .copy-btn.copied {
+  color: var(--c-tests_passed, #5dd39e);
+  border-color: var(--c-tests_passed, #5dd39e);
+}
+.modal-content dd .copy-btn { margin-top: 6px; margin-left: 0; }
 
 /* Usage-gate health banner */
 .usage-banner {

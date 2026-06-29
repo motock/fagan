@@ -171,14 +171,27 @@ def test_get_plan_tails_notifications_to_limit(client, plan_dir):
 # ---------- /api/dispatch_health: escalated-vs-completed rate by acceptance --
 
 def test_dispatch_health_empty_when_no_manifests(client, plan_dir):
-    """No plans ingested -> totals all zero, rates 0.0 (not NaN)."""
+    """No plans ingested -> totals all zero, rates 0.0 (not NaN). Existing
+    keys remain untouched (only-add contract); new aggregate rollup keys
+    appear alongside as zero-valued."""
     res = client.get("/api/dispatch_health")
     assert res.status_code == 200
     body = res.json()
-    assert body["totals"] == {
+    totals = body["totals"]
+    # Pinned existing keys — must remain exact-equivalent to the pre-rollup shape.
+    assert {k: totals[k] for k in (
+        "dispatched", "done", "escalated", "stories",
+        "escalation_rate", "success_rate",
+    )} == {
         "dispatched": 0, "done": 0, "escalated": 0, "stories": 0,
         "escalation_rate": 0.0, "success_rate": 0.0,
     }
+    # New aggregate rollup is present and all-zero.
+    assert totals["dispatch_attempts"] == 0
+    assert totals["rework_attempts"] == 0
+    assert totals["merge_attempts"] == 0
+    assert totals["failure_reasons"] == {}
+    assert totals["by_backend"] == {}
     assert body["per_plan"] == {}
 
 
@@ -244,6 +257,164 @@ def test_dispatch_health_counts_backend_set_as_dispatched_even_if_todo(
     assert s["dispatched"] == 1
     assert s["escalated"] == 1
     assert s["escalation_rate"] == 1.0
+
+
+# ---------- aggregate attempt / failure metrics on /api/plans + dispatch_health ---
+
+def test_plan_summary_aggregate_sums_attempt_counts_across_stories(client, plan_dir):
+    """(1) A plan with varied attempt counts -> sums are correct, and the
+    existing _plan_summary fields (name/paused/story_count/status_counts)
+    are preserved verbatim (only-add contract)."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "a", "status": "done",
+               "dispatch_attempts": 3, "rework_attempts": 2,
+               "merge_attempts": 1, "backend": "local"},
+        "S2": {"summary": "b", "status": "in_progress",
+               "dispatch_attempts": 5, "rework_attempts": 0,
+               "merge_attempts": 2, "backend": "claude"},
+        "S3": {"summary": "c", "status": "failed",
+               "dispatch_attempts": 1, "rework_attempts": 1,
+               "merge_attempts": 0, "backend": "local"},
+    })
+
+    res = client.get("/api/plans")
+    assert res.status_code == 200
+    plan = res.json()["plans"][0]
+    # Existing fields untouched.
+    assert plan["name"] == "demo"
+    assert plan["story_count"] == 3
+    assert plan["status_counts"]["done"] == 1
+    # New aggregate block: sums exact, every story counted once.
+    agg = plan["aggregate"]
+    assert agg["dispatch_attempts"] == 3 + 5 + 1
+    assert agg["rework_attempts"] == 2 + 0 + 1
+    assert agg["merge_attempts"] == 1 + 2 + 0
+
+
+def test_plan_summary_aggregate_failure_reason_rollup_groups_equal_reasons(client, plan_dir):
+    """(2) failure_reason rollup: equal reasons are grouped under the same
+    key, and the empty string is bucketed under '(none)' rather than
+    becoming its own literal '' key in the UI."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "a", "status": "failed",
+               "failure_reason": "tests failed", "backend": "local"},
+        "S2": {"summary": "b", "status": "failed",
+               "failure_reason": "tests failed", "backend": "local"},
+        "S3": {"summary": "c", "status": "failed",
+               "failure_reason": "merge conflict", "backend": "claude"},
+        "S4": {"summary": "d", "status": "todo",
+               "failure_reason": "", "backend": "local"},
+    })
+
+    plan = client.get("/api/plans").json()["plans"][0]
+    agg = plan["aggregate"]
+    by_reason = agg["failure_reasons"]
+    assert by_reason["tests failed"] == 2
+    assert by_reason["merge conflict"] == 1
+    # Empty-string reason -> '(none)' bucket, not a bare '' key.
+    assert by_reason["(none)"] == 1
+    assert "" not in by_reason
+
+
+def test_plan_summary_aggregate_escalated_and_backend_counts_correct(client, plan_dir):
+    """(3) Escalated count and per-backend counts are summed correctly."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "a", "status": "done",
+               "backend": "local", "escalated": False},
+        "S2": {"summary": "b", "status": "interrupted",
+               "backend": "claude", "escalated": True},
+        "S3": {"summary": "c", "status": "failed",
+               "backend": "local", "escalated": True},
+        "S4": {"summary": "d", "status": "todo",
+               "backend": "claude", "escalated": False},
+        "S5": {"summary": "e", "status": "in_progress",
+               # backend field missing -> must NOT raise KeyError and must
+               # NOT contribute to any backend bucket.
+        },
+    })
+
+    plan = client.get("/api/plans").json()["plans"][0]
+    agg = plan["aggregate"]
+    assert agg["escalated"] == 2
+    by_backend = agg["by_backend"]
+    assert by_backend["local"] == 2   # S1 + S3
+    assert by_backend["claude"] == 2  # S2 + S4
+    # Stories with backend missing must not crash and must not appear.
+    assert "S5" not in by_backend or by_backend.get("S5", 0) == 0
+
+
+def test_plan_summary_aggregate_treats_missing_attempt_fields_as_zero(client, plan_dir):
+    """(4) Stories missing dispatch_attempts / rework_attempts /
+    merge_attempts / escalated / failure_reason / backend contribute 0 to
+    every aggregate bucket and MUST NOT raise KeyError. Verifies the
+    stories-missing-the-fields branch end-to-end through the HTTP
+    boundary."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "minimal", "status": "todo"},
+    })
+
+    res = client.get("/api/plans")
+    assert res.status_code == 200
+    plan = res.json()["plans"][0]
+    agg = plan["aggregate"]
+    assert agg["dispatch_attempts"] == 0
+    assert agg["rework_attempts"] == 0
+    assert agg["merge_attempts"] == 0
+    assert agg["escalated"] == 0
+    # failure_reasons is a dict — present even when nothing contributed.
+    assert agg["failure_reasons"] == {"(none)": 1}
+    # by_backend is a dict — empty when no story declared a backend.
+    assert agg["by_backend"] == {}
+
+
+def test_plan_summary_aggregate_all_zero_for_empty_plan(client, plan_dir):
+    """(5) An empty plan (zero stories) -> all-zero aggregate, no NaN."""
+    _write_manifest(plan_dir, "demo", {})
+
+    plan = client.get("/api/plans").json()["plans"][0]
+    agg = plan["aggregate"]
+    assert agg == {
+        "dispatch_attempts": 0,
+        "rework_attempts": 0,
+        "merge_attempts": 0,
+        "escalated": 0,
+        "failure_reasons": {},
+        "by_backend": {},
+    }
+
+
+def test_dispatch_health_adds_aggregate_keys_without_dropping_existing(client, plan_dir):
+    """Only-add contract on /api/dispatch_health: existing keys in totals
+    and per_plan must remain byte-for-byte unchanged, and new aggregate
+    counters must appear alongside."""
+    _write_manifest(plan_dir, "p1", {
+        "S1": {"summary": "a", "status": "done", "backend": "local",
+               "dispatch_attempts": 2, "rework_attempts": 1,
+               "failure_reason": "tests failed"},
+        "S2": {"summary": "b", "status": "interrupted", "backend": "claude",
+               "escalated": True, "dispatch_attempts": 4},
+    })
+
+    body = client.get("/api/dispatch_health").json()
+
+    # Existing totals shape preserved exactly.
+    totals_keys = set(body["totals"].keys())
+    assert {
+        "dispatched", "done", "escalated", "stories",
+        "escalation_rate", "success_rate",
+    }.issubset(totals_keys)
+    # Per-plan entries preserve the existing acceptance slice keys.
+    p1 = body["per_plan"]["p1"]
+    assert {"with_acceptance", "without_acceptance"}.issubset(set(p1.keys()))
+    # Aggregate rollup is present on totals.
+    assert "dispatch_attempts" in body["totals"]
+    assert "rework_attempts" in body["totals"]
+    assert "merge_attempts" in body["totals"]
+    assert "escalated" in body["totals"]
+    assert body["totals"]["dispatch_attempts"] == 6   # 2 + 4
+    assert body["totals"]["rework_attempts"] == 1
+    assert body["totals"]["merge_attempts"] == 0
+    assert body["totals"]["escalated"] == 1
 
 
 # ---------- last_activity derivation on /api/plans/{name} stories ----------

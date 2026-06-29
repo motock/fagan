@@ -103,6 +103,42 @@ def test_oracle_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatch, ca
     )
 
 
+def test_oracle_park_disabled_continues_past_strict_park(tmp_path, monkeypatch, capsys):
+    """PARK_ENABLED=False on the oracle harness: the read-heavy guard still
+    nudges and still prints the park line, but does NOT terminate (return 3).
+    Mirrors test_local_agent.test_local_agent_park_disabled_continues_past_strict_park
+    so the kill-switch is pinned on both harnesses (acceptance-bearing stories
+    use the oracle). Same re-reading scenario as
+    test_oracle_read_heavy_loop_nudges_once_then_parks, which parks at call 12
+    by default; disabled parking must progress past it."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "PARK_ENABLED", False)
+    responses = [
+        ("bash", {"command": "cat a"}), ("bash", {"command": "cat b"}),
+        ("bash", {"command": "cat c"}), ("bash", {"command": "cat d"}),
+        ("bash", {"command": "cat e"}), ("bash", {"command": "cat f"}),
+        ("bash", {"command": "cat g"}), ("bash", {"command": "cat g"}),
+        ("bash", {"command": "cat h"}), ("bash", {"command": "cat i"}),
+        ("bash", {"command": "cat j"}), ("bash", {"command": "cat k"}),
+        ("bash", {"command": "cat spare1"}), ("bash", {"command": "cat spare2"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc != 3, f"PARK_ENABLED=False must not terminate; got rc={rc}\noutput: {out!r}"
+    assert out.count("[read-heavy nudge:") == 1, f"nudge must still fire, output: {out!r}"
+    assert "[parking: read-heavy after nudge]" in out, (
+        f"detection is unchanged; the park line should still print, output: {out!r}"
+    )
+    assert len(calls) > 12, (
+        f"disabled parking should let the run continue past the strict-park "
+        f"point, got {len(calls)} chat calls"
+    )
+
+
 def test_oracle_read_heavy_distinct_exploration_reaches_an_edit(tmp_path, monkeypatch, capsys):
     """Lenient path on the oracle harness: distinct-target exploration
     (reading many files once each) that reaches an edit must NOT park at
@@ -396,10 +432,15 @@ def test_oracle_script_importable_from_non_pipeline_cwd(tmp_path):
     with cwd=tmp_path (the worktree) and PYTHONPATH pointing at the
     pipeline repo. The script's own sys.path.insert handles the
     pipeline_mcp_server import, so this should succeed silently."""
-    import subprocess
+    import subprocess, sys
     repo = str(Path(__file__).resolve().parent)
-    # Use the venv python explicitly so we don't depend on the active env.
+    # Prefer the repo's venv python so the test reflects the real launch path;
+    # fall back to the active interpreter (sys.executable) in environments
+    # without a checked-in .venv — notably CI runners, which install deps into
+    # the active interpreter rather than a project venv.
     venv_python = str(Path(repo) / ".venv" / "bin" / "python3")
+    if not Path(venv_python).exists():
+        venv_python = sys.executable
     r = subprocess.run(
         [venv_python, "-c",
          "import importlib.util, pathlib; "

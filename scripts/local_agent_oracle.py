@@ -119,6 +119,12 @@ READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINC
 # commits existing WIP but doesn't add new code; checkpointing without prior
 # edits is itself a sign of "spinning."
 MUTATING_TOOLS = frozenset({"create_file", "str_replace"})
+# Parking kill-switch (env LOCAL_AGENT_PARK_ENABLED, default "1"). See
+# local_agent.py for the full rationale. When disabled, the loop guards still
+# nudge but never terminate (return 3) — the step cap bounds the run. Kept in
+# sync with local_agent.py per the rule that any loop-guard change ports to
+# both harnesses or acceptance-bearing stories silently regress.
+PARK_ENABLED = os.environ.get("LOCAL_AGENT_PARK_ENABLED", "1") != "0"
 
 # Oracle paths: the harness owns these, the model cannot author or edit them.
 # Set by backend.OllamaDriver.dispatch as a JSON list when the story carries
@@ -504,6 +510,8 @@ def main() -> int:
                 print("   [parking: repeated action after nudge]", flush=True)
                 if worktree_dirty():
                     auto_commit("WIP (parked on repetition)")
+                if not PARK_ENABLED:
+                    break
                 return 3
 
             # A malformed tool call (e.g. a model that omits a required arg
@@ -550,6 +558,9 @@ def main() -> int:
                     print("   [parking: read-heavy after nudge]", flush=True)
                     if worktree_dirty():
                         auto_commit("WIP (read-heavy parking)")
+                    if not PARK_ENABLED:
+                        recent_tools.clear()
+                        break
                     return 3
                 else:
                     # All-distinct reads after the nudge: the model is
@@ -568,6 +579,9 @@ def main() -> int:
                               flush=True)
                         if worktree_dirty():
                             auto_commit("WIP (read-heavy parking)")
+                        if not PARK_ENABLED:
+                            recent_tools.clear()
+                            break
                         return 3
                     recent_tools.clear()
 

@@ -503,6 +503,207 @@ def test_journal_endpoint_passes_through_unknown_extra_fields(client, plan_dir):
     assert body["entries"][0]["score"] == 42
 
 
+# ---------- story log tail endpoint (/api/plans/{plan}/stories/{key}/log) ----------
+#
+# The endpoint surfaces the on-disk log recorded in the manifest's
+# story['log'] field so the UI can render it inside the redesigned modal.
+# Rules:
+#   * Returns {"available": bool, "lines": [str...]} (last N lines, oldest
+#     first / newest-last). Default N=200, capped by `_LOG_TAIL_CAP`.
+#   * If the manifest has no 'log' field, available=false and lines=[].
+#   * If the recorded log file is missing on disk, available=false (NOT a
+#     500 — a missing log is a normal state).
+#   * 404 if the plan or story key is unknown.
+#   * The log path is taken from the manifest only; the caller cannot
+#     override it (so a path traversal in `?path=` etc. is impossible).
+
+LOG_TAIL_CAP = 500  # mirror dashboard._LOG_TAIL_CAP. Hard cap on lines returned.
+
+
+def test_story_log_endpoint_returns_tail_when_file_exists(client, plan_dir):
+    """Story with a 'log' field pointing at a real file -> available=True,
+    lines are the full file in newest-last (insertion) order."""
+    log_path = plan_dir / "demo.S1.log"
+    log_path.write_text("line-one\nline-two\nline-three\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "x", "status": "done",
+            "log": "demo.S1.log",
+            "dependencies": [],
+        },
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/log")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True
+    assert body["lines"] == ["line-one", "line-two", "line-three"]
+
+
+def test_story_log_endpoint_no_log_field_returns_available_false(client, plan_dir):
+    """No 'log' field recorded in the manifest is a normal state: available
+    must be False with an empty list, never a 404 or a 500."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "x", "status": "todo", "dependencies": []},
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/log")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is False
+    assert body["lines"] == []
+
+
+def test_story_log_endpoint_caps_to_default_when_file_is_large(client, plan_dir):
+    """A log file with more than the default 200 lines returns only the
+    last 200 lines, in original (newest-last) order."""
+    log_path = plan_dir / "demo.S1.log"
+    # Write 250 lines: "L001" .. "L250". Last 200 = "L051".."L250".
+    log_path.write_text("\n".join(f"L{n:03d}" for n in range(1, 251)) + "\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "x", "status": "in_progress",
+            "log": "demo.S1.log",
+            "dependencies": [],
+        },
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/log")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True
+    assert len(body["lines"]) == 200
+    assert body["lines"][0] == "L051"
+    assert body["lines"][-1] == "L250"
+
+
+def test_story_log_endpoint_404_for_unknown_plan(client, plan_dir):
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "x", "status": "todo", "log": "demo.S1.log"},
+    })
+    res = client.get("/api/plans/no-such-plan/stories/S1/log")
+    assert res.status_code == 404
+
+
+def test_story_log_endpoint_404_for_unknown_story(client, plan_dir):
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "x", "status": "todo", "log": "demo.S1.log"},
+    })
+    res = client.get("/api/plans/demo/stories/no-such-story/log")
+    assert res.status_code == 404
+
+
+def test_story_log_endpoint_missing_file_returns_available_false_not_500(client, plan_dir):
+    """Path recorded in manifest but file gone (deleted, not yet written)
+    must NOT raise 500: that is a normal state, not an error. The endpoint
+    must instead return available=False with empty lines."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "x", "status": "interrupted",
+            "log": "demo.S1.log",  # recorded, but no file written for it
+            "dependencies": [],
+        },
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/log")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is False
+    assert body["lines"] == []
+
+
+def test_story_log_endpoint_ignores_query_path_override(client, plan_dir):
+    """Hard restriction: the request must NOT be able to redirect the read
+    to an arbitrary path. The endpoint reads only from the manifest's
+    'log' field; any ?path=/etc/passwd etc. is ignored. We arrange a
+    benign secret next to the log and assert only the manifest log is read."""
+    log_path = plan_dir / "demo.S1.log"
+    log_path.write_text("manifest-log-line\n")
+    secret = plan_dir / "secret.txt"
+    secret.write_text("TOPSECRET")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "x", "status": "done",
+            "log": "demo.S1.log",
+            "dependencies": [],
+        },
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/log?path=secret.txt")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True
+    assert body["lines"] == ["manifest-log-line"]
+    assert "TOPSECRET" not in "\n".join(body["lines"])
+
+
+def test_story_log_endpoint_handles_log_path_with_dotdot(client, plan_dir):
+    """A manifest log field that contains '..' components must be
+    normalized to a contained path under PLAN_DIR; traversal attempts
+    must resolve to a non-existent file and degrade gracefully."""
+    # Direct traversal attempt: write a sentinel outside the plan_dir by
+    # using a sibling tmp_path location instead. We can't write outside
+    # tmp_path here, but we can point story.log at '../outside.log' and
+    # assert the call degrades to available:false (file not found
+    # relative to plan_dir) without raising.
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "x", "status": "todo",
+            "log": "../outside.log",
+            "dependencies": [],
+        },
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/log")
+    assert res.status_code == 200
+    # Path is resolved under PLAN_DIR, which lacks that file; safe degrade.
+    assert res.json() == {"available": False, "lines": []}
+
+
+def test_story_log_endpoint_empty_file_returns_empty_lines(client, plan_dir):
+    """Boundary: a log file that exists but is zero bytes returns
+    available=True with an empty lines list (file was not 404'd, just
+    no content yet)."""
+    (plan_dir / "demo.S1.log").write_text("")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "x", "status": "todo",
+            "log": "demo.S1.log",
+            "dependencies": [],
+        },
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/log")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True
+    assert body["lines"] == []
+
+
+def test_story_log_endpoint_garbage_bytes_decode_replacement(client, plan_dir):
+    """A log file with non-UTF-8 garbage bytes must not raise; replacement
+    characters are accepted so the dashboard can still surface whatever
+    was on disk instead of 500'ing."""
+    (plan_dir / "demo.S1.log").write_bytes(b"good-line\n\xff\xfe\xfd\nanother\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "x", "status": "todo",
+            "log": "demo.S1.log",
+            "dependencies": [],
+        },
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/log")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True
+    # Three lines: the garbage line is decoded with U+FFFD placeholders.
+    assert len(body["lines"]) == 3
+    assert body["lines"][0] == "good-line"
+    assert body["lines"][2] == "another"
+    # The middle line contains at least one replacement character.
+    assert "\ufffd" in body["lines"][1]
+
 # ---------- journal timeline rendering in static/app.js ----------
 #
 # The dashboard hands the UI a `last_activity` ISO string per story and the

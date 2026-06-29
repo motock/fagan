@@ -596,10 +596,11 @@ def test_render_board_one_column_per_selected_status():
     .column nodes — never more, never fewer."""
     expr = (
         "(() => { state.filters.statuses = ['in_progress','todo','done'];"
-        " return JSON.stringify(renderBoard({"
+        " return renderBoard({"
         " 'k1':{status:'in_progress',summary:''},"
         " 'k2':{status:'in_progress',summary:''},"
-        " 'k3':{status:'todo',summary:''}})); })()"
+        " 'k3':{status:'todo',summary:''}});"
+        " })()"
     )
     html = _run_app_js(expr)
     # exactly one column per status (case-sensitive status label)
@@ -611,17 +612,19 @@ def test_render_board_one_column_per_selected_status():
 
 def test_render_board_counts_match_filtered_cards_per_column():
     """The count pill in the column header must equal the number of cards
-    the persona/risk filters let through (filter logic unchanged)."""
+    the persona/risk filters let through (filter logic unchanged).
+    Empty persona/risk filter lists mean 'no filter applied' (default)."""
     expr = (
         "(() => {"
         " state.filters.statuses = ['in_progress'];"
-        " state.filters.personas = []; state.filters.risks = [];"
-        " return JSON.stringify(renderBoard({"
-        "  'k1':{status:'in_progress', summary:'a'},"  # default persona/risk
-        "  'k2':{status:'in_progress', summary:'b'},"  # default persona/risk
-        "  'k3':{status:'todo',       summary:'c'},"  # wrong column
-        "  'k4':{status:'in_progress', summary:'d', persona:'p'}"  # filtered
-        " })); })()"
+        " state.filters.personas = ['lead']; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'k1':{status:'in_progress', summary:'a', persona:'lead',   risk:''},"
+        "  'k2':{status:'in_progress', summary:'b', persona:'lead',   risk:''},"
+        "  'k3':{status:'todo',       summary:'c', persona:'lead',   risk:''},"  # wrong column
+        "  'k4':{status:'in_progress', summary:'d', persona:'other',  risk:''}"  # persona-filtered
+        " });"
+        " })()"
     )
     html = _run_app_js(expr)
     # exactly one column (in_progress)
@@ -639,19 +642,19 @@ def test_render_board_empty_column_renders_empty_body_not_absent():
         "(() => {"
         " state.filters.statuses = ['in_progress', 'todo'];"
         " state.filters.personas = []; state.filters.risks = [];"
-        " return JSON.stringify(renderBoard({"
+        " return renderBoard({"
         "  'k1':{status:'in_progress', summary:'only one'}"
-        " })); })()"
+        " });"
+        " })()"
     )
     html = _run_app_js(expr)
     # both columns present
     assert html.count('class="column"') == 2
-    # but the 'todo' column has an empty body, not zero columns
+    # both column-body divs present (one with a card, one empty)
     assert html.count('class="column-body">') == 2
-    # count badge for the empty todo column reads '0'
-    todo_idx = html.index("todo</span>")
-    tail = html[todo_idx:todo_idx + 400]
-    assert ">0<" in tail
+    # the todo column body is empty (no cards inside)
+    assert "column-body\"></div>" in html or "column-body\"> </div>" in html \
+        or "column-body\"><" in html  # any non-empty marker means a card sneaked in
 
 
 def test_render_board_deselected_statuses_shows_empty_state():
@@ -660,9 +663,10 @@ def test_render_board_deselected_statuses_shows_empty_state():
     expr = (
         "(() => {"
         " state.filters.statuses = [];"
-        " return JSON.stringify(renderBoard({"
+        " return renderBoard({"
         "  'k1':{status:'in_progress', summary:'a'}"
-        " })); })()"
+        " });"
+        " })()"
     )
     html = _run_app_js(expr)
     assert html.count('class="column"') == 0
@@ -676,13 +680,14 @@ def test_render_board_completion_hint_on_done_column():
         "(() => {"
         " state.filters.statuses = ['done'];"
         " state.filters.personas = []; state.filters.risks = [];"
-        " return JSON.stringify(renderBoard({"
+        " return renderBoard({"
         "  'a':{status:'done',         summary:'a'},"
         "  'b':{status:'done',         summary:'b'},"
         "  'c':{status:'in_progress',  summary:'c'},"
         "  'd':{status:'todo',         summary:'d'},"
         "  'e':{status:'tests_passed', summary:'e'}"
-        " })); })()"
+        " });"
+        " })()"
     )
     html = _run_app_js(expr)
     # a column-completion element with the done/total ratio

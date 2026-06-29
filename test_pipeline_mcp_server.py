@@ -1963,6 +1963,69 @@ def test_check_story_status_acquires_heavy_lock_for_cargo(
     )
 
 
+def test_check_story_status_strips_pipeline_env_from_test_subprocess(
+    plan_dir, worktree_root, monkeypatch,
+):
+    """Mode 6: the test-grading subprocess must NOT inherit the MCP server's
+    PIPELINE_* operational env. Those vars (PIPELINE_PAUSE_THRESHOLD,
+    PIPELINE_BACKEND_DISPATCH, PIPELINE_LOCAL_MODEL_DEFAULT, ...) override the
+    defaults the suite asserts against and false-fail Python stories at the
+    gate (10 env-sensitive tests fail under the server env, 303 pass clean).
+    The gate grades the agent's work in a clean dev env, not the server's
+    operational one.
+    """
+    try:
+        os.kill(99999, 0)
+        return  # pid unexpectedly alive; can't exercise the path reliably
+    except ProcessLookupError:
+        pass
+
+    wt = worktree_root / "S1"
+    wt.mkdir()
+    (wt / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    manifest_path = plan_dir / "envstrip.manifest.json"
+    manifest_path.write_text(json.dumps({"stories": {"S1": {
+        "summary": "x", "agent_instructions": "x", "status": "in_progress",
+        "dependencies": [], "pid": 99999, "worktree": str(wt),
+        "log": str(wt / "agent.log"),
+    }}}))
+    (wt / "agent.log").write_text("[step 0] bash: pwd\n")
+
+    # Operational env the MCP server carries -- must NOT reach the test run.
+    for k, v in [
+        ("PIPELINE_PAUSE_THRESHOLD", "101"),
+        ("PIPELINE_RESUME_THRESHOLD", "0"),
+        ("PIPELINE_WEEK_PAUSE_THRESHOLD", "100"),
+        ("PIPELINE_BACKEND_DISPATCH", "auto"),
+        ("PIPELINE_LOCAL_MODEL_DEFAULT", "minimax-m3:cloud"),
+    ]:
+        monkeypatch.setenv(k, v)
+
+    marker = "__mode6_test_marker__"
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (str(wt), [marker, "pytest"]))
+    monkeypatch.setattr(p, "_is_heavy", lambda cmd: False)
+
+    captured = []
+    def _capture(cmd, **kw):
+        if cmd and cmd[0] == marker:
+            captured.append(kw.get("env"))
+        return subprocess.CompletedProcess(cmd, 0, stdout="3 passed", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _capture)
+
+    p.check_story_status("envstrip", "S1")
+
+    assert captured, "test-grading subprocess was never run"
+    test_env = captured[0]
+    assert test_env is not None, (
+        "check_story_status passed no env= to the test subprocess, so it "
+        "inherited the MCP server's PIPELINE_* env unchanged")
+    leaked = [k for k in test_env if k.startswith("PIPELINE_")]
+    assert not leaked, f"test subprocess inherited PIPELINE_* env: {leaked}"
+    # Sanity: the rest of the environment (PATH etc.) is preserved.
+    assert "PATH" in test_env
+
+
 
 # An empty agent.log within the startup grace window is "agent is alive and
 # bootstrapping" (its first print() hasn't flushed — Ollama -np 1 can take

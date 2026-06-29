@@ -244,3 +244,132 @@ def test_dispatch_health_counts_backend_set_as_dispatched_even_if_todo(
     assert s["dispatched"] == 1
     assert s["escalated"] == 1
     assert s["escalation_rate"] == 1.0
+
+
+# ---------- last_activity derivation on /api/plans/{name} stories ----------
+
+def _write_journal(plan_dir, plan_name, story_key, entries):
+    """Write a checkpoint journal file. `entries` is a list of dicts each
+    with a 'ts' (ISO timestamp) and a 'step' short id, in chronological
+    order.  Only the final entry's timestamp matters for last_activity."""
+    path = plan_dir / f"{plan_name}.{story_key}.journal.json"
+    path.write_text(json.dumps(entries))
+
+
+def test_story_last_activity_uses_interrupted_at_when_only_that_is_set(client, plan_dir):
+    """(1) interrupted_at only -> last_activity == interrupted_at."""
+    interrupted_at = "2026-06-25T12:00:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "interrupted story",
+            "status": "interrupted",
+            "interrupted_at": interrupted_at,
+            "dependencies": [],
+        },
+    })
+    body = client.get("/api/plans/demo").json()
+    assert body["stories"]["S1"]["interrupted_at"] == interrupted_at  # preserved
+    assert body["stories"]["S1"]["last_activity"] == interrupted_at
+
+
+def test_story_last_activity_picks_later_of_interrupted_at_and_last_commit(client, plan_dir):
+    """(2) both present -> last_activity == the later of the two."""
+    earlier = "2026-06-25T10:00:00+00:00"
+    later = "2026-06-25T12:00:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "interrupted with commit history",
+            "status": "interrupted",
+            "interrupted_at": earlier,
+            "last_commit": later,
+            "dependencies": [],
+        },
+        # Reverse case: last_commit is *earlier* than interrupted_at.
+        "S2": {
+            "summary": "commit older than interrupt",
+            "status": "interrupted",
+            "interrupted_at": later,
+            "last_commit": earlier,
+            "dependencies": [],
+        },
+    })
+    body = client.get("/api/plans/demo").json()
+    assert body["stories"]["S1"]["last_activity"] == later
+    assert body["stories"]["S2"]["last_activity"] == later
+
+
+def test_story_last_activity_omitted_when_no_signal(client, plan_dir):
+    """(3) neither interrupted_at nor last_commit (and no journal) ->
+    last_activity is None / absent so the UI doesn't render an age label."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "todo story",
+            "status": "todo",
+            "dependencies": [],
+        },
+    })
+    body = client.get("/api/plans/demo").json()
+    story = body["stories"]["S1"]
+    # Must exist but signal the absence clearly; UI gates on truthiness.
+    assert story.get("last_activity") in (None, "")
+
+
+def test_story_last_activity_uses_journal_final_timestamp_when_latest(client, plan_dir):
+    """(4) journal present -> its final entry's timestamp is considered and
+    wins when it's the latest signal available."""
+    interrupted_at = "2026-06-25T10:00:00+00:00"
+    last_commit = "2026-06-25T11:00:00+00:00"
+    journal_final_ts = "2026-06-25T13:30:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "journal beats both",
+            "status": "interrupted",
+            "interrupted_at": interrupted_at,
+            "last_commit": last_commit,
+            "dependencies": [],
+        },
+    })
+    _write_journal(plan_dir, "demo", "S1", [
+        {"step": "a", "ts": "2026-06-25T09:00:00+00:00", "summary": "early"},
+        {"step": "b", "ts": "2026-06-25T13:30:00+00:00", "summary": "final"},
+    ])
+
+    body = client.get("/api/plans/demo").json()
+    assert body["stories"]["S1"]["last_activity"] == journal_final_ts
+
+
+def test_story_last_activity_does_not_mutate_manifest(client, plan_dir):
+    """The dashboard is read-only and must NOT modify the manifest on disk
+    when deriving last_activity — re-read after the request and assert
+    nothing new was written."""
+    interrupted_at = "2026-06-25T12:00:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "no mutating writes please",
+            "status": "interrupted",
+            "interrupted_at": interrupted_at,
+            "dependencies": [],
+        },
+    })
+    before = json.loads((plan_dir / "demo.manifest.json").read_text())
+    client.get("/api/plans/demo")
+    after = json.loads((plan_dir / "demo.manifest.json").read_text())
+    assert before == after
+
+
+def test_story_last_activity_ignores_missing_or_empty_journal(client, plan_dir):
+    """Boundary: a journal file that exists but has no parseable entries
+    must not produce a last_activity; missing journal is the same."""
+    interrupted_at = "2026-06-25T12:00:00+00:00"
+    _write_manifest(plan_dir, "demo", {
+        "S1": {
+            "summary": "broken journal",
+            "status": "interrupted",
+            "interrupted_at": interrupted_at,
+            "dependencies": [],
+        },
+    })
+    # Empty list -> parser should fall back to manifest signals.
+    (plan_dir / "demo.S1.journal.json").write_text("[]")
+    body = client.get("/api/plans/demo").json()
+    assert body["stories"]["S1"]["last_activity"] == interrupted_at

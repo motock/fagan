@@ -830,6 +830,13 @@ function showStoryModal(planName, story, key) {
   const depsText = Array.isArray(deps) ? deps.join(", ") : "";
   const depsShow = Array.isArray(deps) && deps.length > 0 ? depsText : null;
 
+  // Track which plan/story the modal is currently showing so the async
+  // log fetch can resolve into the right slot and so a stale fetch that
+  // resolves after the user opened a different story can't write into the
+  // wrong modal.
+  modal.dataset.plan = state.selectedPlan || "";
+  modal.dataset.story = key;
+
   // Field lists per section. Each entry: [label, value, opts].
   //   - `opts.copy` enables the click-to-copy button on that value, using
   //     `opts.copyField` (or fall back to label) as the data-copy key.
@@ -918,6 +925,15 @@ function showStoryModal(planName, story, key) {
       <h3 class="modal-section">Journal</h3>
       <p class="modal-empty" data-journal-empty>No journal yet.</p>
     </div>
+    <section class="dsh-modal-log-section" aria-labelledby="dsh-log-heading">
+      <h3 id="dsh-log-heading" class="modal-section">Log</h3>
+      <div class="dsh-modal-log-status" data-state="loading">
+        Loading log&hellip;
+      </div>
+      <pre class="dsh-modal-log mono hidden" tabindex="0"
+           aria-label="Story log tail"></pre>
+      <p class="dsh-modal-log-empty hidden">No log available.</p>
+    </section>
   `;
   modal.classList.remove("hidden");
 
@@ -927,10 +943,97 @@ function showStoryModal(planName, story, key) {
   // state on error / unavailable). The race guard in loadStoryJournal
   // ensures a slow prior fetch can't clobber a newly-opened story.
   if (planName) loadStoryJournal(planName, key, body);
+
+  // Kick off the tail fetch now that the modal is shown. The fetch
+  // resolves into the placeholder by class — if the user opens a different
+  // story before the fetch lands, we walk away (loadStoryLog guards on
+  // modal.dataset.plan/story still matching).
+  loadStoryLog();
+}
+
+// Asynchronously load /api/plans/{plan}/stories/{key}/log into the Log
+// section of the currently-open modal.
+//
+// Why this is async instead of inlined: the log file can be tens of KB
+// and we don't want to block the modal rendering on it. We render a
+// "Loading log…" placeholder synchronously, then swap in the tail (or
+// the empty state) when the fetch resolves.
+//
+// Resilience contract (matches the backend): any fetch error or
+// non-200 response renders the empty state. The endpoint itself never
+// returns 500 for "log gone", so in practice the error path here is
+// only reachable if the network fails; we surface "No log available"
+// in both cases rather than a misleading error message, because the
+// user's question is "is there a log" and the answer is the same.
+//
+// We swallow JSON/parse failures silently — a partial response from a
+// flaky proxy should not blank the modal.
+async function loadStoryLog() {
+  const modal = document.getElementById("story-modal");
+  const plan = modal.dataset.plan;
+  const key = modal.dataset.story;
+  if (!plan || !key) return;
+
+  const section = modal.querySelector(".dsh-modal-log-section");
+  const statusEl = modal.querySelector(".dsh-modal-log-status");
+  const tailEl = modal.querySelector(".dsh-modal-log");
+  const emptyEl = modal.querySelector(".dsh-modal-log-empty");
+  if (!section || !statusEl || !tailEl || !emptyEl) return;
+
+  const url = `/api/plans/${encodeURIComponent(plan)}`
+    + `/stories/${encodeURIComponent(key)}/log?lines=200`;
+
+  let body;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      // Endpoint gone or the plan/story was renamed between modal open
+      // and fetch: render empty state, don't raise.
+      body = { available: false, lines: [] };
+    } else {
+      body = await res.json();
+    }
+  } catch {
+    body = { available: false, lines: [] };
+  }
+
+  // Stale response guard: if the user closed or navigated the modal
+  // (or opened another story) before this fetch resolved, do nothing.
+  if (modal.dataset.plan !== plan || modal.dataset.story !== key) return;
+  if (modal.classList.contains("hidden")) return;
+
+  const isAvailable = !!(body && body.available);
+  const lines = (body && Array.isArray(body.lines)) ? body.lines : [];
+
+  if (!isAvailable || lines.length === 0) {
+    // available:false OR available:true but the file was zero bytes:
+    // both render the same "No log available" empty state. The user
+    // asked "is there a log" and the answer is no.
+    statusEl.classList.add("hidden");
+    tailEl.classList.add("hidden");
+    emptyEl.classList.remove("hidden");
+    section.dataset.state = "empty";
+    return;
+  }
+
+  // Escape per-line so binary garbage / &<> / replacement chars render
+  // as text instead of breaking the page. Newline preserved by the
+  // surrounding <pre>.
+  const text = lines.map((l) => escapeHtml(String(l))).join("\n");
+  tailEl.textContent = text;
+  statusEl.classList.add("hidden");
+  emptyEl.classList.add("hidden");
+  tailEl.classList.remove("hidden");
+  section.dataset.state = "ready";
 }
 
 function hideStoryModal() {
-  document.getElementById("story-modal").classList.add("hidden");
+  const modal = document.getElementById("story-modal");
+  // Invalidate any in-flight log fetch so it can't write into a hidden
+  // modal that the user just closed.
+  delete modal.dataset.plan;
+  delete modal.dataset.story;
+  modal.classList.add("hidden");
 }
 
 async function selectPlan(name) {

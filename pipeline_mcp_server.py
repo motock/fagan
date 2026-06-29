@@ -680,14 +680,23 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
         ref); rebase aborted if one was in progress.
     """
     def _run(argv: list[str], cwd) -> subprocess.CompletedProcess:
-        return subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+        # `git` may be absent or non-executable (e.g. a minimal container).
+        # Catch OSError so this helper honors its never-raises contract and
+        # reports a non-conflict failure instead of crashing the tick.
+        try:
+            return subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+        except OSError as e:
+            return subprocess.CompletedProcess(argv, 127, "", str(e))
 
     if not Path(worktree).is_dir():
         # No worktree to rebase in (missing/anomalous). The merge gate falls
         # back to the CI gate + the original conflict-at-`gh pr merge` check;
         # rebasing is impossible without the worktree the branch lives in.
         return {"ok": True, "conflict": False, "error": "worktree missing - rebase skipped"}
-    _run(["git", "fetch", "origin", "master"], REPO_ROOT)
+    # Full `git fetch origin` (not `fetch origin master`) so the
+    # remote-tracking ref `refs/remotes/origin/master` is updated on configs
+    # with a narrow/custom refspec, keeping the rebase target current.
+    _run(["git", "fetch", "origin"], REPO_ROOT)
     r = _run(["git", "rebase", "origin/master"], worktree)
     if r.returncode == 0:
         return {"ok": True, "conflict": False, "error": ""}
@@ -717,8 +726,13 @@ def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
         return {"state": "pass", "error": "CI gate disabled"}
     deadline = time.monotonic() + (timeout_s if timeout_s is not None else PIPELINE_MERGE_CI_TIMEOUT)
     while time.monotonic() < deadline:
-        r = subprocess.run(["gh", "pr", "checks", branch, "--json", "bucket"],
-                           capture_output=True, text=True)
+        # `gh` may be absent or non-executable; treat that as "no CI" (none)
+        # rather than letting OSError escape and crash the scheduler tick.
+        try:
+            r = subprocess.run(["gh", "pr", "checks", branch, "--json", "bucket"],
+                               capture_output=True, text=True)
+        except OSError as e:
+            return {"state": "none", "error": f"gh unavailable: {e}"}
         if r.returncode != 0:
             return {"state": "none", "error": r.stderr.strip()[:200]}
         try:
@@ -2193,15 +2207,22 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 # Force-push the rebased branch; only when we actually rebased
                 # in a real worktree (a missing worktree skipped the rebase and
                 # has nothing to push). Run from REPO_ROOT (the plan's repo).
+                # A failed push (concurrent push rejected by --force-with-lease,
+                # network/auth) MUST block: otherwise the remote HEAD stays at
+                # the pre-rebase commit and the CI gate + squash merge operate
+                # on stale code — the exact cross-story breakage Mode 9 closes.
                 if Path(worktree).is_dir():
-                    subprocess.run(["git", "push", "--force-with-lease", "origin",
-                                    branch], cwd=REPO_ROOT,
-                                   capture_output=True, text=True)
-                ci = _ci_status(branch)
-                if ci["state"] == "fail":
-                    gate_error = f"ci fail: {ci['error']}"
-                elif ci["state"] == "pending":
-                    gate_error = f"ci pending: {ci['error']}"
+                    push = subprocess.run(["git", "push", "--force-with-lease", "origin",
+                                           branch], cwd=REPO_ROOT,
+                                          capture_output=True, text=True)
+                    if push.returncode != 0:
+                        gate_error = f"push: {(push.stderr or push.stdout).strip()[:200]}"
+                if not gate_error:
+                    ci = _ci_status(branch)
+                    if ci["state"] == "fail":
+                        gate_error = f"ci fail: {ci['error']}"
+                    elif ci["state"] == "pending":
+                        gate_error = f"ci pending: {ci['error']}"
 
             if gate_error:
                 attempts = story.get("merge_attempts", 0) + 1
@@ -2280,9 +2301,13 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                 return {"ok": False, "error": f"rebase failed: {rb['error']}",
                         "story_key": story_key}
             if Path(worktree).is_dir():
-                subprocess.run(["git", "push", "--force-with-lease", "origin",
-                                branch], cwd=REPO_ROOT,
-                               capture_output=True, text=True)
+                push = subprocess.run(["git", "push", "--force-with-lease", "origin",
+                                       branch], cwd=REPO_ROOT,
+                                      capture_output=True, text=True)
+                if push.returncode != 0:
+                    return {"ok": False,
+                            "error": f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
+                            "story_key": story_key}
             ci = _ci_status(branch)
             if ci["state"] == "fail":
                 return {"ok": False, "error": f"CI failing: {ci['error']}",

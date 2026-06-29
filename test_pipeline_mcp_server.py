@@ -2618,6 +2618,105 @@ def test_ci_status_pending_times_out(monkeypatch):
     assert ci["state"] == "pending"
 
 
+def test_ci_status_returns_none_when_gh_missing(monkeypatch):
+    # `gh` absent/non-executable raises OSError; the helper must honor its
+    # never-raises contract and map that to "none" (treat as pass) rather than
+    # escaping and crashing the scheduler tick.
+    def _raise_run(*a, **k):
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'gh'")
+
+    monkeypatch.setattr(p.subprocess, "run", _raise_run)
+    ci = p._ci_status("agent/x")
+    assert ci["state"] == "none"
+    assert "gh unavailable" in ci["error"]
+
+
+def test_rebase_onto_master_returns_not_ok_when_git_missing(monkeypatch, tmp_path):
+    # `git` absent/non-executable raises OSError; the helper must not escape it
+    # (the loop only wraps _merge_pr in try/except). It reports a non-conflict
+    # failure so the caller parks rather than crashing.
+    wt = tmp_path / "wt"
+    wt.mkdir()
+
+    def _raise_run(*a, **k):
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'git'")
+
+    monkeypatch.setattr(p.subprocess, "run", _raise_run)
+    monkeypatch.setattr(p, "REPO_ROOT", str(tmp_path))
+    rb = p._rebase_onto_master(str(wt), "agent/x")
+    assert rb["ok"] is False
+    assert rb["conflict"] is False
+
+
+def test_advance_pipeline_push_failure_blocks_merge(plan_dir, monkeypatch, tmp_path):
+    # A failed force-push (lease rejected / network / auth) must block before
+    # _ci_status and _merge_pr: otherwise the remote HEAD stays stale and the
+    # gate squashes pre-rebase code. It counts against merge_attempts and leaves
+    # the story pr_open for retry.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    _write_manifest(plan_dir, "pushfail", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": str(wt)},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt_, br: {"ok": True, "conflict": False, "error": ""})
+
+    def _fake_run(argv, **_):
+        class R:
+            returncode = 1
+            stdout = ""
+            stderr = "non-fast-forward (lease rejected)"
+        return R()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    merged_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt_, key: merged_calls.append(key))
+
+    result = p.advance_pipeline("pushfail")
+
+    story = _read_manifest(plan_dir, "pushfail")["stories"]["P1"]
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert merged_calls == []          # _merge_pr must not run on a push fail
+    assert result["merged"] == []
+    assert result["failed"] == []
+    assert "P1" in result["notify"]
+
+
+def test_approve_merge_push_failure_returns_error(plan_dir, monkeypatch, tmp_path):
+    # The manual override must also surface a failed force-push rather than
+    # proceeding to merge stale remote code.
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    _write_manifest(plan_dir, "ampush", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": str(wt)},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt_, br: {"ok": True, "conflict": False, "error": ""})
+
+    def _fake_run(argv, **_):
+        class R:
+            returncode = 1
+            stdout = ""
+            stderr = "lease rejected"
+        return R()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    merged_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt_, key: merged_calls.append(key))
+
+    result = p.approve_merge("ampush", "P1")
+
+    assert result["ok"] is False
+    assert "push failed" in result["error"]
+    assert merged_calls == []
+
+
 def test_advance_pipeline_rebase_conflict_retries_within_budget(plan_dir, monkeypatch):
     # A rebase conflict blocks the merge before _merge_pr is ever called; it
     # counts against merge_attempts and leaves the story pr_open for retry.

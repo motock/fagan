@@ -631,8 +631,10 @@ def test_render_board_counts_match_filtered_cards_per_column():
     assert html.count('class="column"') == 1
     # the count badge inside that column reads '2'
     assert ">2</span>" in html or ">2<" in html
-    # two cards (k1, k2); k3 lives in a different column, k4 persona-filtered
-    assert html.count('class="card') == 2
+    # two cards (k1, k2); k3 lives in a different column, k4 persona-filtered.
+    # Match exactly `class="card"` (with the closing quote, not `card-key`,
+    # `card-summary`, or `card-age` which also start with `card`).
+    assert html.count('class="card"') == 2
 
 
 def test_render_board_empty_column_renders_empty_body_not_absent():

@@ -350,6 +350,13 @@ function applyFilters(entries) {
 }
 
 function renderBoard(stories) {
+  // Total story count for the whole plan — used by the done column's
+  // completion hint so the user sees "2/5 done" instead of just "2",
+  // without changing the filter logic (we still count filtered cards
+  // inside each column). Computed once per render to avoid repeating the
+  // work in every column map.
+  const planTotal = Object.keys(stories).length;
+
   const columns = state.filters.statuses
     .filter((status) => STATUS_COLUMNS.includes(status))
     .sort((a, b) => STATUS_COLUMNS.indexOf(a) - STATUS_COLUMNS.indexOf(b))
@@ -374,12 +381,21 @@ function renderBoard(stories) {
         </div>
       `;
       }).join("");
+      // Thin completion hint for the done column: shows done / plan-total
+      // so the user sees plan-wide progress at a glance. We use planTotal
+      // (not entries.length) so the fraction stays meaningful even when
+      // persona/risk filters narrow the visible cards. Hidden when the
+      // plan has no stories yet to avoid "0/0".
+      const completion = (status === "done" && planTotal > 0)
+        ? `<div class="column-completion">${entries.length}/${planTotal}</div>`
+        : "";
       return `
         <div class="column">
           <div class="column-header">
             <span>${status}</span>
             <span class="badge" style="--badge-color: var(--c-${status})">${entries.length}</span>
           </div>
+          ${completion}
           <div class="column-body">${cards}</div>
         </div>
       `;

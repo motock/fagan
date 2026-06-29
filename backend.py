@@ -407,12 +407,19 @@ class OllamaDriver:
                     title = args.get("pr_title", "")
                     return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
                 messages.append({"role": "tool", "content": _run_readonly_tool(fn, args, Path(cwd))})
-        # No submit_review within the step cap. Salvage a verdict the model may
-        # have written as prose (a 'VERDICT: ...' line) from the last assistant
-        # message so _parse_verdict can still recover it. _parse_verdict stays
-        # strict, so prose without an explicit VERDICT line still yields UNKNOWN
-        # and parks safely (fail-closed) — we do not auto-merge on ambiguous text.
-        return last_prose
+        # No submit_review within the step cap. Salvage ONLY an explicit terminal
+        # verdict line — the model's actual conclusion, written last. An inline
+        # mention of "VERDICT: APPROVE" earlier in the prose (the model echoing
+        # the convergence nudge, or describing what an approve would require) must
+        # NOT be trusted: _parse_verdict's match is unanchored, so returning such
+        # prose would false-positive an APPROVE and auto-merge unreviewed code
+        # (fail-open). Fail-closed: no terminal verdict line -> "" -> UNKNOWN ->
+        # park for a human/Claude rather than auto-merge.
+        lines = [ln.strip() for ln in last_prose.splitlines() if ln.strip()]
+        if lines and re.search(r"^VERDICT:\s*(APPROVE|REQUEST_CHANGES)\s*$",
+                               lines[-1], re.IGNORECASE):
+            return last_prose
+        return ""
 
     # The local agent loop lives in a standalone script so it can run as a
     # pollable subprocess; run it with this project's venv python (which has

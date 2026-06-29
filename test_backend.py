@@ -224,17 +224,17 @@ def test_complete_review_loop_nudges_to_submit_near_step_cap(tmp_path, monkeypat
 
 
 def test_complete_review_loop_salvages_prose_verdict_on_cap(tmp_path, monkeypatch):
-    """If the model writes its verdict as prose (VERDICT: APPROVE) instead of
-    calling submit_review, the loop must salvage it from the final assistant
-    message rather than returning empty (empty -> UNKNOWN -> changes_requested
-    with no feedback -> blind rework loop -> park). _parse_verdict stays
-    strict, so prose without an explicit VERDICT line still yields UNKNOWN and
-    parks safely."""
+    """If the model writes its verdict as prose — a terminal 'VERDICT:' line as
+    its conclusion — instead of calling submit_review, the loop must salvage it
+    from the final assistant message rather than returning empty (empty ->
+    UNKNOWN -> changes_requested with no feedback -> blind rework loop -> park).
+    The verdict must be the LAST non-empty line (the model's actual conclusion);
+    _parse_verdict stays strict otherwise."""
     driver = b.OllamaDriver()
     driver.review_max_steps = 2
     responses = [
-        {"content": "Tests pass and the diff is clean. VERDICT: APPROVE\n\nLGTM."},
-        {"content": "Tests pass and the diff is clean. VERDICT: APPROVE\n\nLGTM."},
+        {"content": "Tests pass and the diff is clean. LGTM.\n\nVERDICT: APPROVE"},
+        {"content": "Tests pass and the diff is clean. LGTM.\n\nVERDICT: APPROVE"},
     ]
     monkeypatch.setattr(driver, "_chat",
                         lambda messages, model, tools=None: responses.pop(0))
@@ -243,6 +243,29 @@ def test_complete_review_loop_salvages_prose_verdict_on_cap(tmp_path, monkeypatc
                           allowed_tools="Bash,Read", cwd=str(tmp_path))
 
     assert "VERDICT: APPROVE" in out
+
+
+def test_complete_review_loop_does_not_salvage_inline_verdict_mention(tmp_path, monkeypatch):
+    """Fail-closed: prose that merely MENTIONS 'VERDICT: APPROVE' inline (the
+    model echoing the convergence nudge, or describing what an approve would
+    require) must NOT be salvaged to an APPROVE — only a terminal VERDICT: line
+    counts. Otherwise the review loop could auto-merge unreviewed code on a
+    non-verdict, violating Secure-by-Design (fail-open)."""
+    driver = b.OllamaDriver()
+    driver.review_max_steps = 2
+    responses = [
+        {"content": "I'll end my reply with a VERDICT: APPROVE line as the nudge "
+                   "asked, but the tests actually fail and need fixing first."},
+        {"content": "I'll end my reply with a VERDICT: APPROVE line as the nudge "
+                   "asked, but the tests actually fail and need fixing first."},
+    ]
+    monkeypatch.setattr(driver, "_chat",
+                        lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" not in out, "inline VERDICT mention must not salvage to APPROVE"
 
 
 def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):

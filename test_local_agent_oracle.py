@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 import httpx
+import pytest
 
 os.environ.setdefault("LOCAL_AGENT_MODEL", "test-model")
 _spec = importlib.util.spec_from_file_location(
@@ -49,6 +50,60 @@ def test_oracle_constants_present():
     assert lao.READ_HEAVY_WINDOW == 6
     assert hasattr(lao, "MUTATING_TOOLS")
     assert lao.MUTATING_TOOLS == frozenset({"create_file", "str_replace"})
+
+
+class _FakeProc:
+    def __init__(self):
+        self.stdout = "ok"
+        self.stderr = ""
+
+
+@pytest.mark.parametrize("cmd", [
+    "git reset --hard",
+    "git reset --hard b5063c7",
+    "git clean -fd",
+    "git clean -xf",      # force, f not first — must still be caught
+    "git checkout -- .",
+    "git restore src/app.py",
+    "git status && git reset --hard b5063c7",
+])
+def test_oracle_bash_blocks_destructive_git_ops(tmp_path, monkeypatch, cmd):
+    """Mode 3a: the destructive-git guard must be ported to the oracle harness
+    too, or acceptance-bearing stories silently regress. A destructive op must
+    be refused before subprocess.run is reached."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+
+    def _boom(*a, **k):
+        raise AssertionError("subprocess.run must not be called for a destructive git op")
+
+    monkeypatch.setattr(lao.subprocess, "run", _boom)
+    result = lao.run_tool("bash", {"command": cmd})
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "blocked" in result.lower()
+
+
+@pytest.mark.parametrize("cmd", [
+    "git status",
+    "git add -A",
+    "git checkout feature-branch",
+    "git reset HEAD src/app.py",
+    "git checkout --theirs src/app.py",
+    "pytest -q",
+])
+def test_oracle_bash_passes_non_destructive_commands_through(tmp_path, monkeypatch, cmd):
+    """Non-destructive commands must still run on the oracle harness."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    seen = {}
+
+    def _fake_run(c, **k):
+        seen["cmd"] = c
+        return _FakeProc()
+
+    monkeypatch.setattr(lao.subprocess, "run", _fake_run)
+    result = lao.run_tool("bash", {"command": cmd})
+    assert seen["cmd"] == cmd
+    assert result == "ok"
 
 
 def test_oracle_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatch, capsys):

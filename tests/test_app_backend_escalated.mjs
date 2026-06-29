@@ -29,8 +29,16 @@ import assert from "node:assert/strict";
 // different Array.prototype than the test's. `node:assert/strict` uses
 // prototype-aware deepEqual, so cross-realm arrays fail with a misleading
 // "same structure, not reference-equal" error. Normalize before assertions.
+//
+// IMPORTANT: must build the new array with `Array.from(value)` (or
+// `[...value]`) so the result inherits Node's Array.prototype. Calling
+// `value.map(...)` would dispatch `map` on the JSDOM realm's Array
+// prototype and return a cross-realm array, defeating the normalization.
 function toLocal(value) {
-  if (Array.isArray(value)) return value.map(toLocal);
+  if (Array.isArray(value)) {
+    const out = Array.from(value, toLocal);
+    return out;
+  }
   if (value && typeof value === "object") {
     const out = {};
     for (const k of Object.keys(value)) out[k] = toLocal(value[k]);

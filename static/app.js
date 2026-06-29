@@ -549,6 +549,60 @@ document.getElementById("auto-refresh").addEventListener("change", (e) => {
 // loses focus to the OS — exactly the moments we want to stop polling.
 document.addEventListener("visibilitychange", syncPollingWithVisibility);
 
+// === Theme toggle =========================================================
+// Persists choice in localStorage under THEME_KEY. Defaults to "dark" when
+// unset/empty. Wrapped in try/catch so a locked-down browser (or any
+// document without Storage permission) doesn't break the page.
+const THEME_KEY = "pipeline-dashboard-theme";
+const DEFAULT_THEME = "dark";
+const VALID_THEMES = new Set(["dark", "light"]);
+
+function readStoredTheme() {
+  try {
+    const raw = localStorage.getItem(THEME_KEY);
+    if (!raw) return DEFAULT_THEME;
+    const value = String(raw).trim().toLowerCase();
+    return VALID_THEMES.has(value) ? value : DEFAULT_THEME;
+  } catch {
+    return DEFAULT_THEME;
+  }
+}
+
+function writeStoredTheme(theme) {
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    /* localStorage unavailable; theme simply won't persist */
+  }
+}
+
+function applyTheme(theme) {
+  const t = VALID_THEMES.has(theme) ? theme : DEFAULT_THEME;
+  document.documentElement.dataset.theme = t;
+  const btn = document.getElementById("theme-toggle");
+  if (btn) {
+    btn.setAttribute("aria-pressed", t === "light" ? "true" : "false");
+    btn.title = t === "dark" ? "Switch to light theme" : "Switch to dark theme";
+  }
+}
+
+function initTheme() {
+  applyTheme(readStoredTheme());
+}
+
+function toggleTheme() {
+  const current = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  const next = current === "light" ? "dark" : "light";
+  applyTheme(next);
+  writeStoredTheme(next);
+}
+
+(function wireThemeToggle() {
+  const btn = document.getElementById("theme-toggle");
+  if (btn) btn.addEventListener("click", toggleTheme);
+})();
+
+initTheme();
 loadFilters();
 refresh();
 startPolling();

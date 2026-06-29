@@ -603,7 +603,6 @@ function toggleTheme() {
 })();
 
 initTheme();
->>>>>>> c2fd8e7 (feat(dashboard): wire light/dark theme toggle with localStorage persistence)
 loadFilters();
 refresh();
 startPolling();

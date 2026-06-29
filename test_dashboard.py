@@ -382,8 +382,8 @@ def test_story_last_activity_ignores_missing_or_empty_journal(client, plan_dir):
 # accurate between polls (no re-fetch needed as the clock advances). These
 # tests exercise the pure helpers exposed by app.js by shelling out to Node
 # in a subprocess — no JS test runner / jsdom dependency, just plain pytest.
-import os
-import subprocess
+import os  # noqa: E402
+import subprocess  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
@@ -404,11 +404,14 @@ def _run_app_js(expr):
             innerHTML: "",
             classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
             addEventListener: noop,
+            setAttribute: noop,
             appendChild: noop,
             querySelectorAll: () => [],
             dataset: {},
         };
         globalThis.document = {
+            addEventListener: noop,
+            documentElement: { dataset: {} },
             getElementById: () => ({ ...fakeEl, dataset: {}, addEventListener: noop }),
             createElement: () => ({ ...fakeEl, classList: { add: noop, remove: noop, contains: () => false } }),
         };
@@ -446,7 +449,6 @@ def _iso(seconds_ago):
 
 def test_relative_age_label_minutes_and_hours_and_days():
     """The short-form label uses the right unit and floors toward zero."""
-    now = _iso(0)
     cases = [
         # age_seconds -> expected label
         (0, "just now"),

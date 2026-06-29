@@ -845,7 +845,7 @@ function showStoryModal(planName, story, key) {
     ["Key", key, { copy: true, copyField: "key" }],
     ["Summary", story.summary],
     ["Persona", story.persona],
-    ["Model", story.model],
+    ["Model", story.dispatched_model || story.model],
     ["Risk", story.risk],
     ["Dependencies", depsShow],
   ];

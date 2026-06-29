@@ -461,3 +461,41 @@ def test_dispatch_streams_claude_cli_output_so_log_size_is_a_reliable_signal(
 class _FakePopenResult:
     def __init__(self, pid):
         self.pid = pid
+
+
+def test_dispatch_handle_records_resolved_local_model(tmp_path, monkeypatch):
+    """The AgentHandle carries the RESOLVED model (the concrete name the agent
+    actually boots with), not the logical tier — so the dashboard can show
+    what really ran (e.g. minimax-m3:cloud) instead of the plan's declared
+    tier (e.g. 'sonnet'). A story declares model='sonnet'; under the local
+    backend with PIPELINE_LOCAL_MODEL_DEFAULT=minimax-m3:cloud the agent boots
+    minimax, and the handle must reflect that."""
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr: _FakePopenResult(11),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "minimax-m3:cloud")
+    monkeypatch.delenv("PIPELINE_LOCAL_MODEL_SONNET", raising=False)
+
+    handle = b.OllamaDriver().dispatch(
+        "do it", system=None, model="sonnet", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+    assert handle.pid == 11
+    assert handle.model == "minimax-m3:cloud"
+
+
+def test_claude_dispatch_handle_records_passed_model(tmp_path, monkeypatch):
+    """The Claude CLI backend uses the model string verbatim (no tier
+    resolution), so the handle records exactly what was passed."""
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda cmd, cwd, stdout, stderr: _FakePopenResult(12),
+    )
+    handle = b.ClaudeCliDriver().dispatch(
+        "do it", system=None, model="opus",
+        allowed_tools="Bash,Read", cwd=tmp_path, log_path=tmp_path / "agent.log",
+        append=False,
+    )
+    assert handle.pid == 12
+    assert handle.model == "opus"

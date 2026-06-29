@@ -651,6 +651,90 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     return result
 
 
+# ---------- Rebase-before-merge + CI gate (Mode 9) ----------
+# Story branches are graded/reviewed off the base they were branched from, which
+# lags origin/master once sibling stories merge. Squash-merging such a branch
+# conflicts (the merge gate used to fail with `mergeable: CONFLICTING` after
+# MERGE_MAX_ATTEMPTS) and a branch that breaks a sibling's pre-existing master
+# test — or is ruff-red — sailed through because `gh pr merge --squash` never
+# looked at CI. The merge adjudication loop now rebases onto origin/master and
+# force-pushes before merging, and refuses to squash a CI-red branch. See
+# ~/.claude/plans/orchestrator-rebase-before-merge.json and memory Mode 9.
+
+PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
+PIPELINE_MERGE_CI_TIMEOUT = int(os.environ.get("PIPELINE_MERGE_CI_TIMEOUT", "300"))
+
+
+def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
+    """Rebase `branch` onto current origin/master inside its worktree so the
+    merge gate sees the branch against current master, not the stale base the
+    agent branched from. Fetches origin/master first (from REPO_ROOT, the shared
+    repo) so the rebase target is current.
+
+    Returns ``{"ok": bool, "conflict": bool, "error": str}``:
+      - ok=True            rebase succeeded; the branch is on top of origin/master.
+      - ok=False, conflict=True  rebase hit a merge conflict; the rebase was
+        aborted so the worktree is back to its pre-rebase state and the caller
+        can park/re-dispatch for resolution instead of force-anything.
+      - ok=False, conflict=False some other git failure (dirty tree, missing
+        ref); rebase aborted if one was in progress.
+    """
+    def _run(argv: list[str], cwd) -> subprocess.CompletedProcess:
+        return subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+
+    if not Path(worktree).is_dir():
+        # No worktree to rebase in (missing/anomalous). The merge gate falls
+        # back to the CI gate + the original conflict-at-`gh pr merge` check;
+        # rebasing is impossible without the worktree the branch lives in.
+        return {"ok": True, "conflict": False, "error": "worktree missing - rebase skipped"}
+    _run(["git", "fetch", "origin", "master"], REPO_ROOT)
+    r = _run(["git", "rebase", "origin/master"], worktree)
+    if r.returncode == 0:
+        return {"ok": True, "conflict": False, "error": ""}
+    blob = (r.stdout + "\n" + r.stderr).lower()
+    conflict = "fix conflicts" in blob or "could not apply" in blob or "conflict" in blob
+    # Abort so we never leave the worktree mid-rebase (a half-rebased tree would
+    # break the next dispatch into it). Best-effort: --abort is a no-op if no
+    # rebase is in progress.
+    _run(["git", "rebase", "--abort"], worktree)
+    return {"ok": False, "conflict": conflict,
+            "error": (r.stdout + r.stderr).strip()[:500]}
+
+
+def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
+    """Poll ``gh pr checks <branch>`` until all checks reach a terminal bucket
+    or the timeout elapses. Returns ``{"state": "pass"|"fail"|"pending"|"none",
+    "error": str}``.
+
+      - ``pass``   every check passed -> safe to merge.
+      - ``fail``   at least one check failed/errored/cancelled -> do not merge.
+      - ``pending`` checks still running at timeout -> do not merge (retry/park).
+      - ``none``   no PR / no checks reported / unparseable output -> treat as
+        pass (a repo without CI must not be blocked by this gate).
+    Never raises; the merge adjudication loop decides what to do with the result.
+    """
+    if not PIPELINE_MERGE_CI_GATE:
+        return {"state": "pass", "error": "CI gate disabled"}
+    deadline = time.monotonic() + (timeout_s if timeout_s is not None else PIPELINE_MERGE_CI_TIMEOUT)
+    while time.monotonic() < deadline:
+        r = subprocess.run(["gh", "pr", "checks", branch, "--json", "bucket"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            return {"state": "none", "error": r.stderr.strip()[:200]}
+        try:
+            buckets = {c.get("bucket") for c in json.loads(r.stdout or "[]")}
+        except ValueError:
+            return {"state": "none", "error": "unparseable gh pr checks output"}
+        if not buckets:
+            return {"state": "none", "error": ""}
+        if buckets & {"fail", "error", "cancelled", "action_required"}:
+            return {"state": "fail", "error": ""}
+        if buckets <= {"pass"}:
+            return {"state": "pass", "error": ""}
+        time.sleep(10)  # still pending — keep polling
+    return {"state": "pending", "error": "CI did not complete within timeout"}
+
+
 def _escalate_to_claude(
     manifest: dict, plan_name: str, story_key: str, manifest_path: Path
 ) -> None:
@@ -2088,33 +2172,74 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             if story["status"] != "pr_open":
                 continue
             decision = _merge_decision(story)
-            if decision["action"] == "merge":
-                try:
-                    _merge_pr(story.get("worktree", ""), key)
-                except Exception as e:  # gh/git transient failure - see MERGE_MAX_ATTEMPTS
-                    attempts = story.get("merge_attempts", 0) + 1
-                    story["merge_attempts"] = attempts
-                    if attempts >= MERGE_MAX_ATTEMPTS:
-                        story["status"] = "failed"
-                        story["merge_error"] = str(e)
-                        _notify_user(plan_name, f"{key} merge failed {attempts}x "
-                                                f"({e}); giving up - needs human intervention.")
-                        summary["failed"].append(key)
-                    else:
-                        # leave pr_open; the next tick retries within budget.
-                        _notify_user(plan_name, f"{key} merge attempt {attempts}/"
-                                                f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.")
-                    summary["notify"].append(key)
-                    continue
-                story["status"] = "done"
-                story.pop("merge_attempts", None)
-                _mark_plane_done(key, plan_name)
-                summary["merged"].append(key)
-            else:
+            if decision["action"] != "merge":
                 story["status"] = "parked"
                 _notify_user(plan_name, f"{key} parked: {decision['reason']}")
                 summary["parked"].append(key)
                 summary["notify"].append(key)
+                continue
+
+            # Mode 9: rebase onto current origin/master + CI gate before merge,
+            # so a stale-base branch can't land cross-story breakage or a
+            # ruff-red PR onto main. Failures count against merge_attempts just
+            # like a transient `gh pr merge` failure (see MERGE_MAX_ATTEMPTS).
+            branch = f"agent/{key.lower()}"
+            worktree = story.get("worktree", "")
+            gate_error = ""
+            rb = _rebase_onto_master(worktree, branch)
+            if not rb["ok"]:
+                gate_error = f"rebase: {rb['error']}"
+            else:
+                # Force-push the rebased branch; only when we actually rebased
+                # in a real worktree (a missing worktree skipped the rebase and
+                # has nothing to push). Run from REPO_ROOT (the plan's repo).
+                if Path(worktree).is_dir():
+                    subprocess.run(["git", "push", "--force-with-lease", "origin",
+                                    branch], cwd=REPO_ROOT,
+                                   capture_output=True, text=True)
+                ci = _ci_status(branch)
+                if ci["state"] == "fail":
+                    gate_error = f"ci fail: {ci['error']}"
+                elif ci["state"] == "pending":
+                    gate_error = f"ci pending: {ci['error']}"
+
+            if gate_error:
+                attempts = story.get("merge_attempts", 0) + 1
+                story["merge_attempts"] = attempts
+                if attempts >= MERGE_MAX_ATTEMPTS:
+                    story["status"] = "failed"
+                    story["merge_error"] = gate_error
+                    _notify_user(plan_name, f"{key} merge gate failed {attempts}x "
+                                            f"({gate_error}); giving up - needs human intervention.")
+                    summary["failed"].append(key)
+                else:
+                    # leave pr_open; the next tick retries within budget.
+                    _notify_user(plan_name, f"{key} merge gate attempt {attempts}/"
+                                            f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.")
+                summary["notify"].append(key)
+                continue
+
+            try:
+                _merge_pr(story.get("worktree", ""), key)
+            except Exception as e:  # gh/git transient failure - see MERGE_MAX_ATTEMPTS
+                attempts = story.get("merge_attempts", 0) + 1
+                story["merge_attempts"] = attempts
+                if attempts >= MERGE_MAX_ATTEMPTS:
+                    story["status"] = "failed"
+                    story["merge_error"] = str(e)
+                    _notify_user(plan_name, f"{key} merge failed {attempts}x "
+                                            f"({e}); giving up - needs human intervention.")
+                    summary["failed"].append(key)
+                else:
+                    # leave pr_open; the next tick retries within budget.
+                    _notify_user(plan_name, f"{key} merge attempt {attempts}/"
+                                            f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.")
+                summary["notify"].append(key)
+                continue
+            story["status"] = "done"
+            story.pop("merge_attempts", None)
+            _mark_plane_done(key, plan_name)
+            summary["merged"].append(key)
         manifest_path.write_text(json.dumps(manifest, indent=2))
 
     return {"ok": True, **summary}
@@ -2145,6 +2270,26 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
 
     try:
         with _scoped_repo_root(plan_name):
+            # Mode 9 gate applies here too: even an explicit human merge must
+            # not land a conflicting or CI-red PR. Disable via
+            # PIPELINE_MERGE_CI_GATE=0 only if you intentionally accept that.
+            branch = f"agent/{story_key.lower()}"
+            worktree = story.get("worktree", "")
+            rb = _rebase_onto_master(worktree, branch)
+            if not rb["ok"]:
+                return {"ok": False, "error": f"rebase failed: {rb['error']}",
+                        "story_key": story_key}
+            if Path(worktree).is_dir():
+                subprocess.run(["git", "push", "--force-with-lease", "origin",
+                                branch], cwd=REPO_ROOT,
+                               capture_output=True, text=True)
+            ci = _ci_status(branch)
+            if ci["state"] == "fail":
+                return {"ok": False, "error": f"CI failing: {ci['error']}",
+                        "story_key": story_key}
+            if ci["state"] == "pending":
+                return {"ok": False, "error": f"CI still pending: {ci['error']}",
+                        "story_key": story_key}
             _merge_pr(story.get("worktree", ""), story_key)
     except Exception as e:  # surface the gh/git failure to the human, don't raise
         return {"ok": False, "error": str(e), "story_key": story_key}

@@ -866,6 +866,86 @@ def test_commit_wip_checkpoints_when_agent_log_is_git_ignored(tmp_path):
     assert "agent.log" not in committed
 
 
+# ---------- Security review gate ----------
+
+def test_review_story_high_risk_calls_security_reviewer(plan_dir, agents_dir, monkeypatch):
+    """High-risk stories must invoke the security-engineer reviewer in addition to code-reviewer."""
+    _write_manifest(plan_dir, "secgate", {
+        "S1": {"summary": "Add auth", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "high"},
+    })
+    security_calls = []
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: (security_calls.append(1), "VERDICT: APPROVE")[1])
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("secgate", "S1")
+    assert len(security_calls) == 1, "security-engineer reviewer must be called for high-risk stories"
+
+
+def test_review_story_high_risk_both_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
+    """High-risk story approved by both reviewers proceeds to pr_open."""
+    _write_manifest(plan_dir, "secboth", {
+        "S1": {"summary": "Crypto change", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "high"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    result = p.review_story("secboth", "S1")
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+
+
+def test_review_story_high_risk_security_request_changes_blocks_merge(plan_dir, agents_dir, monkeypatch):
+    """If security-engineer requests changes, story must NOT go to pr_open even if code-reviewer approves."""
+    _write_manifest(plan_dir, "secblock", {
+        "S1": {"summary": "Token store", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "high"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: "Security issue found.\nVERDICT: REQUEST_CHANGES")
+
+    def _boom(*a, **k):
+        raise AssertionError("PR must not be opened when security reviewer blocks")
+    monkeypatch.setattr(p, "_open_pr", _boom)
+
+    result = p.review_story("secblock", "S1")
+    assert result["verdict"] != "APPROVE", "combined verdict must not be APPROVE when security rejects"
+    assert result["status"] in ("changes_requested", "parked")
+
+
+def test_review_story_high_risk_security_verdict_recorded(plan_dir, agents_dir, monkeypatch):
+    """security_review_verdict is persisted in the manifest for audit purposes."""
+    _write_manifest(plan_dir, "secrecord", {
+        "S1": {"summary": "RBAC impl", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "high"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("secrecord", "S1")
+    story = _read_manifest(plan_dir, "secrecord")["stories"]["S1"]
+    assert story.get("security_review_verdict") == "APPROVE"
+
+
+def test_review_story_low_risk_skips_security_reviewer(plan_dir, agents_dir, monkeypatch):
+    """Low-risk stories must NOT invoke the security-engineer reviewer."""
+    _write_manifest(plan_dir, "secskip", {
+        "S1": {"summary": "Fix typo", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    security_calls = []
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: (security_calls.append(1), "VERDICT: APPROVE")[1])
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("secskip", "S1")
+    assert len(security_calls) == 0, "security reviewer must NOT be called for low-risk stories"
+
+
 # ---------- Per-plan repo_root ----------
 def test_repo_root_for_returns_manifest_value_when_present(plan_dir):
     _write_manifest(plan_dir, "rr1", {})
@@ -1447,6 +1527,29 @@ def test_review_story_rejects_traversal(plan_dir):
 def test_mark_story_done_rejects_traversal(plan_dir):
     with pytest.raises(ValueError, match="invalid"):
         p.mark_story_done("../evil", "s1")
+
+
+# ---------- MCP tool API surface ----------
+
+def test_completed_dep_ids_is_not_a_public_mcp_tool():
+    """_completed_dep_ids is a private helper and must NOT be exposed as an MCP tool."""
+    tool_names = {t.name for t in p.mcp._tool_manager.list_tools()}
+    assert "_completed_dep_ids" not in tool_names, (
+        "_completed_dep_ids is a private helper and must not be a public MCP tool"
+    )
+
+
+def test_list_ready_stories_is_a_public_mcp_tool():
+    """list_ready_stories must be exposed as an MCP tool per the documented API."""
+    tool_names = {t.name for t in p.mcp._tool_manager.list_tools()}
+    assert "list_ready_stories" in tool_names, (
+        "list_ready_stories must be decorated with @mcp.tool() to be callable as an MCP tool"
+    )
+
+
+def test_list_ready_stories_rejects_traversal(plan_dir):
+    with pytest.raises(ValueError, match="invalid"):
+        p.list_ready_stories("../evil")
 
 
 # ---------- Helper used by the new tests above ----------

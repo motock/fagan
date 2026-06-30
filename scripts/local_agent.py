@@ -443,8 +443,14 @@ def main() -> int:
     recent_tools: deque[tuple[str, str]] = deque(maxlen=READ_HEAVY_WINDOW)
     distinct_windows = 0
     done_rejections = 0
+    start_time = time.monotonic()
 
     for step in range(MAX_STEPS):
+        if time.monotonic() - start_time > TIMEOUT:
+            print(f"[step {step}] wall-clock timeout ({TIMEOUT}s) reached; parking", flush=True)
+            if worktree_dirty():
+                auto_wip_commit("wall-clock timeout")
+            return 2
         try:
             m = chat(messages)
         except Exception as e:

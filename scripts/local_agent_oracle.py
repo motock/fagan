@@ -477,8 +477,14 @@ def main() -> int:
     nudged_read_heavy = False
     recent_tools: deque[tuple[str, str]] = deque(maxlen=READ_HEAVY_WINDOW)
     distinct_windows = 0
+    start_time = time.monotonic()
 
     for step in range(MAX_STEPS):
+        if time.monotonic() - start_time > TIMEOUT:
+            print(f"[step {step}] wall-clock timeout ({TIMEOUT}s) reached; parking", flush=True)
+            if worktree_dirty():
+                auto_commit("WIP (wall-clock timeout)")
+            return 2
         try:
             m = chat(messages)
         except Exception as e:

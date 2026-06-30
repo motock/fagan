@@ -583,6 +583,25 @@ def _run_reviewer(worktree: str, branch: str) -> str:
     )
 
 
+def _run_security_reviewer(worktree: str, branch: str) -> str:
+    """Run the security-engineer persona over a branch and return its raw output.
+
+    External boundary: delegates to the configured Backend (always Claude —
+    security-engineer is in _LOCAL_SKIP_PERSONAS). Tests mock this function.
+    """
+    body = _persona_body("security-engineer")
+    model = _persona_default_model("security-engineer") or DEFAULT_MODEL
+    prompt = (
+        f"Perform a security review of the changes on branch {branch} in this "
+        f"worktree. Check for OWASP issues, secrets, injection, auth/authz "
+        f"bypasses, and Secure-by-Design violations. Run the test suite. "
+        f"End with your VERDICT line: APPROVE or REQUEST_CHANGES."
+    )
+    return backend.get_backend("review").complete(
+        prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
+    )
+
+
 def _parse_verdict(text: str) -> str:
     m = re.search(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", text, re.IGNORECASE)
     return m.group(1).upper() if m else "UNKNOWN"
@@ -1360,7 +1379,6 @@ def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str
     return {"ok": True, "manifest_path": str(manifest_path), **manifest}
 
 
-@mcp.tool()
 def _completed_dep_ids(stories: dict[str, Any]) -> set[str]:
     """Identifiers a dependency string may legitimately reference for a *done*
     story, covering both forms a dependency can take.
@@ -1377,11 +1395,13 @@ def _completed_dep_ids(stories: dict[str, Any]) -> set[str]:
     return done_keys | done_summaries
 
 
+@mcp.tool()
 def list_ready_stories(plan_name: str) -> list[dict]:
     """
     Return stories whose dependencies are satisfied and that are still in
     To Do. Use this to decide what to dispatch next.
     """
+    _validate_key(plan_name)
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     if not manifest_path.exists():
         return []
@@ -1974,12 +1994,23 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"ok": False, "error": f"No such story {story_key}"}
 
     branch = f"agent/{story_key.lower()}"
-    reviewer_output = _run_reviewer(story.get("worktree", ""), branch)
+    worktree = story.get("worktree", "")
+    reviewer_output = _run_reviewer(worktree, branch)
     verdict = _parse_verdict(reviewer_output)
     story["review_verdict"] = verdict
 
+    # High-risk stories require an additional security-engineer pass; both
+    # must APPROVE before the story proceeds to pr_open.
+    if verdict == "APPROVE" and story.get("risk") == "high":
+        security_output = _run_security_reviewer(worktree, branch)
+        security_verdict = _parse_verdict(security_output)
+        story["security_review_verdict"] = security_verdict
+        if security_verdict != "APPROVE":
+            verdict = security_verdict
+            reviewer_output = security_output  # use security feedback for rework
+
     if verdict == "APPROVE":
-        pr_url = _open_pr(story.get("worktree", ""), story_key, story)
+        pr_url = _open_pr(worktree, story_key, story)
         story["pr_url"] = pr_url
         story["status"] = "pr_open"
         # The work passed: drop any stale rework state from earlier cycles.

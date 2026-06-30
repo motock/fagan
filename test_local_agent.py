@@ -640,6 +640,55 @@ def test_chat_does_not_retry_on_4xx(monkeypatch):
     assert calls["n"] == 1, "4xx must NOT be retried"
 
 
+# ---------- Wall-clock timeout ----------
+
+def test_main_exits_with_wip_commit_when_wall_clock_exceeded(tmp_path, monkeypatch):
+    """When wall-clock timeout is exceeded between steps, main() must auto-WIP-commit and return 2."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "TIMEOUT", 0.0)  # expire immediately
+    monkeypatch.setattr(la, "MAX_STEPS", 100)
+
+    # Create a dirty worktree file so auto-WIP-commit has something to commit.
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "work.txt").write_text("in progress")
+
+    git_calls = []
+
+    def fake_git_run(cmd, **kwargs):
+        git_calls.append(cmd)
+        class R:
+            returncode = 0
+            stdout = "mocked"
+            stderr = ""
+        return R()
+
+    def fake_chat(messages):
+        # A valid tool call reply so the loop advances at least one step.
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"function": {"name": "done", "arguments": {"result": "x"}}}],
+        }
+
+    monkeypatch.setattr(la.subprocess, "run", fake_git_run)
+    monkeypatch.setattr(la, "chat", fake_chat)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: True)
+    monkeypatch.setattr(la, "auto_wip_commit", lambda reason: git_calls.append(["wip", reason]))
+
+    # patch time.monotonic so the first check already sees elapsed > TIMEOUT
+    call_count = [0]
+    def fake_monotonic():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return 0.0   # start time
+        return 1000.0    # way past timeout
+    monkeypatch.setattr(la.time, "monotonic", fake_monotonic)
+
+    result = la.main()
+    assert result == 2, "wall-clock timeout should exit with code 2 (same as step cap)"
+    assert any("wip" in str(c) for c in git_calls), "auto-WIP-commit should run on timeout"
+
+
 def test_stream_one_turn_assembles_streamed_chunks(monkeypatch):
     lines = [
         json.dumps({"message": {"role": "assistant", "content": "I'll "}}),

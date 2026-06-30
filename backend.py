@@ -470,9 +470,19 @@ class OllamaDriver:
             "LOCAL_AGENT_ENDPOINT": self.endpoint,
             "LOCAL_AGENT_NUM_CTX": str(self.num_ctx),
             "LOCAL_AGENT_TIMEOUT": str(self.dispatch_timeout),
-            "LOCAL_AGENT_MAX_STEPS": str(self.max_steps),
             "LOCAL_AGENT_TEMPERATURE": str(self.temperature),
         }
+        # PIPELINE_LOCAL_MAX_STEPS is the real, plist-honored step-cap knob
+        # for the dispatch agent. Re-read it on every dispatch so launchd /
+        # shell edits to the env actually take effect instead of being
+        # silently shadowed by the value captured at OllamaDriver.__init__
+        # time. Fall back to that captured value when the env var is unset,
+        # so existing callers that rely on the constructor default are not
+        # broken.
+        max_steps = int(
+            os.environ.get("PIPELINE_LOCAL_MAX_STEPS", str(self.max_steps))
+        )
+        env["LOCAL_AGENT_MAX_STEPS"] = str(max_steps)
         if oracle_mode:
             env["LOCAL_AGENT_ACCEPTANCE"] = json.dumps(acceptance)
             env["LOCAL_AGENT_MODE"] = "oracle"

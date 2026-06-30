@@ -241,8 +241,24 @@ surface and can be left running indefinitely.
 ```bash
 cd ~/.claude/mcp-servers/pipeline
 pip install -r requirements-dashboard.txt   # one-time: fastapi + uvicorn
-uvicorn dashboard:app --reload              # http://127.0.0.1:8000
+scripts/dashboard.sh start                 # http://127.0.0.1:8000
 ```
+
+`scripts/dashboard.sh` runs `uvicorn dashboard:app` detached in its own
+session, records the pid to `.dashboard.pid`, and logs to `dashboard.log`
+(both in the repo root, gitignored). Subcommands:
+
+| Command | Effect |
+|---|---|
+| `scripts/dashboard.sh start` | Launch in the background; refuse if already running. |
+| `scripts/dashboard.sh stop` | SIGTERM the recorded pid (escalates to SIGKILL), then remove the pid file. Clean no-op if not running. |
+| `scripts/dashboard.sh restart` | `stop` then `start`. |
+| `scripts/dashboard.sh status` | Print `running, pid N, http://host:port` (exit 0) or `not running` (exit 1). |
+
+Host/port are env-configurable: `DASHBOARD_HOST` (default `127.0.0.1`),
+`DASHBOARD_PORT` (default `8000`). Set `DASHBOARD_RELOAD=1` to pass `--reload`
+to uvicorn (dev only — `stop` signals the whole process group so the reloader
+and its worker both die). **Stopping the dashboard:** `scripts/dashboard.sh stop`.
 
 On launch the dashboard opens on a **Fleet Overview** landing page that
 aggregates every plan on disk. From there you drill into any plan to see

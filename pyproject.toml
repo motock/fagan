@@ -11,4 +11,5 @@ testpaths = [
     "test_dashboard.py",
     "test_local_agent.py",
     "test_local_agent_oracle.py",
+    "test_dashboard_script.py",
 ]

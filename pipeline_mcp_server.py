@@ -77,6 +77,17 @@ WEEK_RESUME_THRESHOLD = int(os.environ.get("PIPELINE_WEEK_RESUME_THRESHOLD", "70
 # fails open. Guards against a CLI output-format change turning a transient
 # blackout into a permanent pause.
 USAGE_STALE_AFTER_SECONDS = int(os.environ.get("PIPELINE_USAGE_STALE_AFTER_SECONDS", "1800"))
+# Request-count thresholds for the new CLI format (post percentage removal).
+# session_pct = min(100, daily_requests * 100 // DAILY_REQUEST_THRESHOLD)
+# week_pct   = min(100, weekly_requests * 100 // WEEKLY_REQUEST_THRESHOLD)
+DAILY_REQUEST_THRESHOLD = int(os.environ.get("PIPELINE_DAILY_REQUEST_THRESHOLD", "3000"))
+WEEKLY_REQUEST_THRESHOLD = int(os.environ.get("PIPELINE_WEEKLY_REQUEST_THRESHOLD", "15000"))
+# After the gate has been blind this long, flip to fail-closed (paused=True)
+# so a permanent CLI-format change doesn't leave spend unguarded indefinitely.
+USAGE_BLIND_PAUSE_AFTER_SECONDS = int(os.environ.get("USAGE_BLIND_PAUSE_AFTER_SECONDS", str(6 * 3600)))
+# Emit a blind-gate stderr log only on the first blind transition and every
+# Nth poll thereafter (default hourly at 60 s poll cadence = 60 polls).
+USAGE_BLIND_LOG_INTERVAL = int(os.environ.get("USAGE_BLIND_LOG_INTERVAL", "60"))
 
 # Cap on agents dispatched and running at once, across all plans in this
 # session. The usage gate above reacts to a polled /cost snapshot, which lags
@@ -794,7 +805,37 @@ def _escalate_to_claude(
     story["status"] = "todo"
     for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error"):
         story.pop(key, None)
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    _atomic_write_json(manifest_path, manifest)
+
+
+def _atomic_write_json(path: Path, obj: Any) -> None:
+    """Write *obj* as JSON to *path* atomically via a same-directory temp file.
+
+    Uses os.replace() (POSIX-atomic on the same filesystem) so a crash or
+    concurrent reader never observes a partial write. Raises on I/O error and
+    leaves *path* untouched.
+    """
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps(obj, indent=2))
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_key(name: str) -> None:
+    """Raise ValueError if *name* could be used for path traversal.
+
+    plan_name and story_key flow into filesystem paths; this boundary check
+    rejects anything containing path separators, null bytes, or characters
+    outside the safe alphanumeric-plus-symbols set.
+    """
+    if not _KEY_RE.match(name):
+        raise ValueError(f"invalid plan/story key {name!r}: only [A-Za-z0-9._-] allowed")
 
 
 def _notify_user(plan_name: str, message: str) -> None:
@@ -813,7 +854,7 @@ def _append_decision(plan_name: str, record: dict[str, Any]) -> None:
     path = _decisions_path(plan_name)
     log = json.loads(path.read_text()) if path.exists() else []
     log.append(record)
-    path.write_text(json.dumps(log, indent=2))
+    _atomic_write_json(path, log)
 
 
 # ---------- Checkpoint journal ----------
@@ -825,7 +866,7 @@ def _append_journal(plan_name: str, story_key: str, record: dict[str, Any]) -> N
     path = _journal_path(plan_name, story_key)
     log = json.loads(path.read_text()) if path.exists() else []
     log.append(record)
-    path.write_text(json.dumps(log, indent=2))
+    _atomic_write_json(path, log)
 
 
 def _read_journal(plan_name: str, story_key: str) -> list[dict[str, Any]]:
@@ -834,28 +875,44 @@ def _read_journal(plan_name: str, story_key: str) -> list[dict[str, Any]]:
 
 
 # ---------- Usage probe ----------
+# Legacy format (Claude Code ≤ ~Jun 2026): "Current session: N% used · resets …"
 _SESSION_USAGE_RE = re.compile(r"Current session:\s*(\d+)%\s*used\s*·\s*resets\s*(.+)")
 _WEEK_USAGE_RE = re.compile(r"Current week \(all models\):\s*(\d+)%\s*used\s*·\s*resets\s*(.+)")
+# Current format (post-Jun 2026): "Last 24h · N requests …" / "Last 7d · N requests …"
+_DAILY_REQ_RE = re.compile(r"Last 24h\s*·\s*(\d+)\s*requests")
+_WEEKLY_REQ_RE = re.compile(r"Last 7d\s*·\s*(\d+)\s*requests")
 
 
 def _parse_usage_output(text: str) -> dict[str, Any]:
-    """Parse the text result of a headless `claude -p "/usage"` call.
+    """Parse the text result of a headless `/cost` call into session/week pcts.
 
-    This is human-readable CLI output, not a documented API contract — a
-    future Claude Code release could reword it. Raises ValueError if the
-    expected lines aren't found, so callers can log and skip a tick rather
-    than act on bad data.
+    Supports both the legacy "Current session: N% used" format and the current
+    "Last 24h · N requests" format. Raises ValueError if neither format is
+    recognised, so callers can fall back rather than act on bad data.
     """
+    # Try legacy percentage format first (preserves backward compatibility).
     session_m = _SESSION_USAGE_RE.search(text)
     week_m = _WEEK_USAGE_RE.search(text)
-    if not session_m or not week_m:
-        raise ValueError(f"Could not parse usage output: {text!r}")
-    return {
-        "session_pct": int(session_m.group(1)),
-        "session_reset": session_m.group(2).strip(),
-        "week_pct": int(week_m.group(1)),
-        "week_reset": week_m.group(2).strip(),
-    }
+    if session_m and week_m:
+        return {
+            "session_pct": int(session_m.group(1)),
+            "session_reset": session_m.group(2).strip(),
+            "week_pct": int(week_m.group(1)),
+            "week_reset": week_m.group(2).strip(),
+        }
+
+    # Current format: derive percentages from request counts vs. configurable thresholds.
+    daily_m = _DAILY_REQ_RE.search(text)
+    weekly_m = _WEEKLY_REQ_RE.search(text)
+    if daily_m and weekly_m:
+        daily = int(daily_m.group(1))
+        weekly = int(weekly_m.group(1))
+        return {
+            "session_pct": min(100, daily * 100 // DAILY_REQUEST_THRESHOLD),
+            "week_pct": min(100, weekly * 100 // WEEKLY_REQUEST_THRESHOLD),
+        }
+
+    raise ValueError(f"Could not parse usage output: {text!r}")
 
 
 def _run_usage_probe() -> dict[str, Any]:
@@ -875,7 +932,7 @@ def _run_usage_probe() -> dict[str, Any]:
 
 
 def _write_usage_state(state: dict[str, Any]) -> None:
-    USAGE_STATE_PATH.write_text(json.dumps(state, indent=2))
+    _atomic_write_json(USAGE_STATE_PATH, state)
 
 
 def _read_usage_state() -> dict[str, Any]:
@@ -1043,7 +1100,7 @@ def _reap_zombie_in_progress_stories() -> int:
             changed = True
             reaped += 1
         if changed:
-            manifest_path.write_text(json.dumps(manifest, indent=2))
+            _atomic_write_json(manifest_path, manifest)
     return reaped
 
 
@@ -1176,6 +1233,7 @@ def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
     schema: { "epics": [ { "summary", "stories": [...] } ] }.
     Call this after generating a plan so the user can review before ingestion.
     """
+    _validate_key(plan_name)
     try:
         plan = json.loads(plan_json)
     except json.JSONDecodeError as e:
@@ -1185,7 +1243,7 @@ def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
         return {"ok": False, "error": "Plan must contain 'epics' key"}
 
     path = PLAN_DIR / f"{plan_name}.json"
-    path.write_text(json.dumps(plan, indent=2))
+    _atomic_write_json(path, plan)
 
     story_count = sum(len(e.get("stories", [])) for e in plan["epics"])
     return {
@@ -1209,6 +1267,7 @@ def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str
     to their parent epic. Optionally restrict to specific epic summaries via
     only_epics. Returns a manifest mapping local IDs to Plane UUIDs.
     """
+    _validate_key(plan_name)
     path = PLAN_DIR / f"{plan_name}.json"
     if not path.exists():
         return {"ok": False, "error": f"No plan named {plan_name}"}
@@ -1296,7 +1355,7 @@ def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str
         ]
 
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    _atomic_write_json(manifest_path, manifest)
 
     return {"ok": True, "manifest_path": str(manifest_path), **manifest}
 
@@ -1361,6 +1420,8 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     same directory. That race is what produced the repeated zero-output
     agent deaths logged in 2026-06-27's e2e-decentralized-messaging run.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
@@ -1451,7 +1512,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # declared tier is left untouched (it's a routing hint).
         if getattr(handle, "model", None):
             story["dispatched_model"] = handle.model
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        _atomic_write_json(manifest_path, manifest)
 
         return {"ok": True, "story_key": story_key, "pid": handle.pid, "branch": branch,
                 "resumed": resuming}
@@ -1463,6 +1524,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     Check whether a dispatched agent has finished. If complete, runs tests
     in the worktree and reports pass/fail without auto-merging.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)
@@ -1515,10 +1578,10 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             story["dispatch_error"] = f"agent produced no output in {attempts} launch attempts"
             _notify_user(plan_name, f"{story_key} failed to launch {attempts}x; "
                                     f"giving up - needs human intervention.")
-            manifest_path.write_text(json.dumps(manifest, indent=2))
+            _atomic_write_json(manifest_path, manifest)
             return {"status": "failed", "pid": pid}
         story["status"] = "interrupted"
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        _atomic_write_json(manifest_path, manifest)
         return {"status": "interrupted", "pid": pid}
 
     # Step-cap exit routing (regression guard for PR #49 / commit 90a3cf1):
@@ -1547,7 +1610,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         story["status"] = "interrupted"
         story["last_commit"] = sha
         story["interrupted_at"] = interrupted_at
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        _atomic_write_json(manifest_path, manifest)
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 
     test_dir, test_cmd = detect_test_command(worktree)
@@ -1613,11 +1676,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             f"tests passed but agent branch has no new commits vs {base}; "
             "agent likely parked without writing code."
         )
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        _atomic_write_json(manifest_path, manifest)
         return {"status": "failed", "reason": "empty_agent_branch"}
 
     story["status"] = "tests_passed" if passed else "failed"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    _atomic_write_json(manifest_path, manifest)
 
     return {
         "status": story["status"],
@@ -1643,6 +1706,8 @@ def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
     calls dispatch on the same story, producing a manifest write race that
     leaves the worktree in an inconsistent state.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
@@ -1675,7 +1740,7 @@ def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
         story["status"] = "interrupted"
         story["last_commit"] = sha
         story["interrupted_at"] = interrupted_at
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        _atomic_write_json(manifest_path, manifest)
 
         return {"ok": True, "status": "interrupted", "commit": sha}
 
@@ -1686,6 +1751,8 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
     Transition a Plane issue to In Progress and update the local manifest.
     Use this before writing any code for a story.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     if _plane_enabled():
         issue_uuid = _resolve_issue_uuid(story_key)
         plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
@@ -1696,7 +1763,7 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
     if story_key not in manifest["stories"]:
         return {"ok": False, "error": f"No such story {story_key}"}
     manifest["stories"][story_key]["status"] = "in_progress"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    _atomic_write_json(manifest_path, manifest)
     return {"ok": True}
 
 
@@ -1738,6 +1805,8 @@ def checkpoint(
     this after completing each idempotent step of a story so a killed agent
     can resume from the last checkpoint instead of starting over.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     return _checkpoint_impl(plan_name, story_key, step, summary, next_hint)
 
 
@@ -1747,6 +1816,8 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     Transition a Plane issue to Done and update the local manifest.
     Use after you've reviewed and merged the agent's PR.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     if _plane_enabled():
         issue_uuid = _resolve_issue_uuid(story_key)
         plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
@@ -1755,7 +1826,7 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["stories"][story_key]["status"] = "done"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    _atomic_write_json(manifest_path, manifest)
     return {"ok": True}
 
 
@@ -1800,22 +1871,31 @@ def check_usage() -> dict[str, Any]:
         state["measured_at"] = measured_at
         age = _usage_state_age_seconds({"checked_at": measured_at}) if measured_at else None
         if age is not None and age > USAGE_STALE_AFTER_SECONDS:
-            # The last real measurement is too old to trust: the gate fails
-            # OPEN (so a permanent CLI change can't freeze the pipeline), but
-            # that means spend is now unguarded — record it loudly (gate_blind
-            # + blind_since) so the dashboard/operator can see the gate is blind
-            # instead of discovering it via an unexpected bill.
-            state["paused"] = False
             state["stale"] = True
             state["gate_blind"] = True
-            if not prev.get("gate_blind"):
-                state["blind_since"] = now_iso  # first poll that went blind
-            print(
-                f"check_usage: usage data is {age:.0f}s stale and the CLI is "
-                f"still not parseable ({state['consecutive_parse_failures']} "
-                f"consecutive failures) - failing the gate OPEN; cost gate is "
-                f"now BLIND since {state.get('blind_since')}", file=sys.stderr,
-            )
+            first_blind = not prev.get("gate_blind")
+            if first_blind:
+                state["blind_since"] = now_iso
+
+            blind_since = state.get("blind_since")
+            blind_age = _usage_state_age_seconds({"checked_at": blind_since}) if blind_since else None
+            if blind_age is not None and blind_age > USAGE_BLIND_PAUSE_AFTER_SECONDS:
+                # Prolonged blindness: fail-closed so a permanent CLI-format
+                # change can't leave spend unguarded indefinitely.
+                state["paused"] = True
+            else:
+                state["paused"] = False
+
+            failures = state["consecutive_parse_failures"]
+            should_log = first_blind or (failures % USAGE_BLIND_LOG_INTERVAL == 0)
+            if should_log:
+                status = "pausing (fail-closed)" if state["paused"] else "failing the gate OPEN"
+                print(
+                    f"check_usage: usage data is {age:.0f}s stale and the CLI is "
+                    f"still not parseable ({failures} consecutive failures) - "
+                    f"{status}; cost gate is now BLIND since {state.get('blind_since')}",
+                    file=sys.stderr,
+                )
         _write_usage_state(state)
         return state
     state["measured_at"] = state["checked_at"]
@@ -1844,6 +1924,8 @@ def request_decision(
     decisions log (audit trail) and returned. Call this from a story agent
     when you are blocked on a choice the user would normally make.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     with _scoped_repo_root(plan_name):
         policy = _load_policy()
     opts = "\n".join(f"  - {o}" for o in options)
@@ -1871,6 +1953,7 @@ def request_decision(
 @mcp.tool()
 def list_decisions(plan_name: str) -> list[dict]:
     """Return the overlord decision log for a plan (audit trail)."""
+    _validate_key(plan_name)
     path = _decisions_path(plan_name)
     return json.loads(path.read_text()) if path.exists() else []
 
@@ -1882,6 +1965,8 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     open a PR via gh and set status to pr_open; otherwise set status to
     changes_requested. Does not merge — merge is the overlord's decision.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)
@@ -1916,7 +2001,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         else:
             story["status"] = "changes_requested"
 
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    _atomic_write_json(manifest_path, manifest)
     return {
         "ok": True,
         "verdict": verdict,
@@ -2209,7 +2294,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         _notify_user(plan_name, f"{key} dispatch attempt {attempts}/"
                                                 f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.")
                     summary["notify"].append(key)
-                    manifest_path.write_text(json.dumps(m, indent=2))
+                    _atomic_write_json(manifest_path, m)
 
             # 2. Poll running agents: tests fail -> notify (or escalate); tests pass -> tests_passed.
             manifest = json.loads(manifest_path.read_text())
@@ -2334,7 +2419,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             story.pop("merge_attempts", None)
             _mark_plane_done(key, plan_name)
             summary["merged"].append(key)
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        _atomic_write_json(manifest_path, manifest)
 
     return {"ok": True, **summary}
 
@@ -2352,6 +2437,8 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
     refuses any status other than "parked"/"pr_open" - this merges reviewed
     work, it does not re-review or fast-track anything.
     """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)
@@ -2392,7 +2479,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
     except Exception as e:  # surface the gh/git failure to the human, don't raise
         return {"ok": False, "error": str(e), "story_key": story_key}
     story["status"] = "done"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    _atomic_write_json(manifest_path, manifest)
     _mark_plane_done(story_key, plan_name)
     return {"ok": True, "story_key": story_key, "status": "done"}
 
@@ -2409,7 +2496,7 @@ def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
             return {"ok": False, "error": f"No manifest for {plan_name}"}
         manifest = json.loads(manifest_path.read_text())
         manifest["paused"] = paused
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        _atomic_write_json(manifest_path, manifest)
         return {"ok": True, "plan_name": plan_name, "paused": paused}
 
 
@@ -2422,6 +2509,7 @@ def pause_plan(plan_name: str) -> dict[str, Any]:
     interrupted (checkpointed and left resumable) so a paused plan isn't
     quietly burning usage in the background. Resume with resume_plan.
     """
+    _validate_key(plan_name)
     return _set_plan_paused(plan_name, True)
 
 
@@ -2429,6 +2517,7 @@ def pause_plan(plan_name: str) -> dict[str, Any]:
 def resume_plan(plan_name: str) -> dict[str, Any]:
     """Clear a pause set by pause_plan so this plan's stories are eligible
     for dispatch/review/merge on the next advance_pipeline tick again."""
+    _validate_key(plan_name)
     return _set_plan_paused(plan_name, False)
 
 

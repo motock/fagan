@@ -1164,6 +1164,298 @@ def test_read_usage_state_missing_file_returns_empty_dict(usage_state_path):
     assert p._read_usage_state() == {}
 
 
+# ---------- Atomic writes ----------
+
+def test_atomic_write_json_leaves_original_intact_on_rename_failure(tmp_path, monkeypatch):
+    """If os.replace raises, the original file must be left untouched."""
+    target = tmp_path / "data.json"
+    original = {"key": "original_value"}
+    target.write_text(json.dumps(original))
+
+    def bad_replace(src, dst):
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr("os.replace", bad_replace)
+    with pytest.raises(OSError):
+        p._atomic_write_json(target, {"key": "new_value"})
+
+    assert json.loads(target.read_text()) == original
+
+
+def test_atomic_write_json_no_tmp_left_on_rename_failure(tmp_path, monkeypatch):
+    """On rename failure, no stray .tmp file remains in the directory."""
+    target = tmp_path / "data.json"
+    target.write_text("{}")
+
+    def bad_replace(src, dst):
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr("os.replace", bad_replace)
+    with pytest.raises(OSError):
+        p._atomic_write_json(target, {"x": 1})
+
+    leftovers = [f for f in tmp_path.iterdir() if f != target]
+    assert leftovers == [], f"stray tmp files: {leftovers}"
+
+
+def test_atomic_write_json_produces_valid_json(tmp_path):
+    target = tmp_path / "out.json"
+    payload = {"a": [1, 2], "b": {"nested": True}}
+    p._atomic_write_json(target, payload)
+    assert json.loads(target.read_text()) == payload
+
+
+def test_atomic_write_json_creates_file_when_missing(tmp_path):
+    target = tmp_path / "new.json"
+    p._atomic_write_json(target, {"hello": "world"})
+    assert json.loads(target.read_text()) == {"hello": "world"}
+
+
+def test_write_usage_state_uses_atomic_write(tmp_path, monkeypatch, usage_state_path):
+    """_write_usage_state must not leave a partial file on rename failure."""
+    calls = []
+
+    real_atomic = p._atomic_write_json
+
+    def tracking_atomic(path, obj):
+        calls.append(path)
+        real_atomic(path, obj)
+
+    monkeypatch.setattr(p, "_atomic_write_json", tracking_atomic)
+    p._write_usage_state({"session_pct": 5})
+    assert any(str(usage_state_path) in str(c) for c in calls), "usage-state write did not go through _atomic_write_json"
+
+
+def test_append_journal_uses_atomic_write(tmp_path, plan_dir, monkeypatch):
+    """_append_journal must route through _atomic_write_json."""
+    calls = []
+    real_atomic = p._atomic_write_json
+
+    def tracking_atomic(path, obj):
+        calls.append(path)
+        real_atomic(path, obj)
+
+    monkeypatch.setattr(p, "_atomic_write_json", tracking_atomic)
+    p._append_journal("myplan", "story-1", {"event": "checkpoint"})
+    assert any(".journal.json" in str(c) for c in calls), "journal write did not go through _atomic_write_json"
+
+
+# ---------- Usage gate: new CLI format ----------
+
+SAMPLE_USAGE_TEXT_NEW = (
+    "You are currently using your subscription to power your Claude Code usage\n\n"
+    "What's contributing to your limits usage?\n"
+    "Approximate, based on local sessions on this machine\n\n"
+    "Last 24h · 1127 requests · 11 sessions\n"
+    "  82% of your usage came from subagent-heavy sessions\n\n"
+    "Last 7d · 7062 requests · 95 sessions\n"
+    "  80% of your usage came from sessions active for 8+ hours\n"
+)
+
+
+def test_parse_usage_output_handles_new_request_count_format(monkeypatch):
+    """New CLI format (request counts) is parsed into session_pct/week_pct."""
+    monkeypatch.setattr(p, "DAILY_REQUEST_THRESHOLD", 2000)
+    monkeypatch.setattr(p, "WEEKLY_REQUEST_THRESHOLD", 10000)
+    result = p._parse_usage_output(SAMPLE_USAGE_TEXT_NEW)
+    # 1127/2000 = 56%, 7062/10000 = 70%
+    assert result["session_pct"] == 56
+    assert result["week_pct"] == 70
+
+
+def test_parse_usage_output_new_format_clamps_to_100(monkeypatch):
+    """Request count exceeding the threshold clamps to 100%, not above."""
+    monkeypatch.setattr(p, "DAILY_REQUEST_THRESHOLD", 500)
+    monkeypatch.setattr(p, "WEEKLY_REQUEST_THRESHOLD", 1000)
+    result = p._parse_usage_output(SAMPLE_USAGE_TEXT_NEW)
+    assert result["session_pct"] == 100
+    assert result["week_pct"] == 100
+
+
+def test_parse_usage_output_old_format_still_works():
+    """Old percentage format continues to parse correctly after the update."""
+    result = p._parse_usage_output(SAMPLE_USAGE_TEXT)
+    assert result["session_pct"] == 9
+    assert result["week_pct"] == 48
+
+
+def test_parse_usage_output_raises_on_completely_unrecognized_format():
+    with pytest.raises(ValueError):
+        p._parse_usage_output("some text with no usage data at all")
+
+
+def test_run_usage_probe_handles_new_cli_format(monkeypatch):
+    """Usage probe works end-to-end with the new /cost JSON output format."""
+    monkeypatch.setattr(p, "DAILY_REQUEST_THRESHOLD", 2000)
+    monkeypatch.setattr(p, "WEEKLY_REQUEST_THRESHOLD", 10000)
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = json.dumps({"type": "result", "result": SAMPLE_USAGE_TEXT_NEW})
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(backend.subprocess, "run", _fake_run)
+    result = p._run_usage_probe()
+    assert result["session_pct"] == 56
+    assert result["week_pct"] == 70
+    assert "checked_at" in result
+
+
+# ---------- Usage gate: bounded fail-closed ----------
+
+def test_check_usage_pauses_after_prolonged_blindness(monkeypatch, usage_state_path):
+    """After gate_blind persists beyond USAGE_BLIND_PAUSE_AFTER_SECONDS, set paused=True."""
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 0)   # always trigger stale path
+    monkeypatch.setattr(p, "USAGE_BLIND_PAUSE_AFTER_SECONDS", 100)
+
+    old_enough = datetime.now(timezone.utc) - timedelta(seconds=200)
+    prev = {
+        "paused": False,
+        "gate_blind": True,
+        "blind_since": old_enough.isoformat(),
+        "measured_at": old_enough.isoformat(),
+        "checked_at": old_enough.isoformat(),
+        "session_pct": 0,
+        "week_pct": 0,
+        "consecutive_parse_failures": 50,
+    }
+    _write_usage_state_direct(usage_state_path, prev)
+
+    monkeypatch.setattr(p, "_run_usage_probe", lambda: (_ for _ in ()).throw(ValueError("no parse")))
+
+    result = p.check_usage()
+    assert result["paused"] is True, "prolonged blindness should flip gate to paused (fail-closed)"
+
+
+def test_check_usage_stays_open_during_short_blind_window(monkeypatch, usage_state_path):
+    """A fresh blind window (within threshold) remains fail-open."""
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 0)   # always trigger stale path
+    monkeypatch.setattr(p, "USAGE_BLIND_PAUSE_AFTER_SECONDS", 3600)
+
+    recent = datetime.now(timezone.utc) - timedelta(seconds=60)
+    prev = {
+        "paused": False,
+        "gate_blind": True,
+        "blind_since": recent.isoformat(),
+        "measured_at": recent.isoformat(),
+        "checked_at": recent.isoformat(),
+        "session_pct": 0,
+        "week_pct": 0,
+        "consecutive_parse_failures": 5,
+    }
+    _write_usage_state_direct(usage_state_path, prev)
+
+    monkeypatch.setattr(p, "_run_usage_probe", lambda: (_ for _ in ()).throw(ValueError("no parse")))
+
+    result = p.check_usage()
+    assert result["paused"] is False, "short blind window should stay fail-open"
+
+
+# ---------- Usage gate: log throttling ----------
+
+def test_check_usage_blind_logs_only_on_transition_and_interval(monkeypatch, usage_state_path, capsys):
+    """Blind stderr line is emitted only on first blindness + every USAGE_BLIND_LOG_INTERVAL polls."""
+    monkeypatch.setattr(p, "USAGE_BLIND_LOG_INTERVAL", 10)
+    monkeypatch.setattr(p, "USAGE_BLIND_PAUSE_AFTER_SECONDS", 9999)
+    monkeypatch.setattr(p, "USAGE_STALE_AFTER_SECONDS", 0)  # trigger blind path
+
+    base_time = datetime.now(timezone.utc) - timedelta(seconds=100)
+    prev = {
+        "paused": False,
+        "gate_blind": False,
+        "measured_at": base_time.isoformat(),
+        "checked_at": base_time.isoformat(),
+        "session_pct": 0,
+        "week_pct": 0,
+        "consecutive_parse_failures": 0,
+    }
+    _write_usage_state_direct(usage_state_path, prev)
+
+    monkeypatch.setattr(p, "_run_usage_probe", lambda: (_ for _ in ()).throw(ValueError("no parse")))
+
+    # First call: first blind transition — should log.
+    p.check_usage()
+    out1 = capsys.readouterr().err
+    assert out1 != "", "first blind transition should log"
+
+    # Calls 2-9: not on the interval — should NOT log.
+    for _ in range(8):
+        p.check_usage()
+    out2 = capsys.readouterr().err
+    assert out2 == "", f"mid-interval blind polls should NOT log, got: {out2!r}"
+
+    # Call 10: interval boundary — should log again.
+    p.check_usage()
+    out3 = capsys.readouterr().err
+    assert out3 != "", "interval boundary should log"
+
+
+# ---------- Path-traversal validation ----------
+
+@pytest.mark.parametrize("bad_key", [
+    "../etc/passwd",
+    "../../secret",
+    "a/b",
+    "a\\b",
+    "\x00null",
+    "plan" + "/" + "story",
+])
+def test_validate_key_rejects_path_traversal(bad_key):
+    with pytest.raises(ValueError, match="invalid"):
+        p._validate_key(bad_key)
+
+
+@pytest.mark.parametrize("good_key", [
+    "my-plan",
+    "PIPE-123",
+    "story_abc",
+    "abc123",
+    "abc.def",
+    "a" * 200,
+])
+def test_validate_key_allows_safe_names(good_key):
+    p._validate_key(good_key)  # must not raise
+
+
+def test_dispatch_story_rejects_traversal_plan_name(plan_dir, monkeypatch):
+    with pytest.raises(ValueError, match="invalid"):
+        p.dispatch_story("../evil", "story-1")
+
+
+def test_dispatch_story_rejects_traversal_story_key(plan_dir, monkeypatch):
+    with pytest.raises(ValueError, match="invalid"):
+        p.dispatch_story("myplan", "../evil")
+
+
+def test_check_story_status_rejects_traversal(plan_dir):
+    with pytest.raises(ValueError, match="invalid"):
+        p.check_story_status("../evil", "s1")
+
+
+def test_interrupt_story_rejects_traversal(plan_dir):
+    with pytest.raises(ValueError, match="invalid"):
+        p.interrupt_story("../evil", "s1")
+
+
+def test_review_story_rejects_traversal(plan_dir):
+    with pytest.raises(ValueError, match="invalid"):
+        p.review_story("../evil", "s1")
+
+
+def test_mark_story_done_rejects_traversal(plan_dir):
+    with pytest.raises(ValueError, match="invalid"):
+        p.mark_story_done("../evil", "s1")
+
+
+# ---------- Helper used by the new tests above ----------
+
+def _write_usage_state_direct(path, state):
+    """Write state directly to the isolated usage path (bypasses monkeypatching of _atomic_write_json)."""
+    path.write_text(json.dumps(state))
+
+
 @pytest.mark.parametrize("prev_paused,session_pct,week_pct,expected", [
     (False, 50, 10, False),
     (False, 90, 10, True),

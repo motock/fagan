@@ -26,6 +26,8 @@
              unless PIPELINE_BACKEND_REVIEW/OVERLORD are also set to local). -->
         <key>PIPELINE_BACKEND_DISPATCH</key>
         <string>local</string>
+        <key>PIPELINE_LOCAL_MAX_STEPS</key>
+        <string>40</string>
         <key>PIPELINE_LOCAL_MODEL_DEFAULT</key>
         <string>devstral:24b</string>
     </dict>

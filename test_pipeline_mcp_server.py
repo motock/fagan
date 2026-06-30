@@ -3993,6 +3993,205 @@ def test_check_story_status_skips_test_run_for_interrupted_story(plan_dir):
     assert result == {"status": "interrupted", "pid": 999}
 
 
+# ---------- Step-cap exit routing (regression guard for PR #49) ----------
+#
+# When the headless agent hits its step cap it prints a terminal marker on
+# its last log line, exits with code 2, and has already WIP-committed. The
+# bug fixed by this block: check_story_status used to ignore the marker and
+# fall straight through to running the test suite against the WIP commit,
+# marking the story `tests_passed` and making the incomplete work merge-
+# eligible (which is how PR #49 / commit 90a3cf1 landed in master). These
+# tests pin the new routing: marker -> interrupted, no test run, journal
+# entry written so dispatch_story can resume.
+
+_STEP_CAP_MARKER_LOCAL = "[ended without done — step cap reached]"
+_STEP_CAP_MARKER_ORACLE = "[ended without oracle green — step cap reached]"
+
+
+def _make_fake_git_run(head_sha="deadbeef"):
+    """Return a subprocess.run stub that mimics _commit_wip's git usage:
+    `git add -A` (ok), `git reset -q -- agent.log` (ok), `git commit`
+    (ok, no-op), `git rev-parse HEAD` (returns head_sha)."""
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = f"{head_sha}\n" if cmd[:3] == ["git", "rev-parse", "HEAD"] else ""
+            stderr = ""
+        return Result()
+    return _fake_run
+
+
+def test_check_story_status_routes_step_cap_to_interrupted(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Regression guard for PR #49: when the agent's last log line is the
+    step-cap marker, the story must be marked interrupted (NOT tests_passed),
+    no test suite is run, and a journal entry is appended so a subsequent
+    dispatch_story call can resume."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "Working on it...\n"
+        "[step 12] bash: pytest -q\n"
+        f"{_STEP_CAP_MARKER_LOCAL}\n"
+    )
+    _write_manifest(plan_dir, "cap1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    # The test suite MUST NOT be invoked. detect_test_command is the gate
+    # in front of subprocess.run; if it gets called the routing is broken.
+    def _fail_detect(*a, **k):
+        raise AssertionError("detect_test_command must not run on a step-cap exit")
+    monkeypatch.setattr(p, "detect_test_command", _fail_detect)
+    # If anything reaches subprocess.run at all (it shouldn't, but defend
+    # the regression from both sides), fail loudly.
+    def _fail_run(*a, **k):
+        raise AssertionError("subprocess.run must not be invoked on a step-cap exit")
+    monkeypatch.setattr(p.subprocess, "run", _fail_run)
+
+    result = p.check_story_status("cap1", "S1")
+
+    assert result["status"] == "interrupted"
+    assert result["reason"] == "step_cap_reached"
+    manifest = _read_manifest(plan_dir, "cap1")
+    assert manifest["stories"]["S1"]["status"] == "interrupted"
+    # Journal entry must exist so the resume path has context.
+    journal = p._read_journal("cap1", "S1")
+    assert any(e.get("step") == "step_cap_reached" for e in journal), journal
+
+
+def test_check_story_status_routes_oracle_step_cap_to_interrupted(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """The oracle agent uses a different marker. It must be classified the
+    same way: interrupted, not tests_passed, no test run."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        f"{_STEP_CAP_MARKER_ORACLE}\n"
+    )
+    _write_manifest(plan_dir, "cap2", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on an oracle step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="cafe0000"))
+
+    result = p.check_story_status("cap2", "S1")
+
+    assert result["status"] == "interrupted"
+    assert result["reason"] == "step_cap_reached"
+    manifest = _read_manifest(plan_dir, "cap2")
+    assert manifest["stories"]["S1"]["status"] == "interrupted"
+    assert manifest["stories"]["S1"]["last_commit"] == "cafe0000"
+    journal = p._read_journal("cap2", "S1")
+    assert any(e.get("step") == "step_cap_reached" for e in journal), journal
+
+
+def test_check_story_status_normal_completion_still_routes_to_tests_passed(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Negative case: a normal agent run whose last log line is NOT the
+    step-cap marker must continue to route through the test suite and land
+    on tests_passed. This is the regression guard against over-broad marker
+    detection (substring-in-whole-file would have caught this case too, but
+    we want to be explicit)."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("Done.\nAll tests pass.\n")
+    _write_manifest(plan_dir, "normal1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class Result:
+        stdout = "all green"
+        returncode = 0
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    result = p.check_story_status("normal1", "S1")
+    assert result["status"] == "tests_passed"
+    manifest = _read_manifest(plan_dir, "normal1")
+    assert manifest["stories"]["S1"]["status"] == "tests_passed"
+
+
+def test_check_story_status_step_cap_clean_worktree_no_crash(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Boundary: marker present but the worktree is already clean (the
+    agent hit the cap right after its own WIP commit, so there's nothing
+    extra to checkpoint). The routing must still fire without crashing,
+    using HEAD as the checkpoint sha."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "some prior output\n"
+        f"{_STEP_CAP_MARKER_LOCAL}\n"
+    )
+    _write_manifest(plan_dir, "cap3", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="clean000"))
+
+    result = p.check_story_status("cap3", "S1")
+    assert result["status"] == "interrupted"
+    manifest = _read_manifest(plan_dir, "cap3")
+    assert manifest["stories"]["S1"]["status"] == "interrupted"
+    assert manifest["stories"]["S1"]["last_commit"] == "clean000"
+    journal = p._read_journal("cap3", "S1")
+    assert any(e.get("step") == "step_cap_reached" for e in journal), journal
+
+
+def test_check_story_status_ignores_old_marker_then_normal_done(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Boundary: on a resume the log is appended to, so a prior step-cap
+    marker from a previous tick may appear earlier in the file. The
+    classification must look ONLY at the last non-empty line, so the
+    later successful done marker wins and the story routes to tests_passed
+    like any other normal run."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        f"resume tick 1...\n{_STEP_CAP_MARKER_LOCAL}\n"
+        "resume tick 2...\nDone.\n"
+    )
+    _write_manifest(plan_dir, "resume1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class Result:
+        stdout = "ok"
+        returncode = 0
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    result = p.check_story_status("resume1", "S1")
+    # Old marker must not poison the routing — last line is "Done.", which
+    # is a normal completion.
+    assert result["status"] == "tests_passed"
+    manifest = _read_manifest(plan_dir, "resume1")
+    assert manifest["stories"]["S1"]["status"] == "tests_passed"
+
+
 class _FakeProc:
     def __init__(self, pid):
         self.pid = pid

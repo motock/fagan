@@ -4041,15 +4041,14 @@ def test_check_story_status_routes_step_cap_to_interrupted(
     })
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
     # The test suite MUST NOT be invoked. detect_test_command is the gate
-    # in front of subprocess.run; if it gets called the routing is broken.
+    # in front of subprocess.run for the test runner; if it gets called the
+    # routing is broken and we'd silently re-introduce PR #49.
     def _fail_detect(*a, **k):
         raise AssertionError("detect_test_command must not run on a step-cap exit")
     monkeypatch.setattr(p, "detect_test_command", _fail_detect)
-    # If anything reaches subprocess.run at all (it shouldn't, but defend
-    # the regression from both sides), fail loudly.
-    def _fail_run(*a, **k):
-        raise AssertionError("subprocess.run must not be invoked on a step-cap exit")
-    monkeypatch.setattr(p.subprocess, "run", _fail_run)
+    # _commit_wip WILL be called (mirror interrupt_story); stub git so the
+    # checkpoint path returns a clean sha without touching real git.
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
 
     result = p.check_story_status("cap1", "S1")
 

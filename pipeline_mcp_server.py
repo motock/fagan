@@ -115,6 +115,21 @@ DISPATCH_STARTUP_GRACE_SECONDS = int(
     os.environ.get("PIPELINE_DISPATCH_STARTUP_GRACE_SECONDS", "90")
 )
 
+# Terminal markers the headless agent prints on the LAST line of its
+# agent.log when it hits its step cap and exits with code 2. The agent
+# has already WIP-committed its in-progress work before printing these,
+# so the right thing for the orchestrator to do is mark the story
+# "interrupted" (dispatch-eligible, resumable from the existing worktree
+# and journal) — NOT run the test suite against the WIP commit and label
+# it tests_passed (which is merge-eligible and was how incomplete work
+# landed on master in PR #49 / commit 90a3cf1). Local-agent marker first,
+# oracle marker second; check_story_status matches the LAST non-empty line
+# of agent.log against this tuple.
+STEP_CAP_MARKERS = (
+    "[ended without done — step cap reached]",
+    "[ended without oracle green — step cap reached]",
+)
+
 # Layered local-first dispatch (PIPELINE_BACKEND_DISPATCH=auto):
 #   1. A-priori: stories with risk above PIPELINE_LOCAL_MAX_RISK (default "low")
 #      or a security persona go straight to Claude.
@@ -1071,6 +1086,28 @@ def _mark_plane_done(story_key: str, plan_name: str | None = None) -> None:
     _plane_set_state(story_key, "completed", plan_name)
 
 
+def _last_nonempty_line(path: Path) -> str:
+    """Return the last stripped-non-empty line of `path`, or "" if the file
+    has no non-empty lines (or doesn't exist — caller should check).
+
+    Used by check_story_status to classify the agent's terminal exit by the
+    tail of agent.log. We must NOT substring-match the whole file: a resumed
+    agent appends to the log, so an earlier step-cap marker from a prior
+    tick may still be present when the resumed run completes successfully.
+    Only the final terminal line classifies the current run.
+
+    Iterates line by line so we don't materialize a multi-MB log into memory
+    just to grab the last line; the file is read in binary mode and decoded
+    per-line so a partial trailing line (no newline) is still considered."""
+    last = ""
+    with open(path, "rb") as fh:
+        for raw in fh:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if line:
+                last = line
+    return last
+
+
 def _commit_wip(worktree: str, story_key: str, step: str) -> str:
     """Commit any uncommitted work in the worktree as a WIP checkpoint.
 
@@ -1483,6 +1520,35 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         story["status"] = "interrupted"
         manifest_path.write_text(json.dumps(manifest, indent=2))
         return {"status": "interrupted", "pid": pid}
+
+    # Step-cap exit routing (regression guard for PR #49 / commit 90a3cf1):
+    # when the headless agent hits its step cap it prints a terminal marker
+    # on the LAST line of agent.log, exits with code 2, and has already
+    # WIP-committed. Classifying the run by its tail line (NOT a substring
+    # search of the whole file — a resumed agent appends to agent.log, so an
+    # old marker from a prior tick may appear earlier) lets us short-circuit
+    # before the test suite runs. If we ran tests against the WIP commit and
+    # it passed, we'd land the story on `tests_passed`, which is merge-
+    # eligible — and that is exactly how incomplete step-capped work landed
+    # on master. `interrupted` is dispatch-eligible, so the next
+    # advance_pipeline tick resumes the agent in its existing worktree from
+    # its WIP commit, seeded by the journal entry we write below.
+    last_log_line = _last_nonempty_line(agent_log) if agent_log.exists() else ""
+    if last_log_line in STEP_CAP_MARKERS:
+        sha = _commit_wip(str(worktree), story_key, "step_cap_reached")
+        interrupted_at = datetime.now(timezone.utc).isoformat()
+        _append_journal(plan_name, story_key, {
+            "step": "step_cap_reached",
+            "summary": "Agent hit the step cap; checkpointed for resume.",
+            "next_hint": "",
+            "commit": sha,
+            "ts": interrupted_at,
+        })
+        story["status"] = "interrupted"
+        story["last_commit"] = sha
+        story["interrupted_at"] = interrupted_at
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 
     test_dir, test_cmd = detect_test_command(worktree)
     # Grade in a clean dev env, not the MCP server's operational one. The

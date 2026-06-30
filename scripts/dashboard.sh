@@ -21,8 +21,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYBIN="$ROOT/.venv/bin/python3"
-[ -x "$PYBIN" ] || PYBIN="$ROOT/.venv/bin/python"
+# Prefer the project venv (what scripts/install.sh creates); fall back to a
+# python on PATH so the script also works in CI runners and any env without
+# a local .venv (uvicorn still has to be importable by whichever python wins).
+if   [ -x "$ROOT/.venv/bin/python3" ]; then PYBIN="$ROOT/.venv/bin/python3"
+elif [ -x "$ROOT/.venv/bin/python"  ]; then PYBIN="$ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1;  then PYBIN=python3
+elif command -v python  >/dev/null 2>&1;  then PYBIN=python
+else PYBIN=""; fi
 PID_FILE="$ROOT/.dashboard.pid"
 LOG_FILE="$ROOT/dashboard.log"
 
@@ -79,8 +85,8 @@ cleanup_pid_file() {
 }
 
 ensure_python() {
-  if [ ! -x "$PYBIN" ]; then
-    echo "ERROR: $PYBIN not found. Run scripts/install.sh first." >&2
+  if [ -z "$PYBIN" ]; then
+    echo "ERROR: no python found (.venv/bin/python or python3 on PATH). Run scripts/install.sh first." >&2
     exit 1
   fi
 }

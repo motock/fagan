@@ -6,6 +6,9 @@ pipeline_mcp_server.py's own tests cover the orchestration call sites
 itself - which driver a role resolves to under which config, and what each
 driver actually does.
 """
+import plistlib
+from pathlib import Path
+
 import pytest
 
 import backend as b
@@ -428,6 +431,100 @@ def test_dispatch_uses_base_harness_when_no_acceptance(tmp_path, monkeypatch):
     assert captured["argv"][1].endswith("scripts/local_agent.py")
     assert "LOCAL_AGENT_ACCEPTANCE" not in captured["env"]
     assert "LOCAL_AGENT_MODE" not in captured["env"]
+
+
+# ---------- OllamaDriver.dispatch() step-cap plumbing (issue 7f1e9923) ----------
+#
+# Bug: OllamaDriver.__init__ read PIPELINE_LOCAL_MAX_STEPS once at singleton
+# construction, so the scheduler plist could set it forever and nothing would
+# change at the dispatch site — overnight launchd runs were stuck on the
+# __init__ default. Fix: dispatch() re-reads the env var on every call and
+# uses the live value as the override, falling back to __init__'s value only
+# when the env var is unset. These three tests pin that contract.
+
+def test_dispatch_rereads_pipeline_local_max_steps_on_each_call(
+    tmp_path, monkeypatch,
+):
+    """Positive: construct ONE OllamaDriver and call dispatch() twice with
+    different PIPELINE_LOCAL_MAX_STEPS values. The second call must reflect
+    the new env var — proves the value is read per-dispatch, not cached
+    at __init__."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_MAX_STEPS", raising=False)
+
+    captures = []
+    def fake_popen(argv, cwd, env, stdout, stderr):
+        captures.append({"env": dict(env)})
+        return _FakePopenResult(101 + len(captures))
+
+    monkeypatch.setattr(b.subprocess, "Popen", fake_popen)
+
+    driver = b.OllamaDriver()
+
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_STEPS", "12")
+    driver.dispatch(
+        "first run", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent1.log", append=False,
+    )
+
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_STEPS", "7")
+    driver.dispatch(
+        "second run", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent2.log", append=False,
+    )
+
+    assert len(captures) == 2
+    assert captures[0]["env"]["LOCAL_AGENT_MAX_STEPS"] == "12"
+    assert captures[1]["env"]["LOCAL_AGENT_MAX_STEPS"] == "7"
+
+
+def test_dispatch_falls_back_to_init_default_when_env_unset(tmp_path, monkeypatch):
+    """Negative/boundary: with PIPELINE_LOCAL_MAX_STEPS unset, the subprocess
+    sees LOCAL_AGENT_MAX_STEPS equal to the __init__ default (40) — proving
+    self.max_steps remains the fallback when the env var is absent."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_MAX_STEPS", raising=False)
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(202),
+    )
+
+    # Defaults: OllamaDriver reads PIPELINE_LOCAL_MAX_STEPS at __init__ — also
+    # unset, so it lands on 40, which is what we expect to see in the env.
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_MAX_STEPS"] == "40"
+
+
+def test_scheduler_plist_sets_pipeline_local_max_steps():
+    """Boundary guard against silent removal: parse the launchd plist with
+    plistlib and confirm PIPELINE_LOCAL_MAX_STEPS is present in
+    EnvironmentVariables. Without this, the plist could drop the var and
+    launchd would fall back to whatever OllamaDriver.__init__ cached — the
+    regression that motivated this fix."""
+    plist_path = (
+        Path(__file__).resolve().parent / "launchd"
+        / "com.claude.pipeline.advance-scheduler.plist"
+    )
+    with open(plist_path, "rb") as f:
+        plist = plistlib.load(f)
+    env_vars = plist.get("EnvironmentVariables", {})
+    assert "PIPELINE_LOCAL_MAX_STEPS" in env_vars, (
+        "scheduler plist must declare PIPELINE_LOCAL_MAX_STEPS so launchd "
+        "runs honor the knob (ollama driver re-reads it per dispatch)"
+    )
+    # Value must be a parseable positive int — we don't pin the exact number
+    # so ops can tune it, but we reject typos like "forty".
+    int(str(env_vars["PIPELINE_LOCAL_MAX_STEPS"]))
 
 
 # ---------- ClaudeCliDriver.dispatch() ----------

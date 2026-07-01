@@ -129,7 +129,13 @@ log as an audit record.
 - `check_story_status(plan_name, story_key)` — has the agent finished? If so,
   runs the detected test suite and sets `tests_passed`/`failed`. An
   `interrupted` story is reported as-is without running tests against its
-  incomplete tree.
+  incomplete tree. If the story carries an `acceptance` block and the detected
+  runner is pytest, the gate runs **only** the acceptance fixture file(s), not
+  the whole worktree suite — this prevents a correct implementation from being
+  blocked by the model's own wrong test assertions, but it also means the gate
+  no longer catches regressions elsewhere in the worktree; the reviewer's own
+  "run the test suite" instruction is the remaining backstop for those. Stories
+  without an `acceptance` block still run the full suite as before.
 
 ### Resumability (checkpoint / interrupt)
 - `checkpoint(plan_name, story_key, step, summary, next_hint="")` — commits
@@ -157,6 +163,11 @@ log as an audit record.
   agent's prompt so it reworks the right thing. This rework loop is bounded by
   `PIPELINE_REWORK_MAX_ATTEMPTS` — once the reviewer has rejected the story that
   many times it is **parked** for human review instead of looping forever.
+  If the reviewer backend itself returns an infrastructure rate-limit response
+  (not a genuine review), the story is left at `tests_passed` for the next
+  `advance_pipeline` tick to retry — this does **not** count against
+  `PIPELINE_REWORK_MAX_ATTEMPTS`, so a rate-limited backend can't silently park
+  a correct implementation.
 
 ### Usage gate
 - `check_usage()` — probes current subscription usage via a headless

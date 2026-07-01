@@ -1,0 +1,9 @@
+{
+  "name": "retry_backoff",
+  "summary": "Compute capped exponential backoff delays and retry decisions",
+  "impl_file": "backoff.py",
+  "persona": "software-engineer",
+  "model": "sonnet",
+  "risk": "low",
+  "agent_instructions": "Implement deterministic retry/backoff helpers in a NEW file backoff.py. NO randomness/jitter - the output must be fully deterministic.\n\nProvide exactly these two functions:\n\n  backoff_delays(base: float, factor: float, cap: float, attempts: int) -> list[float]\n    Returns the delay (seconds) to wait BEFORE each retry, for `attempts` retries.\n    Delay for retry i (0-indexed) is base * factor**i, clamped to a MAXIMUM of cap.\n    Example: base=1, factor=2, cap=10, attempts=6 -> [1, 2, 4, 8, 10, 10].\n    Validation (raise ValueError): base <= 0, factor < 1, cap < base, attempts < 0.\n    attempts == 0 returns [].\n\n  should_retry(status_code: int, attempt: int, max_attempts: int) -> bool\n    Returns True iff the request should be retried.\n    Retry ONLY when status_code is 429 or any 5xx (500-599) AND attempt < max_attempts.\n    attempt is 0-indexed (the attempt that just failed). Any 4xx other than 429, and all 2xx/3xx, are NOT retryable.\n    Validation (raise ValueError): max_attempts < 0, attempt < 0.\n\nFollow strict TDD: write pytest tests in test_backoff.py covering the clamp boundary, the validation errors, and the retryable/non-retryable status matrix FIRST, confirm they fail, then implement."
+}

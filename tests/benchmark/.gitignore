@@ -1,0 +1,9 @@
+# Generated benchmark workspaces, results, and scratch dirs.
+_runs/
+_matrixtest/
+_realtest/
+_dbg/
+_dbg_out.txt
+__pycache__/
+.ruff_cache/
+_realtest.out

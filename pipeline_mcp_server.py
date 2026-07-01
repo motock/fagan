@@ -575,8 +575,12 @@ def _run_reviewer(worktree: str, branch: str) -> str:
     model = _persona_default_model("code-reviewer") or DEFAULT_MODEL
     prompt = (
         f"Review the changes on branch {branch} in this worktree against our "
-        f"standards. Run the test suite. End with your VERDICT line; if you "
-        f"APPROVE, also include a PR title and body."
+        f"standards. Run the test suite. Specifically check: (1) any function "
+        f"taking a mutable argument (list, dict, set) does not mutate it in "
+        f"place unless that is the documented contract; (2) inputs are "
+        f"validated at system boundaries, including negative/out-of-range "
+        f"numeric arguments, not just the happy path. End with your VERDICT "
+        f"line; if you APPROVE, also include a PR title and body."
     )
     return backend.get_backend("review").complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
@@ -605,6 +609,50 @@ def _run_security_reviewer(worktree: str, branch: str) -> str:
 def _parse_verdict(text: str) -> str:
     m = re.search(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", text, re.IGNORECASE)
     return m.group(1).upper() if m else "UNKNOWN"
+
+
+# Anchors that identify an infrastructure rate-limit response, not a genuine
+# review. Checked only when _parse_verdict returns UNKNOWN (i.e. no VERDICT
+# line) so that a review discussing rate-limiting code is never misclassified.
+# Deliberately specific to the backend's own rate-limit banner phrasing —
+# generic terms like "429" or "resets" are excluded because a review of
+# rate-limiter code (e.g. this repo's own token_bucket benchmark task) can
+# legitimately contain them, which would misfire this check on a truncated
+# but otherwise genuine review.
+_RATE_LIMIT_PATTERNS = [
+    r"hit your session limit",
+    r"usage limit reached",
+    r"out_of_credits",
+    r"overageDisabledReason",
+]
+
+
+def _acceptance_rel_paths(story: dict[str, Any]) -> list[str]:
+    """Return the worktree-root-relative paths of a story's acceptance fixtures."""
+    return [entry["path"] for entry in (story.get("acceptance") or [])]
+
+
+def _is_pytest_cmd(cmd: list[str]) -> bool:
+    """True when `cmd` invokes pytest and can accept path arguments for scoping.
+
+    Matches both `["pytest", ...]` and `[python, "-m", "pytest", ...]` forms
+    produced by detect_test_command's venv-aware path (pipeline_mcp_server.py
+    lines 392-393). Other runners (cargo, npm, mvn, ...) return False.
+    """
+    if not cmd:
+        return False
+    last = cmd[-1]
+    return last == "pytest" or last.endswith("/pytest")
+
+
+def _is_rate_limited(text: str) -> bool:
+    """True when `text` looks like an infra rate-limit message, not a review.
+
+    Intentionally called only after _parse_verdict returns UNKNOWN, so a
+    reviewer discussing rate-limit handling in the diff (which ends with a real
+    VERDICT line) is never mistaken for a rate-limited call.
+    """
+    return any(re.search(pat, text, re.IGNORECASE) for pat in _RATE_LIMIT_PATTERNS)
 
 
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
@@ -1499,15 +1547,12 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # the oracle may already be in a committed WIP, and overwriting would
         # discard whatever test evolution happened mid-run.
         acceptance = story.get("acceptance") or []
-        acceptance_paths: list[str] = []
-        if acceptance:
-            for entry in acceptance:
-                rel_path = entry["path"]
-                target = worktree_path / rel_path
-                if not target.exists():
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(entry["source"])
-                acceptance_paths.append(rel_path)
+        acceptance_paths = _acceptance_rel_paths(story)
+        for entry in acceptance:
+            target = worktree_path / entry["path"]
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(entry["source"])
 
         dispatch_kwargs: dict[str, Any] = dict(
             prompt=spec["prompt"], system=spec["system"], model=spec["model"],
@@ -1634,6 +1679,24 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 
     test_dir, test_cmd = detect_test_command(worktree)
+
+    # FM-A: when the story carries an acceptance block, gate on only those
+    # oracle test files rather than the full worktree suite. The model's own
+    # tests can contain wrong assertions (the "graded on own buggy tests"
+    # failure mode); the harness-owned oracle is the authoritative bar.
+    # Scoping is only safe for pytest, which accepts path args; other runners
+    # fall back to the whole suite (documented limitation — all benchmark tasks
+    # and the pipeline's own test stories are pytest).
+    #
+    # Paths are materialized relative to the worktree root (dispatch_story),
+    # but test_dir can be a child subdirectory when the buildable project
+    # doesn't live at the worktree root (detect_test_command's fallback).
+    # Use absolute paths so the scoped run works regardless of test_dir.
+    acceptance = story.get("acceptance") or []
+    if acceptance and _is_pytest_cmd(test_cmd):
+        acceptance_paths = [str(worktree / p) for p in _acceptance_rel_paths(story)]
+        test_cmd = test_cmd + acceptance_paths
+
     # Grade in a clean dev env, not the MCP server's operational one. The
     # server carries PIPELINE_* (pause/resume thresholds, backend dispatch,
     # model defaults) so advance_pipeline/check_usage see the real config —
@@ -1997,6 +2060,17 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     worktree = story.get("worktree", "")
     reviewer_output = _run_reviewer(worktree, branch)
     verdict = _parse_verdict(reviewer_output)
+
+    # FM-B: a rate-limit response from the reviewer is an infrastructure event,
+    # not a genuine review cycle. Leave the story at tests_passed so the next
+    # advance_pipeline tick retries review once the backend recovers. Do NOT
+    # touch rework_attempts — burning the rework budget on rate-limits parks
+    # correct implementations silently.
+    if verdict == "UNKNOWN" and _is_rate_limited(reviewer_output):
+        _notify_user(plan_name, f"{story_key} review deferred: reviewer rate-limited; will retry next tick.")
+        _atomic_write_json(manifest_path, manifest)
+        return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
+
     story["review_verdict"] = verdict
 
     # High-risk stories require an additional security-engineer pass; both
@@ -2004,6 +2078,14 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     if verdict == "APPROVE" and story.get("risk") == "high":
         security_output = _run_security_reviewer(worktree, branch)
         security_verdict = _parse_verdict(security_output)
+
+        # FM-B: same rate-limit deferral for the security-reviewer pass.
+        if security_verdict == "UNKNOWN" and _is_rate_limited(security_output):
+            _notify_user(plan_name,
+                         f"{story_key} security review deferred: reviewer rate-limited; will retry next tick.")
+            _atomic_write_json(manifest_path, manifest)
+            return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
+
         story["security_review_verdict"] = security_verdict
         if security_verdict != "APPROVE":
             verdict = security_verdict

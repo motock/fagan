@@ -5356,3 +5356,254 @@ def test_dispatch_story_skips_oracle_write_when_resumed(
     p.dispatch_story("oracle_resume", "S1")
 
     assert (wt / "tests/test_x.py").read_text() == "# evolved by the agent\n"
+
+
+# ---------- FM-B: reviewer rate-limit must defer, not consume rework budget ----------
+
+_RATE_LIMIT_MSG = (
+    "You've hit your session limit · resets 8:20pm (America/Chicago)"
+)
+
+def test_is_rate_limited_detects_session_limit():
+    assert p._is_rate_limited(_RATE_LIMIT_MSG)
+
+
+def test_is_rate_limited_detects_out_of_credits():
+    assert p._is_rate_limited('{"overageDisabledReason":"out_of_credits"}')
+
+
+def test_is_rate_limited_detects_usage_limit_reached():
+    assert p._is_rate_limited("Usage limit reached. Your limit resets tomorrow.")
+
+
+def test_is_rate_limited_false_for_normal_review():
+    normal = (
+        "I reviewed the diff. The implementation looks correct.\n"
+        "VERDICT: APPROVE\n"
+        "PR title: Fix retry logic\n"
+    )
+    assert not p._is_rate_limited(normal)
+
+
+def test_is_rate_limited_false_for_review_mentioning_session_limit():
+    # A reviewer discussing rate-limit code must NOT be treated as rate-limited.
+    text = (
+        "The session limit check on line 42 should raise ValueError, not return None.\n"
+        "VERDICT: REQUEST_CHANGES"
+    )
+    assert not p._is_rate_limited(text)
+
+
+def test_review_story_rate_limited_leaves_status_tests_passed(plan_dir, agents_dir, monkeypatch):
+    # When the reviewer returns a rate-limit message, status must stay
+    # tests_passed so the next advance_pipeline tick retries review.
+    _write_manifest(plan_dir, "rl_defer", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+
+    def _boom(*a, **k):
+        raise AssertionError("PR must not be opened on rate-limit deferral")
+    monkeypatch.setattr(p, "_open_pr", _boom)
+
+    result = p.review_story("rl_defer", "S1")
+
+    assert result["status"] == "tests_passed"
+    assert result.get("deferred") == "rate_limited"
+    story = _read_manifest(plan_dir, "rl_defer")["stories"]["S1"]
+    assert story["status"] == "tests_passed"
+    assert "rework_attempts" not in story
+
+
+def test_review_story_rate_limited_does_not_increment_rework_attempts(plan_dir, agents_dir, monkeypatch):
+    # Even with prior rework cycles, a rate-limit hit must not count.
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "rl_noincr", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "rework_attempts": 2},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
+
+    p.review_story("rl_noincr", "S1")
+
+    story = _read_manifest(plan_dir, "rl_noincr")["stories"]["S1"]
+    assert story["rework_attempts"] == 2  # unchanged
+    assert story["status"] == "tests_passed"
+
+
+def test_review_story_rate_limited_notifies_user(plan_dir, agents_dir, monkeypatch):
+    _write_manifest(plan_dir, "rl_notify", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.review_story("rl_notify", "S1")
+
+    assert any("rate" in n.lower() or "deferred" in n.lower() for n in notes)
+
+
+def test_review_story_genuine_request_changes_still_increments_rework(plan_dir, agents_dir, monkeypatch):
+    # Regression: a real REQUEST_CHANGES must still count against the budget.
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "rl_regression", {
+        "S1": {"summary": "Add thing", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: "The error path is untested.\nVERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    p.review_story("rl_regression", "S1")
+
+    story = _read_manifest(plan_dir, "rl_regression")["stories"]["S1"]
+    assert story["rework_attempts"] == 1
+    assert story["status"] == "changes_requested"
+
+
+def test_review_story_high_risk_security_rate_limited_defers(plan_dir, agents_dir, monkeypatch):
+    # A rate-limit hit on the security reviewer must also defer, not block.
+    _write_manifest(plan_dir, "rl_sec", {
+        "S1": {"summary": "Auth change", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "high"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on security defer")))
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    result = p.review_story("rl_sec", "S1")
+
+    assert result["status"] == "tests_passed"
+    assert result.get("deferred") == "rate_limited"
+    story = _read_manifest(plan_dir, "rl_sec")["stories"]["S1"]
+    assert "rework_attempts" not in story
+
+
+# ---------- FM-A: acceptance oracle gates check_story_status when present ----------
+
+def _setup_oracle_story(plan_dir, plan_name, worktree, acceptance=None, extra=None):
+    """Write a manifest story with the given acceptance block and worktree."""
+    story = {
+        "summary": "Implement thing",
+        "status": "in_progress",
+        "pid": 4242,
+        "worktree": str(worktree),
+    }
+    if acceptance is not None:
+        story["acceptance"] = acceptance
+    if extra:
+        story.update(extra)
+    _write_manifest(plan_dir, plan_name, {"S1": story})
+
+
+def test_check_story_status_with_acceptance_runs_only_oracle_tests(plan_dir, monkeypatch):
+    # FM-A: when a story has an acceptance block, check_story_status must run
+    # only the oracle test files — not the model's self-written tests.
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("did work\n")
+
+    acceptance = [{"path": "tests/test_oracle.py", "source": "def test_ok(): pass"}]
+    _setup_oracle_story(plan_dir, "fm_a_oracle", worktree, acceptance=acceptance)
+
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(p, "_last_nonempty_line", lambda f: "")
+
+    captured_cmds = []
+
+    class _Pass:
+        returncode = 0
+        stdout = "1 passed"
+
+    def _fake_run(cmd, **kw):
+        captured_cmds.append(list(cmd))
+        return _Pass()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (str(worktree), ["pytest"]))
+
+    result = p.check_story_status("fm_a_oracle", "S1")
+
+    assert result["status"] == "tests_passed"
+    # The command actually run must include the oracle path, not be a bare suite run.
+    test_cmds = [c for c in captured_cmds if "pytest" in c[0] or "pytest" in (c[1] if len(c) > 1 else "")]
+    assert test_cmds, "pytest must have been called"
+    assert any("tests/test_oracle.py" in " ".join(cmd) for cmd in captured_cmds), (
+        "oracle path must appear in the pytest command when acceptance is set"
+    )
+
+
+def test_check_story_status_with_acceptance_fails_when_oracle_fails(plan_dir, monkeypatch):
+    # When the oracle tests fail, status must be `failed` even if the model's
+    # own tests would pass.
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("did work\n")
+
+    acceptance = [{"path": "tests/test_oracle.py", "source": "def test_spec(): assert False"}]
+    _setup_oracle_story(plan_dir, "fm_a_fail", worktree, acceptance=acceptance)
+
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(p, "_last_nonempty_line", lambda f: "")
+
+    class _Fail:
+        returncode = 1
+        stdout = "1 failed"
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: _Fail())
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (str(worktree), ["pytest"]))
+
+    result = p.check_story_status("fm_a_fail", "S1")
+    assert result["status"] == "failed"
+
+
+def test_check_story_status_without_acceptance_runs_whole_suite(plan_dir, monkeypatch):
+    # Regression: stories without an acceptance block must still run the full suite.
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("did work\n")
+    _setup_oracle_story(plan_dir, "fm_a_nosuite", worktree, acceptance=None)
+
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(p, "_last_nonempty_line", lambda f: "")
+
+    captured_cmds = []
+
+    class _Pass:
+        returncode = 0
+        stdout = "all passed"
+
+    def _fake_run(cmd, **kw):
+        captured_cmds.append(list(cmd))
+        return _Pass()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (str(worktree), ["pytest"]))
+
+    result = p.check_story_status("fm_a_nosuite", "S1")
+
+    assert result["status"] == "tests_passed"
+    test_cmds = [c for c in captured_cmds if "pytest" in c[0] or (len(c) > 1 and "pytest" in c[1])]
+    # Must not have scoped to any specific file (no path args beyond bare pytest).
+    assert any(c == ["pytest"] for c in test_cmds), (
+        "whole-suite run must be bare pytest when no acceptance block"
+    )

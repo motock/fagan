@@ -1,0 +1,9 @@
+{
+  "name": "lru_cache",
+  "summary": "Implement a fixed-capacity LRU cache",
+  "impl_file": "lru_cache.py",
+  "persona": "software-engineer",
+  "model": "sonnet",
+  "risk": "low",
+  "agent_instructions": "Implement a fixed-capacity Least-Recently-Used cache in a NEW file lru_cache.py.\n\nProvide a class LRUCache with exactly this interface:\n  - __init__(self, capacity)            # capacity is a positive int; raise ValueError if capacity < 1\n  - get(self, key) -> value | None      # returns the stored value, or None if absent; counts as a use\n  - put(self, key, value) -> None       # inserts/updates; counts as a use; evicts the LRU entry when over capacity\n  - size (read-only property) -> int    # current number of entries\n\nBehaviour requirements - ALL must hold:\n  1. Both get(hit) and put mark a key as most-recently-used.\n  2. When inserting a NEW key would exceed capacity, evict exactly the least-recently-used key first.\n  3. put on an EXISTING key updates its value and marks it most-recently-used; it does NOT grow size and does NOT evict.\n  4. get on a missing key returns None and does not change recency ordering.\n  5. A capacity of 1 works (every new key evicts the previous).\n  6. Storing a value of None is allowed and is distinguishable... not required; you may treat get-miss as None. Do not special-case None values.\n\nFollow strict TDD: write pytest tests in test_lru_cache.py covering eviction order, update-in-place, capacity bounds, and the ValueError FIRST, confirm they fail, then implement. Aim for O(1) get/put."
+}

@@ -1,0 +1,9 @@
+{
+  "name": "cron_field",
+  "summary": "Parse a single cron field into its matching integer set",
+  "impl_file": "cron_field.py",
+  "persona": "software-engineer",
+  "model": "sonnet",
+  "risk": "low",
+  "agent_instructions": "Implement a parser for a SINGLE cron field in a NEW file cron_field.py.\n\nProvide a function with exactly this signature:\n  match_field(field: str, lo: int, hi: int) -> set[int]\n\nIt expands one cron field over the inclusive range [lo, hi] and returns the set of matching integers. Supported syntax:\n  - '*'            -> every value in [lo, hi]\n  - a single int   -> {a}                       e.g. '5' -> {5}\n  - 'a-b'          -> every value in [a, b]      e.g. '1-3' -> {1,2,3}\n  - '*/s'          -> every s-th value from lo   e.g. lo=0,hi=10,'*/3' -> {0,3,6,9}\n  - 'a-b/s'        -> every s-th value from a..b  e.g. '1-9/3' -> {1,4,7}\n  - comma list     -> union of the above         e.g. '1,3,5-7' -> {1,3,5,6,7}\n\nValidation (raise ValueError on ALL of these):\n  1. A step <= 0 (e.g. '*/0', 'a-b/-1').\n  2. A value or range endpoint outside [lo, hi].\n  3. A reversed range where a > b (e.g. '5-1').\n  4. Malformed tokens (empty token from a stray comma, non-integer, more than one '/').\n  5. lo > hi passed by the caller.\n\nFollow strict TDD: write pytest tests in test_cron_field.py covering every syntax form AND every ValueError case FIRST, confirm they fail, then implement. Return a real set[int]."
+}

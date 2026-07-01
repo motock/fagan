@@ -1,0 +1,62 @@
+"""Model configurations for the pipeline benchmark matrix.
+
+Each entry maps a benchmark model name to the environment the cell runs under.
+The dispatch backend and concrete model are the only things that change between
+cells; everything else (autonomy, review backend, isolation) is fixed by the
+harness so cross-model rows are apples-to-apples.
+
+Local cells set PIPELINE_LOCAL_MODEL_DEFAULT and leave the per-tier overrides
+unset, so the story's "sonnet" tier falls through to this default (see
+backend._resolve_local_model). Cloud cells pin the dispatch backend to claude
+and let the story's tier ("sonnet") select the model.
+
+`endpoint`/`tag` for local models must match what `ollama list` actually serves
+on this host -- verify before a full matrix run.
+"""
+from __future__ import annotations
+
+import os
+
+# Local Ollama endpoint shared by all local cells.
+_OLLAMA = os.environ.get("BENCH_OLLAMA_ENDPOINT", "http://localhost:11434")
+
+# Shared local-agent knobs: bound each cell so a stuck model can't run forever.
+_LOCAL_AGENT_ENV = {
+    "LOCAL_AGENT_ENDPOINT": _OLLAMA,
+    "LOCAL_AGENT_NUM_CTX": "16384",
+    "LOCAL_AGENT_TIMEOUT": "900",
+    "LOCAL_AGENT_TEMPERATURE": "0.3",
+    "PIPELINE_LOCAL_MAX_STEPS": "40",
+}
+
+
+def _local(tag: str) -> dict:
+    return {
+        "mock": False,
+        "env": {
+            "PIPELINE_BACKEND_DISPATCH": "local",
+            "PIPELINE_LOCAL_MODEL_DEFAULT": tag,
+            **_LOCAL_AGENT_ENV,
+        },
+    }
+
+
+MODELS: dict[str, dict] = {
+    # --- local (Ollama) ---
+    "devstral": _local(os.environ.get("BENCH_DEVSTRAL_TAG", "devstral:24b")),
+    "minimax": _local(os.environ.get("BENCH_MINIMAX_TAG", "minimax-m3:cloud")),
+    # --- cloud (claude CLI) ---
+    "sonnet": {
+        "mock": False,
+        "env": {
+            "PIPELINE_BACKEND_DISPATCH": "claude",
+        },
+    },
+    # --- offline self-test of the harness plumbing (no model/network) ---
+    "mock": {
+        "mock": True,
+        "env": {
+            "PIPELINE_BACKEND_DISPATCH": "local",
+        },
+    },
+}

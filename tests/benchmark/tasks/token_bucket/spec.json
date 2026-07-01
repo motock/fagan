@@ -1,0 +1,9 @@
+{
+  "name": "token_bucket",
+  "summary": "Implement a token-bucket rate limiter",
+  "impl_file": "rate_limiter.py",
+  "persona": "software-engineer",
+  "model": "sonnet",
+  "risk": "low",
+  "agent_instructions": "Implement a token-bucket rate limiter in a NEW file rate_limiter.py.\n\nProvide a class TokenBucket with exactly this interface:\n  - __init__(self, capacity, refill_rate, now=0.0)\n  - allow(self, tokens=1.0, now=None) -> bool   # now = current time in seconds; if None, reuse the bucket's last-known time\n\nBehaviour requirements - ALL must hold:\n  1. The bucket starts FULL (capacity tokens).\n  2. Tokens refill continuously at refill_rate tokens/second based on the elapsed time since the last allow() call; the refilled level is CAPPED at capacity (never more).\n  3. allow(t, now): first refill up to `now`, then if at least t tokens are available, deduct t and return True; otherwise deduct NOTHING and return False.\n  4. Fractional tokens and fractional seconds must work.\n  5. Time only moves forward: if `now` is earlier than the last time, treat the elapsed time as 0 (no refill, no error).\n  6. allow(t) where t > capacity can never succeed.\n\nFollow strict TDD: write pytest tests in test_rate_limiter.py covering every one of these rules FIRST, confirm they fail, then implement until they pass. Cover negative and boundary cases (zero tokens, t > capacity, time going backwards, exact-capacity drain)."
+}

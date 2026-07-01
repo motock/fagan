@@ -71,12 +71,16 @@ _MOCK_IMPLS: dict[str, str] = {
     "token_bucket": '''
 class TokenBucket:
     def __init__(self, capacity, refill_rate, now=0.0):
+        if capacity <= 0 or refill_rate <= 0:
+            raise ValueError("capacity and refill_rate must be > 0")
         self.capacity = float(capacity)
         self.refill_rate = float(refill_rate)
         self.tokens = float(capacity)
         self.last = float(now)
 
     def allow(self, tokens=1.0, now=None):
+        if tokens < 0:
+            raise ValueError("tokens must be >= 0")
         if now is None:
             now = self.last
         elapsed = now - self.last

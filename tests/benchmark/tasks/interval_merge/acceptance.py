@@ -27,3 +27,10 @@ def test_empty():
 def test_invalid_interval_raises():
     with pytest.raises(ValueError):
         merge([(5, 1)])
+
+
+def test_does_not_mutate_input():
+    data = [(5, 6), (1, 3), (2, 4)]
+    snapshot = [tuple(iv) for iv in data]
+    merge(data)
+    assert data == snapshot, "merge() must not sort or modify the input list in place"

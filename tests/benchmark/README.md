@@ -84,7 +84,7 @@ Cells run **sequentially** by default — local models share one Ollama/GPU, so
 
 - `--trials N` — trials per cell; success is reported as a pass-rate, since LLM
   runs are non-deterministic (default 3).
-- `--timeout S` — per-cell wall-clock budget (default 1800s).
+- `--timeout S` — per-cell wall-clock budget (default 3600s).
 - `--tick S` — seconds between `advance_pipeline` ticks (default 10).
 - `BENCH_DEVSTRAL_TAG`, `BENCH_MINIMAX_TAG`, `BENCH_OLLAMA_ENDPOINT` — override
   local model tags/endpoint to match `ollama list`.
@@ -111,7 +111,11 @@ GitHub artifacts. Nothing here ever touches `~/.claude/plans` or
      `impl_file` module. Make it harder than the acceptance oracle (more edge and
      negative cases).
 2. Verify both suites agree on a correct reference implementation before
-   committing — a buggy oracle invalidates every run that uses it.
+   committing — a buggy oracle invalidates every run that uses it. Both suites
+   must cover, at minimum: a no-mutation test for any function taking a
+   mutable argument (list/dict/set), and a negative/boundary test for every
+   input the spec's `agent_instructions` declares as validated. A gap here lets
+   a subtly wrong implementation merge clean (see FM-G/FM-F in FINDINGS.md).
 3. For the offline `mock` self-test to cover the new task, add a correct
    reference implementation to `_MOCK_IMPLS` in `harness.py`.
 

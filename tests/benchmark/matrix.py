@@ -72,7 +72,7 @@ def main() -> int:
     ap.add_argument("--models", nargs="+", default=DEFAULT_MODELS)
     ap.add_argument("--trials", type=int, default=3)
     ap.add_argument("--workdir", default=str(BENCH / "_runs"))
-    ap.add_argument("--timeout", type=int, default=1800,
+    ap.add_argument("--timeout", type=int, default=3600,
                     help="per-cell wall-clock budget, seconds")
     ap.add_argument("--tick", type=float, default=10.0)
     ap.add_argument("--jobs", type=int, default=1,

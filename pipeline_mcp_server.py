@@ -565,11 +565,13 @@ def _parse_ruling(text: str) -> dict[str, Any]:
 
 
 # ---------- Review / PR helpers ----------
-def _run_reviewer(worktree: str, branch: str) -> str:
+def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -> str:
     """Run the code-reviewer persona over a branch and return its raw output.
 
     External boundary: delegates to the configured Backend. Tests mock this
-    function.
+    function. backend_name lets a caller override the env-resolved default
+    (e.g. review_story's rate-limit fallback routing to "local");
+    get_backend already treats name=None as "use the env-resolved default".
     """
     body = _persona_body("code-reviewer")
     model = _persona_default_model("code-reviewer") or DEFAULT_MODEL
@@ -582,7 +584,7 @@ def _run_reviewer(worktree: str, branch: str) -> str:
         f"numeric arguments, not just the happy path. End with your VERDICT "
         f"line; if you APPROVE, also include a PR title and body."
     )
-    return backend.get_backend("review").complete(
+    return backend.get_backend("review", name=backend_name).complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
     )
 
@@ -2067,11 +2069,23 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # touch rework_attempts — burning the rework budget on rate-limits parks
     # correct implementations silently.
     if verdict == "UNKNOWN" and _is_rate_limited(reviewer_output):
-        _notify_user(plan_name, f"{story_key} review deferred: reviewer rate-limited; will retry next tick.")
-        _atomic_write_json(manifest_path, manifest)
-        return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
+        story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
+        fallback_mode = os.environ.get("PIPELINE_REVIEW_FALLBACK", "off").strip().lower()
+        fallback_after = int(os.environ.get("PIPELINE_REVIEW_FALLBACK_AFTER", "3"))
+        if fallback_mode == "local" and story["review_deferred_count"] >= fallback_after:
+            _notify_user(plan_name, f"{story_key} review falling back to local backend "
+                                    f"after {story['review_deferred_count']} rate-limited attempts.")
+            reviewer_output = _run_reviewer(worktree, branch, backend_name="local")
+            verdict = _parse_verdict(reviewer_output)
+            # Fall through into the normal verdict-handling code below —
+            # this is a genuine review attempt now, not a deferral.
+        else:
+            _notify_user(plan_name, f"{story_key} review deferred: reviewer rate-limited; will retry next tick.")
+            _atomic_write_json(manifest_path, manifest)
+            return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
 
     story["review_verdict"] = verdict
+    story["review_deferred_count"] = 0
 
     # High-risk stories require an additional security-engineer pass; both
     # must APPROVE before the story proceeds to pr_open.

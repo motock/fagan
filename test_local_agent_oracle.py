@@ -52,6 +52,86 @@ def test_oracle_constants_present():
     assert lao.MUTATING_TOOLS == frozenset({"create_file", "str_replace"})
 
 
+def test_oracle_create_file_rejects_invalid_python_syntax_diff_artifact(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_create_file_rejects_invalid_python_syntax_diff_artifact
+    — this guard must be ported to the oracle harness too, or it silently
+    regresses for every acceptance-bearing story."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    bad_content = "+def foo():\n+    return 1\n"
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": bad_content})
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "invalid" in result.lower() and "syntax" in result.lower()
+    assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
+
+
+def test_oracle_create_file_rejects_invalid_python_syntax_dangling_triple_quote(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    bad_content = '"""unterminated docstring\ndef foo():\n    pass\n'
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": bad_content})
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "invalid" in result.lower() and "syntax" in result.lower()
+    assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
+
+
+def test_oracle_str_replace_rejects_edit_that_produces_invalid_python_syntax(tmp_path, monkeypatch):
+    """A rejected edit must not partially apply — the file's on-disk content
+    must be byte-for-byte unchanged from before the call."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = "def foo():\n    return 1\n"
+    (tmp_path / "mod.py").write_text(original)
+    result = lao.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "    return 1",
+        "new_str": "+    return 1",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "invalid" in result.lower() and "syntax" in result.lower()
+    assert (tmp_path / "mod.py").read_text() == original
+
+
+def test_oracle_create_file_accepts_valid_python_syntax(tmp_path, monkeypatch):
+    """Regression: valid Python content must still write exactly as before."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": "def foo():\n    return 1\n"})
+    assert result == "created mod.py"
+    assert (tmp_path / "mod.py").read_text() == "def foo():\n    return 1\n"
+
+
+def test_oracle_str_replace_accepts_edit_that_keeps_valid_python_syntax(tmp_path, monkeypatch):
+    """Regression: a valid edit must still apply exactly as before."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text("def foo():\n    return 1\n")
+    result = lao.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "return 1",
+        "new_str": "return 2",
+    })
+    assert result == "edited mod.py"
+    assert (tmp_path / "mod.py").read_text() == "def foo():\n    return 2\n"
+
+
+def test_oracle_create_file_syntax_check_only_applies_to_py_paths(tmp_path, monkeypatch):
+    """A non-.py path with content that looks like broken Python must not be
+    rejected — the ast.parse check is scoped to .py targets only."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    bad_python_looking_content = '"""unterminated\ndef foo(:\n    +return 1\n'
+    result = lao.run_tool("create_file", {"path": "README.md", "content": bad_python_looking_content})
+    assert result == "created README.md"
+    assert (tmp_path / "README.md").read_text() == bad_python_looking_content
+
+
+def test_oracle_create_file_empty_content_on_py_path_is_not_rejected(tmp_path, monkeypatch):
+    """An empty file is valid Python (ast.parse('') does not raise) — must
+    not be a false-positive rejection."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    result = lao.run_tool("create_file", {"path": "empty.py"})
+    assert result == "created empty.py"
+    assert (tmp_path / "empty.py").read_text() == ""
+
+
 class _FakeProc:
     def __init__(self):
         self.stdout = "ok"

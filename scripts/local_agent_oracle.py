@@ -34,6 +34,7 @@ Exit codes:
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -370,6 +371,26 @@ def is_oracle_path(path: str) -> bool:
                for p in ACCEPTANCE_PATHS)
 
 
+def _python_syntax_error(path_str: str, content: str) -> str | None:
+    """Return an ERROR string if `path_str` is a .py file and `content` is not
+    valid Python, else None. Defense-in-depth against malformed model output
+    (e.g. a stray unified-diff leading '+', or an unmatched triple-quote)
+    landing on disk — not an attempt to explain why a model emits it. Ported
+    verbatim from local_agent.py; keep both copies in sync."""
+    if not path_str.endswith(".py"):
+        return None
+    try:
+        ast.parse(content)
+    except SyntaxError as e:
+        return (
+            f"ERROR: content for {path_str} has invalid Python syntax: {e}. "
+            f"Check for stray formatting artifacts (e.g. a leading '+' from "
+            f"pasted diff/patch text, or an unmatched/duplicated triple-quote) "
+            f"and retry."
+        )
+    return None
+
+
 def run_tool(fn, args) -> str:
     if fn in ("create_file", "str_replace") and is_oracle_path(args.get("path", "")):
         return (f"ERROR: {args['path']} is the read-only acceptance suite and "
@@ -378,8 +399,12 @@ def run_tool(fn, args) -> str:
         path = CWD / args["path"]
         if path.exists() and path.read_text().strip():
             return f"ERROR: {args['path']} already exists and is non-empty. Use str_replace to edit it."
+        content = args.get("content", "")
+        err = _python_syntax_error(args["path"], content)
+        if err:
+            return err
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(args.get("content", ""))
+        path.write_text(content)
         return f"created {args['path']}"
     if fn == "str_replace":
         path = CWD / args["path"]
@@ -391,7 +416,11 @@ def run_tool(fn, args) -> str:
             return f"ERROR: old_str not found in {args['path']}."
         if n > 1:
             return f"ERROR: old_str occurs {n} times in {args['path']}; include more context to make it unique."
-        path.write_text(text.replace(args["old_str"], args["new_str"]))
+        new_text = text.replace(args["old_str"], args["new_str"])
+        err = _python_syntax_error(args["path"], new_text)
+        if err:
+            return err
+        path.write_text(new_text)
         return f"edited {args['path']}"
     if fn == "view_file":
         path = CWD / args["path"]

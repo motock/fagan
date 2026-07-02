@@ -204,6 +204,7 @@ def _stream_one_turn(payload):
     connect/read stall — chat() decides which of those are retryable.
     """
     content_parts: list[str] = []
+    thinking_parts: list[str] = []
     tool_calls = None
     role = "assistant"
     with httpx.stream(
@@ -224,6 +225,8 @@ def _stream_one_turn(payload):
                 role = msg["role"]
             if msg.get("content"):
                 content_parts.append(msg["content"])
+            if msg.get("thinking"):
+                thinking_parts.append(msg["thinking"])
             # Tool calls may land at the top level of a chunk or inside its
             # message; capture from either. (devstral emits tool calls as
             # text content, so tool_calls stays None and recover_tool_calls
@@ -233,7 +236,16 @@ def _stream_one_turn(payload):
                 tool_calls = tc
             if chunk.get("done"):
                 break
-    assembled = {"role": role, "content": "".join(content_parts)}
+    content = "".join(content_parts)
+    # Reasoning models (e.g. gpt-oss:20b) stream their chain-of-thought in a
+    # separate `thinking` field and may leave `content` entirely empty for a
+    # turn. Fall back to the assembled thinking text ONLY when there is no
+    # real content at all — never append it alongside genuine content, since
+    # that would leak raw reasoning traces into recover_tool_calls() parsing
+    # and downstream commit messages/logs.
+    if not content.strip() and thinking_parts:
+        content = "".join(thinking_parts)
+    assembled = {"role": role, "content": content}
     if tool_calls:
         assembled["tool_calls"] = tool_calls
     return assembled

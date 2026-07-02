@@ -49,6 +49,7 @@ MODELS: dict[str, dict] = {
     # --- local (Ollama) ---
     "devstral": _local(os.environ.get("BENCH_DEVSTRAL_TAG", "devstral:24b")),
     "minimax": _local(os.environ.get("BENCH_MINIMAX_TAG", "minimax-m3:cloud")),
+    "gptoss": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="1.0", num_ctx="32768"),
     # --- cloud (claude CLI) ---
     "sonnet": {
         "mock": False,

@@ -27,3 +27,11 @@ def test_local_without_overrides_falls_back_to_shared_defaults():
     result = _local("some:tag")
     assert result["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.3"
     assert result["env"]["LOCAL_AGENT_NUM_CTX"] == "16384"
+
+
+def test_gptoss_entry_uses_tuned_temperature_and_num_ctx():
+    env = MODELS["gptoss"]["env"]
+    assert env["LOCAL_AGENT_TEMPERATURE"] == "1.0"
+    assert env["LOCAL_AGENT_NUM_CTX"] == "32768"
+    assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] == "gpt-oss:20b"
+    assert env["PIPELINE_BACKEND_DISPATCH"] == "local"

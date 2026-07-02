@@ -5525,6 +5525,187 @@ def test_advance_pipeline_does_not_report_genuine_verdict_as_deferred(plan_dir, 
     assert "S1" not in result["review_deferred"]
 
 
+# ---------- Local-backend reviewer fallback after repeated rate-limit ----------
+
+def test_review_story_review_fallback_to_local_after_repeated_rate_limit(plan_dir, agents_dir, monkeypatch):
+    # PIPELINE_REVIEW_FALLBACK=local + PIPELINE_REVIEW_FALLBACK_AFTER=2: the
+    # 1st rate-limited call defers as usual; the 2nd rate-limited call crosses
+    # the threshold and retries inline with the local backend in the same
+    # review_story() invocation, resolving to a real verdict.
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK", "local")
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK_AFTER", "2")
+    _write_manifest(plan_dir, "fb_local", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    calls = []
+
+    def _stub(wt, br, backend_name=None):
+        calls.append(backend_name)
+        if len(calls) <= 2:
+            return _RATE_LIMIT_MSG
+        return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _stub)
+    monkeypatch.setattr(p, "_open_pr", lambda *a, **k: "https://example.com/pr/1")
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    result1 = p.review_story("fb_local", "S1")
+    assert result1.get("deferred") == "rate_limited"
+    assert result1["status"] == "tests_passed"
+
+    result2 = p.review_story("fb_local", "S1")
+    assert result2.get("deferred") is None
+    assert result2["status"] == "pr_open"
+    assert result2["verdict"] == "APPROVE"
+
+    assert calls == [None, None, "local"]
+    story = _read_manifest(plan_dir, "fb_local")["stories"]["S1"]
+    assert story["review_verdict"] == "APPROVE"
+    assert story["review_deferred_count"] == 0
+
+
+def test_review_story_fallback_disabled_by_default_keeps_deferring(plan_dir, agents_dir, monkeypatch):
+    # Negative/boundary test: with PIPELINE_REVIEW_FALLBACK unset (default
+    # "off"), FM-B's original behavior must be unchanged - every rate-limited
+    # call defers, no matter how many times it happens, and the reviewer is
+    # never invoked with the local backend override.
+    monkeypatch.delenv("PIPELINE_REVIEW_FALLBACK", raising=False)
+    _write_manifest(plan_dir, "fb_off", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    calls = []
+
+    def _stub(wt, br, backend_name=None):
+        calls.append(backend_name)
+        return _RATE_LIMIT_MSG
+
+    monkeypatch.setattr(p, "_run_reviewer", _stub)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    for _ in range(5):
+        result = p.review_story("fb_off", "S1")
+        assert result.get("deferred") == "rate_limited"
+        assert result["status"] == "tests_passed"
+
+    assert calls == [None, None, None, None, None]
+
+
+def test_review_story_review_fallback_off_setting_keeps_deferring(plan_dir, agents_dir, monkeypatch):
+    # Explicit PIPELINE_REVIEW_FALLBACK=off behaves identically to unset.
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK", "off")
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK_AFTER", "1")
+    _write_manifest(plan_dir, "fb_explicit_off", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, backend_name=None: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    result = p.review_story("fb_explicit_off", "S1")
+
+    assert result.get("deferred") == "rate_limited"
+    assert result["status"] == "tests_passed"
+
+
+def test_review_story_deferred_count_resets_on_genuine_verdict(plan_dir, agents_dir, monkeypatch):
+    # Fallback env NOT set: a genuine verdict following a rate-limit deferral
+    # must reset the persisted counter back to 0, proving it doesn't
+    # accumulate across unrelated recovery cycles.
+    monkeypatch.delenv("PIPELINE_REVIEW_FALLBACK", raising=False)
+    _write_manifest(plan_dir, "fb_reset", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    calls = []
+
+    def _stub(wt, br, backend_name=None):
+        calls.append(backend_name)
+        if len(calls) == 1:
+            return _RATE_LIMIT_MSG
+        return "The error path is untested.\nVERDICT: REQUEST_CHANGES"
+
+    monkeypatch.setattr(p, "_run_reviewer", _stub)
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    result1 = p.review_story("fb_reset", "S1")
+    assert result1.get("deferred") == "rate_limited"
+    story = _read_manifest(plan_dir, "fb_reset")["stories"]["S1"]
+    assert story["review_deferred_count"] == 1
+
+    result2 = p.review_story("fb_reset", "S1")
+    assert result2["verdict"] == "REQUEST_CHANGES"
+    story = _read_manifest(plan_dir, "fb_reset")["stories"]["S1"]
+    assert story["review_deferred_count"] == 0
+
+
+def test_review_story_review_fallback_after_one_triggers_on_first_deferral(plan_dir, agents_dir, monkeypatch):
+    # Boundary: PIPELINE_REVIEW_FALLBACK_AFTER=1 crosses the threshold on the
+    # very first rate-limited response (not the second), so a single
+    # review_story() call both defers once and immediately retries locally.
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK", "local")
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK_AFTER", "1")
+    _write_manifest(plan_dir, "fb_after_one", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    calls = []
+
+    def _stub(wt, br, backend_name=None):
+        calls.append(backend_name)
+        if backend_name == "local":
+            return "VERDICT: APPROVE"
+        return _RATE_LIMIT_MSG
+
+    monkeypatch.setattr(p, "_run_reviewer", _stub)
+    monkeypatch.setattr(p, "_open_pr", lambda *a, **k: "https://example.com/pr/1")
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    result = p.review_story("fb_after_one", "S1")
+
+    assert result.get("deferred") is None
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+    assert calls == [None, "local"]
+
+
+def test_review_story_high_risk_security_ignores_review_fallback(plan_dir, agents_dir, monkeypatch):
+    # The security-engineer pass must keep deferring on rate-limit regardless
+    # of PIPELINE_REVIEW_FALLBACK - security-engineer always runs on Claude
+    # per backend.py's _LOCAL_SKIP_PERSONAS design. _run_security_reviewer
+    # must never receive a backend_name override.
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK", "local")
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK_AFTER", "1")
+    _write_manifest(plan_dir, "fb_sec", {
+        "S1": {"summary": "Auth change", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "high"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, backend_name=None: "VERDICT: APPROVE")
+    sec_calls = []
+
+    def _sec_stub(wt, br):
+        sec_calls.append((wt, br))
+        return _RATE_LIMIT_MSG
+
+    monkeypatch.setattr(p, "_run_security_reviewer", _sec_stub)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on security defer")))
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    result = p.review_story("fb_sec", "S1")
+
+    assert result.get("deferred") == "rate_limited"
+    assert result["status"] == "tests_passed"
+    assert len(sec_calls) == 1
+    story = _read_manifest(plan_dir, "fb_sec")["stories"]["S1"]
+    assert "rework_attempts" not in story
+
+
 # ---------- FM-A: acceptance oracle gates check_story_status when present ----------
 
 def _setup_oracle_story(plan_dir, plan_name, worktree, acceptance=None, extra=None):

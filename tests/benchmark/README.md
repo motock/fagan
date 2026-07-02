@@ -52,9 +52,12 @@ tests/benchmark/
 | `sonnet`  | cloud (claude) | consumes Claude usage. |
 | `mock`    | offline        | writes a known-correct reference impl; for self-testing the harness only. |
 
-The **review gate always runs on the cloud Claude reviewer**
+By **default** the review gate runs on the cloud Claude reviewer
 (`PIPELINE_BACKEND_REVIEW=claude`), regardless of which model implemented — so
 even local-model cells consume a small amount of usage at the review step.
+Setting `PIPELINE_BACKEND_REVIEW` (e.g. to `local`) in the invoking shell
+before running `matrix.py`/`harness.py` overrides this for that run. Doing so
+trades review quality for avoiding Claude usage — see REVIEW-LOCAL-FALLBACK.
 
 ## Running
 

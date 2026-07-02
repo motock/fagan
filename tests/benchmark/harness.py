@@ -60,6 +60,13 @@ VENV_PY = PIPELINE_REPO / ".venv" / "bin" / "python"
 if str(PIPELINE_REPO) not in sys.path:
     sys.path.insert(0, str(PIPELINE_REPO))
 
+def _set_review_backend_env() -> None:
+    """Default the review gate to the cloud Claude reviewer, without
+    clobbering an explicit override from the invoking shell (e.g. `local`,
+    to trade review quality for zero Claude usage on a given run)."""
+    os.environ.setdefault("PIPELINE_BACKEND_REVIEW", "claude")
+
+
 # Terminal manifest statuses for a single story: the drive loop stops here.
 TERMINAL = {"done", "failed", "parked"}
 
@@ -392,7 +399,7 @@ def main() -> int:
     os.environ["PIPELINE_AUTONOMY"] = "full"
     os.environ["PIPELINE_RISK_THRESHOLD"] = "low"
     os.environ["PIPELINE_MAX_CONCURRENT_AGENTS"] = "1"
-    os.environ["PIPELINE_BACKEND_REVIEW"] = "claude"
+    _set_review_backend_env()
     # Make sure no stale per-tier local override hijacks the "sonnet" story tier.
     for k in ("PIPELINE_LOCAL_MODEL_SONNET", "PIPELINE_LOCAL_MODEL_OPUS",
               "PIPELINE_LOCAL_MODEL_HAIKU"):

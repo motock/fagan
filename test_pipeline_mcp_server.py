@@ -775,6 +775,37 @@ def test_review_story_parks_after_rework_budget_exhausted(plan_dir, agents_dir, 
     assert len(notes) == 1 and "S1" in notes[0]
 
 
+def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_dir, monkeypatch):
+    """A local reviewer's internal error (e.g. a malformed backend response
+    surfacing as a bare KeyError) must not crash review_story - it must
+    resolve to the same UNKNOWN-verdict 'changes_requested' path a genuinely
+    inconclusive review already takes (fail-safe), not be silently treated
+    as an APPROVE (fail-closed), and must notify the user for observability
+    without leaking raw exception text."""
+    _write_manifest(plan_dir, "rvcrash", {
+        "S1": {"summary": "Add thing", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+
+    def _boom(wt, br):
+        raise KeyError("message")
+
+    monkeypatch.setattr(p, "_run_reviewer", _boom)
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    result = p.review_story("rvcrash", "S1")
+
+    assert result["ok"] is True
+    assert result["verdict"] == "UNKNOWN"
+    assert result["status"] == "changes_requested"
+    story = _read_manifest(plan_dir, "rvcrash")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
+    assert len(notes) == 1
+    assert "KeyError" in notes[0]
+    assert "message" not in notes[0]
+
+
 def test_merge_pr_does_not_pass_delete_branch_to_gh(monkeypatch, tmp_path):
     calls = []
 

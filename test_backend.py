@@ -271,6 +271,66 @@ def test_complete_review_loop_does_not_salvage_inline_verdict_mention(tmp_path, 
     assert "VERDICT: APPROVE" not in out, "inline VERDICT mention must not salvage to APPROVE"
 
 
+def test_complete_review_loop_still_raises_runtime_error_on_http_error(tmp_path, monkeypatch):
+    """The existing httpx.HTTPError handling in the review loop must be
+    unchanged by broadening the catch to other exceptions - it must still
+    raise RuntimeError with the review-specific message."""
+    driver = b.OllamaDriver()
+
+    def _boom(messages, model, tools=None):
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(driver, "_chat", _boom)
+
+    with pytest.raises(RuntimeError, match="errored during review"):
+        driver.complete("review the branch", system="r", model="sonnet",
+                        allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+
+def test_complete_review_loop_survives_non_http_error_from_chat(tmp_path, monkeypatch):
+    """A non-HTTPError exception from _chat (e.g. a KeyError from a malformed
+    Ollama response) must not crash the caller - the review loop must fail
+    safe into the same 'no verdict' contract as exhausting the step cap
+    without a submit_review call, rather than propagating and taking down
+    the process."""
+    driver = b.OllamaDriver()
+    calls = {"n": 0}
+
+    def chat(messages, model, tools=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"tool_calls": [{"function": {"name": "bash",
+                                                  "arguments": {"command": "echo hi"}}}]}
+        raise KeyError("message")
+
+    monkeypatch.setattr(driver, "_chat", chat)
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" not in out
+    assert "VERDICT: REQUEST_CHANGES" not in out
+
+
+def test_complete_review_loop_survives_malformed_tool_call_shape(tmp_path, monkeypatch):
+    """A tool call missing the expected function/name keys (the model
+    emitting a malformed tool call) must not crash the loop with a bare
+    KeyError, and must not stop the review from converging on a later,
+    well-formed submit_review call."""
+    driver = b.OllamaDriver()
+    responses = [
+        {"tool_calls": [{"bogus": "shape"}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "ok"}}}]},
+    ]
+    monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" in out
+
+
 def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
     """Overlord-style complete() (allowed_tools='Read', no cwd) must NOT enter
     the tool loop — one plain completion, no tools offered."""

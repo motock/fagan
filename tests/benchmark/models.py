@@ -30,13 +30,17 @@ _LOCAL_AGENT_ENV = {
 }
 
 
-def _local(tag: str) -> dict:
+def _local(tag: str, *, temperature: str | None = None, num_ctx: str | None = None) -> dict:
+    env = {**_LOCAL_AGENT_ENV, "PIPELINE_LOCAL_MODEL_DEFAULT": tag}
+    if temperature is not None:
+        env["LOCAL_AGENT_TEMPERATURE"] = str(temperature)
+    if num_ctx is not None:
+        env["LOCAL_AGENT_NUM_CTX"] = str(num_ctx)
     return {
         "mock": False,
         "env": {
             "PIPELINE_BACKEND_DISPATCH": "local",
-            "PIPELINE_LOCAL_MODEL_DEFAULT": tag,
-            **_LOCAL_AGENT_ENV,
+            **env,
         },
     }
 

@@ -379,41 +379,54 @@ class OllamaDriver:
                     "'VERDICT: REQUEST_CHANGES' line)."})
                 final_nudged = True
             try:
-                m = self._chat(messages, resolved_model, tools=self._REVIEW_TOOLS)
-            except httpx.HTTPError as e:
-                raise RuntimeError(
-                    f"Local backend at {self.endpoint} (model={resolved_model}) "
-                    f"is unreachable or errored during review: {e}"
-                ) from e
-            messages.append(m)
-            if m.get("content"):
-                last_prose = m["content"]
-            tcs = (m.get("tool_calls") or _recover_tool_calls(m.get("content", ""))
-                   or _infer_review_tool_call(m.get("content", "")))
-            if not tcs:
-                if nudged:
-                    break  # still no tool after a nudge -> give up (-> salvage/park)
-                nudged = True
-                messages.append({"role": "user", "content":
-                    "Call a tool (bash/view_file to investigate, or submit_review to finish). Do not reply in prose."})
-                continue
-            nudged = False
-            for tc in tcs:
-                fn = tc["function"]["name"]
-                args = tc["function"]["arguments"]
-                if isinstance(args, str):
+                try:
+                    m = self._chat(messages, resolved_model, tools=self._REVIEW_TOOLS)
+                except httpx.HTTPError as e:
+                    raise RuntimeError(
+                        f"Local backend at {self.endpoint} (model={resolved_model}) "
+                        f"is unreachable or errored during review: {e}"
+                    ) from e
+                messages.append(m)
+                if m.get("content"):
+                    last_prose = m["content"]
+                tcs = (m.get("tool_calls") or _recover_tool_calls(m.get("content", ""))
+                       or _infer_review_tool_call(m.get("content", "")))
+                if not tcs:
+                    if nudged:
+                        break  # still no tool after a nudge -> give up (-> salvage/park)
+                    nudged = True
+                    messages.append({"role": "user", "content":
+                        "Call a tool (bash/view_file to investigate, or submit_review to finish). Do not reply in prose."})
+                    continue
+                nudged = False
+                for tc in tcs:
                     try:
-                        args = json.loads(args)
-                    except ValueError:
-                        args = {}
-                if fn == "submit_review":
-                    verdict = str(args.get("verdict", "")).upper()
-                    if verdict not in ("APPROVE", "REQUEST_CHANGES"):
-                        verdict = "REQUEST_CHANGES"  # malformed -> safe default
-                    body = args.get("pr_body") or args.get("summary", "")
-                    title = args.get("pr_title", "")
-                    return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
-                messages.append({"role": "tool", "content": _run_readonly_tool(fn, args, Path(cwd))})
+                        fn = tc["function"]["name"]
+                        args = tc["function"]["arguments"]
+                    except (KeyError, TypeError):
+                        continue  # malformed tool-call shape -> skip, keep reviewing
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except ValueError:
+                            args = {}
+                    if fn == "submit_review":
+                        verdict = str(args.get("verdict", "")).upper()
+                        if verdict not in ("APPROVE", "REQUEST_CHANGES"):
+                            verdict = "REQUEST_CHANGES"  # malformed -> safe default
+                        body = args.get("pr_body") or args.get("summary", "")
+                        title = args.get("pr_title", "")
+                        return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
+                    messages.append({"role": "tool", "content": _run_readonly_tool(fn, args, Path(cwd))})
+            except RuntimeError:
+                raise  # preserve the httpx.HTTPError -> RuntimeError contract above
+            except Exception:
+                # Any other failure this step (malformed response shape, a bad
+                # tool call, a read-only tool erroring) must not crash the
+                # caller. Fail safe into the same "no verdict" path a
+                # genuinely inconclusive review already takes below, rather
+                # than propagating and taking down the whole harness process.
+                break
         # No submit_review within the step cap. Salvage ONLY an explicit terminal
         # verdict line — the model's actual conclusion, written last. An inline
         # mention of "VERDICT: APPROVE" earlier in the prose (the model echoing

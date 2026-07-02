@@ -2,4 +2,4 @@
 -r requirements.txt
 -r requirements-dashboard.txt
 pytest>=9.1.1
-ruff>=0.15.19
+ruff>=0.15.20

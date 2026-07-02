@@ -2060,7 +2060,18 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
     branch = f"agent/{story_key.lower()}"
     worktree = story.get("worktree", "")
-    reviewer_output = _run_reviewer(worktree, branch)
+    try:
+        reviewer_output = _run_reviewer(worktree, branch)
+    except Exception as e:
+        # Defense in depth: a reviewer backend's own internal error (a bad
+        # tool-call shape, a malformed backend response, ...) must not crash
+        # the pipeline process. Fail safe into the same UNKNOWN-verdict path
+        # a genuinely inconclusive review already takes below - never treat
+        # this as an APPROVE (fail-closed). Log only the exception type, not
+        # its text, which could carry sensitive detail.
+        _notify_user(plan_name, f"{story_key} review failed with an unexpected "
+                                f"{type(e).__name__}; treating as inconclusive.")
+        reviewer_output = ""
     verdict = _parse_verdict(reviewer_output)
 
     # FM-B: a rate-limit response from the reviewer is an infrastructure event,

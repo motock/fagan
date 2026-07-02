@@ -2358,6 +2358,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
         "review_paused": not review_ok,
         "dispatched": [], "advanced": [], "merged": [],
         "parked": [], "failed": [], "interrupted": [], "notify": [],
+        "review_deferred": [],
     }
 
     # Scoped for the whole tick: dispatch_story resolves its own repo_root
@@ -2446,6 +2447,8 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 if story["status"] == "tests_passed":
                     rv = review_story(plan_name, key)
                     summary["advanced"].append({key: rv["status"]})
+                    if rv.get("deferred") == "rate_limited":
+                        summary["review_deferred"].append(key)
         else:
             _notify_user(plan_name, f"Review backend gated ({review_reason}): deferring review.")
             summary["notify"].append("review_paused")

@@ -5489,6 +5489,42 @@ def test_review_story_high_risk_security_rate_limited_defers(plan_dir, agents_di
     assert "rework_attempts" not in story
 
 
+def test_advance_pipeline_reports_review_deferred_on_rate_limit(plan_dir, agents_dir, monkeypatch):
+    # FM-H: advance_pipeline must surface which stories had review deferred by
+    # a reviewer rate-limit so the benchmark harness (or any caller ticking
+    # advance_pipeline in a wall-clock loop) can extend its deadline instead
+    # of burning budget while the reviewer is gated.
+    _write_manifest(plan_dir, "defer_visible", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on defer")))
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    result = p.advance_pipeline("defer_visible")
+
+    assert "S1" in result["review_deferred"]
+
+
+def test_advance_pipeline_does_not_report_genuine_verdict_as_deferred(plan_dir, agents_dir, monkeypatch):
+    # Negative case: a real REQUEST_CHANGES/APPROVE verdict is not a deferral
+    # and must not appear in review_deferred.
+    _write_manifest(plan_dir, "no_defer", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: "The error path is untested.\nVERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    result = p.advance_pipeline("no_defer")
+
+    assert result["review_deferred"] == []
+    assert "S1" not in result["review_deferred"]
+
+
 # ---------- FM-A: acceptance oracle gates check_story_status when present ----------
 
 def _setup_oracle_story(plan_dir, plan_name, worktree, acceptance=None, extra=None):

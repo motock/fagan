@@ -310,9 +310,18 @@ class MockBackend:
 
 
 def drive(p, plan_name: str, story_key: str, deadline: float,
-          tick_interval: float) -> list[dict]:
-    """Tick advance_pipeline until the story is terminal or the deadline passes."""
+          tick_interval: float, max_defer_extension: float = 14400.0) -> list[dict]:
+    """Tick advance_pipeline until the story is terminal or the deadline passes.
+
+    A reviewer rate-limit (FM-H) is an infra event, not real elapsed work: while
+    advance_pipeline reports the story as deferred on a given tick, the deadline
+    is pushed out by one more tick_interval so the wall-clock budget isn't spent
+    waiting out the reviewer's reset. Bounded by max_defer_extension so a
+    permanently rate-limited reviewer still times out the cell eventually
+    instead of hanging the benchmark forever.
+    """
     ticks: list[dict] = []
+    extension_used = 0.0
     while time.time() < deadline:
         summary = p.advance_pipeline(plan_name)
         manifest = json.loads(
@@ -323,6 +332,9 @@ def drive(p, plan_name: str, story_key: str, deadline: float,
                       "skipped": summary.get("skipped")})
         if status in TERMINAL:
             break
+        if story_key in summary.get("review_deferred", []) and extension_used < max_defer_extension:
+            deadline += tick_interval
+            extension_used += tick_interval
         time.sleep(tick_interval)
     return ticks
 
@@ -355,6 +367,9 @@ def main() -> int:
                     help="wall-clock budget for the cell, seconds")
     ap.add_argument("--tick", type=float, default=10.0,
                     help="seconds between advance_pipeline ticks")
+    ap.add_argument("--max-defer-extension", type=int, default=14400,
+                    help="max seconds the deadline may be extended for reviewer "
+                         "rate-limit deferrals (FM-H), seconds")
     args = ap.parse_args()
 
     from models import MODELS
@@ -413,7 +428,8 @@ def main() -> int:
 
     started = time.time()
     deadline = started + args.timeout
-    ticks = drive(p, plan_name, story_key, deadline, args.tick)
+    ticks = drive(p, plan_name, story_key, deadline, args.tick,
+                 max_defer_extension=args.max_defer_extension)
     elapsed = round(time.time() - started, 1)
 
     manifest = json.loads((paths["plans"] / f"{plan_name}.manifest.json").read_text())

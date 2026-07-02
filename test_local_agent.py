@@ -703,3 +703,90 @@ def test_stream_one_turn_assembles_streamed_chunks(monkeypatch):
     msg = la._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
     assert msg["role"] == "assistant"
     assert msg["content"] == "I'll create a file."
+
+
+# ---------- reasoning-model 'thinking' field (gpt-oss:20b onboarding) ----------
+# gpt-oss:20b streams its chain-of-thought in a separate `thinking` field on
+# each chunk, distinct from `content`. If a turn's `content` is empty on every
+# chunk (the model only "thought" and never emitted a final answer/tool call
+# as content), the assembled message would otherwise have empty content —
+# starving recover_tool_calls() of anything to parse. `thinking` must be used
+# ONLY as a content fallback for a turn with zero real content; it must never
+# be appended to genuine content (that would leak raw reasoning traces into
+# tool-call parsing, commit messages, and logs).
+
+def test_stream_one_turn_falls_back_to_thinking_when_content_entirely_empty(monkeypatch):
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "", "thinking": "Let me "}}),
+        json.dumps({"message": {"role": "assistant", "content": "", "thinking": "think about this."}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    msg = la._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert msg["content"] == "Let me think about this."
+
+
+def test_stream_one_turn_does_not_leak_thinking_into_real_content(monkeypatch):
+    """When content IS present anywhere in the turn, thinking fragments (even
+    ones interleaved on the same chunks) must never be appended to it."""
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "", "thinking": "pondering "}}),
+        json.dumps({"message": {"role": "assistant", "content": "Hello ", "thinking": "more thoughts "}}),
+        json.dumps({"message": {"role": "assistant", "content": "world.", "thinking": ""}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    msg = la._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert msg["content"] == "Hello world."
+
+
+def test_stream_one_turn_native_tool_call_with_thinking_and_empty_content(monkeypatch):
+    """Native tool_calls plus thinking-only turns (no real content) must still
+    capture tool_calls correctly, and the thinking-fallback must not interfere
+    with or duplicate the tool call."""
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "", "thinking": "figuring out the call "}}),
+        json.dumps({
+            "message": {
+                "role": "assistant", "content": "", "thinking": "now calling.",
+                "tool_calls": [{"function": {"name": "bash", "arguments": {"command": "ls"}}}],
+            },
+        }),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    msg = la._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert msg["tool_calls"] == [{"function": {"name": "bash", "arguments": {"command": "ls"}}}]
+    assert msg["content"] == "figuring out the call now calling."
+
+
+def test_stream_one_turn_no_thinking_key_is_noop(monkeypatch):
+    """Existing-behavior regression: a plain devstral-style stream (text-only
+    content, no `thinking` key at all in any chunk) must assemble identically
+    to today's behavior — the absence of `thinking` must be a no-op."""
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "I'll "}}),
+        json.dumps({"message": {"role": "assistant", "content": "create a file."}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    msg = la._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert msg["role"] == "assistant"
+    assert msg["content"] == "I'll create a file."
+    assert "tool_calls" not in msg

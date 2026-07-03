@@ -157,6 +157,19 @@ _LOCAL_SKIP_PERSONAS = {"security-engineer"}
 # for human review instead of redispatching again. Cleared on APPROVE.
 REWORK_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS", "3"))
 
+# Oracle-aware rework budget: a story carrying a non-empty `acceptance`
+# block already has an objective, pre-verified correctness signal (it only
+# reaches review after tests - including the oracle - pass), so a reviewer
+# that keeps finding beyond-oracle issues on 3 full cycles is mostly
+# spending time, not changing the outcome (2026-07-03 replication run: 5 of
+# 12 non-successes were ground-truth-correct code that still burned the
+# full budget before parking). A lower cap converges to the same "parked
+# for human review" endpoint faster. Falls back to REWORK_MAX_ATTEMPTS for
+# any story without a truthy `acceptance` list (ordinary TDD, where the
+# reviewer's judgment is the primary correctness signal and deserves the
+# full budget).
+REWORK_MAX_ATTEMPTS_ORACLE = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE", "1"))
+
 # Inconclusive-review budget. A non-rate-limited UNKNOWN verdict (a reviewer
 # response with no parseable VERDICT line, or the fail-safe path for a
 # reviewer backend's own internal error) is not evidence the story needs
@@ -589,6 +602,24 @@ def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -
     """
     body = _persona_body("code-reviewer")
     model = _persona_default_model("code-reviewer") or DEFAULT_MODEL
+    # Asymmetric review: software-engineer.md and code-reviewer.md both
+    # declare `model: sonnet`, so without an override dispatch and review
+    # resolve to the identical concrete local model - a model reviewing its
+    # own work with identical weights. When the review backend is actually
+    # local, an explicit PIPELINE_LOCAL_REVIEW_MODEL overrides the tier so
+    # review can run on a different (e.g. stronger) local model. Gated on
+    # backend == "local" so a bare Ollama tag never leaks into a cloud
+    # review as a bogus --model value. backend_name may already be the
+    # explicit "local" (review_story's FM-B rate-limit fallback); otherwise
+    # fall back to the env-resolved default, mirroring how get_backend
+    # itself treats name=None.
+    resolved_backend = (
+        backend_name or os.environ.get("PIPELINE_BACKEND_REVIEW", "claude")
+    ).strip().lower()
+    if resolved_backend == "local":
+        review_model_override = os.environ.get("PIPELINE_LOCAL_REVIEW_MODEL")
+        if review_model_override:
+            model = review_model_override
     prompt = (
         f"Review the changes on branch {branch} in this worktree against our "
         f"standards. Run the test suite. Specifically check: (1) any function "
@@ -1489,6 +1520,42 @@ def list_ready_stories(plan_name: str) -> list[dict]:
     return ready
 
 
+# Observability artifacts a dispatched/reviewed agent writes into its own
+# worktree (agent.log, review.log) but must NEVER be trackable by git. Mode
+# 17: review.log starts untracked (harmless), but a rework cycle's auto
+# WIP-commit (`git add -A`) tracks it if the story gets REQUEST_CHANGES;
+# the next review cycle's append then makes it a modified tracked file, and
+# the pre-merge rebase (Mode 9's gate) refuses on "unstaged changes" -
+# failing an already-APPROVED, ground-truth-correct story 3 retries running.
+# .git/info/exclude is shared across every worktree of a repo (verified:
+# `git rev-parse --git-path info/exclude` from inside a worktree resolves to
+# the MAIN repo's .git/info/exclude, not a per-worktree file), so writing it
+# once per repo, idempotently, covers every past and future worktree.
+_WORKTREE_LOG_EXCLUDES = ("agent.log", "review.log")
+
+
+def _exclude_worktree_logs_from_tracking(repo_root: Path) -> None:
+    """Best-effort: append _WORKTREE_LOG_EXCLUDES to repo_root/.git/info/exclude
+    if not already present. Never raises - this is a hygiene fix, not a
+    correctness requirement, and must not break dispatch if the repo's .git
+    layout is unexpected (e.g. a submodule, or repo_root not actually a git
+    repo yet in some caller)."""
+    try:
+        info_dir = repo_root / ".git" / "info"
+        info_dir.mkdir(parents=True, exist_ok=True)
+        exclude_path = info_dir / "exclude"
+        existing = exclude_path.read_text() if exclude_path.exists() else ""
+        missing = [name for name in _WORKTREE_LOG_EXCLUDES if name not in existing]
+        if missing:
+            with exclude_path.open("a") as f:
+                if existing and not existing.endswith("\n"):
+                    f.write("\n")
+                for name in missing:
+                    f.write(f"{name}\n")
+    except OSError:
+        pass
+
+
 @mcp.tool()
 def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
@@ -1541,6 +1608,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     ["git", "worktree", "add", "-b", branch, str(worktree_path)],
                     cwd=repo_root, check=True,
                 )
+                _exclude_worktree_logs_from_tracking(Path(repo_root))
 
         _plane_set_state(story_key, "started", plan_name)
 
@@ -2172,7 +2240,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         story["review_feedback"] = reviewer_output
         attempts = story.get("rework_attempts", 0) + 1
         story["rework_attempts"] = attempts
-        if attempts >= REWORK_MAX_ATTEMPTS:
+        rework_cap = (
+            REWORK_MAX_ATTEMPTS_ORACLE if story.get("acceptance") else REWORK_MAX_ATTEMPTS
+        )
+        if attempts >= rework_cap:
             story["status"] = "parked"
             story["parked_reason"] = f"rework budget exhausted after {attempts} review cycles"
             _notify_user(plan_name, f"{story_key} parked: reviewer still requesting changes "

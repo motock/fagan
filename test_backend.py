@@ -447,6 +447,108 @@ def test_complete_review_loop_findings_nudge_still_returns_verdict_near_step_cap
     assert "foo.py:10 off by one" in out
 
 
+# ---------- review.log transcript persistence (REVIEW-LOG) ----------
+def test_review_loop_writes_transcript_with_header_tool_and_verdict(tmp_path, monkeypatch):
+    """The review loop must persist a plain-text transcript to review.log in
+    the worktree cwd - a cycle header (timestamp + resolved model), each tool
+    call, and the terminal verdict - so an inconclusive review is debuggable
+    (dispatch's agent.log has no review counterpart today)."""
+    driver = b.OllamaDriver()
+    responses = [
+        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo ran-tests"}}}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+    ]
+    monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    log_path = tmp_path / "review.log"
+    assert log_path.exists()
+    content = log_path.read_text()
+    assert "review cycle" in content
+    assert "model=" in content
+    assert "bash" in content
+    assert "VERDICT: APPROVE" in content
+    assert "VERDICT: APPROVE" in out
+
+
+def test_review_loop_appends_across_multiple_review_cycles(tmp_path, monkeypatch):
+    """Multiple review cycles in the same worktree cwd (a rework loop) must
+    accumulate in one review.log, matching agent.log's append idiom - not
+    truncate the previous cycle's transcript."""
+    driver = b.OllamaDriver()
+
+    def make_responses():
+        return [
+            {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]},
+            {"tool_calls": [{"function": {"name": "submit_review",
+                                          "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+        ]
+
+    for _ in range(2):
+        responses = make_responses()
+        monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
+        driver.complete("review the branch", system="r", model="sonnet",
+                        allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    content = (tmp_path / "review.log").read_text()
+    assert content.count("review cycle") == 2
+
+
+def test_review_loop_survives_review_log_path_being_a_directory(tmp_path, monkeypatch):
+    """Logging must never break the review: if review.log cannot be written
+    (here, forced by pre-creating it as a directory so open() raises
+    IsADirectoryError, an OSError subclass), the loop must still return its
+    verdict and must not raise."""
+    (tmp_path / "review.log").mkdir()
+    driver = b.OllamaDriver()
+    responses = [
+        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+    ]
+    monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" in out
+
+
+def test_review_loop_truncates_tool_result_in_log_but_not_in_conversation(tmp_path, monkeypatch):
+    """Tool results must be truncated to ~2000 chars in review.log only - the
+    full text must still reach the model conversation unmodified."""
+    driver = b.OllamaDriver()
+    long_result = "X" * 3000
+    monkeypatch.setattr(b, "_run_readonly_tool", lambda fn, args, cwd: long_result)
+
+    seen_messages = []
+    responses = [
+        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+    ]
+
+    def chat(messages, model, tools=None):
+        seen_messages.append(list(messages))
+        return responses.pop(0)
+
+    monkeypatch.setattr(driver, "_chat", chat)
+
+    driver.complete("review the branch", system="r", model="sonnet",
+                    allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    tool_messages = [m["content"] for call in seen_messages for m in call
+                     if m.get("role") == "tool"]
+    assert long_result in tool_messages, "full tool result must reach the model conversation"
+
+    content = (tmp_path / "review.log").read_text()
+    assert long_result not in content, "full tool result must not appear unabridged in the log"
+    assert "X" * 2000 in content, "truncated tool result must still appear in the log"
+
+
 def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
     """Overlord-style complete() (allowed_tools='Read', no cwd) must NOT enter
     the tool loop — one plain completion, no tools offered."""

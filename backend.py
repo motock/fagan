@@ -8,6 +8,7 @@ the orchestrator never depends on which backend runs a given role.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -192,6 +193,21 @@ def _infer_review_tool_call(content: str | None) -> list | None:
     return None
 
 
+_REVIEW_LOG_TRUNCATE = 2000
+
+
+def _append_review_log(cwd: str, text: str) -> None:
+    """Best-effort transcript write for the review loop: the verdict is the
+    deliverable, the log is diagnostic only, so any OSError (unwritable
+    path, read-only tree, review.log pre-empted by a directory) must be
+    swallowed rather than breaking the review."""
+    try:
+        with open(Path(cwd) / "review.log", "a") as f:
+            f.write(text)
+    except OSError:
+        pass
+
+
 def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
     """Execute a review (read-only) tool: bash (run commands) or view_file."""
     if fn == "view_file":
@@ -359,6 +375,12 @@ class OllamaDriver:
         as dispatch, plus key-based tool inference, since the local model
         intermittently emits tool calls as text and drops the tool name."""
         resolved_model = _resolve_local_model(model)
+        _append_review_log(
+            cwd,
+            f"=== review cycle "
+            f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} "
+            f"model={resolved_model} ===\n",
+        )
         preamble = (
             "You are reviewing code in the current directory, READ-ONLY. First use "
             "the bash tool to run the test suite and inspect the changes (e.g. "
@@ -374,6 +396,7 @@ class OllamaDriver:
         final_nudged = False
         findings_nudged = False
         last_prose = ""
+        fallthrough_reason = "step cap exhausted"
         for i in range(self.review_max_steps):
             # The local model investigates thoroughly but rarely converges to
             # the submit_review terminator on its own. It will call it when
@@ -400,6 +423,7 @@ class OllamaDriver:
                 messages.append(m)
                 if m.get("content"):
                     last_prose = m["content"]
+                    _append_review_log(cwd, m["content"] + "\n")
                 tcs = (m.get("tool_calls") or _recover_tool_calls(m.get("content", ""))
                        or _infer_review_tool_call(m.get("content", "")))
                 if not tcs:
@@ -421,6 +445,9 @@ class OllamaDriver:
                             args = json.loads(args)
                         except ValueError:
                             args = {}
+                    _append_review_log(
+                        cwd, f"TOOL: {fn} {json.dumps(args, separators=(',', ':'), default=str)}\n"
+                    )
                     if fn == "submit_review":
                         verdict = str(args.get("verdict", "")).upper()
                         if verdict not in ("APPROVE", "REQUEST_CHANGES"):
@@ -442,8 +469,11 @@ class OllamaDriver:
                                 "states the specific problems - which file, "
                                 "what is wrong, and what must change."})
                             continue
+                        _append_review_log(cwd, f"VERDICT: {verdict}\n")
                         return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
-                    messages.append({"role": "tool", "content": _run_readonly_tool(fn, args, Path(cwd))})
+                    result = _run_readonly_tool(fn, args, Path(cwd))
+                    messages.append({"role": "tool", "content": result})
+                    _append_review_log(cwd, f"RESULT: {result[:_REVIEW_LOG_TRUNCATE]}\n")
             except RuntimeError:
                 raise  # preserve the httpx.HTTPError -> RuntimeError contract above
             except Exception:
@@ -452,6 +482,7 @@ class OllamaDriver:
                 # caller. Fail safe into the same "no verdict" path a
                 # genuinely inconclusive review already takes below, rather
                 # than propagating and taking down the whole harness process.
+                fallthrough_reason = "loop error"
                 break
         # No submit_review within the step cap. Salvage ONLY an explicit terminal
         # verdict line — the model's actual conclusion, written last. An inline
@@ -471,7 +502,9 @@ class OllamaDriver:
         lines = [ln.strip() for ln in last_prose.splitlines() if ln.strip()]
         if lines and re.search(r"^VERDICT:\s*(APPROVE|REQUEST_CHANGES)\s*$",
                                lines[-1], re.IGNORECASE):
+            _append_review_log(cwd, f"{lines[-1]}\n")
             return lines[-1]
+        _append_review_log(cwd, f"no verdict ({fallthrough_reason})\n")
         return ""
 
     # The local agent loop lives in a standalone script so it can run as a

@@ -927,6 +927,38 @@ def _escalate_to_claude(
     _atomic_write_json(manifest_path, manifest)
 
 
+def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name: str, reason: str) -> None:
+    """Under PIPELINE_BACKEND_DISPATCH=auto, when local review can't converge
+    (rework budget or inconclusive-review budget exhausted), give the story
+    to Claude instead of parking for a human - for both review and any
+    further rework, going forward.
+
+    Unlike _escalate_to_claude (the dispatch-failure path), this does NOT
+    wipe the worktree/branch: the existing code is very often already
+    correct (2026-07-03's benchmark validation showed most of these parks
+    hold ground-truth-correct implementations a local reviewer just
+    couldn't cleanly resolve), so Claude reviewing/reworking the SAME
+    worktree in place is cheaper and more likely to succeed than discarding
+    it and starting over. Sets story["backend"] = "claude" so a subsequent
+    redispatch (rework case) also runs on Claude - dispatch_story's own
+    priority order already honors story["backend"] first, so no dispatch
+    changes are needed. Resets the local rework/inconclusive counters as a
+    fresh budget for Claude; a second exhaustion after escalation (checked
+    by the caller via story.get("escalated")) is terminal - there is no
+    further fallback past Claude, so it must park rather than escalate
+    again or loop forever."""
+    story["backend"] = "claude"
+    story["escalated"] = True
+    story.pop("rework_attempts", None)
+    story.pop("review_inconclusive_count", None)
+    _notify_user(plan_name, f"{story_key} escalating to Claude ({reason}); "
+                            f"retrying the same worktree with a fresh budget.")
+
+
+def _auto_escalation_enabled() -> bool:
+    return os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower() == "auto"
+
+
 def _atomic_write_json(path: Path, obj: Any) -> None:
     """Write *obj* as JSON to *path* atomically via a same-directory temp file.
 
@@ -2148,7 +2180,15 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     branch = f"agent/{story_key.lower()}"
     worktree = story.get("worktree", "")
     try:
-        reviewer_output = _run_reviewer(worktree, branch)
+        # Once a story is escalated (see _escalate_review_to_claude below),
+        # every subsequent review must go to Claude regardless of the global
+        # PIPELINE_BACKEND_REVIEW setting - review backend is otherwise
+        # resolved purely from that env var with no per-story override, so
+        # this is the one seam that needs an explicit check.
+        reviewer_output = (
+            _run_reviewer(worktree, branch, backend_name="claude")
+            if story.get("escalated") else _run_reviewer(worktree, branch)
+        )
     except Exception as e:
         # Defense in depth: a reviewer backend's own internal error (a bad
         # tool-call shape, a malformed backend response, ...) must not crash
@@ -2212,12 +2252,20 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         inconclusive = story.get("review_inconclusive_count", 0) + 1
         story["review_inconclusive_count"] = inconclusive
         if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
-            story["status"] = "parked"
-            story["parked_reason"] = (
-                f"review inconclusive after {inconclusive} attempts - needs human review"
-            )
-            _notify_user(plan_name, f"{story_key} parked: review inconclusive after "
-                                    f"{inconclusive} attempts - needs human review.")
+            if _auto_escalation_enabled() and not story.get("escalated"):
+                _escalate_review_to_claude(
+                    story, story_key, plan_name,
+                    f"review inconclusive after {inconclusive} attempts",
+                )
+                # status stays at its pre-review value (e.g. tests_passed) -
+                # the next tick retries review, now resolved via Claude.
+            else:
+                story["status"] = "parked"
+                story["parked_reason"] = (
+                    f"review inconclusive after {inconclusive} attempts - needs human review"
+                )
+                _notify_user(plan_name, f"{story_key} parked: review inconclusive after "
+                                        f"{inconclusive} attempts - needs human review.")
         else:
             _notify_user(plan_name, f"{story_key} review inconclusive; will retry.")
         _atomic_write_json(manifest_path, manifest)
@@ -2244,10 +2292,19 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             REWORK_MAX_ATTEMPTS_ORACLE if story.get("acceptance") else REWORK_MAX_ATTEMPTS
         )
         if attempts >= rework_cap:
-            story["status"] = "parked"
-            story["parked_reason"] = f"rework budget exhausted after {attempts} review cycles"
-            _notify_user(plan_name, f"{story_key} parked: reviewer still requesting changes "
-                                    f"after {attempts} cycles - needs human review.")
+            if _auto_escalation_enabled() and not story.get("escalated"):
+                _escalate_review_to_claude(
+                    story, story_key, plan_name,
+                    f"rework budget exhausted after {attempts} review cycles",
+                )
+                # A redispatch will pick up the real review_feedback already
+                # set above, now on Claude (story["backend"] was just set).
+                story["status"] = "changes_requested"
+            else:
+                story["status"] = "parked"
+                story["parked_reason"] = f"rework budget exhausted after {attempts} review cycles"
+                _notify_user(plan_name, f"{story_key} parked: reviewer still requesting changes "
+                                        f"after {attempts} cycles - needs human review.")
         else:
             story["status"] = "changes_requested"
 

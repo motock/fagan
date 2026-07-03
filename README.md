@@ -519,11 +519,26 @@ enables a two-layer routing strategy:
    local worktree, resets the story, and re-dispatches it on Claude starting clean.
    A second failure on Claude is terminal (same behavior as today). The escalation
    flag (`story["escalated"]`) prevents infinite looping.
+3. **Review-side escalation (local review can't converge):** under `auto`, a
+   story that exhausts its rework budget (`PIPELINE_REWORK_MAX_ATTEMPTS[_ORACLE]`)
+   or its inconclusive-review budget (`PIPELINE_REVIEW_INCONCLUSIVE_MAX`) escalates
+   to Claude instead of parking for a human — `_escalate_review_to_claude` sets
+   `story["backend"] = "claude"` and `story["escalated"] = True` with a fresh
+   rework/inconclusive budget. Unlike (2), this does **not** wipe the worktree —
+   the existing code is very often already correct (a local reviewer that can't
+   converge doesn't mean the implementation is wrong), so Claude reviews/reworks
+   the *same* worktree in place. A second exhaustion after escalation is terminal
+   and parks for a human — there is no fallback past Claude.
 
 To activate, set `PIPELINE_BACKEND_DISPATCH=auto` in your env (e.g.
 `~/.claude.json` `mcpServers.pipeline.env`). Stories already carrying
 `story["backend"]` take that value over the router (used internally to lock an
-escalated story to Claude across ticks).
+escalated story to Claude across ticks). Note that (3) only escalates the
+*review/rework loop* — merge-gate exhaustion (`PIPELINE_MERGE_MAX_ATTEMPTS`, e.g.
+a rebase conflict) and the high-risk `park-and-ping` floor are **not** escalated by
+any of this: a merge conflict isn't a model-capability problem a stronger model
+fixes, and the high-risk human-review floor is a deliberate safety gate, not a
+capability gap — see Secure by Design.
 
 Setting any `PIPELINE_BACKEND_*` var to a name that isn't registered raises
 `NotImplementedError` naming the offending var.

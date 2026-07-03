@@ -6121,6 +6121,163 @@ def test_review_story_unknown_inconclusive_max_one_parks_on_first_attempt(plan_d
     assert story["review_inconclusive_count"] == 1
 
 
+# ---------- Escalate-to-Claude on rework/inconclusive exhaustion (auto mode) ----------
+#
+# Turning the review-side loop 100% autonomous means the two remaining
+# park-for-a-human paths (rework budget exhausted, review inconclusive
+# exhausted) need a fallback too - PIPELINE_BACKEND_DISPATCH=auto already
+# escalates a failed DISPATCH to Claude; these tests extend the same
+# philosophy to a local reviewer that can't converge. Unlike the dispatch
+# escalation, this does NOT wipe the worktree/branch - the existing code is
+# very often already correct (this session's benchmark runs showed most of
+# these parks hold ground-truth-correct implementations a local reviewer
+# just couldn't cleanly resolve), so Claude reviews/reworks the SAME
+# worktree in place rather than starting over.
+
+def test_review_story_rework_exhausted_escalates_to_claude_under_auto(
+    plan_dir, agents_dir, monkeypatch,
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "rvesc", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "local", "rework_attempts": 2},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: "still bad\nVERDICT: REQUEST_CHANGES")
+
+    result = p.review_story("rvesc", "S1")
+
+    story = _read_manifest(plan_dir, "rvesc")["stories"]["S1"]
+    assert story["status"] != "parked"
+    assert story["status"] == "changes_requested"
+    assert story["backend"] == "claude"
+    assert story["escalated"] is True
+    # Fresh budget for Claude - the local count must not carry over and
+    # silently exhaust immediately on the very next cycle.
+    assert "rework_attempts" not in story
+    assert result["status"] == "changes_requested"
+
+
+def test_review_story_rework_exhausted_parks_when_already_escalated(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Regression/terminal guard: a story already escalated (i.e. Claude
+    itself is now failing to satisfy review) must park for real - there is
+    no further fallback past Claude, so this must not loop forever."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "rvescdone", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "claude", "escalated": True, "rework_attempts": 2},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, backend_name=None: "still bad\nVERDICT: REQUEST_CHANGES")
+
+    result = p.review_story("rvescdone", "S1")
+
+    story = _read_manifest(plan_dir, "rvescdone")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert result["status"] == "parked"
+
+
+def test_review_story_rework_exhausted_parks_when_auto_disabled(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Regression guard: without PIPELINE_BACKEND_DISPATCH=auto, behavior is
+    unchanged from before this story - park for a human, no escalation."""
+    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "rvnoauto", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "local", "rework_attempts": 2},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: "still bad\nVERDICT: REQUEST_CHANGES")
+
+    result = p.review_story("rvnoauto", "S1")
+
+    story = _read_manifest(plan_dir, "rvnoauto")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert "escalated" not in story
+    assert result["status"] == "parked"
+
+
+def test_review_story_inconclusive_exhausted_escalates_to_claude_under_auto(
+    plan_dir, agents_dir, monkeypatch,
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p, "REVIEW_INCONCLUSIVE_MAX", 2)
+    _write_manifest(plan_dir, "unkesc", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "local", "review_inconclusive_count": 1},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+
+    result = p.review_story("unkesc", "S1")
+
+    story = _read_manifest(plan_dir, "unkesc")["stories"]["S1"]
+    assert story["status"] != "parked"
+    assert story["status"] == "tests_passed"
+    assert story["backend"] == "claude"
+    assert story["escalated"] is True
+    assert "review_inconclusive_count" not in story
+    assert result["status"] == "tests_passed"
+
+
+def test_review_story_inconclusive_exhausted_parks_when_already_escalated(
+    plan_dir, agents_dir, monkeypatch,
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p, "REVIEW_INCONCLUSIVE_MAX", 2)
+    _write_manifest(plan_dir, "unkescdone", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "claude", "escalated": True,
+               "review_inconclusive_count": 1},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, backend_name=None: "no verdict line here")
+
+    result = p.review_story("unkescdone", "S1")
+
+    story = _read_manifest(plan_dir, "unkescdone")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert result["status"] == "parked"
+
+
+def test_review_story_escalated_story_reviews_via_claude_backend(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Once escalated, EVERY subsequent review call for that story must go
+    to Claude regardless of the global PIPELINE_BACKEND_REVIEW setting -
+    review is normally resolved purely from the env var, with no per-story
+    override, so this is the one seam that must explicitly check
+    story['escalated'] and force backend_name='claude'."""
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "local")
+    _write_manifest(plan_dir, "escreview", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "claude", "escalated": True},
+    })
+    captured = {}
+
+    def _fake_reviewer(wt, br, backend_name=None):
+        captured["backend_name"] = backend_name
+        return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _fake_reviewer)
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("escreview", "S1")
+
+    assert captured["backend_name"] == "claude"
+
+
 # ---------- FM-A: acceptance oracle gates check_story_status when present ----------
 
 def _setup_oracle_story(plan_dir, plan_name, worktree, acceptance=None, extra=None):

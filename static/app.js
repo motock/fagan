@@ -294,6 +294,7 @@ window.state = {
   pollHandle: null,
   refreshIndicatorTimer: null,
   filters: defaultFilters(),
+  showArchived: false,
 };
 // Local alias keeps the rest of the file terse.
 const state = window.state;
@@ -336,6 +337,16 @@ async function fetchJson(url) {
   return res.json();
 }
 
+async function postJson(url) {
+  const res = await fetch(url, { method: "POST" });
+  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  return res.json();
+}
+
+// Plans come back from /api/plans already sorted newest-first by the
+// server (by manifest mtime) and, by default, with archived plans excluded
+// - state.showArchived controls whether refresh() asks for them too (see
+// the include_archived query param built there).
 function renderPlanList(plans) {
   const nav = document.getElementById("plan-list");
   nav.innerHTML = "";
@@ -356,16 +367,66 @@ function renderPlanList(plans) {
 
   for (const plan of plans) {
     const div = document.createElement("div");
-    div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "");
+    div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
+      + (plan.archived ? " plan-archived" : "");
     const total = plan.story_count || 0;
     const done = (plan.status_counts && plan.status_counts.done) || 0;
     div.innerHTML = `
-      <div class="plan-name">${escapeHtml(plan.name)}</div>
-      <div class="plan-meta">${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}</div>
+      <div class="plan-item-row">
+        <div class="plan-item-main">
+          <div class="plan-name">${escapeHtml(plan.name)}</div>
+          <div class="plan-meta">${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}</div>
+        </div>
+        <button type="button" class="plan-archive-btn" title="${plan.archived ? "Restore" : "Dismiss"}">
+          ${plan.archived ? "Restore" : "Dismiss"}
+        </button>
+      </div>
     `;
     div.addEventListener("click", () => selectPlan(plan.name));
+    div.querySelector(".plan-archive-btn").addEventListener("click", (event) => {
+      // Don't let the archive/restore click also select the plan.
+      event.stopPropagation();
+      togglePlanArchived(plan.name, plan.archived);
+    });
     nav.appendChild(div);
   }
+
+  // Built with direct DOM calls, not an innerHTML string: a bare
+  // <input type="checkbox"> has no closing tag, and this file's lightweight
+  // test-only DOM stubs parse innerHTML by matching open/close tag pairs -
+  // a self-closing input embedded in an innerHTML string would silently
+  // fail to parse into a real, listenable element under test.
+  const toggle = document.createElement("div");
+  toggle.className = "plan-list-footer";
+  const label = document.createElement("label");
+  label.className = "show-archived-toggle";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = state.showArchived;
+  checkbox.addEventListener("change", (event) => {
+    state.showArchived = event.target.checked;
+    refresh();
+  });
+  label.appendChild(checkbox);
+  const labelText = document.createElement("span");
+  labelText.textContent = "Show dismissed plans";
+  label.appendChild(labelText);
+  toggle.appendChild(label);
+  nav.appendChild(toggle);
+}
+
+// Archive/unarchive is fire-and-forget from the UI's perspective: on
+// success, refresh() re-fetches /api/plans so the sidebar reflects the new
+// archived set (and re-sorts/re-filters) rather than us hand-patching the
+// DOM in place. A failed request leaves the list as-is; the user can retry.
+async function togglePlanArchived(planName, currentlyArchived) {
+  const action = currentlyArchived ? "unarchive" : "archive";
+  try {
+    await postJson(`/api/plans/${encodeURIComponent(planName)}/${action}`);
+  } catch {
+    return;
+  }
+  await refresh();
 }
 
 function riskRank(story) {
@@ -1286,7 +1347,8 @@ async function refresh() {
     /* usage state unavailable; leave the banner as-is */
   }
 
-  const { plans } = await fetchJson("/api/plans");
+  const plansUrl = state.showArchived ? "/api/plans?include_archived=true" : "/api/plans";
+  const { plans } = await fetchJson(plansUrl);
   state.lastPlans = { plans };
   renderPlanList(plans);
 

@@ -2,8 +2,12 @@
 
 A small FastAPI app, separate from pipeline_mcp_server.py (the MCP server
 the orchestrator drives). It only reads the plan/manifest/notification/
-decision files PLAN_DIR already holds - it never dispatches, advances, or
-mutates anything, so it carries none of the pipeline's risk surface.
+decision files PLAN_DIR already holds - it never touches those files, so
+it carries none of the pipeline's risk surface. The one exception is a
+small dashboard-owned UI-preference file (.dashboard_ui_state.json, see
+_read_archived_plans/_write_archived_plans below) tracking which plans the
+user has archived/dismissed from the sidebar - this is purely a view
+preference, never read by pipeline_mcp_server.py or any orchestration path.
 
 Run with:  uvicorn dashboard:app --reload
 """
@@ -48,6 +52,42 @@ def _journal_path(plan_name: str, story_key: str) -> Path:
     keeps the two sides from drifting silently to a 404 in the UI.
     """
     return PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+
+
+def _dashboard_ui_state_path() -> Path:
+    return PLAN_DIR / ".dashboard_ui_state.json"
+
+
+def _read_archived_plans() -> set[str]:
+    """Which plan names the user has archived/dismissed from the sidebar.
+
+    Fails open (treats a missing or corrupt state file as "nothing
+    archived") rather than 500ing the plan list over a non-critical
+    preference file - the same tolerance _parse_iso already applies to
+    malformed timestamps elsewhere in this module."""
+    path = _dashboard_ui_state_path()
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text())
+        return set(data.get("archived", []))
+    except (json.JSONDecodeError, OSError, AttributeError):
+        return set()
+
+
+def _write_archived_plans(archived: set[str]) -> None:
+    """Atomically persist the archived-plan set via a same-directory temp
+    file + os.replace, so a crash or concurrent read never observes a
+    partial write (same pattern pipeline_mcp_server._atomic_write_json
+    uses for manifest.json)."""
+    path = _dashboard_ui_state_path()
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps({"archived": sorted(archived)}, indent=2))
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _list_plan_names() -> list[str]:
@@ -236,14 +276,25 @@ def _read_story_log(
     return {"available": True, "lines": tail}
 
 
-def _plan_summary(plan_name: str, manifest: dict[str, Any]) -> dict[str, Any]:
+def _plan_summary(
+    plan_name: str, manifest: dict[str, Any], archived_plans: set[str] | None = None,
+) -> dict[str, Any]:
     stories = manifest.get("stories", {})
+    try:
+        updated_at = _manifest_path(plan_name).stat().st_mtime
+    except OSError:
+        # Manifest existed a moment ago (caller just read it) but vanished
+        # under a race with a concurrent write - sort it last rather than
+        # 500ing the whole list over one plan's timestamp.
+        updated_at = 0.0
     return {
         "name": plan_name,
         "paused": bool(manifest.get("paused", False)),
         "story_count": len(stories),
         "status_counts": _status_counts(stories),
         "aggregate": _aggregate_stories(stories),
+        "updated_at": updated_at,
+        "archived": plan_name in (archived_plans or set()),
     }
 
 
@@ -500,14 +551,46 @@ def usage() -> dict[str, Any]:
 
 
 @app.get("/api/plans")
-def list_plans() -> dict[str, Any]:
+def list_plans(include_archived: bool = False) -> dict[str, Any]:
+    archived_plans = _read_archived_plans()
     plans = []
     for name in _list_plan_names():
         manifest = _read_manifest(name)
         if manifest is None:
             continue
-        plans.append(_plan_summary(name, manifest))
+        if not include_archived and name in archived_plans:
+            continue
+        plans.append(_plan_summary(name, manifest, archived_plans))
+    # Newest-first: most-recently-touched plan surfaces at the top of the
+    # sidebar regardless of name, so active work is never buried below
+    # long-finished plans just because they alphabetize earlier.
+    plans.sort(key=lambda p: p["updated_at"], reverse=True)
     return {"plans": plans}
+
+
+@app.post("/api/plans/{plan_name}/archive")
+def archive_plan(plan_name: str) -> dict[str, Any]:
+    """Dismiss a plan from the default sidebar view. This only touches the
+    dashboard's own UI-preference file - the plan's manifest.json (and
+    everything the live pipeline reads/writes) is untouched, so this is
+    reversible and carries no orchestration risk."""
+    if plan_name not in _list_plan_names():
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    archived = _read_archived_plans()
+    archived.add(plan_name)
+    _write_archived_plans(archived)
+    return {"name": plan_name, "archived": True}
+
+
+@app.post("/api/plans/{plan_name}/unarchive")
+def unarchive_plan(plan_name: str) -> dict[str, Any]:
+    """Restore a previously-archived plan to the default sidebar view."""
+    if plan_name not in _list_plan_names():
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    archived = _read_archived_plans()
+    archived.discard(plan_name)
+    _write_archived_plans(archived)
+    return {"name": plan_name, "archived": False}
 
 
 @app.get("/api/plans/{plan_name}")

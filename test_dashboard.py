@@ -78,6 +78,105 @@ def test_get_plan_404_when_no_manifest(client, plan_dir):
     assert res.status_code == 404
 
 
+def test_list_plans_sorted_newest_first(client, plan_dir):
+    """The left-nav plan list orders by most-recently-updated first, not
+    alphabetically - so a plan touched moments ago always surfaces above
+    one untouched for days, regardless of name."""
+    import os
+    import time
+
+    _write_manifest(plan_dir, "aaa-oldest", {"S1": {"summary": "x", "status": "todo"}})
+    os.utime(plan_dir / "aaa-oldest.manifest.json", (time.time() - 200, time.time() - 200))
+    _write_manifest(plan_dir, "zzz-newest", {"S1": {"summary": "x", "status": "todo"}})
+    os.utime(plan_dir / "zzz-newest.manifest.json", (time.time() - 10, time.time() - 10))
+    _write_manifest(plan_dir, "mmm-middle", {"S1": {"summary": "x", "status": "todo"}})
+    os.utime(plan_dir / "mmm-middle.manifest.json", (time.time() - 100, time.time() - 100))
+
+    res = client.get("/api/plans")
+    names = [p["name"] for p in res.json()["plans"]]
+    assert names == ["zzz-newest", "mmm-middle", "aaa-oldest"]
+
+
+def test_list_plans_excludes_archived_by_default(client, plan_dir):
+    _write_manifest(plan_dir, "keep", {"S1": {"summary": "x", "status": "todo"}})
+    _write_manifest(plan_dir, "dismiss-me", {"S1": {"summary": "x", "status": "todo"}})
+
+    archive_res = client.post("/api/plans/dismiss-me/archive")
+    assert archive_res.status_code == 200
+    assert archive_res.json()["archived"] is True
+
+    res = client.get("/api/plans")
+    names = [p["name"] for p in res.json()["plans"]]
+    assert names == ["keep"]
+
+
+def test_list_plans_includes_archived_when_requested(client, plan_dir):
+    _write_manifest(plan_dir, "keep", {"S1": {"summary": "x", "status": "todo"}})
+    _write_manifest(plan_dir, "dismiss-me", {"S1": {"summary": "x", "status": "todo"}})
+    client.post("/api/plans/dismiss-me/archive")
+
+    res = client.get("/api/plans?include_archived=true")
+    plans = {p["name"]: p["archived"] for p in res.json()["plans"]}
+    assert plans == {"keep": False, "dismiss-me": True}
+
+
+def test_archive_plan_404_for_unknown_plan(client, plan_dir):
+    res = client.post("/api/plans/does-not-exist/archive")
+    assert res.status_code == 404
+
+
+def test_unarchive_plan_404_for_unknown_plan(client, plan_dir):
+    res = client.post("/api/plans/does-not-exist/unarchive")
+    assert res.status_code == 404
+
+
+def test_unarchive_plan_restores_default_visibility(client, plan_dir):
+    _write_manifest(plan_dir, "back-again", {"S1": {"summary": "x", "status": "todo"}})
+    client.post("/api/plans/back-again/archive")
+    assert [p["name"] for p in client.get("/api/plans").json()["plans"]] == []
+
+    unarchive_res = client.post("/api/plans/back-again/unarchive")
+    assert unarchive_res.status_code == 200
+    assert unarchive_res.json()["archived"] is False
+
+    assert [p["name"] for p in client.get("/api/plans").json()["plans"]] == ["back-again"]
+
+
+def test_archive_state_persists_across_separate_requests(client, plan_dir):
+    """The archived set is read from disk on every request, not cached in
+    memory, so it survives a dashboard process restart (a fresh TestClient
+    call sequence exercises the same code path a restart would)."""
+    _write_manifest(plan_dir, "persist-me", {"S1": {"summary": "x", "status": "todo"}})
+    client.post("/api/plans/persist-me/archive")
+
+    state_file = plan_dir / ".dashboard_ui_state.json"
+    assert state_file.exists()
+    assert "persist-me" in json.loads(state_file.read_text())["archived"]
+
+    # A brand-new client against the same plan_dir sees the same state.
+    fresh_client = TestClient(d.app)
+    names = [p["name"] for p in fresh_client.get("/api/plans").json()["plans"]]
+    assert names == []
+
+
+def test_archive_state_file_missing_defaults_to_no_archived_plans(client, plan_dir):
+    _write_manifest(plan_dir, "solo", {"S1": {"summary": "x", "status": "todo"}})
+    assert not (plan_dir / ".dashboard_ui_state.json").exists()
+    res = client.get("/api/plans")
+    assert [p["name"] for p in res.json()["plans"]] == ["solo"]
+
+
+def test_archive_state_file_corrupt_fails_open_to_no_archived_plans(client, plan_dir):
+    """A corrupt UI-state file must not 500 the plan list - fail open (treat
+    as nothing archived) rather than breaking the whole dashboard over a
+    non-critical preference file."""
+    _write_manifest(plan_dir, "solo", {"S1": {"summary": "x", "status": "todo"}})
+    (plan_dir / ".dashboard_ui_state.json").write_text("{not valid json")
+    res = client.get("/api/plans")
+    assert res.status_code == 200
+    assert [p["name"] for p in res.json()["plans"]] == ["solo"]
+
+
 @pytest.fixture
 def usage_state_path(tmp_path, monkeypatch):
     path = tmp_path / "usage_state.json"
@@ -1520,6 +1619,17 @@ def test_render_journal_escapes_html_in_entry_text():
     # And no raw un-escaped tags from the entry fields
     assert "<script>" not in html
     assert "<img onerror=" not in html
+
+
+def test_static_style_css_defines_plan_archive_classes(client):
+    """The rendered sidebar uses .plan-item-row / .plan-archive-btn /
+    .plan-archived / .plan-list-footer / .show-archived-toggle - the CSS
+    must actually define those selectors so archive/dismiss renders
+    visibly rather than as unstyled elements."""
+    css = client.get("/style.css").text
+    for sel in (".plan-item-row", ".plan-archive-btn", ".plan-archived",
+                ".plan-list-footer", ".show-archived-toggle"):
+        assert sel in css, f"missing CSS selector: {sel}"
 
 
 def test_static_style_css_defines_journal_timeline_classes(client):

@@ -130,6 +130,18 @@ def test_complete_resolves_tier_to_configured_local_model(monkeypatch):
     assert captured["model"] == "qwen2.5-coder:32b"
 
 
+def test_resolve_local_model_passes_through_a_concrete_tag_unchanged(monkeypatch):
+    """A value containing ':' (Ollama's tag separator, e.g. 'devstral:24b')
+    is already a concrete model tag, not a tier name ('sonnet'/'opus'/
+    'haiku') - it must be returned as-is rather than looked up in
+    _LOCAL_TIER_ENV (where it would never match and silently fall back to
+    PIPELINE_LOCAL_MODEL_DEFAULT, discarding the caller's explicit choice).
+    This is what lets _run_reviewer route review to a different concrete
+    model than dispatch's tier resolution would give it."""
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "gpt-oss:20b")
+    assert b._resolve_local_model("devstral:24b") == "devstral:24b"
+
+
 def test_complete_falls_back_to_devstral_default_for_unmapped_tier(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_MODEL_DEFAULT", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_MODEL_SONNET", raising=False)

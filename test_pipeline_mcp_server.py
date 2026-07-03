@@ -703,6 +703,71 @@ def test_run_reviewer_prompt_asks_reviewer_to_flag_missing_documentation(
     assert "README" in prompt
 
 
+def test_run_reviewer_uses_review_model_override_when_backend_is_local(monkeypatch):
+    """Asymmetric review: both software-engineer.md and code-reviewer.md
+    declare `model: sonnet`, so without an override dispatch and review
+    resolve to the identical concrete local model - a model reviewing its
+    own work with identical weights. PIPELINE_LOCAL_REVIEW_MODEL lets
+    review run on a different model, but only when the review backend is
+    actually local (passing a bare Ollama tag like "devstral:24b" as the
+    Claude CLI's --model would break cloud review)."""
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "local")
+    monkeypatch.setenv("PIPELINE_LOCAL_REVIEW_MODEL", "devstral:24b")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            captured["model"] = model
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    assert captured["model"] == "devstral:24b"
+
+
+def test_run_reviewer_ignores_review_model_override_when_backend_is_claude(monkeypatch):
+    """Regression guard: PIPELINE_LOCAL_REVIEW_MODEL must NOT leak into a
+    cloud (claude) review - it must keep using the persona's declared tier
+    ("sonnet") so ClaudeCliDriver gets a real Claude model name, not an
+    Ollama tag."""
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "claude")
+    monkeypatch.setenv("PIPELINE_LOCAL_REVIEW_MODEL", "devstral:24b")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            captured["model"] = model
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    assert captured["model"] == "sonnet"
+
+
+def test_run_reviewer_explicit_local_backend_name_honors_review_model_override(monkeypatch):
+    """review_story's FM-B rate-limit fallback calls _run_reviewer with an
+    explicit backend_name="local" override (not via the env var) - the
+    review-model override must apply in that path too."""
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_REVIEW_MODEL", "devstral:24b")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            captured["model"] = model
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch", backend_name="local")
+
+    assert captured["model"] == "devstral:24b"
+
+
 def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
     _write_manifest(plan_dir, "rv", {
         "S1": {"summary": "Add thing", "status": "in_progress",
@@ -799,6 +864,79 @@ def test_review_story_parks_after_rework_budget_exhausted(plan_dir, agents_dir, 
     assert story["rework_attempts"] == 3
     assert result["status"] == "parked"
     assert len(notes) == 1 and "S1" in notes[0]
+
+
+def test_review_story_oracle_backed_story_parks_after_lower_rework_cap(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """A story with an acceptance oracle already has an objective,
+    pre-verified correctness signal (it reached review because tests -
+    including the oracle - passed). Burning the full REWORK_MAX_ATTEMPTS
+    budget chasing a reviewer's beyond-oracle findings on already-correct
+    code just wastes cycles before it parks anyway; PIPELINE_REWORK_MAX_
+    ATTEMPTS_ORACLE (default 1) converges faster for these stories."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 1)
+    _write_manifest(plan_dir, "rvoracle", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: "edge case missing\nVERDICT: REQUEST_CHANGES")
+
+    result = p.review_story("rvoracle", "S1")
+
+    story = _read_manifest(plan_dir, "rvoracle")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert story["rework_attempts"] == 1
+    assert result["status"] == "parked"
+
+
+def test_review_story_non_oracle_story_still_uses_full_rework_budget(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Regression guard: a story with NO acceptance oracle (ordinary TDD -
+    the agent's own tests are the only correctness signal, review judgment
+    matters more) must keep using the full REWORK_MAX_ATTEMPTS, unaffected
+    by the oracle-backed cap - one REQUEST_CHANGES here must NOT park."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 1)
+    _write_manifest(plan_dir, "rvnoacc", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: "needs work\nVERDICT: REQUEST_CHANGES")
+
+    result = p.review_story("rvnoacc", "S1")
+
+    story = _read_manifest(plan_dir, "rvnoacc")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
+    assert story["rework_attempts"] == 1
+    assert result["status"] == "changes_requested"
+
+
+def test_review_story_oracle_backed_empty_acceptance_list_uses_full_budget(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Boundary: a story carrying acceptance=[] (present but empty) is not
+    actually oracle-backed - falsy, same as no acceptance at all - so it
+    must use the full rework budget, not the oracle cap."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 1)
+    _write_manifest(plan_dir, "rvempty", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance": []},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: "needs work\nVERDICT: REQUEST_CHANGES")
+
+    result = p.review_story("rvempty", "S1")
+
+    story = _read_manifest(plan_dir, "rvempty")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
 
 
 def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_dir, monkeypatch):
@@ -4682,6 +4820,78 @@ def test_dispatch_story_fresh_creates_worktree_and_dispatches(
     assert story["status"] == "in_progress"
     assert story["pid"] == 1234
     assert story["worktree"] == str(worktree_root / "S1")
+
+
+def test_dispatch_story_excludes_review_and_agent_log_from_worktree_tracking(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    """Mode 17: review.log (written by the local review loop) gets committed
+    by a rework cycle's auto-WIP-commit if it isn't excluded, so the next
+    review cycle's append makes it a modified TRACKED file - the pre-merge
+    rebase then refuses ("You have unstaged changes"), failing an already
+    -APPROVED, ground-truth-correct story. Excluding review.log (and
+    agent.log, for the same reason) via .git/info/exclude at worktree
+    creation means `git add -A` can never track them in the first place.
+    Uses a REAL git repo (not mocked subprocess) so the actual exclude file
+    content is verified end-to-end, not just that some git command ran."""
+    real_repo = tmp_path / "real-repo"
+    real_repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=real_repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=real_repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=real_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"],
+                    cwd=real_repo, check=True)
+    bare_origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "master", str(bare_origin)], check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(bare_origin)], cwd=real_repo, check=True)
+    subprocess.run(["git", "push", "-q", "-u", "origin", "master"], cwd=real_repo, check=True)
+
+    _write_manifest(plan_dir, "excl", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    manifest_path = plan_dir / "excl.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(real_repo)
+    manifest_path.write_text(json.dumps(manifest))
+
+    # backend.subprocess IS the real, global subprocess module (a singleton
+    # import, not a copy) - patching its Popen would also break the REAL
+    # git commands this test needs (git worktree add / pull / add / diff).
+    # Discriminate: only fake the actual dispatch invocation (argv[0] ==
+    # "claude"), delegate everything else to the real Popen.
+    real_popen = backend.subprocess.Popen
+
+    def _discriminating_popen(cmd, **kw):
+        if cmd and cmd[0] == "claude":
+            return _FakeProc(999)
+        return real_popen(cmd, **kw)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _discriminating_popen)
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "master")
+
+    result = p.dispatch_story("excl", "S1")
+    assert result["ok"] is True
+
+    exclude_content = (real_repo / ".git" / "info" / "exclude").read_text()
+    assert "review.log" in exclude_content
+    assert "agent.log" in exclude_content
+
+    # The exclusion must actually work, not just be present as text: a
+    # rework-style `git add -A` inside the worktree must not stage either
+    # file, even when both exist with real content.
+    worktree_path = worktree_root / "S1"
+    (worktree_path / "review.log").write_text("review cycle 1\n")
+    (worktree_path / "agent.log").write_text("[step 0] bash: ls\n")
+    subprocess.run(["git", "add", "-A"], cwd=worktree_path, check=True)
+    staged = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                             cwd=worktree_path, capture_output=True, text=True, check=True)
+    assert "review.log" not in staged.stdout
+    assert "agent.log" not in staged.stdout
 
 
 def test_dispatch_story_fresh_seeds_checkpoint_instruction_with_plan_name(

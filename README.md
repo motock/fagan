@@ -319,6 +319,12 @@ the cost gate.
   `/api/plans/{plan}/stories/{key}/log` and appends the tail inline below
   the story metadata, so you can see the most recent agent output without
   tailing the file by hand.
+- **Local review transcript (`review.log`).** When a story is reviewed on
+  the `local` backend, `OllamaDriver._review_loop` appends each review
+  cycle (tool calls, results, final verdict) to `review.log` in the
+  story's worktree, alongside `agent.log` — best-effort (never breaks the
+  review if the write fails), so a local reviewer that returns an
+  inconclusive `UNKNOWN` verdict is still debuggable after the fact.
 - **Checkpoint journal timeline viewer.** Each story modal also fetches
   `/api/plans/{plan}/stories/{key}/journal` and renders the
   `<plan>.<story>.journal.json` entries as a vertical timeline, so you
@@ -342,6 +348,15 @@ the cost gate.
   flips between dark (default) and light themes by setting
   `data-theme` on `<html>`. The choice is persisted in `localStorage` and
   re-applied on the next load.
+- **Plan sidebar: newest-first sort + archive/dismiss.** `/api/plans`
+  sorts by each manifest's file mtime, descending, so active work never
+  gets buried below a long-finished plan that happens to sort earlier
+  alphabetically. A plan can be dismissed from the default view (a
+  "Dismiss" button per sidebar row) without touching its manifest — the
+  archived set lives in a dashboard-owned `.dashboard_ui_state.json`
+  sidecar file in `PLAN_DIR`, so this is purely a view preference, fully
+  reversible via the "Show dismissed plans" toggle at the bottom of the
+  sidebar.
 
 ---
 
@@ -441,6 +456,19 @@ guard an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_LOCAL_MODEL_HAIKU` | — | Local model for the `haiku` tier (falls back to the default) |
 | `PIPELINE_LOCAL_NUM_CTX` | `16384` | Ollama context window for local calls (sized to fit 100% on a 24GB M4 GPU; raising it risks a slow CPU/GPU split) |
 | `PIPELINE_LOCAL_TEMPERATURE` | `0.3` | Sampling temperature for local model calls |
+
+**Per-model tuning table.** `backend.py`'s `_LOCAL_MODEL_TUNING` dict holds
+empirically-settled `temperature`/`num_ctx` overrides keyed by the *resolved
+concrete model tag* (e.g. `gpt-oss:20b`), not the tier. An explicit
+`PIPELINE_LOCAL_TEMPERATURE`/`PIPELINE_LOCAL_NUM_CTX` env var still always
+wins over a table entry; a model tag with no entry falls back to the global
+defaults above. This exists so a tuning finding travels with the model
+instead of requiring the operator to remember to flip a global env var every
+time the active local model changes. Currently populated:
+
+| Model tag | `temperature` | `num_ctx` | Why |
+|---|---|---|---|
+| `gpt-oss:20b` | `0.3` | `32768` | 2026-07-03 A/B benchmark (`tests/benchmark/_runs/full_20260703_postfix` vs `temp_tune_20260703`, 15 cells each): `temperature=1.0` scored 6/15 success with 3 cells where the implementation never landed on disk at all; `temperature=0.3` scored 9/15 with only 1, at an unchanged 11/15 ground-truth-pass rate. |
 | `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Per-request timeout for local single-shot `complete()` calls |
 | `PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS` | `900` | Legacy. Was the per-request timeout for the dispatch/review chat loop; since streaming landed this only seeds the harness boot log (`steps=… timeout=…s`). The live timeout is `LOCAL_AGENT_READ_SILENCE_SECONDS` below — kept set by `backend.py` for back-compat. |
 | `LOCAL_AGENT_READ_SILENCE_SECONDS` | `180` | Per-chunk read timeout for the streamed `chat()`. Fires only on a genuine stall (no bytes for N s), not on a legitimately long generation that emits a chunk every ~1–2 s. Passed through from the shell/MCP env by `backend.py` (`**os.environ`). |

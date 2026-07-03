@@ -1,29 +1,39 @@
 :root {
-  /* === Refined dark palette === */
-  /* deeper panel contrast: bg <- panel <- panel-2; softer borders */
-  --bg:           #0c0e12;
-  --panel:        #13161c;
-  --panel-2:      #1b1f27;
-  --panel-3:      #242933;
-  --border:       #232833;
-  --border-soft:  #1c2029;
-  --text:         #e8eaef;
-  --text-dim:     #9aa3b2;
-  --text-muted:   #6b7382;
-  --accent:       #6b9bff;
-  --accent-hover: #84adff;
-  --accent-soft:  rgba(107, 155, 255, 0.12);
+  /* === Dispatch Tower palette === */
+  /* A monitoring console for a fleet of dispatched agents reads its own
+     vocabulary (dispatch / fleet / escalated / parked) as an air-traffic
+     dispatch tower, not a generic dark-mode SaaS panel. Background drops a
+     shade cooler/blacker than a default dark theme (console glass, not
+     "dark mode"); the interactive accent is scope-cyan (radar/sonar
+     phosphor), deliberately NOT the blue-on-black that's the default
+     accent choice for AI-generated dark dashboards. Status colors stay
+     semantically where operators already read them (green=done,
+     red=failed, amber=parked/attention) but are tuned brighter/more
+     saturated - panel-light tones, paired with a glow (see .card::before,
+     .badge) rather than flat swatches. */
+  --bg:           #090c10;
+  --panel:        #11151b;
+  --panel-2:      #171c24;
+  --panel-3:      #1f2530;
+  --border:       #232a36;
+  --border-soft:  #1b212b;
+  --text:         #e6e9ef;
+  --text-dim:     #93a0b3;
+  --text-muted:   #616d80;
+  --accent:       #45d8e0;
+  --accent-hover: #6ee5ec;
+  --accent-soft:  rgba(69, 216, 224, 0.14);
 
-  /* === Status colors (dark-tuned for contrast on dark bg) === */
-  --c-todo:               #7a8290;
-  --c-in_progress:        #4f8fe0;
-  --c-tests_passed:       #34b3a4;
-  --c-pr_open:            #9d72f6;
-  --c-done:               #44c66f;
-  --c-changes_requested:  #e8a04a;
-  --c-interrupted:        #a0a6b0;
-  --c-parked:             #d4b13e;
-  --c-failed:             #e75858;
+  /* === Status colors (panel-light tones, dark bg) === */
+  --c-todo:               #7a8494;
+  --c-in_progress:        #4d96f0;
+  --c-tests_passed:       #2fcab8;
+  --c-pr_open:            #b07dff;
+  --c-done:               #3ddc84;
+  --c-changes_requested:  #ffa53d;
+  --c-interrupted:        #9aa3b3;
+  --c-parked:             #ffc23d;
+  --c-failed:             #ff5c5c;
   --c-unknown:            #7e8694;
 
   /* === 8px spacing scale === */
@@ -65,9 +75,11 @@
   --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
 
   /* === Radii === */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  /* Slightly more rectilinear than a default SaaS card grid - a console
+     reads as instrument panels, not rounded consumer-app tiles. */
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
   --radius-pill: 999px;
 
   /* === Transitions === */
@@ -86,9 +98,9 @@
   --text:         #1a1f2a;
   --text-dim:     #56607a;
   --text-muted:   #8893a8;
-  --accent:       #2f6fe0;
-  --accent-hover: #1d5ed0;
-  --accent-soft:  rgba(47, 111, 224, 0.10);
+  --accent:       #0f9aa4;
+  --accent-hover: #0c7d85;
+  --accent-soft:  rgba(15, 154, 164, 0.10);
 
   /* Status colors tuned for legibility on light surfaces (deeper saturations,
      dark borders behind the swatch via border-left pattern handled below). */
@@ -131,13 +143,39 @@ header {
   box-shadow: var(--shadow-1);
   position: relative;
   z-index: 1;
+  overflow: hidden;
+}
+/* Signature flourish: a slow scope-sweep drifting across the tower
+   header, the one deliberately animated moment in the whole page (see the
+   restraint note at the top of this file's palette comment). Purely
+   decorative and non-interactive (pointer-events: none); disabled outright
+   under reduced-motion rather than just slowed down. */
+header::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--accent-soft), transparent);
+  pointer-events: none;
+  animation: dispatch-sweep 10s linear infinite;
+}
+@keyframes dispatch-sweep {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  header::after { animation: none; display: none; }
 }
 
 header h1 {
   font-size: var(--fs-lg);
   margin: 0;
   font-weight: var(--fw-semibold);
-  letter-spacing: -0.005em;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .header-right {
@@ -226,7 +264,7 @@ main {
 }
 .plan-item:hover { background: var(--panel-2); }
 .plan-item.active { background: var(--panel-2); border-left: 3px solid var(--accent); }
-.plan-item .plan-name { font-weight: 600; font-size: 13px; }
+.plan-item .plan-name { font-weight: 600; font-size: 13px; font-family: var(--font-mono); letter-spacing: 0.01em; }
 .plan-item .plan-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 .plan-item .plan-paused { color: var(--c-parked); }
 .plan-item.plan-archived { opacity: 0.55; }
@@ -379,7 +417,11 @@ main {
   padding: var(--sp-3);
   font-size: var(--fs-sm);
   cursor: pointer;
-  box-shadow: var(--shadow-1);
+  /* Panel-light glow bleeding off the status stripe - the same
+     --badge-color the JS already sets per card drives both the stripe
+     and this glow, so every status reads as a lit console indicator
+     rather than a flat color swatch. */
+  box-shadow: var(--shadow-1), -3px 0 8px -3px var(--badge-color, transparent);
   transition: transform var(--t-fast), box-shadow var(--t-fast),
     border-color var(--t-fast), background var(--t-fast);
 }
@@ -493,7 +535,7 @@ main {
   font-variant-numeric: tabular-nums;
   color: #0f1115;
   background: var(--badge-color, var(--c-unknown));
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-1), 0 0 8px -1px var(--badge-color, transparent);
 }
 
 .panels { display: flex; gap: 16px; margin-top: 18px; flex-wrap: wrap; }

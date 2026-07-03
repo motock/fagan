@@ -950,6 +950,231 @@ def test_chat_falls_back_to_init_defaults_for_num_ctx_and_temperature(monkeypatc
     assert captured["options"]["temperature"] == 0.3
 
 
+# ---------- OllamaDriver per-model tuning table (_LOCAL_MODEL_TUNING) ----------
+#
+# temperature/num_ctx findings from tests/benchmark A/B experiments are tied
+# to a specific model tag (e.g. "gpt-oss:20b"), not a global default. Without
+# a per-model table, applying a finding means remembering to flip
+# PIPELINE_LOCAL_TEMPERATURE/PIPELINE_LOCAL_NUM_CTX every time the active
+# local model tag changes — easy to forget, and silently wrong when
+# forgotten. Fix: a module-level table keyed by the RESOLVED model tag,
+# consulted after the env var (operator override still wins) and before the
+# constructor-captured default.
+
+def test_chat_uses_tuned_table_values_when_present_and_no_env_override(monkeypatch):
+    """Positive: a model tag present in the tuning table drives num_ctx/
+    temperature for _chat(), with no env var set."""
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+    monkeypatch.setattr(
+        b, "_LOCAL_MODEL_TUNING",
+        {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: captured.update(json) or _FakeResponse(
+            {"message": {"content": "ok"}}
+        ),
+    )
+
+    driver = b.OllamaDriver()
+    driver._chat([{"role": "user", "content": "hi"}], "fake-model:1b")
+
+    assert captured["options"]["num_ctx"] == 8192
+    assert captured["options"]["temperature"] == 0.5
+
+
+def test_dispatch_uses_tuned_table_values_when_present_and_no_env_override(
+    tmp_path, monkeypatch,
+):
+    """Positive: same as above, but through dispatch()'s child-env plumbing.
+    model="opus" resolves (via PIPELINE_LOCAL_MODEL_DEFAULT, unset here) to
+    the RESOLVED tag "fake-model:1b", which is what the table is keyed on."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
+    monkeypatch.setattr(
+        b, "_LOCAL_MODEL_TUNING",
+        {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(305),
+    )
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "8192"
+    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.5"
+
+
+def test_chat_env_override_wins_over_tuned_table(monkeypatch):
+    """Operator override (PIPELINE_LOCAL_TEMPERATURE/NUM_CTX) must win over a
+    table entry for the same model tag."""
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
+    monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "1.0")
+    monkeypatch.setattr(
+        b, "_LOCAL_MODEL_TUNING",
+        {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: captured.update(json) or _FakeResponse(
+            {"message": {"content": "ok"}}
+        ),
+    )
+
+    driver = b.OllamaDriver()
+    driver._chat([{"role": "user", "content": "hi"}], "fake-model:1b")
+
+    assert captured["options"]["num_ctx"] == 32768
+    assert captured["options"]["temperature"] == 1.0
+
+
+def test_dispatch_env_override_wins_over_tuned_table(tmp_path, monkeypatch):
+    """Same override precedence as above, through dispatch()."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
+    monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "1.0")
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
+    monkeypatch.setattr(
+        b, "_LOCAL_MODEL_TUNING",
+        {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(306),
+    )
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "32768"
+    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "1.0"
+
+
+def test_chat_falls_back_to_init_defaults_when_model_tag_absent_from_table(
+    monkeypatch,
+):
+    """Regression guard: the shipped table is genuinely empty (not a
+    test-local stub), so a model tag with no entry must fall back to
+    self.num_ctx/self.temperature exactly as before this table existed."""
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+    assert b._LOCAL_MODEL_TUNING == {}, (
+        "the shipped table must ship empty; a non-empty default would change "
+        "behavior for currently-supported models without an explicit finding"
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: captured.update(json) or _FakeResponse(
+            {"message": {"content": "ok"}}
+        ),
+    )
+
+    b.OllamaDriver().complete("p", model="opus")
+
+    assert captured["options"]["num_ctx"] == 16384
+    assert captured["options"]["temperature"] == 0.3
+
+
+def test_dispatch_falls_back_to_init_defaults_when_model_tag_absent_from_table(
+    tmp_path, monkeypatch,
+):
+    """Same regression guard as above, through dispatch()."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+    assert b._LOCAL_MODEL_TUNING == {}
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(307),
+    )
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "16384"
+    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.3"
+
+
+def test_chat_partial_table_entry_only_overrides_the_key_present(monkeypatch):
+    """Negative/boundary: a table entry need not set both keys. Only
+    temperature is tuned here, so num_ctx must still resolve via the
+    existing fallback chain (env, then constructor default)."""
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+    monkeypatch.setattr(
+        b, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"temperature": 0.5}},
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: captured.update(json) or _FakeResponse(
+            {"message": {"content": "ok"}}
+        ),
+    )
+
+    driver = b.OllamaDriver()
+    driver._chat([{"role": "user", "content": "hi"}], "fake-model:1b")
+
+    assert captured["options"]["num_ctx"] == 16384
+    assert captured["options"]["temperature"] == 0.5
+
+
+def test_dispatch_partial_table_entry_only_overrides_the_key_present(
+    tmp_path, monkeypatch,
+):
+    """Same partial-entry boundary as above, through dispatch(): only
+    num_ctx is tuned, so temperature falls back to the constructor default."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
+    monkeypatch.setattr(
+        b, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"num_ctx": 8192}},
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(308),
+    )
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "8192"
+    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.3"
+
+
 # ---------- ClaudeCliDriver.dispatch() ----------
 def test_dispatch_streams_claude_cli_output_so_log_size_is_a_reliable_signal(
     tmp_path, monkeypatch,

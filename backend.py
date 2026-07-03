@@ -143,6 +143,34 @@ def _resolve_local_model(tier: str) -> str:
     return os.environ.get(env_var, default) if env_var else default
 
 
+# Per-model tuned defaults, keyed by the RESOLVED concrete model tag (e.g.
+# "gpt-oss:20b"), not the tier ("sonnet"/"opus"/"haiku"). Populated as a
+# model's temperature/num_ctx is empirically settled (see tests/benchmark/
+# A/B experiments). An explicit PIPELINE_LOCAL_TEMPERATURE/PIPELINE_LOCAL_NUM_CTX
+# env var always overrides an entry here (operator override wins); a model
+# tag with no entry, or an entry missing one of the two keys, falls back to
+# OllamaDriver's constructor-captured default for that specific value.
+# Intentionally empty until a model's tuning is concluded - do not add
+# speculative entries.
+_LOCAL_MODEL_TUNING: dict[str, dict[str, float | int]] = {}
+
+
+def _tuned_num_ctx(model_tag: str, fallback: int) -> int:
+    env = os.environ.get("PIPELINE_LOCAL_NUM_CTX")
+    if env is not None:
+        return int(env)
+    tuned = _LOCAL_MODEL_TUNING.get(model_tag, {}).get("num_ctx")
+    return int(tuned) if tuned is not None else fallback
+
+
+def _tuned_temperature(model_tag: str, fallback: float) -> float:
+    env = os.environ.get("PIPELINE_LOCAL_TEMPERATURE")
+    if env is not None:
+        return float(env)
+    tuned = _LOCAL_MODEL_TUNING.get(model_tag, {}).get("temperature")
+    return float(tuned) if tuned is not None else fallback
+
+
 def _recover_tool_calls(content: str | None) -> list | None:
     """Recover tool calls from message text when the native tool_calls field
     is empty — the local model intermittently emits well-formed calls as text
@@ -323,16 +351,15 @@ class OllamaDriver:
         return payload["content"]
 
     def _chat(self, messages: list, model: str, tools: list | None = None) -> dict:
-        # PIPELINE_LOCAL_NUM_CTX / PIPELINE_LOCAL_TEMPERATURE are re-read per
-        # call, mirroring dispatch()'s PIPELINE_LOCAL_MAX_STEPS pattern below,
-        # so a per-model override set after this driver was constructed (e.g.
-        # tests/benchmark/models.py's gptoss row) actually takes effect for
-        # complete()/review calls too, instead of being silently shadowed by
-        # the value captured at OllamaDriver.__init__ time.
-        num_ctx = int(os.environ.get("PIPELINE_LOCAL_NUM_CTX", str(self.num_ctx)))
-        temperature = float(
-            os.environ.get("PIPELINE_LOCAL_TEMPERATURE", str(self.temperature))
-        )
+        # num_ctx/temperature are resolved per call (env override > per-model
+        # tuning table > constructor default), mirroring dispatch()'s
+        # PIPELINE_LOCAL_MAX_STEPS pattern below, so a per-model override set
+        # after this driver was constructed (e.g. tests/benchmark/models.py's
+        # gptoss row, or an entry in _LOCAL_MODEL_TUNING) actually takes
+        # effect for complete()/review calls too, instead of being silently
+        # shadowed by the value captured at OllamaDriver.__init__ time.
+        num_ctx = _tuned_num_ctx(model, self.num_ctx)
+        temperature = _tuned_temperature(model, self.temperature)
         body = {
             "model": model, "messages": messages, "stream": False,
             "options": {"num_ctx": num_ctx, "temperature": temperature},
@@ -542,18 +569,16 @@ class OllamaDriver:
             "LOCAL_AGENT_ENDPOINT": self.endpoint,
             "LOCAL_AGENT_TIMEOUT": str(self.dispatch_timeout),
         }
-        # PIPELINE_LOCAL_NUM_CTX / PIPELINE_LOCAL_TEMPERATURE are the real,
-        # per-model-overridable knobs for the dispatch agent. Re-read them on
-        # every dispatch so a per-model override (e.g.
-        # tests/benchmark/models.py's gptoss row) actually takes effect
-        # instead of being silently shadowed by the value captured at
-        # OllamaDriver.__init__ time. Fall back to that captured value when
-        # the env var is unset, so existing callers that rely on the
+        # num_ctx/temperature are resolved per dispatch (env override >
+        # per-model tuning table > constructor default) so a per-model
+        # override (e.g. tests/benchmark/models.py's gptoss row, or an entry
+        # in _LOCAL_MODEL_TUNING keyed on the resolved model tag) actually
+        # takes effect instead of being silently shadowed by the value
+        # captured at OllamaDriver.__init__ time. Fall back to that captured
+        # value when neither is set, so existing callers that rely on the
         # constructor default are not broken.
-        num_ctx = int(os.environ.get("PIPELINE_LOCAL_NUM_CTX", str(self.num_ctx)))
-        temperature = float(
-            os.environ.get("PIPELINE_LOCAL_TEMPERATURE", str(self.temperature))
-        )
+        num_ctx = _tuned_num_ctx(resolved_model, self.num_ctx)
+        temperature = _tuned_temperature(resolved_model, self.temperature)
         env["LOCAL_AGENT_NUM_CTX"] = str(num_ctx)
         env["LOCAL_AGENT_TEMPERATURE"] = str(temperature)
         # PIPELINE_LOCAL_MAX_STEPS is the real, plist-honored step-cap knob

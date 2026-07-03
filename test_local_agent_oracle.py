@@ -132,6 +132,105 @@ def test_oracle_create_file_empty_content_on_py_path_is_not_rejected(tmp_path, m
     assert (tmp_path / "empty.py").read_text() == ""
 
 
+def test_oracle_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE: mirrors test_local_agent's version — the rejection must
+    name the exact line and quote the offending line plus up to 2 lines of
+    context either side, verbatim from the content the model submitted."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = (
+        "def foo():\n"
+        "    return 1\n"
+        "\n"
+        "+def bar():\n"
+        "    return 2\n"
+    )
+    import ast
+    try:
+        ast.parse(bad_content)
+        pytest.fail("fixture must itself be invalid Python")
+    except SyntaxError as e:
+        expected_lineno = e.lineno
+    result = lao.run_tool("create_file", {"path": "ctx.py", "content": bad_content})
+    assert result.startswith("ERROR")
+    assert str(expected_lineno) in result
+    assert "+def bar():" in result
+    assert "return 1" in result
+    assert "return 2" in result
+
+
+def test_oracle_second_consecutive_syntax_rejection_same_path_carries_escalation(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE: mirrors test_local_agent's version — resubmitting the
+    same broken content for the same path must escalate from the second
+    consecutive rejection onward."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = "+def foo():\n+    return 1\n"
+    first = lao.run_tool("create_file", {"path": "escalate.py", "content": bad_content})
+    assert "do not resubmit" not in first.lower()
+    second = lao.run_tool("create_file", {"path": "escalate.py", "content": bad_content})
+    assert "do not resubmit the same content" in second.lower()
+    assert "regenerate the entire file" in second.lower()
+
+
+def test_oracle_rejection_for_different_path_does_not_inherit_escalation(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE boundary case: a rejection for a DIFFERENT path in
+    between must not carry the escalation — the counter is per-path."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = "+def foo():\n+    return 1\n"
+    lao.run_tool("create_file", {"path": "a.py", "content": bad_content})
+    result_b = lao.run_tool("create_file", {"path": "b.py", "content": bad_content})
+    assert "do not resubmit" not in result_b.lower()
+    result_a_again = lao.run_tool("create_file", {"path": "a.py", "content": bad_content})
+    assert "do not resubmit" in result_a_again.lower()
+
+
+def test_oracle_successful_write_resets_syntax_rejection_counter(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE boundary case: a successful write to a path resets its
+    consecutive-rejection counter, so a later rejection for that same path
+    starts fresh (no escalation) instead of carrying over stale state."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = "+def foo():\n+    return 1\n"
+    lao.run_tool("create_file", {"path": "reset.py", "content": bad_content})
+    good = lao.run_tool("create_file", {"path": "reset.py", "content": "def foo():\n    return 1\n"})
+    assert good == "created reset.py"
+    again = lao.run_tool("str_replace", {
+        "path": "reset.py",
+        "old_str": "    return 1",
+        "new_str": "+    return 1",
+    })
+    assert again.startswith("ERROR")
+    assert "do not resubmit" not in again.lower()
+
+
+def test_oracle_syntax_rejection_never_writes_file_even_with_escalation(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE regression guard: the rejection must still return the
+    exact original ERROR-prefixed contract and must NEVER write the file —
+    not the submitted content, not a repaired version — even once escalated.
+    Guards against silently reintroducing auto-repair."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = "+def foo():\n+    return 1\n"
+    lao.run_tool("create_file", {"path": "guard.py", "content": bad_content})
+    result = lao.run_tool("create_file", {"path": "guard.py", "content": bad_content})
+    assert result.startswith("ERROR")
+    assert "do not resubmit" in result.lower()
+    assert not (tmp_path / "guard.py").exists() or not (tmp_path / "guard.py").read_text().strip()
+
+
+def test_oracle_valid_python_writes_never_trigger_escalation_text(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE: valid .py content must remain entirely unaffected by the
+    new rejection-message/escalation machinery."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    result1 = lao.run_tool("create_file", {"path": "ok.py", "content": "x = 1\n"})
+    assert result1 == "created ok.py"
+    result2 = lao.run_tool("str_replace", {"path": "ok.py", "old_str": "x = 1", "new_str": "x = 2"})
+    assert result2 == "edited ok.py"
+
+
 class _FakeProc:
     def __init__(self):
         self.stdout = "ok"

@@ -331,6 +331,122 @@ def test_complete_review_loop_survives_malformed_tool_call_shape(tmp_path, monke
     assert "VERDICT: APPROVE" in out
 
 
+# ---------- REQUEST_CHANGES must carry findings (REVIEW-FINDINGS) ----------
+def test_complete_review_loop_rejects_findings_less_request_changes_once(tmp_path, monkeypatch):
+    """A REQUEST_CHANGES with no summary/pr_body gives the redispatched agent
+    nothing to act on. The loop must not accept it the first time - it should
+    push back once with a corrective tool-role message, then accept the
+    model's follow-up once it actually states the problems."""
+    driver = b.OllamaDriver()
+    responses = [
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES",
+                                                    "summary": "auth.py:42 missing null check"}}}]},
+    ]
+    seen_tool_msgs = []
+
+    def chat(messages, model, tools=None):
+        seen_tool_msgs.extend(m.get("content") for m in messages if m.get("role") == "tool")
+        return responses.pop(0)
+
+    monkeypatch.setattr(driver, "_chat", chat)
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: REQUEST_CHANGES" in out
+    assert "auth.py:42 missing null check" in out
+    corrective = [m for m in seen_tool_msgs if m and "file" in m.lower()]
+    assert len(corrective) == 1, "expected exactly one corrective nudge for the findings-less verdict"
+
+
+def test_complete_review_loop_fails_closed_after_two_findings_less_request_changes(tmp_path, monkeypatch):
+    """If the model still submits no findings after the corrective nudge, the
+    loop must fail closed: return REQUEST_CHANGES with whatever text exists,
+    never silently upgrade to APPROVE, and never raise."""
+    driver = b.OllamaDriver()
+    responses = [
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]},
+    ]
+    monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: REQUEST_CHANGES" in out
+    assert "APPROVE" not in out
+    assert responses == []
+
+
+def test_complete_review_loop_accepts_request_changes_with_summary_immediately(tmp_path, monkeypatch):
+    """REQUEST_CHANGES with a non-empty summary on the first call must pass
+    through untouched - no corrective nudge, no extra chat round-trip."""
+    driver = b.OllamaDriver()
+    calls = {"n": 0}
+
+    def chat(messages, model, tools=None):
+        calls["n"] += 1
+        return {"tool_calls": [{"function": {"name": "submit_review",
+                                             "arguments": {"verdict": "REQUEST_CHANGES",
+                                                           "summary": "tests fail in test_foo.py"}}}]}
+
+    monkeypatch.setattr(driver, "_chat", chat)
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: REQUEST_CHANGES" in out
+    assert "tests fail in test_foo.py" in out
+    assert calls["n"] == 1
+
+
+def test_complete_review_loop_accepts_approve_without_summary(tmp_path, monkeypatch):
+    """APPROVE needs no findings - an empty summary must not trigger the
+    corrective nudge that findings-less REQUEST_CHANGES gets."""
+    driver = b.OllamaDriver()
+    calls = {"n": 0}
+
+    def chat(messages, model, tools=None):
+        calls["n"] += 1
+        return {"tool_calls": [{"function": {"name": "submit_review",
+                                             "arguments": {"verdict": "APPROVE"}}}]}
+
+    monkeypatch.setattr(driver, "_chat", chat)
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: APPROVE" in out
+    assert calls["n"] == 1
+
+
+def test_complete_review_loop_findings_nudge_still_returns_verdict_near_step_cap(tmp_path, monkeypatch):
+    """The findings nudge must not consume the step budget in a way that
+    turns a conclusive review into UNKNOWN: even when it fires on the last
+    available steps, a verdict must still come back once the model complies."""
+    driver = b.OllamaDriver()
+    driver.review_max_steps = 2
+    responses = [
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]},
+        {"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES",
+                                                    "summary": "foo.py:10 off by one"}}}]},
+    ]
+    monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert "VERDICT: REQUEST_CHANGES" in out
+    assert "foo.py:10 off by one" in out
+
+
 def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
     """Overlord-style complete() (allowed_tools='Read', no cwd) must NOT enter
     the tool loop — one plain completion, no tools offered."""

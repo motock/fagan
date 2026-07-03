@@ -49,3 +49,24 @@ def test_gptoss_temp03_entry_uses_low_temperature_and_matches_gptoss_ctx():
     assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] == gptoss_env["PIPELINE_LOCAL_MODEL_DEFAULT"]
     assert env["PIPELINE_BACKEND_DISPATCH"] == "local"
     assert env["PIPELINE_LOCAL_TEMPERATURE"] != gptoss_env["PIPELINE_LOCAL_TEMPERATURE"]
+
+
+def test_gptoss_devstral_review_matches_gptoss_temp03_dispatch_settings():
+    """Same dispatch config as gptoss_temp03 - only the review model/backend
+    differ - so this is a controlled asymmetric-review experiment, not a
+    confound of two changes at once."""
+    baseline = MODELS["gptoss_temp03"]["env"]
+    env = MODELS["gptoss_devstral_review"]["env"]
+    assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] == baseline["PIPELINE_LOCAL_MODEL_DEFAULT"]
+    assert env["PIPELINE_LOCAL_TEMPERATURE"] == baseline["PIPELINE_LOCAL_TEMPERATURE"]
+    assert env["PIPELINE_LOCAL_NUM_CTX"] == baseline["PIPELINE_LOCAL_NUM_CTX"]
+    assert env["PIPELINE_BACKEND_DISPATCH"] == "local"
+
+
+def test_gptoss_devstral_review_routes_review_to_devstral_locally():
+    env = MODELS["gptoss_devstral_review"]["env"]
+    assert env["PIPELINE_BACKEND_REVIEW"] == "local"
+    assert env["PIPELINE_LOCAL_REVIEW_MODEL"] == "devstral:24b"
+    # Dispatch model must NOT equal the review model - otherwise this isn't
+    # actually testing asymmetric review.
+    assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] != env["PIPELINE_LOCAL_REVIEW_MODEL"]

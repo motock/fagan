@@ -99,6 +99,31 @@ class TokenBucket:
             return True
         return False
 ''',
+    "ratelimiter_bugfix": '''
+class RateLimiter:
+    """A simple token-bucket rate limiter."""
+
+    def __init__(self, capacity, refill_rate, now=0.0):
+        if capacity <= 0 or refill_rate <= 0:
+            raise ValueError("capacity and refill_rate must be positive")
+        self.capacity = float(capacity)
+        self.refill_rate = float(refill_rate)
+        self.tokens = float(capacity)
+        self.last_time = float(now)
+
+    def allow(self, cost=1.0, now=None):
+        if cost < 0:
+            raise ValueError("cost must be non-negative")
+        current = self.last_time if now is None else float(now)
+        elapsed = max(0.0, current - self.last_time)
+        refill = elapsed * self.refill_rate
+        self.tokens = min(self.capacity, self.tokens + refill)
+        self.last_time = current
+        if cost <= self.tokens:
+            self.tokens -= cost
+            return True
+        return False
+''',
     "lru_cache": '''
 from collections import OrderedDict
 
@@ -203,11 +228,34 @@ def load_task(name: str) -> dict:
     spec = json.loads((TASKS_DIR / name / "spec.json").read_text())
     spec["acceptance_source"] = (TASKS_DIR / name / "acceptance.py").read_text()
     spec["groundtruth_source"] = (TASKS_DIR / name / "groundtruth.py").read_text()
+    # Tier 2+ tasks ("modify existing code", vs. Tier 1's greenfield katas)
+    # seed the repo with an existing, already-committed codebase via
+    # tasks/<name>/seed/ - a real directory tree (not JSON-embedded strings,
+    # so seed files get normal syntax highlighting/editing) mirrored
+    # verbatim into the repo before setup_workspace's initial commit. Empty
+    # dict (not an error) when a task has no seed/ dir - the common case for
+    # every existing Tier 1 task.
+    seed_dir = TASKS_DIR / name / "seed"
+    seed_files: dict[str, str] = {}
+    if seed_dir.is_dir():
+        for path in seed_dir.rglob("*"):
+            if path.is_file():
+                seed_files[str(path.relative_to(seed_dir))] = path.read_text()
+    spec["seed_files"] = seed_files
     return spec
 
 
-def setup_workspace(cell: Path) -> dict[str, Path]:
-    """Create the isolated repo + local bare origin + plan/worktree dirs."""
+def setup_workspace(cell: Path, task: dict | None = None) -> dict[str, Path]:
+    """Create the isolated repo + local bare origin + plan/worktree dirs.
+
+    When `task` carries `seed_files` (a Tier 2+ "modify existing code" task,
+    see load_task), those files are written into the repo and folded into
+    the SAME initial commit as the scaffold - so the dispatched agent's
+    first `git log`/`git status` sees one clean "init" commit containing a
+    pre-existing codebase, not a suspicious separate "seed" commit or dirty
+    tree. `task=None` (or a task with no seed_files) behaves exactly as
+    before this existed: an empty scaffold repo.
+    """
     if cell.exists():
         shutil.rmtree(cell)
     repo = cell / "repo"
@@ -228,6 +276,10 @@ def setup_workspace(cell: Path) -> dict[str, Path]:
     (repo / "README.md").write_text("# benchmark task workspace\n")
     (repo / ".venv").symlink_to(PIPELINE_REPO / ".venv")
     (repo / ".gitignore").write_text(".venv/\n__pycache__/\n")
+    for rel_path, content in (task or {}).get("seed_files", {}).items():
+        target = repo / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
     _sh(["git", "add", "-A"], repo)
     _sh(["git", "commit", "-qm", "init"], repo)
 
@@ -389,7 +441,7 @@ def main() -> int:
     # Resolve to absolute: the bare-origin remote is referenced by path from
     # inside the repo's cwd, so a relative workdir would break git push.
     cell = Path(args.workdir).resolve() / f"{args.task}__{args.model}__t{args.trial}"
-    paths = setup_workspace(cell)
+    paths = setup_workspace(cell, task)
     repo = paths["repo"]
 
     # --- environment: set BEFORE importing pipeline_mcp_server ---

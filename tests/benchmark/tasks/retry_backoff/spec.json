@@ -1,5 +1,6 @@
 {
   "name": "retry_backoff",
+  "tier": "T1",
   "summary": "Compute capped exponential backoff delays and retry decisions",
   "impl_file": "backoff.py",
   "persona": "software-engineer",

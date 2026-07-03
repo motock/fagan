@@ -72,6 +72,26 @@ def test_mock_good_drives_to_done_and_passes_groundtruth(tmp_path):
     assert r["timed_out"] is False
 
 
+def test_mock_ratelimiter_bugfix_seeds_existing_files_and_drives_to_done(tmp_path):
+    """End-to-end proof for the Tier 2 ("modify existing code") mechanism:
+    the seeded ratelimiter.py/test_ratelimiter.py land in the initial
+    commit, the mock backend's fix (overwriting only ratelimiter.py, never
+    touching the seeded test file) drives the story through review and
+    merge, and BOTH the seeded existing tests and the new acceptance/
+    groundtruth oracles pass against the merged result - proving seed files
+    survive the whole dispatch -> review -> merge pipeline intact."""
+    r = _run("mock", tmp_path, task="ratelimiter_bugfix")
+    assert r["final_status"] == "done"
+    assert r["merged"] is True
+    assert r["review_verdict"] == "APPROVE"
+    assert r["groundtruth_passed"] is True
+
+    cell = Path(tmp_path) / "ratelimiter_bugfix__mock__t0"
+    merged_test_file = (cell / "repo" / "test_ratelimiter.py").read_text()
+    assert "test_starts_full" in merged_test_file
+    assert "test_single_refill_after_time_passes" in merged_test_file
+
+
 def test_groundtruth_catches_oracle_gaming_impl(tmp_path):
     gamer = tmp_path / "gamer.py"
     gamer.write_text(GAMER)

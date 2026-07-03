@@ -1,5 +1,6 @@
 {
   "name": "lru_cache",
+  "tier": "T1",
   "summary": "Implement a fixed-capacity LRU cache",
   "impl_file": "lru_cache.py",
   "persona": "software-engineer",

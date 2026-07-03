@@ -1,5 +1,6 @@
 {
   "name": "cron_field",
+  "tier": "T1",
   "summary": "Parse a single cron field into its matching integer set",
   "impl_file": "cron_field.py",
   "persona": "software-engineer",

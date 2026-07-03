@@ -1,5 +1,6 @@
 {
   "name": "token_bucket",
+  "tier": "T1",
   "summary": "Implement a token-bucket rate limiter",
   "impl_file": "rate_limiter.py",
   "persona": "software-engineer",

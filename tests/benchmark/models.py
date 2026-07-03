@@ -58,6 +58,23 @@ MODELS: dict[str, dict] = {
     "minimax": _local(os.environ.get("BENCH_MINIMAX_TAG", "minimax-m3:cloud")),
     "gptoss": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="1.0", num_ctx="32768"),
     "gptoss_temp03": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="0.3", num_ctx="32768"),
+    # Asymmetric review: same dispatch settings as gptoss_temp03, but review
+    # runs on devstral:24b instead of gpt-oss reviewing its own work with
+    # identical weights (both software-engineer.md and code-reviewer.md
+    # declare model: sonnet, so without PIPELINE_LOCAL_REVIEW_MODEL the two
+    # roles resolve to the same concrete model - see _run_reviewer).
+    # PIPELINE_BACKEND_REVIEW=local is baked in here (not left to the
+    # invoking shell) so this config can't be run mis-set the way the
+    # 2026-07-03 temp=0.3 experiment's first attempt was.
+    "gptoss_devstral_review": {
+        "mock": False,
+        "env": {
+            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
+                     temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_BACKEND_REVIEW": "local",
+            "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get("BENCH_DEVSTRAL_TAG", "devstral:24b"),
+        },
+    },
     # --- cloud (claude CLI) ---
     "sonnet": {
         "mock": False,

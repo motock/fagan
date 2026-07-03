@@ -677,6 +677,32 @@ def test_parse_verdict_variants():
     assert p._parse_verdict("no verdict here") == "UNKNOWN"
 
 
+def test_run_reviewer_prompt_asks_reviewer_to_flag_missing_documentation(
+    agents_dir, monkeypatch,
+):
+    """The reviewer rubric must explicitly ask whether a user-visible change
+    needs a documentation update, not just correctness/mutation/validation -
+    otherwise a story can cleanly pass review and merge while silently
+    missing the README update CLAUDE.md's Definition of Done requires
+    (observed: REVIEW-LOG/MODEL-TUNING-TABLE/GPTOSS-TEMP03 merged without
+    it; only REVIEW-UNKNOWN got documented, because that story's own
+    agent_instructions happened to ask for it explicitly)."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    prompt = captured["prompt"]
+    assert "documentation" in prompt.lower()
+    assert "README" in prompt
+
+
 def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
     _write_manifest(plan_dir, "rv", {
         "S1": {"summary": "Add thing", "status": "in_progress",

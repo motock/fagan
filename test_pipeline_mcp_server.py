@@ -778,10 +778,12 @@ def test_review_story_parks_after_rework_budget_exhausted(plan_dir, agents_dir, 
 def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_dir, monkeypatch):
     """A local reviewer's internal error (e.g. a malformed backend response
     surfacing as a bare KeyError) must not crash review_story - it must
-    resolve to the same UNKNOWN-verdict 'changes_requested' path a genuinely
+    resolve to the same UNKNOWN-verdict inconclusive-retry path a genuinely
     inconclusive review already takes (fail-safe), not be silently treated
-    as an APPROVE (fail-closed), and must notify the user for observability
-    without leaking raw exception text."""
+    as an APPROVE (fail-closed), must not burn the rework budget (updated for
+    REVIEW-UNKNOWN: a non-rate-limited UNKNOWN no longer counts as
+    REQUEST_CHANGES), and must notify the user for observability without
+    leaking raw exception text."""
     _write_manifest(plan_dir, "rvcrash", {
         "S1": {"summary": "Add thing", "status": "in_progress",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
@@ -798,12 +800,14 @@ def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_di
 
     assert result["ok"] is True
     assert result["verdict"] == "UNKNOWN"
-    assert result["status"] == "changes_requested"
+    assert result["status"] == "in_progress"
     story = _read_manifest(plan_dir, "rvcrash")["stories"]["S1"]
-    assert story["status"] == "changes_requested"
-    assert len(notes) == 1
-    assert "KeyError" in notes[0]
-    assert "message" not in notes[0]
+    assert story["status"] == "in_progress"
+    assert story["review_inconclusive_count"] == 1
+    assert "rework_attempts" not in story
+    assert "review_feedback" not in story
+    assert any("KeyError" in n for n in notes)
+    assert not any("message" in n for n in notes)
 
 
 def test_merge_pr_does_not_pass_delete_branch_to_gh(monkeypatch, tmp_path):
@@ -5735,6 +5739,150 @@ def test_review_story_high_risk_security_ignores_review_fallback(plan_dir, agent
     assert len(sec_calls) == 1
     story = _read_manifest(plan_dir, "fb_sec")["stories"]["S1"]
     assert "rework_attempts" not in story
+
+
+# ---------- Non-rate-limited UNKNOWN must not burn the rework budget ----------
+
+def test_review_story_unknown_leaves_rework_and_feedback_untouched(plan_dir, agents_dir, monkeypatch):
+    # A genuinely inconclusive (non-rate-limited) UNKNOWN verdict must not be
+    # treated like REQUEST_CHANGES: no rework_attempts, no review_feedback
+    # (which would otherwise redispatch the agent blind on empty feedback),
+    # and no changes_requested status.
+    _write_manifest(plan_dir, "unk_untouched", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on UNKNOWN")))
+
+    result = p.review_story("unk_untouched", "S1")
+
+    assert result["verdict"] == "UNKNOWN"
+    assert result["status"] == "tests_passed"
+    story = _read_manifest(plan_dir, "unk_untouched")["stories"]["S1"]
+    assert story["status"] == "tests_passed"
+    assert "rework_attempts" not in story
+    assert "review_feedback" not in story
+    assert story["review_inconclusive_count"] == 1
+
+
+def test_review_story_unknown_notifies_user_will_retry(plan_dir, agents_dir, monkeypatch):
+    _write_manifest(plan_dir, "unk_notify", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.review_story("unk_notify", "S1")
+
+    assert any("inconclusive" in n.lower() for n in notes)
+
+
+def test_review_story_unknown_parks_after_max_inconclusive_attempts(plan_dir, agents_dir, monkeypatch):
+    # Default max is 2: a second consecutive UNKNOWN must park the story for
+    # human review rather than retrying forever - and must never reach
+    # APPROVE/pr_open. review_verdict stays UNKNOWN throughout.
+    _write_manifest(plan_dir, "unk_park", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    pr_calls = []
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    monkeypatch.setattr(p, "_open_pr", lambda *a, **k: pr_calls.append(1))
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    result1 = p.review_story("unk_park", "S1")
+    assert result1["status"] == "tests_passed"
+
+    result2 = p.review_story("unk_park", "S1")
+
+    assert result2["verdict"] == "UNKNOWN"
+    assert result2["status"] == "parked"
+    story = _read_manifest(plan_dir, "unk_park")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert story["review_verdict"] == "UNKNOWN"
+    assert story["review_inconclusive_count"] == 2
+    assert "inconclusive after 2 attempts" in story["parked_reason"]
+    assert pr_calls == [], "an UNKNOWN verdict must never open a PR"
+    assert any("parked" in n.lower() for n in notes)
+
+
+def test_review_story_conclusive_verdict_after_unknown_resets_and_reworks(plan_dir, agents_dir, monkeypatch):
+    # A real REQUEST_CHANGES following a prior UNKNOWN must carry the actual
+    # feedback, start rework_attempts fresh from 0 (the UNKNOWN must not have
+    # silently pre-incremented it), and clear the inconclusive counter.
+    _write_manifest(plan_dir, "unk_then_real", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    calls = []
+
+    def _stub(wt, br):
+        calls.append(1)
+        if len(calls) == 1:
+            return "no verdict line here"
+        return "The error path is untested.\nVERDICT: REQUEST_CHANGES"
+
+    monkeypatch.setattr(p, "_run_reviewer", _stub)
+
+    result1 = p.review_story("unk_then_real", "S1")
+    assert result1["verdict"] == "UNKNOWN"
+    story = _read_manifest(plan_dir, "unk_then_real")["stories"]["S1"]
+    assert story["review_inconclusive_count"] == 1
+
+    result2 = p.review_story("unk_then_real", "S1")
+
+    assert result2["verdict"] == "REQUEST_CHANGES"
+    assert result2["status"] == "changes_requested"
+    story = _read_manifest(plan_dir, "unk_then_real")["stories"]["S1"]
+    assert story["review_feedback"] == "The error path is untested.\nVERDICT: REQUEST_CHANGES"
+    assert story["rework_attempts"] == 1
+    assert story["review_inconclusive_count"] == 0
+
+
+def test_review_story_unknown_rate_limited_still_defers_not_inconclusive(plan_dir, agents_dir, monkeypatch):
+    # Regression: a rate-limited UNKNOWN must keep taking the existing FM-B
+    # deferral path, not the new inconclusive-retry path - it must not
+    # increment review_inconclusive_count at all.
+    _write_manifest(plan_dir, "unk_rl_regression", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
+
+    result = p.review_story("unk_rl_regression", "S1")
+
+    assert result.get("deferred") == "rate_limited"
+    assert result["status"] == "tests_passed"
+    story = _read_manifest(plan_dir, "unk_rl_regression")["stories"]["S1"]
+    assert "review_inconclusive_count" not in story
+    assert "rework_attempts" not in story
+
+
+def test_review_story_unknown_inconclusive_max_one_parks_on_first_attempt(plan_dir, agents_dir, monkeypatch):
+    # Boundary: PIPELINE_REVIEW_INCONCLUSIVE_MAX=1 parks on the very first
+    # inconclusive verdict rather than waiting for a second.
+    monkeypatch.setattr(p, "REVIEW_INCONCLUSIVE_MAX", 1)
+    _write_manifest(plan_dir, "unk_max_one", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on UNKNOWN")))
+
+    result = p.review_story("unk_max_one", "S1")
+
+    assert result["status"] == "parked"
+    story = _read_manifest(plan_dir, "unk_max_one")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert story["review_inconclusive_count"] == 1
 
 
 # ---------- FM-A: acceptance oracle gates check_story_status when present ----------

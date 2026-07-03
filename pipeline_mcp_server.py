@@ -157,6 +157,20 @@ _LOCAL_SKIP_PERSONAS = {"security-engineer"}
 # for human review instead of redispatching again. Cleared on APPROVE.
 REWORK_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS", "3"))
 
+# Inconclusive-review budget. A non-rate-limited UNKNOWN verdict (a reviewer
+# response with no parseable VERDICT line, or the fail-safe path for a
+# reviewer backend's own internal error) is not evidence the story needs
+# rework - it's an infrastructure hiccup. Counting it against
+# REWORK_MAX_ATTEMPTS would let a flaky reviewer silently exhaust the rework
+# budget and park a correct implementation, and redispatching the agent with
+# the (empty) reviewer output would make it rework blind. So leave the
+# story's status untouched and let the next advance_pipeline tick retry
+# review instead - but cap the retries too, since an inconclusive reviewer
+# that never recovers would otherwise loop forever just like an unbounded
+# rework cycle would. Cleared on any conclusive verdict (APPROVE or
+# REQUEST_CHANGES).
+REVIEW_INCONCLUSIVE_MAX = int(os.environ.get("PIPELINE_REVIEW_INCONCLUSIVE_MAX", "2"))
+
 # Error budget for Plane state transitions. Plane sync is a best-effort side
 # effect of an action that already succeeded in git, so its budget is an inline
 # retry (not an across-ticks retry like merge/dispatch): _plane_set_state
@@ -2115,6 +2129,28 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         if security_verdict != "APPROVE":
             verdict = security_verdict
             reviewer_output = security_output  # use security feedback for rework
+
+    # A non-rate-limited UNKNOWN is inconclusive, not a rejection: don't touch
+    # review_feedback or rework_attempts, and leave status at its pre-review
+    # value so the next advance_pipeline tick retries review. Fail closed -
+    # this must never fall through to the APPROVE branch. Only after repeated
+    # inconclusive attempts does it park for a human.
+    if verdict == "UNKNOWN":
+        inconclusive = story.get("review_inconclusive_count", 0) + 1
+        story["review_inconclusive_count"] = inconclusive
+        if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
+            story["status"] = "parked"
+            story["parked_reason"] = (
+                f"review inconclusive after {inconclusive} attempts - needs human review"
+            )
+            _notify_user(plan_name, f"{story_key} parked: review inconclusive after "
+                                    f"{inconclusive} attempts - needs human review.")
+        else:
+            _notify_user(plan_name, f"{story_key} review inconclusive; will retry.")
+        _atomic_write_json(manifest_path, manifest)
+        return {"ok": True, "verdict": verdict, "status": story["status"]}
+
+    story["review_inconclusive_count"] = 0
 
     if verdict == "APPROVE":
         pr_url = _open_pr(worktree, story_key, story)

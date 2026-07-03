@@ -31,6 +31,21 @@ def test_cap_at_capacity():
     assert b.allow(5, now=10.0) is True
 
 
+def test_two_consecutive_successes_then_insufficient_at_same_time():
+    """Two successive SUCCESSFUL allow() calls must each advance the
+    bucket's internal clock, so a third call at the same `now` as the
+    second is judged against the correct remaining balance - not
+    re-computed as if time had elapsed again from an earlier point.
+    Concrete bug this catches: an implementation that only updates its
+    last-call timestamp on rejection (never on success) recomputes elapsed
+    time from a stale timestamp on the second success, double-counting
+    refill and wrongly allowing a request that should be denied."""
+    b = TokenBucket(2, 2, now=0.0)
+    assert b.allow(2, now=0.0) is True
+    assert b.allow(1, now=0.5) is True    # 0.5s * 2 = 1.0 token refilled
+    assert b.allow(0.5, now=0.5) is False  # no time elapsed since the last call
+
+
 def test_over_capacity_never_succeeds():
     b = TokenBucket(2, 1, now=0.0)
     assert b.allow(3, now=1000.0) is False

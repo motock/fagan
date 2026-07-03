@@ -229,6 +229,43 @@ main {
 .plan-item .plan-name { font-weight: 600; font-size: 13px; }
 .plan-item .plan-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 .plan-item .plan-paused { color: var(--c-parked); }
+.plan-item.plan-archived { opacity: 0.55; }
+
+.plan-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.plan-item-main { min-width: 0; flex: 1; }
+
+.plan-archive-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.plan-item:hover .plan-archive-btn { opacity: 1; }
+.plan-archive-btn:hover { color: var(--text); border-color: var(--accent); }
+
+.plan-list-footer {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.show-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
 
 #plan-detail { flex: 1; overflow-y: auto; padding: 16px 20px; }
 

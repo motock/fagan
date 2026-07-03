@@ -150,9 +150,15 @@ def _resolve_local_model(tier: str) -> str:
 # env var always overrides an entry here (operator override wins); a model
 # tag with no entry, or an entry missing one of the two keys, falls back to
 # OllamaDriver's constructor-captured default for that specific value.
-# Intentionally empty until a model's tuning is concluded - do not add
-# speculative entries.
-_LOCAL_MODEL_TUNING: dict[str, dict[str, float | int]] = {}
+_LOCAL_MODEL_TUNING: dict[str, dict[str, float | int]] = {
+    # 2026-07-03 A/B experiment (tests/benchmark/_runs/full_20260703_postfix
+    # vs temp_tune_20260703, 15 cells each): temp=1.0 -> 6/15 success, 3
+    # cells where the implementation file never landed at all; temp=0.3 ->
+    # 9/15 success, only 1 zero-code-landed cell, same 11/15 ground-truth
+    # pass rate. Lower temperature measurably improves self-correction
+    # without costing correctness.
+    "gpt-oss:20b": {"temperature": 0.3, "num_ctx": 32768},
+}
 
 
 def _tuned_num_ctx(model_tag: str, fallback: int) -> int:

@@ -342,10 +342,10 @@ class OllamaDriver:
             "name": "view_file", "description": "Show a file's contents with line numbers.",
             "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
         {"type": "function", "function": {
-            "name": "submit_review", "description": "Submit your final review verdict. Call this once, after running the tests and inspecting the changes.",
+            "name": "submit_review", "description": "Submit your final review verdict. Call this once, after running the tests and inspecting the changes. If verdict is REQUEST_CHANGES, summary is required and must list the specific problems: which file, what is wrong, and what must change.",
             "parameters": {"type": "object", "properties": {
                 "verdict": {"type": "string", "enum": ["APPROVE", "REQUEST_CHANGES"]},
-                "summary": {"type": "string", "description": "brief justification"},
+                "summary": {"type": "string", "description": "brief justification; required when verdict is REQUEST_CHANGES - state the specific file, problem, and required fix"},
                 "pr_title": {"type": "string", "description": "PR title (if APPROVE)"},
                 "pr_body": {"type": "string", "description": "PR body (if APPROVE)"}},
                 "required": ["verdict"]}}},
@@ -372,6 +372,7 @@ class OllamaDriver:
                     {"role": "user", "content": prompt}]
         nudged = False
         final_nudged = False
+        findings_nudged = False
         last_prose = ""
         for i in range(self.review_max_steps):
             # The local model investigates thoroughly but rarely converges to
@@ -426,6 +427,21 @@ class OllamaDriver:
                             verdict = "REQUEST_CHANGES"  # malformed -> safe default
                         body = args.get("pr_body") or args.get("summary", "")
                         title = args.get("pr_title", "")
+                        # A REQUEST_CHANGES with no findings gives the
+                        # redispatched agent nothing to act on -> it reworks
+                        # blind. Reject it once and demand specifics; if the
+                        # model still gives nothing on the retry, fail closed
+                        # and accept it anyway rather than looping forever or
+                        # silently upgrading to APPROVE.
+                        if (verdict == "REQUEST_CHANGES" and not body.strip()
+                                and not findings_nudged):
+                            findings_nudged = True
+                            messages.append({"role": "tool", "content":
+                                "REQUEST_CHANGES rejected: no findings given. "
+                                "Call submit_review again with a summary that "
+                                "states the specific problems - which file, "
+                                "what is wrong, and what must change."})
+                            continue
                         return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
                     messages.append({"role": "tool", "content": _run_readonly_tool(fn, args, Path(cwd))})
             except RuntimeError:

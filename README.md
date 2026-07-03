@@ -167,7 +167,14 @@ log as an audit record.
   (not a genuine review), the story is left at `tests_passed` for the next
   `advance_pipeline` tick to retry — this does **not** count against
   `PIPELINE_REWORK_MAX_ATTEMPTS`, so a rate-limited backend can't silently park
-  a correct implementation.
+  a correct implementation. A non-rate-limited `UNKNOWN` verdict (no parseable
+  `VERDICT` line, or the reviewer-exception fail-safe) is likewise treated as
+  inconclusive rather than a rejection: status is left untouched for a retry
+  on the next tick, and neither `review_feedback` nor `rework_attempts` is
+  touched, so the story is never redispatched to rework blind on empty
+  feedback. This is bounded by its own budget, `PIPELINE_REVIEW_INCONCLUSIVE_MAX`
+  — after that many consecutive inconclusive verdicts the story is **parked**
+  for human review instead of retrying forever.
 
 ### Usage gate
 - `check_usage()` — probes current subscription usage via a headless
@@ -418,6 +425,7 @@ guard an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_MERGE_MAX_ATTEMPTS` | `3` | Merge error budget: how many ticks a failing `_merge_pr` (transient `gh`/`git`) is retried before the story is marked `failed` for human intervention |
 | `PIPELINE_DISPATCH_MAX_ATTEMPTS` | `3` | Dispatch error budget: how many times a story whose launch keeps failing (raising `dispatch_story`, or an agent that produces no output) is retried before it is marked `failed` instead of looping forever |
 | `PIPELINE_REWORK_MAX_ATTEMPTS` | `3` | Rework budget: how many times a `changes_requested` story is redispatched (with the reviewer's feedback) before it is `parked` for human review instead of looping through review↔rework |
+| `PIPELINE_REVIEW_INCONCLUSIVE_MAX` | `2` | Inconclusive-review budget: how many consecutive non-rate-limited `UNKNOWN` verdicts (no parseable `VERDICT` line, or the reviewer-exception fail-safe) are retried on later ticks — without counting against `PIPELINE_REWORK_MAX_ATTEMPTS` or touching `review_feedback` — before the story is `parked` for human review instead of retrying forever |
 | `PIPELINE_PLANE_MAX_ATTEMPTS` | `3` | Plane error budget: inline retries for a best-effort Plane state transition before the drop is recorded durably (Plane sync never blocks git work) |
 | `PIPELINE_PAUSE_THRESHOLD` | `90` | `%` of the **session** window that trips the Claude usage gate |
 | `PIPELINE_RESUME_THRESHOLD` | `70` | `%` the **session** window must drop below to clear the gate |

@@ -36,7 +36,7 @@ tests/benchmark/
     acceptance.py    hidden oracle materialized read-only into the worktree; the agent must make it pass
     groundtruth.py   investigator-owned, independent; run against the MERGED code (never enters the worktree)
   harness.py         single-cell runner (one task x one model x one trial)
-  models.py          model -> environment configs (devstral, minimax, sonnet, mock)
+  models.py          model -> environment configs (devstral, minimax, gptoss, gptoss_temp03, sonnet, mock)
   matrix.py          drives the full grid and renders the scorecard
   scorecard.py       aggregates cell results into a markdown comparison table
   test_harness_selftest.py   offline pytest self-tests (no model/network)
@@ -49,6 +49,8 @@ tests/benchmark/
 |-----------|----------------|-------|
 | `devstral`| local (Ollama) | free; needs Ollama up. Tag via `BENCH_DEVSTRAL_TAG`. |
 | `minimax` | local (Ollama) | free; needs Ollama up. Tag via `BENCH_MINIMAX_TAG`. |
+| `gptoss`  | local (Ollama) | free; needs Ollama up. Tag via `BENCH_GPTOSS_TAG` (default `gpt-oss:20b`). Runs at `temperature=1.0`, `num_ctx=32768`. |
+| `gptoss_temp03` | local (Ollama) | Same tag/`num_ctx` as `gptoss`, `temperature=0.3` only — the A/B comparison arm. This is the value now baked into `backend.py`'s per-model tuning table for real (non-benchmark) dispatch/review, so a fresh `gptoss` run tests the *old*, superseded setting unless you're deliberately re-verifying temp=1.0. |
 | `sonnet`  | cloud (claude) | consumes Claude usage. |
 | `mock`    | offline        | writes a known-correct reference impl; for self-testing the harness only. |
 

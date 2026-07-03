@@ -124,6 +124,105 @@ def test_create_file_empty_content_on_py_path_is_not_rejected(tmp_path, monkeypa
     assert (tmp_path / "empty.py").read_text() == ""
 
 
+def test_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE: the rejection must name the exact line and quote the
+    offending line plus up to 2 lines of context either side, verbatim from
+    the content the model actually submitted — not a repaired version."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = (
+        "def foo():\n"
+        "    return 1\n"
+        "\n"
+        "+def bar():\n"
+        "    return 2\n"
+    )
+    import ast
+    try:
+        ast.parse(bad_content)
+        pytest.fail("fixture must itself be invalid Python")
+    except SyntaxError as e:
+        expected_lineno = e.lineno
+    result = la.run_tool("create_file", {"path": "ctx.py", "content": bad_content})
+    assert result.startswith("ERROR")
+    assert str(expected_lineno) in result
+    assert "+def bar():" in result
+    assert "return 1" in result
+    assert "return 2" in result
+
+
+def test_second_consecutive_syntax_rejection_same_path_carries_escalation(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE: resubmitting the same broken content for the same path
+    must escalate from the second consecutive rejection onward, telling the
+    model to regenerate from scratch rather than retry the same content."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = "+def foo():\n+    return 1\n"
+    first = la.run_tool("create_file", {"path": "escalate.py", "content": bad_content})
+    assert "do not resubmit" not in first.lower()
+    second = la.run_tool("create_file", {"path": "escalate.py", "content": bad_content})
+    assert "do not resubmit the same content" in second.lower()
+    assert "regenerate the entire file" in second.lower()
+
+
+def test_rejection_for_different_path_does_not_inherit_escalation(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE boundary case: a rejection for a DIFFERENT path in
+    between must not carry the escalation — the counter is per-path."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = "+def foo():\n+    return 1\n"
+    la.run_tool("create_file", {"path": "a.py", "content": bad_content})
+    result_b = la.run_tool("create_file", {"path": "b.py", "content": bad_content})
+    assert "do not resubmit" not in result_b.lower()
+    result_a_again = la.run_tool("create_file", {"path": "a.py", "content": bad_content})
+    assert "do not resubmit" in result_a_again.lower()
+
+
+def test_successful_write_resets_syntax_rejection_counter(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE boundary case: a successful write to a path resets its
+    consecutive-rejection counter, so a later rejection for that same path
+    starts fresh (no escalation) instead of carrying over stale state."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = "+def foo():\n+    return 1\n"
+    la.run_tool("create_file", {"path": "reset.py", "content": bad_content})
+    good = la.run_tool("create_file", {"path": "reset.py", "content": "def foo():\n    return 1\n"})
+    assert good == "created reset.py"
+    again = la.run_tool("str_replace", {
+        "path": "reset.py",
+        "old_str": "    return 1",
+        "new_str": "+    return 1",
+    })
+    assert again.startswith("ERROR")
+    assert "do not resubmit" not in again.lower()
+
+
+def test_syntax_rejection_never_writes_file_even_with_escalation(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE regression guard: the rejection must still return the
+    exact original ERROR-prefixed contract and must NEVER write the file —
+    not the submitted content, not a repaired version — even once escalated.
+    Guards against silently reintroducing auto-repair."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    bad_content = "+def foo():\n+    return 1\n"
+    la.run_tool("create_file", {"path": "guard.py", "content": bad_content})
+    result = la.run_tool("create_file", {"path": "guard.py", "content": bad_content})
+    assert result.startswith("ERROR")
+    assert "do not resubmit" in result.lower()
+    assert not (tmp_path / "guard.py").exists() or not (tmp_path / "guard.py").read_text().strip()
+
+
+def test_valid_python_writes_never_trigger_escalation_text(tmp_path, monkeypatch):
+    """SYNTAX-NUDGE: valid .py content must remain entirely unaffected by the
+    new rejection-message/escalation machinery."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    result1 = la.run_tool("create_file", {"path": "ok.py", "content": "x = 1\n"})
+    assert result1 == "created ok.py"
+    result2 = la.run_tool("str_replace", {"path": "ok.py", "old_str": "x = 1", "new_str": "x = 2"})
+    assert result2 == "edited ok.py"
+
+
 class _FakeProc:
     """A stand-in CompletedProcess so the bash handler can format output."""
 

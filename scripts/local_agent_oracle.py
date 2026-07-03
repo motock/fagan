@@ -371,24 +371,64 @@ def is_oracle_path(path: str) -> bool:
                for p in ACCEPTANCE_PATHS)
 
 
+
+# Consecutive syntax-rejection count per path, so a model that resubmits the
+# same broken content can be escalated instead of silently retrying forever
+# (observed: gpt-oss retried near-identical broken content 4x until the
+# repetition guard parked the run with no file ever landing). Resets on any
+# successful write to that path (see run_tool). NOT a repair mechanism — the
+# write itself is always either exactly what the model submitted, or
+# refused; this only tracks how many times in a row that refusal happened.
+# Ported verbatim from local_agent.py; keep both copies in sync.
+_SYNTAX_REJECT_COUNTS: dict[str, int] = {}
+
+
 def _python_syntax_error(path_str: str, content: str) -> str | None:
     """Return an ERROR string if `path_str` is a .py file and `content` is not
     valid Python, else None. Defense-in-depth against malformed model output
     (e.g. a stray unified-diff leading '+', or an unmatched triple-quote)
-    landing on disk — not an attempt to explain why a model emits it. Ported
-    verbatim from local_agent.py; keep both copies in sync."""
+    landing on disk — not an attempt to explain why a model emits it.
+
+    The message quotes the offending line (by e.lineno) plus up to 2 lines of
+    context either side, verbatim from the SUBMITTED content — never a
+    repaired/transformed version — so the model can see exactly what it wrote
+    and where. Ported verbatim from local_agent.py; keep both copies in
+    sync."""
     if not path_str.endswith(".py"):
         return None
     try:
         ast.parse(content)
     except SyntaxError as e:
+        lines = content.splitlines()
+        lineno = e.lineno or 0
+        offending = lines[lineno - 1] if 1 <= lineno <= len(lines) else ""
+        ctx_start = max(1, lineno - 2)
+        ctx_end = min(len(lines), lineno + 2)
+        context = "\n".join(f"{i:4d}| {lines[i - 1]}" for i in range(ctx_start, ctx_end + 1))
         return (
-            f"ERROR: content for {path_str} has invalid Python syntax: {e}. "
+            f"ERROR: content for {path_str} has invalid Python syntax at line "
+            f"{lineno}: {e}. Offending line: {offending!r}\n"
+            f"Context (submitted content, lines {ctx_start}-{ctx_end}):\n{context}\n"
             f"Check for stray formatting artifacts (e.g. a leading '+' from "
             f"pasted diff/patch text, or an unmatched/duplicated triple-quote) "
             f"and retry."
         )
     return None
+
+
+def _record_syntax_rejection(path_str: str, err: str) -> str:
+    """Bump the consecutive-rejection counter for `path_str` and, from the
+    second consecutive rejection onward, append a nudge to regenerate the
+    file from scratch instead of resubmitting the same broken content.
+    Ported verbatim from local_agent.py; keep both copies in sync."""
+    count = _SYNTAX_REJECT_COUNTS.get(path_str, 0) + 1
+    _SYNTAX_REJECT_COUNTS[path_str] = count
+    if count >= 2:
+        err += (
+            "\nDo NOT resubmit the same content. Regenerate the ENTIRE file "
+            "from scratch, with no diff markers and no surrounding prose."
+        )
+    return err
 
 
 def run_tool(fn, args) -> str:
@@ -402,9 +442,10 @@ def run_tool(fn, args) -> str:
         content = args.get("content", "")
         err = _python_syntax_error(args["path"], content)
         if err:
-            return err
+            return _record_syntax_rejection(args["path"], err)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
+        _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         return f"created {args['path']}"
     if fn == "str_replace":
         path = CWD / args["path"]
@@ -419,8 +460,9 @@ def run_tool(fn, args) -> str:
         new_text = text.replace(args["old_str"], args["new_str"])
         err = _python_syntax_error(args["path"], new_text)
         if err:
-            return err
+            return _record_syntax_rejection(args["path"], err)
         path.write_text(new_text)
+        _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         return f"edited {args['path']}"
     if fn == "view_file":
         path = CWD / args["path"]

@@ -595,8 +595,13 @@ def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -
         f"taking a mutable argument (list, dict, set) does not mutate it in "
         f"place unless that is the documented contract; (2) inputs are "
         f"validated at system boundaries, including negative/out-of-range "
-        f"numeric arguments, not just the happy path. End with your VERDICT "
-        f"line; if you APPROVE, also include a PR title and body."
+        f"numeric arguments, not just the happy path; (3) if this change "
+        f"alters externally visible behavior (API contracts, configuration, "
+        f"CLI flags, or user-facing functionality), a README (or other "
+        f"in-repo documentation) update is included - if one is missing, "
+        f"REQUEST_CHANGES and name the specific doc that needs updating "
+        f"rather than approving with the gap silently unaddressed. End with "
+        f"your VERDICT line; if you APPROVE, also include a PR title and body."
     )
     return backend.get_backend("review", name=backend_name).complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,

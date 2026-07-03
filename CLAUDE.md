@@ -510,6 +510,7 @@ Approving a pull request is a statement that the reviewer has verified all of th
 - No obvious security issues — injection, unvalidated input, exposed secrets, excessive permissions
 - The implementation is consistent with the architecture and style of the surrounding code
 - The commit message accurately describes the change
+- If the change alters externally visible behavior (API contracts, configuration, CLI flags, user-facing functionality), documentation is updated — request changes and name the specific doc if it's missing, rather than approving with the gap unaddressed
 
 An approver who has not checked these items should not approve.
 

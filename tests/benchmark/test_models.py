@@ -38,3 +38,14 @@ def test_gptoss_entry_uses_tuned_temperature_and_num_ctx():
     assert env["PIPELINE_LOCAL_NUM_CTX"] == "32768"
     assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] == "gpt-oss:20b"
     assert env["PIPELINE_BACKEND_DISPATCH"] == "local"
+
+
+def test_gptoss_temp03_entry_uses_low_temperature_and_matches_gptoss_ctx():
+    gptoss_env = MODELS["gptoss"]["env"]
+    env = MODELS["gptoss_temp03"]["env"]
+    assert env["PIPELINE_LOCAL_TEMPERATURE"] == "0.3"
+    assert env["PIPELINE_LOCAL_NUM_CTX"] == gptoss_env["PIPELINE_LOCAL_NUM_CTX"]
+    assert env["PIPELINE_LOCAL_NUM_CTX"] == "32768"
+    assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] == gptoss_env["PIPELINE_LOCAL_MODEL_DEFAULT"]
+    assert env["PIPELINE_BACKEND_DISPATCH"] == "local"
+    assert env["PIPELINE_LOCAL_TEMPERATURE"] != gptoss_env["PIPELINE_LOCAL_TEMPERATURE"]

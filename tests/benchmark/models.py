@@ -58,6 +58,21 @@ MODELS: dict[str, dict] = {
     "minimax": _local(os.environ.get("BENCH_MINIMAX_TAG", "minimax-m3:cloud")),
     "gptoss": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="1.0", num_ctx="32768"),
     "gptoss_temp03": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="0.3", num_ctx="32768"),
+    # Same dispatch/review settings as gptoss_temp03, but PIPELINE_BACKEND_
+    # DISPATCH=auto instead of "local" - so a story whose local dispatch
+    # fails, or whose local review exhausts its rework/inconclusive budget,
+    # escalates to Claude (real, non-mocked Claude usage) instead of parking
+    # for a human. Validates the escalate-to-Claude mechanism live; expect
+    # meaningfully higher "done" counts than gptoss_temp03's pure-local run
+    # at the cost of consuming Claude usage on escalated cells.
+    "gptoss_temp03_auto": {
+        "mock": False,
+        "env": {
+            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
+                     temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_BACKEND_DISPATCH": "auto",
+        },
+    },
     # Asymmetric review: same dispatch settings as gptoss_temp03, but review
     # runs on devstral:24b instead of gpt-oss reviewing its own work with
     # identical weights (both software-engineer.md and code-reviewer.md

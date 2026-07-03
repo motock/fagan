@@ -63,6 +63,20 @@ def test_gptoss_devstral_review_matches_gptoss_temp03_dispatch_settings():
     assert env["PIPELINE_BACKEND_DISPATCH"] == "local"
 
 
+def test_gptoss_temp03_auto_matches_gptoss_temp03_except_dispatch_backend():
+    """Same dispatch/review settings as gptoss_temp03 - only
+    PIPELINE_BACKEND_DISPATCH differs - so this isolates the
+    escalate-to-Claude mechanism as the sole variable, not a confound with
+    a different temperature/ctx/model."""
+    baseline = MODELS["gptoss_temp03"]["env"]
+    env = MODELS["gptoss_temp03_auto"]["env"]
+    assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] == baseline["PIPELINE_LOCAL_MODEL_DEFAULT"]
+    assert env["PIPELINE_LOCAL_TEMPERATURE"] == baseline["PIPELINE_LOCAL_TEMPERATURE"]
+    assert env["PIPELINE_LOCAL_NUM_CTX"] == baseline["PIPELINE_LOCAL_NUM_CTX"]
+    assert env["PIPELINE_BACKEND_DISPATCH"] == "auto"
+    assert baseline["PIPELINE_BACKEND_DISPATCH"] == "local"
+
+
 def test_gptoss_devstral_review_routes_review_to_devstral_locally():
     env = MODELS["gptoss_devstral_review"]["env"]
     assert env["PIPELINE_BACKEND_REVIEW"] == "local"

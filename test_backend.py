@@ -1069,18 +1069,30 @@ def test_dispatch_env_override_wins_over_tuned_table(tmp_path, monkeypatch):
     assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "1.0"
 
 
+def test_gptoss_20b_tuned_to_low_temperature_from_ab_experiment():
+    """gpt-oss:20b's entry reflects the 2026-07-03 temperature A/B experiment
+    (tests/benchmark/_runs/full_20260703_postfix vs temp_tune_20260703):
+    temp=1.0 scored 6/15 success (3 zero-code-landed failures); temp=0.3
+    scored 9/15 success (1 zero-code-landed failure) with an unchanged
+    ground-truth-pass rate (11/15 both). num_ctx stays 32768 (unrelated to
+    the temperature finding, kept as already tuned)."""
+    assert b._LOCAL_MODEL_TUNING["gpt-oss:20b"] == {
+        "temperature": 0.3, "num_ctx": 32768,
+    }
+
+
 def test_chat_falls_back_to_init_defaults_when_model_tag_absent_from_table(
     monkeypatch,
 ):
-    """Regression guard: the shipped table is genuinely empty (not a
-    test-local stub), so a model tag with no entry must fall back to
-    self.num_ctx/self.temperature exactly as before this table existed."""
+    """Regression guard: a model tag with NO entry in the (now non-empty)
+    table must still fall back to self.num_ctx/self.temperature exactly as
+    before the table existed - only gpt-oss:20b is tuned, "opus" (which
+    resolves to the devstral default in this test env) must not be."""
     monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
-    assert b._LOCAL_MODEL_TUNING == {}, (
-        "the shipped table must ship empty; a non-empty default would change "
-        "behavior for currently-supported models without an explicit finding"
-    )
+    monkeypatch.delenv("PIPELINE_LOCAL_MODEL_DEFAULT", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_MODEL_OPUS", raising=False)
+    assert b._resolve_local_model("opus") not in b._LOCAL_MODEL_TUNING
 
     captured = {}
     monkeypatch.setattr(
@@ -1103,7 +1115,9 @@ def test_dispatch_falls_back_to_init_defaults_when_model_tag_absent_from_table(
     monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
     monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
-    assert b._LOCAL_MODEL_TUNING == {}
+    monkeypatch.delenv("PIPELINE_LOCAL_MODEL_DEFAULT", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_MODEL_OPUS", raising=False)
+    assert b._resolve_local_model("opus") not in b._LOCAL_MODEL_TUNING
 
     captured = {}
     monkeypatch.setattr(

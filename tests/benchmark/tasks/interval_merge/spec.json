@@ -1,5 +1,6 @@
 {
   "name": "interval_merge",
+  "tier": "T1",
   "summary": "Merge overlapping and adjacent integer intervals",
   "impl_file": "intervals.py",
   "persona": "software-engineer",

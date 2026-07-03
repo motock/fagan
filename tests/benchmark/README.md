@@ -27,16 +27,41 @@ its *own* tests (or the visible acceptance oracle) while still being wrong.
 Grading on a separate, hidden suite is what catches that — see the self-test
 `test_groundtruth_catches_oracle_gaming_impl`.
 
+## Tiers
+
+Every task carries a `tier` field. **Tier 1** is a single-file, dependency-free
+kata written into an empty repo from scratch (`cron_field`, `interval_merge`,
+`lru_cache`, `retry_backoff`, `token_bucket`) — this measures pipeline mechanics
+and raw greenfield capability, but nothing about the harder, more common
+real-world shape of *changing existing code*. **Tier 2** seeds the repo with an
+existing, already-committed codebase (via `tasks/<name>/seed/`, see below) that
+the story must modify — currently `ratelimiter_bugfix`: fix a reported bug in an
+existing implementation without breaking its existing test suite, following the
+same diagnose-then-regression-test-then-fix workflow this repo's own `CLAUDE.md`
+prescribes for bug work. Tier 3 (cross-module: a change touching an API, its
+consumer, and documentation together) is not yet implemented.
+
+Tiers exist because Tier 1 alone can be a misleading proxy: a model or pipeline
+change that helps on greenfield katas may not transfer to modify-existing-code
+work, which is both harder (existing tests must be preserved, not just written)
+and closer to what a real project actually needs. Filter a run by tier by
+naming tasks explicitly, e.g. `matrix.py --tasks ratelimiter_bugfix --models
+gptoss_temp03`. In principle, per-tier results should inform
+`PIPELINE_LOCAL_MAX_RISK` for the `auto` dispatch router — "local handles
+Tier-1-shaped stories, Claude gets Tier 2+" as a measured policy rather than a
+guess — but that wiring doesn't exist yet either.
+
 ## Layout
 
 ```
 tests/benchmark/
   tasks/<name>/
-    spec.json        story fed to the pipeline (summary, agent_instructions, persona, model, risk, impl_file)
+    spec.json        story fed to the pipeline (tier, summary, agent_instructions, persona, model, risk, impl_file)
+    seed/            Tier 2+ only: existing codebase mirrored into the repo's initial commit
     acceptance.py    hidden oracle materialized read-only into the worktree; the agent must make it pass
     groundtruth.py   investigator-owned, independent; run against the MERGED code (never enters the worktree)
   harness.py         single-cell runner (one task x one model x one trial)
-  models.py          model -> environment configs (devstral, minimax, gptoss, gptoss_temp03, sonnet, mock)
+  models.py          model -> environment configs (devstral, minimax, gptoss, gptoss_temp03, gptoss_devstral_review, sonnet, mock)
   matrix.py          drives the full grid and renders the scorecard
   scorecard.py       aggregates cell results into a markdown comparison table
   test_harness_selftest.py   offline pytest self-tests (no model/network)
@@ -51,6 +76,7 @@ tests/benchmark/
 | `minimax` | local (Ollama) | free; needs Ollama up. Tag via `BENCH_MINIMAX_TAG`. |
 | `gptoss`  | local (Ollama) | free; needs Ollama up. Tag via `BENCH_GPTOSS_TAG` (default `gpt-oss:20b`). Runs at `temperature=1.0`, `num_ctx=32768`. |
 | `gptoss_temp03` | local (Ollama) | Same tag/`num_ctx` as `gptoss`, `temperature=0.3` only — the A/B comparison arm. This is the value now baked into `backend.py`'s per-model tuning table for real (non-benchmark) dispatch/review, so a fresh `gptoss` run tests the *old*, superseded setting unless you're deliberately re-verifying temp=1.0. |
+| `gptoss_devstral_review` | local (Ollama) | Same dispatch settings as `gptoss_temp03` (gpt-oss:20b, temp=0.3, ctx=32768), but review runs on `devstral:24b` via `PIPELINE_LOCAL_REVIEW_MODEL` instead of gpt-oss reviewing its own work with identical weights (`code-reviewer.md` and `software-engineer.md` both declare `model: sonnet`). Bakes `PIPELINE_BACKEND_REVIEW=local` into the config itself rather than relying on the invoking shell. |
 | `sonnet`  | cloud (claude) | consumes Claude usage. |
 | `mock`    | offline        | writes a known-correct reference impl; for self-testing the harness only. |
 
@@ -108,20 +134,34 @@ GitHub artifacts. Nothing here ever touches `~/.claude/plans` or
 ## Adding a task
 
 1. `mkdir tasks/<name>` and add three files:
-   - `spec.json` — must include `name`, `summary`, `impl_file`,
+   - `spec.json` — must include `name`, `tier` (`"T1"` for a greenfield kata,
+     `"T2"` for modify-existing-code), `summary`, `impl_file`,
      `agent_instructions`, and `persona`/`model`/`risk`. Keep the API in
      `agent_instructions` identical to what both test files import.
    - `acceptance.py` — the oracle the agent is graded on inside the pipeline.
    - `groundtruth.py` — an **independently authored** suite that imports the same
      `impl_file` module. Make it harder than the acceptance oracle (more edge and
      negative cases).
-2. Verify both suites agree on a correct reference implementation before
+2. **Tier 2+ only:** add `tasks/<name>/seed/`, a real directory tree (not
+   JSON-embedded strings) mirrored verbatim into the repo and folded into the
+   same initial commit `setup_workspace` creates — so the dispatched agent's
+   first `git log`/`git status` sees one clean commit containing a pre-existing
+   codebase, not a suspicious second "seed" commit or a dirty tree. Include
+   both the existing implementation AND its existing, currently-passing test
+   suite; the story's `agent_instructions` must explicitly say those existing
+   tests must still pass and must not be rewritten or deleted — an agent
+   given free rein over a repo with pre-existing tests will sometimes "fix"
+   a failure by gutting the test rather than the implementation.
+   Verify the seeded test suite genuinely passes against the seeded
+   (deliberately buggy, for a bugfix task) implementation before committing —
+   an already-failing seed doesn't test "preserve existing behavior" at all.
+3. Verify both suites agree on a correct reference implementation before
    committing — a buggy oracle invalidates every run that uses it. Both suites
    must cover, at minimum: a no-mutation test for any function taking a
    mutable argument (list/dict/set), and a negative/boundary test for every
    input the spec's `agent_instructions` declares as validated. A gap here lets
    a subtly wrong implementation merge clean (see FM-G/FM-F in FINDINGS.md).
-3. For the offline `mock` self-test to cover the new task, add a correct
+4. For the offline `mock` self-test to cover the new task, add a correct
    reference implementation to `_MOCK_IMPLS` in `harness.py`.
 
 ## Self-tests

@@ -1,0 +1,10 @@
+{
+  "name": "ratelimiter_bugfix",
+  "tier": "T2",
+  "summary": "Fix a reported rate-limiter bug without breaking the existing test suite",
+  "impl_file": "ratelimiter.py",
+  "persona": "software-engineer",
+  "model": "sonnet",
+  "risk": "low",
+  "agent_instructions": "This repository already contains a working RateLimiter implementation in ratelimiter.py with an EXISTING, currently-passing test suite in test_ratelimiter.py. Do NOT delete, rewrite, or gut test_ratelimiter.py's existing tests - they must all still pass after your fix. Do NOT rewrite ratelimiter.py from scratch; fix the specific bug in place.\n\nBUG REPORT: calling allow() twice in a row, both times successfully, and then checking a third time at the SAME `now` as the second call incorrectly succeeds when it should fail.\n\nReproduction:\n  rl = RateLimiter(2, 2, now=0.0)\n  rl.allow(2, now=0.0)     # True (starts full, drains to 0)\n  rl.allow(1, now=0.5)     # True (0.5s * 2 refill_rate = 1.0 token back)\n  rl.allow(0.5, now=0.5)   # Currently returns True. Should return False: no time has passed since the previous call (both are now=0.5), so no additional tokens have refilled since that call - only 0 tokens remain, not 0.5.\n\nFollow the standard bug-fix workflow: read the existing allow() method to find the exact line responsible (read it end-to-end, do not guess from the symptom alone), reproduce the failure with a concrete assertion, then write a NEW regression test in test_ratelimiter.py (add to it - do not replace its existing tests) that fails before your fix and passes after, confirming it fails for the right reason before implementing the fix. Then make the minimal fix. Do not add unrelated functionality or refactor code you don't need to touch.\n\nAll tests already in test_ratelimiter.py, plus your new regression test, must pass when you are done."
+}

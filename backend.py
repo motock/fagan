@@ -307,9 +307,19 @@ class OllamaDriver:
         return payload["content"]
 
     def _chat(self, messages: list, model: str, tools: list | None = None) -> dict:
+        # PIPELINE_LOCAL_NUM_CTX / PIPELINE_LOCAL_TEMPERATURE are re-read per
+        # call, mirroring dispatch()'s PIPELINE_LOCAL_MAX_STEPS pattern below,
+        # so a per-model override set after this driver was constructed (e.g.
+        # tests/benchmark/models.py's gptoss row) actually takes effect for
+        # complete()/review calls too, instead of being silently shadowed by
+        # the value captured at OllamaDriver.__init__ time.
+        num_ctx = int(os.environ.get("PIPELINE_LOCAL_NUM_CTX", str(self.num_ctx)))
+        temperature = float(
+            os.environ.get("PIPELINE_LOCAL_TEMPERATURE", str(self.temperature))
+        )
         body = {
             "model": model, "messages": messages, "stream": False,
-            "options": {"num_ctx": self.num_ctx, "temperature": self.temperature},
+            "options": {"num_ctx": num_ctx, "temperature": temperature},
         }
         if tools:
             body["tools"] = tools
@@ -481,10 +491,22 @@ class OllamaDriver:
             "LOCAL_AGENT_SYSTEM": system or "",
             "LOCAL_AGENT_TASK": prompt,
             "LOCAL_AGENT_ENDPOINT": self.endpoint,
-            "LOCAL_AGENT_NUM_CTX": str(self.num_ctx),
             "LOCAL_AGENT_TIMEOUT": str(self.dispatch_timeout),
-            "LOCAL_AGENT_TEMPERATURE": str(self.temperature),
         }
+        # PIPELINE_LOCAL_NUM_CTX / PIPELINE_LOCAL_TEMPERATURE are the real,
+        # per-model-overridable knobs for the dispatch agent. Re-read them on
+        # every dispatch so a per-model override (e.g.
+        # tests/benchmark/models.py's gptoss row) actually takes effect
+        # instead of being silently shadowed by the value captured at
+        # OllamaDriver.__init__ time. Fall back to that captured value when
+        # the env var is unset, so existing callers that rely on the
+        # constructor default are not broken.
+        num_ctx = int(os.environ.get("PIPELINE_LOCAL_NUM_CTX", str(self.num_ctx)))
+        temperature = float(
+            os.environ.get("PIPELINE_LOCAL_TEMPERATURE", str(self.temperature))
+        )
+        env["LOCAL_AGENT_NUM_CTX"] = str(num_ctx)
+        env["LOCAL_AGENT_TEMPERATURE"] = str(temperature)
         # PIPELINE_LOCAL_MAX_STEPS is the real, plist-honored step-cap knob
         # for the dispatch agent. Re-read it on every dispatch so launchd /
         # shell edits to the env actually take effect instead of being

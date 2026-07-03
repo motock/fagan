@@ -587,6 +587,151 @@ def test_scheduler_plist_sets_pipeline_local_max_steps():
     int(str(env_vars["PIPELINE_LOCAL_MAX_STEPS"]))
 
 
+# ---------- OllamaDriver num_ctx/temperature per-dispatch/per-chat plumbing (ENV-KNOBS) ----------
+#
+# Bug: OllamaDriver.__init__ read PIPELINE_LOCAL_NUM_CTX/PIPELINE_LOCAL_TEMPERATURE
+# once at construction, so dispatch() and _chat() always wrote the captured
+# values into the child env / request body, silently clobbering per-model
+# overrides (e.g. tests/benchmark/models.py's gptoss row) set by the invoking
+# harness after the driver already existed. Fix: both re-read the env vars on
+# every call, mirroring PIPELINE_LOCAL_MAX_STEPS's existing per-dispatch
+# pattern above.
+
+def test_dispatch_rereads_num_ctx_and_temperature_on_each_call(tmp_path, monkeypatch):
+    """Positive: construct ONE driver, THEN set PIPELINE_LOCAL_NUM_CTX /
+    PIPELINE_LOCAL_TEMPERATURE in the env, call dispatch(), and assert the
+    child env reflects the post-construction values — proves they are read
+    per-dispatch, not cached at __init__."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+
+    driver = b.OllamaDriver()
+
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
+    monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "1.0")
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(303),
+    )
+
+    driver.dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "32768"
+    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "1.0"
+
+
+def test_dispatch_falls_back_to_init_defaults_for_num_ctx_and_temperature(
+    tmp_path, monkeypatch,
+):
+    """Negative/boundary: with the env vars unset, the subprocess sees the
+    __init__ defaults (16384 / 0.3)."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(304),
+    )
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "16384"
+    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.3"
+
+
+def test_dispatch_malformed_num_ctx_raises_value_error_like_max_steps(
+    tmp_path, monkeypatch,
+):
+    """Boundary: an empty-string override must fail the same way
+    PIPELINE_LOCAL_MAX_STEPS already does today (a bare ValueError from the
+    int() conversion) rather than crashing some other, inconsistent way or
+    being silently swallowed into a bogus value."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    driver = b.OllamaDriver()
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "")
+
+    with pytest.raises(ValueError):
+        driver.dispatch(
+            "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+            cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+        )
+
+
+def test_dispatch_malformed_temperature_raises_value_error_like_max_steps(
+    tmp_path, monkeypatch,
+):
+    """Same boundary as above, for PIPELINE_LOCAL_TEMPERATURE."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+    driver = b.OllamaDriver()
+    monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "")
+
+    with pytest.raises(ValueError):
+        driver.dispatch(
+            "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+            cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+        )
+
+
+def test_chat_rereads_num_ctx_and_temperature_on_each_call(monkeypatch):
+    """_chat() backs both complete() and the review loop, so it must also
+    honor env changes made after construction, not just dispatch()."""
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+
+    driver = b.OllamaDriver()
+
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
+    monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "1.0")
+
+    captured = {}
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: captured.update(json) or _FakeResponse(
+            {"message": {"content": "ok"}}
+        ),
+    )
+
+    driver.complete("p", model="opus")
+
+    assert captured["options"]["num_ctx"] == 32768
+    assert captured["options"]["temperature"] == 1.0
+
+
+def test_chat_falls_back_to_init_defaults_for_num_ctx_and_temperature(monkeypatch):
+    """Negative/boundary: with the env vars unset, _chat() sends the
+    __init__ defaults (16384 / 0.3)."""
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
+
+    captured = {}
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: captured.update(json) or _FakeResponse(
+            {"message": {"content": "ok"}}
+        ),
+    )
+
+    b.OllamaDriver().complete("p", model="opus")
+
+    assert captured["options"]["num_ctx"] == 16384
+    assert captured["options"]["temperature"] == 0.3
+
+
 # ---------- ClaudeCliDriver.dispatch() ----------
 def test_dispatch_streams_claude_cli_output_so_log_size_is_a_reliable_signal(
     tmp_path, monkeypatch,

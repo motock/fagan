@@ -743,6 +743,55 @@ def test_local_agent_str_replace_repetitions_do_not_fire_per_target_guard(
     assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
 
 
+def test_local_agent_edit_between_reads_resets_per_target_repetition_counter(
+    tmp_path, monkeypatch, capsys,
+):
+    """The per-target repetition guard's counter must not be a lifetime
+    cumulative count of how many times a path was EVER viewed in the run — it
+    must reset on real progress (a str_replace/create_file edit), since a
+    model re-checking a file it just edited is not "repeating with no
+    progress" just because it also happened to view that same path earlier.
+
+    Without this fix, view_file(X), view_file(X), str_replace(X),
+    view_file(X), view_file(X) hits the per-target threshold (seen >= 3) on
+    the second post-edit view, purely from the pre-edit reads still counting
+    toward the same lifetime total — nudging and then parking a run that is
+    actually making progress. This reproduces the 2026-07-04 gpt-oss
+    false-positive parks on ratelimiter_inspect's RLI-2 (both trials parked
+    re-viewing rate_limiter.py a 3rd/4th time across the whole run, with real
+    edits and test runs in between each view)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "rate_limiter.py").write_text("class TokenBucket:\n    pass\n")
+    responses = [
+        ("view_file", {"path": "rate_limiter.py"}),
+        ("view_file", {"path": "rate_limiter.py"}),
+        ("str_replace", {
+            "path": "rate_limiter.py",
+            "old_str": "class TokenBucket:\n    pass\n",
+            "new_str": "class TokenBucket:\n    def __init__(self):\n        pass\n",
+        }),
+        ("view_file", {"path": "rate_limiter.py"}),
+        ("view_file", {"path": "rate_limiter.py"}),
+        ("done", {"summary": "implemented"}),
+        ("done", {"summary": "implemented"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" not in out, (
+        f"a real edit between reads must reset the per-target counter; output: {out!r}"
+    )
+    assert "[parking: repeated action after nudge]" not in out, (
+        f"a real edit between reads must not lead to a park; output: {out!r}"
+    )
+    # After 1 done rejection (worktree dirty from the str_replace), the
+    # harness auto-WIP-commits and accepts, same as the str_replace test above.
+    assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
+
+
 # ---------- chat() streaming + retry (2026-06-28 timeout incident) ----------
 # Mirrors the oracle-harness tests: a single transient Ollama stall must not
 # kill the run. chat() streams and retries. The base harness got the same

@@ -116,3 +116,157 @@ def test_drive_stops_extending_once_max_defer_extension_is_exhausted(tmp_path, m
     assert ticks[-1]["status"] == "tests_passed"
     assert ticks[-1]["status"] not in harness.TERMINAL
     assert fake_p.calls == 3
+
+
+class _FakeMultiPipeline:
+    """Like _FakePipeline, but plays back statuses for several story keys at
+    once -- for drive_plan(), which waits on a dependency-chained plan rather
+    than a single story."""
+
+    def __init__(self, plan_dir: Path, story_keys, statuses_by_key, summaries):
+        self.PLAN_DIR = plan_dir
+        self.story_keys = story_keys
+        self.statuses_by_key = statuses_by_key
+        self.summaries = list(summaries)
+        self.calls = 0
+
+    def advance_pipeline(self, plan_name: str) -> dict:
+        i = self.calls
+        self.calls += 1
+        manifest_path = self.PLAN_DIR / f"{plan_name}.manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        for key in self.story_keys:
+            manifest["stories"][key]["status"] = self.statuses_by_key[key][i]
+        manifest_path.write_text(json.dumps(manifest))
+        return self.summaries[i]
+
+
+def _write_multi_manifest(plan_dir: Path, plan_name: str, story_keys, initial_status: str) -> None:
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest_path.write_text(json.dumps(
+        {"stories": {key: {"status": initial_status} for key in story_keys}}
+    ))
+
+
+def test_drive_plan_waits_for_every_story_key_to_reach_terminal(tmp_path, monkeypatch):
+    plan_dir = tmp_path
+    plan_name = "plan_multi"
+    story_keys = ["S1", "S2"]
+    _write_multi_manifest(plan_dir, plan_name, story_keys, "dispatched")
+
+    clock = _FakeClock(start=0.0)
+    monkeypatch.setattr(harness, "time", clock)
+
+    # S1 (the dependency) finishes on tick 2; S2 (depends on S1) only finishes
+    # on tick 4 -- drive_plan must not stop early just because S1 is terminal.
+    statuses_by_key = {
+        "S1": ["dispatched", "done", "done", "done", "done"],
+        "S2": ["dispatched", "dispatched", "dispatched", "dispatched", "done"],
+    }
+    summaries = [{"review_deferred": []} for _ in range(5)]
+    fake_p = _FakeMultiPipeline(plan_dir, story_keys, statuses_by_key, summaries)
+
+    deadline = clock.now + 10.0
+    ticks = harness.drive_plan(fake_p, plan_name, story_keys, deadline, tick_interval=1.0)
+
+    assert fake_p.calls == 5
+    assert ticks[-1]["statuses"] == {"S1": "done", "S2": "done"}
+
+
+def test_drive_plan_extends_deadline_while_any_story_is_review_deferred(tmp_path, monkeypatch):
+    plan_dir = tmp_path
+    plan_name = "plan_multi_defer"
+    story_keys = ["S1", "S2"]
+    _write_multi_manifest(plan_dir, plan_name, story_keys, "tests_passed")
+
+    clock = _FakeClock(start=0.0)
+    monkeypatch.setattr(harness, "time", clock)
+
+    # S1 is already done; S2 is stuck under reviewer rate-limit (FM-H) for 5
+    # ticks before finally landing on the 6th.
+    statuses_by_key = {
+        "S1": ["done"] * 6,
+        "S2": ["tests_passed"] * 5 + ["done"],
+    }
+    summaries = [{"review_deferred": ["S2"]} for _ in range(5)] + [{"review_deferred": []}]
+    fake_p = _FakeMultiPipeline(plan_dir, story_keys, statuses_by_key, summaries)
+
+    # Deadline only covers ~3 ticks unextended.
+    deadline = clock.now + 3.0
+    ticks = harness.drive_plan(fake_p, plan_name, story_keys, deadline, tick_interval=1.0,
+                               max_defer_extension=100.0)
+
+    assert fake_p.calls == 6
+    assert ticks[-1]["statuses"] == {"S1": "done", "S2": "done"}
+
+
+def test_drive_plan_stops_early_when_a_dependency_permanently_fails(tmp_path, monkeypatch):
+    """S2 depends on S1; list_ready_stories only dispatches a story once every
+    dependency is "done" (see pipeline_mcp_server.py), so once S1 lands on
+    "failed" (a TERMINAL status, but not "done"), S2 can never become ready --
+    it would sit at "todo" forever. drive_plan must recognize the whole plan
+    is stuck and stop, instead of polling until the wall-clock deadline."""
+    plan_dir = tmp_path
+    plan_name = "plan_stuck"
+    story_keys = ["S1", "S2"]
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest_path.write_text(json.dumps({"stories": {
+        "S1": {"status": "dispatched", "dependencies": []},
+        "S2": {"status": "todo", "dependencies": ["S1"]},
+    }}))
+
+    clock = _FakeClock(start=0.0)
+    monkeypatch.setattr(harness, "time", clock)
+
+    # S1 fails on tick 2 and stays failed; S2 never leaves "todo" because its
+    # only dependency never reaches "done".
+    statuses_by_key = {
+        "S1": ["dispatched", "failed", "failed", "failed", "failed"],
+        "S2": ["todo", "todo", "todo", "todo", "todo"],
+    }
+    summaries = [{"review_deferred": []} for _ in range(5)]
+    fake_p = _FakeMultiPipeline(plan_dir, story_keys, statuses_by_key, summaries)
+
+    # A deadline generous enough that, without stuck-detection, the loop would
+    # keep polling well past when S1 actually failed.
+    deadline = clock.now + 100.0
+    ticks = harness.drive_plan(fake_p, plan_name, story_keys, deadline, tick_interval=1.0)
+
+    assert ticks[-1]["statuses"] == {"S1": "failed", "S2": "todo"}
+    # Stopped as soon as S1's failure made S2 permanently unreachable (tick 2),
+    # not after burning the full 100-tick deadline.
+    assert fake_p.calls == 2
+
+
+def test_drive_plan_stops_early_for_a_transitively_blocked_dependency_chain(tmp_path, monkeypatch):
+    """S3 depends on S2, which depends on S1. S1 parks; S2 never leaves "todo"
+    (it's blocked directly), and S3 never leaves "todo" either -- but S3's own
+    DIRECT dependency (S2) never reaches a terminal status itself, so
+    detecting S3 as blocked requires following the chain through S2 to S1,
+    not just checking S3's immediate dependency's status string."""
+    plan_dir = tmp_path
+    plan_name = "plan_stuck_chain"
+    story_keys = ["S1", "S2", "S3"]
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest_path.write_text(json.dumps({"stories": {
+        "S1": {"status": "dispatched", "dependencies": []},
+        "S2": {"status": "todo", "dependencies": ["S1"]},
+        "S3": {"status": "todo", "dependencies": ["S2"]},
+    }}))
+
+    clock = _FakeClock(start=0.0)
+    monkeypatch.setattr(harness, "time", clock)
+
+    statuses_by_key = {
+        "S1": ["dispatched", "parked", "parked", "parked", "parked"],
+        "S2": ["todo", "todo", "todo", "todo", "todo"],
+        "S3": ["todo", "todo", "todo", "todo", "todo"],
+    }
+    summaries = [{"review_deferred": []} for _ in range(5)]
+    fake_p = _FakeMultiPipeline(plan_dir, story_keys, statuses_by_key, summaries)
+
+    deadline = clock.now + 100.0
+    ticks = harness.drive_plan(fake_p, plan_name, story_keys, deadline, tick_interval=1.0)
+
+    assert ticks[-1]["statuses"] == {"S1": "parked", "S2": "todo", "S3": "todo"}
+    assert fake_p.calls == 2

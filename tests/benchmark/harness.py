@@ -99,6 +99,39 @@ class TokenBucket:
             return True
         return False
 ''',
+    "ratelimiter_inspect": '''
+class TokenBucket:
+    def __init__(self, capacity, refill_rate, now=0.0):
+        if capacity <= 0 or refill_rate <= 0:
+            raise ValueError("capacity and refill_rate must be > 0")
+        self.capacity = float(capacity)
+        self.refill_rate = float(refill_rate)
+        self.tokens = float(capacity)
+        self.last = float(now)
+
+    def _refilled_level(self, now):
+        if now is None:
+            now = self.last
+        elapsed = now - self.last
+        if elapsed > 0:
+            return min(self.capacity, self.tokens + elapsed * self.refill_rate), now
+        return self.tokens, self.last
+
+    def allow(self, tokens=1.0, now=None):
+        if tokens < 0:
+            raise ValueError("tokens must be >= 0")
+        level, effective_now = self._refilled_level(now)
+        self.tokens = level
+        self.last = effective_now
+        if tokens <= self.tokens:
+            self.tokens -= tokens
+            return True
+        return False
+
+    def available_tokens(self, now=None):
+        level, _ = self._refilled_level(now)
+        return level
+''',
     "ratelimiter_bugfix": '''
 class RateLimiter:
     """A simple token-bucket rate limiter."""
@@ -310,6 +343,21 @@ def build_plan(repo: Path, task: dict) -> dict:
     }
 
 
+def build_plan_from_stories(repo: Path, epic_summary: str, stories: list[dict]) -> dict:
+    """Wrap a pre-built story list in the same plan envelope build_plan() uses,
+    for compound tasks with more than one story (e.g. a product-analyst
+    decomposition, or a hand-written monolithic control) -- see
+    tests/benchmark/PRODUCT_ANALYST_VALIDATION_PLAN.md. Drive the result with
+    drive_plan(), not drive()."""
+    return {
+        "repo_root": str(repo),
+        "epics": [{
+            "summary": epic_summary,
+            "stories": stories,
+        }],
+    }
+
+
 def install_merge_stubs(p, repo: Path) -> None:
     """Replace the three gh-calling seams with hermetic git-only equivalents."""
 
@@ -355,6 +403,26 @@ class MockBackend:
         override = os.environ.get("BENCH_MOCK_IMPL_FILE")
         impl = Path(override).read_text() if override else _MOCK_IMPLS[self.task["name"]]
         (cwd / self.task["impl_file"]).write_text(impl.lstrip("\n"))
+        # Every dispatch writes byte-identical impl content (the mock backend
+        # isn't incremental), so in a multi-story chain (compound_harness.py) a
+        # later story's worktree can end up byte-identical to what an earlier
+        # story already merged onto master -- an empty diff that fails the
+        # merge's `git commit`. agent.log can't be used to force a real diff
+        # (it's excluded via .git/info/exclude, see Mode 17 in FINDINGS.md), so
+        # commit a small tracked marker instead, tagged with this worktree's
+        # own directory name -- always unique per story/dispatch.
+        (cwd / ".mock_dispatch_marker").write_text(f"{cwd.name}\n")
+        if not acceptance:
+            # No acceptance oracle was materialized for this story (a
+            # non-terminal story in a compound multi-story plan, see
+            # compound_harness.py -- only the chain's sink story carries one).
+            # A real agent writes its own TDD tests per agent_instructions;
+            # the mock backend only self-tests plumbing, so give pytest a
+            # trivial passing test to collect instead of "no tests ran".
+            module_name = Path(self.task["impl_file"]).stem
+            (cwd / "test_mock_smoke.py").write_text(
+                f"def test_mock_smoke_import():\n    import {module_name}\n"
+            )
         Path(log_path).write_text("[mock] wrote reference implementation\n")
         _sh(["git", "add", "-A"], cwd)
         # --allow-empty: a resumed dispatch re-writes identical content, so a
@@ -392,6 +460,66 @@ def drive(p, plan_name: str, story_key: str, deadline: float,
         if status in TERMINAL:
             break
         if story_key in summary.get("review_deferred", []) and extension_used < max_defer_extension:
+            deadline += tick_interval
+            extension_used += tick_interval
+        time.sleep(tick_interval)
+    return ticks
+
+
+def drive_plan(p, plan_name: str, story_keys: list[str], deadline: float,
+               tick_interval: float, max_defer_extension: float = 14400.0) -> list[dict]:
+    """Like drive(), but for a dependency-chained plan with several stories:
+    ticks until EVERY key in story_keys is terminal, instead of a single one.
+
+    Deadline extension (FM-H, see drive()) triggers if ANY story in the plan
+    is deferred on a given tick, since a rate-limited reviewer blocks the
+    whole chain regardless of which story it's currently reviewing.
+    """
+    # A story with an unmet dependency is never dispatched (list_ready_stories
+    # requires every dependency to be "done", see pipeline_mcp_server.py) --
+    # so once a dependency lands on a terminal status OTHER than "done"
+    # (failed/parked), its dependents can never become ready and will sit at
+    # their initial status forever. This propagates transitively: a story
+    # three links down a chain is just as stuck as the one directly blocked,
+    # even though ITS direct dependency's status string is still "todo" (it
+    # never got a chance to fail/park because it was never dispatched).
+    blocked_terminal = {"failed", "parked"}
+
+    def _is_permanently_blocked(key: str, statuses: dict[str, str],
+                                stories: dict, memo: dict[str, bool]) -> bool:
+        if key in memo:
+            return memo[key]
+        memo[key] = False  # guard against a cyclic dependency graph
+        blocked = any(
+            statuses.get(dep) in blocked_terminal
+            or _is_permanently_blocked(dep, statuses, stories, memo)
+            for dep in stories.get(key, {}).get("dependencies", [])
+        )
+        memo[key] = blocked
+        return blocked
+
+    ticks: list[dict] = []
+    extension_used = 0.0
+    while time.time() < deadline:
+        summary = p.advance_pipeline(plan_name)
+        manifest = json.loads(
+            (Path(p.PLAN_DIR) / f"{plan_name}.manifest.json").read_text()
+        )
+        stories = manifest["stories"]
+        statuses = {key: stories[key]["status"] for key in story_keys}
+        ticks.append({"t": round(time.time(), 1), "statuses": statuses,
+                      "skipped": summary.get("skipped")})
+        if all(status in TERMINAL for status in statuses.values()):
+            break
+        pending = [key for key in story_keys if statuses[key] not in TERMINAL]
+        if pending and all(
+            _is_permanently_blocked(key, statuses, stories, {}) for key in pending
+        ):
+            # No further tick can make progress: stop instead of spinning out
+            # the wall-clock budget until the deadline.
+            break
+        deferred = summary.get("review_deferred", [])
+        if any(key in deferred for key in story_keys) and extension_used < max_defer_extension:
             deadline += tick_interval
             extension_used += tick_interval
         time.sleep(tick_interval)

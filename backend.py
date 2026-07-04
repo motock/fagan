@@ -434,7 +434,6 @@ class OllamaDriver:
         messages = [{"role": "system", "content": system_content},
                     {"role": "user", "content": prompt}]
         nudged = False
-        final_nudged = False
         findings_nudged = False
         last_prose = ""
         fallthrough_reason = "step cap exhausted"
@@ -442,17 +441,25 @@ class OllamaDriver:
             # The local model investigates thoroughly but rarely converges to
             # the submit_review terminator on its own. It will call it when
             # pushed (the same model calls `done` in dispatch mode), so when the
-            # step budget is nearly spent without a verdict, nudge once to press
-            # for a verdict. Without this the loop exhausts into UNKNOWN, the
-            # orchestrator records changes_requested with empty feedback, and
-            # the redispatched agent re-runs blind -> review/rework loop -> park.
-            if (self.review_max_steps - i) <= 5 and not final_nudged:
+            # step budget is nearly spent without a verdict, nudge to press for
+            # one. Without this the loop exhausts into UNKNOWN, the orchestrator
+            # records changes_requested with empty feedback, and the redispatched
+            # agent re-runs blind -> review/rework loop -> park.
+            #
+            # Re-nudge on EVERY remaining step in the window, not just once: a
+            # single nudge is easy for a weak local model to lose track of deep
+            # in a long tool-calling transcript. gpt-oss exhausted the full
+            # 20-step cap in 3 of 5 observed review cycles on 2026-07-04
+            # (ratelimiter_inspect benchmark) despite the one-shot nudge firing
+            # — it just kept calling view_file/bash past it with nothing
+            # reinforcing the instruction for the remaining steps.
+            remaining = self.review_max_steps - i
+            if remaining <= 5:
                 messages.append({"role": "user", "content":
-                    "You have few review steps left. Stop investigating and call "
-                    "submit_review now with verdict APPROVE or REQUEST_CHANGES "
-                    "(or end your reply with a 'VERDICT: APPROVE' or "
-                    "'VERDICT: REQUEST_CHANGES' line)."})
-                final_nudged = True
+                    f"You have {remaining} review step(s) left. Stop investigating "
+                    "and call submit_review now with verdict APPROVE or "
+                    "REQUEST_CHANGES (or end your reply with a 'VERDICT: APPROVE' "
+                    "or 'VERDICT: REQUEST_CHANGES' line)."})
             try:
                 try:
                     m = self._chat(messages, resolved_model, tools=self._REVIEW_TOOLS)

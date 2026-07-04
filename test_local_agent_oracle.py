@@ -534,6 +534,48 @@ def test_oracle_str_replace_repetitions_do_not_fire_per_target_guard(
     # because ACCEPTANCE_PATHS is empty -> line 165 short-circuits).
     assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
 
+
+def test_oracle_edit_between_reads_resets_per_target_repetition_counter(
+    tmp_path, monkeypatch, capsys,
+):
+    """Mirrors test_local_agent.test_local_agent_edit_between_reads_resets_
+    per_target_repetition_counter for the oracle harness: the per-target
+    guard's counter must reset on a real edit (str_replace/create_file), not
+    stay a lifetime cumulative count across the whole run. Without this,
+    view_file(X), view_file(X), str_replace(X), view_file(X), view_file(X)
+    hits the >=3 threshold on the second post-edit view from stale pre-edit
+    reads, even though a real edit happened in between."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "rate_limiter.py").write_text("class TokenBucket:\n    pass\n")
+    responses = [
+        ("view_file", {"path": "rate_limiter.py"}),
+        ("view_file", {"path": "rate_limiter.py"}),
+        ("str_replace", {
+            "path": "rate_limiter.py",
+            "old_str": "class TokenBucket:\n    pass\n",
+            "new_str": "class TokenBucket:\n    def __init__(self):\n        pass\n",
+        }),
+        ("view_file", {"path": "rate_limiter.py"}),
+        ("view_file", {"path": "rate_limiter.py"}),
+        ("done", {"summary": "implemented"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" not in out, (
+        f"a real edit between reads must reset the per-target counter; output: {out!r}"
+    )
+    assert "[parking: repeated action after nudge]" not in out, (
+        f"a real edit between reads must not lead to a park; output: {out!r}"
+    )
+    # Same accept path as the str_replace test above: done() on a dirty
+    # worktree succeeds because ACCEPTANCE_PATHS is empty here.
+    assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
+
+
 def test_oracle_detects_pytest_when_pyproject_present(tmp_path, monkeypatch):
     """When the project has pyproject.toml, detect_test_command returns
     ['pytest']; the oracle must append ACCEPTANCE_PATHS + the quiet flags."""

@@ -578,6 +578,19 @@ def main() -> int:
             # is a legitimate fix-build cycle, not a repetition. The
             # read-heavy guard (MUTATING_TOOLS) still catches a model stuck
             # in a bad edit loop — str_replace calls reset that window.
+            #
+            # Any mutating call (str_replace/create_file) also resets every
+            # OTHER signature's accumulated count: `seen` was a lifetime
+            # cumulative counter, so re-viewing a file 2x, editing it, then
+            # viewing it again to check the edit landed hit the >=3 threshold
+            # from stale pre-edit reads, even though real progress happened
+            # in between. That false-triggered on gpt-oss's ratelimiter_
+            # inspect RLI-2 runs on 2026-07-04: view, view, edit, view (3rd
+            # cumulative view -> nudge), view (park) -- despite the edit and
+            # a test run in between. A real edit invalidates prior reads'
+            # staleness, so the count for everything else should start over.
+            if fn in MUTATING_TOOLS:
+                seen.clear()
             above_threshold = False
             if fn != "str_replace":
                 seen[sig] = seen.get(sig, 0) + 1

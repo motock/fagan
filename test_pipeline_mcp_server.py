@@ -939,6 +939,60 @@ def test_review_story_oracle_backed_empty_acceptance_list_uses_full_budget(
     assert story["status"] == "changes_requested"
 
 
+def test_review_story_escalated_oracle_story_gets_escalated_cap_not_oracle_cap(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """2026-07-04's auto-escalation benchmark validation: 6 of 11 escalated
+    cells parked after exactly 1 post-escalation rework cycle, because the
+    oracle cap (built to converge LOCAL review fast) still applied to
+    Claude's shot at the same feedback. Once story["escalated"] is True,
+    REWORK_MAX_ATTEMPTS_ESCALATED must govern instead - regardless of
+    whether the story also carries an acceptance oracle."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 1)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ESCALATED", 3)
+    _write_manifest(plan_dir, "escoracle", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "claude", "escalated": True,
+               "acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}],
+               "rework_attempts": 0},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, backend_name=None: "still bad\nVERDICT: REQUEST_CHANGES")
+
+    result = p.review_story("escoracle", "S1")
+
+    story = _read_manifest(plan_dir, "escoracle")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
+    assert story["rework_attempts"] == 1
+    assert result["status"] == "changes_requested"
+
+
+def test_review_story_escalated_oracle_story_parks_after_escalated_cap_exhausted(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Boundary: the escalated cap is still finite - once IT is exhausted,
+    the story must park for real (no further fallback past Claude)."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 1)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ESCALATED", 3)
+    _write_manifest(plan_dir, "escoracledone", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "claude", "escalated": True,
+               "acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}],
+               "rework_attempts": 2},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, backend_name=None: "still bad\nVERDICT: REQUEST_CHANGES")
+
+    result = p.review_story("escoracledone", "S1")
+
+    story = _read_manifest(plan_dir, "escoracledone")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert story["rework_attempts"] == 3
+    assert result["status"] == "parked"
+
+
 def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_dir, monkeypatch):
     """A local reviewer's internal error (e.g. a malformed backend response
     surfacing as a bare KeyError) must not crash review_story - it must

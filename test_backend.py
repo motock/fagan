@@ -238,6 +238,41 @@ def test_complete_review_loop_nudges_to_submit_near_step_cap(tmp_path, monkeypat
     assert nudges, "expected a convergence nudge mentioning submit_review near the cap"
 
 
+def test_complete_review_loop_repeats_nudge_every_step_near_cap(tmp_path, monkeypatch):
+    """A model that ignores the first convergence nudge and keeps calling
+    bash must be re-nudged on EVERY subsequent step within the final window,
+    not just once — a single nudge deep in a long agentic transcript is easy
+    for a weak local model to lose track of. This is what let gpt-oss exhaust
+    the full 20-step review cap in 3 of 5 observed review cycles on
+    2026-07-04 (ratelimiter_inspect benchmark) despite the nudge firing once
+    at 5-steps-remaining: the model just kept calling view_file/bash past it,
+    with nothing reinforcing the instruction for the remaining steps."""
+    driver = b.OllamaDriver()
+    driver.review_max_steps = 6
+    last_msg_had_nudge = []
+
+    def chat(messages, model, tools=None):
+        last_msg_had_nudge.append(
+            bool(messages) and messages[-1].get("role") == "user"
+            and "submit_review" in (messages[-1].get("content") or "")
+        )
+        return {"tool_calls": [{"function": {"name": "bash",
+                                              "arguments": {"command": "ls"}}}]}
+
+    monkeypatch.setattr(driver, "_chat", chat)
+    driver.complete("review the branch", system="r", model="sonnet",
+                    allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    # review_max_steps=6 -> the "few steps left" window covers 5 calls
+    # (5 down to 1 remaining). A model that never converges should be
+    # re-nudged before most of those, not just the first one.
+    nudge_count = sum(last_msg_had_nudge)
+    assert nudge_count >= 3, (
+        f"expected the nudge to repeat across multiple steps near the cap, "
+        f"got {nudge_count} nudged calls: {last_msg_had_nudge}"
+    )
+
+
 def test_complete_review_loop_salvages_prose_verdict_on_cap(tmp_path, monkeypatch):
     """If the model writes its verdict as prose — a terminal 'VERDICT:' line as
     its conclusion — instead of calling submit_review, the loop must salvage it

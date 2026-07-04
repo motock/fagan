@@ -170,6 +170,20 @@ REWORK_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS", "3"))
 # full budget).
 REWORK_MAX_ATTEMPTS_ORACLE = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE", "1"))
 
+# Rework budget for a story that has already been escalated to Claude (see
+# _escalate_review_to_claude). REWORK_MAX_ATTEMPTS_ORACLE exists to converge
+# LOCAL review fast; once escalation has already paid its cost (real Claude
+# usage, and often real wall-clock time - see 2026-07-04's benchmark
+# validation, where a story that escalated could take hours if the Claude
+# reviewer got rate-limited), reusing that same tight 1-attempt cap just
+# throttles Claude's shot at the SAME feedback for no benefit - 6 of 11
+# escalated cells in that validation run parked after exactly 1 post-
+# escalation cycle. Takes priority over REWORK_MAX_ATTEMPTS_ORACLE
+# regardless of whether the story has an acceptance oracle, since once
+# escalated the story is on the "give it a real shot" track, not the
+# "converge fast" track.
+REWORK_MAX_ATTEMPTS_ESCALATED = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED", "3"))
+
 # Inconclusive-review budget. A non-rate-limited UNKNOWN verdict (a reviewer
 # response with no parseable VERDICT line, or the fail-safe path for a
 # reviewer backend's own internal error) is not evidence the story needs
@@ -2288,9 +2302,12 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         story["review_feedback"] = reviewer_output
         attempts = story.get("rework_attempts", 0) + 1
         story["rework_attempts"] = attempts
-        rework_cap = (
-            REWORK_MAX_ATTEMPTS_ORACLE if story.get("acceptance") else REWORK_MAX_ATTEMPTS
-        )
+        if story.get("escalated"):
+            rework_cap = REWORK_MAX_ATTEMPTS_ESCALATED
+        elif story.get("acceptance"):
+            rework_cap = REWORK_MAX_ATTEMPTS_ORACLE
+        else:
+            rework_cap = REWORK_MAX_ATTEMPTS
         if attempts >= rework_cap:
             if _auto_escalation_enabled() and not story.get("escalated"):
                 _escalate_review_to_claude(

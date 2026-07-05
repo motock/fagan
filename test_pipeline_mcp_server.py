@@ -703,6 +703,37 @@ def test_run_reviewer_prompt_asks_reviewer_to_flag_missing_documentation(
     assert "README" in prompt
 
 
+def test_run_reviewer_prompt_does_not_block_on_docs_for_brand_new_code(
+    agents_dir, monkeypatch,
+):
+    """The documentation check (see the test above) must not fire as a
+    blocker for a brand-new addition nothing else in the repo calls yet --
+    only for behavior EXISTING callers/users already depend on. Without this
+    distinction, every new-module story (the common case for early-stage
+    work) burns a full extra dispatch+rework+re-review cycle on a doc nit
+    CLAUDE.md's own Blocking-vs-Suggestion guidance says should default to
+    Suggestion, not REQUEST_CHANGES -- and each of those cycles is a full
+    reviewer invocation, cloud or local, that a spurious block doesn't need
+    to spend (observed: a throwaway benchmark task's rate limiter got
+    REQUEST_CHANGES purely for missing README docs on a brand-new, not-yet-
+    consumed class, 2026-07-04)."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    prompt = captured["prompt"].lower()
+    assert "existing caller" in prompt or "existing consumer" in prompt or "already depend" in prompt
+    assert "suggestion" in prompt
+    assert "brand-new" in prompt or "brand new" in prompt
+
+
 def test_run_reviewer_uses_review_model_override_when_backend_is_local(monkeypatch):
     """Asymmetric review: both software-engineer.md and code-reviewer.md
     declare `model: sonnet`, so without an override dispatch and review

@@ -3588,6 +3588,152 @@ def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
     assert result["merged"] == ["P1"]
 
 
+def test_reverify_acceptance_returns_none_without_acceptance_block(monkeypatch, tmp_path):
+    # Ordinary TDD stories (no acceptance fixtures) are already covered by the
+    # full-suite gate at tests_passed time; the merge-time reverify is a no-op
+    # for them and must not spawn a subprocess.
+    def _boom_run(*a, **k):
+        raise AssertionError("must not run tests when there is no acceptance block")
+
+    monkeypatch.setattr(p.subprocess, "run", _boom_run)
+
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+
+    assert result == {"state": "none", "error": ""}
+
+
+def test_reverify_acceptance_returns_none_for_missing_worktree(monkeypatch):
+    def _boom_run(*a, **k):
+        raise AssertionError("must not run tests against a missing worktree")
+
+    monkeypatch.setattr(p.subprocess, "run", _boom_run)
+    story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
+
+    result = p._reverify_acceptance(story, "/no/such/worktree")
+
+    assert result == {"state": "none", "error": ""}
+
+
+def test_reverify_acceptance_returns_none_for_non_pytest_runner(monkeypatch, tmp_path):
+    # Scoping to specific acceptance paths only works for pytest; other
+    # runners fall back to "none" rather than a misscoped/wrong invocation.
+    def _boom_run(*a, **k):
+        raise AssertionError("must not run tests for a non-pytest project")
+
+    monkeypatch.setattr(p.subprocess, "run", _boom_run)
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["cargo", "test"]))
+    story = {"acceptance": [{"path": "tests/acceptance.rs", "source": "// x"}]}
+
+    result = p._reverify_acceptance(story, str(tmp_path))
+
+    assert result == {"state": "none", "error": ""}
+
+
+def test_reverify_acceptance_fails_when_oracle_red(monkeypatch, tmp_path):
+    # The exact case the RLI-3 merged-but-wrong incident needed caught: the
+    # acceptance test references behavior the branch never implemented.
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    seen_cmd = {}
+
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 1, stdout="AttributeError: no available_tokens", stderr="")
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
+
+    result = p._reverify_acceptance(story, str(tmp_path))
+
+    assert result["state"] == "fail"
+    assert "available_tokens" in result["error"]
+    assert seen_cmd["cmd"] == ["pytest", str(tmp_path / "test_acceptance.py")]
+
+
+def test_reverify_acceptance_passes_when_oracle_green(monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(p.subprocess, "run",
+                        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""))
+    story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
+
+    result = p._reverify_acceptance(story, str(tmp_path))
+
+    assert result == {"state": "pass", "error": ""}
+
+
+def test_advance_pipeline_acceptance_reverify_fail_blocks_merge(plan_dir, monkeypatch):
+    # A reviewer APPROVE + green CI is not sufficient to land a branch whose
+    # acceptance oracle, re-run independently right before merge, is red.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "accfail", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x",
+               "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "fail", "error": "AttributeError"})
+    merged_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
+
+    result = p.advance_pipeline("accfail")
+
+    story = _read_manifest(plan_dir, "accfail")["stories"]["P1"]
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert merged_calls == []
+    assert result["merged"] == []
+
+
+def test_advance_pipeline_acceptance_reverify_pass_merges(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    _write_manifest(plan_dir, "accok", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x",
+               "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    result = p.advance_pipeline("accok")
+
+    story = _read_manifest(plan_dir, "accok")["stories"]["P1"]
+    assert story["status"] == "done"
+    assert result["merged"] == ["P1"]
+
+
+def test_approve_merge_acceptance_reverify_fail_returns_error(plan_dir, monkeypatch):
+    # The manual override must also refuse to land a branch whose acceptance
+    # oracle fails on reverification, even with a prior reviewer APPROVE.
+    _write_manifest(plan_dir, "amacc", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/x",
+               "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "fail", "error": "AttributeError"})
+    merged_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
+
+    result = p.approve_merge("amacc", "P1")
+
+    assert result["ok"] is False
+    assert "acceptance reverify fail" in result["error"]
+    assert merged_calls == []
+
+
 def test_approve_merge_rebase_conflict_returns_error(plan_dir, monkeypatch):
     # The manual override must also refuse to land a conflicting branch; it
     # surfaces the rebase failure rather than calling _merge_pr.

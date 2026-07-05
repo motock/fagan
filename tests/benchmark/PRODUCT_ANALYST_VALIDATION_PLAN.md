@@ -215,3 +215,149 @@ config.
   direct-then-transitive dependency-blocking detection) only affected the
   offline self-test and the harness's own wall-clock efficiency, not the
   live-run results themselves.
+
+---
+
+## Results — post-fix rerun (2026-07-04, same config, `_runs/rli_pa_validation_postfix/`)
+
+Digging into *why* the above run failed led to two production fixes, committed
+separately from this experiment: the per-target repetition guard now resets on
+a real edit instead of counting reads cumulatively for the whole run
+(`852c6ad`), and the local reviewer's "wrap up" nudge now repeats every step
+near the cap instead of firing once (`63e37cc`). Re-ran the identical 6-cell
+comparison to see whether either fix moved the numbers.
+
+| Condition | Trial | Final status | Merged | Groundtruth passed | Note |
+|---|---|---|---|---|---|
+| M | 0 | done | yes | **yes** | — |
+| M | 1 | done | yes | **yes** | — |
+| M | 2 | done | yes | **yes** | — |
+| D | 0 | done | yes | **no** | merged-but-wrong (see below) |
+| D | 1 | done | yes | **yes** | — |
+| D | 2 | incomplete | no | — | RLI-1 parked after 3 REQUEST_CHANGES rework cycles |
+
+**Completion rate (merged):** M 3/3 (100%, up from 1/3) vs D 2/3 (67%, up from 0/3).
+**Correct AND merged (the metric that actually matters):** M 3/3 (100%) vs D 1/3 (33%).
+
+### Reading it
+
+The reviewer-nudge fix fully resolved Condition M's problem: all 3 trials now
+merge, and all 3 remain groundtruth-correct — matching the pre-fix run, where
+the code was already correct 3/3 times but only landed once. That's a clean,
+unambiguous win, independent of the Story Sizing question.
+
+Condition D also improved — no repetition-guard trips this time; both
+trials that reached RLI-2 got past it — but the Story Sizing hypothesis
+**still isn't supported**. D/trial 0 is the important result: all three
+stories reached `done` and the pipeline merged the work, but the independent
+groundtruth failed. Inspecting the merged repo directly: `rate_limiter.py` was
+never touched by RLI-3's dispatch at all — the only diff was a one-line
+comment in the test file (`# Additional tests for available_tokens method`)
+and the materialized `test_acceptance.py` fixture itself. No implementation,
+no real test, yet the story reached `tests_passed` and got `APPROVE`.
+
+This is a genuine merged-but-wrong regression, and specifically the failure
+mode the acceptance-oracle gate (`pipeline_mcp_server.py`'s FM-A scoping,
+`backend.py`'s `oracle_result()`) exists to prevent — `test_acceptance.py`
+directly calls `available_tokens()`, which doesn't exist in the merged code,
+so a pytest run against it should have failed with an `AttributeError` and
+kept the story out of `tests_passed`. Both the server-side gate and the
+agent's own client-side `oracle_result()` check look correct on inspection;
+neither the worktree nor `agent.log` survived past the successful merge
+(cleaned up on success), so the exact mechanism is **not yet root-caused** —
+only the outcome is confirmed. Worth a follow-up investigation on its own,
+independent of the Story Sizing question, and probably higher priority: a gate
+that can be bypassed is a bigger risk than a model that's merely slow.
+
+D/trial 2 parked cleanly this time (no runaway spin, no repetition-guard
+false-positive) — three genuine `REQUEST_CHANGES` cycles exhausted the
+rework budget. A normal, working outcome of the pipeline's own safety net.
+
+### Updated bottom line
+
+Both production fixes were real, valuable improvements — Condition M went
+from 33% completion (despite always-correct code) to 100%. But
+they didn't change the answer to the original question: product-analyst's
+3-story decomposition still underperforms the monolithic story on this task
+(33% correct-and-merged vs 100%), and now surfaced a more serious problem
+(a gate that let wrong code merge) that deserves investigation before this
+config is trusted for anything beyond benchmarking.
+
+## Investigating the merged-but-wrong RLI-3 incident (2026-07-04)
+
+### Ruled out by code inspection
+
+- **Pre-merge rebase (`_rebase_onto_master`)**: aborts and reports a conflict
+  rather than silently applying a partial merge. Not the mechanism — and moot
+  here anyway, since RLI-3 had no sibling stories to drift against (it
+  dispatches strictly after RLI-2 already merged, so its branch base was
+  already current master).
+- **`bash`-tool bypass of the acceptance-file guard**: `is_oracle_path()` in
+  `local_agent_oracle.py` only blocks `create_file`/`str_replace` on the
+  oracle path, not `bash` (a model could `rm`/overwrite it via shell and
+  dodge the guard) — a real gap, confirmed by reading the code, but not what
+  happened here: the merged `test_acceptance.py` still has all 10 original
+  tests unmodified, so it wasn't tampered with.
+- **Squash-merge conflict silently landing a partial diff**: `harness.py`'s
+  merge stub runs `git merge --squash` then `git commit` with `check=True`
+  (`_sh`'s default) — a real conflict would raise `CalledProcessError` and
+  crash the cell, not complete cleanly. Our cells completed cleanly.
+
+### Live repro: 2 attempts, 0 reproductions
+
+Built `tests/benchmark/_repro/repro_rli3.py`: seeds a fresh repo with the
+*actual* RLI-1+RLI-2 code from the incident (copied from
+`_runs/rli_pa_validation_postfix/.../t0/repo` at the commit right after
+RLI-2's merge), then dispatches only RLI-3 against it, with the merge stub
+patched to keep the worktree on success so logs survive regardless of
+outcome.
+
+- **Attempt 1**: gpt-oss correctly implemented `available_tokens()` (with a
+  shared `_tokens_after_refill` helper, exactly per instructions), reached
+  `done`/`APPROVE`, groundtruth passed.
+- **Attempt 2**: the agent genuinely attempted the work (5 `str_replace`
+  calls to `rate_limiter.py` across the run, visible in the preserved
+  `agent.log`) but hit the repetition guard and parked — `status: failed`,
+  never reached review, `rate_limiter.py` correctly left untouched on master.
+  Side note (not a new bug, just a design observation): `nudged_repeat` is a
+  single flag for the whole run, not per-signature, so an early nudge on one
+  repeated target (`test_rate_limiter.py`) consumed the agent's only warning,
+  and a later, unrelated repetition (`rate_limiter.py`) went straight to
+  park with no second chance.
+
+Neither attempt reproduced the actual incident (reaching `done`/`APPROVE`
+with zero real implementation). At this sample size that's consistent with a
+rare, non-deterministic model-behavior tail event rather than a deterministic
+pipeline defect — but it also means **the exact mechanism is still not
+confirmed**, only the outcome (from the original run's artifacts) and what
+it isn't (the three ruled-out mechanisms above).
+
+### A structural gap this surfaced regardless of root cause
+
+The benchmark harness's CI stub (`harness.py`'s `_ci_status_stub`)
+unconditionally returns `{"state": "pass"}` — it never actually runs
+anything. In a real deployment, `_ci_status` polls genuine CI, and a repo
+with a pytest CI job would very likely have caught this before merge as a
+second, independent check. The hermetic benchmark has no equivalent: once
+whatever let `tests_passed` get set incorrectly happened, there was no
+second layer to catch it. That's a **defense-in-depth gap in the test
+harness itself**, independent of whatever the original root cause turns out
+to be, and cheap to close: make the stub actually run the acceptance oracle
+(or the full suite) before reporting pass, mirroring what real CI would do.
+
+### Recommended follow-ups (not yet done)
+
+1. **Close the benchmark's CI-stub gap** (low-risk, harness-only): have
+   `_ci_status_stub` actually run the story's acceptance oracle against the
+   branch and report `fail` if it doesn't pass, instead of always reporting
+   `pass`. This alone would have caught the RLI-3 incident before merge.
+2. **Consider an independent pre-merge re-verification in the real pipeline**
+   (broader, production-level): don't rely solely on external CI configuration
+   (which may not exist for a given repo) — have the merge gate itself
+   re-run a story's acceptance oracle right before merging, as a second,
+   self-contained check independent of review. This is the same
+   defense-in-depth principle CLAUDE.md already asks for elsewhere in this
+   codebase.
+3. Keep an eye out for a natural recurrence with logs preserved (don't clean
+   up a worktree on a *first* occurrence of an anomaly like this if one is
+   spotted again), since live reproduction is expensive and low-yield.

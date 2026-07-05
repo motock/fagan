@@ -694,6 +694,86 @@ def test_oracle_returns_true_with_short_circuit_when_no_acceptance_paths(tmp_pat
     assert called["run"] is False, "subprocess.run must not be called when ACCEPTANCE_PATHS is empty"
 
 
+# ---------- oracle-file tamper protection ----------
+# create_file/str_replace are blocked from touching the acceptance path
+# directly (is_oracle_path), but that guard is a no-op for the bash tool,
+# which can rm/overwrite/sed-in-place the file with no such check. A model
+# could dodge the guard entirely via shell. These lock in both the existing,
+# previously-untested create_file/str_replace guard and the new bash-tamper
+# detection (snapshot-and-restore, since arbitrary shell syntax can't be
+# reliably pattern-matched).
+
+def test_create_file_on_oracle_path_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["test_acceptance.py"])
+    (tmp_path / "test_acceptance.py").write_text("def test_x(): assert True\n")
+
+    result = lao.run_tool("create_file", {"path": "test_acceptance.py", "content": "def test_x(): pass\n"})
+
+    assert "must NOT be modified" in result
+    assert (tmp_path / "test_acceptance.py").read_text() == "def test_x(): assert True\n"
+
+
+def test_str_replace_on_oracle_path_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["test_acceptance.py"])
+    (tmp_path / "test_acceptance.py").write_text("def test_x(): assert True\n")
+
+    result = lao.run_tool("str_replace", {
+        "path": "test_acceptance.py", "old_str": "assert True", "new_str": "assert False",
+    })
+
+    assert "must NOT be modified" in result
+    assert (tmp_path / "test_acceptance.py").read_text() == "def test_x(): assert True\n"
+
+
+def test_bash_deleting_oracle_file_is_restored(tmp_path, monkeypatch):
+    """The concrete gap: is_oracle_path only guards create_file/str_replace,
+    so a model could `rm` the acceptance file via bash to dodge it entirely.
+    The snapshot-and-restore check must put it back and warn, regardless of
+    what shell command was used to remove it."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["test_acceptance.py"])
+    original = "def test_x(): assert True\n"
+    (tmp_path / "test_acceptance.py").write_text(original)
+    lao._capture_oracle_snapshot()
+
+    result = lao.run_tool("bash", {"command": "rm test_acceptance.py"})
+
+    assert (tmp_path / "test_acceptance.py").exists()
+    assert (tmp_path / "test_acceptance.py").read_text() == original
+    assert "restored" in result.lower()
+
+
+def test_bash_overwriting_oracle_file_is_restored(tmp_path, monkeypatch):
+    """Same gap, different shell technique: overwriting via redirection
+    instead of deleting. Must be caught the same way."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["test_acceptance.py"])
+    original = "def test_x(): assert True\n"
+    (tmp_path / "test_acceptance.py").write_text(original)
+    lao._capture_oracle_snapshot()
+
+    result = lao.run_tool("bash", {"command": "echo 'def test_x(): pass' > test_acceptance.py"})
+
+    assert (tmp_path / "test_acceptance.py").read_text() == original
+    assert "restored" in result.lower()
+
+
+def test_bash_not_touching_oracle_file_is_unaffected(tmp_path, monkeypatch):
+    """The restore check must not false-positive on ordinary bash calls that
+    never touch the oracle file at all."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["test_acceptance.py"])
+    (tmp_path / "test_acceptance.py").write_text("def test_x(): assert True\n")
+    lao._capture_oracle_snapshot()
+
+    result = lao.run_tool("bash", {"command": "echo hello"})
+
+    assert "restored" not in result.lower()
+    assert "hello" in result
+
+
 def test_oracle_script_importable_from_non_pipeline_cwd(tmp_path):
     """Regression guard for the PR #32 fix: the oracle harness must
     import pipeline_mcp_server at module load (reused for _heavy_lock +

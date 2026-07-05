@@ -7,3 +7,8 @@ _dbg_out.txt
 __pycache__/
 .ruff_cache/
 _realtest.out
+
+# _repro/ scripts are kept (reusable diagnostic tooling, see
+# PRODUCT_ANALYST_VALIDATION_PLAN.md); the regenerable git workspace itself
+# is ignored (its logs already match the root .gitignore's *.log rule).
+_repro/cell/

@@ -29,7 +29,9 @@ every trial to GitHub would add nothing but flakiness. Instead we keep ALL `git`
 operations real (against the local bare origin) and monkeypatch only the three
 `gh`-calling seams so the full state machine still runs to `done` hermetically:
 
-    _ci_status   -> always "pass"
+    _ci_status   -> actually runs the story's worktree test suite (a second,
+                    independent check before merge, mirroring real CI --
+                    NOT a rubber-stamp; see install_merge_stubs)
     _open_pr     -> real `git push`, returns a file:// URL (no `gh pr create`)
     _merge_pr    -> real local squash-merge into master + push (no `gh pr merge`)
 
@@ -362,7 +364,28 @@ def install_merge_stubs(p, repo: Path) -> None:
     """Replace the three gh-calling seams with hermetic git-only equivalents."""
 
     def _ci_status_stub(branch, *, timeout_s=None):
-        return {"state": "pass", "error": ""}
+        """Actually run the story's worktree test suite, mirroring what a
+        real CI pipeline would do -- unlike a rubber-stamp "always pass",
+        this is a second, independent check before merge. Without it the
+        hermetic benchmark has no equivalent to what a real CI-gated repo
+        provides, which is one plausible contributor to a merged-but-wrong
+        story slipping through undetected (see the RLI-3 incident in
+        PRODUCT_ANALYST_VALIDATION_PLAN.md, 2026-07-04). Runs against the
+        story's worktree (already rebased onto current master by the time
+        the merge gate calls this) rather than the not-yet-merged branch
+        tip in the shared repo, so this needs no extra checkout.
+        """
+        story_key = branch.split("/", 1)[1].upper()
+        worktree = p.WORKTREE_ROOT / story_key
+        if not worktree.is_dir():
+            return {"state": "pass", "error": ""}
+        test_dir, test_cmd = p.detect_test_command(worktree)
+        if not test_cmd:
+            return {"state": "pass", "error": ""}
+        r = subprocess.run(test_cmd, cwd=test_dir, capture_output=True, text=True)
+        if r.returncode == 0:
+            return {"state": "pass", "error": ""}
+        return {"state": "fail", "error": (r.stdout + r.stderr)[-500:]}
 
     def _open_pr_stub(worktree, story_key, story):
         branch = f"agent/{story_key.lower()}"

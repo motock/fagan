@@ -371,6 +371,49 @@ def is_oracle_path(path: str) -> bool:
                for p in ACCEPTANCE_PATHS)
 
 
+# is_oracle_path only guards create_file/str_replace (run_tool checks it
+# directly for those two). It's a no-op for the bash tool, which can
+# rm/overwrite/sed-in-place the acceptance file with no such check -- a model
+# could dodge the guard entirely via shell. Arbitrary shell syntax can't be
+# reliably pattern-matched (rm, mv, redirection, sed -i, a python one-liner,
+# ... too many ways to write the same effect), so instead of trying to block
+# the command text, snapshot the oracle files' real content up front and
+# restore them after any bash call that changed them -- this can't be evaded
+# by shell cleverness since it checks the actual bytes on disk.
+_ORACLE_SNAPSHOT: dict[str, str | None] = {}
+
+
+def _capture_oracle_snapshot() -> None:
+    _ORACLE_SNAPSHOT.clear()
+    for rel in ACCEPTANCE_PATHS:
+        path = CWD / rel
+        _ORACLE_SNAPSHOT[rel] = path.read_text() if path.exists() else None
+
+
+def _restore_tampered_oracle_files() -> str:
+    """Restore any acceptance path whose on-disk content no longer matches
+    its snapshot. Returns a warning to append to the bash tool's result, or
+    "" if nothing was tampered with."""
+    restored = []
+    for rel, original in _ORACLE_SNAPSHOT.items():
+        path = CWD / rel
+        current = path.read_text() if path.exists() else None
+        if current != original:
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(original)
+            restored.append(rel)
+    if not restored:
+        return ""
+    names = ", ".join(restored)
+    return (f"\n\nWARNING: {names} is the read-only acceptance suite and was "
+            f"restored after being modified via bash. It must NOT be edited "
+            f"or deleted by any means, including shell commands. Change the "
+            f"implementation file instead.")
+
+
 
 # Consecutive syntax-rejection count per path, so a model that resubmits the
 # same broken content can be escalated instead of silently retrying forever
@@ -499,7 +542,10 @@ def run_tool(fn, args) -> str:
                 pr = subprocess.run(cmd, **run_kwargs)
         else:
             pr = subprocess.run(cmd, **run_kwargs)
-        return (pr.stdout + pr.stderr)[:3000] or "(no output)"
+        result = (pr.stdout + pr.stderr)[:3000] or "(no output)"
+        if ACCEPTANCE_PATHS:
+            result += _restore_tampered_oracle_files()
+        return result
     return f"unknown tool {fn}"
 
 
@@ -540,6 +586,8 @@ def main() -> int:
         print("[local_agent_oracle] WARNING: no LOCAL_AGENT_ACCEPTANCE; "
               "this variant should not have been launched. Falling back to "
               "no-oracle behavior — done is honored on clean worktree + model `done`.", flush=True)
+    else:
+        _capture_oracle_snapshot()
 
     exclude_runtime_artifacts()
 

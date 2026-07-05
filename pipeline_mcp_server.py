@@ -916,6 +916,47 @@ def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
     return {"state": "pending", "error": "CI did not complete within timeout"}
 
 
+def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]:
+    """Re-run a story's acceptance oracle against its (rebased) worktree right
+    before merge, as a second check independent of review and of whatever
+    `check_story_status` decided when it set `tests_passed`.
+
+    A repo's own CI (`_ci_status`) only exists if the repo has one configured;
+    a story graded against a harness-owned `acceptance` block deserves the
+    same re-verification regardless. Returns ``{"state": "pass"|"fail"|"none",
+    "error": str}`` — ``"none"`` when the story carries no acceptance block
+    (ordinary TDD stories, already covered by the full-suite gate at
+    `tests_passed` time) or the test runner can't be scoped to specific paths
+    (non-pytest), mirroring `_ci_status`'s "no CI configured" semantics so
+    callers treat both the same way.
+    """
+    acceptance = story.get("acceptance") or []
+    if not acceptance or not worktree or not Path(worktree).is_dir():
+        return {"state": "none", "error": ""}
+    test_dir, test_cmd = detect_test_command(Path(worktree))
+    if not _is_pytest_cmd(test_cmd):
+        return {"state": "none", "error": ""}
+    acceptance_paths = [str(Path(worktree) / p) for p in _acceptance_rel_paths(story)]
+    test_cmd = test_cmd + acceptance_paths
+    # Same operational-env stripping as check_story_status: PIPELINE_*/
+    # LOCAL_AGENT_*/REPO_ROOT are harness config, not developer defaults the
+    # suite asserts against.
+    test_env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("PIPELINE_")
+        and not k.startswith("LOCAL_AGENT_")
+        and k != "REPO_ROOT"
+    }
+    if _is_heavy(test_cmd):
+        with _heavy_lock():
+            r = subprocess.run(test_cmd, cwd=test_dir, capture_output=True, text=True, env=test_env)
+    else:
+        r = subprocess.run(test_cmd, cwd=test_dir, capture_output=True, text=True, env=test_env)
+    if r.returncode == 0:
+        return {"state": "pass", "error": ""}
+    return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
+
+
 def _escalate_to_claude(
     manifest: dict, plan_name: str, story_key: str, manifest_path: Path
 ) -> None:
@@ -2716,6 +2757,14 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         gate_error = f"ci fail: {ci['error']}"
                     elif ci["state"] == "pending":
                         gate_error = f"ci pending: {ci['error']}"
+                if not gate_error:
+                    # Independent of review: re-run the acceptance oracle
+                    # against the just-rebased branch right before merging.
+                    # Closes the gap CI alone can't (a repo without CI, or a
+                    # CI-independent slip between tests_passed and review).
+                    acc = _reverify_acceptance(story, worktree)
+                    if acc["state"] == "fail":
+                        gate_error = f"acceptance reverify fail: {acc['error']}"
 
             if gate_error:
                 attempts = story.get("merge_attempts", 0) + 1
@@ -2809,6 +2858,10 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                         "story_key": story_key}
             if ci["state"] == "pending":
                 return {"ok": False, "error": f"CI still pending: {ci['error']}",
+                        "story_key": story_key}
+            acc = _reverify_acceptance(story, worktree)
+            if acc["state"] == "fail":
+                return {"ok": False, "error": f"acceptance reverify fail: {acc['error']}",
                         "story_key": story_key}
             _merge_pr(story.get("worktree", ""), story_key)
     except Exception as e:  # surface the gh/git failure to the human, don't raise

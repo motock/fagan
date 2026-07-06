@@ -37,8 +37,14 @@ class Backend(Protocol):
     def complete(
         self, prompt: str, *, system: str | None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
-        """Run a blocking, single invocation and return its captured output."""
+        """Run a blocking, single invocation and return its captured output.
+
+        `max_tokens` is an optional cap on the response. Claude-backed drivers
+        pass it through as `--max-tokens`; Ollama-backed drivers ignore it
+        (Ollama caps the response via the model's own context window).
+        """
         ...
 
     def dispatch(
@@ -70,12 +76,19 @@ class ClaudeCliDriver:
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         cmd = ["claude", "-p", prompt, "--model", model]
         if system:
             cmd += ["--append-system-prompt", system]
         if allowed_tools:
             cmd += ["--allowedTools", allowed_tools]
+        # Cap the response so a runaway review can't burn a huge output token
+        # budget. Default leaves it uncapped (matching pre-existing behavior
+        # for the overlord path, which gets a tiny prompt and a tiny expected
+        # output). Review callers override via PIPELINE_REVIEW_MAX_TOKENS.
+        if max_tokens is not None:
+            cmd += ["--max-tokens", str(max_tokens)]
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         return proc.stdout
 
@@ -340,7 +353,11 @@ class OllamaDriver:
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
+        # max_tokens is honored by the Claude driver; Ollama caps the response
+        # via the model's own context window (num_ctx in _chat), so we accept
+        # the kwarg to satisfy the protocol but don't act on it here.
         # Review-style call: allowed_tools includes Bash and a worktree cwd is
         # given (see _run_reviewer). The model must actually run the tests and
         # read files, then emit a VERDICT — so run a blocking read-only tool

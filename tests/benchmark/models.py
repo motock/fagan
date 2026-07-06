@@ -90,6 +90,46 @@ MODELS: dict[str, dict] = {
             "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get("BENCH_DEVSTRAL_TAG", "devstral:24b"),
         },
     },
+    # Asymmetric review on minimax-m3:cloud (the existing minimax cell on its
+    # own has a known history: read-loop-parks on one story, trips the
+    # per-target guard on another - so the implementation role was never
+    # fully green; we're testing it in the reviewer role instead, where the
+    # failure mode is safe (no clean verdict -> UNKNOWN -> never false
+    # auto-merge). This validates the gpt-oss-implements / minimax-reviews
+    # combination live. Same dispatch settings as gptoss_temp03, with
+    # PIPELINE_BACKEND_REVIEW=local and the review model pinned here so
+    # neither is left to the invoking shell.
+    "gptoss_minimax_review": {
+        "mock": False,
+        "env": {
+            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
+                     temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_BACKEND_REVIEW": "local",
+            "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get("BENCH_MINIMAX_TAG", "minimax-m3:cloud"),
+        },
+    },
+    # Asymmetric review on glm-5.2:cloud. Same dispatch as gptoss_temp03
+    # (gpt-oss:20b implements locally, no Claude usage consumed), with
+    # PIPELINE_BACKEND_REVIEW=local and the review model pinned to
+    # glm-5.2:cloud (an Ollama cloud-hosted model comparable to Claude in
+    # capability per the user's read of the model card; also capable of
+    # native tool-calling, verified live). Used to measure the cost impact
+    # of the driver-level token-spend fixes (memory: user dropped on
+    # reviewers, --max-tokens cap, tightened persona prose) when the
+    # reviewer model is a cloud model the user is NOT rate-limited on -
+    # glm-5.2:cloud's /api/chat response carries the same
+    # prompt_eval_count / eval_count fields as Anthropic's API, so the
+    # measurement transfers 1:1 to a real Claude review run once the
+    # weekly limit resets.
+    "gptoss_glm_review": {
+        "mock": False,
+        "env": {
+            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
+                     temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_BACKEND_REVIEW": "local",
+            "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get("BENCH_GLM_TAG", "glm-5.2:cloud"),
+        },
+    },
     # --- cloud (claude CLI) ---
     "sonnet": {
         "mock": False,

@@ -101,7 +101,7 @@ def main() -> int:
     p.ingest_plan(plan_name)
 
     deadline = time.time() + 3600
-    ticks = harness.drive(p, plan_name, "RLI-3", deadline, tick_interval=10.0)
+    harness.drive(p, plan_name, "RLI-3", deadline, tick_interval=10.0)
 
     manifest = json.loads((plans / f"{plan_name}.manifest.json").read_text())
     story_final = manifest["stories"]["RLI-3"]

@@ -38,12 +38,21 @@ class Backend(Protocol):
         self, prompt: str, *, system: str | None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
         max_tokens: int | None = None,
+        cell_dir: str | None = None,
     ) -> str:
         """Run a blocking, single invocation and return its captured output.
 
         `max_tokens` is an optional cap on the response. Claude-backed drivers
         pass it through as `--max-tokens`; Ollama-backed drivers ignore it
         (Ollama caps the response via the model's own context window).
+
+        `cell_dir`, when set, is the per-cell directory the caller is running
+        in (the benchmark's <run>/<task>__<model>__t<trial>/ path). Drivers
+        with structured per-call usage data (Ollama's response envelope,
+        Claude's --output-format json) append a JSONL record to
+        `<cell_dir>/review_token_costs.jsonl` so the data survives the
+        worktree cleanup that wipes the live review.log. Drivers that can't
+        extract structured usage silently skip the sidecar.
         """
         ...
 
@@ -52,6 +61,21 @@ class Backend(Protocol):
         allowed_tools: str | None, cwd: Path, log_path: Path, append: bool,
     ) -> AgentHandle:
         """Spawn a non-blocking agentic run, streaming output to log_path."""
+        ...
+
+    def record_token_usage(
+        self, usage: dict, *, cell_dir: str | None = None,
+        role: str = "review", step: int | None = None,
+        verdict: str | None = None,
+    ) -> None:
+        """Append a per-call token-usage record to the cell's sidecar.
+
+        Default no-op so drivers without structured usage data don't have
+        to implement anything. Drivers that do have it (Ollama, Claude)
+        override to JSONL-append to <cell_dir>/review_token_costs.jsonl
+        and swallow OSError so a failed write never breaks the review
+        loop. The schema is documented on the concrete drivers.
+        """
         ...
 
     def usage_probe_text(self) -> str:
@@ -76,7 +100,7 @@ class ClaudeCliDriver:
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
-        max_tokens: int | None = None,
+        max_tokens: int | None = None, cell_dir: str | None = None,
     ) -> str:
         cmd = ["claude", "-p", prompt, "--model", model]
         if system:
@@ -89,8 +113,78 @@ class ClaudeCliDriver:
         # output). Review callers override via PIPELINE_REVIEW_MAX_TOKENS.
         if max_tokens is not None:
             cmd += ["--max-tokens", str(max_tokens)]
+        # When cell_dir is set, switch to --output-format json so we can
+        # extract per-call usage (input_tokens, output_tokens,
+        # total_cost_usd, duration_ms) and append it to the cell's
+        # token-cost sidecar. Falls back to text output for any caller that
+        # doesn't pass cell_dir (the overlord path, ad-hoc single-shots).
+        if cell_dir is not None:
+            cmd += ["--output-format", "json"]
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-        return proc.stdout
+        if cell_dir is None:
+            return proc.stdout
+        # Structured path: parse the JSON envelope, record usage, return
+        # just the `result` field so callers (and _parse_verdict) see the
+        # same text they would have seen without --output-format json.
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            # Defensive: if the CLI somehow returned non-JSON despite
+            # --output-format json, fall back to raw stdout so the caller's
+            # verdict parser still has something to scan. No usage record
+            # is written in that case.
+            return proc.stdout
+        result_text = payload.get("result", proc.stdout)
+        usage = payload.get("usage", {}) or {}
+        self.record_token_usage(
+            {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+                "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+                "total_cost_usd": payload.get("total_cost_usd"),
+                "duration_ms": payload.get("duration_ms"),
+                "model": model,
+            },
+            cell_dir=cell_dir, role="complete",
+        )
+        return result_text
+
+    def record_token_usage(
+        self, usage: dict, *, cell_dir: str | None = None,
+        role: str = "review", step: int | None = None,
+        verdict: str | None = None,
+    ) -> None:
+        """Append a Claude usage record to <cell_dir>/review_token_costs.jsonl.
+
+        Best-effort: any OSError (unwritable cell_dir, missing parent,
+        review_token_costs.jsonl pre-empted by a directory) is swallowed
+        so a failed sidecar write never breaks the review loop - same
+        pattern as _append_review_log for the prose transcript.
+        """
+        if cell_dir is None:
+            return
+        try:
+            from datetime import datetime, timezone
+            record = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "backend": "claude",
+                "model": usage.get("model", "?"),
+                "role": role,
+                "step": step,
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+                "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+                "total_cost_usd": usage.get("total_cost_usd"),
+                "duration_ms": usage.get("duration_ms"),
+                "duration_ns": None,
+                "verdict": verdict,
+            }
+            with open(Path(cell_dir) / "review_token_costs.jsonl", "a") as f:
+                f.write(json.dumps(record) + "\n")
+        except OSError:
+            pass
 
     def dispatch(
         self, prompt: str, *, system: str | None = None, model: str,
@@ -354,6 +448,7 @@ class OllamaDriver:
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
         max_tokens: int | None = None,
+        cell_dir: str | None = None,
     ) -> str:
         # max_tokens is honored by the Claude driver; Ollama caps the response
         # via the model's own context window (num_ctx in _chat), so we accept
@@ -365,7 +460,8 @@ class OllamaDriver:
         # tool loop when `claude -p` is given allowed_tools+cwd. Overlord-style
         # calls (allowed_tools="Read", no cwd) fall through to single-shot.
         if cwd is not None and allowed_tools and "Bash" in allowed_tools.split(","):
-            return self._review_loop(prompt, system=system, model=model, cwd=cwd)
+            return self._review_loop(prompt, system=system, model=model,
+                                     cwd=cwd, cell_dir=cell_dir)
 
         resolved_model = _resolve_local_model(model)
         messages = []
@@ -373,13 +469,27 @@ class OllamaDriver:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         try:
-            payload = self._chat(messages, resolved_model)
+            envelope = self._chat(messages, resolved_model)
         except httpx.HTTPError as e:
             raise RuntimeError(
                 f"Local backend at {self.endpoint} (model={resolved_model}) "
                 f"is unreachable or errored: {e}"
             ) from e
-        return payload["content"]
+        # envelope is the full /api/chat response; the assistant message
+        # is in ["message"]. record_token_usage is best-effort and a no-op
+        # when cell_dir is None, matching ClaudeCliDriver.complete()'s
+        # "only record on the structured path" policy.
+        if cell_dir is not None:
+            self.record_token_usage(
+                {
+                    "input_tokens": envelope.get("prompt_eval_count", 0),
+                    "output_tokens": envelope.get("eval_count", 0),
+                    "duration_ns": envelope.get("total_duration"),
+                    "model": resolved_model,
+                },
+                cell_dir=cell_dir, role="complete",
+            )
+        return envelope["message"]["content"]
 
     def _chat(self, messages: list, model: str, tools: list | None = None) -> dict:
         # num_ctx/temperature are resolved per call (env override > per-model
@@ -399,7 +509,13 @@ class OllamaDriver:
             body["tools"] = tools
         resp = httpx.post(f"{self.endpoint}/api/chat", json=body, timeout=self.timeout)
         resp.raise_for_status()
-        return resp.json()["message"]
+        # Return the full response envelope (not just resp.json()["message"])
+        # so callers that have structured usage data (review loop's
+        # prompt_eval_count/eval_count/total_duration for the per-call
+        # token-cost sidecar) can extract it. The single-shot complete()
+        # path peels off ["message"] itself; the review loop peels off
+        # both the message and the usage fields.
+        return resp.json()
 
     # Read-only tools for the review loop. No create/edit — review must not
     # modify the tree (the "review does not merge / does not edit" guarantee).
@@ -425,7 +541,8 @@ class OllamaDriver:
                 "required": ["verdict"]}}},
     ]
 
-    def _review_loop(self, prompt: str, *, system: str | None, model: str, cwd: str) -> str:
+    def _review_loop(self, prompt: str, *, system: str | None, model: str,
+                      cwd: str, cell_dir: str | None = None) -> str:
         """Blocking read-only agentic loop for review. The model runs tests and
         reads files via tools, then calls submit_review with its verdict. Returns
         a `VERDICT: ...` text block (so pipeline_mcp_server._parse_verdict, shared
@@ -479,12 +596,28 @@ class OllamaDriver:
                     "or 'VERDICT: REQUEST_CHANGES' line)."})
             try:
                 try:
-                    m = self._chat(messages, resolved_model, tools=self._REVIEW_TOOLS)
+                    # _chat now returns the full /api/chat envelope (not just
+                    # the message), so we can pull prompt_eval_count /
+                    # eval_count / total_duration for the per-call
+                    # token-cost sidecar alongside the message body itself.
+                    envelope = self._chat(messages, resolved_model,
+                                           tools=self._REVIEW_TOOLS)
                 except httpx.HTTPError as e:
                     raise RuntimeError(
                         f"Local backend at {self.endpoint} (model={resolved_model}) "
                         f"is unreachable or errored during review: {e}"
                     ) from e
+                m = envelope["message"]
+                if cell_dir is not None:
+                    self.record_token_usage(
+                        {
+                            "input_tokens": envelope.get("prompt_eval_count", 0),
+                            "output_tokens": envelope.get("eval_count", 0),
+                            "duration_ns": envelope.get("total_duration"),
+                            "model": resolved_model,
+                        },
+                        cell_dir=cell_dir, role="review", step=i,
+                    )
                 messages.append(m)
                 if m.get("content"):
                     last_prose = m["content"]
@@ -535,6 +668,22 @@ class OllamaDriver:
                                 "what is wrong, and what must change."})
                             continue
                         _append_review_log(cwd, f"VERDICT: {verdict}\n")
+                        if cell_dir is not None:
+                            # The verdict-bearing call is i (the same step
+                            # the message above was already recorded for);
+                            # write a second row tagged with verdict= so
+                            # the analysis script can attribute total cost
+                            # to the final call without re-deriving it from
+                            # the transcript.
+                            self.record_token_usage(
+                                {
+                                    "input_tokens": 0,
+                                    "output_tokens": 0,
+                                    "model": resolved_model,
+                                },
+                                cell_dir=cell_dir, role="review",
+                                step=i, verdict=verdict,
+                            )
                         return f"VERDICT: {verdict}\n\n{title}\n{body}".strip()
                     result = _run_readonly_tool(fn, args, Path(cwd))
                     messages.append({"role": "tool", "content": result})
@@ -578,6 +727,43 @@ class OllamaDriver:
     _AGENT_SCRIPT = Path(__file__).resolve().parent / "scripts" / "local_agent.py"
     _AGENT_SCRIPT_ORACLE = Path(__file__).resolve().parent / "scripts" / "local_agent_oracle.py"
     _VENV_PYTHON = Path(__file__).resolve().parent / ".venv" / "bin" / "python3"
+
+    def record_token_usage(
+        self, usage: dict, *, cell_dir: str | None = None,
+        role: str = "review", step: int | None = None,
+        verdict: str | None = None,
+    ) -> None:
+        """Append an Ollama usage record to <cell_dir>/review_token_costs.jsonl.
+
+        Same JSONL sidecar as ClaudeCliDriver.record_token_usage; populated
+        fields differ because Ollama's /api/chat envelope has
+        prompt_eval_count/eval_count/total_duration (nanoseconds) but no
+        cache fields or USD cost. Best-effort: OSError is swallowed so a
+        failed sidecar write never breaks the review loop - same pattern
+        as ClaudeCliDriver.record_token_usage and _append_review_log.
+        """
+        if cell_dir is None:
+            return
+        try:
+            record = {
+                "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "backend": "ollama",
+                "model": usage.get("model", "?"),
+                "role": role,
+                "step": step,
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "cache_creation_input_tokens": None,
+                "cache_read_input_tokens": None,
+                "total_cost_usd": None,
+                "duration_ms": None,
+                "duration_ns": usage.get("duration_ns"),
+                "verdict": verdict,
+            }
+            with open(Path(cell_dir) / "review_token_costs.jsonl", "a") as f:
+                f.write(json.dumps(record) + "\n")
+        except OSError:
+            pass
 
     def dispatch(
         self, prompt: str, *, system: str | None = None, model: str,

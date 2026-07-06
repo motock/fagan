@@ -14,6 +14,17 @@ import pytest
 import backend as b
 
 
+# _chat was widened to return the full /api/chat envelope (not just the
+# message body) so the review loop can pull prompt_eval_count /
+# eval_count / total_duration for the per-call token-cost sidecar. Tests
+# that mock _chat below still want to express "here is the message the
+# model emits next" — _envelope wraps such a message in the minimal
+# envelope shape OllamaDriver._review_loop reads, so test bodies don't
+# have to spell out `{"message": {"content": ...}}` at every call site.
+def _envelope(message_body: dict) -> dict:
+    return {"message": message_body, "model": "test"}
+
+
 # ---------- Role routing ----------
 def test_get_backend_no_role_returns_claude_driver():
     assert isinstance(b.get_backend(), b.ClaudeCliDriver)
@@ -180,9 +191,9 @@ def test_complete_runs_readonly_review_loop_when_bash_and_cwd(tmp_path, monkeypa
     a single-shot hallucinated verdict."""
     driver = b.OllamaDriver()
     responses = [
-        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo ran-tests"}}}]},
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+        _envelope({"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo ran-tests"}}}]}),
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]}),
     ]
     tools_each_call = []
     monkeypatch.setattr(
@@ -202,7 +213,7 @@ def test_complete_review_loop_recovers_unnamed_tool_call(tmp_path, monkeypatch):
     """devstral sometimes emits a bare args object with no tool name; the loop
     must infer the tool from its keys (here: verdict -> submit_review)."""
     driver = b.OllamaDriver()
-    responses = [{"content": 'Looks good.\n{"verdict": "APPROVE", "summary": "ok"}'}]
+    responses = [_envelope({"content": 'Looks good.\n{"verdict": "APPROVE", "summary": "ok"}'})]
     monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
 
     out = driver.complete("review", system="r", model="sonnet",
@@ -227,8 +238,8 @@ def test_complete_review_loop_nudges_to_submit_near_step_cap(tmp_path, monkeypat
         seen_user_msgs.extend(
             m.get("content") for m in messages if m.get("role") == "user"
         )
-        return {"tool_calls": [{"function": {"name": "bash",
-                                              "arguments": {"command": "ls"}}}]}
+        return _envelope({"tool_calls": [{"function": {"name": "bash",
+                                              "arguments": {"command": "ls"}}}]})
 
     monkeypatch.setattr(driver, "_chat", chat)
     driver.complete("review the branch", system="r", model="sonnet",
@@ -256,8 +267,8 @@ def test_complete_review_loop_repeats_nudge_every_step_near_cap(tmp_path, monkey
             bool(messages) and messages[-1].get("role") == "user"
             and "submit_review" in (messages[-1].get("content") or "")
         )
-        return {"tool_calls": [{"function": {"name": "bash",
-                                              "arguments": {"command": "ls"}}}]}
+        return _envelope({"tool_calls": [{"function": {"name": "bash",
+                                              "arguments": {"command": "ls"}}}]})
 
     monkeypatch.setattr(driver, "_chat", chat)
     driver.complete("review the branch", system="r", model="sonnet",
@@ -283,8 +294,8 @@ def test_complete_review_loop_salvages_prose_verdict_on_cap(tmp_path, monkeypatc
     driver = b.OllamaDriver()
     driver.review_max_steps = 2
     responses = [
-        {"content": "Tests pass and the diff is clean. LGTM.\n\nVERDICT: APPROVE"},
-        {"content": "Tests pass and the diff is clean. LGTM.\n\nVERDICT: APPROVE"},
+        _envelope({"content": "Tests pass and the diff is clean. LGTM.\n\nVERDICT: APPROVE"}),
+        _envelope({"content": "Tests pass and the diff is clean. LGTM.\n\nVERDICT: APPROVE"}),
     ]
     monkeypatch.setattr(driver, "_chat",
                         lambda messages, model, tools=None: responses.pop(0))
@@ -304,10 +315,10 @@ def test_complete_review_loop_does_not_salvage_inline_verdict_mention(tmp_path, 
     driver = b.OllamaDriver()
     driver.review_max_steps = 2
     responses = [
-        {"content": "I'll end my reply with a VERDICT: APPROVE line as the nudge "
-                   "asked, but the tests actually fail and need fixing first."},
-        {"content": "I'll end my reply with a VERDICT: APPROVE line as the nudge "
-                   "asked, but the tests actually fail and need fixing first."},
+        _envelope({"content": "I'll end my reply with a VERDICT: APPROVE line as the nudge "
+                   "asked, but the tests actually fail and need fixing first."}),
+        _envelope({"content": "I'll end my reply with a VERDICT: APPROVE line as the nudge "
+                   "asked, but the tests actually fail and need fixing first."}),
     ]
     monkeypatch.setattr(driver, "_chat",
                         lambda messages, model, tools=None: responses.pop(0))
@@ -346,8 +357,8 @@ def test_complete_review_loop_survives_non_http_error_from_chat(tmp_path, monkey
     def chat(messages, model, tools=None):
         calls["n"] += 1
         if calls["n"] == 1:
-            return {"tool_calls": [{"function": {"name": "bash",
-                                                  "arguments": {"command": "echo hi"}}}]}
+            return _envelope({"tool_calls": [{"function": {"name": "bash",
+                                                  "arguments": {"command": "echo hi"}}}]})
         raise KeyError("message")
 
     monkeypatch.setattr(driver, "_chat", chat)
@@ -366,9 +377,9 @@ def test_complete_review_loop_survives_malformed_tool_call_shape(tmp_path, monke
     well-formed submit_review call."""
     driver = b.OllamaDriver()
     responses = [
-        {"tool_calls": [{"bogus": "shape"}]},
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "APPROVE", "summary": "ok"}}}]},
+        _envelope({"tool_calls": [{"bogus": "shape"}]}),
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "ok"}}}]}),
     ]
     monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
 
@@ -386,11 +397,11 @@ def test_complete_review_loop_rejects_findings_less_request_changes_once(tmp_pat
     model's follow-up once it actually states the problems."""
     driver = b.OllamaDriver()
     responses = [
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]},
-        {"tool_calls": [{"function": {"name": "submit_review",
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]}),
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
                                       "arguments": {"verdict": "REQUEST_CHANGES",
-                                                    "summary": "auth.py:42 missing null check"}}}]},
+                                                    "summary": "auth.py:42 missing null check"}}}]}),
     ]
     seen_tool_msgs = []
 
@@ -415,10 +426,10 @@ def test_complete_review_loop_fails_closed_after_two_findings_less_request_chang
     never silently upgrade to APPROVE, and never raise."""
     driver = b.OllamaDriver()
     responses = [
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]},
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]},
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]}),
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]}),
     ]
     monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
 
@@ -438,9 +449,9 @@ def test_complete_review_loop_accepts_request_changes_with_summary_immediately(t
 
     def chat(messages, model, tools=None):
         calls["n"] += 1
-        return {"tool_calls": [{"function": {"name": "submit_review",
+        return _envelope({"tool_calls": [{"function": {"name": "submit_review",
                                              "arguments": {"verdict": "REQUEST_CHANGES",
-                                                           "summary": "tests fail in test_foo.py"}}}]}
+                                                           "summary": "tests fail in test_foo.py"}}}]})
 
     monkeypatch.setattr(driver, "_chat", chat)
 
@@ -460,8 +471,8 @@ def test_complete_review_loop_accepts_approve_without_summary(tmp_path, monkeypa
 
     def chat(messages, model, tools=None):
         calls["n"] += 1
-        return {"tool_calls": [{"function": {"name": "submit_review",
-                                             "arguments": {"verdict": "APPROVE"}}}]}
+        return _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                             "arguments": {"verdict": "APPROVE"}}}]})
 
     monkeypatch.setattr(driver, "_chat", chat)
 
@@ -479,11 +490,11 @@ def test_complete_review_loop_findings_nudge_still_returns_verdict_near_step_cap
     driver = b.OllamaDriver()
     driver.review_max_steps = 2
     responses = [
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]},
-        {"tool_calls": [{"function": {"name": "submit_review",
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "REQUEST_CHANGES"}}}]}),
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
                                       "arguments": {"verdict": "REQUEST_CHANGES",
-                                                    "summary": "foo.py:10 off by one"}}}]},
+                                                    "summary": "foo.py:10 off by one"}}}]}),
     ]
     monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
 
@@ -502,9 +513,9 @@ def test_review_loop_writes_transcript_with_header_tool_and_verdict(tmp_path, mo
     (dispatch's agent.log has no review counterpart today)."""
     driver = b.OllamaDriver()
     responses = [
-        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo ran-tests"}}}]},
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+        _envelope({"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo ran-tests"}}}]}),
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]}),
     ]
     monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
 
@@ -529,9 +540,9 @@ def test_review_loop_appends_across_multiple_review_cycles(tmp_path, monkeypatch
 
     def make_responses():
         return [
-            {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]},
-            {"tool_calls": [{"function": {"name": "submit_review",
-                                          "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+            _envelope({"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]}),
+            _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                          "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]}),
         ]
 
     for _ in range(2):
@@ -552,9 +563,9 @@ def test_review_loop_survives_review_log_path_being_a_directory(tmp_path, monkey
     (tmp_path / "review.log").mkdir()
     driver = b.OllamaDriver()
     responses = [
-        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]},
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+        _envelope({"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]}),
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]}),
     ]
     monkeypatch.setattr(driver, "_chat", lambda messages, model, tools=None: responses.pop(0))
 
@@ -573,9 +584,9 @@ def test_review_loop_truncates_tool_result_in_log_but_not_in_conversation(tmp_pa
 
     seen_messages = []
     responses = [
-        {"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]},
-        {"tool_calls": [{"function": {"name": "submit_review",
-                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]},
+        _envelope({"tool_calls": [{"function": {"name": "bash", "arguments": {"command": "echo hi"}}}]}),
+        _envelope({"tool_calls": [{"function": {"name": "submit_review",
+                                      "arguments": {"verdict": "APPROVE", "summary": "clean"}}}]}),
     ]
 
     def chat(messages, model, tools=None):
@@ -603,7 +614,7 @@ def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
     seen_tools = []
     monkeypatch.setattr(
         driver, "_chat",
-        lambda messages, model, tools=None: seen_tools.append(tools) or {"content": "RULING: ROUTINE"},
+        lambda messages, model, tools=None: seen_tools.append(tools) or _envelope({"content": "RULING: ROUTINE"}),
     )
 
     out = driver.complete("adjudicate", system="overlord", model="opus", allowed_tools="Read")

@@ -734,7 +734,7 @@ def test_run_reviewer_prompt_does_not_block_on_docs_for_brand_new_code(
     assert "brand-new" in prompt or "brand new" in prompt
 
 
-def test_run_reviewer_uses_review_model_override_when_backend_is_local(monkeypatch):
+def test_run_reviewer_uses_review_model_override_when_backend_is_local(agents_dir, monkeypatch):
     """Asymmetric review: both software-engineer.md and code-reviewer.md
     declare `model: sonnet`, so without an override dispatch and review
     resolve to the identical concrete local model - a model reviewing its
@@ -758,7 +758,7 @@ def test_run_reviewer_uses_review_model_override_when_backend_is_local(monkeypat
     assert captured["model"] == "devstral:24b"
 
 
-def test_run_reviewer_ignores_review_model_override_when_backend_is_claude(monkeypatch):
+def test_run_reviewer_ignores_review_model_override_when_backend_is_claude(agents_dir, monkeypatch):
     """Regression guard: PIPELINE_LOCAL_REVIEW_MODEL must NOT leak into a
     cloud (claude) review - it must keep using the persona's declared tier
     ("sonnet") so ClaudeCliDriver gets a real Claude model name, not an
@@ -779,7 +779,7 @@ def test_run_reviewer_ignores_review_model_override_when_backend_is_claude(monke
     assert captured["model"] == "sonnet"
 
 
-def test_run_reviewer_explicit_local_backend_name_honors_review_model_override(monkeypatch):
+def test_run_reviewer_explicit_local_backend_name_honors_review_model_override(agents_dir, monkeypatch):
     """review_story's FM-B rate-limit fallback calls _run_reviewer with an
     explicit backend_name="local" override (not via the env var) - the
     review-model override must apply in that path too."""
@@ -964,7 +964,7 @@ def test_review_story_oracle_backed_empty_acceptance_list_uses_full_budget(
     monkeypatch.setattr(p, "_run_reviewer",
                         lambda wt, br: "needs work\nVERDICT: REQUEST_CHANGES")
 
-    result = p.review_story("rvempty", "S1")
+    p.review_story("rvempty", "S1")
 
     story = _read_manifest(plan_dir, "rvempty")["stories"]["S1"]
     assert story["status"] == "changes_requested"

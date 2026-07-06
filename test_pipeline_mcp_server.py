@@ -3588,18 +3588,87 @@ def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
     assert result["merged"] == ["P1"]
 
 
-def test_reverify_acceptance_returns_none_without_acceptance_block(monkeypatch, tmp_path):
-    # Ordinary TDD stories (no acceptance fixtures) are already covered by the
-    # full-suite gate at tests_passed time; the merge-time reverify is a no-op
-    # for them and must not spawn a subprocess.
-    def _boom_run(*a, **k):
-        raise AssertionError("must not run tests when there is no acceptance block")
+def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypatch, tmp_path):
+    # Gap 1: stories without an acceptance block (the common case for
+    # real-project stories) get the rebased branch's full test suite
+    # re-run before merge, not a silent "none" pass. The 1 MBW in the
+    # gpt-oss + glm-5.2:cloud v2 run was only caught because benchmark
+    # stories carry acceptance oracles; a real-project story without
+    # one had no second check after rebase until this fix. Behavior
+    # change flagged per CLAUDE.md Step 4 (this test replaces the old
+    # `test_reverify_acceptance_returns_none_without_acceptance_block`,
+    # which asserted the silent-pass path).
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 1, stdout="1 failed", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
 
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+
+    assert result["state"] == "fail"
+    assert "failed" in result["error"]
+    # The cmd must be the unscoped full suite (no acceptance paths
+    # appended), because there is no acceptance block to scope to.
+    assert seen_cmd["cmd"] == ["pytest"]
+
+
+def test_reverify_acceptance_passes_when_full_suite_green(monkeypatch, tmp_path):
+    # The "no acceptance block" arm returns pass on rc=0, not "none" -
+    # the MBW safety net only catches real failures; a clean suite
+    # merges normally.
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+
+    assert result == {"state": "pass", "error": ""}
+    assert seen_cmd["cmd"] == ["pytest"]
+
+
+def test_reverify_acceptance_full_suite_opt_out_restores_none(monkeypatch, tmp_path):
+    # `PIPELINE_REVERIFY_FULL_SUITE=0` restores the old silent-pass
+    # behavior for operators with slow test suites who don't want a
+    # full-suite re-run at the merge gate. Mirrors the opt-out pattern
+    # used by `PIPELINE_MERGE_CI_GATE`.
+    def _boom_run(*a, **k):
+        raise AssertionError("must not run tests when opted out")
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "0")
 
     result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
 
     assert result == {"state": "none", "error": ""}
+
+
+def test_reverify_acceptance_reruns_full_suite_for_non_pytest_runner(monkeypatch, tmp_path):
+    # Gap 1: non-pytest runners (cargo, npm) also get the full suite
+    # re-run for stories without an acceptance block. With an
+    # acceptance block + non-pytest, the runner is non-pytest so the
+    # scoped path doesn't apply, and the suite re-runs in full (we
+    # can't scope `cargo test` or `node --test` to a single file with
+    # the project's runner without changing the test config).
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["cargo", "test"]))
+
+    result = p._reverify_acceptance(
+        {"summary": "x", "acceptance": [{"path": "tests/acc.rs", "source": "// x"}]},
+        str(tmp_path),
+    )
+
+    assert result == {"state": "pass", "error": ""}
+    # cargo test runs the full suite - no path scoping.
+    assert seen_cmd["cmd"] == ["cargo", "test"]
 
 
 def test_reverify_acceptance_returns_none_for_missing_worktree(monkeypatch):
@@ -3610,21 +3679,6 @@ def test_reverify_acceptance_returns_none_for_missing_worktree(monkeypatch):
     story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
 
     result = p._reverify_acceptance(story, "/no/such/worktree")
-
-    assert result == {"state": "none", "error": ""}
-
-
-def test_reverify_acceptance_returns_none_for_non_pytest_runner(monkeypatch, tmp_path):
-    # Scoping to specific acceptance paths only works for pytest; other
-    # runners fall back to "none" rather than a misscoped/wrong invocation.
-    def _boom_run(*a, **k):
-        raise AssertionError("must not run tests for a non-pytest project")
-
-    monkeypatch.setattr(p.subprocess, "run", _boom_run)
-    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["cargo", "test"]))
-    story = {"acceptance": [{"path": "tests/acceptance.rs", "source": "// x"}]}
-
-    result = p._reverify_acceptance(story, str(tmp_path))
 
     assert result == {"state": "none", "error": ""}
 
@@ -3682,6 +3736,40 @@ def test_advance_pipeline_acceptance_reverify_fail_blocks_merge(plan_dir, monkey
     result = p.advance_pipeline("accfail")
 
     story = _read_manifest(plan_dir, "accfail")["stories"]["P1"]
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert merged_calls == []
+    assert result["merged"] == []
+
+
+def test_advance_pipeline_full_suite_reverify_fail_blocks_merge(plan_dir, monkeypatch):
+    # Gap 1: the no-acceptance-block path runs the full test suite at the
+    # merge gate. A story that broke a sibling's module after rebase is
+    # now caught here, even without a harness-owned acceptance oracle.
+    # Mirrors the existing `test_advance_pipeline_acceptance_reverify_fail_blocks_merge`
+    # but for the no-acceptance case (which is the common one for real
+    # projects; the benchmark tasks all carry oracles and were already
+    # covered).
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "fsfail", {
+        "P1": {"summary": "approved but rebased-broken", "status": "pr_open",
+               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x",
+               # NO acceptance block - ordinary TDD story.
+               },
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "fail", "error": "ModuleNotFoundError: shared"})
+    merged_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
+
+    result = p.advance_pipeline("fsfail")
+
+    story = _read_manifest(plan_dir, "fsfail")["stories"]["P1"]
     assert story["status"] == "pr_open"
     assert story["merge_attempts"] == 1
     assert merged_calls == []
@@ -5860,6 +5948,173 @@ def test_dispatch_story_skips_oracle_write_when_resumed(
     assert (wt / "tests/test_x.py").read_text() == "# evolved by the agent\n"
 
 
+# ---------- Gap 7: surface multi-model concurrent-dispatch risk ----------
+def test_dispatch_warns_on_loaded_model_mismatch(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When MAX_CONCURRENT_AGENTS > 1, an agent is already in progress, and
+    the target dispatch model is NOT the one currently loaded in Ollama,
+    dispatch_story must log a WARN (via _notify_user) about a likely VRAM
+    swap. Same-model dispatch and the MAX_CONCURRENT_AGENTS=1 case must
+    not warn."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    # Simulate one agent already running (this is what triggers the check).
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    # And a different model is currently in VRAM.
+    monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: {"devstral:24b"})
+
+    _write_manifest(plan_dir, "swap_warn", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "gpt-oss:20b"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("swap_warn", "S1")
+
+    # Filter for our specific warning - other notifications (e.g. Plane
+    # sync failures) can land in the same list and we don't want to
+    # confuse the assertion.
+    swap_notes = [n for n in notes if "multi-model concurrent dispatch" in n]
+    assert swap_notes, f"expected VRAM-swap warning, got: {notes}"
+    assert any("devstral:24b" in n for n in swap_notes)
+
+
+def test_dispatch_no_warn_when_same_model_loaded(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The target model is already loaded in Ollama - no swap risk, no warn."""
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    monkeypatch.setattr(backend, "_ollama_loaded_models",
+                        lambda ep: {"gpt-oss:20b"})
+
+    _write_manifest(plan_dir, "same_model", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "gpt-oss:20b"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("same_model", "S1")
+
+    assert not any("multi-model concurrent dispatch" in n for n in notes), \
+        f"unexpected VRAM-swap warning: {notes}"
+
+
+def test_dispatch_no_warn_when_no_agents_in_progress(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """First dispatch of a fresh plan has no concurrent agents - the
+    `something_loaded != target` check is only meaningful when there's
+    actually a concurrent agent that could be swapped. With zero
+    in-progress, dispatch can simply load the target model and there's
+    no swap risk to warn about."""
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 0)
+    monkeypatch.setattr(backend, "_ollama_loaded_models",
+                        lambda ep: {"devstral:24b"})
+
+    _write_manifest(plan_dir, "fresh", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "gpt-oss:20b"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("fresh", "S1")
+
+    assert not any("multi-model concurrent dispatch" in n for n in notes)
+
+
+def test_dispatch_no_warn_when_max_concurrent_agents_is_one(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When MAX_CONCURRENT_AGENTS=1 there's no concurrency window, so the
+    whole class of multi-model swap risk is impossible and the warning
+    should be suppressed. (Same-model dispatch in this mode is also safe
+    but the bigger point is: with one slot, no second dispatch can race.)"""
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 1)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 0)
+    monkeypatch.setattr(backend, "_ollama_loaded_models",
+                        lambda ep: {"devstral:24b"})
+
+    _write_manifest(plan_dir, "single_slot", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "gpt-oss:20b"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("single_slot", "S1")
+
+    assert not any("multi-model concurrent dispatch" in n for n in notes)
+
+
+def test_dispatch_no_warn_for_claude_backend(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The warning is local-Ollama-specific (Claude runs in a separate
+    infra). A dispatch against the Claude backend must never trigger it,
+    even with MAX_CONCURRENT_AGENTS=2 and a 'loaded' Ollama model."""
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    monkeypatch.setattr(backend, "_ollama_loaded_models",
+                        lambda ep: {"devstral:24b"})
+
+    _write_manifest(plan_dir, "claude", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "sonnet", "backend": "claude"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("claude", "S1")
+
+    assert not any("multi-model concurrent dispatch" in n for n in notes)
+
+
 # ---------- FM-B: reviewer rate-limit must defer, not consume rework budget ----------
 
 _RATE_LIMIT_MSG = (
@@ -5969,6 +6224,117 @@ def test_review_story_genuine_request_changes_still_increments_rework(plan_dir, 
     story = _read_manifest(plan_dir, "rl_regression")["stories"]["S1"]
     assert story["rework_attempts"] == 1
     assert story["status"] == "changes_requested"
+
+
+# ---------- Gap 5: Ollama 429 (RateLimitedError) on review path -> deferral ----------
+def test_review_story_defers_on_ollama_rate_limited(plan_dir, agents_dir, monkeypatch):
+    """When the reviewer raises backend.RateLimitedError (an Ollama 429),
+    review_story must defer to the next tick (status stays tests_passed,
+    review_deferred_count increments), NOT count as an inconclusive review
+    and burn the rework budget. This mirrors the Claude rate-limit path
+    but for the local-ollama cloud 429 case."""
+    _write_manifest(plan_dir, "rl_ollama", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+
+    def _raise_429(wt, br):
+        raise backend.RateLimitedError("simulated 429 from ollama-cloud")
+
+    monkeypatch.setattr(p, "_run_reviewer", _raise_429)
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+    # _open_pr must NOT be called on deferral.
+    def _boom(*a, **k):
+        raise AssertionError("PR must not be opened on rate-limit deferral")
+    monkeypatch.setattr(p, "_open_pr", _boom)
+
+    result = p.review_story("rl_ollama", "S1")
+
+    assert result.get("deferred") == "rate_limited"
+    assert result["status"] == "tests_passed"
+    story = _read_manifest(plan_dir, "rl_ollama")["stories"]["S1"]
+    assert story["status"] == "tests_passed"
+    assert story["review_deferred_count"] == 1
+    # Crucially: rework_attempts must NOT be touched, just like the Claude
+    # rate-limit path. The whole point of routing 429 to deferral is that
+    # a transient infra event doesn't penalize the implementation.
+    assert "rework_attempts" not in story
+
+
+def test_review_story_ollama_rate_limited_does_not_burn_inconclusive_budget(
+    plan_dir, agents_dir, monkeypatch
+):
+    """A 429 must NOT increment review_inconclusive_count either. A misclassified
+    429 would silently drain the inconclusive budget and eventually park a
+    story that should just be retried next tick."""
+    _write_manifest(plan_dir, "rl_ollama_noincr", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "review_inconclusive_count": 1},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: (_ for _ in ()).throw(
+                            backend.RateLimitedError("simulated 429")))
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    p.review_story("rl_ollama_noincr", "S1")
+
+    story = _read_manifest(plan_dir, "rl_ollama_noincr")["stories"]["S1"]
+    # The pre-existing count is preserved; a 429 does not move it.
+    assert story["review_inconclusive_count"] == 1
+    assert "parked_reason" not in story
+    assert story["status"] == "tests_passed"
+
+
+def test_review_story_ollama_rate_limited_accumulates_deferred_count(
+    plan_dir, agents_dir, monkeypatch
+):
+    """Repeated 429s (e.g. ollama-cloud weekly cap) must accumulate so the
+    PIPELINE_REVIEW_FALLBACK_AFTER path can eventually fall over to a
+    different review backend. The counter is the same one Claude's
+    rate-limit path uses."""
+    _write_manifest(plan_dir, "rl_ollama_acc", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "review_deferred_count": 2},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br: (_ for _ in ()).throw(
+                            backend.RateLimitedError("simulated 429")))
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    p.review_story("rl_ollama_acc", "S1")
+
+    story = _read_manifest(plan_dir, "rl_ollama_acc")["stories"]["S1"]
+    assert story["review_deferred_count"] == 3
+
+
+def test_review_story_non_rate_limited_exception_still_falls_to_inconclusive(
+    plan_dir, agents_dir, monkeypatch
+):
+    """Guard: a generic Exception (not RateLimitedError) on the review
+    path must still take the existing inconclusive path. The new 429 branch
+    must not swallow other failures."""
+    _write_manifest(plan_dir, "rl_ollama_other", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+
+    def _raise_other(wt, br):
+        raise ValueError("malformed tool call shape")
+
+    monkeypatch.setattr(p, "_run_reviewer", _raise_other)
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    p.review_story("rl_ollama_other", "S1")
+
+    story = _read_manifest(plan_dir, "rl_ollama_other")["stories"]["S1"]
+    # A generic exception takes the inconclusive path: review_inconclusive_count
+    # increments, status stays tests_passed for retry.
+    assert story["review_inconclusive_count"] == 1
+    assert story["status"] == "tests_passed"
+    # And it must NOT be recorded as a rate-limit deferral.
+    assert "review_deferred_count" not in story or story["review_deferred_count"] == 0
 
 
 def test_review_story_high_risk_security_rate_limited_defers(plan_dir, agents_dir, monkeypatch):

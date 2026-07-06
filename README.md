@@ -446,7 +446,7 @@ guard an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_RISK_THRESHOLD` | `low` | Highest risk merged unattended in `gated` |
 | `PIPELINE_DEFAULT_MODEL` | `sonnet` | Model when no story/persona model |
 | `USAGE_STATE_PATH` | `~/.claude/usage_state.json` | Where `check_usage` persists usage/paused state |
-| `PIPELINE_MAX_CONCURRENT_AGENTS` | `3` | Cap on dispatched agents running at once (across all plans); `<=0` = unlimited |
+| `PIPELINE_MAX_CONCURRENT_AGENTS` | `3` | Cap on dispatched agents running at once (across all plans); `<=0` = unlimited. **Local-Ollama note:** with multiple local models in `MODELS`, set this to `1` to avoid Ollama swapping a different model into VRAM (dispatch_story will WARN when it detects a different model already loaded). Same-model concurrency is always safe. |
 | `PIPELINE_MERGE_MAX_ATTEMPTS` | `3` | Merge error budget: how many ticks a failing `_merge_pr` (transient `gh`/`git`) is retried before the story is marked `failed` for human intervention |
 | `PIPELINE_DISPATCH_MAX_ATTEMPTS` | `3` | Dispatch error budget: how many times a story whose launch keeps failing (raising `dispatch_story`, or an agent that produces no output) is retried before it is marked `failed` instead of looping forever |
 | `PIPELINE_REWORK_MAX_ATTEMPTS` | `3` | Rework budget: how many times a `changes_requested` story is redispatched (with the reviewer's feedback) before it is `parked` for human review instead of looping through review↔rework |

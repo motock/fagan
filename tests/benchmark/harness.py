@@ -251,6 +251,68 @@ def merge(intervals):
             out.append((s, e))
     return out
 ''',
+    # Gap 3: ecosystem-tagged reference impls for the cargo + npm tasks.
+    # Same shape as the python ones; the mock backend writes this into
+    # the ecosystem's expected impl path (src/lib.rs for cargo, src/*.js
+    # for npm) so the offline `mock` cell can self-test the new code
+    # paths without a real model.
+    "lru_cache_rs": '''
+use std::collections::HashMap;
+
+pub struct LruCache {
+    capacity: usize,
+    map: HashMap<i32, i32>,
+    recency: Vec<i32>,  // least-recently-used first
+}
+
+impl LruCache {
+    pub fn new(capacity: usize) -> Self {
+        if capacity < 1 {
+            panic!("capacity must be >= 1");
+        }
+        LruCache { capacity, map: HashMap::new(), recency: Vec::new() }
+    }
+    pub fn get(&mut self, key: i32) -> Option<i32> {
+        let v = self.map.get(&key).copied()?;
+        self.recency.retain(|k| k != &key);
+        self.recency.push(key);
+        Some(v)
+    }
+    pub fn put(&mut self, key: i32, value: i32) {
+        if self.map.contains_key(&key) {
+            self.map.insert(key, value);
+            self.recency.retain(|k| k != &key);
+            self.recency.push(key);
+            return;
+        }
+        self.map.insert(key, value);
+        self.recency.push(key);
+        if self.map.len() > self.capacity {
+            let evict = self.recency.remove(0);
+            self.map.remove(&evict);
+        }
+    }
+    pub fn size(&self) -> usize { self.map.len() }
+}
+''',
+    "interval_merge_js": '''
+function merge(intervals) {
+  for (const [s, e] of intervals) {
+    if (s > e) throw new Error("start > end");
+  }
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [s, e] of sorted) {
+    if (out.length && s <= out[out.length - 1][1] + 1) {
+      out[out.length - 1][1] = Math.max(out[out.length - 1][1], e);
+    } else {
+      out.push([s, e]);
+    }
+  }
+  return out;
+}
+module.exports = { merge };
+''',
 }
 
 
@@ -261,8 +323,28 @@ def _sh(argv, cwd, check=True):
 
 def load_task(name: str) -> dict:
     spec = json.loads((TASKS_DIR / name / "spec.json").read_text())
-    spec["acceptance_source"] = (TASKS_DIR / name / "acceptance.py").read_text()
-    spec["groundtruth_source"] = (TASKS_DIR / name / "groundtruth.py").read_text()
+    # Ecosystem dispatch (Gap 3): the harness used to be pytest-only, with
+    # hard-coded `acceptance.py`/`groundtruth.py` filenames and a pyproject.toml
+    # scaffold. Tasks now declare `ecosystem: "pytest" | "cargo" | "npm"` in
+    # spec.json (defaulting to "pytest" for backwards compatibility with every
+    # existing task). The acceptance/groundtruth files are renamed accordingly:
+    #   pytest: acceptance.py / groundtruth.py  (materially unchanged)
+    #   cargo:  acceptance.rs / groundtruth.rs  (Rust integration test)
+    #   npm:    acceptance.test.js / groundtruth.test.js
+    # The "test_" / "test_" prefix is what makes the test runner pick them up
+    # (pytest auto-discovers, cargo's tests/ dir + `cargo test`, npm's `node
+    # --test` walks test/ for *.test.js).
+    ecosystem = spec.get("ecosystem", "pytest")
+    ext_map = {"pytest": "py", "cargo": "rs", "npm": "test.js"}
+    if ecosystem not in ext_map:
+        raise ValueError(
+            f"task {name!r} declares unknown ecosystem={ecosystem!r}; "
+            f"expected one of {list(ext_map)}"
+        )
+    ext = ext_map[ecosystem]
+    spec["ecosystem"] = ecosystem
+    spec["acceptance_source"] = (TASKS_DIR / name / f"acceptance.{ext}").read_text()
+    spec["groundtruth_source"] = (TASKS_DIR / name / f"groundtruth.{ext}").read_text()
     # Tier 2+ tasks ("modify existing code", vs. Tier 1's greenfield katas)
     # seed the repo with an existing, already-committed codebase via
     # tasks/<name>/seed/ - a real directory tree (not JSON-embedded strings,
@@ -290,6 +372,14 @@ def setup_workspace(cell: Path, task: dict | None = None) -> dict[str, Path]:
     pre-existing codebase, not a suspicious separate "seed" commit or dirty
     tree. `task=None` (or a task with no seed_files) behaves exactly as
     before this existed: an empty scaffold repo.
+
+    Ecosystem dispatch (Gap 3): pytest writes pyproject.toml + .venv (so
+    `detect_test_command` resolves to `pytest`); cargo writes a Cargo.toml
+    + src/ dir; npm writes a package.json + src/ dir. Non-pytest tasks
+    MUST NOT have a pyproject.toml, otherwise `detect_test_command`
+    (priority: pom > gradle > package.json > make > pyproject > cargo)
+    would still pick pytest and run the (cargo/node) test files through
+    the wrong runner.
     """
     if cell.exists():
         shutil.rmtree(cell)
@@ -303,14 +393,74 @@ def setup_workspace(cell: Path, task: dict | None = None) -> dict[str, Path]:
     _sh(["git", "init", "-q", "-b", "master", "."], repo)
     _sh(["git", "config", "user.email", "bench@local"], repo)
     _sh(["git", "config", "user.name", "bench"], repo)
-    # pyproject.toml makes detect_test_command() pick pytest; the .venv symlink
-    # makes _venv_python_for() resolve to the pipeline venv (with pytest + deps).
-    (repo / "pyproject.toml").write_text(
-        '[project]\nname = "bench-task"\nversion = "0.0.0"\n'
-    )
-    (repo / "README.md").write_text("# benchmark task workspace\n")
-    (repo / ".venv").symlink_to(PIPELINE_REPO / ".venv")
-    (repo / ".gitignore").write_text(".venv/\n__pycache__/\n")
+
+    ecosystem = (task or {}).get("ecosystem", "pytest")
+    if ecosystem == "pytest":
+        # pyproject.toml makes detect_test_command() pick pytest; the .venv
+        # symlink makes _venv_python_for() resolve to the pipeline venv
+        # (with pytest + deps).
+        (repo / "pyproject.toml").write_text(
+            '[project]\nname = "bench-task"\nversion = "0.0.0"\n'
+        )
+        (repo / "README.md").write_text("# benchmark task workspace\n")
+        (repo / ".venv").symlink_to(PIPELINE_REPO / ".venv")
+        (repo / ".gitignore").write_text(".venv/\n__pycache__/\n")
+    elif ecosystem == "cargo":
+        # Cargo.toml at the root makes `detect_test_command` pick `cargo test`.
+        # Edition 2021 is the modern default; src/lib.rs is the conventional
+        # layout for a library crate. We do NOT symlink a .venv (cargo has
+        # its own toolchain) and we do NOT write pyproject.toml (it would
+        # win the priority and route the test runner to pytest).
+        (repo / "Cargo.toml").write_text(
+            '[package]\nname = "bench_task"\nversion = "0.0.0"\nedition = "2021"\n'
+            '[lib]\npath = "src/lib.rs"\n'
+        )
+        (repo / "src").mkdir()
+        # Seed src/lib.rs with a placeholder so cargo can build the empty
+        # crate before the agent writes its impl; the agent overwrites it
+        # (impl_file is "src/lib.rs" by spec.json convention). This keeps
+        # the initial commit self-consistent (a `cargo build` works, a
+        # `cargo test` reports "no tests" rather than "compilation
+        # failed" - so the dispatch path is unambiguously "tests fail
+        # until the agent adds an impl").
+        (repo / "src" / "lib.rs").write_text(
+            '// placeholder; the dispatched agent replaces this file\n'
+        )
+        (repo / "README.md").write_text("# benchmark cargo task workspace\n")
+        (repo / "target").mkdir()
+        (repo / ".gitignore").write_text("target/\n")
+    elif ecosystem == "npm":
+        # package.json with `node --test test/*.test.js` is enough for
+        # `detect_test_command` to pick it. No external deps - we use the
+        # built-in `node:test` + `node:assert` so a fresh `node` install
+        # (>=18) runs the suite with no `npm install` step. The agent's
+        # impl file lives under src/ by convention; acceptance/groundtruth
+        # under test/ (Node's --test runner walks test/ for *.test.js).
+        # We use the explicit `test/*.test.js` glob because Node 22
+        # treats the bare `test/` positional argument as a module path
+        # to RUN, not a directory to scan (see Node issue tracker:
+        # `node --test <dir>` was the documented form pre-22; Node 22
+        # requires an explicit glob or a `--test-name-pattern` flag).
+        (repo / "package.json").write_text(
+            '{\n  "name": "bench-task",\n  "version": "0.0.0",\n'
+            '  "scripts": { "test": "node --test test/*.test.js" }\n}\n'
+        )
+        (repo / "src").mkdir()
+        (repo / "test").mkdir()
+        # placeholder impl so the initial commit is non-empty; the agent
+        # overwrites this (impl_file is "src/merge.js" or similar by
+        # spec.json convention).
+        (repo / "src" / "placeholder.js").write_text(
+            "// placeholder; the dispatched agent replaces the real impl file\n"
+            "module.exports = {};\n"
+        )
+        (repo / "README.md").write_text("# benchmark npm task workspace\n")
+        (repo / ".gitignore").write_text("node_modules/\n")
+    else:
+        # load_task validates ecosystem; reaching here means a programmer
+        # error rather than a user-facing bad task spec.
+        raise ValueError(f"setup_workspace: unknown ecosystem {ecosystem!r}")
+
     for rel_path, content in (task or {}).get("seed_files", {}).items():
         target = repo / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -325,7 +475,25 @@ def setup_workspace(cell: Path, task: dict | None = None) -> dict[str, Path]:
 
 
 def build_plan(repo: Path, task: dict) -> dict:
-    """One epic, one story carrying the acceptance fixture as a read-only oracle."""
+    """One epic, one story carrying the acceptance fixture as a read-only oracle.
+    The acceptance path and the file the agent must write are dispatched on
+    the task's ecosystem (Gap 3): pytest writes the acceptance to
+    test_acceptance.py (the agent imports lru_cache.py directly); cargo
+    writes tests/test_acceptance.rs (a Rust integration test that uses
+    bench_task::*); npm writes test/acceptance.test.js (Node's --test
+    runner auto-discovers *.test.js under test/). The agent's impl path
+    is also ecosystem-specific - src/lib.rs for cargo, src/merge.js or
+    similar for npm, plain lru_cache.py for pytest."""
+    ecosystem = task.get("ecosystem", "pytest")
+    if ecosystem == "pytest":
+        acceptance_path = "test_acceptance.py"
+    elif ecosystem == "cargo":
+        acceptance_path = "tests/test_acceptance.rs"
+    elif ecosystem == "npm":
+        acceptance_path = "test/acceptance.test.js"
+    else:
+        # load_task validates this; reaching here is a programmer error.
+        raise ValueError(f"build_plan: unknown ecosystem {ecosystem!r}")
     return {
         "repo_root": str(repo),
         "epics": [{
@@ -338,7 +506,7 @@ def build_plan(repo: Path, task: dict) -> dict:
                 "model": task.get("model", "sonnet"),
                 "risk": task.get("risk", "low"),
                 "acceptance": [
-                    {"path": "test_acceptance.py", "source": task["acceptance_source"]}
+                    {"path": acceptance_path, "source": task["acceptance_source"]}
                 ],
             }],
         }],
@@ -550,21 +718,96 @@ def drive_plan(p, plan_name: str, story_keys: list[str], deadline: float,
 
 
 def run_groundtruth(impl_src: Path, impl_file: str, groundtruth: str,
-                    scratch: Path) -> dict:
-    """Run the independent ground-truth suite against a copy of the impl file."""
+                    scratch: Path, ecosystem: str = "pytest") -> dict:
+    """Run the independent ground-truth suite against a copy of the impl file.
+
+    Ecosystem dispatch (Gap 3): pytest copies the impl into a scratch dir
+    alongside test_groundtruth.py and invokes `pytest`. cargo scaffolds a
+    throwaway crate (Cargo.toml + src/lib.rs + tests/test_groundtruth.rs)
+    and runs `cargo test` (this acquires _heavy_lock upstream of here --
+    see install_merge_stubs for the same lock the reviewer's test run
+    takes, so we don't double-allocate VRAM compiling two crates at once).
+    npm writes package.json + src/<impl> + test/groundtruth.test.js and
+    runs `node --test` (no _heavy_lock - node is light, but it does
+    share node_modules, so we point HOME at the scratch to keep it
+    isolated).
+
+    A cargo impl that fails to compile returns `passed=False` with the
+    compiler error in `tail` (the same channel pytest uses for failures) -
+    so a "model wrote something that doesn't build" looks identical to
+    "model wrote something that builds but fails the tests" in the
+    result. The test-orchestrator scripts (`tests/benchmark/_post/*`)
+    should treat either as wrong, which is the correct reading.
+    """
     impl_path = impl_src / impl_file
     if not impl_path.exists():
         return {"ran": False, "passed": False, "reason": f"no {impl_file} at {impl_src}"}
     scratch.mkdir(parents=True, exist_ok=True)
-    shutil.copy(impl_path, scratch / impl_file)
-    (scratch / "test_groundtruth.py").write_text(groundtruth)
-    r = subprocess.run(
-        [str(VENV_PY), "-m", "pytest", "test_groundtruth.py", "-q",
-         "--no-header", "-p", "no:cacheprovider"],
-        cwd=str(scratch), capture_output=True, text=True,
-    )
-    return {"ran": True, "passed": r.returncode == 0,
-            "tail": (r.stdout + r.stderr)[-700:]}
+
+    if ecosystem == "pytest":
+        shutil.copy(impl_path, scratch / impl_file)
+        (scratch / "test_groundtruth.py").write_text(groundtruth)
+        r = subprocess.run(
+            [str(VENV_PY), "-m", "pytest", "test_groundtruth.py", "-q",
+             "--no-header", "-p", "no:cacheprovider"],
+            cwd=str(scratch), capture_output=True, text=True,
+        )
+        return {"ran": True, "passed": r.returncode == 0,
+                "tail": (r.stdout + r.stderr)[-700:]}
+
+    if ecosystem == "cargo":
+        # Copy the impl to the conventional src/lib.rs (the cargo way -
+        # integration tests in tests/ import the crate via `use bench_task::*`,
+        # so the impl file must be at the lib path, not at the spec's
+        # impl_file location in the source tree). If the agent's spec put
+        # the impl somewhere else, fall back to the src/lib.rs that was
+        # used in the source repo (impl_path in the source tree IS what
+        # the agent wrote; copy it to where cargo expects to find a lib).
+        (scratch / "src").mkdir(exist_ok=True)
+        (scratch / "tests").mkdir(exist_ok=True)
+        (scratch / "Cargo.toml").write_text(
+            '[package]\nname = "bench_task"\nversion = "0.0.0"\nedition = "2021"\n'
+            '[lib]\npath = "src/lib.rs"\n'
+        )
+        shutil.copy(impl_path, scratch / "src" / "lib.rs")
+        (scratch / "tests" / "test_groundtruth.rs").write_text(groundtruth)
+        # `cargo test` is heavy (compiles the entire dependency graph for
+        # the first invocation; warm-runs are faster but still 10-30s on
+        # a cold target dir). The harness doesn't take _heavy_lock here
+        # because run_groundtruth is called from main() after the cell is
+        # already terminal, so there's no concurrent dispatch to
+        # serialize against. If a future caller wants concurrent cells,
+        # they should wrap this call in _heavy_lock.
+        r = subprocess.run(
+            ["cargo", "test", "--quiet"],
+            cwd=str(scratch), capture_output=True, text=True,
+        )
+        return {"ran": True, "passed": r.returncode == 0,
+                "tail": (r.stdout + r.stderr)[-700:]}
+
+    if ecosystem == "npm":
+        # Copy the impl to the conventional src/ path Node's --test runner
+        # expects to require() from. The spec's impl_file is honored (the
+        # agent's task told it exactly where to put the file - mirroring
+        # that under src/ in the scratch dir keeps the test code's
+        # `require()` paths consistent).
+        (scratch / "src").mkdir(exist_ok=True)
+        (scratch / "test").mkdir(exist_ok=True)
+        (scratch / "package.json").write_text(
+            '{\n  "name": "bench-task",\n  "version": "0.0.0",\n'
+            '  "scripts": { "test": "node --test test/groundtruth.test.js" }\n}\n'
+        )
+        shutil.copy(impl_path, scratch / impl_file)
+        (scratch / "test" / "groundtruth.test.js").write_text(groundtruth)
+        r = subprocess.run(
+            ["node", "--test", "test/groundtruth.test.js"],
+            cwd=str(scratch), capture_output=True, text=True,
+        )
+        return {"ran": True, "passed": r.returncode == 0,
+                "tail": (r.stdout + r.stderr)[-700:]}
+
+    return {"ran": False, "passed": False,
+            "reason": f"unknown ecosystem {ecosystem!r}"}
 
 
 def main() -> int:
@@ -655,7 +898,7 @@ def main() -> int:
         wt = Path(story.get("worktree", ""))
         gt_src, gt_where = (wt, "worktree") if wt.is_dir() else (repo, "master")
     gt = run_groundtruth(gt_src, task["impl_file"], task["groundtruth_source"],
-                         cell / "_gt")
+                         cell / "_gt", ecosystem=task.get("ecosystem", "pytest"))
 
     result = {
         "task": args.task,

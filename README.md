@@ -61,8 +61,18 @@ and safety controls.
 ## Personas (`~/.claude/agents/`)
 
 Each persona is a Claude Code subagent: a markdown file with YAML frontmatter
-(`name`, `description`, `model`, `memory: user`) and a system-prompt body. The
-pipeline reads the body and dispatches a headless agent with it as the role.
+(`name`, `description`, `model`, and optionally `memory: user`) and a
+system-prompt body. The pipeline reads the body and dispatches a headless agent
+with it as the role.
+
+`memory: user` injects the user-memory directory into the system prompt on
+every Claude call — high-leverage context but expensive in tokens. The
+**reviewer personas** (`code-reviewer`, `security-engineer`) deliberately omit
+it: their job is a mechanical check (run tests, read diff, emit `VERDICT`),
+the CLAUDE.md rules they need are in the persona body, and skipping the
+~132 KB memory injection shaves ~30-40% off every review call's input tokens.
+The dispatch and overlord personas keep it because they benefit from project
+context and are lower-volume.
 
 | Persona | Default model | Responsibility |
 |---|---|---|
@@ -479,6 +489,8 @@ time the active local model changes. Currently populated:
 | `PIPELINE_LOCAL_MAX_STEPS` | `40` | Max tool-call steps a local **dispatch** run takes before it parks (WIP-commits). **`PIPELINE_LOCAL_MAX_STEPS` is the input knob; `LOCAL_AGENT_MAX_STEPS` is transport-only and must not be set in the plist or shell** — `backend.py` re-reads `PIPELINE_LOCAL_MAX_STEPS` on every dispatch and writes the resolved value into `LOCAL_AGENT_MAX_STEPS` for the subprocess. Set this in `launchd/com.claude.pipeline.advance-scheduler.plist` to change overnight run behavior; `launchctl unload && launchctl load` to apply. |
 | `PIPELINE_LOCAL_REVIEW_MAX_STEPS` | `20` | Max tool-call steps a local **review** takes before returning UNKNOWN (→ parks). Read in-process (not subprocess-spawned) — same input-knob contract as `PIPELINE_LOCAL_MAX_STEPS` and editable in the plist if you want one knob for both. |
 | `PIPELINE_LOCAL_REVIEW_MODEL` | — | Concrete Ollama tag (e.g. `devstral:24b`) for **local review only** — asymmetric review. Both `software-engineer.md` and `code-reviewer.md` declare `model: sonnet`, so without this override dispatch and review resolve to the identical concrete model (a model reviewing its own work with identical weights). Only applied when the review backend is actually `local` (via `PIPELINE_BACKEND_REVIEW=local` or an explicit `local` fallback); ignored for cloud review so a bare Ollama tag never leaks in as a bogus Claude `--model` value. |
+| `PIPELINE_REVIEW_MAX_TOKENS` | `4096` | Output cap (passed as `--max-tokens`) for any Claude `complete()` call originating from `_run_reviewer`. Bounds the runaway-output failure mode where Claude emits a long findings list / PR body before the `VERDICT:` line; the redispatched agent has the diff and the file paths and does not need prose to navigate. Ignored when the review backend is `local` (Ollama caps via `num_ctx`). |
+| `PIPELINE_SECURITY_REVIEW_MAX_TOKENS` | *fallback* | Same cap for the security-engineer pass on high-risk stories. Falls back to `PIPELINE_REVIEW_MAX_TOKENS` when unset, so the two can be tuned independently — the security pass typically produces shorter output (VERDICT only, no PR title/body), so a tighter cap is reasonable. |
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` | `1` | Rework budget for a story carrying a non-empty `acceptance` block — lower than `PIPELINE_REWORK_MAX_ATTEMPTS` because an oracle-backed story already has an objective, pre-verified correctness signal (it only reaches review after tests, including the oracle, pass); a reviewer that keeps finding beyond-oracle issues mostly spends cycles rather than changing the outcome, so a lower cap parks it for human review faster. Falls back to `PIPELINE_REWORK_MAX_ATTEMPTS` for any story without a truthy `acceptance` list. Superseded by `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` once a story is escalated (see below). |
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` | `3` | Rework budget for a story that has already been escalated to Claude (`story["escalated"]`), taking priority over `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` regardless of whether the story also carries an acceptance oracle. `_ORACLE`'s tight cap exists to converge *local* review fast; once escalation has already paid its cost (real Claude usage, and per 2026-07-04's benchmark validation, sometimes real wall-clock time if the Claude reviewer gets rate-limited), reusing that same cap just throttles Claude's shot at the same feedback for no benefit — 6 of 11 escalated cells in that run parked after exactly one post-escalation cycle. |
 | `PIPELINE_LOCAL_MAX_RISK` | `low` | Highest story risk the `auto` router sends to the local agent: `low` \| `medium` \| `high`. Stories above this threshold go straight to Claude. Security-persona stories always go to Claude regardless of this setting. |

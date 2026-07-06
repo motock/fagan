@@ -20,6 +20,17 @@ from typing import Protocol
 import httpx
 
 
+class RateLimitedError(RuntimeError):
+    """Raised by an Ollama local backend when the chat endpoint returns 429.
+
+    Distinct from the generic RuntimeError that wraps other httpx.HTTPError
+    failures (network errors, 5xx, etc.) so the orchestrator can route a
+    transient rate-limit to the same deferral path it uses for Claude's
+    weekly-usage pause, instead of misclassifying it as an inconclusive
+    review and burning the rework budget.
+    """
+
+
 @dataclass
 class AgentHandle:
     """A non-blocking agentic run (dispatch/review-style), identified by pid."""
@@ -508,6 +519,18 @@ class OllamaDriver:
         if tools:
             body["tools"] = tools
         resp = httpx.post(f"{self.endpoint}/api/chat", json=body, timeout=self.timeout)
+        # Detect 429 before raise_for_status() converts it to a generic
+        # HTTPError — Ollama-cloud (and any upstream proxy) rate-limits per
+        # host, so a 429 is a transient "defer and retry" signal, not a
+        # real backend failure. Surface it as RateLimitedError so the
+        # orchestrator's review path routes it to deferral instead of the
+        # inconclusive/rework loop. Other 4xx/5xx stay as HTTPError and
+        # get wrapped into a generic RuntimeError in the callers.
+        if resp.status_code == 429:
+            raise RateLimitedError(
+                f"Local backend at {self.endpoint} (model={model}) "
+                f"returned 429 (rate limited)"
+            )
         resp.raise_for_status()
         # Return the full response envelope (not just resp.json()["message"])
         # so callers that have structured usage data (review loop's
@@ -562,7 +585,12 @@ class OllamaDriver:
             "`git diff`, `git log -p -1`), and view_file to read files — do not edit "
             "anything. Then call submit_review exactly once with verdict APPROVE or "
             "REQUEST_CHANGES (REQUEST_CHANGES if the tests fail). Always call a tool; "
-            "do not answer in prose."
+            "do not answer in prose.\n\n"
+            "For large diffs: bash output is truncated to 3000 chars per call, so a "
+            "bare `git diff` may silently cut off the end. Start with `git diff --stat` "
+            "to see the scope, then use `git diff -- <file>` per file for the parts you "
+            "need, and `view_file <path>` for surrounding context. Do NOT rely on a "
+            "single `git diff` for a multi-file change."
         )
         system_content = preamble + ("\n\n" + system if system else "")
         messages = [{"role": "system", "content": system_content},
@@ -844,6 +872,34 @@ class OllamaDriver:
             return {"ok": True, "reason": ""}
         except httpx.HTTPError as e:
             return {"ok": False, "reason": f"Ollama endpoint {self.endpoint} unreachable: {e}"}
+
+
+def _ollama_loaded_models(endpoint: str) -> set[str]:
+    """Return the set of model names currently loaded in Ollama's memory.
+
+    Used by `dispatch_story` to warn when a multi-model concurrent dispatch
+    is about to force Ollama to swap a different model into VRAM. The
+    endpoint's /api/ps reports every model currently in GPU/CPU memory; a
+    dispatch against a model not in this set will trigger a load (and
+    possibly an eviction of the currently-loaded one if VRAM is tight).
+
+    Network / parse failures are swallowed: the function is a
+    observability hook, not a gate. Returning an empty set is fine; the
+    caller will then see "nothing loaded" and skip the mismatch warning
+    (a same-model dispatch is safe regardless of what's loaded).
+    """
+    try:
+        resp = httpx.get(f"{endpoint}/api/ps", timeout=5)
+        resp.raise_for_status()
+        payload = resp.json()
+    except (httpx.HTTPError, ValueError):
+        return set()
+    out: set[str] = set()
+    for entry in payload.get("models", []) or []:
+        name = entry.get("name") or entry.get("model")
+        if name:
+            out.add(name)
+    return out
 
 
 # Registry of available drivers by config name. Register new drivers here -

@@ -1,0 +1,11 @@
+{
+  "name": "interval_merge_js",
+  "ecosystem": "npm",
+  "tier": "T1",
+  "summary": "Merge overlapping and adjacent integer intervals in JavaScript",
+  "impl_file": "src/merge.js",
+  "persona": "software-engineer",
+  "model": "sonnet",
+  "risk": "low",
+  "agent_instructions": "Implement interval merging in src/merge.js.\n\nExport a function with exactly this signature:\n  merge(intervals) -> Array<[number, number]>\n\nEach input interval is an inclusive [start, end] pair (a 2-element array). Return a NEW sorted array of disjoint [start, end] arrays covering the same points.\n\nBehaviour requirements - ALL must hold:\n  1. Overlapping intervals merge: [[1,3],[2,6]] -> [[1,6]].\n  2. ADJACENT (touching) intervals merge because endpoints are inclusive: [[1,2],[3,4]] -> [[1,4]] (2 and 3 are consecutive integers). Treat intervals as touching when next.start <= current.end + 1.\n  3. Input may be unsorted and may contain duplicates.\n  4. Output is sorted ascending by start and contains no overlaps or touches.\n  5. An empty input returns an empty array.\n  6. A single interval returns a one-element array with the same bounds.\n  7. Do NOT mutate the input array or its elements.\n\nValidation (throw an Error with a clear message): any interval whose start > end.\n\nThe test runner is Node's built-in `node --test test/` (no Jest, no Mocha, no external deps - the spec deliberately uses the standard runner so the benchmark doesn't pull in node_modules). Tests live in test/merge.test.js.\n\nFollow strict TDD: write tests in test/merge.test.js covering overlap, adjacency (the +1 rule), unsorted input, duplicates, empty input, the no-mutation guarantee, and the thrown-Error-on-start>end FIRST, confirm they fail with `node --test test/`, then implement."
+}

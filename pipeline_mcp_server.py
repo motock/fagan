@@ -218,6 +218,11 @@ mcp = FastMCP("pipeline")
 # HTTP problems still surface but routine request chatter doesn't.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+# Module logger for non-user-visible warnings (dispatch_story's multi-model
+# VRAM-swap warning uses both this and _notify_user; the user sees the
+# latter via the dashboard/notification summary, the former is for
+# tail-grepping the orchestrator log).
+logging.getLogger("pipeline")
 
 # ---------- Helpers ----------
 def _plane_enabled() -> bool:
@@ -653,7 +658,13 @@ def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -
         f"nothing else in the repo calls), a missing doc update is a "
         f"Suggestion, not a blocker - note it in your summary but don't "
         f"REQUEST_CHANGES for that reason alone if the code itself is "
-        f"correct and tested. End with your VERDICT line; if you APPROVE, "
+        f"correct and tested.\n\n"
+        f"For large diffs: bash output is truncated to 3000 chars per call, "
+        f"so a bare `git diff` may silently cut off. Start with "
+        f"`git diff --stat` to see the scope, then use `git diff -- <file>` "
+        f"per file (or `git diff <commit>` for a range), and `view_file` "
+        f"for surrounding context. Do NOT rely on a single `git diff` for "
+        f"a multi-file change. End with your VERDICT line; if you APPROVE, "
         f"also include a PR title and body."
     )
     # cell_dir points at the worktree's parent directory. In production
@@ -947,20 +958,33 @@ def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]
     A repo's own CI (`_ci_status`) only exists if the repo has one configured;
     a story graded against a harness-owned `acceptance` block deserves the
     same re-verification regardless. Returns ``{"state": "pass"|"fail"|"none",
-    "error": str}`` — ``"none"`` when the story carries no acceptance block
-    (ordinary TDD stories, already covered by the full-suite gate at
-    `tests_passed` time) or the test runner can't be scoped to specific paths
-    (non-pytest), mirroring `_ci_status`'s "no CI configured" semantics so
-    callers treat both the same way.
+    "error": str}`` — ``"none"`` only when there's no worktree to test
+    against. Stories with an `acceptance` block get the scoped oracle re-run;
+    stories WITHOUT one (ordinary TDD stories) and non-pytest runners fall
+    back to re-running the full suite, so a post-rebase break can't slip
+    through (this is the MBW safety net — see commit history). Operators
+    with slow suites can opt out via ``PIPELINE_REVERIFY_FULL_SUITE=0`` to
+    restore the old silent-pass behavior.
     """
     acceptance = story.get("acceptance") or []
-    if not acceptance or not worktree or not Path(worktree).is_dir():
+    if not worktree or not Path(worktree).is_dir():
         return {"state": "none", "error": ""}
     test_dir, test_cmd = detect_test_command(Path(worktree))
-    if not _is_pytest_cmd(test_cmd):
-        return {"state": "none", "error": ""}
-    acceptance_paths = [str(Path(worktree) / p) for p in _acceptance_rel_paths(story)]
-    test_cmd = test_cmd + acceptance_paths
+    # Decide what to run: scoped to acceptance paths when the story carries
+    # an acceptance block AND the runner is pytest (the only runner where
+    # `pytest <files>` is well-defined); otherwise the full suite. The
+    # full-suite path is the MBW safety net — a story without an acceptance
+    # block (the common case for real-project stories) still gets the
+    # rebased branch's full test suite re-run before merge.
+    scope_to_acceptance = bool(acceptance) and _is_pytest_cmd(test_cmd)
+    if scope_to_acceptance:
+        acceptance_paths = [str(Path(worktree) / p) for p in _acceptance_rel_paths(story)]
+        test_cmd = test_cmd + acceptance_paths
+    elif not (acceptance and _is_pytest_cmd(test_cmd)):
+        # No acceptance block, or non-pytest runner: run the full suite
+        # unless the operator opted out.
+        if os.environ.get("PIPELINE_REVERIFY_FULL_SUITE", "1") == "0":
+            return {"state": "none", "error": ""}
     # Same operational-env stripping as check_story_status: PIPELINE_*/
     # LOCAL_AGENT_*/REPO_ROOT are harness config, not developer defaults the
     # suite asserts against.
@@ -1748,6 +1772,32 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         worktree_path.mkdir(parents=True, exist_ok=True)
         log_path = worktree_path / "agent.log"
 
+        # Gap 7: surface multi-model concurrent-dispatch risk. MAX_CONCURRENT_AGENTS
+        # is a process-count cap with no model/VRAM awareness, and Ollama's
+        # `/api/ps` reports whatever's currently loaded. If a *different* model
+        # is already in VRAM and we're about to dispatch a second story on a
+        # different model, Ollama will swap the existing model out to make room
+        # (or OOM-split if 24GB unified memory is tight). Warn, don't block:
+        # same-model concurrency is safe, and even a swap is just slow.
+        if (dispatch_backend == "local"
+                and MAX_CONCURRENT_AGENTS > 1
+                and _count_in_progress_agents() > 0):
+            target_model = spec.get("model") or story.get("model")
+            try:
+                loaded = backend._ollama_loaded_models(
+                    os.environ.get("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+                )
+            except Exception:
+                loaded = set()  # observability hook, never a gate
+            if loaded and target_model and target_model not in loaded:
+                msg = (
+                    f"multi-model concurrent dispatch: {sorted(loaded)} already "
+                    f"loaded, dispatching {story_key} on {target_model} may force "
+                    f"a VRAM swap (set MAX_CONCURRENT_AGENTS=1 to silence)"
+                )
+                _notify_user(plan_name, msg)
+                logging.getLogger("pipeline").warning(msg)
+
         # Fix #1: if the story carries an `acceptance` block, materialize the
         # oracle files into the worktree BEFORE the backend launches so the local
         # harness can grade against them. On a resumed story skip the write —
@@ -2275,6 +2325,17 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _run_reviewer(worktree, branch, backend_name="claude")
             if story.get("escalated") else _run_reviewer(worktree, branch)
         )
+    except backend.RateLimitedError:
+        # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
+        # is an infrastructure event, not a real review cycle. Treat it the
+        # same as Claude's weekly-usage pause: defer and retry on the next
+        # tick, do NOT burn REVIEW_INCONCLUSIVE_MAX. Without this, a
+        # misclassified rate-limit would eventually park a correct impl.
+        story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
+        _notify_user(plan_name,
+                     f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.")
+        _atomic_write_json(manifest_path, manifest)
+        return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
     except Exception as e:
         # Defense in depth: a reviewer backend's own internal error (a bad
         # tool-call shape, a malformed backend response, ...) must not crash

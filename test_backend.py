@@ -78,9 +78,16 @@ def test_get_backend_auto_raises_with_helpful_message():
 class _FakeResponse:
     def __init__(self, payload):
         self._payload = payload
+        # Default to a healthy status; _FakeStatusResponse overrides for
+        # the 429 short-circuit path that _chat now checks before
+        # raise_for_status().
+        self.status_code = 200
 
     def raise_for_status(self):
-        pass
+        if self.status_code >= 400:
+            raise b.httpx.HTTPStatusError(
+                f"{self.status_code} simulated", request=None, response=self
+            )
 
     def json(self):
         return self._payload
@@ -1316,3 +1323,206 @@ def test_claude_dispatch_handle_records_passed_model(tmp_path, monkeypatch):
     )
     assert handle.pid == 12
     assert handle.model == "opus"
+
+
+# ---------- Gap 5: Ollama 429 must surface as RateLimitedError, not a generic HTTPError ----------
+class _FakeStatusResponse:
+    """A response that surfaces a real status_code so _chat's 429 short-circuit fires."""
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise b.httpx.HTTPStatusError(
+                f"{self.status_code} simulated", request=None, response=self
+            )
+
+
+def test_chat_raises_rate_limited_on_429(monkeypatch):
+    """_chat must surface a 429 from the chat endpoint as RateLimitedError
+    (a RuntimeError subclass) so the orchestrator can route it to deferral.
+    It must NOT be wrapped into a generic HTTPError, which would later be
+    converted to a bare RuntimeError("unreachable") and misclassified as an
+    inconclusive review by review_story."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: _FakeStatusResponse(429),
+    )
+
+    driver = b.OllamaDriver()
+    with pytest.raises(b.RateLimitedError, match="429"):
+        driver._chat([{"role": "user", "content": "hi"}], model="gpt-oss:20b")
+    # And it must NOT be the generic httpx error - the whole point of the
+    # short-circuit is to keep RateLimitedError distinct from HTTPError.
+    assert not isinstance(
+        b.RateLimitedError("x"),
+        b.httpx.HTTPError,
+    )
+
+
+def test_complete_propagates_rate_limited_not_generic_runtime_error(monkeypatch):
+    """A 429 on a single-shot complete() must propagate as RateLimitedError,
+    NOT as the generic RuntimeError('unreachable') the callers wrap
+    httpx.HTTPError into. The orchestrator distinguishes the two via
+    `except backend.RateLimitedError` BEFORE the generic fallback."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: _FakeStatusResponse(429),
+    )
+
+    driver = b.OllamaDriver()
+    with pytest.raises(b.RateLimitedError):
+        driver.complete("p", model="gpt-oss:20b")
+    # Negative assertion: must NOT be a plain RuntimeError with the
+    # "unreachable" message that the httpx.HTTPError handler would produce.
+    try:
+        driver.complete("p", model="gpt-oss:20b")
+    except b.RateLimitedError as e:
+        assert "unreachable" not in str(e)
+    except RuntimeError as e:
+        pytest.fail(f"got generic RuntimeError({e!r}); expected RateLimitedError")
+
+
+def test_review_loop_propagates_rate_limited_through_complete(tmp_path, monkeypatch):
+    """_review_loop (via complete() in review mode) must let RateLimitedError
+    escape — wrapping it in a generic RuntimeError would defeat the
+    orchestrator's `except backend.RateLimitedError` branch and route the
+    429 into the inconclusive path instead of deferral."""
+    driver = b.OllamaDriver()
+
+    def _boom(*args, **kwargs):
+        raise b.RateLimitedError("simulated 429")
+
+    monkeypatch.setattr(driver, "_chat", _boom)
+
+    with pytest.raises(b.RateLimitedError):
+        driver.complete(
+            "review this", system="s", model="gpt-oss:20b",
+            allowed_tools="Bash,Read", cwd=str(tmp_path),
+        )
+
+
+def test_non_429_httpx_error_still_wraps_as_generic_runtime_error(monkeypatch):
+    """Guard: only 429 must trigger RateLimitedError. A real backend error
+    (500, network drop, etc.) should still surface as the generic
+    RuntimeError so existing failure paths in the orchestrator continue to
+    handle it the same way."""
+    def _boom(url, json, timeout):
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(b.httpx, "post", _boom)
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+
+    with pytest.raises(RuntimeError, match="unreachable"):
+        b.OllamaDriver().complete("p", model="gpt-oss:20b")
+
+
+# ---------- Gap 4: large-diff reviewer guidance ----------
+def test_review_loop_preamble_mentions_diff_stat():
+    """The local-model review preamble must guide the model to use
+    `git diff --stat` first and per-file `git diff -- <file>` for large
+    diffs, because bash output is truncated to 3000 chars. Drop this
+    guidance and a multi-file change can be silently cut off. Assert by
+    inspecting the module source directly (the preamble is a multi-line
+    string built inside _review_loop)."""
+    module_src = open(b.__file__).read()
+    assert "git diff --stat" in module_src, (
+        "reviewer preamble must mention `git diff --stat` so the model "
+        "scopes large diffs before reading them"
+    )
+    assert "git diff -- <file>" in module_src, (
+        "reviewer preamble must mention per-file `git diff -- <file>` "
+        "as the safe way to read a multi-file change past the 3000-char "
+        "bash-output cap"
+    )
+    # Sanity: confirm _run_readonly_tool actually truncates bash output,
+    # so the preamble's advice is grounded in real behavior.
+    assert "(pr.stdout + pr.stderr)[:3000]" in module_src
+
+
+def test_claude_reviewer_prompt_mentions_diff_stat():
+    """The Claude reviewer's prompt must also tell Claude to scope large
+    diffs via `git diff --stat` first — same 3000-char bash cap applies
+    on the Claude side, and Claude was shown to be similarly vulnerable
+    to silently-truncated diffs on Tier-2 multi-file stories."""
+    import importlib
+    p = importlib.import_module("pipeline_mcp_server")
+    src = open(p.__file__).read()
+    assert "git diff --stat" in src
+    # And it should explicitly warn about the truncation.
+    assert "3000 chars" in src or "truncat" in src.lower()
+
+
+def test_run_readonly_tool_truncates_bash_output_at_3000_chars(tmp_path, monkeypatch):
+    """Bash output from the reviewer's read-only tool is truncated to 3000
+    chars. The reviewer's preamble explicitly tells the model to avoid
+    relying on a single `git diff` for large changes because of this cap;
+    this test guards the cap itself so a future 'fix' doesn't silently
+    inflate it."""
+    import subprocess as _sp
+    long_output = "x" * 5000
+
+    class _FakeProc:
+        stdout = long_output
+        stderr = ""
+
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: _FakeProc())
+
+    result = b._run_readonly_tool("bash", {"command": "echo x"}, tmp_path)
+    assert len(result) <= 3000
+    assert result == "x" * 3000  # the cap is a hard cut, not a smart trim
+
+
+# ---------- Gap 7: /api/ps loaded-model probe ----------
+class _FakePsResponse:
+    def __init__(self, models):
+        self._payload = {"models": models}
+        self.status_code = 200
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise b.httpx.HTTPStatusError(
+                f"{self.status_code}", request=None, response=self
+            )
+
+    def json(self):
+        return self._payload
+
+
+def test_ollama_loaded_models_parses_api_ps(monkeypatch):
+    """_ollama_loaded_models must return the set of `name` fields from
+    /api/ps so dispatch_story can compare against the about-to-load model."""
+    monkeypatch.setattr(
+        b.httpx, "get",
+        lambda url, timeout: _FakePsResponse([
+            {"name": "gpt-oss:20b", "size_vram": 12000000000},
+            {"name": "devstral:24b", "size_vram": 14000000000},
+        ]),
+    )
+
+    loaded = b._ollama_loaded_models("http://localhost:11434")
+    assert loaded == {"gpt-oss:20b", "devstral:24b"}
+
+
+def test_ollama_loaded_models_returns_empty_set_on_http_error(monkeypatch):
+    """Observability hook, never a gate: on any failure (endpoint down,
+    timeout, malformed JSON), the helper must return an empty set so the
+    caller skips the mismatch warning rather than crashing dispatch."""
+    def _boom(url, timeout):
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(b.httpx, "get", _boom)
+
+    assert b._ollama_loaded_models("http://localhost:11434") == set()
+
+
+def test_ollama_loaded_models_handles_missing_models_field(monkeypatch):
+    """Some Ollama versions / proxies return an empty payload; we must
+    not crash on that."""
+    monkeypatch.setattr(
+        b.httpx, "get",
+        lambda url, timeout: _FakePsResponse([]),
+    )
+    assert b._ollama_loaded_models("http://localhost:11434") == set()

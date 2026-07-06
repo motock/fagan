@@ -1,0 +1,11 @@
+{
+  "name": "lru_cache_rs",
+  "ecosystem": "cargo",
+  "tier": "T1",
+  "summary": "Implement a fixed-capacity LRU cache in Rust",
+  "impl_file": "src/lib.rs",
+  "persona": "software-engineer",
+  "model": "sonnet",
+  "risk": "low",
+  "agent_instructions": "Implement a fixed-capacity Least-Recently-Used cache in src/lib.rs (the file already exists with a placeholder; replace its contents entirely).\n\nExport a public struct LruCache with exactly this interface:\n  - pub fn new(capacity: usize) -> Self  # panic if capacity < 1\n  - pub fn get(&mut self, key: i32) -> Option<i32>  # returns the stored value, or None if absent; counts as a use\n  - pub fn put(&mut self, key: i32, value: i32)  # inserts/updates; counts as a use; evicts the LRU entry when over capacity\n  - pub fn size(&self) -> usize              # current number of entries\n\nBehaviour requirements - ALL must hold:\n  1. Both get(hit) and put mark a key as most-recently-used.\n  2. When inserting a NEW key would exceed capacity, evict exactly the least-recently-used key first.\n  3. put on an EXISTING key updates its value and marks it most-recently-used; it does NOT grow size and does NOT evict.\n  4. get on a missing key returns None and does not change recency ordering.\n  5. A capacity of 1 works (every new key evicts the previous).\n\nFollow strict TDD: write integration tests in tests/test_lru_cache.rs covering eviction order, update-in-place, capacity bounds, and the panic-on-zero case FIRST, confirm they fail with `cargo test`, then implement. The grader's tests/test_groundtruth.rs is independent and only ever runs against your merged code, not anything you write.\n\nRun `cargo test` to verify (it will pull in dev-dependencies, none needed; the bench task has no external deps). Aim for O(1) amortized get/put."
+}

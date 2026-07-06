@@ -130,6 +130,22 @@ MODELS: dict[str, dict] = {
             "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get("BENCH_GLM_TAG", "glm-5.2:cloud"),
         },
     },
+    # Cloud-review counterpart to gptoss_glm_review. Same dispatch path
+    # (gpt-oss:20b implements locally, no Claude usage consumed) but the
+    # review role runs on Claude itself (PIPELINE_BACKEND_REVIEW=claude,
+    # no PIPELINE_LOCAL_REVIEW_MODEL). Used to measure the cloud review's
+    # real per-call token cost after the driver-level fixes (drop
+    # memory: user on reviewers, --max-tokens 4096 cap, tightened
+    # persona prose) - the headline number for the token-cost comparison
+    # report at docs/benchmarks/2026-07-06-token-cost-comparison.md.
+    "gptoss_claude_review": {
+        "mock": False,
+        "env": {
+            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
+                     temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_BACKEND_REVIEW": "claude",
+        },
+    },
     # --- cloud (claude CLI) ---
     "sonnet": {
         "mock": False,

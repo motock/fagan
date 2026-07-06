@@ -656,9 +656,24 @@ def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -
         f"correct and tested. End with your VERDICT line; if you APPROVE, "
         f"also include a PR title and body."
     )
+    # cell_dir points at the worktree's parent directory. In production
+    # that's ~/.claude/worktrees/; in the benchmark it's
+    # <cell>/worktrees/, which the harness preserves across all trials
+    # of a cell (worktrees/<story_key>/ is removed on merge, but the
+    # surrounding worktrees/ dir is not). The driver writes a per-call
+    # token-cost sidecar there so the data survives the worktree
+    # cleanup that wipes review.log. None for live (non-benchmark)
+    # reviews whose worktree lives somewhere we shouldn't be
+    # scribbling new files into: in that case the driver silently
+    # skips the sidecar.
+    if Path(worktree).parent.name == "worktrees":
+        cell_dir = str(Path(worktree).resolve().parent)
+    else:
+        cell_dir = None
     return backend.get_backend("review", name=backend_name).complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
         max_tokens=int(os.environ.get("PIPELINE_REVIEW_MAX_TOKENS", "4096")),
+        cell_dir=cell_dir,
     )
 
 
@@ -676,10 +691,15 @@ def _run_security_reviewer(worktree: str, branch: str) -> str:
         f"bypasses, and Secure-by-Design violations. Run the test suite. "
         f"End with your VERDICT line: APPROVE or REQUEST_CHANGES."
     )
+    if Path(worktree).parent.name == "worktrees":
+        cell_dir = str(Path(worktree).resolve().parent)
+    else:
+        cell_dir = None
     return backend.get_backend("review").complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
         max_tokens=int(os.environ.get("PIPELINE_SECURITY_REVIEW_MAX_TOKENS",
                                       os.environ.get("PIPELINE_REVIEW_MAX_TOKENS", "4096"))),
+        cell_dir=cell_dir,
     )
 
 

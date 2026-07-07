@@ -321,6 +321,43 @@ def _sh(argv, cwd, check=True):
                           capture_output=True, text=True)
 
 
+# Convention per ecosystem for files that count as "tests" for the
+# TDD-skip check. The T2 story brief asks the agent to add a regression
+# test alongside the impl fix; the scorecard flags a cell that fixes
+# the impl without adding one. Centralised here so the helper and any
+# future test-discovery code stay in lockstep.
+_TEST_FILE_PATTERNS: dict[str, tuple[str, ...]] = {
+    "pytest": ("test_", "_test.py", "tests/"),
+    "cargo":  ("tests/", "_test.rs"),
+    "npm":    ("test/", ".test.js", "test_"),
+}
+
+
+def _is_test_path(rel: str, ecosystem: str) -> bool:
+    patterns = _TEST_FILE_PATTERNS.get(ecosystem, _TEST_FILE_PATTERNS["pytest"])
+    return any(p in rel for p in patterns)
+
+
+def _tdd_diff(repo: Path, init_sha: str, impl_file: str,
+              ecosystem: str = "pytest") -> tuple[bool, bool]:
+    """Return (impl_changed, test_changed) for paths under `repo` that
+    differ from `init_sha`. Used by the scorecard to flag a T2 cell that
+    modified the impl without adding a regression test
+    (project_t2_tdd_skip_finding.md). Pure function: no side effects,
+    no manifest reads. Failures (missing init, dirty tree, etc.) report
+    both-false so the scorecard does not false-positive on infra noise.
+    """
+    try:
+        out = _sh(["git", "diff", "--name-only", init_sha, "HEAD"],
+                  cwd=repo, check=True).stdout
+    except subprocess.CalledProcessError:
+        return (False, False)
+    changed = [p.strip() for p in out.splitlines() if p.strip()]
+    impl_changed = impl_file in changed
+    test_changed = any(_is_test_path(p, ecosystem) for p in changed)
+    return (impl_changed, test_changed)
+
+
 def load_task(name: str) -> dict:
     spec = json.loads((TASKS_DIR / name / "spec.json").read_text())
     # Ecosystem dispatch (Gap 3): the harness used to be pytest-only, with
@@ -467,11 +504,13 @@ def setup_workspace(cell: Path, task: dict | None = None) -> dict[str, Path]:
         target.write_text(content)
     _sh(["git", "add", "-A"], repo)
     _sh(["git", "commit", "-qm", "init"], repo)
+    init_sha = _sh(["git", "rev-parse", "HEAD"], repo).stdout.strip()
 
     _sh(["git", "init", "--bare", "-q", "-b", "master", "."], origin)
     _sh(["git", "remote", "add", "origin", str(origin)], repo)
     _sh(["git", "push", "-q", "-u", "origin", "master"], repo)
-    return {"repo": repo, "origin": origin, "plans": plans, "worktrees": worktrees}
+    return {"repo": repo, "origin": origin, "plans": plans,
+            "worktrees": worktrees, "init_sha": init_sha}
 
 
 def build_plan(repo: Path, task: dict) -> dict:
@@ -900,6 +939,24 @@ def main() -> int:
     gt = run_groundtruth(gt_src, task["impl_file"], task["groundtruth_source"],
                          cell / "_gt", ecosystem=task.get("ecosystem", "pytest"))
 
+    # TDD-skip signal (project_t2_tdd_skip_finding.md): a T2 cell that
+    # touches the impl without adding a regression test still scores
+    # green today. Compute against the merged repo (or the surviving
+    # worktree, same diff target as the GT path) so the scorecard can
+    # surface a yellow flag on T2 stories. On any infra failure
+    # (_tdd_diff returns both-false) we omit the booleans rather than
+    # record a misleading signal.
+    init_sha = paths.get("init_sha", "")
+    tdd_src = repo if final_status == "done" else (
+        Path(story.get("worktree", "")) if Path(story.get("worktree", "")).is_dir()
+        else repo
+    )
+    if init_sha and tdd_src.is_dir():
+        impl_ch, test_ch = _tdd_diff(tdd_src, init_sha, task["impl_file"],
+                                      ecosystem=task.get("ecosystem", "pytest"))
+    else:
+        impl_ch, test_ch = False, False
+
     result = {
         "task": args.task,
         "model": args.model,
@@ -913,6 +970,9 @@ def main() -> int:
         "groundtruth_where": gt_where,
         "groundtruth_passed": gt.get("passed", False),
         "groundtruth_ran": gt.get("ran", False),
+        "task_tier": task.get("tier", ""),
+        "impl_changed": impl_ch,
+        "test_changed": test_ch,
         "elapsed_s": elapsed,
         "ticks": len(ticks),
         "timed_out": final_status not in TERMINAL,

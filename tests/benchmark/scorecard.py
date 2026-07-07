@@ -40,6 +40,17 @@ def aggregate(cells: list[dict]) -> dict:
             "merged_wrong": sum(
                 bool(c.get("merged")) and not c.get("groundtruth_passed") for c in group
             ),
+            # TDD-skip signal (project_t2_tdd_skip_finding.md): a T2 cell
+            # where the agent fixed the impl but skipped the requested
+            # regression test still scores green today. Counted as a
+            # process footnote, not folded into `success` (TDD-skip is
+            # a discipline signal, not a correctness failure).
+            "tdd_skip": sum(
+                c.get("task_tier") == "T2"
+                and bool(c.get("impl_changed"))
+                and not bool(c.get("test_changed"))
+                for c in group
+            ),
             "timeouts": sum(bool(c.get("timed_out")) for c in group),
             "avg_elapsed": round(sum(c.get("elapsed_s", 0) for c in group) / n, 1),
             "avg_ticks": round(sum(c.get("ticks", 0) for c in group) / n, 1),
@@ -76,8 +87,8 @@ def render(cells: list[dict]) -> str:
 
     # --- per-model rollup ---
     lines.append("\n## Per-model totals\n")
-    lines.append("| Model | Success | Merged | GT-pass | Merged-but-wrong | Timeouts | Avg s | Avg ticks |")
-    lines.append("|-------|---------|--------|---------|------------------|----------|-------|-----------|")
+    lines.append("| Model | Success | Merged | GT-pass | Merged-but-wrong | TDD-skip | Timeouts | Avg s | Avg ticks |")
+    lines.append("|-------|---------|--------|---------|------------------|----------|----------|-------|-----------|")
     for model in models:
         msl = [s for (t, m), s in stats.items() if m == model]
         trials = sum(s["trials"] for s in msl)
@@ -85,18 +96,27 @@ def render(cells: list[dict]) -> str:
         merged = sum(s["merged"] for s in msl)
         gtp = sum(s["gt_pass"] for s in msl)
         mw = sum(s["merged_wrong"] for s in msl)
+        ts = sum(s.get("tdd_skip", 0) for s in msl)
         to = sum(s["timeouts"] for s in msl)
         avg_s = round(sum(s["avg_elapsed"] * s["trials"] for s in msl) / trials, 1) if trials else 0
         avg_t = round(sum(s["avg_ticks"] * s["trials"] for s in msl) / trials, 1) if trials else 0
         lines.append(
             f"| {model} | {succ}/{trials} ({_pct(succ, trials)}) | {merged}/{trials} | "
-            f"{gtp}/{trials} | {mw} | {to} | {avg_s} | {avg_t} |"
+            f"{gtp}/{trials} | {mw} | {ts} | {to} | {avg_s} | {avg_t} |"
         )
 
     lines.append(
         "\n> **Merged-but-wrong** counts cells the pipeline merged whose code "
         "the ground-truth rejected — the pipeline accepting incorrect work. Any "
         "non-zero value here is a pipeline-quality signal worth investigating.\n"
+        "\n> **TDD-skip** counts T2 cells where the agent's diff touched the impl "
+        "file but no test file — i.e. the agent fixed the bug but skipped the "
+        "regression test the spec asked for. This is a process footnote, not a "
+        "correctness failure (the cell still counts as `success`): it tells you "
+        "the model's headline number is real, but the test-suite coverage is "
+        "weaker than the spec requested. Investigate when TDD-skip is high AND "
+        "the cell's only evidence of correctness is the diff, not a re-run "
+        "ground-truth.\n"
     )
     return "\n".join(lines) + "\n"
 

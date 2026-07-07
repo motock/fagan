@@ -274,6 +274,13 @@ def _default_branch() -> str:
         return _default_branch_cache[key]
     except subprocess.CalledProcessError:
         pass
+    except OSError:
+        # `git` binary missing / not executable on PATH. Honor the same
+        # never-raises contract as _rebase_onto_master: fall through to
+        # the rev-parse attempt, then the "main" default, rather than
+        # crashing the caller (e.g. the merge-gate rebase path on a
+        # container without git installed).
+        pass
 
     try:
         branch = subprocess.run(
@@ -284,6 +291,8 @@ def _default_branch() -> str:
             _default_branch_cache[key] = branch
             return _default_branch_cache[key]
     except subprocess.CalledProcessError:
+        pass
+    except OSError:
         pass
 
     _default_branch_cache[key] = "main"
@@ -894,11 +903,15 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
         # back to the CI gate + the original conflict-at-`gh pr merge` check;
         # rebasing is impossible without the worktree the branch lives in.
         return {"ok": True, "conflict": False, "error": "worktree missing - rebase skipped"}
-    # Full `git fetch origin` (not `fetch origin master`) so the
-    # remote-tracking ref `refs/remotes/origin/master` is updated on configs
-    # with a narrow/custom refspec, keeping the rebase target current.
+    # Full `git fetch origin` (not `fetch origin <branch>`) so every
+    # remote-tracking ref is updated on configs with a narrow/custom refspec,
+    # keeping the rebase target current. The rebase target itself must follow
+    # the repo's default branch (`main` on fresh `gh repo create`, `master` on
+    # legacy / local bench clones); hardcoding `origin/master` would break
+    # every merge-gate attempt on a main-default repo (live-`gh` probe,
+    # PROOF.md note #1).
     _run(["git", "fetch", "origin"], REPO_ROOT)
-    r = _run(["git", "rebase", "origin/master"], worktree)
+    r = _run(["git", "rebase", f"origin/{_default_branch()}"], worktree)
     if r.returncode == 0:
         return {"ok": True, "conflict": False, "error": ""}
     blob = (r.stdout + "\n" + r.stderr).lower()

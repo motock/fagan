@@ -3281,6 +3281,55 @@ def test_rebase_onto_master_reports_conflict(monkeypatch, tmp_path):
     assert rb["conflict"] is True
 
 
+def test_rebase_onto_master_uses_default_branch_on_main_repo(tmp_path, monkeypatch):
+    # Gap from the live-`gh` probe (PROOF.md note #1): when the repo's default
+    # branch is `main` (e.g. a fresh `gh repo create`), the rebase path must
+    # rebase onto `origin/main`, not the hardcoded `origin/master`. A `main`-
+    # default repo with no `master` ref would otherwise fail the rebase and
+    # block every merge-gate attempt. Run against a real tmp git repo so the
+    # `git rebase` invocation actually executes against the configured ref.
+    # `wt` is a real `git worktree add` off `repo` (not a separate `git init`)
+    # because that's the production invariant: the fetch into REPO_ROOT updates
+    # `origin/main` for the worktree too, since they share `.git/`.
+    repo = tmp_path / "repo"
+    wt = tmp_path / "wt"
+    repo.mkdir()
+    for d in (repo,):
+        r = subprocess.run(["git", "init", "-q", "-b", "main", str(d)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        subprocess.run(["git", "config", "user.email", "t@e"],
+                       cwd=d, capture_output=True, text=True, check=True)
+        subprocess.run(["git", "config", "user.name", "t"],
+                       cwd=d, capture_output=True, text=True, check=True)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(origin)],
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)],
+                   cwd=repo, capture_output=True, text=True, check=True)
+    (repo / "README.md").write_text("seed\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, text=True, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "push", "-q", "-u", "origin", "main"],
+                   cwd=repo, capture_output=True, text=True, check=True)
+    subprocess.run(["git", "remote", "set-head", "origin", "main"],
+                   cwd=repo, capture_output=True, text=True, check=True)
+    # Real worktree off `repo` so it shares `.git/`. A new commit on
+    # `agent/x` from the worktree gives the rebase something to fast-forward.
+    r = subprocess.run(["git", "worktree", "add", "-b", "agent/x", str(wt)],
+                       cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    (wt / "new.txt").write_text("agent edit\n")
+    subprocess.run(["git", "add", "-A"], cwd=wt, capture_output=True, text=True, check=True)
+    subprocess.run(["git", "commit", "-qm", "agent edit"], cwd=wt,
+                   capture_output=True, text=True, check=True)
+    monkeypatch.setattr(p, "REPO_ROOT", str(repo))
+    rb = p._rebase_onto_master(str(wt), "agent/x")
+    assert rb["ok"] is True, f"rebase failed: {rb}"
+    assert rb["conflict"] is False
+
+
 def test_ci_status_none_when_gh_unavailable(monkeypatch):
     # No PR / no gh -> state "none" is treated as pass so repos without CI are
     # not blocked. A non-zero gh exit (no checks for the branch) maps here too.

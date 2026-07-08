@@ -203,6 +203,45 @@ def test_detect_test_command_worktree_uses_main_repo_venv_via_git_common_dir(tmp
     assert cmd == [str(repo / ".venv" / "bin" / "python"), "-m", "pytest"]
 
 
+# ---------- detect_build_command (T4) ----------
+def test_detect_build_command_finds_npm_build_script(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}}))
+    result = p.detect_build_command(tmp_path)
+    assert result == (tmp_path, ["npm", "run", "build"])
+
+
+def test_detect_build_command_prefers_yarn_when_lockfile_present(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}}))
+    (tmp_path / "yarn.lock").write_text("")
+    result = p.detect_build_command(tmp_path)
+    assert result == (tmp_path, ["yarn", "build"])
+
+
+def test_detect_build_command_none_when_package_json_has_no_build_script(tmp_path):
+    # A package.json without a "build" script (e.g. a library with no bundling
+    # step) must not be treated as having a build gate to enforce.
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "vitest"}}))
+    assert p.detect_build_command(tmp_path) is None
+
+
+def test_detect_build_command_finds_cargo_build(tmp_path):
+    (tmp_path / "Cargo.toml").write_text("[package]\nname = 'x'\n")
+    result = p.detect_build_command(tmp_path)
+    assert result == (tmp_path, ["cargo", "build"])
+
+
+def test_detect_build_command_falls_back_to_subdirectory(tmp_path):
+    sub = tmp_path / "web"
+    sub.mkdir()
+    (sub / "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}}))
+    result = p.detect_build_command(tmp_path)
+    assert result == (sub, ["npm", "run", "build"])
+
+
+def test_detect_build_command_none_when_no_marker_anywhere(tmp_path):
+    assert p.detect_build_command(tmp_path) is None
+
+
 # ---------- Persona helpers ----------
 def test_persona_body_strips_frontmatter(agents_dir):
     body = p._persona_body("software-engineer")
@@ -559,6 +598,117 @@ def test_mark_story_in_progress_without_plane_skips_patch(_plane_disabled, plan_
     assert manifest["stories"]["S1"]["status"] == "in_progress"
 
 
+# ---------- patch_story / set_story_status (T2) ----------
+# These give a caller a sanctioned, lock-serialized way to edit a story's
+# authored fields or transition its status, so nobody needs to hand-edit the
+# manifest JSON directly - which races the 60s scheduler tick with no lock
+# protecting the edit (2026-07-07 web-client-epic retro, §6).
+
+def test_patch_story_updates_allowlisted_field_preserves_others(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ps1", {
+        "S1": {"summary": "Old summary", "agent_instructions": "Old.",
+               "status": "todo", "dependencies": [], "model": "sonnet"},
+    })
+    result = p.patch_story("ps1", "S1", {"agent_instructions": "New, clarified."})
+    assert result["ok"] is True
+    manifest = _read_manifest(plan_dir, "ps1")
+    assert manifest["stories"]["S1"]["agent_instructions"] == "New, clarified."
+    assert manifest["stories"]["S1"]["status"] == "todo"
+    assert manifest["stories"]["S1"]["model"] == "sonnet"
+
+
+def test_patch_story_can_update_pr_url(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ps2", {
+        "S1": {"summary": "s", "status": "done"},
+    })
+    result = p.patch_story("ps2", "S1", {"pr_url": "https://example.com/pr/9"})
+    assert result["ok"] is True
+    manifest = _read_manifest(plan_dir, "ps2")
+    assert manifest["stories"]["S1"]["pr_url"] == "https://example.com/pr/9"
+
+
+def test_patch_story_rejects_field_outside_allowlist(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ps3", {
+        "S1": {"summary": "s", "status": "todo"},
+    })
+    result = p.patch_story("ps3", "S1", {"status": "done"})
+    assert result["ok"] is False
+    assert "status" in result["error"]
+    manifest = _read_manifest(plan_dir, "ps3")
+    assert manifest["stories"]["S1"]["status"] == "todo"
+
+
+def test_patch_story_rejects_missing_story(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ps4", {})
+    result = p.patch_story("ps4", "no-such-key", {"model": "opus"})
+    assert result["ok"] is False
+    assert "no-such-key" in result["error"]
+
+
+def test_patch_story_skips_when_lock_held(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ps5", {
+        "S1": {"summary": "s", "status": "todo", "model": "sonnet"},
+    })
+    lock_path = plan_dir / "ps5.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = p.patch_story("ps5", "S1", {"model": "opus"})
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    assert result["ok"] is True
+    assert result.get("skipped") == "locked"
+    manifest = _read_manifest(plan_dir, "ps5")
+    assert manifest["stories"]["S1"]["model"] == "sonnet"
+
+
+def test_set_story_status_updates_to_valid_status(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ss1", {
+        "S1": {"summary": "s", "status": "parked"},
+    })
+    result = p.set_story_status("ss1", "S1", "interrupted")
+    assert result["ok"] is True
+    manifest = _read_manifest(plan_dir, "ss1")
+    assert manifest["stories"]["S1"]["status"] == "interrupted"
+
+
+def test_set_story_status_rejects_invalid_status(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ss2", {
+        "S1": {"summary": "s", "status": "parked"},
+    })
+    result = p.set_story_status("ss2", "S1", "definitely-not-a-status")
+    assert result["ok"] is False
+    assert "definitely-not-a-status" in result["error"]
+    manifest = _read_manifest(plan_dir, "ss2")
+    assert manifest["stories"]["S1"]["status"] == "parked"
+
+
+def test_set_story_status_rejects_missing_story(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ss3", {})
+    result = p.set_story_status("ss3", "no-such-key", "todo")
+    assert result["ok"] is False
+    assert "no-such-key" in result["error"]
+
+
+def test_set_story_status_skips_when_lock_held(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "ss4", {
+        "S1": {"summary": "s", "status": "parked"},
+    })
+    lock_path = plan_dir / "ss4.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = p.set_story_status("ss4", "S1", "interrupted")
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    assert result["ok"] is True
+    assert result.get("skipped") == "locked"
+    manifest = _read_manifest(plan_dir, "ss4")
+    assert manifest["stories"]["S1"]["status"] == "parked"
+
+
 def test_ingest_plan_rejects_missing_repo_root(plan_dir, monkeypatch):
     """Without repo_root, advance_all_plans() falls back to the global
     REPO_ROOT for this plan - almost certainly the wrong repo (or a
@@ -591,6 +741,140 @@ def test_ingest_plan_rejects_nonexistent_repo_root_directory(plan_dir, monkeypat
     assert result["ok"] is False
     assert "repo_root" in result["error"]
     assert not (plan_dir / "badrepo.manifest.json").exists()
+
+
+# ---------- ingest_plan re-ingest merges instead of clobbering (T1) ----------
+# Re-running ingest_plan with only_epics scoped to a newly-added epic used to
+# replace the whole manifest, silently deleting every previously-ingested
+# story's status/pr_url/history (2026-07-07 web-client-epic retro, incident
+# #2: 43 tracked stories -> 10 after one only_epics call).
+
+def test_ingest_plan_reingest_preserves_stories_from_untouched_epics(
+    _plane_disabled, plan_dir, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [
+            {"summary": "E1", "stories": [_story(key="S1")]},
+            {"summary": "E2", "stories": [_story(key="S2")]},
+        ],
+    }
+    (plan_dir / "reingest.json").write_text(json.dumps(plan))
+
+    first = p.ingest_plan("reingest")
+    assert first["ok"] is True
+    manifest = _read_manifest(plan_dir, "reingest")
+    # Simulate real progress recorded against S1 by later pipeline activity.
+    manifest["stories"]["S1"]["status"] = "done"
+    manifest["stories"]["S1"]["pr_url"] = "https://example.com/pr/48"
+    (plan_dir / "reingest.manifest.json").write_text(json.dumps(manifest))
+
+    result = p.ingest_plan("reingest", only_epics=["E2"])
+
+    assert result["ok"] is True
+    merged = _read_manifest(plan_dir, "reingest")
+    assert merged["stories"]["S1"]["status"] == "done"
+    assert merged["stories"]["S1"]["pr_url"] == "https://example.com/pr/48"
+    assert "S2" in merged["stories"]
+
+
+def test_ingest_plan_reingest_refreshes_authored_fields_preserves_runtime_status(
+    _plane_disabled, plan_dir, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [
+            _story(key="S1", agent_instructions="Build v1."),
+        ]}],
+    }
+    (plan_dir / "refresh.json").write_text(json.dumps(plan))
+    p.ingest_plan("refresh")
+    manifest = _read_manifest(plan_dir, "refresh")
+    manifest["stories"]["S1"]["status"] = "done"
+    manifest["stories"]["S1"]["pr_url"] = "https://example.com/pr/1"
+    (plan_dir / "refresh.manifest.json").write_text(json.dumps(manifest))
+
+    plan["epics"][0]["stories"][0]["agent_instructions"] = "Build v2, with edge cases."
+    (plan_dir / "refresh.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("refresh")
+
+    assert result["ok"] is True
+    merged = _read_manifest(plan_dir, "refresh")
+    assert merged["stories"]["S1"]["agent_instructions"] == "Build v2, with edge cases."
+    assert merged["stories"]["S1"]["status"] == "done"
+    assert merged["stories"]["S1"]["pr_url"] == "https://example.com/pr/1"
+
+
+def test_ingest_plan_overwrite_true_drops_untouched_epics(
+    _plane_disabled, plan_dir, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [
+            {"summary": "E1", "stories": [_story(key="S1")]},
+            {"summary": "E2", "stories": [_story(key="S2")]},
+        ],
+    }
+    (plan_dir / "ovr.json").write_text(json.dumps(plan))
+    p.ingest_plan("ovr")
+
+    result = p.ingest_plan("ovr", only_epics=["E2"], overwrite=True)
+
+    assert result["ok"] is True
+    manifest = _read_manifest(plan_dir, "ovr")
+    assert "S1" not in manifest["stories"]
+    assert "S2" in manifest["stories"]
+
+
+def test_ingest_plan_reingest_preserves_top_level_paused_and_fallback_fields(
+    plan_dir, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [_story(key="S1")]}],
+    }
+    (plan_dir / "topkeys.json").write_text(json.dumps(plan))
+    p.ingest_plan("topkeys")
+    manifest = _read_manifest(plan_dir, "topkeys")
+    manifest["paused"] = True
+    manifest["local_model_fallback"] = "glm-5.2:cloud"
+    (plan_dir / "topkeys.manifest.json").write_text(json.dumps(manifest))
+
+    result = p.ingest_plan("topkeys")
+
+    assert result["ok"] is True
+    merged = _read_manifest(plan_dir, "topkeys")
+    assert merged["paused"] is True
+    assert merged["local_model_fallback"] == "glm-5.2:cloud"
+
+
+def test_ingest_plan_skips_when_lock_held(plan_dir, monkeypatch, tmp_path):
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [_story(key="S1")]}],
+    }
+    (plan_dir / "ilk2.json").write_text(json.dumps(plan))
+
+    def _boom(*a, **kw):
+        raise AssertionError("a locked-out ingest_plan must not touch Plane or the manifest")
+    monkeypatch.setattr(p, "plane_request", _boom)
+
+    lock_path = plan_dir / "ilk2.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = p.ingest_plan("ilk2")
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert result["ok"] is True
+    assert result.get("skipped") == "locked"
+    assert not (plan_dir / "ilk2.manifest.json").exists()
 
 
 # ---------- Review gate + auto-PR ----------
@@ -3398,6 +3682,55 @@ def test_ci_status_returns_none_when_gh_missing(monkeypatch):
     assert "gh unavailable" in ci["error"]
 
 
+def test_ci_status_none_when_no_workflows_dir_and_no_checks_reported(
+    monkeypatch, tmp_path,
+):
+    # A repo with no .github/workflows genuinely has no CI: an empty checks
+    # list must resolve straight to "none" (treated as pass), not block a
+    # merge waiting for checks that will never appear.
+    monkeypatch.setattr(p, "REPO_ROOT", tmp_path)
+
+    def _fake_run(argv, **_):
+        class R:
+            returncode = 0
+            stdout = "[]"
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    ci = p._ci_status("agent/x")
+    assert ci["state"] == "none"
+
+
+def test_ci_status_pending_not_none_when_workflows_dir_present_but_checks_not_yet_registered(
+    monkeypatch, tmp_path,
+):
+    # A repo WITH .github/workflows that reports zero checks yet must NOT be
+    # treated as pass - the workflow run may just not have registered with
+    # GitHub yet. Fix for the gap that let PR #48 merge with a red Linux CI
+    # job that hadn't shown up in `gh pr checks` at merge time (2026-07-07
+    # web-client-epic retro §4). Must poll (not fast-path) and land on
+    # "pending", never silently "none"/pass, once the timeout elapses.
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    monkeypatch.setattr(p, "REPO_ROOT", tmp_path)
+
+    def _fake_run(argv, **_):
+        class R:
+            returncode = 0
+            stdout = "[]"
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p.time, "sleep", lambda _s: None)
+    # A tiny positive timeout (not 0): 0 would let the while loop's deadline
+    # already be past on the first condition check, skipping the loop body
+    # (and thus the gh call under test) entirely and falling through to
+    # "pending" for free - passing even with the pre-fix "none" bug.
+    ci = p._ci_status("agent/x", timeout_s=0.05)
+    assert ci["state"] == "pending"
+
+
 def test_rebase_onto_master_returns_not_ok_when_git_missing(monkeypatch, tmp_path):
     # `git` absent/non-executable raises OSError; the helper must not escape it
     # (the loop only wraps _merge_pr in try/except). It reports a non-conflict
@@ -3761,6 +4094,154 @@ def test_reverify_acceptance_passes_when_oracle_green(monkeypatch, tmp_path):
     result = p._reverify_acceptance(story, str(tmp_path))
 
     assert result == {"state": "pass", "error": ""}
+
+
+# ---------- _reverify_build (T4) ----------
+# Neither the reviewer nor the dispatched agent's own "tests pass" report is
+# proof the project actually builds - PR #48 shipped with `npm run build`
+# broken (a real, pre-existing bug: Node's `crypto` module can't bundle for a
+# browser target) because nobody ran it before merge (2026-07-07
+# web-client-epic retro §3.1).
+
+def test_reverify_build_fails_when_build_command_exits_nonzero(monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda cmd, **k: subprocess.CompletedProcess(
+            cmd, 1, stdout="", stderr="Error: Can't resolve 'crypto'"),
+    )
+
+    result = p._reverify_build(str(tmp_path))
+
+    assert result["state"] == "fail"
+    assert "crypto" in result["error"]
+
+
+def test_reverify_build_passes_when_build_command_exits_zero(monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
+    )
+
+    result = p._reverify_build(str(tmp_path))
+
+    assert result == {"state": "pass", "error": ""}
+
+
+def test_reverify_build_skips_when_no_build_command_detected(monkeypatch, tmp_path):
+    # A repo without a build step (most real-project stories) must merge
+    # freely - "none" is a skip, not a block.
+    def _boom_run(*a, **k):
+        raise AssertionError("must not run anything when no build command is detected")
+    monkeypatch.setattr(p, "detect_build_command", lambda wt: None)
+    monkeypatch.setattr(p.subprocess, "run", _boom_run)
+
+    result = p._reverify_build(str(tmp_path))
+
+    assert result == {"state": "none", "error": ""}
+
+
+def test_reverify_build_returns_none_for_missing_worktree(monkeypatch):
+    def _boom_run(*a, **k):
+        raise AssertionError("must not attempt a build against a missing worktree")
+    monkeypatch.setattr(p.subprocess, "run", _boom_run)
+
+    result = p._reverify_build("/no/such/worktree")
+
+    assert result == {"state": "none", "error": ""}
+
+
+def test_reverify_build_opt_out_restores_none(monkeypatch, tmp_path):
+    # PIPELINE_MERGE_BUILD_GATE=0 restores the old silent-skip behavior for
+    # operators with slow builds who don't want a build re-run at the merge
+    # gate. Mirrors the opt-out pattern used by PIPELINE_MERGE_CI_GATE and
+    # PIPELINE_REVERIFY_FULL_SUITE.
+    def _boom_run(*a, **k):
+        raise AssertionError("must not build when opted out")
+    monkeypatch.setattr(p, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
+    monkeypatch.setattr(p.subprocess, "run", _boom_run)
+    monkeypatch.setattr(p, "PIPELINE_MERGE_BUILD_GATE", False)
+
+    result = p._reverify_build(str(tmp_path))
+
+    assert result == {"state": "none", "error": "build gate disabled"}
+
+
+def test_advance_pipeline_build_reverify_fail_blocks_merge(plan_dir, monkeypatch):
+    # A reviewer APPROVE + green CI + passing tests is not sufficient to land
+    # a branch whose build, re-run independently right before merge, fails.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "buildfail", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_build",
+                        lambda wt: {"state": "fail", "error": "Error: Can't resolve 'crypto'"})
+    merged_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
+
+    result = p.advance_pipeline("buildfail")
+
+    story = _read_manifest(plan_dir, "buildfail")["stories"]["P1"]
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert merged_calls == []
+    assert result["merged"] == []
+
+
+def test_advance_pipeline_build_reverify_pass_merges(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    _write_manifest(plan_dir, "buildok", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    result = p.advance_pipeline("buildok")
+
+    story = _read_manifest(plan_dir, "buildok")["stories"]["P1"]
+    assert story["status"] == "done"
+    assert result["merged"] == ["P1"]
+
+
+def test_approve_merge_build_reverify_fail_returns_error(plan_dir, monkeypatch):
+    # The manual override must also refuse to land a branch whose build,
+    # re-run independently right before merge, fails.
+    _write_manifest(plan_dir, "ambuild", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_reverify_build",
+                        lambda wt: {"state": "fail", "error": "build broke"})
+    merged_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
+
+    result = p.approve_merge("ambuild", "P1")
+
+    assert result["ok"] is False
+    assert "build reverify fail" in result["error"]
+    assert merged_calls == []
 
 
 def test_advance_pipeline_acceptance_reverify_fail_blocks_merge(plan_dir, monkeypatch):
@@ -4487,6 +4968,105 @@ def test_check_story_status_fails_when_agent_made_no_commits(
     story = manifest["stories"]["S1"]
     assert story["status"] == "failed"
     assert "no new commits" in story["failure_reason"]
+
+
+# ---------- give-up classification (T6) ----------
+# The WASM prekey/session story's second attempt (gpt-oss:20b, after being
+# split into a smaller story) called `done` with "I'm sorry, I can't
+# complete this task" after real research and zero commits (2026-07-07
+# web-client-epic retro §3.2). local_agent.py's `done` tool prints its
+# summary verbatim as "[step N] DONE: <summary>" - that's the concrete,
+# real signal these tests key on, not a fictitious exit protocol.
+
+def test_last_done_summary_extracts_final_done_line(tmp_path):
+    log = tmp_path / "agent.log"
+    log.write_text(
+        "[step 1] bash: ls\n"
+        "[step 2] DONE: implemented the feature, tests pass\n"
+    )
+    assert p._last_done_summary(log) == "implemented the feature, tests pass"
+
+
+def test_last_done_summary_uses_last_done_line_not_first(tmp_path):
+    # A resumed agent appends to the same log across ticks; only the LAST
+    # DONE line reflects the current run (mirrors _last_nonempty_line's
+    # resumed-log caution for STEP_CAP_MARKERS).
+    log = tmp_path / "agent.log"
+    log.write_text(
+        "[step 2] DONE: first attempt summary\n"
+        "=== resumed ===\n"
+        "[step 5] DONE: second attempt summary\n"
+    )
+    assert p._last_done_summary(log) == "second attempt summary"
+
+
+def test_last_done_summary_empty_when_no_done_line(tmp_path):
+    log = tmp_path / "agent.log"
+    log.write_text("[step 1] bash: ls\n[ended without done — step cap reached]\n")
+    assert p._last_done_summary(log) == ""
+
+
+def test_last_done_summary_empty_when_log_missing(tmp_path):
+    assert p._last_done_summary(tmp_path / "no-such-log.log") == ""
+
+
+def test_is_give_up_summary_matches_explicit_surrender():
+    assert p._is_give_up_summary("I'm sorry, I can't complete this task.") is True
+
+
+def test_is_give_up_summary_is_case_insensitive():
+    assert p._is_give_up_summary("I CANNOT COMPLETE THIS TASK after research") is True
+
+
+def test_is_give_up_summary_does_not_match_genuine_completion():
+    assert p._is_give_up_summary("implemented the feature, all tests pass") is False
+
+
+def test_check_story_status_marks_failure_kind_give_up(plan_dir, monkeypatch):
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[step 1] bash: grep -r PreKeyBundle .\n"
+        "[step 9] DONE: I'm sorry, I can't complete this task.\n"
+    )
+    _write_manifest(plan_dir, "giveup1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(p.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess([], 1, stdout="1 failed"))
+
+    result = p.check_story_status("giveup1", "S1")
+
+    assert result["status"] == "failed"
+    manifest = _read_manifest(plan_dir, "giveup1")
+    assert manifest["stories"]["S1"]["failure_kind"] == "give_up"
+
+
+def test_check_story_status_ordinary_failure_has_no_failure_kind(plan_dir, monkeypatch):
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[step 5] DONE: implemented the feature per the spec\n"
+    )
+    _write_manifest(plan_dir, "giveup2", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(p.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess([], 1, stdout="1 failed"))
+
+    result = p.check_story_status("giveup2", "S1")
+
+    assert result["status"] == "failed"
+    manifest = _read_manifest(plan_dir, "giveup2")
+    assert "failure_kind" not in manifest["stories"]["S1"]
 
 
 def test_check_story_status_passes_when_agent_committed_changes(
@@ -5666,6 +6246,60 @@ def test_advance_pipeline_does_not_escalate_already_escalated(
     assert "S1" in result.get("failed", [])
 
 
+def test_advance_pipeline_give_up_failure_gets_distinguishing_notify(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A story whose agent explicitly gave up (T6) gets a notify message
+    pointing the human at "likely under-specified, needs clarification"
+    rather than the generic "tests failed" - so a second identical
+    dispatch/escalation attempt isn't the reflexive next step (2026-07-07
+    web-client-epic retro §3.2: a missing API is a story-scoping bug, not a
+    model-capability gap). Mirrors test_advance_pipeline_does_not_escalate_
+    already_escalated's terminal-branch setup exactly, differing only in
+    agent.log's content and the assertion on the notify message."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text(
+        "[step 1] bash: grep -r PreKeyBundle .\n"
+        "[step 9] DONE: I'm sorry, I can't complete this task.\n"
+    )
+    _write_manifest(plan_dir, "giveupnotify", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "in_progress", "pid": 9003,
+               "worktree": str(worktree_path),
+               "log": str(worktree_path / "agent.log"),
+               "backend": "local", "escalated": True, "dependencies": []},
+    })
+
+    class _FailResult:
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
+
+    def _fake_subprocess(cmd, **kw):
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    result = p.advance_pipeline("giveupnotify")
+
+    manifest = _read_manifest(plan_dir, "giveupnotify")
+    assert manifest["stories"]["S1"]["status"] == "failed"
+    assert "S1" in result.get("failed", [])
+    give_up_notes = [n for n in notes if "S1" in n and "gave up" in n]
+    assert give_up_notes, notes
+    assert "clarification" in give_up_notes[0]
+
+
 def test_advance_pipeline_local_failure_terminal_under_local_mode(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
@@ -5712,6 +6346,109 @@ def test_advance_pipeline_local_failure_terminal_under_local_mode(
     assert story["status"] == "failed"
     assert story["backend"] == "local"        # not flipped to claude
     assert not story.get("escalated")          # never escalated
+    assert "S1" in result.get("failed", [])
+
+
+def test_advance_pipeline_retries_on_local_fallback_model(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A plan opted into manifest["local_model_fallback"] retries a failed
+    local story on that model instead of parking immediately - and never on
+    Claude, even though this is a local-only (not "auto") run, mirroring
+    esclocal's terminal guard but with a fallback model configured."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    (plan_dir / "escfallback.manifest.json").write_text(json.dumps({
+        "epics": {}, "local_model_fallback": "glm-5.2:cloud",
+        "stories": {
+            "S1": {"summary": "Thing", "agent_instructions": "Build.",
+                   "status": "in_progress", "pid": 9005,
+                   "worktree": str(worktree_path),
+                   "log": str(worktree_path / "agent.log"),
+                   "backend": "local", "dispatched_model": "gpt-oss:20b",
+                   "dependencies": []},
+        },
+    }))
+
+    class _FailResult:
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    def _fake_subprocess(cmd, **kw):
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+
+    result = p.advance_pipeline("escfallback")
+
+    story = _read_manifest(plan_dir, "escfallback")["stories"]["S1"]
+    assert story["status"] == "todo"
+    assert story["backend"] == "local"                 # never claude
+    assert story["model"] == "glm-5.2:cloud"
+    assert story["tried_fallback_model"] is True
+    assert "pid" not in story
+    assert "dispatched_model" not in story
+    assert "S1" not in result.get("failed", [])
+    notif = (plan_dir / "escfallback.notifications.log").read_text()
+    assert "retrying on fallback model glm-5.2:cloud" in notif
+
+
+def test_advance_pipeline_fallback_model_failure_is_terminal(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Once the fallback model has already been tried (tried_fallback_model),
+    a second failure is terminal - it must not retry forever, and must not
+    escalate to Claude either."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    (plan_dir / "escfallback2.manifest.json").write_text(json.dumps({
+        "epics": {}, "local_model_fallback": "glm-5.2:cloud",
+        "stories": {
+            "S1": {"summary": "Thing", "agent_instructions": "Build.",
+                   "status": "in_progress", "pid": 9006,
+                   "worktree": str(worktree_path),
+                   "log": str(worktree_path / "agent.log"),
+                   "backend": "local", "model": "glm-5.2:cloud",
+                   "tried_fallback_model": True, "dependencies": []},
+        },
+    }))
+
+    class _FailResult:
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    def _fake_subprocess(cmd, **kw):
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+
+    result = p.advance_pipeline("escfallback2")
+
+    story = _read_manifest(plan_dir, "escfallback2")["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert story["backend"] == "local"         # never claude
     assert "S1" in result.get("failed", [])
 
 

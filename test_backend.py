@@ -313,6 +313,37 @@ def test_complete_review_loop_salvages_prose_verdict_on_cap(tmp_path, monkeypatc
     assert "VERDICT: APPROVE" in out
 
 
+def test_review_loop_reads_step_cap_live_from_env(tmp_path, monkeypatch):
+    """PIPELINE_LOCAL_REVIEW_MAX_STEPS must take effect on a driver instance
+    that already exists, mirroring how PIPELINE_LOCAL_MAX_STEPS is re-read
+    live for dispatch (see the dispatch() num_ctx/max_steps re-read comment)
+    rather than only being captured once at __init__ time. Without this, a
+    plist/env edit to the review cap silently has no effect on a long-lived
+    MCP server process (2026-07-07 web-client-epic retro §7 - this was the
+    root cause of the observed config-propagation asymmetry)."""
+    driver = b.OllamaDriver()
+    assert driver.review_max_steps == 20  # constructor default, env unset
+    monkeypatch.setenv("PIPELINE_LOCAL_REVIEW_MAX_STEPS", "2")
+    call_count = 0
+
+    def chat(messages, model, tools=None):
+        nonlocal call_count
+        call_count += 1
+        return _envelope({"tool_calls": [{"function": {"name": "bash",
+                                                        "arguments": {"command": "echo x"}}}]})
+    monkeypatch.setattr(driver, "_chat", chat)
+
+    out = driver.complete("review the branch", system="r", model="sonnet",
+                          allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    # A never-ending supply of tool-call responses is available (25+ would be
+    # trivial for the mock to serve), so a call_count of 2 can only mean the
+    # loop honored the live env override rather than the constructor's
+    # captured default of 20.
+    assert call_count == 2
+    assert out == ""        # step cap exhausted with no verdict to salvage
+
+
 def test_complete_review_loop_does_not_salvage_inline_verdict_mention(tmp_path, monkeypatch):
     """Fail-closed: prose that merely MENTIONS 'VERDICT: APPROVE' inline (the
     model echoing the convergence nudge, or describing what an approve would

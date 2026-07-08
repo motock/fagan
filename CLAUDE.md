@@ -474,6 +474,8 @@ This table is illustrative, not exhaustive — extend it for any ecosystem the r
 
 1. Submit the story with `mcp__pipeline__review_story` to engage the review gate. Do not commit on a blocking verdict — fix the issues and resubmit.
 2. Once `review_story` returns a clean verdict, advance the story with `mcp__pipeline__advance_pipeline`.
+
+   **A clean review verdict plus a local test run is not sufficient sign-off for a merge.** `mcp__pipeline__approve_merge` (and the scheduler's own merge path) rebases onto the current default branch, force-pushes, polls the repo's actual CI (`gh pr checks`), and re-runs the acceptance/test suite against the rebased branch before merging — a manual `gh pr merge` bypasses every one of those checks. If a story's merge is ever done by hand instead of through `approve_merge`, first confirm `gh pr checks <branch>` is all-green (not merely absent/pending) — local, single-platform test runs do not catch native/platform-specific dependency failures (npm optional deps, Rust build scripts needing platform assets) that only surface in CI.
 3. Present the user a summary: the branch name (from Step 1), a list of all files changed with a one-line description of each, and the proposed commit message formatted per the project's **Commit Standards**.
 4. Ask: *"Review approved via the pipeline. Please review the changes above. Shall I commit?"*
 
@@ -488,6 +490,7 @@ A task is not complete when the code is written. It is complete when all of the 
 - [ ] All new and existing tests pass
 - [ ] A reproducing test exists and was observed failing before the fix (bug fixes only)
 - [ ] The change has passed `mcp__pipeline__review_story` with a clean verdict (see **Code Review**)
+- [ ] The merge went through `mcp__pipeline__approve_merge` (or the scheduler's own merge path) or, for a manual merge, `gh pr checks <branch>` was confirmed all-green first — not just "reviewer approved + tests passed locally"
 - [ ] No regressions in areas touched by the change — smoke-test the critical path if automated tests do not cover it
 - [ ] Documentation is updated if the change alters externally visible behavior (API contracts, configuration, user-facing functionality)
 - [ ] The commit message follows the project's **Commit Standards**

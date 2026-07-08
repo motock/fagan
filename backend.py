@@ -53,9 +53,10 @@ class Backend(Protocol):
     ) -> str:
         """Run a blocking, single invocation and return its captured output.
 
-        `max_tokens` is an optional cap on the response. Claude-backed drivers
-        pass it through as `--max-tokens`; Ollama-backed drivers ignore it
-        (Ollama caps the response via the model's own context window).
+        `max_tokens` is accepted for signature parity across drivers but not
+        acted on by any of them: the `claude` CLI dropped `--max-tokens` (see
+        ClaudeCliDriver.complete), and Ollama-backed drivers cap the response
+        via the model's own context window instead.
 
         `cell_dir`, when set, is the per-cell directory the caller is running
         in (the benchmark's <run>/<task>__<model>__t<trial>/ path). Drivers
@@ -118,12 +119,13 @@ class ClaudeCliDriver:
             cmd += ["--append-system-prompt", system]
         if allowed_tools:
             cmd += ["--allowedTools", allowed_tools]
-        # Cap the response so a runaway review can't burn a huge output token
-        # budget. Default leaves it uncapped (matching pre-existing behavior
-        # for the overlord path, which gets a tiny prompt and a tiny expected
-        # output). Review callers override via PIPELINE_REVIEW_MAX_TOKENS.
-        if max_tokens is not None:
-            cmd += ["--max-tokens", str(max_tokens)]
+        # `--max-tokens` was removed from the `claude` CLI (this project pins
+        # v2.1.202+, which only exposes `--max-budget-usd`); passing it makes
+        # the CLI exit 1 with an empty stdout, which callers silently read as
+        # "" -> _parse_verdict returns UNKNOWN. max_tokens is accepted for
+        # backward-compat signature parity with OllamaDriver.complete() (Ollama
+        # caps via num_ctx, not a CLI flag) but is otherwise unused here.
+        del max_tokens
         # When cell_dir is set, switch to --output-format json so we can
         # extract per-call usage (input_tokens, output_tokens,
         # total_cost_usd, duration_ms) and append it to the cell's
@@ -461,9 +463,10 @@ class OllamaDriver:
         max_tokens: int | None = None,
         cell_dir: str | None = None,
     ) -> str:
-        # max_tokens is honored by the Claude driver; Ollama caps the response
-        # via the model's own context window (num_ctx in _chat), so we accept
-        # the kwarg to satisfy the protocol but don't act on it here.
+        # max_tokens is not honored by either driver now (see
+        # ClaudeCliDriver.complete); Ollama caps the response via the model's
+        # own context window (num_ctx in _chat), so we accept the kwarg to
+        # satisfy the protocol but don't act on it here.
         # Review-style call: allowed_tools includes Bash and a worktree cwd is
         # given (see _run_reviewer). The model must actually run the tests and
         # read files, then emit a VERDICT — so run a blocking read-only tool
@@ -599,7 +602,15 @@ class OllamaDriver:
         findings_nudged = False
         last_prose = ""
         fallthrough_reason = "step cap exhausted"
-        for i in range(self.review_max_steps):
+        # Re-read live from os.environ, mirroring dispatch()'s live re-read of
+        # PIPELINE_LOCAL_MAX_STEPS (see its comment) rather than only using
+        # the value captured once at __init__ time - otherwise a plist/env
+        # edit to the review cap silently has no effect on a long-lived MCP
+        # server process (2026-07-07 web-client-epic retro §7).
+        review_max_steps = int(
+            os.environ.get("PIPELINE_LOCAL_REVIEW_MAX_STEPS", str(self.review_max_steps))
+        )
+        for i in range(review_max_steps):
             # The local model investigates thoroughly but rarely converges to
             # the submit_review terminator on its own. It will call it when
             # pushed (the same model calls `done` in dispatch mode), so when the
@@ -615,7 +626,7 @@ class OllamaDriver:
             # (ratelimiter_inspect benchmark) despite the one-shot nudge firing
             # — it just kept calling view_file/bash past it with nothing
             # reinforcing the instruction for the remaining steps.
-            remaining = self.review_max_steps - i
+            remaining = review_max_steps - i
             if remaining <= 5:
                 messages.append({"role": "user", "content":
                     f"You have {remaining} review step(s) left. Stop investigating "

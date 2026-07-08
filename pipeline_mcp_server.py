@@ -141,6 +141,17 @@ STEP_CAP_MARKERS = (
     "[ended without oracle green — step cap reached]",
 )
 
+# A story that keeps hitting the step cap is classified "interrupted" (see the
+# STEP_CAP_MARKERS branch below), never "failed" - so it never reaches the
+# "failed"-gated local_model_fallback check in advance_pipeline's polling loop
+# and can cycle on a struggling model forever. This threshold gates a SEPARATE
+# fallback: after this many consecutive step-cap interrupts on the same model,
+# switch story["model"] (never story["backend"] - stays local, never Claude)
+# for the next resume. Only takes effect when the plan has opted in via
+# manifest["local_model_fallback"] (see _escalate_to_local_fallback_model).
+STEP_CAP_FALLBACK_THRESHOLD = int(
+    os.environ.get("PIPELINE_STEP_CAP_FALLBACK_THRESHOLD", "3"))
+
 # Layered local-first dispatch (PIPELINE_BACKEND_DISPATCH=auto):
 #   1. A-priori: stories with risk above PIPELINE_LOCAL_MAX_RISK (default "low")
 #      or a security persona go straight to Claude.
@@ -2189,6 +2200,37 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         story["status"] = "interrupted"
         story["last_commit"] = sha
         story["interrupted_at"] = interrupted_at
+
+        # See STEP_CAP_FALLBACK_THRESHOLD: track consecutive step-cap
+        # interrupts on the current model and, past the threshold, switch to
+        # the plan's opted-in fallback model for the next resume. Worktree
+        # and journal are left untouched so the resumed run still benefits
+        # from whatever real progress is already committed.
+        fallback_model = manifest.get("local_model_fallback")
+        current_model = story.get("dispatched_model") or story.get("model")
+        # STEP_CAP_MARKERS are only ever printed by the local agent scripts, so
+        # a Claude-backend story should never reach here in practice - guard
+        # explicitly anyway (defense in depth) so a plan-scoped local model
+        # name can never land in a Claude story's model field. Missing
+        # "backend" defaults to local: dispatch_story always sets it
+        # explicitly, so an absent key only occurs in tests exercising this
+        # branch in isolation.
+        if (fallback_model and current_model != fallback_model
+                and story.get("backend", "local") == "local"):
+            if story.get("step_cap_streak_model") == current_model:
+                story["step_cap_streak"] = story.get("step_cap_streak", 0) + 1
+            else:
+                story["step_cap_streak"] = 1
+                story["step_cap_streak_model"] = current_model
+            if story["step_cap_streak"] >= STEP_CAP_FALLBACK_THRESHOLD:
+                story["model"] = fallback_model
+                story.pop("step_cap_streak", None)
+                story.pop("step_cap_streak_model", None)
+                _notify_user(
+                    plan_name,
+                    f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
+                    f"on {current_model}; switching to fallback model "
+                    f"{fallback_model} for the next resume.")
         _atomic_write_json(manifest_path, manifest)
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 

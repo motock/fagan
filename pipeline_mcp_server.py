@@ -451,6 +451,44 @@ def _test_command_for(cwd: Path) -> list[str] | None:
     return None
 
 
+def _build_command_for(cwd: Path) -> list[str] | None:
+    """Return the build command for cwd if a recognized build marker
+    declares one, or None if this project has no detectable build step (a
+    library with no bundling step, a package.json with no "build" script,
+    etc). Deliberately conservative/allow-listed - only ecosystems where a
+    build step is unambiguous."""
+    pkg = cwd / "package.json"
+    if pkg.exists():
+        try:
+            data = json.loads(pkg.read_text())
+        except ValueError:
+            data = {}
+        if isinstance(data.get("scripts"), dict) and "build" in data["scripts"]:
+            if (cwd / "yarn.lock").exists():
+                return ["yarn", "build"]
+            return ["npm", "run", "build"]
+    if (cwd / "Cargo.toml").exists():
+        return ["cargo", "build"]
+    return None
+
+
+def detect_build_command(cwd: Path) -> tuple[Path, list[str]] | None:
+    """Detect the build command and directory to run it in, mirroring
+    detect_test_command's cwd-then-immediate-subdirectory search. Returns
+    None if no recognized build marker declares a build step anywhere - a
+    repo without a build step must not be blocked by the build gate (unlike
+    detect_test_command, there is no reasonable universal fallback for
+    "build")."""
+    cmd = _build_command_for(cwd)
+    if cmd is not None:
+        return cwd, cmd
+    for child in sorted(p for p in cwd.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        cmd = _build_command_for(child)
+        if cmd is not None:
+            return child, cmd
+    return None
+
+
 def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
     """Detect the appropriate test command and the directory to run it in.
 
@@ -873,6 +911,10 @@ def _merge_pr(worktree: str, story_key: str) -> str:
 
 PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
 PIPELINE_MERGE_CI_TIMEOUT = int(os.environ.get("PIPELINE_MERGE_CI_TIMEOUT", "300"))
+# Mirrors PIPELINE_MERGE_CI_GATE's opt-out pattern for operators with slow
+# builds who don't want a build re-run at the merge gate (see
+# _reverify_build below, T4).
+PIPELINE_MERGE_BUILD_GATE = os.environ.get("PIPELINE_MERGE_BUILD_GATE", "1") != "0"
 
 
 def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
@@ -924,6 +966,17 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
             "error": (r.stdout + r.stderr).strip()[:500]}
 
 
+def _repo_has_ci_configured() -> bool:
+    """Whether the plan's repo (module-level REPO_ROOT, set by
+    _scoped_repo_root for the duration of the merge gate) declares any GitHub
+    Actions workflows at all. Distinguishes "genuinely no CI" from "CI exists
+    but hasn't registered checks for this branch yet" in _ci_status - PR #48
+    merged with a red Linux CI job because an empty `gh pr checks` result was
+    treated identically to "no CI configured" (2026-07-07 web-client-epic
+    retro §4)."""
+    return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
+
+
 def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
     """Poll ``gh pr checks <branch>`` until all checks reach a terminal bucket
     or the timeout elapses. Returns ``{"state": "pass"|"fail"|"pending"|"none",
@@ -931,9 +984,11 @@ def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
 
       - ``pass``   every check passed -> safe to merge.
       - ``fail``   at least one check failed/errored/cancelled -> do not merge.
-      - ``pending`` checks still running at timeout -> do not merge (retry/park).
-      - ``none``   no PR / no checks reported / unparseable output -> treat as
-        pass (a repo without CI must not be blocked by this gate).
+      - ``pending`` checks still running (or a configured repo's checks
+        haven't registered yet) at timeout -> do not merge (retry/park).
+      - ``none``   no PR / unparseable output / a repo with no
+        .github/workflows at all -> treat as pass (a repo without CI must
+        not be blocked by this gate).
     Never raises; the merge adjudication loop decides what to do with the result.
     """
     if not PIPELINE_MERGE_CI_GATE:
@@ -954,7 +1009,13 @@ def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
         except ValueError:
             return {"state": "none", "error": "unparseable gh pr checks output"}
         if not buckets:
-            return {"state": "none", "error": ""}
+            if not _repo_has_ci_configured():
+                return {"state": "none", "error": ""}
+            # Checks are configured but haven't registered for this branch
+            # yet - keep polling within the deadline rather than fast-pathing
+            # to pass; falls through to "pending" below if they never do.
+            time.sleep(10)
+            continue
         if buckets & {"fail", "error", "cancelled", "action_required"}:
             return {"state": "fail", "error": ""}
         if buckets <= {"pass"}:
@@ -1017,6 +1078,46 @@ def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]
     return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
 
 
+def _reverify_build(worktree: str) -> dict[str, str]:
+    """Run the rebased worktree's build command (if one is detectable)
+    right before merge, alongside _reverify_acceptance's test re-run.
+
+    Neither the reviewer nor the dispatched agent's own "tests pass" report
+    is proof the project actually builds - PR #48 merged with `npm run
+    build` broken (Node's `crypto` module can't bundle for a browser
+    target, a real pre-existing bug) because nobody ran it before merge
+    (2026-07-07 web-client-epic retro §3.1). Returns {"state":
+    "pass"|"fail"|"none", "error": str} - "none" when the gate is disabled,
+    there's no worktree to build against, or no build command is
+    detectable (a repo without a build step must merge freely).
+    """
+    if not PIPELINE_MERGE_BUILD_GATE:
+        return {"state": "none", "error": "build gate disabled"}
+    if not worktree or not Path(worktree).is_dir():
+        return {"state": "none", "error": ""}
+    detected = detect_build_command(Path(worktree))
+    if detected is None:
+        return {"state": "none", "error": ""}
+    build_dir, build_cmd = detected
+    # Same operational-env stripping as _reverify_acceptance: PIPELINE_*/
+    # LOCAL_AGENT_*/REPO_ROOT are harness config, not developer defaults the
+    # build asserts against.
+    build_env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("PIPELINE_")
+        and not k.startswith("LOCAL_AGENT_")
+        and k != "REPO_ROOT"
+    }
+    if _is_heavy(build_cmd):
+        with _heavy_lock():
+            r = subprocess.run(build_cmd, cwd=build_dir, capture_output=True, text=True, env=build_env)
+    else:
+        r = subprocess.run(build_cmd, cwd=build_dir, capture_output=True, text=True, env=build_env)
+    if r.returncode == 0:
+        return {"state": "pass", "error": ""}
+    return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
+
+
 def _escalate_to_claude(
     manifest: dict, plan_name: str, story_key: str, manifest_path: Path
 ) -> None:
@@ -1046,6 +1147,48 @@ def _escalate_to_claude(
     story["escalated"] = True
     story["status"] = "todo"
     for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error"):
+        story.pop(key, None)
+    _atomic_write_json(manifest_path, manifest)
+
+
+def _escalate_to_local_fallback_model(
+    manifest: dict, plan_name: str, story_key: str, manifest_path: Path,
+    fallback_model: str,
+) -> None:
+    """Flip a failed local story to a different local model and start clean.
+
+    Plan-scoped opt-in (see manifest["local_model_fallback"]): when a plan
+    designates a fallback model, a story whose primary local model failed
+    gets one retry on that fallback before falling through to the terminal
+    park/fail path, instead of parking immediately. Stays on the "local"
+    backend throughout - unlike _escalate_to_claude, this never spends Claude;
+    it exists for plans that want a second local opinion (e.g. a larger/
+    different Ollama model) without escalating to Claude at all. Mirrors
+    _escalate_to_claude's clean-slate teardown (fresh worktree/branch/journal)
+    since the prior run may have left broken/half-written state a different
+    model shouldn't inherit.
+    """
+    story = manifest["stories"][story_key]
+    worktree = story.get("worktree", "")
+    branch = f"agent/{story_key.lower()}"
+    # Remove worktree and branch — best-effort (may already be gone).
+    if worktree:
+        subprocess.run(["git", "worktree", "remove", "--force", worktree],
+                        cwd=REPO_ROOT, capture_output=True, text=True)
+    subprocess.run(["git", "branch", "-D", branch],
+                    cwd=REPO_ROOT, capture_output=True, text=True)
+    # Clear journal so the fallback model starts fresh, not from a broken
+    # checkpoint left by the model that just failed.
+    journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+    if journal_path.exists():
+        journal_path.unlink()
+    # Reset the story: fallback-model dispatch on next tick. backend is left
+    # untouched (stays "local") - only the model changes.
+    story["model"] = fallback_model
+    story["tried_fallback_model"] = True
+    story["status"] = "todo"
+    for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error",
+                "dispatched_model"):
         story.pop(key, None)
     _atomic_write_json(manifest_path, manifest)
 
@@ -1534,12 +1677,35 @@ def list_plans() -> list[str]:
     return [p.stem for p in PLAN_DIR.glob("*.json")]
 
 
+# Story fields the plan authors and that a re-ingest should refresh. Every
+# other field on an already-tracked story (status, pr_url, worktree,
+# review_verdict, journal, ...) is pipeline-owned runtime state and must
+# survive a re-ingest untouched - see the merge behavior in ingest_plan below
+# (T1, 2026-07-07 web-client-epic retro incident #2).
+_INGEST_AUTHORED_STORY_FIELDS = (
+    "summary", "agent_instructions", "dependencies", "persona", "model",
+    "acceptance", "risk",
+)
+
+
 @mcp.tool()
-def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str, Any]:
+def ingest_plan(
+    plan_name: str, only_epics: list[str] | None = None, overwrite: bool = False,
+) -> dict[str, Any]:
     """
     Push a saved plan into Plane. Creates epics first, then issues linked
     to their parent epic. Optionally restrict to specific epic summaries via
     only_epics. Returns a manifest mapping local IDs to Plane UUIDs.
+
+    Re-ingesting an already-ingested plan merges into the existing manifest
+    rather than replacing it: epics/stories not touched this call (including
+    everything only_epics excludes) are preserved verbatim, a story whose key
+    already exists gets its authored fields (summary, agent_instructions,
+    dependencies, persona, model, acceptance, risk) refreshed while its
+    runtime state (status, pr_url, ...) is kept, and top-level manifest keys
+    outside epics/stories/repo_root (paused, local_model_fallback, ...) carry
+    over untouched. Pass overwrite=True to restore the old wholesale-replace
+    behavior (drops anything not produced by this call).
     """
     _validate_key(plan_name)
     path = PLAN_DIR / f"{plan_name}.json"
@@ -1560,78 +1726,114 @@ def ingest_plan(plan_name: str, only_epics: list[str] | None = None) -> dict[str
     if not repo_root or not Path(repo_root).is_dir():
         return {"ok": False, "error": f"Plan repo_root is missing or not a directory: {repo_root!r}"}
 
-    manifest = {"epics": {}, "stories": {}, "repo_root": repo_root}
+    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 
-    # When Plane isn't configured the manifest is the sole source of truth:
-    # skip every Plane call and synthesize story keys locally instead of
-    # taking them from Plane-issued UUIDs.
-    plane_on = _plane_enabled()
-    label_id = _get_or_create_label("agent-pipeline") if plane_on else None
-    backlog_state = _get_state("backlog") if plane_on else None
-
-    # Maps the plan's local story keys (e.g. "S1") to the manifest story keys
-    # generated below (Plane issue UUIDs, or local keys when Plane is off), so
-    # dependencies can be translated to manifest keys.
-    key_to_issue_id: dict[str, str] = {}
-
-    for epic in plan["epics"]:
-        if only_epics and epic["summary"] not in only_epics:
-            continue
-
-        epic_id = None
-        if plane_on:
-            # Epics are an optional Plane module; some instances/API versions
-            # do not expose the /epics/ endpoint. Fall back to ungrouped issues.
-            try:
-                epic_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
-                                          json={"name": epic["summary"]})
-                epic_id = epic_resp["id"]
-                manifest["epics"][epic["summary"]] = epic_id
-            except RuntimeError:
-                epic_id = None
-
-        for story in epic.get("stories", []):
-            if plane_on:
-                issue_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/work-items/", json={
-                    "name": story["summary"],
-                    "description": story.get("description", ""),
-                    "state": backlog_state,
-                    "labels": [label_id],
-                })
-                issue_id = issue_resp["id"]
-                if epic_id is not None:
-                    plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
-                                  json={"issue_id": issue_id})
-            else:
-                # No Plane UUID to key on: prefer the plan's own story key
-                # (keeps the manifest readable and lets key-based dependencies
-                # resolve to themselves), else mint a unique synthetic key.
-                issue_id = story.get("key") or str(uuid.uuid4())
-            if "key" in story:
-                key_to_issue_id[story["key"]] = issue_id
-            manifest["stories"][issue_id] = {
-                "summary": story["summary"],
-                "agent_instructions": story.get("agent_instructions", ""),
-                "dependencies": story.get("dependencies", []),
-                "persona": story.get("persona"),
-                "model": story.get("model"),
-                "acceptance": story.get("acceptance", []),
-                "risk": story.get("risk", "low"),
-                "status": "todo",
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {
+                "ok": True, "skipped": "locked",
+                "reason": "another ingest/dispatch/interrupt is in progress for this plan",
             }
 
-    # Translate dependencies expressed as local plan keys into the issue IDs
-    # just created. Dependencies that don't match a known local key (e.g.
-    # already an issue ID, or a typo) are left as-is.
-    for story in manifest["stories"].values():
-        story["dependencies"] = [
-            key_to_issue_id.get(dep, dep) for dep in story["dependencies"]
-        ]
+        manifest = {"epics": {}, "stories": {}, "repo_root": repo_root}
 
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    _atomic_write_json(manifest_path, manifest)
+        # When Plane isn't configured the manifest is the sole source of truth:
+        # skip every Plane call and synthesize story keys locally instead of
+        # taking them from Plane-issued UUIDs.
+        plane_on = _plane_enabled()
+        label_id = _get_or_create_label("agent-pipeline") if plane_on else None
+        backlog_state = _get_state("backlog") if plane_on else None
 
-    return {"ok": True, "manifest_path": str(manifest_path), **manifest}
+        # Maps the plan's local story keys (e.g. "S1") to the manifest story keys
+        # generated below (Plane issue UUIDs, or local keys when Plane is off), so
+        # dependencies can be translated to manifest keys.
+        key_to_issue_id: dict[str, str] = {}
+
+        for epic in plan["epics"]:
+            if only_epics and epic["summary"] not in only_epics:
+                continue
+
+            epic_id = None
+            if plane_on:
+                # Epics are an optional Plane module; some instances/API versions
+                # do not expose the /epics/ endpoint. Fall back to ungrouped issues.
+                try:
+                    epic_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
+                                              json={"name": epic["summary"]})
+                    epic_id = epic_resp["id"]
+                    manifest["epics"][epic["summary"]] = epic_id
+                except RuntimeError:
+                    epic_id = None
+
+            for story in epic.get("stories", []):
+                if plane_on:
+                    issue_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/work-items/", json={
+                        "name": story["summary"],
+                        "description": story.get("description", ""),
+                        "state": backlog_state,
+                        "labels": [label_id],
+                    })
+                    issue_id = issue_resp["id"]
+                    if epic_id is not None:
+                        plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
+                                      json={"issue_id": issue_id})
+                else:
+                    # No Plane UUID to key on: prefer the plan's own story key
+                    # (keeps the manifest readable and lets key-based dependencies
+                    # resolve to themselves), else mint a unique synthetic key.
+                    issue_id = story.get("key") or str(uuid.uuid4())
+                if "key" in story:
+                    key_to_issue_id[story["key"]] = issue_id
+                manifest["stories"][issue_id] = {
+                    "summary": story["summary"],
+                    "agent_instructions": story.get("agent_instructions", ""),
+                    "dependencies": story.get("dependencies", []),
+                    "persona": story.get("persona"),
+                    "model": story.get("model"),
+                    "acceptance": story.get("acceptance", []),
+                    "risk": story.get("risk", "low"),
+                    "status": "todo",
+                }
+
+        # Translate dependencies expressed as local plan keys into the issue IDs
+        # just created. Dependencies that don't match a known local key (e.g.
+        # already an issue ID, or a typo) are left as-is.
+        for story in manifest["stories"].values():
+            story["dependencies"] = [
+                key_to_issue_id.get(dep, dep) for dep in story["dependencies"]
+            ]
+
+        # Merge into the existing manifest rather than replacing it (T1):
+        # anything only_epics excluded this round - and, with overwrite=False,
+        # the manifest's runtime state for stories re-ingested this round -
+        # must survive. overwrite=True restores the old wholesale-replace
+        # behavior for callers that genuinely want a clean slate.
+        prior: dict[str, Any] = {}
+        if not overwrite and manifest_path.exists():
+            prior = json.loads(manifest_path.read_text())
+
+        merged_epics = dict(prior.get("epics", {}))
+        merged_epics.update(manifest["epics"])
+
+        merged_stories = dict(prior.get("stories", {}))
+        for key, new_story in manifest["stories"].items():
+            old_story = merged_stories.get(key)
+            if old_story is not None:
+                combined = dict(old_story)
+                for field in _INGEST_AUTHORED_STORY_FIELDS:
+                    combined[field] = new_story[field]
+                merged_stories[key] = combined
+            else:
+                merged_stories[key] = new_story
+
+        final_manifest = dict(prior)
+        final_manifest["epics"] = merged_epics
+        final_manifest["stories"] = merged_stories
+        final_manifest["repo_root"] = repo_root
+
+        _atomic_write_json(manifest_path, final_manifest)
+
+    return {"ok": True, "manifest_path": str(manifest_path), **final_manifest}
 
 
 def _completed_dep_ids(stories: dict[str, Any]) -> set[str]:
@@ -1854,6 +2056,48 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def _last_done_summary(agent_log: Path) -> str:
+    """Return the summary text from the LAST "] DONE:" line in agent.log, or
+    "" if the agent never reached done. Only the final DONE line reflects
+    the current run - a resumed agent appends to the same log across ticks
+    (mirrors _last_nonempty_line's resumed-log caution for STEP_CAP_MARKERS).
+    local_agent.py's `done` tool prints its summary argument verbatim as
+    "[step N] DONE: <summary>"; this is that real signal, not a fictitious
+    exit protocol."""
+    if not agent_log.exists():
+        return ""
+    marker = "] DONE:"
+    last = ""
+    with open(agent_log, "rb") as fh:
+        for raw in fh:
+            line = raw.decode("utf-8", errors="replace").strip()
+            idx = line.find(marker)
+            if idx != -1:
+                last = line[idx + len(marker):].strip()
+    return last
+
+
+# Literal, narrow phrases only - broad keyword matching would false-positive
+# on legitimate completion summaries that happen to mention difficulty
+# encountered along the way.
+_GIVE_UP_PHRASES = (
+    "i can't complete this task",
+    "i cannot complete this task",
+    "i'm unable to complete this task",
+    "i am unable to complete this task",
+    "i give up",
+)
+
+
+def _is_give_up_summary(summary: str) -> bool:
+    """Whether a DONE summary reads as an explicit surrender rather than a
+    genuine completion claim (2026-07-07 web-client-epic retro §3.2: the
+    WASM story's second attempt called done with "I'm sorry, I can't
+    complete this task" after real research, zero commits)."""
+    lowered = summary.lower()
+    return any(phrase in lowered for phrase in _GIVE_UP_PHRASES)
+
+
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Check whether a dispatched agent has finished. If complete, runs tests
@@ -2033,14 +2277,28 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"status": "failed", "reason": "empty_agent_branch"}
 
     story["status"] = "tests_passed" if passed else "failed"
+
+    # T6: distinguish an explicit agent surrender from an ordinary red test
+    # run. A missing/wrong API is a story-scoping bug, not a model-capability
+    # gap - the terminal notify in advance_pipeline uses this to point a
+    # human at "clarify the story" instead of the generic "tests failed".
+    give_up_summary = _last_done_summary(agent_log) if not passed else ""
+    if give_up_summary and _is_give_up_summary(give_up_summary):
+        story["failure_kind"] = "give_up"
+    else:
+        story.pop("failure_kind", None)
+
     _atomic_write_json(manifest_path, manifest)
 
-    return {
+    result = {
         "status": story["status"],
         "tests_passed": passed,
         "test_command": test_cmd,
         "output_tail": test_result.stdout[-500:],
     }
+    if story.get("failure_kind"):
+        result["failure_kind"] = story["failure_kind"]
+    return result
 
 
 @mcp.tool()
@@ -2181,6 +2439,97 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest["stories"][story_key]["status"] = "done"
     _atomic_write_json(manifest_path, manifest)
     return {"ok": True}
+
+
+# Story fields patch_story may edit. Deliberately excludes "status" (use
+# set_story_status), "worktree", "pid", "review_verdict" and other
+# pipeline-owned runtime state - this tool is for correcting what the plan
+# authored, not for mechanically bypassing the review/merge gates.
+_PATCHABLE_STORY_FIELDS = frozenset((
+    "agent_instructions", "model", "persona", "risk", "dependencies",
+    "acceptance", "pr_url", "summary",
+))
+
+# Every status value the pipeline itself assigns to a story (see the
+# "status"] = / "status": literal assignments throughout this file). Kept as
+# an explicit allowlist so set_story_status can't be used to invent a status
+# the rest of the code doesn't know how to handle.
+_VALID_STORY_STATUSES = frozenset((
+    "todo", "in_progress", "running", "interrupted", "failed",
+    "tests_passed", "pr_open", "changes_requested", "parked", "done",
+))
+
+
+@mcp.tool()
+def patch_story(plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """
+    Edit a story's plan-authored fields (agent_instructions, model, persona,
+    risk, dependencies, acceptance, pr_url, summary) without hand-editing the
+    manifest JSON.
+
+    Hand-editing the manifest directly races the scheduler's 60s
+    advance_all_plans tick - a read-modify-write on either side can silently
+    clobber the other's write. This tool acquires the same _plan_lock the
+    scheduler and dispatch_story use, so the edit is atomic with respect to
+    it. Only the fields above may be set; status transitions go through
+    set_story_status, not this tool.
+    """
+    _validate_key(plan_name)
+    _validate_key(story_key)
+    unknown = set(fields) - _PATCHABLE_STORY_FIELDS
+    if unknown:
+        return {"ok": False, "error": f"cannot patch field(s) {sorted(unknown)}: "
+                                       f"only {sorted(_PATCHABLE_STORY_FIELDS)} are editable"}
+
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {
+                "ok": True, "skipped": "locked",
+                "reason": "another dispatch/ingest/interrupt is in progress for this plan",
+            }
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        story = manifest["stories"].get(story_key)
+        if story is None:
+            return {"ok": False, "error": f"No such story {story_key!r}"}
+        story.update(fields)
+        _atomic_write_json(manifest_path, manifest)
+        return {"ok": True, "story_key": story_key, "story": story}
+
+
+@mcp.tool()
+def set_story_status(plan_name: str, story_key: str, status: str) -> dict[str, Any]:
+    """
+    Transition a story to an explicit status without hand-editing the
+    manifest JSON (e.g. resetting a "parked" story to "interrupted" so the
+    scheduler retries it).
+
+    Acquires _plan_lock for the same reason patch_story does. Only accepts
+    the fixed set of statuses the pipeline itself assigns
+    (todo/in_progress/running/interrupted/failed/tests_passed/pr_open/
+    changes_requested/parked/done) - this is a sanctioned status change, not
+    a way to invent pipeline state the rest of the code doesn't expect.
+    """
+    _validate_key(plan_name)
+    _validate_key(story_key)
+    if status not in _VALID_STORY_STATUSES:
+        return {"ok": False, "error": f"invalid status {status!r}: "
+                                       f"must be one of {sorted(_VALID_STORY_STATUSES)}"}
+
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {
+                "ok": True, "skipped": "locked",
+                "reason": "another dispatch/ingest/interrupt is in progress for this plan",
+            }
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        story = manifest["stories"].get(story_key)
+        if story is None:
+            return {"ok": False, "error": f"No such story {story_key!r}"}
+        story["status"] = status
+        _atomic_write_json(manifest_path, manifest)
+        return {"ok": True, "story_key": story_key, "status": status}
 
 
 @mcp.tool()
@@ -2772,8 +3121,10 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             stories = manifest["stories"]
             for key, story in stories.items():
                 if story["status"] == "in_progress" and "pid" in story:
-                    status = check_story_status(plan_name, key).get("status")
+                    check_result = check_story_status(plan_name, key)
+                    status = check_result.get("status")
                     if status == "failed":
+                        fallback_model = manifest.get("local_model_fallback")
                         # A-posteriori escalation: under auto dispatch, if the
                         # local agent failed and has NOT been escalated before,
                         # wipe its worktree and re-queue for Claude. A second
@@ -2786,6 +3137,35 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                             _escalate_to_claude(manifest, plan_name, key, manifest_path)
                             _notify_user(plan_name,
                                 f"{key} local agent failed; escalating to Claude and starting clean.")
+                            summary["notify"].append(key)
+                        elif (fallback_model
+                                and story.get("backend") == "local"
+                                and story.get("model") != fallback_model
+                                and not story.get("tried_fallback_model")):
+                            # Plan-scoped opt-in (manifest["local_model_fallback"]):
+                            # never escalates to Claude - just gives one other
+                            # local model a shot before the terminal park/fail
+                            # path below.
+                            manifest = json.loads(manifest_path.read_text())
+                            failed_model = story.get("dispatched_model") or story.get("model") or "default"
+                            _escalate_to_local_fallback_model(
+                                manifest, plan_name, key, manifest_path, fallback_model)
+                            _notify_user(plan_name,
+                                f"{key} local agent failed on {failed_model}; retrying on "
+                                f"fallback model {fallback_model} before parking.")
+                            summary["notify"].append(key)
+                        elif check_result.get("failure_kind") == "give_up":
+                            # T6: the agent explicitly surrendered rather than
+                            # producing ordinary red tests. Point the human at
+                            # the story's scope/clarity instead of the generic
+                            # message - a missing/wrong API needs a fix to
+                            # agent_instructions, not another identical retry.
+                            _notify_user(plan_name,
+                                f"{key} agent gave up (explicit surrender, zero productive "
+                                f"progress) - likely under-specified (missing API, wrong "
+                                f"scope) rather than a model-capability gap; needs human "
+                                f"clarification before another dispatch.")
+                            summary["failed"].append(key)
                             summary["notify"].append(key)
                         else:
                             _notify_user(plan_name, f"{key} tests failed")
@@ -2862,6 +3242,13 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     acc = _reverify_acceptance(story, worktree)
                     if acc["state"] == "fail":
                         gate_error = f"acceptance reverify fail: {acc['error']}"
+                if not gate_error:
+                    # Independent of tests: a green suite doesn't mean the
+                    # project actually builds (PR #48 merged with `npm run
+                    # build` broken - retro §3.1).
+                    build = _reverify_build(worktree)
+                    if build["state"] == "fail":
+                        gate_error = f"build reverify fail: {build['error']}"
 
             if gate_error:
                 attempts = story.get("merge_attempts", 0) + 1
@@ -2959,6 +3346,10 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
             acc = _reverify_acceptance(story, worktree)
             if acc["state"] == "fail":
                 return {"ok": False, "error": f"acceptance reverify fail: {acc['error']}",
+                        "story_key": story_key}
+            build = _reverify_build(worktree)
+            if build["state"] == "fail":
+                return {"ok": False, "error": f"build reverify fail: {build['error']}",
                         "story_key": story_key}
             _merge_pr(story.get("worktree", ""), story_key)
     except Exception as e:  # surface the gh/git failure to the human, don't raise

@@ -5634,6 +5634,177 @@ def test_check_story_status_routes_oracle_step_cap_to_interrupted(
     assert any(e.get("step") == "step_cap_reached" for e in journal), journal
 
 
+def test_check_story_status_step_cap_streak_ignored_without_fallback_configured(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A plan with no manifest["local_model_fallback"] (the default for every
+    plan except the ones that opt in) must not track or act on a step-cap
+    streak at all - existing behavior for the vast majority of plans is
+    unchanged."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap3", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "dispatched_model": "gpt-oss:20b"},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("cap3", "S1")
+
+    story = _read_manifest(plan_dir, "cap3")["stories"]["S1"]
+    assert "model" not in story  # never set - no fallback configured for this plan
+    assert "step_cap_streak" not in story
+    assert "step_cap_streak_model" not in story
+
+
+def test_check_story_status_step_cap_streak_increments_below_threshold(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A plan opted into local_model_fallback tracks consecutive step-cap
+    interrupts on the same model, but does not switch until the threshold
+    (default 3) is reached."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap4", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "dispatched_model": "gpt-oss:20b", "step_cap_streak": 1,
+               "step_cap_streak_model": "gpt-oss:20b"},
+    })
+    manifest_path = plan_dir / "cap4.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "glm-5.2:cloud"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("cap4", "S1")
+
+    story = _read_manifest(plan_dir, "cap4")["stories"]["S1"]
+    assert story["model"] == "gpt-oss:20b"  # not switched yet
+    assert story["step_cap_streak"] == 2
+    assert story["step_cap_streak_model"] == "gpt-oss:20b"
+
+
+def test_check_story_status_step_cap_streak_switches_model_at_threshold(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Once the step-cap streak on the same model reaches
+    STEP_CAP_FALLBACK_THRESHOLD, the story's model switches to the plan's
+    fallback model for the next resume - backend is untouched (stays local,
+    never Claude), and the streak counters reset."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap5", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "backend": "local", "dispatched_model": "gpt-oss:20b",
+               "step_cap_streak": p.STEP_CAP_FALLBACK_THRESHOLD - 1,
+               "step_cap_streak_model": "gpt-oss:20b"},
+    })
+    manifest_path = plan_dir / "cap5.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "glm-5.2:cloud"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("cap5", "S1")
+
+    story = _read_manifest(plan_dir, "cap5")["stories"]["S1"]
+    assert story["model"] == "glm-5.2:cloud"
+    assert story["backend"] == "local"  # never claude
+    assert "step_cap_streak" not in story
+    assert "step_cap_streak_model" not in story
+    notif = (plan_dir / "cap5.notifications.log").read_text()
+    assert "switching to fallback model glm-5.2:cloud" in notif
+
+
+def test_check_story_status_step_cap_streak_noop_once_already_on_fallback_model(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A story already running on the plan's fallback model that keeps
+    hitting the step cap must not restart the streak counters or fire
+    another switch-model notification - there is no fallback past the
+    fallback, so the guard (current model == fallback model) must hold."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap6", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "glm-5.2:cloud",
+               "backend": "local", "dispatched_model": "glm-5.2:cloud"},
+    })
+    manifest_path = plan_dir / "cap6.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "glm-5.2:cloud"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("cap6", "S1")
+
+    story = _read_manifest(plan_dir, "cap6")["stories"]["S1"]
+    assert story["model"] == "glm-5.2:cloud"
+    assert "step_cap_streak" not in story
+    assert "step_cap_streak_model" not in story
+    notif_path = plan_dir / "cap6.notifications.log"
+    assert not notif_path.exists() or "switching to fallback model" not in notif_path.read_text()
+
+
+def test_check_story_status_step_cap_streak_ignores_claude_backend_story(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """The step-cap streak fallback only ever applies to a local-backend
+    story. A story dispatched on backend="claude" must never have its model
+    switched by this logic, even if a plan opts into local_model_fallback and
+    the streak threshold is reached (defense in depth alongside the local
+    agent scripts being the only source of STEP_CAP_MARKERS)."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap7", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "sonnet",
+               "backend": "claude", "dispatched_model": "sonnet",
+               "step_cap_streak": p.STEP_CAP_FALLBACK_THRESHOLD - 1,
+               "step_cap_streak_model": "sonnet"},
+    })
+    manifest_path = plan_dir / "cap7.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "glm-5.2:cloud"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("cap7", "S1")
+
+    story = _read_manifest(plan_dir, "cap7")["stories"]["S1"]
+    assert story["model"] == "sonnet"  # never switched
+    assert story["backend"] == "claude"
+    notif_path = plan_dir / "cap7.notifications.log"
+    assert not notif_path.exists() or "switching to fallback model" not in notif_path.read_text()
+
+
 def test_check_story_status_normal_completion_still_routes_to_tests_passed(
     plan_dir, tmp_path, monkeypatch,
 ):

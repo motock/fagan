@@ -8152,3 +8152,106 @@ def test_set_story_status_clears_parked_reason_on_unpark(plan_dir, monkeypatch):
     story = _read_manifest(plan_dir, "sss")["stories"]["P1"]
     assert story["status"] == "interrupted"
     assert "parked_reason" not in story
+
+
+# ---------- Auto-retry review on transient backend 500 ----------
+
+_TRANSIENT_500_MSG = "500 Internal Server Error: upstream crashed mid-request"
+
+
+def test_is_transient_backend_error_detects_500():
+    assert p._is_transient_backend_error("HTTP 500 Internal Server Error")
+
+
+def test_is_transient_backend_error_detects_internal_server_error():
+    assert p._is_transient_backend_error("internal server error: something broke")
+
+
+def test_is_transient_backend_error_detects_connection_reset():
+    assert p._is_transient_backend_error("Connection reset by peer")
+
+
+def test_is_transient_backend_error_detects_connection_refused():
+    assert p._is_transient_backend_error("Connection refused while contacting backend")
+
+
+def test_is_transient_backend_error_false_for_rate_limit_banner():
+    """The two detectors must not double-handle the same input."""
+    assert not p._is_transient_backend_error(_RATE_LIMIT_MSG)
+
+
+def test_is_transient_backend_error_false_for_normal_review():
+    normal = (
+        "I reviewed the diff. The implementation looks correct.\n"
+        "VERDICT: APPROVE\n"
+    )
+    assert not p._is_transient_backend_error(normal)
+
+
+def test_is_rate_limited_false_for_transient_500():
+    """Conversely, a transient-500 must not be treated as a rate-limit."""
+    assert not p._is_rate_limited(_TRANSIENT_500_MSG)
+
+
+def test_review_story_transient_500_retry_resolves_to_approve(
+    plan_dir, agents_dir, monkeypatch
+):
+    """First reviewer call returns a transient-500 UNKNOWN; the single retry
+    returns VERDICT: APPROVE. The story must end up approved with
+    review_inconclusive_count NOT incremented."""
+    _write_manifest(plan_dir, "transient_ok", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+
+    call_count = {"n": 0}
+
+    def _reviewer(wt, br, backend_name=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _TRANSIENT_500_MSG
+        return "Looks good.\nVERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _reviewer)
+    monkeypatch.setattr(p, "_open_pr", lambda *a, **k: "https://pr/1")
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+
+    result = p.review_story("transient_ok", "S1")
+
+    assert result["verdict"] == "APPROVE"
+    assert call_count["n"] == 2  # original + one retry
+    story = _read_manifest(plan_dir, "transient_ok")["stories"]["S1"]
+    assert story["review_verdict"] == "APPROVE"
+    assert story.get("review_inconclusive_count", 0) == 0
+
+
+def test_review_story_transient_500_retry_also_fails_increments_inconclusive_once(
+    plan_dir, agents_dir, monkeypatch
+):
+    """Both the original and the retry return transient-500 UNKNOWN. The retry
+    must happen exactly once (2 total calls) and review_inconclusive_count
+    must increment by exactly 1, falling through to the existing inconclusive
+    path unchanged."""
+    _write_manifest(plan_dir, "transient_fail", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+
+    call_count = {"n": 0}
+
+    def _reviewer(wt, br, backend_name=None):
+        call_count["n"] += 1
+        return _TRANSIENT_500_MSG  # always fails
+
+    monkeypatch.setattr(p, "_run_reviewer", _reviewer)
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+
+    result = p.review_story("transient_fail", "S1")
+
+    assert call_count["n"] == 2  # original + exactly one retry
+    assert result["verdict"] == "UNKNOWN"
+    story = _read_manifest(plan_dir, "transient_fail")["stories"]["S1"]
+    assert story["review_inconclusive_count"] == 1  # incremented exactly once
+    assert story["status"] == "tests_passed"

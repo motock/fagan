@@ -820,6 +820,28 @@ def _is_rate_limited(text: str) -> bool:
     return any(re.search(pat, text, re.IGNORECASE) for pat in _RATE_LIMIT_PATTERNS)
 
 
+# Transient-backend-error signatures distinct from rate-limiting. Like
+# _RATE_LIMIT_PATTERNS, checked only when _parse_verdict returns UNKNOWN (no
+# VERDICT line) so a review discussing HTTP 500 handling is never misclassified.
+_TRANSIENT_BACKEND_PATTERNS = [
+    r"500\s+internal\s+server\s+error",
+    r"internal\s+server\s+error",
+    r"connection\s+reset",
+    r"connection\s+refused",
+]
+
+
+def _is_transient_backend_error(text: str) -> bool:
+    """True when `text` looks like a transient backend error (HTTP 500,
+    connection-reset/refused), not a rate-limit message or a genuine review.
+
+    Intentionally called only after _parse_verdict returns UNKNOWN, so a
+    reviewer discussing 500-handling code (which ends with a real VERDICT
+    line) is never mistaken for a transient backend failure.
+    """
+    return any(re.search(pat, text, re.IGNORECASE) for pat in _TRANSIENT_BACKEND_PATTERNS)
+
+
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
     """Push the story's branch and open a PR for it via the gh CLI.
 
@@ -2774,6 +2796,21 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _notify_user(plan_name, f"{story_key} review deferred: reviewer rate-limited; will retry next tick.")
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
+
+    # Transient backend error (HTTP 500 / connection-reset / connection-refused):
+    # re-invoke the reviewer once inline. This is an infrastructure hiccup, not
+    # a genuine review cycle, so do NOT increment review_inconclusive_count for
+    # this branch itself — only the fallback inconclusive path below (reached
+    # when still UNKNOWN after the single retry) touches that counter.
+    _transient_retried = False
+    if verdict == "UNKNOWN" and _is_transient_backend_error(reviewer_output):
+        _notify_user(plan_name, f"{story_key} review hit transient backend error; retrying once.")
+        reviewer_output = (
+            _run_reviewer(worktree, branch, backend_name="claude")
+            if story.get("escalated") else _run_reviewer(worktree, branch)
+        )
+        verdict = _parse_verdict(reviewer_output)
+        _transient_retried = True
 
     story["review_verdict"] = verdict
     story["review_deferred_count"] = 0

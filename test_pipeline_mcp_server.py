@@ -3726,7 +3726,10 @@ def test_rebase_aborts_all_or_nothing_across_multiple_files(tmp_path, monkeypatc
     }
     master = {
         "a.py": "import os\nimport json\n\n\ndef foo():\n    pass\n",
-        "b.py": "import os\n\n\ndef bar_renamed():\n    pass\n",
+        # Same anchor line as agent's edit (right after "import os") so this
+        # genuinely conflicts, but it MODIFIES the existing line instead of
+        # purely adding one - the disqualifying edit for this file.
+        "b.py": "import os as o\n\n\ndef bar():\n    pass\n",
     }
     repo, wt = _setup_conflict_repo(
         tmp_path, {"a.py": base_a, "b.py": base_b}, agent, master,

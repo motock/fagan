@@ -7950,3 +7950,205 @@ def test_check_story_status_without_acceptance_runs_whole_suite(plan_dir, monkey
     assert any(c == ["pytest"] for c in test_cmds), (
         "whole-suite run must be bare pytest when no acceptance block"
     )
+
+
+# ---------- issue 24eb6c5b: lock approve_merge + refresh parked_reason ----------
+
+def test_approve_merge_returns_retriable_busy_when_lock_held(plan_dir, monkeypatch):
+    """approve_merge must not proceed on stale state when the plan lock is
+    already held by another context (scheduler tick). It returns a clean,
+    retriable error instead of crashing or silently succeeding."""
+    _write_manifest(plan_dir, "ambusy", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/x"},
+    })
+    merged = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    lock_path = plan_dir / "ambusy.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = p.approve_merge("ambusy", "P1")
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert result["ok"] is False
+    assert result.get("retriable") is True
+    assert "busy" in result["error"].lower() or "retry" in result["error"].lower()
+    assert merged == []
+    # Story must be untouched.
+    assert _read_manifest(plan_dir, "ambusy")["stories"]["P1"]["status"] == "parked"
+
+
+def test_approve_merge_rereads_manifest_inside_lock(plan_dir, monkeypatch):
+    """approve_merge must re-read the manifest from disk AFTER acquiring the
+    lock, so it merges against the freshest on-disk state, not a pre-lock
+    stale copy. We mutate an unrelated field on disk before the call and
+    confirm the merge proceeds using the fresh manifest (the worktree path
+    is taken from the on-disk manifest, so we change it and verify the
+    merge used the fresh value)."""
+    _write_manifest(plan_dir, "amfresh", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/old/wt"},
+    })
+
+    seen_worktrees = []
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
+
+    def _capture_merge(wt, key):
+        seen_worktrees.append(wt)
+        return "merged"
+    monkeypatch.setattr(p, "_merge_pr", _capture_merge)
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    # Mutate the on-disk manifest to a fresh worktree path BEFORE calling
+    # approve_merge. If approve_merge uses a pre-lock stale copy, it will
+    # pass "/old/wt" to _merge_pr; if it re-reads inside the lock, it will
+    # pass "/fresh/wt".
+    _write_manifest(plan_dir, "amfresh", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/fresh/wt"},
+    })
+
+    result = p.approve_merge("amfresh", "P1")
+
+    assert result["ok"] is True
+    assert seen_worktrees == ["/fresh/wt"]
+
+
+def test_approve_merge_revalidates_status_inside_lock(plan_dir, monkeypatch):
+    """If the story's status changed on disk while waiting for the lock
+    (e.g. a scheduler tick already merged it), approve_merge must detect the
+    stale state and return the validation error rather than proceeding."""
+    _write_manifest(plan_dir, "amstale", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/x"},
+    })
+    merged = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    # Simulate the on-disk state changing to 'done' before approve_merge
+    # acquires the lock (the pre-lock read sees 'parked', but the in-lock
+    # re-read sees 'done').
+    _write_manifest(plan_dir, "amstale", {
+        "P1": {"summary": "approved", "status": "done", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/x"},
+    })
+
+    result = p.approve_merge("amstale", "P1")
+
+    assert result["ok"] is False
+    assert merged == []
+
+
+def test_approve_merge_revalidates_review_verdict_inside_lock(plan_dir, monkeypatch):
+    """If the review_verdict changed on disk while waiting for the lock,
+    approve_merge must detect it and refuse rather than merging unapproved work."""
+    _write_manifest(plan_dir, "amverdict", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/x"},
+    })
+    merged = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    # On-disk verdict changed to REQUEST_CHANGES before the lock was acquired.
+    _write_manifest(plan_dir, "amverdict", {
+        "P1": {"summary": "changes requested", "status": "parked",
+               "review_verdict": "REQUEST_CHANGES", "risk": "medium", "worktree": "/x"},
+    })
+
+    result = p.approve_merge("amverdict", "P1")
+
+    assert result["ok"] is False
+    assert merged == []
+
+
+def test_merge_gate_park_sets_parked_reason(plan_dir, monkeypatch):
+    """When the scheduler's merge-adjudication loop parks a pr_open story
+    (non-merge decision), it must set parked_reason to the decision's reason
+    string, matching the review-park sites."""
+    _write_manifest(plan_dir, "mgpark", {
+        "P1": {"summary": "approved but high risk", "status": "pr_open",
+               "review_verdict": "APPROVE", "risk": "high", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "full")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+
+    # advance_pipeline will adjudicate the merge; high risk -> park.
+    result = p.advance_pipeline("mgpark")
+
+    story = _read_manifest(plan_dir, "mgpark")["stories"]["P1"]
+    assert story["status"] == "parked"
+    assert story.get("parked_reason") == "high risk held for human review"
+
+
+def test_approve_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
+    """A story leaving 'parked' status via successful approve_merge must no
+    longer carry a stale parked_reason key."""
+    _write_manifest(plan_dir, "amclear", {
+        "P1": {"summary": "approved", "status": "parked", "review_verdict": "APPROVE",
+               "risk": "medium", "worktree": "/x", "parked_reason": "high risk held for human review"},
+    })
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    result = p.approve_merge("amclear", "P1")
+
+    assert result["ok"] is True
+    story = _read_manifest(plan_dir, "amclear")["stories"]["P1"]
+    assert story["status"] == "done"
+    assert "parked_reason" not in story
+
+
+def test_scheduler_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
+    """When the scheduler's merge loop successfully merges a pr_open story
+    that previously carried a parked_reason, the reason must be cleared."""
+    _write_manifest(plan_dir, "smclear", {
+        "P1": {"summary": "approved low risk", "status": "pr_open",
+               "review_verdict": "APPROVE", "risk": "low", "worktree": "/x",
+               "parked_reason": "stale reason from a prior park"},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "full")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status", lambda br: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "pass"})
+    monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    result = p.advance_pipeline("smclear")
+
+    story = _read_manifest(plan_dir, "smclear")["stories"]["P1"]
+    assert story["status"] == "done"
+    assert "parked_reason" not in story
+
+
+def test_set_story_status_clears_parked_reason_on_unpark(plan_dir, monkeypatch):
+    """set_story_status transitioning a story OUT of 'parked' to an active
+    status must clear parked_reason so a stale reason doesn't survive."""
+    _write_manifest(plan_dir, "sss", {
+        "P1": {"summary": "parked", "status": "parked",
+               "parked_reason": "high risk held for human review"},
+    })
+
+    result = p.set_story_status("sss", "P1", "interrupted")
+
+    assert result["ok"] is True
+    story = _read_manifest(plan_dir, "sss")["stories"]["P1"]
+    assert story["status"] == "interrupted"
+    assert "parked_reason" not in story

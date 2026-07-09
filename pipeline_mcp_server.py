@@ -2479,6 +2479,7 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["stories"][story_key]["status"] = "done"
+    manifest["stories"][story_key].pop("parked_reason", None)
     _atomic_write_json(manifest_path, manifest)
     return {"ok": True}
 
@@ -2570,6 +2571,8 @@ def set_story_status(plan_name: str, story_key: str, status: str) -> dict[str, A
         if story is None:
             return {"ok": False, "error": f"No such story {story_key!r}"}
         story["status"] = status
+        if status != "parked":
+            story.pop("parked_reason", None)
         _atomic_write_json(manifest_path, manifest)
         return {"ok": True, "story_key": story_key, "status": status}
 
@@ -3241,6 +3244,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             decision = _merge_decision(story)
             if decision["action"] != "merge":
                 story["status"] = "parked"
+                story["parked_reason"] = decision["reason"]
                 _notify_user(plan_name, f"{key} parked: {decision['reason']}")
                 summary["parked"].append(key)
                 summary["notify"].append(key)
@@ -3327,6 +3331,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 continue
             story["status"] = "done"
             story.pop("merge_attempts", None)
+            story.pop("parked_reason", None)
             _mark_plane_done(key, plan_name)
             summary["merged"].append(key)
         _atomic_write_json(manifest_path, manifest)
@@ -3350,54 +3355,67 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    story = manifest["stories"].get(story_key)
-    if not story:
-        return {"ok": False, "error": f"No such story {story_key}"}
-    if story["status"] not in ("parked", "pr_open"):
-        return {"ok": False, "error": f"Story is {story['status']}, not parked/pr_open"}
-    if story.get("review_verdict") != "APPROVE":
-        return {"ok": False, "error": "Story was never reviewer-approved"}
 
-    try:
-        with _scoped_repo_root(plan_name):
-            # Mode 9 gate applies here too: even an explicit human merge must
-            # not land a conflicting or CI-red PR. Disable via
-            # PIPELINE_MERGE_CI_GATE=0 only if you intentionally accept that.
-            branch = f"agent/{story_key.lower()}"
-            worktree = story.get("worktree", "")
-            rb = _rebase_onto_master(worktree, branch)
-            if not rb["ok"]:
-                return {"ok": False, "error": f"rebase failed: {rb['error']}",
-                        "story_key": story_key}
-            if Path(worktree).is_dir():
-                push = subprocess.run(["git", "push", "--force-with-lease", "origin",
-                                       branch], cwd=REPO_ROOT,
-                                      capture_output=True, text=True)
-                if push.returncode != 0:
-                    return {"ok": False,
-                            "error": f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {"ok": False,
+                    "error": "plan busy (scheduler tick in progress); retry",
+                    "retriable": True}
+        # Re-read the manifest from disk INSIDE the lock so we merge against
+        # the freshest on-disk state, not a pre-lock stale copy. A scheduler
+        # tick may have changed the story's status or verdict while we waited
+        # to acquire the lock.
+        manifest = json.loads(manifest_path.read_text())
+        story = manifest["stories"].get(story_key)
+        if not story:
+            return {"ok": False, "error": f"No such story {story_key}"}
+        if story["status"] not in ("parked", "pr_open"):
+            return {"ok": False, "error": f"Story is {story['status']}, not parked/pr_open"}
+        if story.get("review_verdict") != "APPROVE":
+            return {"ok": False, "error": "Story was never reviewer-approved"}
+
+        try:
+            with _scoped_repo_root(plan_name):
+                # Mode 9 gate applies here too: even an explicit human merge must
+                # not land a conflicting or CI-red PR. Disable via
+                # PIPELINE_MERGE_CI_GATE=0 only if you intentionally accept that.
+                branch = f"agent/{story_key.lower()}"
+                worktree = story.get("worktree", "")
+                rb = _rebase_onto_master(worktree, branch)
+                if not rb["ok"]:
+                    return {"ok": False, "error": f"rebase failed: {rb['error']}",
                             "story_key": story_key}
-            ci = _ci_status(branch)
-            if ci["state"] == "fail":
-                return {"ok": False, "error": f"CI failing: {ci['error']}",
-                        "story_key": story_key}
-            if ci["state"] == "pending":
-                return {"ok": False, "error": f"CI still pending: {ci['error']}",
-                        "story_key": story_key}
-            acc = _reverify_acceptance(story, worktree)
-            if acc["state"] == "fail":
-                return {"ok": False, "error": f"acceptance reverify fail: {acc['error']}",
-                        "story_key": story_key}
-            build = _reverify_build(worktree)
-            if build["state"] == "fail":
-                return {"ok": False, "error": f"build reverify fail: {build['error']}",
-                        "story_key": story_key}
-            _merge_pr(story.get("worktree", ""), story_key)
-    except Exception as e:  # surface the gh/git failure to the human, don't raise
-        return {"ok": False, "error": str(e), "story_key": story_key}
-    story["status"] = "done"
-    _atomic_write_json(manifest_path, manifest)
+                if Path(worktree).is_dir():
+                    push = subprocess.run(["git", "push", "--force-with-lease", "origin",
+                                           branch], cwd=REPO_ROOT,
+                                          capture_output=True, text=True)
+                    if push.returncode != 0:
+                        return {"ok": False,
+                                "error": f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
+                                "story_key": story_key}
+                ci = _ci_status(branch)
+                if ci["state"] == "fail":
+                    return {"ok": False, "error": f"CI failing: {ci['error']}",
+                            "story_key": story_key}
+                if ci["state"] == "pending":
+                    return {"ok": False, "error": f"CI still pending: {ci['error']}",
+                            "story_key": story_key}
+                acc = _reverify_acceptance(story, worktree)
+                if acc["state"] == "fail":
+                    return {"ok": False, "error": f"acceptance reverify fail: {acc['error']}",
+                            "story_key": story_key}
+                build = _reverify_build(worktree)
+                if build["state"] == "fail":
+                    return {"ok": False, "error": f"build reverify fail: {build['error']}",
+                            "story_key": story_key}
+                _merge_pr(story.get("worktree", ""), story_key)
+        except Exception as e:  # surface the gh/git failure to the human, don't raise
+            return {"ok": False, "error": str(e), "story_key": story_key}
+        # Final write INSIDE the lock, using the manifest re-read inside the
+        # lock (not a pre-lock copy). Clear parked_reason on leaving 'parked'.
+        story["status"] = "done"
+        story.pop("parked_reason", None)
+        _atomic_write_json(manifest_path, manifest)
     _mark_plane_done(story_key, plan_name)
     return {"ok": True, "story_key": story_key, "status": "done"}
 

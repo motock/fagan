@@ -1011,11 +1011,16 @@ def _repo_has_ci_configured() -> bool:
 
 def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
     """Poll ``gh pr checks <branch>`` until all checks reach a terminal bucket
-    or the timeout elapses. Returns ``{"state": "pass"|"fail"|"pending"|"none",
-    "error": str}``.
+    or the timeout elapses. Returns ``{"state": "pass"|"fail"|"cancelled"|
+    "pending"|"none", "error": str}``.
 
       - ``pass``   every check passed -> safe to merge.
-      - ``fail``   at least one check failed/errored/cancelled -> do not merge.
+      - ``fail``   at least one check failed/errored/needs-action -> do not
+        merge.
+      - ``cancelled`` at least one check was cancelled (e.g. an abnormal
+        queue delay) and no check failed/errored - worth exactly one
+        automatic rerun before being treated as a failure; callers retry via
+        `_ci_rerun` once, then re-poll.
       - ``pending`` checks still running (or a configured repo's checks
         haven't registered yet) at timeout -> do not merge (retry/park).
       - ``none``   no PR / unparseable output / a repo with no
@@ -1048,12 +1053,48 @@ def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
             # to pass; falls through to "pending" below if they never do.
             time.sleep(10)
             continue
-        if buckets & {"fail", "error", "cancelled", "action_required"}:
+        if buckets & {"fail", "error", "action_required"}:
             return {"state": "fail", "error": ""}
+        if "cancelled" in buckets:
+            return {"state": "cancelled", "error": ""}
         if buckets <= {"pass"}:
             return {"state": "pass", "error": ""}
         time.sleep(10)  # still pending — keep polling
     return {"state": "pending", "error": "CI did not complete within timeout"}
+
+
+def _ci_rerun(branch: str) -> bool:
+    """Rerun the most recent CI run's failed/cancelled jobs for `branch` via
+    `gh run rerun --failed`, for the one-shot auto-retry on a `cancelled`
+    `_ci_status` result. Never raises - `gh`/network failures return False so
+    the caller falls through to the ordinary fail/retry path rather than
+    crashing the scheduler tick."""
+    try:
+        r = subprocess.run(
+            ["gh", "run", "list", "--branch", branch, "--limit", "1", "--json", "databaseId"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return False
+    if r.returncode != 0:
+        return False
+    try:
+        runs = json.loads(r.stdout or "[]")
+    except ValueError:
+        return False
+    if not runs:
+        return False
+    run_id = runs[0].get("databaseId")
+    if not run_id:
+        return False
+    try:
+        rerun = subprocess.run(
+            ["gh", "run", "rerun", str(run_id), "--failed"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return False
+    return rerun.returncode == 0
 
 
 def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]:
@@ -3312,7 +3353,14 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         gate_error = f"push: {(push.stderr or push.stdout).strip()[:200]}"
                 if not gate_error:
                     ci = _ci_status(branch)
-                    if ci["state"] == "fail":
+                    if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
+                        # Worth exactly one automatic rerun before treating it
+                        # as a failure - an abnormal queue delay can cancel
+                        # jobs with no code-quality signal at all.
+                        story["ci_rerun_attempted"] = True
+                        _ci_rerun(branch)
+                        ci = _ci_status(branch)
+                    if ci["state"] in ("fail", "cancelled"):
                         gate_error = f"ci fail: {ci['error']}"
                     elif ci["state"] == "pending":
                         gate_error = f"ci pending: {ci['error']}"
@@ -3368,6 +3416,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             story["status"] = "done"
             story.pop("merge_attempts", None)
             story.pop("parked_reason", None)
+            story.pop("ci_rerun_attempted", None)
             _mark_plane_done(key, plan_name)
             summary["merged"].append(key)
         _atomic_write_json(manifest_path, manifest)
@@ -3430,7 +3479,14 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                                 "error": f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
                                 "story_key": story_key}
                 ci = _ci_status(branch)
-                if ci["state"] == "fail":
+                if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
+                    # Same one-shot auto-rerun as the scheduler's merge gate:
+                    # a queue-delay cancellation carries no code-quality
+                    # signal, so give it one automatic retry before failing.
+                    story["ci_rerun_attempted"] = True
+                    _ci_rerun(branch)
+                    ci = _ci_status(branch)
+                if ci["state"] in ("fail", "cancelled"):
                     return {"ok": False, "error": f"CI failing: {ci['error']}",
                             "story_key": story_key}
                 if ci["state"] == "pending":
@@ -3451,6 +3507,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
         # lock (not a pre-lock copy). Clear parked_reason on leaving 'parked'.
         story["status"] = "done"
         story.pop("parked_reason", None)
+        story.pop("ci_rerun_attempted", None)
         _atomic_write_json(manifest_path, manifest)
     _mark_plane_done(story_key, plan_name)
     return {"ok": True, "story_key": story_key, "status": "done"}

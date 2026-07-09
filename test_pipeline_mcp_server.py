@@ -3731,6 +3731,74 @@ def test_ci_status_pending_not_none_when_workflows_dir_present_but_checks_not_ye
     assert ci["state"] == "pending"
 
 
+def test_ci_status_cancelled_when_only_cancelled_bucket(monkeypatch):
+    # A job cancelled by an abnormal queue delay is a transient event worth
+    # one auto-rerun, not a terminal failure - it must be distinguishable
+    # from "fail" so callers can retry instead of giving up immediately.
+    def _fake_run(argv, **_):
+        class R:
+            returncode = 0
+            stdout = json.dumps([{"bucket": "cancelled"}, {"bucket": "pass"}])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert p._ci_status("agent/x")["state"] == "cancelled"
+
+
+def test_ci_status_fail_wins_over_cancelled_when_both_present(monkeypatch):
+    # A genuine failure alongside an unrelated cancelled job must still be
+    # reported as "fail" - cancelled-only auto-rerun must never mask a real
+    # test/lint failure.
+    def _fake_run(argv, **_):
+        class R:
+            returncode = 0
+            stdout = json.dumps([{"bucket": "cancelled"}, {"bucket": "fail"}])
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert p._ci_status("agent/x")["state"] == "fail"
+
+
+def test_ci_rerun_issues_gh_run_rerun_on_success(monkeypatch):
+    calls = []
+
+    def _fake_run(argv, **_):
+        calls.append(argv)
+        class R:
+            returncode = 0
+            stdout = json.dumps([{"databaseId": 12345}]) if "list" in argv else ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert p._ci_rerun("agent/x") is True
+    assert any(a[:3] == ["gh", "run", "list"] for a in calls)
+    assert any(a[:3] == ["gh", "run", "rerun"] and "12345" in a for a in calls)
+    assert any("--failed" in a for a in calls)
+
+
+def test_ci_rerun_returns_false_when_gh_run_list_fails(monkeypatch):
+    def _fake_run(argv, **_):
+        class R:
+            returncode = 1
+            stdout = ""
+            stderr = "no runs found"
+        return R()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert p._ci_rerun("agent/x") is False
+
+
+def test_ci_rerun_returns_false_never_raises_when_gh_missing(monkeypatch):
+    def _raise_run(*a, **k):
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'gh'")
+
+    monkeypatch.setattr(p.subprocess, "run", _raise_run)
+    assert p._ci_rerun("agent/x") is False
+
+
 def test_rebase_onto_master_returns_not_ok_when_git_missing(monkeypatch, tmp_path):
     # `git` absent/non-executable raises OSError; the helper must not escape it
     # (the loop only wraps _merge_pr in try/except). It reports a non-conflict
@@ -3968,6 +4036,100 @@ def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
     story = _read_manifest(plan_dir, "cidisabled")["stories"]["P1"]
     assert story["status"] == "done"
     assert result["merged"] == ["P1"]
+
+
+def test_advance_pipeline_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, monkeypatch):
+    # A cancelled-only CI result is worth exactly one automatic rerun before
+    # falling back to the ordinary fail/retry path - not an immediate park.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    _write_manifest(plan_dir, "cicancel", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    ci_calls = []
+
+    def _fake_ci_status(br, **_):
+        ci_calls.append(br)
+        if len(ci_calls) == 1:
+            return {"state": "cancelled", "error": ""}
+        return {"state": "pass", "error": ""}
+
+    rerun_calls = []
+    monkeypatch.setattr(p, "_ci_status", _fake_ci_status)
+    monkeypatch.setattr(p, "_ci_rerun", lambda br: rerun_calls.append(br) or True)
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    result = p.advance_pipeline("cicancel")
+
+    assert len(rerun_calls) == 1
+    assert len(ci_calls) == 2
+    story = _read_manifest(plan_dir, "cicancel")["stories"]["P1"]
+    assert story["status"] == "done"
+    assert result["merged"] == ["P1"]
+
+
+def test_advance_pipeline_cancelled_ci_second_time_does_not_rerun_again(plan_dir, monkeypatch):
+    # ci_rerun_attempted, once set, bounds the auto-rerun to exactly once per
+    # story - a second cancelled result must fall straight to the ordinary
+    # fail/retry path instead of rerunning indefinitely.
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cicancel2", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x", "ci_rerun_attempted": True},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "cancelled", "error": ""})
+    rerun_calls = []
+    monkeypatch.setattr(p, "_ci_rerun", lambda br: rerun_calls.append(br) or True)
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+
+    result = p.advance_pipeline("cicancel2")
+
+    assert rerun_calls == []
+    story = _read_manifest(plan_dir, "cicancel2")["stories"]["P1"]
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert result["merged"] == []
+
+
+def test_approve_merge_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, monkeypatch):
+    # Same one-shot auto-rerun behavior on the human-driven approve_merge
+    # path as the scheduler's merge gate.
+    _write_manifest(plan_dir, "amcancel", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+    ci_calls = []
+
+    def _fake_ci_status(br, **_):
+        ci_calls.append(br)
+        if len(ci_calls) == 1:
+            return {"state": "cancelled", "error": ""}
+        return {"state": "pass", "error": ""}
+
+    rerun_calls = []
+    monkeypatch.setattr(p, "_ci_status", _fake_ci_status)
+    monkeypatch.setattr(p, "_ci_rerun", lambda br: rerun_calls.append(br) or True)
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
+    monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
+
+    result = p.approve_merge("amcancel", "P1")
+
+    assert result["ok"] is True
+    assert len(rerun_calls) == 1
+    assert len(ci_calls) == 2
+    story = _read_manifest(plan_dir, "amcancel")["stories"]["P1"]
+    assert story["status"] == "done"
 
 
 def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypatch, tmp_path):

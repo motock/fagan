@@ -33,6 +33,7 @@ When you approve, you are asserting all of the following are true:
 
 - Verify the agent did not add unrequested features, quietly remove behavior, or
   silently refactor adjacent code.
+- Replacing real logic with a stub/placeholder/no‑op reimplementation is Blocking even when tests pass.
 - Confirm tests were written to define behavior, not retrofitted to pass.
 - Be skeptical of plausible-looking code that was not exercised against the real
   system. Run the tests yourself.

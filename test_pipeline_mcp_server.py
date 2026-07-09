@@ -8086,7 +8086,7 @@ def test_merge_gate_park_sets_parked_reason(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
 
     # advance_pipeline will adjudicate the merge; high risk -> park.
-    result = p.advance_pipeline("mgpark")
+    p.advance_pipeline("mgpark")
 
     story = _read_manifest(plan_dir, "mgpark")["stories"]["P1"]
     assert story["status"] == "parked"
@@ -8131,7 +8131,7 @@ def test_scheduler_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
-    result = p.advance_pipeline("smclear")
+    p.advance_pipeline("smclear")
 
     story = _read_manifest(plan_dir, "smclear")["stories"]["P1"]
     assert story["status"] == "done"

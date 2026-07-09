@@ -273,7 +273,7 @@ scripts/dashboard.sh start                 # http://127.0.0.1:8000
 ```
 
 `scripts/dashboard.sh` runs `uvicorn dashboard:app` detached in its own
-session, records the pid to `.dashboard.pid`, and logs to `dashboard.log`
+session, records the pid to `.dashboard.<port>.pid`, and logs to `dashboard.log`
 (both in the repo root, gitignored). Subcommands:
 
 | Command | Effect |

@@ -16,7 +16,11 @@
 #                    group — reloader master and worker both).
 #
 # Artifacts in repo root:
-#   .dashboard.pid   pid of the running uvicorn process (master when reload)
+#   .dashboard.<port>.pid   pid of the running uvicorn process (master when
+#                    reload), one per DASHBOARD_PORT so independent instances
+#                    on different ports (e.g. a real long-running dashboard
+#                    and an isolated test instance) never share pid-file
+#                    state and can't observe or kill each other.
 #   dashboard.log    combined stdout+stderr from uvicorn
 set -euo pipefail
 
@@ -29,11 +33,16 @@ elif [ -x "$ROOT/.venv/bin/python"  ]; then PYBIN="$ROOT/.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1;  then PYBIN=python3
 elif command -v python  >/dev/null 2>&1;  then PYBIN=python
 else PYBIN=""; fi
-PID_FILE="$ROOT/.dashboard.pid"
-LOG_FILE="$ROOT/dashboard.log"
 
 DASHBOARD_HOST="${DASHBOARD_HOST:-127.0.0.1}"
 DASHBOARD_PORT="${DASHBOARD_PORT:-8000}"
+
+# Scoped by port (not just a fixed name) so two independent instances on
+# different ports never share pid-file state - a `start`/`stop` for one
+# port can never see, and therefore can never kill, an instance running on
+# another port.
+PID_FILE="$ROOT/.dashboard.${DASHBOARD_PORT}.pid"
+LOG_FILE="$ROOT/dashboard.log"
 
 usage() {
   cat <<EOF
@@ -47,7 +56,7 @@ Env:
   DASHBOARD_PORT   (default 8000)
   DASHBOARD_RELOAD 1 to pass --reload to uvicorn (dev only)
 
-Pid is written to .dashboard.pid and logs to dashboard.log in the repo root.
+Pid is written to .dashboard.<port>.pid and logs to dashboard.log in the repo root.
 EOF
 }
 

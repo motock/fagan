@@ -132,6 +132,77 @@ def test_script_syntax_ok():
     assert res.returncode == 0, f"bash -n failed: {res.stderr}"
 
 
+def _env_for_port(port: int) -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("DASHBOARD_HOST", None)
+    env.pop("DASHBOARD_PORT", None)
+    env.pop("DASHBOARD_RELOAD", None)
+    env["DASHBOARD_HOST"] = "127.0.0.1"
+    env["DASHBOARD_PORT"] = str(port)
+    return env
+
+
+def test_concurrent_instances_on_different_ports_do_not_collide():
+    """A second `dashboard.sh start`/`stop` cycle on a DIFFERENT port must
+    never observe or kill an unrelated instance already running on another
+    port. This is the exact bug that killed the real dashboard during test
+    runs: `is_running`/`cmd_stop` were keyed off a single shared, non-port-
+    scoped `.dashboard.pid`, so a differently-ported invocation would see
+    "already running" (skip starting its own) and then `stop` would kill the
+    OTHER instance instead of its own (nonexistent) one."""
+    port1 = _free_port()
+    env1 = _env_for_port(port1)
+    try:
+        res1 = _run_script("start", env=env1)
+        assert res1.returncode == 0, f"start failed: {res1.stdout!r} {res1.stderr!r}"
+        assert _wait_healthy(port1), "first instance never became healthy"
+        pid_file1 = REPO_ROOT / f".dashboard.{port1}.pid"
+        assert pid_file1.exists(), f"expected a port-scoped pidfile at {pid_file1}"
+        pid1 = int(pid_file1.read_text().strip())
+        assert _pid_alive(pid1)
+
+        port2 = _free_port()
+        env2 = _env_for_port(port2)
+        res2 = _run_script("start", env=env2)
+        assert res2.returncode == 0, f"start failed: {res2.stdout!r} {res2.stderr!r}"
+        assert _wait_healthy(port2), (
+            "second instance never became healthy on its own port - it "
+            "likely collided with the first instance's pidfile/port check "
+            "instead of starting independently"
+        )
+        assert _pid_alive(pid1), "first instance died when a second was started on a different port"
+
+        _run_script("stop", env=env2)
+        assert _pid_alive(pid1), "first instance was killed by stopping the second instance"
+        assert _health_unreachable(port2), "second instance did not actually stop"
+    finally:
+        _run_script("stop", env=env1)
+
+
+def test_existing_lifecycle_unaffected_by_concurrent_real_instance(env):
+    """Regression guard for the real-world trigger: a real dashboard already
+    running on another port must survive an unrelated test's own isolated
+    start/health/stop cycle (the fixture's unconditional teardown `stop` used
+    to read the shared pidfile and could kill this "real" instance)."""
+    env_, port = env
+    real_port = _free_port()
+    real_env = _env_for_port(real_port)
+    real_res = _run_script("start", env=real_env)
+    assert real_res.returncode == 0, f"start failed: {real_res.stdout!r} {real_res.stderr!r}"
+    assert _wait_healthy(real_port)
+    real_pid = int((REPO_ROOT / f".dashboard.{real_port}.pid").read_text().strip())
+
+    try:
+        res = _run_script("start", env=env_)
+        assert res.returncode == 0, f"start failed: {res.stdout!r} {res.stderr!r}"
+        assert _wait_healthy(port)
+        _run_script("stop", env=env_)
+
+        assert _pid_alive(real_pid), "the concurrently-running real instance was killed"
+    finally:
+        _run_script("stop", env=real_env)
+
+
 def test_start_then_health(env):
     """start → /api/health 200, pid file exists, recorded pid is alive."""
     env_, port = env
@@ -142,8 +213,8 @@ def test_start_then_health(env):
         f"start stdout={res.stdout!r}"
     )
 
-    pid_file = REPO_ROOT / ".dashboard.pid"
-    assert pid_file.exists(), f".dashboard.pid missing; start stdout={res.stdout!r}"
+    pid_file = REPO_ROOT / f".dashboard.{port}.pid"
+    assert pid_file.exists(), f".dashboard.{port}.pid missing; start stdout={res.stdout!r}"
     pid = int(pid_file.read_text().strip())
     assert _pid_alive(pid), f"recorded pid {pid} not alive"
 
@@ -182,7 +253,7 @@ def test_status_reports_running_then_not(env):
         f"status output missing port {port}: {res_up.stdout!r}"
     )
 
-    pid_file = REPO_ROOT / ".dashboard.pid"
+    pid_file = REPO_ROOT / f".dashboard.{port}.pid"
     assert pid_file.exists()
     pid = int(pid_file.read_text().strip())
     assert str(pid) in res_up.stdout, (
@@ -200,7 +271,7 @@ def test_stop_kills_process_and_removes_pid_file(env):
     assert res.returncode == 0, f"start failed: {res.stdout!r} {res.stderr!r}"
     assert _wait_healthy(port)
 
-    pid_file = REPO_ROOT / ".dashboard.pid"
+    pid_file = REPO_ROOT / f".dashboard.{port}.pid"
     pid = int(pid_file.read_text().strip())
     assert _pid_alive(pid)
 
@@ -208,7 +279,7 @@ def test_stop_kills_process_and_removes_pid_file(env):
     assert stop.returncode == 0, f"stop failed: {stop.stdout!r} {stop.stderr!r}"
 
     assert not _pid_alive(pid), f"pid {pid} still alive after stop"
-    assert not pid_file.exists(), f".dashboard.pid still present after stop: {pid_file.read_text()!r}"
+    assert not pid_file.exists(), f".dashboard.{port}.pid still present after stop: {pid_file.read_text()!r}"
     assert _health_unreachable(port), (
         f"/api/health on port {port} still answered after stop"
     )
@@ -216,9 +287,9 @@ def test_stop_kills_process_and_removes_pid_file(env):
 
 def test_stop_when_not_running_is_noop(env):
     """stop without a live dashboard: exit 0, 'not running', no error."""
-    env_, _port = env
+    env_, port = env
     # Make sure nothing is up.
-    pid_file = REPO_ROOT / ".dashboard.pid"
+    pid_file = REPO_ROOT / f".dashboard.{port}.pid"
     if pid_file.exists():
         pid_file.unlink()
 
@@ -238,7 +309,7 @@ def test_start_when_already_running_refuses(env):
     res = _run_script("start", env=env_)
     assert res.returncode == 0, f"first start failed: {res.stdout!r} {res.stderr!r}"
     assert _wait_healthy(port)
-    pid_file = REPO_ROOT / ".dashboard.pid"
+    pid_file = REPO_ROOT / f".dashboard.{port}.pid"
     original_pid = int(pid_file.read_text().strip())
 
     # Snapshot all dashboard uvicorn pids BEFORE the second start so we can
@@ -293,7 +364,7 @@ def test_restart_cycles_pid_on_same_port(env):
     res = _run_script("start", env=env_)
     assert res.returncode == 0, f"first start failed: {res.stdout!r} {res.stderr!r}"
     assert _wait_healthy(port)
-    pid_file = REPO_ROOT / ".dashboard.pid"
+    pid_file = REPO_ROOT / f".dashboard.{port}.pid"
     old_pid = int(pid_file.read_text().strip())
 
     # Force a different pid by starting with a short sleep first, then

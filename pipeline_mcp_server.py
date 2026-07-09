@@ -19,6 +19,7 @@ Per-project overrides (set in project .mcp.json env block):
     across all plans in this session (default: 3; <=0 disables the cap)
 """
 
+import difflib
 import fcntl
 import json
 import logging
@@ -949,26 +950,180 @@ PIPELINE_MERGE_CI_TIMEOUT = int(os.environ.get("PIPELINE_MERGE_CI_TIMEOUT", "300
 PIPELINE_MERGE_BUILD_GATE = os.environ.get("PIPELINE_MERGE_BUILD_GATE", "1") != "0"
 
 
+# Conservative, narrow allowlist of import/use-statement prefixes for the
+# additive-only rebase-conflict auto-resolver below. Intentionally not
+# exhaustive - unrecognized statement shapes simply don't qualify for
+# auto-resolution and fall through to the existing abort behavior.
+_AUTO_RESOLVE_IMPORT_PATTERN = re.compile(
+    r"^\s*(import\s|from\s.+\simport\s|use\s|#include\s|require\()"
+)
+
+
+def _parse_conflict_blocks(text: str) -> list[tuple[int, int, list[str], list[str]]] | None:
+    """Parse every ``<<<<<<<``/``=======``/``>>>>>>>`` block in `text`.
+
+    Returns a list of (start_line, end_line, ours_lines, theirs_lines) - line
+    indices into ``text.splitlines(keepends=True)`` spanning the whole marker
+    block (inclusive) - or None if the file has no conflict markers at all,
+    or has malformed/unterminated markers (never guess in that case; the
+    caller disqualifies the whole rebase step)."""
+    lines = text.splitlines(keepends=True)
+    blocks: list[tuple[int, int, list[str], list[str]]] = []
+    i = 0
+    n = len(lines)
+    found_any = False
+    while i < n:
+        if lines[i].startswith("<<<<<<<"):
+            found_any = True
+            start = i
+            ours: list[str] = []
+            i += 1
+            while i < n and not lines[i].startswith("======="):
+                ours.append(lines[i])
+                i += 1
+            if i >= n:
+                return None
+            i += 1  # skip the "=======" separator itself
+            theirs: list[str] = []
+            while i < n and not lines[i].startswith(">>>>>>>"):
+                theirs.append(lines[i])
+                i += 1
+            if i >= n:
+                return None
+            end = i
+            blocks.append((start, end, ours, theirs))
+            i += 1
+        else:
+            i += 1
+    return blocks if found_any else None
+
+
+def _resolve_conflict_blocks(text: str, blocks: list[tuple[int, int, list[str], list[str]]]) -> str:
+    """Replace each conflict-marker block with the union of both sides' added
+    lines: ours followed by theirs, verbatim, no reordering/dedup/editing."""
+    lines = text.splitlines(keepends=True)
+    for start, end, ours, theirs in reversed(blocks):  # back-to-front: indices stay valid
+        lines[start:end + 1] = ours + theirs
+    return "".join(lines)
+
+
+def _git_show_stage(worktree: str, stage: int, fname: str) -> str | None:
+    """Read a file's content at conflict stage 1 (merge base)/2 (ours)/3
+    (theirs) from the index. None on any failure (missing stage - e.g. a
+    rename/delete conflict has no stage-1 entry - or a git/OSError), which
+    the caller treats as "can't verify, disqualify"."""
+    try:
+        r = subprocess.run(["git", "show", f":{stage}:{fname}"], cwd=worktree,
+                           capture_output=True, text=True)
+    except OSError:
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _is_pure_additive_import_diff(base: str, other: str) -> bool:
+    """True iff `other` differs from `base` by pure line insertions only (no
+    deletion or modification of any base line), and every non-blank inserted
+    line matches the conservative import/use pattern."""
+    base_lines = base.splitlines(keepends=True)
+    other_lines = other.splitlines(keepends=True)
+    matcher = difflib.SequenceMatcher(a=base_lines, b=other_lines, autojunk=False)
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("replace", "delete"):
+            return False
+        if tag == "insert":
+            for line in other_lines[j1:j2]:
+                if line.strip() and not _AUTO_RESOLVE_IMPORT_PATTERN.match(line):
+                    return False
+    return True
+
+
+def _try_auto_resolve_conflict(worktree: str) -> list[str]:
+    """Attempt the narrow, fail-closed additive-import auto-resolution.
+
+    Eligible only if EVERY conflicted file's whole-file diff from its merge
+    base, on BOTH the "ours" (rebase target) and "theirs" (incoming commit)
+    side, is pure-insertion-only and every inserted line is a conservative
+    import/use statement - i.e. a genuine add/add conflict, never a case
+    where either side deleted or modified a pre-existing line. One
+    disqualifying file anywhere disqualifies the whole rebase step (no
+    partial per-file resolution).
+
+    On success, every eligible file's working-tree content is rewritten with
+    its conflict markers replaced by the union of both sides' added lines,
+    and the list of resolved filenames is returned (still needs `git add`).
+    Returns an empty list if not eligible - the working tree is left
+    untouched so the caller's abort path is unaffected."""
+    try:
+        diff = subprocess.run(["git", "diff", "--name-only", "--diff-filter=U"],
+                              cwd=worktree, capture_output=True, text=True)
+    except OSError:
+        return []
+    if diff.returncode != 0:
+        return []
+    conflicted = [f for f in diff.stdout.splitlines() if f.strip()]
+    if not conflicted:
+        return []
+
+    resolutions: dict[str, str] = {}
+    for fname in conflicted:
+        try:
+            text = (Path(worktree) / fname).read_text()
+        except (OSError, UnicodeDecodeError):
+            return []  # unreadable/binary - disqualify the whole step
+
+        blocks = _parse_conflict_blocks(text)
+        if blocks is None:
+            return []  # no/malformed markers - can't verify, disqualify
+
+        base = _git_show_stage(worktree, 1, fname)
+        ours = _git_show_stage(worktree, 2, fname)
+        theirs = _git_show_stage(worktree, 3, fname)
+        if base is None or ours is None or theirs is None:
+            return []  # rename/delete conflict (missing a stage) - disqualify
+
+        if not _is_pure_additive_import_diff(base, ours):
+            return []
+        if not _is_pure_additive_import_diff(base, theirs):
+            return []
+
+        resolutions[fname] = _resolve_conflict_blocks(text, blocks)
+
+    for fname, resolved_text in resolutions.items():
+        (Path(worktree) / fname).write_text(resolved_text)
+    return list(resolutions.keys())
+
+
 def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
     """Rebase `branch` onto current origin/master inside its worktree so the
     merge gate sees the branch against current master, not the stale base the
     agent branched from. Fetches origin/master first (from REPO_ROOT, the shared
     repo) so the rebase target is current.
 
-    Returns ``{"ok": bool, "conflict": bool, "error": str}``:
+    Returns ``{"ok": bool, "conflict": bool, "error": str}``, plus
+    ``"auto_resolved": True`` when a conflict was narrowly auto-resolved (see
+    below) instead of aborted:
       - ok=True            rebase succeeded; the branch is on top of origin/master.
-      - ok=False, conflict=True  rebase hit a merge conflict; the rebase was
-        aborted so the worktree is back to its pre-rebase state and the caller
-        can park/re-dispatch for resolution instead of force-anything.
+      - ok=True, auto_resolved=True  the rebase hit a conflict, but every
+        conflicted file was a pure add/add of import/use statements (never a
+        deletion or modification of an existing line) - both sides' added
+        lines were unioned and the rebase continued. Fail-closed: any doubt
+        anywhere (a modified/deleted line, a non-import addition, a
+        rename/delete conflict, one disqualifying file among several) falls
+        straight through to the ordinary abort path below - there is no
+        partial per-file resolution.
+      - ok=False, conflict=True  rebase hit a merge conflict that either
+        wasn't a pure additive-import case or couldn't be safely verified as
+        one; the rebase was aborted so the worktree is back to its pre-rebase
+        state and the caller can park/re-dispatch for human resolution.
       - ok=False, conflict=False some other git failure (dirty tree, missing
         ref); rebase aborted if one was in progress.
     """
-    def _run(argv: list[str], cwd) -> subprocess.CompletedProcess:
+    def _run(argv: list[str], cwd, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
         # `git` may be absent or non-executable (e.g. a minimal container).
         # Catch OSError so this helper honors its never-raises contract and
         # reports a non-conflict failure instead of crashing the tick.
         try:
-            return subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+            return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, env=env)
         except OSError as e:
             return subprocess.CompletedProcess(argv, 127, "", str(e))
 
@@ -990,6 +1145,27 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
         return {"ok": True, "conflict": False, "error": ""}
     blob = (r.stdout + "\n" + r.stderr).lower()
     conflict = "fix conflicts" in blob or "could not apply" in blob or "conflict" in blob
+
+    if conflict:
+        resolved_files = _try_auto_resolve_conflict(worktree)
+        if resolved_files:
+            add_ok = True
+            for fname in resolved_files:
+                if _run(["git", "add", fname], worktree).returncode != 0:
+                    add_ok = False
+                    break
+            if add_ok:
+                # GIT_EDITOR=true: --continue reuses the original commit
+                # message by default, but pin a no-op editor defensively so
+                # this can never block on an interactive prompt.
+                env = dict(os.environ, GIT_EDITOR="true", GIT_SEQUENCE_EDITOR="true")
+                cont = _run(["git", "rebase", "--continue"], worktree, env=env)
+                if cont.returncode == 0:
+                    return {"ok": True, "conflict": False, "auto_resolved": True, "error": ""}
+            # Resolution or --continue failed (e.g. a second conflicting
+            # commit further down the rebase) - never attempt recursively;
+            # fall through to the ordinary abort below.
+
     # Abort so we never leave the worktree mid-rebase (a half-rebased tree would
     # break the next dispatch into it). Best-effort: --abort is a no-op if no
     # rebase is in progress.
@@ -3335,6 +3511,9 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             worktree = story.get("worktree", "")
             gate_error = ""
             rb = _rebase_onto_master(worktree, branch)
+            if rb.get("auto_resolved"):
+                _notify_user(plan_name, f"{key} rebase auto-resolved an additive-import "
+                                        f"conflict against origin/{_default_branch()}.")
             if not rb["ok"]:
                 gate_error = f"rebase: {rb['error']}"
             else:
@@ -3467,6 +3646,10 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                 branch = f"agent/{story_key.lower()}"
                 worktree = story.get("worktree", "")
                 rb = _rebase_onto_master(worktree, branch)
+                if rb.get("auto_resolved"):
+                    _notify_user(plan_name, f"{story_key} rebase auto-resolved an "
+                                            f"additive-import conflict against "
+                                            f"origin/{_default_branch()}.")
                 if not rb["ok"]:
                     return {"ok": False, "error": f"rebase failed: {rb['error']}",
                             "story_key": story_key}

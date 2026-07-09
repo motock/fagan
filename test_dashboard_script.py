@@ -103,7 +103,7 @@ def env(tmp_path: Path):
     yield env, port
     # Teardown — make sure no dashboard is left running after the test, even
     # if an assertion failed mid-flight. Use a fresh subprocess so a stale
-    # `.dashboard.pid` from a parallel run can't kill the wrong process.
+    # `.dashboard.<port>.pid` from a parallel run can't kill the wrong process.
     subprocess.run(
         ["bash", str(SCRIPT), "stop"],
         env=env,
@@ -147,7 +147,7 @@ def test_concurrent_instances_on_different_ports_do_not_collide():
     never observe or kill an unrelated instance already running on another
     port. This is the exact bug that killed the real dashboard during test
     runs: `is_running`/`cmd_stop` were keyed off a single shared, non-port-
-    scoped `.dashboard.pid`, so a differently-ported invocation would see
+    scoped pidfile, so a differently-ported invocation would see
     "already running" (skip starting its own) and then `stop` would kill the
     OTHER instance instead of its own (nonexistent) one."""
     port1 = _free_port()
@@ -265,7 +265,7 @@ def test_status_reports_running_then_not(env):
 
 
 def test_stop_kills_process_and_removes_pid_file(env):
-    """stop → pid gone, .dashboard.pid gone, /api/health refuses connections."""
+    """stop → pid gone, .dashboard.<port>.pid gone, /api/health refuses connections."""
     env_, port = env
     res = _run_script("start", env=env_)
     assert res.returncode == 0, f"start failed: {res.stdout!r} {res.stderr!r}"

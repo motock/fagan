@@ -3614,6 +3614,146 @@ def test_rebase_onto_master_uses_default_branch_on_main_repo(tmp_path, monkeypat
     assert rb["conflict"] is False
 
 
+def _setup_conflict_repo(tmp_path, files_base, agent_edits, master_edits):
+    """Build repo+bare origin+worktree with a base commit (`files_base`: full
+    file contents), then a divergent commit on the worktree's `agent/x`
+    branch (`agent_edits`: full new file contents) and a divergent commit
+    pushed to `origin/master` (`master_edits`: full new file contents) - so
+    rebasing `agent/x` onto `origin/master` conflicts on every file present
+    in both edit dicts. Returns (repo, wt) Paths."""
+    repo = tmp_path / "repo"
+    wt = tmp_path / "wt"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "master", str(repo)],
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@e"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "master", str(origin)],
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    for name, content in files_base.items():
+        (repo / name).write_text(content)
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, text=True, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "push", "-q", "-u", "origin", "master"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+
+    r = subprocess.run(["git", "worktree", "add", "-b", "agent/x", str(wt)],
+                       cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    for name, content in agent_edits.items():
+        (wt / name).write_text(content)
+    subprocess.run(["git", "add", "-A"], cwd=wt, capture_output=True, text=True, check=True)
+    subprocess.run(["git", "commit", "-qm", "agent edit"], cwd=wt,
+                   capture_output=True, text=True, check=True)
+
+    for name, content in master_edits.items():
+        (repo / name).write_text(content)
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, text=True, check=True)
+    subprocess.run(["git", "commit", "-qm", "master edit"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "master"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    return repo, wt
+
+
+def test_rebase_auto_resolves_additive_import_conflict(tmp_path, monkeypatch):
+    # The primary positive case: two branches each add a distinct import line
+    # at the same anchor point in a shared file. Must auto-resolve (union of
+    # both added lines) and continue the rebase rather than aborting.
+    base = "import os\n\n\ndef foo():\n    pass\n"
+    agent = "import os\nimport sys\n\n\ndef foo():\n    pass\n"
+    master = "import os\nimport json\n\n\ndef foo():\n    pass\n"
+    repo, wt = _setup_conflict_repo(
+        tmp_path, {"shared.py": base}, {"shared.py": agent}, {"shared.py": master},
+    )
+    monkeypatch.setattr(p, "REPO_ROOT", str(repo))
+    rb = p._rebase_onto_master(str(wt), "agent/x")
+    assert rb["ok"] is True, f"expected auto-resolved rebase, got {rb}"
+    assert rb["conflict"] is False
+    assert rb.get("auto_resolved") is True
+    result = (wt / "shared.py").read_text()
+    assert "import sys" in result
+    assert "import json" in result
+
+
+def test_rebase_aborts_when_a_side_modifies_existing_line(tmp_path, monkeypatch):
+    # A conflict where one side modifies a PRE-EXISTING line (not a pure
+    # addition) must never auto-resolve - unchanged current behavior: abort.
+    base = "import os\n\n\ndef foo():\n    pass\n"
+    agent = "import os\nimport sys\n\n\ndef foo():\n    pass\n"
+    master = "import os as o\n\n\ndef foo():\n    pass\n"
+    repo, wt = _setup_conflict_repo(
+        tmp_path, {"shared.py": base}, {"shared.py": agent}, {"shared.py": master},
+    )
+    monkeypatch.setattr(p, "REPO_ROOT", str(repo))
+    rb = p._rebase_onto_master(str(wt), "agent/x")
+    assert rb["ok"] is False
+    assert rb["conflict"] is True
+    assert not rb.get("auto_resolved")
+
+
+def test_rebase_aborts_on_non_import_conflicting_lines(tmp_path, monkeypatch):
+    # A conflict on added lines that are NOT import/use statements must never
+    # auto-resolve, even though both sides are pure additions.
+    base = "import os\n\n\ndef foo():\n    pass\n"
+    agent = "import os\nx = 1\n\n\ndef foo():\n    pass\n"
+    master = "import os\nx = 2\n\n\ndef foo():\n    pass\n"
+    repo, wt = _setup_conflict_repo(
+        tmp_path, {"shared.py": base}, {"shared.py": agent}, {"shared.py": master},
+    )
+    monkeypatch.setattr(p, "REPO_ROOT", str(repo))
+    rb = p._rebase_onto_master(str(wt), "agent/x")
+    assert rb["ok"] is False
+    assert rb["conflict"] is True
+    assert not rb.get("auto_resolved")
+
+
+def test_rebase_aborts_all_or_nothing_across_multiple_files(tmp_path, monkeypatch):
+    # A clean additive-import conflict in one file plus a disqualifying
+    # conflict in another must abort the WHOLE rebase - no partial per-file
+    # resolution.
+    base_a = "import os\n\n\ndef foo():\n    pass\n"
+    base_b = "import os\n\n\ndef bar():\n    pass\n"
+    agent = {
+        "a.py": "import os\nimport sys\n\n\ndef foo():\n    pass\n",
+        "b.py": "import os\nimport sys\n\n\ndef bar():\n    pass\n",
+    }
+    master = {
+        "a.py": "import os\nimport json\n\n\ndef foo():\n    pass\n",
+        "b.py": "import os\n\n\ndef bar_renamed():\n    pass\n",
+    }
+    repo, wt = _setup_conflict_repo(
+        tmp_path, {"a.py": base_a, "b.py": base_b}, agent, master,
+    )
+    monkeypatch.setattr(p, "REPO_ROOT", str(repo))
+    rb = p._rebase_onto_master(str(wt), "agent/x")
+    assert rb["ok"] is False
+    assert rb["conflict"] is True
+    assert not rb.get("auto_resolved")
+
+
+def test_rebase_no_conflict_has_no_auto_resolved_key(tmp_path, monkeypatch):
+    # Regression check: a normal, non-conflicting rebase must keep returning
+    # its existing shape - no `auto_resolved` key at all for the common case.
+    repo, wt = _setup_conflict_repo(
+        tmp_path,
+        {"a.py": "x = 1\n", "b.py": "y = 1\n"},
+        {"a.py": "x = 1\nx2 = 2\n"},
+        {"b.py": "y = 1\ny2 = 2\n"},
+    )
+    monkeypatch.setattr(p, "REPO_ROOT", str(repo))
+    rb = p._rebase_onto_master(str(wt), "agent/x")
+    assert rb["ok"] is True
+    assert rb["conflict"] is False
+    assert "auto_resolved" not in rb
+
+
 def test_ci_status_none_when_gh_unavailable(monkeypatch):
     # No PR / no gh -> state "none" is treated as pass so repos without CI are
     # not blocked. A non-zero gh exit (no checks for the branch) maps here too.

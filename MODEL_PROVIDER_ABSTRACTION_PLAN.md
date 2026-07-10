@@ -45,14 +45,25 @@
 > Documented in the README; not changed, since it's an existing Ollama-tag-oriented function
 > outside this task's scope.
 >
-> **S3 still deferred** (scope decision made when first executing S1/S2/S4, after reading
-> `scripts/local_agent.py` in full): provider-izing the dispatch subprocess touches a
-> streaming NDJSON retry loop with its own ~90KB of tests and drives the *live* coding-agent
-> harness — materially higher risk than the rest. Consequence while deferred:
-> `PIPELINE_LOCAL_PROVIDER` only governs `complete()`/`resource_status()` (review + overlord
-> single-shot calls); `dispatch()` (the coding-agent subprocess) and `_ollama_loaded_models`
-> (its VRAM-swap warning) always talk to Ollama's native API regardless of this setting.
-> Documented in README/module docstrings.
+> **S3 implemented** (2026-07-09/10, direct-edit + PR, not a dispatched pipeline story — a
+> deliberate scope decision, see below): rather than porting Ollama's streaming NDJSON
+> `/api/chat` loop to SSE for the OpenAI-compatible servers (the materially higher-risk path
+> originally flagged here), `scripts/local_agent.py`/`local_agent_oracle.py`'s `chat()` now
+> branches on `LOCAL_AGENT_PROVIDER` (threaded through by `OllamaDriver.dispatch` from
+> `self.provider.name`): `"ollama"` (the default) keeps today's streaming path byte-for-byte
+> unchanged; any other provider goes through a new blocking `_provider_chat_turn`, which calls
+> `inference_providers.get_local_provider().chat(...)` directly (the same call `complete()`/the
+> review loop already use) and returns just the assembled message, matching
+> `_stream_one_turn`'s contract. `RateLimitedError` (429) is folded into the existing 5xx-style
+> retry branch. Trade-off accepted: a slow non-Ollama generation is bounded by a flat
+> `LOCAL_AGENT_TIMEOUT` instead of a per-chunk silence timeout — acceptable since MLX/LM
+> Studio's SSE tool-call deltas were the actual risk being deferred, not streaming per se.
+> `_ollama_loaded_models` (the VRAM-swap warning) stays intentionally hardcoded to
+> `OllamaProvider` — it's an Ollama-specific concept (one process, many models swapped in/out
+> of VRAM), not a stand-in for provider-awareness; LM Studio JIT-loads and mlx_lm.server is
+> one-model-per-process, so neither has an equivalent warning to give. `tests/benchmark/
+> models.py` gained `lmstudio_gemma4` and `mlx` cells (`_local_provider` helper) so both
+> providers can now be benchmarked as the *implementer*, not just the reviewer.
 
 ## Goal
 Make the *local inference server* pluggable so the pipeline can drive Ollama (default),
@@ -183,9 +194,17 @@ OpenAI-compat servers.
 - ~~Implement `LMStudioProvider` for real~~ and ~~implement `MLXProvider` for real~~ — both
   done 2026-07-09/10, live-validated (see status header above). Neither needed SSE: both are
   driven through `complete()`/the review loop, which only ever call `chat()` non-streaming
-  (`"stream": false`); SSE parsing is only relevant to S3 (dispatch's streaming loop), still
-  deferred.
-- S3 (provider-ize `scripts/local_agent.py`'s dispatch subprocess) — still deferred, see above.
+  (`"stream": false`).
+- ~~S3 (provider-ize `scripts/local_agent.py`'s dispatch subprocess)~~ — done 2026-07-09/10 via
+  the blocking `_provider_chat_turn` branch (see status header above), not the originally
+  planned SSE-streaming port. **Still open:** a true streaming path for non-Ollama providers
+  (per-chunk silence timeout instead of a flat wall-clock bound) would need the SSE
+  index-based tool-call-delta parser this plan deferred as materially higher risk — worth
+  revisiting only if the flat-timeout trade-off proves too tight in practice (e.g. a capable
+  but slow MLX/LM Studio model timing out mid-generation on a real story).
 - Optional generic `OpenAICompatProvider` base class, now that two concrete OpenAI-compatible
   subclasses (MLX, LM Studio) exist with near-identical `chat()`/`reachable()` bodies — could
   be factored to reduce duplication once a third such server is added.
+- Live-validate `_provider_chat_turn` against a running LM Studio server dispatching a real
+  story end-to-end (create_file/str_replace/bash/done), mirroring how `LMStudioProvider`
+  itself was validated — done in code + mocked tests here, not yet against a live server.

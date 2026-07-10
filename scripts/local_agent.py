@@ -36,9 +36,12 @@ devstral intermittently leaks well-formed calls as text even with clean tools.
 Config is read from the environment (set by backend.OllamaDriver.dispatch):
 LOCAL_AGENT_SYSTEM, LOCAL_AGENT_TASK, LOCAL_AGENT_MODEL, LOCAL_AGENT_ENDPOINT,
 LOCAL_AGENT_NUM_CTX, LOCAL_AGENT_TIMEOUT, LOCAL_AGENT_MAX_STEPS,
-LOCAL_AGENT_TEMPERATURE. The process CWD is the worktree. Progress is printed
-to stdout (which dispatch redirects to agent.log — a non-empty log is itself
-the signal that a real attempt was made).
+LOCAL_AGENT_TEMPERATURE, LOCAL_AGENT_PROVIDER (default "ollama"; "lmstudio"/
+"mlx" route chat() through inference_providers instead of Ollama's streaming
+/api/chat — see PROVIDER/_provider_chat_turn below). The process CWD is the
+worktree. Progress is printed to stdout (which dispatch redirects to
+agent.log — a non-empty log is itself the signal that a real attempt was
+made).
 """
 from __future__ import annotations
 
@@ -57,10 +60,16 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pipeline_mcp_server as p  # noqa: E402  (reuses _checkpoint_impl + PLAN_DIR config)
+import inference_providers  # noqa: E402  (non-Ollama chat() branch, see PROVIDER below)
 
 CWD = Path.cwd()
 MODEL = os.environ["LOCAL_AGENT_MODEL"]
 ENDPOINT = os.environ.get("LOCAL_AGENT_ENDPOINT", "http://localhost:11434").rstrip("/")
+# Set by backend.OllamaDriver.dispatch from self.provider.name. "ollama" (the
+# default) keeps chat() on the streaming NDJSON /api/chat path below,
+# unchanged; any other registered provider (lmstudio, mlx) routes through
+# _provider_chat_turn's blocking inference_providers call instead.
+PROVIDER = os.environ.get("LOCAL_AGENT_PROVIDER", "ollama").strip().lower()
 NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
 MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "40"))
@@ -252,14 +261,34 @@ def _stream_one_turn(payload):
     return assembled
 
 
-def chat(messages):
-    """One LLM turn, with streaming + retry.
+def _provider_chat_turn(messages):
+    """One provider-backed chat turn for a non-Ollama PROVIDER (lmstudio,
+    mlx). Blocking, not streamed — these servers are OpenAI-compatible and
+    stream tool calls as index-based deltas that need reassembly across
+    chunks, a materially different (and riskier) parser than Ollama's
+    whole-message-per-chunk NDJSON; deferred, see
+    MODEL_PROVIDER_ABSTRACTION_PLAN.md S3. Bounded by TIMEOUT (the overall
+    dispatch wall-clock budget) rather than a per-chunk silence timeout.
+    Returns just the assembled message dict — the same shape
+    _stream_one_turn returns — so chat()/main() work unchanged regardless of
+    which provider is active."""
+    envelope = inference_providers.get_local_provider().chat(
+        messages, model=MODEL, num_ctx=NUM_CTX, temperature=TEMPERATURE,
+        tools=TOOLS, endpoint=ENDPOINT, timeout=TIMEOUT,
+    )
+    return envelope["message"]
 
-    A single transient Ollama stall (queue contention, network blip, Ollama
-    5xx) must not kill a 30-minute run. We stream so a slow generation
-    doesn't trip the timeout, and retry the transient failures. 4xx is a
-    bad request (retrying won't help) so it raises immediately; 5xx and
-    transport errors (timeout/connect/read) are retried up to
+
+def chat(messages):
+    """One LLM turn, with retry.
+
+    A single transient stall (queue contention, network blip, 5xx, 429)
+    must not kill a 30-minute run. For PROVIDER == "ollama" (the default) we
+    stream so a slow generation doesn't trip the timeout; other providers go
+    through _provider_chat_turn's blocking call instead (see its docstring).
+    Either way, retry covers the transient failures: 4xx is a bad request
+    (retrying won't help) so it raises immediately; 5xx, transport errors
+    (timeout/connect/read), and RateLimitedError (429) are retried up to
     CHAT_MAX_ATTEMPTS. If every attempt fails, the last exception propagates
     to main()'s except, which commits WIP and returns 1 — same terminal
     behavior as before, but only after we've genuinely tried.
@@ -269,13 +298,17 @@ def chat(messages):
     last_exc: Exception | None = None
     for attempt in range(1, CHAT_MAX_ATTEMPTS + 1):
         try:
-            return _stream_one_turn(payload)
+            if PROVIDER == "ollama":
+                return _stream_one_turn(payload)
+            return _provider_chat_turn(messages)
         except httpx.HTTPStatusError as e:
             if e.response.status_code < 500:
                 raise  # 4xx — bad request, retrying is pointless
             last_exc = e
         except httpx.TransportError as e:
             last_exc = e  # timeout / connect / read — transient, retry
+        except inference_providers.RateLimitedError as e:
+            last_exc = e  # 429 — transient, retry like a 5xx
         if attempt < CHAT_MAX_ATTEMPTS:
             time.sleep(CHAT_RETRY_BACKOFF * attempt)
     assert last_exc is not None  # loop ran ≥1 attempt; only reachable w/ an exc
@@ -506,7 +539,7 @@ def main() -> int:
     # Ollama's -np 1 worker waiting for an inference slot).
     print(
         f"[boot] pid={os.getpid()} model={MODEL} endpoint={ENDPOINT} "
-        f"steps={MAX_STEPS} timeout={TIMEOUT}s",
+        f"provider={PROVIDER} steps={MAX_STEPS} timeout={TIMEOUT}s",
         flush=True,
     )
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()

@@ -869,6 +869,125 @@ def test_chat_does_not_retry_on_4xx(monkeypatch):
     assert calls["n"] == 1, "4xx must NOT be retried"
 
 
+# ---------- chat() provider routing (LOCAL_AGENT_PROVIDER, S3) ----------
+# Ollama (PROVIDER == "ollama", the default) keeps the streaming
+# _stream_one_turn path untouched. Any other provider (lmstudio, mlx) goes
+# through the blocking _provider_chat_turn seam instead, which delegates to
+# inference_providers.get_local_provider().chat(). These tests pin that
+# branch and its retry contract without a real LM Studio/MLX server.
+
+def test_chat_default_provider_is_ollama():
+    assert la.PROVIDER == "ollama"
+
+
+def test_chat_uses_stream_one_turn_when_provider_is_ollama(monkeypatch):
+    """The default (ollama) branch must never touch the provider seam."""
+    monkeypatch.setattr(la, "PROVIDER", "ollama")
+
+    def _boom(messages):
+        raise AssertionError("_provider_chat_turn must not be called for ollama")
+
+    monkeypatch.setattr(la, "_provider_chat_turn", _boom)
+    monkeypatch.setattr(
+        la, "_stream_one_turn",
+        lambda payload: {"role": "assistant", "content": "ok"},
+    )
+    msg = la.chat([{"role": "user", "content": "hi"}])
+    assert msg["content"] == "ok"
+
+
+def test_chat_routes_through_provider_when_not_ollama(monkeypatch):
+    """LOCAL_AGENT_PROVIDER=lmstudio (or mlx) must skip Ollama's streaming
+    /api/chat path entirely and use the provider's blocking chat() instead."""
+    monkeypatch.setattr(la, "PROVIDER", "lmstudio")
+
+    def _boom(payload):
+        raise AssertionError("_stream_one_turn must not be called for lmstudio")
+
+    monkeypatch.setattr(la, "_stream_one_turn", _boom)
+    monkeypatch.setattr(
+        la, "_provider_chat_turn",
+        lambda messages: {"role": "assistant", "content": "from lmstudio",
+                           "tool_calls": [{"function": {"name": "done", "arguments": "{}"}}]},
+    )
+    msg = la.chat([{"role": "user", "content": "hi"}])
+    assert msg["content"] == "from lmstudio"
+    assert msg["tool_calls"][0]["function"]["name"] == "done"
+
+
+def test_provider_chat_turn_extracts_message_from_envelope(monkeypatch):
+    """_provider_chat_turn must return just the message dict (matching
+    _stream_one_turn's return contract), not the full provider envelope."""
+    captured = {}
+
+    class _FakeProvider:
+        def chat(self, messages, *, model, num_ctx, temperature, tools, endpoint, timeout):
+            captured.update(model=model, num_ctx=num_ctx, temperature=temperature,
+                             tools=tools, endpoint=endpoint, timeout=timeout)
+            return {"message": {"role": "assistant", "content": "hi"},
+                    "prompt_eval_count": 3, "eval_count": 5}
+
+    monkeypatch.setattr(la.inference_providers, "get_local_provider", lambda: _FakeProvider())
+    msg = la._provider_chat_turn([{"role": "user", "content": "hi"}])
+    assert msg == {"role": "assistant", "content": "hi"}
+    assert captured["model"] == la.MODEL
+    assert captured["tools"] == la.TOOLS
+
+
+def test_chat_retries_on_provider_5xx_then_succeeds(monkeypatch):
+    monkeypatch.setattr(la, "PROVIDER", "lmstudio")
+    monkeypatch.setattr(la.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _flaky_5xx(messages):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _status_error(503)
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(la, "_provider_chat_turn", _flaky_5xx)
+    msg = la.chat([{"role": "user", "content": "hi"}])
+    assert calls["n"] == 2
+    assert msg["content"] == "ok"
+
+
+def test_chat_does_not_retry_on_provider_4xx(monkeypatch):
+    monkeypatch.setattr(la, "PROVIDER", "lmstudio")
+    monkeypatch.setattr(la.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _bad_request(messages):
+        calls["n"] += 1
+        raise _status_error(400)
+
+    monkeypatch.setattr(la, "_provider_chat_turn", _bad_request)
+    try:
+        la.chat([{"role": "user", "content": "hi"}])
+        assert False, "expected HTTPStatusError(400)"
+    except httpx.HTTPStatusError:
+        pass
+    assert calls["n"] == 1, "4xx must NOT be retried"
+
+
+def test_chat_retries_on_provider_rate_limited_error_then_succeeds(monkeypatch):
+    """A 429 from the local server (RateLimitedError) is transient — chat()
+    must retry it like a 5xx, not treat it as a terminal failure."""
+    monkeypatch.setattr(la, "PROVIDER", "mlx")
+    monkeypatch.setattr(la.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _rate_limited_then_ok(messages):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise la.inference_providers.RateLimitedError("429")
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(la, "_provider_chat_turn", _rate_limited_then_ok)
+    msg = la.chat([{"role": "user", "content": "hi"}])
+    assert calls["n"] == 2
+    assert msg["content"] == "ok"
+
+
 # ---------- Wall-clock timeout ----------
 
 def test_main_exits_with_wip_commit_when_wall_clock_exceeded(tmp_path, monkeypatch):

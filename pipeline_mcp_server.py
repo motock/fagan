@@ -5,11 +5,23 @@ Exposes tools for: planning, Plane ingestion, agent dispatch, status monitoring.
 Run with: python pipeline_mcp_server.py
 Register globally: claude mcp add -s user pipeline ~/.claude/mcp-servers/pipeline/.venv/bin/python3 ~/.claude/mcp-servers/pipeline/pipeline_mcp_server.py
 
-Required env vars (set in ~/.zshrc or ~/.zprofile):
+Required env vars (set in ~/.zshrc or ~/.zprofile) - only if using Plane:
   PLANE_BASE       e.g. https://plane.yourcompany.com
   PLANE_API_KEY    Plane personal access token (never commit this)
   PLANE_WORKSPACE  workspace slug, e.g. my-team
   PLANE_PROJECT    project UUID from Plane settings
+
+Ticketing backend (optional - see TicketProvider / get_ticket_provider below):
+  PIPELINE_TICKET_PROVIDER  auto (default) | none | plane | jira
+    auto:  Plane if the four PLANE_* vars above are all set, else no-op -
+           the local manifest is the sole source of truth either way.
+    none:  force the no-op provider even if PLANE_* is configured.
+    plane: force Plane; errors at call time if PLANE_* is incomplete.
+    jira:  documented stub only - selecting it succeeds, but every method
+           raises NotImplementedError (see TICKETING_ABSTRACTION_PLAN.md S5).
+  A ticketing backend is entirely optional: the pipeline runs fully off its
+  local manifest (ingest_plan/dispatch_story/mark_story_done/...) with no
+  backend configured at all.
 
 Per-project overrides (set in project .mcp.json env block):
   REPO_ROOT    absolute path to the git repo being worked on
@@ -33,8 +45,9 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -401,6 +414,209 @@ def _get_or_create_label(name: str) -> str:
                              json={"name": name, "color": "#6366f1"})
         _label_cache[name] = resp["id"]
     return _label_cache[name]
+
+
+# ---------------------------------------------------------------------------
+# TicketProvider abstraction
+#
+# Plane is one possible ticketing backend, not the only one, and the pipeline
+# already runs fully off its local manifest when no backend is configured
+# (see _plane_enabled above). TicketProvider makes that choice explicit and
+# swappable via PIPELINE_TICKET_PROVIDER instead of an implicit side effect
+# of unset env vars: "auto" (default) picks Plane if configured else no-op,
+# "none" forces the no-op provider even if Plane vars are present, "plane"
+# forces Plane (erroring if unconfigured), and "jira" is a documented
+# extension point for a future real implementation.
+#
+# Every provider method mirrors the four operations the orchestrator actually
+# needs: create_epic, create_story, set_state (a transition, never raises),
+# and resolve_key (human key -> backend id). PlaneTicketProvider is a thin
+# delegate to the existing module-level Plane functions above rather than a
+# reimplementation, so it shares their caches, retry budget, and (in tests)
+# their exact plane_request call shape.
+# ---------------------------------------------------------------------------
+class LogicalState(Enum):
+    """Backend-agnostic story lifecycle states, mapped to each provider's own
+    vocabulary (e.g. Plane's state *groups*: backlog/started/completed)."""
+    BACKLOG = "backlog"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+
+
+_PLANE_STATE_GROUP = {
+    LogicalState.BACKLOG: "backlog",
+    LogicalState.IN_PROGRESS: "started",
+    LogicalState.DONE: "completed",
+}
+
+
+class TicketProvider(Protocol):
+    """The seam between orchestration and whatever ticketing backend (or
+    none) is configured. See the module comment above for the rationale."""
+
+    enabled: bool
+
+    def create_epic(self, summary: str) -> str | None:
+        """Create an epic and return its backend id, or None if the backend
+        has no epic concept / the call isn't supported (never an error)."""
+        ...
+
+    def create_story(
+        self, summary: str, description: str, epic_id: str | None, label: str,
+    ) -> str | None:
+        """Create a story and return its backend id, or None if there is no
+        backend to create it in (caller falls back to a local/synthetic key)."""
+        ...
+
+    def set_state(
+        self, story_key: str, state: LogicalState, plan_name: str | None = None,
+    ) -> bool:
+        """Best-effort state transition. Never raises - returns whether it
+        landed, mirroring _plane_set_state's contract."""
+        ...
+
+    def resolve_key(self, story_key: str) -> str:
+        """Resolve a human-readable key (e.g. PIPE-7) to the backend's id."""
+        ...
+
+
+class NullTicketProvider:
+    """No ticketing backend configured: every op is a no-op that reports
+    success. The manifest remains the sole source of truth."""
+
+    enabled = False
+
+    def create_epic(self, summary: str) -> str | None:
+        return None
+
+    def create_story(
+        self, summary: str, description: str, epic_id: str | None, label: str,
+    ) -> str | None:
+        return None
+
+    def set_state(
+        self, story_key: str, state: LogicalState, plan_name: str | None = None,
+    ) -> bool:
+        return True
+
+    def resolve_key(self, story_key: str) -> str:
+        return story_key
+
+
+class PlaneTicketProvider:
+    """Delegates to the existing module-level Plane functions unchanged, so
+    it shares their caches (_state_cache/_label_cache) and their retry/
+    never-raise contract (_plane_set_state) rather than reimplementing it."""
+
+    @property
+    def enabled(self) -> bool:
+        return _plane_enabled()
+
+    def create_epic(self, summary: str) -> str | None:
+        # Epics are an optional Plane module; some instances/API versions do
+        # not expose the /epics/ endpoint. Fall back to ungrouped issues.
+        try:
+            resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
+                                  json={"name": summary})
+            return resp["id"]
+        except RuntimeError:
+            return None
+
+    def create_story(
+        self, summary: str, description: str, epic_id: str | None, label: str,
+    ) -> str | None:
+        label_id = _get_or_create_label(label)
+        backlog_state = _get_state("backlog")
+        issue_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/work-items/", json={
+            "name": summary,
+            "description": description,
+            "state": backlog_state,
+            "labels": [label_id],
+        })
+        issue_id = issue_resp["id"]
+        if epic_id is not None:
+            plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
+                          json={"issue_id": issue_id})
+        return issue_id
+
+    def set_state(
+        self, story_key: str, state: LogicalState, plan_name: str | None = None,
+    ) -> bool:
+        return _plane_set_state(story_key, _PLANE_STATE_GROUP[state], plan_name)
+
+    def resolve_key(self, story_key: str) -> str:
+        return _resolve_issue_uuid(story_key)
+
+
+class JiraTicketProvider:
+    """Documented extension point, not a working implementation.
+
+    A real Jira Cloud integration needs to handle three things this stub
+    does not: transitions go through POST /issue/{key}/transitions (Jira has
+    no single `state` PATCH like Plane's), auth is `Authorization: Basic
+    base64(email:api_token)` (or OAuth bearer) rather than Plane's
+    `X-API-Key`, and issue descriptions must be Atlassian Document Format
+    (ADF), not plain text. See TICKETING_ABSTRACTION_PLAN.md S5.
+    """
+
+    enabled = True
+
+    def _unimplemented(self) -> None:
+        raise NotImplementedError(
+            "JiraTicketProvider is a documented stub, not a working "
+            "integration. See TICKETING_ABSTRACTION_PLAN.md S5 for what a "
+            "real implementation must handle (transition IDs, Basic/Bearer "
+            "auth, ADF description format)."
+        )
+
+    def create_epic(self, summary: str) -> str | None:
+        self._unimplemented()
+
+    def create_story(
+        self, summary: str, description: str, epic_id: str | None, label: str,
+    ) -> str | None:
+        self._unimplemented()
+
+    def set_state(
+        self, story_key: str, state: LogicalState, plan_name: str | None = None,
+    ) -> bool:
+        self._unimplemented()
+
+    def resolve_key(self, story_key: str) -> str:
+        self._unimplemented()
+
+
+_TICKET_PROVIDERS: dict[str, type] = {
+    "plane": PlaneTicketProvider,
+    "jira": JiraTicketProvider,
+}
+
+
+def get_ticket_provider() -> TicketProvider:
+    """Resolve the active ticketing backend from PIPELINE_TICKET_PROVIDER.
+
+    "auto" (default) preserves today's behavior exactly: Plane if configured,
+    else the no-op provider. "none" forces the no-op provider even when Plane
+    vars are set. "plane"/"jira" force that backend, erroring clearly if its
+    required config is missing rather than silently falling back.
+    """
+    choice = os.environ.get("PIPELINE_TICKET_PROVIDER", "auto").strip().lower()
+    if choice == "auto":
+        return PlaneTicketProvider() if _plane_enabled() else NullTicketProvider()
+    if choice == "none":
+        return NullTicketProvider()
+    if choice == "plane" and not _plane_enabled():
+        raise ValueError(
+            "PIPELINE_TICKET_PROVIDER=plane requires PLANE_API_KEY, "
+            "PLANE_WORKSPACE, and PLANE_PROJECT to all be set."
+        )
+    provider_cls = _TICKET_PROVIDERS.get(choice)
+    if provider_cls is None:
+        raise ValueError(
+            f"Unknown PIPELINE_TICKET_PROVIDER={choice!r}; expected one of "
+            f"'auto', 'none', {sorted(_TICKET_PROVIDERS)}."
+        )
+    return provider_cls()
 
 
 def _venv_python_for(cwd: Path) -> Path | None:
@@ -1800,13 +2016,17 @@ def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = N
 
 
 def _mark_plane_done(story_key: str, plan_name: str | None = None) -> None:
-    """Best-effort transition of a Plane issue to Done.
+    """Best-effort transition of a story's ticket to Done, via whichever
+    TicketProvider is configured (PIPELINE_TICKET_PROVIDER).
 
     Mirrors dispatch_story's in-progress transition: swallows errors rather
-    than raising, since not every plan is Plane-backed and a Plane outage
-    must not block a local merge that has already happened in git.
+    than raising, since not every plan is ticket-backed and a ticketing
+    outage must not block a local merge that has already happened in git.
+    Named for the merge-path callers (advance_pipeline, approve_merge) that
+    predate the TicketProvider abstraction; kept as the call site so their
+    existing test mocks don't need to change.
     """
-    _plane_set_state(story_key, "completed", plan_name)
+    get_ticket_provider().set_state(story_key, LogicalState.DONE, plan_name)
 
 
 def _last_nonempty_line(path: Path) -> str:
@@ -1986,48 +2206,32 @@ def ingest_plan(
 
         manifest = {"epics": {}, "stories": {}, "repo_root": repo_root}
 
-        # When Plane isn't configured the manifest is the sole source of truth:
-        # skip every Plane call and synthesize story keys locally instead of
-        # taking them from Plane-issued UUIDs.
-        plane_on = _plane_enabled()
-        label_id = _get_or_create_label("agent-pipeline") if plane_on else None
-        backlog_state = _get_state("backlog") if plane_on else None
+        # When no ticketing backend is configured (NullTicketProvider) the
+        # manifest is the sole source of truth: create_epic/create_story are
+        # no-ops returning None, and we synthesize story keys locally instead
+        # of taking them from a backend-issued id.
+        provider = get_ticket_provider()
 
         # Maps the plan's local story keys (e.g. "S1") to the manifest story keys
-        # generated below (Plane issue UUIDs, or local keys when Plane is off), so
-        # dependencies can be translated to manifest keys.
+        # generated below (backend ids, or local keys when no backend is
+        # configured), so dependencies can be translated to manifest keys.
         key_to_issue_id: dict[str, str] = {}
 
         for epic in plan["epics"]:
             if only_epics and epic["summary"] not in only_epics:
                 continue
 
-            epic_id = None
-            if plane_on:
-                # Epics are an optional Plane module; some instances/API versions
-                # do not expose the /epics/ endpoint. Fall back to ungrouped issues.
-                try:
-                    epic_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
-                                              json={"name": epic["summary"]})
-                    epic_id = epic_resp["id"]
-                    manifest["epics"][epic["summary"]] = epic_id
-                except RuntimeError:
-                    epic_id = None
+            epic_id = provider.create_epic(epic["summary"])
+            if epic_id is not None:
+                manifest["epics"][epic["summary"]] = epic_id
 
             for story in epic.get("stories", []):
-                if plane_on:
-                    issue_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/work-items/", json={
-                        "name": story["summary"],
-                        "description": story.get("description", ""),
-                        "state": backlog_state,
-                        "labels": [label_id],
-                    })
-                    issue_id = issue_resp["id"]
-                    if epic_id is not None:
-                        plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
-                                      json={"issue_id": issue_id})
-                else:
-                    # No Plane UUID to key on: prefer the plan's own story key
+                issue_id = provider.create_story(
+                    story["summary"], story.get("description", ""), epic_id,
+                    "agent-pipeline",
+                )
+                if issue_id is None:
+                    # No backend id to key on: prefer the plan's own story key
                     # (keeps the manifest readable and lets key-based dependencies
                     # resolve to themselves), else mint a unique synthetic key.
                     issue_id = story.get("key") or str(uuid.uuid4())
@@ -2216,7 +2420,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
                 _exclude_worktree_logs_from_tracking(Path(repo_root))
 
-        _plane_set_state(story_key, "started", plan_name)
+        get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
         # Resolve concrete backend name for this story. Priority order:
         #   1. story["backend"] already set (e.g. from an escalation flip)
@@ -2639,15 +2843,12 @@ def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
 @mcp.tool()
 def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
     """
-    Transition a Plane issue to In Progress and update the local manifest.
+    Transition the ticket to In Progress and update the local manifest.
     Use this before writing any code for a story.
     """
     _validate_key(plan_name)
     _validate_key(story_key)
-    if _plane_enabled():
-        issue_uuid = _resolve_issue_uuid(story_key)
-        plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
-                      json={"state": _get_state("started")})
+    get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
@@ -2704,15 +2905,12 @@ def checkpoint(
 @mcp.tool()
 def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     """
-    Transition a Plane issue to Done and update the local manifest.
+    Transition the ticket to Done and update the local manifest.
     Use after you've reviewed and merged the agent's PR.
     """
     _validate_key(plan_name)
     _validate_key(story_key)
-    if _plane_enabled():
-        issue_uuid = _resolve_issue_uuid(story_key)
-        plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
-                      json={"state": _get_state("completed")})
+    get_ticket_provider().set_state(story_key, LogicalState.DONE, plan_name)
 
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())

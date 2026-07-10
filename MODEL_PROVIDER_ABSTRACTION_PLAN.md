@@ -216,3 +216,23 @@ OpenAI-compat servers.
   not in the implementation), confirming the review gate is grading real content, not a
   wiring artifact. Not yet done for MLX (no coding-capable model currently running locally to
   test against — see the `mlx` benchmark cell's tag caveat above).
+  - **Second, heavier data point (2026-07-10):** same task via LM Studio serving
+    `qwen/qwen3.6-27b` (official Qwen MLX repo, `--mlx -y`, 16.08GB weights). First attempt
+    crashed the inference backend mid-generation with a genuine Metal GPU OOM
+    (`kIOGPUCommandBufferCallbackErrorOutOfMemory`, surfaced to the API caller as an
+    unretried 400) — the model had been loaded via LM Studio's GUI at its *max* context
+    (262144), whose KV-cache footprint pushed a 24GB unified-memory Mac over the edge under
+    concurrent load. This is exactly the risk `lms load`'s own "insufficient system resources"
+    guardrail warns about (confirmed it's real: overriding
+    `modelLoadingGuardrails.alwaysAllowLoadAnyway` in `~/.lmstudio/settings.json` did not
+    change the CLI's behavior — the GUI's load dialog was the only way found to load past it).
+    Reloading the same model at 8192 context succeeded cleanly: `final_status: "done"`,
+    `merged: true`, `review_verdict: "APPROVE"`, `groundtruth_passed: true` against the merged
+    code on `master`. Takeaway for future local-model runs on this host: pick a context length
+    sized to the task, not the model's max, especially for anything above ~10-15B params.
+    `froggeric/Qwen3.6-27B-MLX-4bit` (a different, community-published repo of nominally the
+    same model) was tried first and abandoned — `lms get` hung indefinitely at its
+    finalize/registration step on 4/4 attempts (fresh download, cached files, after a full app
+    restart, after freeing disk space), while the official `qwen/qwen3.6-27b` repo downloaded
+    and registered cleanly on the first try — apparently specific to that repo's metadata, not
+    a general `lms get`/disk-space issue.

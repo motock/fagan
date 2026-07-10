@@ -56,6 +56,15 @@ MODELS: dict[str, dict] = {
     # --- local (Ollama) ---
     "devstral": _local(os.environ.get("BENCH_DEVSTRAL_TAG", "devstral:24b")),
     "minimax": _local(os.environ.get("BENCH_MINIMAX_TAG", "minimax-m3:cloud")),
+    # 27.3B, Q4_K_M, native tool-calling + MTP (speculative decoding), 17GB on
+    # disk. Modelfile default num_ctx is 105000 but the shared harness default
+    # (16384) is kept here for a first, comparable-cost run; override via
+    # BENCH_QWEN36CODER_TAG / rerun with num_ctx= if it needs more context to
+    # complete real tasks.
+    "qwen36coder": _local(os.environ.get(
+        "BENCH_QWEN36CODER_TAG",
+        "SetneufPT/Qwen3.6-27B-CODER-MTP_Q4_105k_24GB-GPU:latest",
+    )),
     "gptoss": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="1.0", num_ctx="32768"),
     "gptoss_temp03": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="0.3", num_ctx="32768"),
     # Same dispatch/review settings as gptoss_temp03, but PIPELINE_BACKEND_

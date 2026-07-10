@@ -692,6 +692,49 @@ def test_claude_resource_status_fails_open_when_no_usage_state(monkeypatch):
     assert b.ClaudeCliDriver().resource_status()["ok"] is True
 
 
+# ---------- LocalInferenceProvider selection (PIPELINE_LOCAL_PROVIDER) ----------
+def test_ollama_driver_defaults_to_ollama_provider(monkeypatch):
+    monkeypatch.delenv("PIPELINE_LOCAL_PROVIDER", raising=False)
+    driver = b.OllamaDriver()
+    assert isinstance(driver.provider, b.inference_providers.OllamaProvider)
+
+
+class _UnimplementedFakeProvider:
+    """Stands in for a not-yet-built provider (all three registered
+    providers - ollama/mlx/lmstudio - are real implementations now), so the
+    two contracts below can still be regression-tested without depending on
+    any specific provider being unimplemented."""
+
+    def chat(self, *a, **k):
+        raise NotImplementedError("fake stub provider")
+
+    def reachable(self, endpoint):
+        raise NotImplementedError("fake stub provider")
+
+
+def test_ollama_driver_complete_raises_on_unimplemented_provider(monkeypatch):
+    # An unimplemented provider must surface NotImplementedError from
+    # complete() (via _chat -> provider.chat), not silently fall back to
+    # Ollama or hang.
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "provider", _UnimplementedFakeProvider())
+    with pytest.raises(NotImplementedError):
+        driver.complete("p", model="opus")
+
+
+def test_ollama_driver_resource_status_reports_not_ok_for_unimplemented_provider(
+    monkeypatch,
+):
+    # resource_status()'s contract is "never raises, always returns an
+    # {ok, reason} dict" - an unimplemented provider must report itself as
+    # unavailable, not propagate NotImplementedError out of the gate check.
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "provider", _UnimplementedFakeProvider())
+    status = driver.resource_status()
+    assert status["ok"] is False
+    assert "fake stub provider" in status["reason"]
+
+
 # ---------- OllamaDriver.dispatch() ----------
 def test_dispatch_refuses_read_only_allowed_tools():
     """The local agent loop is a writing/coding harness - routing a read-only

@@ -1,9 +1,58 @@
 # Plan: Abstract the local model-inference layer (Ollama default, pluggable)
 
-> Status: **Proposed, not started.** Written 2026-07-09. Scope: introduce a pluggable
-> local-inference *provider* seam with Ollama as the working default; ship LM Studio and
-> MLX as documented stubs (working default now, real impls in a follow-up — mirrors the
-> Jira-stub decision in TICKETING_ABSTRACTION_PLAN.md). Not yet registered in the pipeline.
+> Status: **All four stories implemented 2026-07-09/10; all three registered providers
+> (Ollama, MLX, LM Studio) are real, live-validated implementations** — none are stubs
+> anymore. `inference_providers.py` holds `LocalInferenceProvider`, `OllamaProvider`,
+> `MLXProvider`, `LMStudioProvider`, `RateLimitedError`, and `get_local_provider()`.
+> `OllamaDriver._chat`/`resource_status()` delegate to `self.provider`; `_ollama_loaded_models`
+> stays hardcoded to `OllamaProvider` (see below). All existing + 35 new tests pass unchanged
+> (791 total vs. 756 on `master`).
+>
+> **MLXProvider was validated against a real `mlx_lm.server`** (installed into a throwaway
+> venv, not a project dependency), not just mocked: `mlx-lm==0.28.3` on Python 3.11 (Python
+> 3.14 + `transformers` 5.13.0 breaks `mlx_lm`'s tokenizer registration — pin
+> `transformers<5`) serving `mlx-community/Qwen2.5-1.5B-Instruct-4bit`. Confirmed live: basic
+> `complete()` content, a full tool-calling round trip (`tools` → `tool_calls` with
+> JSON-string `arguments`, matching what `backend.py`'s existing parser already handles), and
+> a genuine multi-turn review loop (`bash`/`view_file` tool calls exchanged correctly via
+> `OllamaDriver.complete()` in review mode — the 1.5B model didn't converge to a verdict in 5
+> steps, a model-quality/step-budget limit, not a wiring bug). Findings baked into
+> `MLXProvider`'s docstring: `tool_calls[].function.arguments` is a JSON string,
+> `tool_calls[].id` is always `null`, there's no per-request context-window control (so
+> `num_ctx` is sent as `max_tokens` instead, since the server's own default is a tiny 512
+> tokens), and a model emitting malformed tool-call JSON crashes the server's connection
+> (surfaces as an `httpx.HTTPError` subclass, already handled by existing callers).
+>
+> **LMStudioProvider was validated the same way against a real LM Studio server** (already
+> installed on this machine — `~/.lmstudio/bin/lms server start`, no throwaway venv needed),
+> serving the user's already-downloaded `google/gemma-4-e4b` (4B, tool-capable). Confirmed
+> live: basic `complete()` content, a full tool-calling round trip, and — going further than
+> MLX's validation — a genuine multi-turn review loop that actually **converged to a real
+> `VERDICT: APPROVE`** (bash + view_file tool calls, then submit_review; the stronger 4B model
+> succeeded where MLX's 1.5B one hit its step cap). Findings baked into `LMStudioProvider`'s
+> docstring: same JSON-string `tool_calls[].function.arguments` shape as MLX, but `id` is a
+> real non-null string here (harmless either way — the caller only reads name/arguments); no
+> per-request context-window control (same `max_tokens`-for-`num_ctx` mapping as MLX);
+> loaded-model state comes from LM Studio's own `/api/v0/models` (`state: loaded/not-loaded`),
+> not Ollama's `/api/ps`; and LM Studio JIT-loads a model on its first request (~30s observed
+> for the 4B model) rather than requiring it pre-loaded like Ollama expects.
+>
+> **Also discovered (pre-existing, not introduced by this work):** `_resolve_local_model`'s
+> "contains `:` → concrete tag, else → tier name" heuristic assumes Ollama's `name:tag`
+> convention; an MLX/LM Studio Hugging Face repo id (e.g. `mlx-community/...`,
+> `google/gemma-4-e4b`) has no `:`, so it must be set via
+> `PIPELINE_LOCAL_MODEL_DEFAULT`/`_OPUS`/`_SONNET`/`_HAIKU`, not passed directly as `model=`.
+> Documented in the README; not changed, since it's an existing Ollama-tag-oriented function
+> outside this task's scope.
+>
+> **S3 still deferred** (scope decision made when first executing S1/S2/S4, after reading
+> `scripts/local_agent.py` in full): provider-izing the dispatch subprocess touches a
+> streaming NDJSON retry loop with its own ~90KB of tests and drives the *live* coding-agent
+> harness — materially higher risk than the rest. Consequence while deferred:
+> `PIPELINE_LOCAL_PROVIDER` only governs `complete()`/`resource_status()` (review + overlord
+> single-shot calls); `dispatch()` (the coding-agent subprocess) and `_ollama_loaded_models`
+> (its VRAM-swap warning) always talk to Ollama's native API regardless of this setting.
+> Documented in README/module docstrings.
 
 ## Goal
 Make the *local inference server* pluggable so the pipeline can drive Ollama (default),
@@ -131,8 +180,12 @@ OpenAI-compat servers.
   out-of-process — S3 must plumb the provider name through env, not assume shared globals.
 
 ## Follow-up (separate plans)
-- Implement `LMStudioProvider` for real (SSE parsing, `/api/v0/models` loaded-state, tool-call
-  schema mapping), validated against a running LM Studio.
-- Implement `MLXProvider` for real against `mlx_lm.server`.
-- Optional generic `OpenAICompatProvider` exposed directly (vLLM / llama.cpp-server) once the
-  base is proven by one concrete subclass.
+- ~~Implement `LMStudioProvider` for real~~ and ~~implement `MLXProvider` for real~~ — both
+  done 2026-07-09/10, live-validated (see status header above). Neither needed SSE: both are
+  driven through `complete()`/the review loop, which only ever call `chat()` non-streaming
+  (`"stream": false`); SSE parsing is only relevant to S3 (dispatch's streaming loop), still
+  deferred.
+- S3 (provider-ize `scripts/local_agent.py`'s dispatch subprocess) — still deferred, see above.
+- Optional generic `OpenAICompatProvider` base class, now that two concrete OpenAI-compatible
+  subclasses (MLX, LM Studio) exist with near-identical `chat()`/`reachable()` bodies — could
+  be factored to reduce duplication once a third such server is added.

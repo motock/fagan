@@ -52,6 +52,40 @@ def _local(tag: str, *, temperature: str | None = None, num_ctx: str | None = No
     }
 
 
+def _local_provider(
+    provider: str, tag: str, *, endpoint: str,
+    temperature: str | None = None, num_ctx: str | None = None,
+) -> dict:
+    """Like _local, but for a non-Ollama LocalInferenceProvider (lmstudio,
+    mlx) - see inference_providers.py and MODEL_PROVIDER_ABSTRACTION_PLAN.md
+    S3. Sets PIPELINE_LOCAL_ENDPOINT explicitly (each provider's default port
+    differs from Ollama's :11434 and OllamaDriver.__init__ always reads
+    PIPELINE_LOCAL_ENDPOINT, never self.provider.default_endpoint) and
+    PIPELINE_LOCAL_MODEL_DEFAULT to the provider's own model id - an MLX/LM
+    Studio Hugging Face repo id (e.g. "google/gemma-4-e4b") has no ':', so
+    _resolve_local_model's tag-vs-tier heuristic is a non-issue here (only
+    the *tier* string, always "sonnet", is checked for ':' - the resolved
+    default value is passed through as-is regardless of its shape).
+
+    num_ctx has no true equivalent on these OpenAI-compatible servers - both
+    providers send it as `max_tokens` (an output-length budget; the actual
+    context window is fixed at model-load time), per their chat() docstrings.
+    """
+    env = {**_LOCAL_AGENT_ENV, "PIPELINE_LOCAL_PROVIDER": provider,
+           "PIPELINE_LOCAL_ENDPOINT": endpoint, "PIPELINE_LOCAL_MODEL_DEFAULT": tag}
+    if temperature is not None:
+        env["PIPELINE_LOCAL_TEMPERATURE"] = str(temperature)
+    if num_ctx is not None:
+        env["PIPELINE_LOCAL_NUM_CTX"] = str(num_ctx)
+    return {
+        "mock": False,
+        "env": {
+            "PIPELINE_BACKEND_DISPATCH": "local",
+            **env,
+        },
+    }
+
+
 MODELS: dict[str, dict] = {
     # --- local (Ollama) ---
     "devstral": _local(os.environ.get("BENCH_DEVSTRAL_TAG", "devstral:24b")),
@@ -155,6 +189,29 @@ MODELS: dict[str, dict] = {
             "PIPELINE_BACKEND_REVIEW": "claude",
         },
     },
+    # --- local (LM Studio) ---
+    # gemma-4-e4b is the same model LMStudioProvider's docstring was
+    # live-validated against (basic complete(), a tool-calling round trip,
+    # and a review loop that converged to a real VERDICT: APPROVE). Requires
+    # `lms server start` running locally with the model downloaded
+    # (`lms ps` should list it) - the harness does not start LM Studio itself.
+    "lmstudio_gemma4": _local_provider(
+        "lmstudio",
+        os.environ.get("BENCH_LMSTUDIO_TAG", "google/gemma-4-e4b"),
+        endpoint=os.environ.get("BENCH_LMSTUDIO_ENDPOINT", "http://localhost:1234"),
+    ),
+    # --- local (mlx_lm.server) ---
+    # Default tag is the tiny 1.5B model MLXProvider's docstring was
+    # validated against - it proved the wire protocol works (tool calls,
+    # complete()) but did NOT converge in a 5-step review loop, a
+    # model-quality limit not a wiring bug. Expect weak dispatch signal at
+    # this size; override BENCH_MLX_TAG with a larger MLX-served model for a
+    # real benchmark run. Requires mlx_lm.server already running locally.
+    "mlx": _local_provider(
+        "mlx",
+        os.environ.get("BENCH_MLX_TAG", "mlx-community/Qwen2.5-1.5B-Instruct-4bit"),
+        endpoint=os.environ.get("BENCH_MLX_ENDPOINT", "http://localhost:8080"),
+    ),
     # --- cloud (claude CLI) ---
     "sonnet": {
         "mock": False,

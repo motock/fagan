@@ -445,10 +445,11 @@ class OllamaDriver:
         # Resolved per-instance (not module-cached) so a PIPELINE_LOCAL_PROVIDER
         # change between OllamaDriver() constructions takes effect, mirroring
         # this class's own live-env-read pattern elsewhere (see e.g.
-        # review_max_steps below). Only complete()/resource_status() consult
-        # it today - dispatch() (the coding-agent subprocess) still always
-        # talks to Ollama's native API regardless of this setting; see
-        # MODEL_PROVIDER_ABSTRACTION_PLAN.md S3 (deferred).
+        # review_max_steps below). complete()/resource_status() consult it
+        # directly; dispatch() forwards self.provider.name to the subprocess
+        # as LOCAL_AGENT_PROVIDER, which scripts/local_agent(_oracle).py use
+        # to pick between Ollama's streaming /api/chat and a provider's
+        # blocking chat() (see MODEL_PROVIDER_ABSTRACTION_PLAN.md S3).
         self.provider = inference_providers.get_local_provider()
         self.endpoint = os.environ.get(
             "PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434",
@@ -823,6 +824,7 @@ class OllamaDriver:
             "LOCAL_AGENT_TASK": prompt,
             "LOCAL_AGENT_ENDPOINT": self.endpoint,
             "LOCAL_AGENT_TIMEOUT": str(self.dispatch_timeout),
+            "LOCAL_AGENT_PROVIDER": self.provider.name,
         }
         # num_ctx/temperature are resolved per dispatch (env override >
         # per-model tuning table > constructor default) so a per-model
@@ -886,11 +888,11 @@ def _ollama_loaded_models(endpoint: str) -> set[str]:
     Used by `dispatch_story` to warn when a multi-model concurrent dispatch
     is about to force Ollama to swap a different model into VRAM. Always
     checks Ollama specifically (not self.provider / PIPELINE_LOCAL_PROVIDER):
-    dispatch() - the coding-agent subprocess this warning protects - still
-    always talks to Ollama's native API regardless of that setting (see
-    MODEL_PROVIDER_ABSTRACTION_PLAN.md S3, deferred), so the VRAM-swap check
-    it backs must stay tied to Ollama too until dispatch() itself is
-    provider-aware.
+    this is a VRAM-swap warning, a concept specific to Ollama's one-process-
+    many-models memory model (LM Studio JIT-loads instead, and mlx_lm.server
+    is one model per process with nothing to swap) - not a leftover from
+    dispatch() itself being non-provider-aware (see
+    MODEL_PROVIDER_ABSTRACTION_PLAN.md S3).
 
     Network / parse failures are swallowed: the function is a
     observability hook, not a gate. Returning an empty set is fine; the

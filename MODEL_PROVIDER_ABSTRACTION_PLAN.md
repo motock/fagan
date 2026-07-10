@@ -205,6 +205,14 @@ OpenAI-compat servers.
 - Optional generic `OpenAICompatProvider` base class, now that two concrete OpenAI-compatible
   subclasses (MLX, LM Studio) exist with near-identical `chat()`/`reachable()` bodies — could
   be factored to reduce duplication once a third such server is added.
-- Live-validate `_provider_chat_turn` against a running LM Studio server dispatching a real
-  story end-to-end (create_file/str_replace/bash/done), mirroring how `LMStudioProvider`
-  itself was validated — done in code + mocked tests here, not yet against a live server.
+- ~~Live-validate `_provider_chat_turn` against a running LM Studio server dispatching a real
+  story end-to-end~~ — done 2026-07-10, via `harness.py --task token_bucket --model
+  lmstudio_gemma4` against a real `lms server start` instance. `google/gemma-4-e4b` drove a
+  genuine 17-step tool-calling loop (`create_file`/`str_replace`/`bash`, real WIP commits) over
+  the full 900s dispatch budget; the resulting implementation passed the independent
+  ground-truth suite (`groundtruth_passed: true`) *and* the hidden acceptance oracle (8/8). The
+  cell still parked at review (`REQUEST_CHANGES`) — but on a legitimate finding (2 of the
+  model's own self-authored tests failed on a backward-clock-jump bug in their expectations,
+  not in the implementation), confirming the review gate is grading real content, not a
+  wiring artifact. Not yet done for MLX (no coding-capable model currently running locally to
+  test against — see the `mlx` benchmark cell's tag caveat above).

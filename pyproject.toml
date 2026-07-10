@@ -7,6 +7,7 @@
 # to the real test files so experiment artifacts can never affect CI again.
 testpaths = [
     "test_backend.py",
+    "test_inference_providers.py",
     "test_pipeline_mcp_server.py",
     "test_dashboard.py",
     "test_local_agent.py",

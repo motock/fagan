@@ -423,16 +423,27 @@ the cost gate.
 Set global vars in your shell profile; set per-project overrides in the project's
 `.mcp.json` `env` block.
 
-**Plane is optional.** It's an issue-tracker mirror, not load-bearing — the
-manifest (`<plan>.manifest.json`) is the actual source of truth for story state.
-When `PLANE_API_KEY`, `PLANE_WORKSPACE`, and `PLANE_PROJECT` are not all set,
-every Plane call is **skipped** (`ingest_plan` mints local story keys; state
-transitions no-op) rather than fired at an unconfigured endpoint — without that
-guard an unconfigured deployment would 404 on every scheduled tick, burn the
+**A ticketing backend is optional.** It's an issue-tracker mirror, not
+load-bearing — the manifest (`<plan>.manifest.json`) is the actual source of
+truth for story state. Which backend (if any) is active is resolved by
+`get_ticket_provider()` from `PIPELINE_TICKET_PROVIDER`:
+
+| `PIPELINE_TICKET_PROVIDER` | Behavior |
+|---|---|
+| `auto` (default) | Plane if `PLANE_API_KEY`/`PLANE_WORKSPACE`/`PLANE_PROJECT` are all set, else the no-op provider |
+| `none` | Force the no-op provider even if Plane is configured |
+| `plane` | Force Plane; raises at call time if the three vars above aren't all set |
+| `jira` | Documented stub only — selecting it works, but every operation raises `NotImplementedError` until a real implementation lands |
+
+With no backend (the `auto`/unconfigured default, or explicit `none`), every
+ticket call is **skipped** (`ingest_plan` mints local story keys; state
+transitions no-op) rather than fired at a dead endpoint — without that guard
+an unconfigured deployment would 404 on every scheduled tick, burn the
 `PIPELINE_PLANE_MAX_ATTEMPTS` retry budget, and flood the logs.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `PIPELINE_TICKET_PROVIDER` | `auto` | `auto` \| `none` \| `plane` \| `jira` — see table above |
 | `PLANE_BASE` | `http://localhost` | Plane instance URL |
 | `PLANE_API_KEY` | — | Plane token (never commit). **Unset ⇒ Plane disabled** |
 | `PLANE_WORKSPACE` | — | Plane workspace slug. **Unset ⇒ Plane disabled** |

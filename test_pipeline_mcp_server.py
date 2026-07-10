@@ -598,6 +598,146 @@ def test_mark_story_in_progress_without_plane_skips_patch(_plane_disabled, plan_
     assert manifest["stories"]["S1"]["status"] == "in_progress"
 
 
+# ---------- TicketProvider abstraction ----------
+# Plane is already optional (see tests above); these cover the pluggable
+# TicketProvider seam: selection via PIPELINE_TICKET_PROVIDER, the Null/Plane
+# providers, and the documented Jira stub.
+def test_get_ticket_provider_auto_resolves_to_plane_when_configured(monkeypatch):
+    monkeypatch.delenv("PIPELINE_TICKET_PROVIDER", raising=False)
+    provider = p.get_ticket_provider()
+    assert isinstance(provider, p.PlaneTicketProvider)
+    assert provider.enabled is True
+
+
+def test_get_ticket_provider_auto_resolves_to_null_when_unconfigured(
+    _plane_disabled, monkeypatch,
+):
+    monkeypatch.delenv("PIPELINE_TICKET_PROVIDER", raising=False)
+    provider = p.get_ticket_provider()
+    assert isinstance(provider, p.NullTicketProvider)
+    assert provider.enabled is False
+
+
+def test_get_ticket_provider_none_forces_null_even_when_plane_configured(monkeypatch):
+    monkeypatch.setenv("PIPELINE_TICKET_PROVIDER", "none")
+    provider = p.get_ticket_provider()
+    assert isinstance(provider, p.NullTicketProvider)
+
+
+def test_get_ticket_provider_plane_forced_without_config_raises(
+    _plane_disabled, monkeypatch,
+):
+    monkeypatch.setenv("PIPELINE_TICKET_PROVIDER", "plane")
+    with pytest.raises(ValueError, match="PLANE_"):
+        p.get_ticket_provider()
+
+
+def test_get_ticket_provider_jira_returns_stub(monkeypatch):
+    monkeypatch.setenv("PIPELINE_TICKET_PROVIDER", "jira")
+    provider = p.get_ticket_provider()
+    assert isinstance(provider, p.JiraTicketProvider)
+
+
+def test_get_ticket_provider_rejects_unknown_value(monkeypatch):
+    monkeypatch.setenv("PIPELINE_TICKET_PROVIDER", "bogus")
+    with pytest.raises(ValueError, match="bogus"):
+        p.get_ticket_provider()
+
+
+def test_null_ticket_provider_every_op_is_a_noop():
+    provider = p.NullTicketProvider()
+    assert provider.enabled is False
+    assert provider.create_epic("E1") is None
+    assert provider.create_story("S1", "desc", None, "agent-pipeline") is None
+    assert provider.set_state("S1", p.LogicalState.DONE) is True
+    assert provider.resolve_key("S1") == "S1"
+
+
+def test_plane_ticket_provider_create_epic_and_story_delegate_to_plane_request(
+    monkeypatch,
+):
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    provider = p.PlaneTicketProvider()
+    assert provider.enabled is True
+    epic_id = provider.create_epic("E1")
+    assert epic_id == "epic-1"
+    issue_id = provider.create_story("S1", "desc", epic_id, "agent-pipeline")
+    assert issue_id == "issue-1"
+
+
+def test_plane_ticket_provider_create_epic_falls_back_to_none_on_api_error(
+    monkeypatch,
+):
+    # Epics are an optional Plane module; some instances don't expose it.
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("404")),
+    )
+    provider = p.PlaneTicketProvider()
+    assert provider.create_epic("E1") is None
+
+
+def test_plane_ticket_provider_set_state_delegates_to_plane_set_state(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        p, "_plane_set_state",
+        lambda key, group, plan_name=None: calls.append((key, group, plan_name)) or True,
+    )
+    provider = p.PlaneTicketProvider()
+    assert provider.set_state("S1", p.LogicalState.IN_PROGRESS, "myplan") is True
+    assert calls == [("S1", "started", "myplan")]
+
+
+def test_plane_ticket_provider_resolve_key_delegates_to_resolve_issue_uuid(monkeypatch):
+    monkeypatch.setattr(p, "_resolve_issue_uuid", lambda key: f"resolved-{key}")
+    provider = p.PlaneTicketProvider()
+    assert provider.resolve_key("PIPE-7") == "resolved-PIPE-7"
+
+
+def test_jira_ticket_provider_every_op_raises_not_implemented():
+    provider = p.JiraTicketProvider()
+    with pytest.raises(NotImplementedError):
+        provider.create_epic("E1")
+    with pytest.raises(NotImplementedError):
+        provider.create_story("S1", "desc", None, "agent-pipeline")
+    with pytest.raises(NotImplementedError):
+        provider.set_state("S1", p.LogicalState.DONE)
+    with pytest.raises(NotImplementedError):
+        provider.resolve_key("S1")
+
+
+def test_mark_story_in_progress_routes_through_ticket_provider(plan_dir, monkeypatch):
+    calls = []
+
+    class _FakeProvider:
+        def set_state(self, story_key, state, plan_name=None):
+            calls.append((story_key, state, plan_name))
+            return True
+
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _FakeProvider())
+    (plan_dir / "tpmip.manifest.json").write_text(json.dumps(
+        {"stories": {"S1": {"status": "todo"}}}))
+    result = p.mark_story_in_progress("tpmip", "S1")
+    assert result["ok"] is True
+    assert calls == [("S1", p.LogicalState.IN_PROGRESS, "tpmip")]
+
+
+def test_mark_story_done_routes_through_ticket_provider(plan_dir, monkeypatch):
+    calls = []
+
+    class _FakeProvider:
+        def set_state(self, story_key, state, plan_name=None):
+            calls.append((story_key, state, plan_name))
+            return True
+
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _FakeProvider())
+    (plan_dir / "tpmd.manifest.json").write_text(json.dumps(
+        {"stories": {"S1": {"status": "pr_open"}}}))
+    result = p.mark_story_done("tpmd", "S1")
+    assert result["ok"] is True
+    assert calls == [("S1", p.LogicalState.DONE, "tpmd")]
+
+
 # ---------- patch_story / set_story_status (T2) ----------
 # These give a caller a sanctioned, lock-serialized way to edit a story's
 # authored fields or transition its status, so nobody needs to hand-edit the

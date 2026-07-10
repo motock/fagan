@@ -236,3 +236,49 @@ OpenAI-compat servers.
     restart, after freeing disk space), while the official `qwen/qwen3.6-27b` repo downloaded
     and registered cleanly on the first try — apparently specific to that repo's metadata, not
     a general `lms get`/disk-space issue.
+  - **n=3/n=4 trial comparison (2026-07-10),** `token_bucket`, all cells reviewed by the same
+    default Claude reviewer:
+
+    | Model | Backend | Params | Trials | Merged | GT-correct | Avg s/trial |
+    |---|---|---|---|---|---|---|
+    | `gemma-4-e4b` | LM Studio | 4B | 4 | 1/4 | 2/4 (50%) | 926 |
+    | `qwen/qwen3.6-27b` | LM Studio | 27B | 4 | 1/4 | 3/4 (75%) | 946 |
+    | `devstral:24b` | Ollama | 24B | 3 | 0/3 | 2/3 (67%) | 904 |
+    | `gpt-oss:20b` (temp=0.3) | Ollama | 20B | 3 | 1/3 | 2/3 (67%) | 804 |
+    | MLX, `Qwen2.5-1.5B-Instruct-4bit` | `mlx_lm.server` | 1.5B | 1 | stuck/timed out | 0/1 | 1500+ |
+
+    No model reliably clears this task's review gate (0-33% merge across the board) - the
+    dominant bottleneck on this task is review strictness about self-authored test quality, not
+    raw model coding capability. `qwen3.6-27b` leads GT-correctness at 75% but n=4 is not a
+    statistically strong claim over devstral/gpt-oss's 67%. Timing is comparable across the
+    800-1050s band regardless of model size or provider (LM Studio's blocking dispatch path
+    shows no obvious speed penalty vs. Ollama's streaming one).
+  - **MLX dispatch: wire-level proof positive, task-level inconclusive.** The 1.5B MLX cell's
+    dispatch subprocess (`local_agent_oracle.py`, `LOCAL_AGENT_PROVIDER=mlx`) exchanged 3 real
+    `POST /v1/chat/completions` round-trips with `mlx_lm.server` over ~15 minutes (confirmed in
+    the server's own access log) - the provider wiring works - but then hung indefinitely after
+    step 0 (a "no tool call" turn) with no further log output, 0% CPU, and no error. The
+    dispatch subprocess was not killed when the outer harness (`harness.py`) gave up at its
+    1500s wall-clock cap; it was found still running, orphaned, several minutes later and had to
+    be killed manually. **Open bug:** the harness's timeout path does not appear to terminate
+    the dispatch subprocess it spawned - worth a dedicated fix, likely in
+    `advance_pipeline`/`check_story_status`'s handling of a story stuck `in_progress` past the
+    benchmark harness's own timeout, not specific to the MLX provider.
+  - **MLX + Qwen3.6: blocked on a genuine upstream `mlx-lm`/`transformers` incompatibility,
+    confirmed across two independent repos.** Both `lmstudio-community/Qwen3.6-27B-MLX-4bit`
+    (the same weights LM Studio downloaded, pointed at directly via a local path) and
+    `mlx-community/Qwen3.6-27B-4bit` (a fresh HF download) fail identically:
+    `ValueError: Tokenizer class TokenizersBackend does not exist or is not currently imported.`
+    Qwen3.6's tokenizer config requires `transformers>=5`, but `mlx-lm` (tried both `0.28.3`,
+    the version validated for the 1.5B model, and the latest `0.31.3`) breaks at its own
+    `AutoTokenizer.register()` call under `transformers>=5`
+    (`AttributeError: 'str' object has no attribute '__module__'`) - so this specific model
+    cannot currently be loaded by the standalone `mlx-lm` package on any `mlx-lm`/`transformers`
+    combination tried, regardless of Python version (the plan's original S1-S4 finding tied the
+    incompatibility to Python 3.14; it reproduces on Python 3.11 too, so the real constraint is
+    the `transformers` version, not the Python version). LM Studio's bundled MLX runtime clearly
+    patches around this - it serves this exact model fine - but the open-source `mlx-lm` package
+    hasn't caught up as of `0.31.3`. Not pursued further (a `mlx-lm` `tokenizer_utils.py` patch
+    was considered and declined as too hacky/unproven for the payoff). The throwaway venv
+    (`mlx-lm==0.28.3` + `transformers<5`, Python 3.11) remains valid for models with
+    non-bleeding-edge tokenizers, e.g. the 1.5B model above.

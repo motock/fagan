@@ -5,6 +5,13 @@ module owns the *how* (spawning a model to do the work). ClaudeCliDriver wraps
 today's `claude` CLI subprocess calls with identical mechanics to what it
 replaced; a future local-model driver implements the same Backend protocol so
 the orchestrator never depends on which backend runs a given role.
+
+OllamaDriver owns the *harness* mechanics for local models (the native-tool-
+calling dispatch loop, the read-only review loop, checkpoint plumbing, the
+cost sidecar) - mechanics shared by any local inference server. Which server
+actually serves the model (Ollama today; LM Studio/MLX are documented stubs)
+is a separate concern, selected via PIPELINE_LOCAL_PROVIDER - see
+inference_providers.py.
 """
 from __future__ import annotations
 
@@ -19,16 +26,8 @@ from typing import Protocol
 
 import httpx
 
-
-class RateLimitedError(RuntimeError):
-    """Raised by an Ollama local backend when the chat endpoint returns 429.
-
-    Distinct from the generic RuntimeError that wraps other httpx.HTTPError
-    failures (network errors, 5xx, etc.) so the orchestrator can route a
-    transient rate-limit to the same deferral path it uses for Claude's
-    weekly-usage pause, instead of misclassifying it as an inconclusive
-    review and burning the rework budget.
-    """
+import inference_providers
+from inference_providers import RateLimitedError  # noqa: F401 (re-exported: backend.RateLimitedError)
 
 
 @dataclass
@@ -443,6 +442,14 @@ class OllamaDriver:
     """
 
     def __init__(self) -> None:
+        # Resolved per-instance (not module-cached) so a PIPELINE_LOCAL_PROVIDER
+        # change between OllamaDriver() constructions takes effect, mirroring
+        # this class's own live-env-read pattern elsewhere (see e.g.
+        # review_max_steps below). Only complete()/resource_status() consult
+        # it today - dispatch() (the coding-agent subprocess) still always
+        # talks to Ollama's native API regardless of this setting; see
+        # MODEL_PROVIDER_ABSTRACTION_PLAN.md S3 (deferred).
+        self.provider = inference_providers.get_local_provider()
         self.endpoint = os.environ.get(
             "PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434",
         ).rstrip("/")
@@ -513,35 +520,20 @@ class OllamaDriver:
         # gptoss row, or an entry in _LOCAL_MODEL_TUNING) actually takes
         # effect for complete()/review calls too, instead of being silently
         # shadowed by the value captured at OllamaDriver.__init__ time.
+        # The actual wire call (request shape, 429 detection, response
+        # envelope) lives in self.provider - see inference_providers.py.
         num_ctx = _tuned_num_ctx(model, self.num_ctx)
         temperature = _tuned_temperature(model, self.temperature)
-        body = {
-            "model": model, "messages": messages, "stream": False,
-            "options": {"num_ctx": num_ctx, "temperature": temperature},
-        }
-        if tools:
-            body["tools"] = tools
-        resp = httpx.post(f"{self.endpoint}/api/chat", json=body, timeout=self.timeout)
-        # Detect 429 before raise_for_status() converts it to a generic
-        # HTTPError — Ollama-cloud (and any upstream proxy) rate-limits per
-        # host, so a 429 is a transient "defer and retry" signal, not a
-        # real backend failure. Surface it as RateLimitedError so the
-        # orchestrator's review path routes it to deferral instead of the
-        # inconclusive/rework loop. Other 4xx/5xx stay as HTTPError and
-        # get wrapped into a generic RuntimeError in the callers.
-        if resp.status_code == 429:
-            raise RateLimitedError(
-                f"Local backend at {self.endpoint} (model={model}) "
-                f"returned 429 (rate limited)"
-            )
-        resp.raise_for_status()
-        # Return the full response envelope (not just resp.json()["message"])
+        # Returns the full response envelope (not just the "message" body)
         # so callers that have structured usage data (review loop's
         # prompt_eval_count/eval_count/total_duration for the per-call
         # token-cost sidecar) can extract it. The single-shot complete()
         # path peels off ["message"] itself; the review loop peels off
         # both the message and the usage fields.
-        return resp.json()
+        return self.provider.chat(
+            messages, model=model, num_ctx=num_ctx, temperature=temperature,
+            tools=tools, endpoint=self.endpoint, timeout=self.timeout,
+        )
 
     # Read-only tools for the review loop. No create/edit — review must not
     # modify the tree (the "review does not merge / does not edit" guarantee).
@@ -872,45 +864,40 @@ class OllamaDriver:
 
     def resource_status(self) -> dict:
         """Local backend has no usage/cost limit to respect, so the only gate
-        is whether the Ollama endpoint is up. (The concurrency ceiling is
-        enforced separately by advance_pipeline via MAX_CONCURRENT_AGENTS.)
+        is whether the local inference server is up. (The concurrency ceiling
+        is enforced separately by advance_pipeline via MAX_CONCURRENT_AGENTS.)
         This is what unlocks overnight autonomy decoupled from Claude's weekly
-        limit: as long as Ollama is reachable, local dispatch keeps running.
+        limit: as long as the server is reachable, local dispatch keeps
+        running. Delegates to self.provider (never raises: an unimplemented
+        stub provider reports "not ok" here rather than propagating
+        NotImplementedError out of a method whose contract is to always
+        return an {ok, reason} dict).
         """
         try:
-            resp = httpx.get(f"{self.endpoint}/api/tags", timeout=10)
-            resp.raise_for_status()
-            return {"ok": True, "reason": ""}
-        except httpx.HTTPError as e:
-            return {"ok": False, "reason": f"Ollama endpoint {self.endpoint} unreachable: {e}"}
+            ok, reason = self.provider.reachable(self.endpoint)
+        except NotImplementedError as e:
+            return {"ok": False, "reason": str(e)}
+        return {"ok": ok, "reason": reason}
 
 
 def _ollama_loaded_models(endpoint: str) -> set[str]:
     """Return the set of model names currently loaded in Ollama's memory.
 
     Used by `dispatch_story` to warn when a multi-model concurrent dispatch
-    is about to force Ollama to swap a different model into VRAM. The
-    endpoint's /api/ps reports every model currently in GPU/CPU memory; a
-    dispatch against a model not in this set will trigger a load (and
-    possibly an eviction of the currently-loaded one if VRAM is tight).
+    is about to force Ollama to swap a different model into VRAM. Always
+    checks Ollama specifically (not self.provider / PIPELINE_LOCAL_PROVIDER):
+    dispatch() - the coding-agent subprocess this warning protects - still
+    always talks to Ollama's native API regardless of that setting (see
+    MODEL_PROVIDER_ABSTRACTION_PLAN.md S3, deferred), so the VRAM-swap check
+    it backs must stay tied to Ollama too until dispatch() itself is
+    provider-aware.
 
     Network / parse failures are swallowed: the function is a
     observability hook, not a gate. Returning an empty set is fine; the
     caller will then see "nothing loaded" and skip the mismatch warning
     (a same-model dispatch is safe regardless of what's loaded).
     """
-    try:
-        resp = httpx.get(f"{endpoint}/api/ps", timeout=5)
-        resp.raise_for_status()
-        payload = resp.json()
-    except (httpx.HTTPError, ValueError):
-        return set()
-    out: set[str] = set()
-    for entry in payload.get("models", []) or []:
-        name = entry.get("name") or entry.get("model")
-        if name:
-            out.add(name)
-    return out
+    return inference_providers.OllamaProvider().loaded_models(endpoint)
 
 
 # Registry of available drivers by config name. Register new drivers here -

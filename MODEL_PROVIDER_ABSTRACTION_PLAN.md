@@ -253,6 +253,17 @@ OpenAI-compat servers.
     statistically strong claim over devstral/gpt-oss's 67%. Timing is comparable across the
     800-1050s band regardless of model size or provider (LM Studio's blocking dispatch path
     shows no obvious speed penalty vs. Ollama's streaming one).
+  - **Context-length follow-up (2026-07-10): doubling `qwen3.6-27b`'s context from 8192 to
+    16384 measurably improved correctness.** Same task, same reviewer, n=3 at 16384 (reloaded
+    via the LM Studio GUI - the CLI guardrail still blocks `lms load` for this model
+    regardless of context size, not just at max context): 3/3 GT-correct (100%), 1/3 merged
+    (33%), avg 985s/trial. Combined with the earlier 8192-context n=4 (3/4 GT-correct, 1/4
+    merged, avg 946s), `qwen3.6-27b` totals **n=7: 6/7 GT-correct (86%), 2/7 merged (29%)**, no
+    meaningful time penalty for the extra context. Consistent with the hypothesis that 8192 was
+    genuinely tight for this task's ~85-tick average dispatch loop (growing tool-call history
+    plus the model's own reasoning traces) - worth defaulting future `qwen3.6-27b` (and likely
+    other reasoning-heavy 20B+ local models) benchmark cells to a context length sized to
+    expected run length, not the smallest value that merely avoids the GPU OOM guardrail.
   - **MLX dispatch: wire-level proof positive, task-level inconclusive.** The 1.5B MLX cell's
     dispatch subprocess (`local_agent_oracle.py`, `LOCAL_AGENT_PROVIDER=mlx`) exchanged 3 real
     `POST /v1/chat/completions` round-trips with `mlx_lm.server` over ~15 minutes (confirmed in

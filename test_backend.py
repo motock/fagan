@@ -777,6 +777,49 @@ def test_dispatch_launches_local_agent_subprocess(tmp_path, monkeypatch):
     assert (tmp_path / "agent.log").exists()
 
 
+def test_dispatch_passes_local_agent_provider_env_default(tmp_path, monkeypatch):
+    """Unset PIPELINE_LOCAL_PROVIDER resolves to "ollama" and dispatch()
+    forwards it to the subprocess as LOCAL_AGENT_PROVIDER, so local_agent.py
+    can tell which wire protocol to speak without re-deriving it itself."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr: captured.update(env=env)
+        or _FakePopenResult(4243),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_PROVIDER", raising=False)
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_PROVIDER"] == "ollama"
+
+
+def test_dispatch_passes_local_agent_provider_env_lmstudio(tmp_path, monkeypatch):
+    """PIPELINE_LOCAL_PROVIDER=lmstudio must reach the dispatch subprocess as
+    LOCAL_AGENT_PROVIDER=lmstudio, not silently stay pinned to ollama."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr: captured.update(env=env)
+        or _FakePopenResult(4244),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:1234")
+    monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "lmstudio")
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_PROVIDER"] == "lmstudio"
+
+
 def test_dispatch_resolves_model_tier_and_passes_runtime_knobs(tmp_path, monkeypatch):
     captured = {}
     monkeypatch.setattr(

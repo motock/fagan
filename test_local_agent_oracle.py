@@ -912,6 +912,117 @@ def test_chat_retries_on_5xx_then_succeeds(monkeypatch):
     assert msg["content"] == "ok"
 
 
+# ---------- chat() provider routing (LOCAL_AGENT_PROVIDER, S3) ----------
+# Mirrors test_local_agent.py's provider-routing tests: ollama (default)
+# keeps the streaming _stream_one_turn path untouched; any other provider
+# (lmstudio, mlx) goes through the blocking _provider_chat_turn seam,
+# delegating to inference_providers.get_local_provider().chat().
+
+def test_chat_default_provider_is_ollama():
+    assert lao.PROVIDER == "ollama"
+
+
+def test_chat_uses_stream_one_turn_when_provider_is_ollama(monkeypatch):
+    monkeypatch.setattr(lao, "PROVIDER", "ollama")
+
+    def _boom(messages):
+        raise AssertionError("_provider_chat_turn must not be called for ollama")
+
+    monkeypatch.setattr(lao, "_provider_chat_turn", _boom)
+    monkeypatch.setattr(
+        lao, "_stream_one_turn",
+        lambda payload: {"role": "assistant", "content": "ok"},
+    )
+    msg = lao.chat([{"role": "user", "content": "hi"}])
+    assert msg["content"] == "ok"
+
+
+def test_chat_routes_through_provider_when_not_ollama(monkeypatch):
+    monkeypatch.setattr(lao, "PROVIDER", "lmstudio")
+
+    def _boom(payload):
+        raise AssertionError("_stream_one_turn must not be called for lmstudio")
+
+    monkeypatch.setattr(lao, "_stream_one_turn", _boom)
+    monkeypatch.setattr(
+        lao, "_provider_chat_turn",
+        lambda messages: {"role": "assistant", "content": "from lmstudio",
+                           "tool_calls": [{"function": {"name": "done", "arguments": "{}"}}]},
+    )
+    msg = lao.chat([{"role": "user", "content": "hi"}])
+    assert msg["content"] == "from lmstudio"
+    assert msg["tool_calls"][0]["function"]["name"] == "done"
+
+
+def test_provider_chat_turn_extracts_message_from_envelope(monkeypatch):
+    captured = {}
+
+    class _FakeProvider:
+        def chat(self, messages, *, model, num_ctx, temperature, tools, endpoint, timeout):
+            captured.update(model=model, num_ctx=num_ctx, temperature=temperature,
+                             tools=tools, endpoint=endpoint, timeout=timeout)
+            return {"message": {"role": "assistant", "content": "hi"},
+                    "prompt_eval_count": 3, "eval_count": 5}
+
+    monkeypatch.setattr(lao.inference_providers, "get_local_provider", lambda: _FakeProvider())
+    msg = lao._provider_chat_turn([{"role": "user", "content": "hi"}])
+    assert msg == {"role": "assistant", "content": "hi"}
+    assert captured["model"] == lao.MODEL
+    assert captured["tools"] == lao.TOOLS
+
+
+def test_chat_retries_on_provider_5xx_then_succeeds(monkeypatch):
+    monkeypatch.setattr(lao, "PROVIDER", "lmstudio")
+    monkeypatch.setattr(lao.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _flaky_5xx(messages):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _status_error(503)
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(lao, "_provider_chat_turn", _flaky_5xx)
+    msg = lao.chat([{"role": "user", "content": "hi"}])
+    assert calls["n"] == 2
+    assert msg["content"] == "ok"
+
+
+def test_chat_does_not_retry_on_provider_4xx(monkeypatch):
+    monkeypatch.setattr(lao, "PROVIDER", "lmstudio")
+    monkeypatch.setattr(lao.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _bad_request(messages):
+        calls["n"] += 1
+        raise _status_error(400)
+
+    monkeypatch.setattr(lao, "_provider_chat_turn", _bad_request)
+    try:
+        lao.chat([{"role": "user", "content": "hi"}])
+        assert False, "expected HTTPStatusError(400)"
+    except httpx.HTTPStatusError:
+        pass
+    assert calls["n"] == 1, "4xx must NOT be retried"
+
+
+def test_chat_retries_on_provider_rate_limited_error_then_succeeds(monkeypatch):
+    monkeypatch.setattr(lao, "PROVIDER", "mlx")
+    monkeypatch.setattr(lao.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _rate_limited_then_ok(messages):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise lao.inference_providers.RateLimitedError("429")
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(lao, "_provider_chat_turn", _rate_limited_then_ok)
+    msg = lao.chat([{"role": "user", "content": "hi"}])
+    assert calls["n"] == 2
+    assert msg["content"] == "ok"
+
+
 class _FakeStreamResponse:
     """Stand-in for the response object httpx.stream() yields. raise_for_status
     honors the status code; iter_lines yields the canned JSON lines."""

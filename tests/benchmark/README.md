@@ -61,7 +61,7 @@ tests/benchmark/
     acceptance.py    hidden oracle materialized read-only into the worktree; the agent must make it pass
     groundtruth.py   investigator-owned, independent; run against the MERGED code (never enters the worktree)
   harness.py         single-cell runner (one task x one model x one trial)
-  models.py          model -> environment configs (devstral, minimax, gptoss, gptoss_temp03, gptoss_devstral_review, sonnet, mock)
+  models.py          model -> environment configs (devstral, minimax, gptoss, gptoss_temp03, gptoss_devstral_review, lmstudio_gemma4, mlx, sonnet, mock)
   matrix.py          drives the full grid and renders the scorecard
   scorecard.py       aggregates cell results into a markdown comparison table
   test_harness_selftest.py   offline pytest self-tests (no model/network)
@@ -77,8 +77,16 @@ tests/benchmark/
 | `gptoss`  | local (Ollama) | free; needs Ollama up. Tag via `BENCH_GPTOSS_TAG` (default `gpt-oss:20b`). Runs at `temperature=1.0`, `num_ctx=32768`. |
 | `gptoss_temp03` | local (Ollama) | Same tag/`num_ctx` as `gptoss`, `temperature=0.3` only — the A/B comparison arm. This is the value now baked into `backend.py`'s per-model tuning table for real (non-benchmark) dispatch/review, so a fresh `gptoss` run tests the *old*, superseded setting unless you're deliberately re-verifying temp=1.0. |
 | `gptoss_devstral_review` | local (Ollama) | Same dispatch settings as `gptoss_temp03` (gpt-oss:20b, temp=0.3, ctx=32768), but review runs on `devstral:24b` via `PIPELINE_LOCAL_REVIEW_MODEL` instead of gpt-oss reviewing its own work with identical weights (`code-reviewer.md` and `software-engineer.md` both declare `model: sonnet`). Bakes `PIPELINE_BACKEND_REVIEW=local` into the config itself rather than relying on the invoking shell. |
+| `lmstudio_gemma4` | local (LM Studio) | `PIPELINE_LOCAL_PROVIDER=lmstudio`, model `google/gemma-4-e4b` by default (`BENCH_LMSTUDIO_TAG`). Requires `lms server start` running with the model already downloaded (`lms ps`) at `BENCH_LMSTUDIO_ENDPOINT` (default `http://localhost:1234`) — the harness does not start it for you. |
+| `mlx`     | local (mlx_lm.server) | `PIPELINE_LOCAL_PROVIDER=mlx`, tag via `BENCH_MLX_TAG` (default is a tiny 1.5B model that validated the wire protocol but did not converge in a review loop — expect weak signal until you point it at a larger MLX-served model). Requires `mlx_lm.server` already running at `BENCH_MLX_ENDPOINT` (default `http://localhost:8080`). |
 | `sonnet`  | cloud (claude) | consumes Claude usage. |
 | `mock`    | offline        | writes a known-correct reference impl; for self-testing the harness only. |
+
+`lmstudio_gemma4`/`mlx` dispatch through `inference_providers.py` (see
+`MODEL_PROVIDER_ABSTRACTION_PLAN.md`) instead of Ollama's native `/api/chat` —
+the wire protocol differs (OpenAI-compatible `/v1/chat/completions`, blocking
+rather than streamed) but the harness mechanics (dispatch loop, tool set,
+guards) are identical.
 
 By **default** the review gate runs on the cloud Claude reviewer
 (`PIPELINE_BACKEND_REVIEW=claude`), regardless of which model implemented — so
@@ -119,6 +127,10 @@ Cells run **sequentially** by default — local models share one Ollama/GPU, so
 - `--tick S` — seconds between `advance_pipeline` ticks (default 10).
 - `BENCH_DEVSTRAL_TAG`, `BENCH_MINIMAX_TAG`, `BENCH_OLLAMA_ENDPOINT` — override
   local model tags/endpoint to match `ollama list`.
+- `BENCH_LMSTUDIO_TAG`, `BENCH_LMSTUDIO_ENDPOINT` — override the `lmstudio_gemma4`
+  cell's model id/endpoint to match `lms ps`.
+- `BENCH_MLX_TAG`, `BENCH_MLX_ENDPOINT` — override the `mlx` cell's model
+  id/endpoint to match whatever `mlx_lm.server` is currently serving.
 
 ## How isolation works (and why it's safe)
 

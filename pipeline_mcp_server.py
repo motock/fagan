@@ -514,29 +514,53 @@ class PlaneTicketProvider:
 
     def create_epic(self, summary: str) -> str | None:
         # Epics are an optional Plane module; some instances/API versions do
-        # not expose the /epics/ endpoint. Fall back to ungrouped issues.
+        # not expose the /epics/ endpoint. Any failure here - a 404 from an
+        # unsupported module just as much as a connection refused/timeout/
+        # other transport error - must fall back to ungrouped issues rather
+        # than propagate out of ingest_plan, matching create_story below.
         try:
             resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
                                   json={"name": summary})
             return resp["id"]
-        except RuntimeError:
+        except Exception as e:
+            print(f"Warning: Plane create_epic({summary!r}) failed, "
+                  f"continuing without a Plane epic: {e}")
             return None
 
     def create_story(
         self, summary: str, description: str, epic_id: str | None, label: str,
     ) -> str | None:
-        label_id = _get_or_create_label(label)
-        backlog_state = _get_state("backlog")
-        issue_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/work-items/", json={
-            "name": summary,
-            "description": description,
-            "state": backlog_state,
-            "labels": [label_id],
-        })
-        issue_id = issue_resp["id"]
+        # Mirrors create_epic: a ticketing outage (connection refused,
+        # timeout, non-2xx response, ...) must not block ingest_plan, which
+        # falls back to a local/synthetic story key when this returns None.
+        try:
+            label_id = _get_or_create_label(label)
+            backlog_state = _get_state("backlog")
+            issue_resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/work-items/", json={
+                "name": summary,
+                "description": description,
+                "state": backlog_state,
+                "labels": [label_id],
+            })
+            issue_id = issue_resp["id"]
+        except Exception as e:
+            print(f"Warning: Plane create_story({summary!r}) failed, "
+                  f"falling back to a local/synthetic story key: {e}")
+            return None
+        # The epic link is a second, separate call after a real issue has
+        # already been created. Its failure must only degrade the link (the
+        # issue stays ungrouped, like create_epic's own optional-module
+        # fallback) - not discard the just-created issue_id, which would
+        # orphan a real Plane ticket and cause a retried ingest_plan to
+        # create a duplicate.
         if epic_id is not None:
-            plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
-                          json={"issue_id": issue_id})
+            try:
+                plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
+                              json={"issue_id": issue_id})
+            except Exception as e:
+                print(f"Warning: Plane create_story({summary!r}) succeeded but "
+                      f"linking issue {issue_id!r} to epic {epic_id!r} failed, "
+                      f"continuing without the epic link: {e}")
         return issue_id
 
     def set_state(

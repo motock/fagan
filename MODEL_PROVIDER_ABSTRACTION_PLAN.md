@@ -264,6 +264,42 @@ OpenAI-compat servers.
     plus the model's own reasoning traces) - worth defaulting future `qwen3.6-27b` (and likely
     other reasoning-heavy 20B+ local models) benchmark cells to a context length sized to
     expected run length, not the smallest value that merely avoids the GPU OOM guardrail.
+  - **Merge-bottleneck breakdown and a review-gate reliability gap (2026-07-11):** a follow-up
+    n=4 batch at `qwen3.6-27b`/ctx=16384 (`token_bucket`, same reviewer) added 2 more merges and
+    2 more `REQUEST_CHANGES` parks, bringing the running total to **n=11: 10/11 GT-correct (91%
+    as measured before this finding — see revision below), 4/11 merged (36%)**. Classifying all
+    6 `REQUEST_CHANGES` parks across the full n=11 by root cause (implementation bug vs. the
+    branch's own test being wrong) gives an even **3/6 real bugs, 3/6 bad self-tests** — not the
+    "mostly bad self-tests" pattern the single earlier `gemma-4-e4b` data point suggested.
+    - Two of the three real-bug parks (`n3-t1`, and the new batch's `t0`) are the **same bug**,
+      independently: `rate_limiter.py`'s `allow()` unconditionally sets `self._last_time = now`
+      even on the branch where a backward `now` had its elapsed-time contribution clamped to 0,
+      rewinding the bucket's high-water mark. A later call with a `now` between the backward
+      value and the true high-water mark then computes a bogus large elapsed interval and
+      over-refills — a rate-limit bypass, not a cosmetic bug.
+    - **That same bug was independently verified present in 2 of the run's 4 *merged*
+      implementations** (`live_validation_v2` and the new batch's `t2`) via a direct exploit
+      script run against the merged `rate_limiter.py` files
+      (`TokenBucket(1,1,now=10).allow(1,now=10)` → drain, `.allow(1,now=0)` → correctly `False`,
+      `.allow(1,now=5)` → `True` on the buggy pair, `False` on the safe pair). **Same reviewer,
+      same bug class, ~50% catch rate** — REQUEST_CHANGES twice, silent merge twice. Neither the
+      visible acceptance oracle nor (until this finding) the independent `groundtruth.py` suite
+      exercised a backward-then-forward-but-still-behind-the-original-high-water-mark sequence,
+      so the bug was invisible to every automated check in the harness; catching it depended
+      entirely on whether the LLM reviewer happened to hand-trace that specific input sequence,
+      which is inherently non-deterministic. **This revises the GT-correctness figures reported
+      above and elsewhere in this doc downward** — `groundtruth_passed: true` on those two merged
+      trials was a false negative from an incomplete oracle, not a correct implementation.
+    - **Fix applied same-day:** added a `test_backward_jump_does_not_rewind_high_water_mark` case
+      to both `tasks/token_bucket/groundtruth.py` and `tasks/token_bucket/acceptance.py`
+      (verified: fails against both known-buggy merged implementations, passes against both
+      known-safe ones, and the offline `test_harness_selftest.py` suite still passes against the
+      mock reference impl). Read live from the task files at dispatch time
+      (`harness.py`'s `spec["acceptance_source"]`/`spec["groundtruth_source"]`), so future
+      `token_bucket` runs pick up the stronger oracle automatically with no other code change.
+      **Not yet re-validated against a live model run** — the fix closes the specific gap found
+      here but the review gate's non-deterministic catch rate on bug classes the oracle *doesn't*
+      cover is a standing risk worth keeping in mind for any task, not just this one.
   - **MLX dispatch: wire-level proof positive, task-level inconclusive.** The 1.5B MLX cell's
     dispatch subprocess (`local_agent_oracle.py`, `LOCAL_AGENT_PROVIDER=mlx`) exchanged 3 real
     `POST /v1/chat/completions` round-trips with `mlx_lm.server` over ~15 minutes (confirmed in

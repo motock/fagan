@@ -46,6 +46,20 @@ def test_two_consecutive_successes_then_insufficient_at_same_time():
     assert b.allow(0.5, now=0.5) is False  # no time elapsed since the last call
 
 
+def test_backward_jump_does_not_rewind_high_water_mark():
+    """A rejected/backward `now` must not overwrite the bucket's internal
+    clock. Concrete bug this catches: an implementation that unconditionally
+    sets `self._last_time = now` (even on the branch where elapsed was
+    clamped to 0 for a backward jump) rewinds its own high-water mark. A
+    later call with a `now` between the backward value and the true
+    high-water mark then computes a bogus large elapsed interval and
+    over-refills - a rate-limit bypass."""
+    b = TokenBucket(1, 1, now=10.0)
+    assert b.allow(1, now=10.0) is True    # drain at the true high-water mark
+    assert b.allow(1, now=0.0) is False    # backward jump: no refill, rejected
+    assert b.allow(1, now=5.0) is False    # still behind the true high-water mark (10.0)
+
+
 def test_over_capacity_never_succeeds():
     b = TokenBucket(2, 1, now=0.0)
     assert b.allow(3, now=1000.0) is False

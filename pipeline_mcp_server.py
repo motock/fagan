@@ -163,6 +163,15 @@ STEP_CAP_MARKERS = (
 # switch story["model"] (never story["backend"] - stays local, never Claude)
 # for the next resume. Only takes effect when the plan has opted in via
 # manifest["local_model_fallback"] (see _escalate_to_local_fallback_model).
+#
+# When the plan has NOT opted into local_model_fallback, the same threshold
+# and the same streak fields instead gate escalation to Claude (see
+# _escalate_to_claude, called from check_story_status) once
+# PIPELINE_BACKEND_DISPATCH=auto - a repeated step-cap streak indicates a
+# local-model capability problem, not a review-convergence problem, so under
+# auto dispatch it is treated the same as a local test-failure escalation.
+# The two fallbacks are mutually exclusive (no chaining): a plan with
+# local_model_fallback configured always takes the local-fallback path.
 STEP_CAP_FALLBACK_THRESHOLD = int(
     os.environ.get("PIPELINE_STEP_CAP_FALLBACK_THRESHOLD", "3"))
 
@@ -1623,7 +1632,11 @@ def _escalate_to_claude(
     Claude gets a fresh branch from main so it doesn't inherit that state), clears
     the dispatch counters, and resets status to 'todo' so the next tick
     re-dispatches on Claude. The journal is also cleared: there's nothing useful
-    to resume from a failed local run when Claude is starting over.
+    to resume from a failed local run when Claude is starting over. Also invoked
+    from check_story_status's step-cap streak path (see
+    STEP_CAP_FALLBACK_THRESHOLD), not just the test-failure caller - the same
+    clean-slate teardown applies since a repeated step-cap streak isn't a
+    trustworthy foundation for Claude to build on either.
     """
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
@@ -1642,7 +1655,8 @@ def _escalate_to_claude(
     story["backend"] = "claude"
     story["escalated"] = True
     story["status"] = "todo"
-    for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error"):
+    for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error",
+                "step_cap_streak", "step_cap_streak_model"):
         story.pop(key, None)
     _atomic_write_json(manifest_path, manifest)
 
@@ -2704,6 +2718,28 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
                     f"on {current_model}; switching to fallback model "
                     f"{fallback_model} for the next resume.")
+        elif (not fallback_model and _auto_escalation_enabled()
+                and story.get("backend", "local") == "local"
+                and not story.get("escalated")):
+            # No local_model_fallback opt-in for this plan: under auto
+            # dispatch, escalate to Claude instead of cycling on the same
+            # struggling local model forever. Mutually exclusive with the
+            # local-fallback branch above (gated on `not fallback_model`) -
+            # no chaining from local fallback to Claude.
+            if story.get("step_cap_streak_model") == current_model:
+                story["step_cap_streak"] = story.get("step_cap_streak", 0) + 1
+            else:
+                story["step_cap_streak"] = 1
+                story["step_cap_streak_model"] = current_model
+            if story["step_cap_streak"] >= STEP_CAP_FALLBACK_THRESHOLD:
+                _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
+                _notify_user(
+                    plan_name,
+                    f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
+                    f"on {current_model}; escalating to Claude (no "
+                    f"local_model_fallback configured).")
+                return {"status": "todo", "reason": "step_cap_escalated_to_claude",
+                        "pid": pid}
         _atomic_write_json(manifest_path, manifest)
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 

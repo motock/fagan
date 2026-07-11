@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 
 import backend
@@ -573,6 +574,38 @@ def test_ingest_plan_without_plane_synthesizes_keys_when_absent(
     assert len(manifest["stories"]) == 2  # two distinct synthetic keys
 
 
+def test_ingest_plan_survives_plane_configured_but_unreachable(
+    plan_dir, monkeypatch, tmp_path, capsys,
+):
+    # Plane IS configured here (the autouse _plane_configured fixture), so
+    # get_ticket_provider() resolves to PlaneTicketProvider - but every call
+    # fails at the connection level (host down, timeout, ...). ingest_plan
+    # must still succeed by falling back to synthesized/local story keys,
+    # exactly like the "Plane unconfigured" path does.
+    monkeypatch.delenv("PIPELINE_TICKET_PROVIDER", raising=False)
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
+    )
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(key="S1"), _story(key="S2", dependencies=["S1"])],
+        }]
+    }
+    (plan_dir / "unreachable.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("unreachable")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "unreachable.manifest.json").read_text())
+    assert set(manifest["stories"]) == {"S1", "S2"}
+    assert manifest["stories"]["S2"]["dependencies"] == ["S1"]
+    # The epic itself failed to create too, so it must not appear.
+    assert manifest["epics"] == {}
+    # The failure must be surfaced, not silently swallowed forever.
+    assert "Warning" in capsys.readouterr().out
+
+
 def test_plane_set_state_noop_when_plane_disabled(_plane_disabled, monkeypatch):
     monkeypatch.setattr(p, "plane_request", _explode_plane)
     assert p._plane_set_state("S1", "started") is True
@@ -675,6 +708,65 @@ def test_plane_ticket_provider_create_epic_falls_back_to_none_on_api_error(
     )
     provider = p.PlaneTicketProvider()
     assert provider.create_epic("E1") is None
+
+
+def test_plane_ticket_provider_create_epic_falls_back_to_none_on_connection_error(
+    monkeypatch,
+):
+    # A connection failure (Plane host unreachable, timeout, ...) is not a
+    # RuntimeError like a non-2xx response - it must be caught too, not just
+    # the "epics module unsupported" 404 case.
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
+    )
+    provider = p.PlaneTicketProvider()
+    assert provider.create_epic("E1") is None
+
+
+def test_plane_ticket_provider_create_story_falls_back_to_none_on_connection_error(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
+    )
+    provider = p.PlaneTicketProvider()
+    assert provider.create_story("S1", "desc", None, "agent-pipeline") is None
+
+
+def test_plane_ticket_provider_create_story_falls_back_to_none_on_api_error(
+    monkeypatch,
+):
+    # create_story must tolerate a non-2xx RuntimeError the same way
+    # create_epic already does, not just connection-level failures.
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("500")),
+    )
+    provider = p.PlaneTicketProvider()
+    assert provider.create_story("S1", "desc", None, "agent-pipeline") is None
+
+
+def test_plane_ticket_provider_create_story_returns_issue_id_when_epic_link_fails(
+    monkeypatch, capsys,
+):
+    # The issue itself was created successfully; only the (optional) epic-
+    # link call failed afterwards. Discarding issue_id here would orphan a
+    # real Plane ticket (never referenced by the manifest) and cause
+    # ingest_plan to create a duplicate issue on a retried ingest - the link
+    # failure must degrade the link only, matching create_epic's "epic
+    # support is optional" contract, not discard a real created id.
+    def flaky_plane(method, path, **kwargs):
+        if "/epics/" in path and path.endswith("/issues/"):
+            raise httpx.ConnectError("connection refused")
+        return _fake_plane(method, path, **kwargs)
+
+    monkeypatch.setattr(p, "plane_request", flaky_plane)
+    provider = p.PlaneTicketProvider()
+    issue_id = provider.create_story("S1", "desc", "epic-1", "agent-pipeline")
+    assert issue_id == "issue-1"
+    assert "Warning" in capsys.readouterr().out
 
 
 def test_plane_ticket_provider_set_state_delegates_to_plane_set_state(monkeypatch):

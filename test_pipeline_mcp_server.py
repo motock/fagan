@@ -748,6 +748,27 @@ def test_plane_ticket_provider_create_story_falls_back_to_none_on_api_error(
     assert provider.create_story("S1", "desc", None, "agent-pipeline") is None
 
 
+def test_plane_ticket_provider_create_story_returns_issue_id_when_epic_link_fails(
+    monkeypatch, capsys,
+):
+    # The issue itself was created successfully; only the (optional) epic-
+    # link call failed afterwards. Discarding issue_id here would orphan a
+    # real Plane ticket (never referenced by the manifest) and cause
+    # ingest_plan to create a duplicate issue on a retried ingest - the link
+    # failure must degrade the link only, matching create_epic's "epic
+    # support is optional" contract, not discard a real created id.
+    def flaky_plane(method, path, **kwargs):
+        if "/epics/" in path and path.endswith("/issues/"):
+            raise httpx.ConnectError("connection refused")
+        return _fake_plane(method, path, **kwargs)
+
+    monkeypatch.setattr(p, "plane_request", flaky_plane)
+    provider = p.PlaneTicketProvider()
+    issue_id = provider.create_story("S1", "desc", "epic-1", "agent-pipeline")
+    assert issue_id == "issue-1"
+    assert "Warning" in capsys.readouterr().out
+
+
 def test_plane_ticket_provider_set_state_delegates_to_plane_set_state(monkeypatch):
     calls = []
     monkeypatch.setattr(

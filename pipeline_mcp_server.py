@@ -543,14 +543,25 @@ class PlaneTicketProvider:
                 "labels": [label_id],
             })
             issue_id = issue_resp["id"]
-            if epic_id is not None:
-                plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
-                              json={"issue_id": issue_id})
-            return issue_id
         except Exception as e:
             print(f"Warning: Plane create_story({summary!r}) failed, "
                   f"falling back to a local/synthetic story key: {e}")
             return None
+        # The epic link is a second, separate call after a real issue has
+        # already been created. Its failure must only degrade the link (the
+        # issue stays ungrouped, like create_epic's own optional-module
+        # fallback) - not discard the just-created issue_id, which would
+        # orphan a real Plane ticket and cause a retried ingest_plan to
+        # create a duplicate.
+        if epic_id is not None:
+            try:
+                plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
+                              json={"issue_id": issue_id})
+            except Exception as e:
+                print(f"Warning: Plane create_story({summary!r}) succeeded but "
+                      f"linking issue {issue_id!r} to epic {epic_id!r} failed, "
+                      f"continuing without the epic link: {e}")
+        return issue_id
 
     def set_state(
         self, story_key: str, state: LogicalState, plan_name: str | None = None,

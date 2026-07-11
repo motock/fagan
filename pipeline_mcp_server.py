@@ -1304,8 +1304,15 @@ def _try_auto_resolve_conflict(worktree: str) -> list[str]:
 
         resolutions[fname] = _resolve_conflict_blocks(text, blocks)
 
-    for fname, resolved_text in resolutions.items():
-        (Path(worktree) / fname).write_text(resolved_text)
+    # Wrap the write loop in try/except so a write failure (ENOSPC, EROFS,
+    # quota, etc.) disqualifies the whole step instead of propagating and
+    # leaving the worktree mid-rebase. Matches the read-side handling above
+    # and honors _rebase_onto_master's never-raises contract.
+    try:
+        for fname, resolved_text in resolutions.items():
+            (Path(worktree) / fname).write_text(resolved_text)
+    except (OSError, UnicodeDecodeError):
+        return []
     return list(resolutions.keys())
 
 

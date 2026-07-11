@@ -3881,6 +3881,29 @@ def test_rebase_aborts_all_or_nothing_across_multiple_files(tmp_path, monkeypatc
     assert not rb.get("auto_resolved")
 
 
+def test_auto_resolve_conflict_disqualifies_on_write_failure(tmp_path, monkeypatch):
+    # A write failure (ENOSPC, EROFS, quota, etc.) while applying an
+    # otherwise-eligible additive-import resolution must disqualify the step
+    # (return []) rather than propagate and leave the worktree mid-rebase.
+    base = "import os\n\n\ndef foo():\n    pass\n"
+    agent = "import os\nimport sys\n\n\ndef foo():\n    pass\n"
+    master = "import os\nimport json\n\n\ndef foo():\n    pass\n"
+    repo, wt = _setup_conflict_repo(
+        tmp_path, {"shared.py": base}, {"shared.py": agent}, {"shared.py": master},
+    )
+    monkeypatch.setattr(p, "REPO_ROOT", str(repo))
+    subprocess.run(["git", "fetch", "origin"], cwd=wt, capture_output=True, text=True, check=True)
+    r = subprocess.run(["git", "rebase", "origin/master"], cwd=wt, capture_output=True, text=True)
+    assert r.returncode != 0, "expected the rebase to conflict"
+
+    def _boom(self, *a, **kw):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    result = p._try_auto_resolve_conflict(str(wt))
+    assert result == []
+
+
 def test_rebase_no_conflict_has_no_auto_resolved_key(tmp_path, monkeypatch):
     # Regression check: a normal, non-conflicting rebase must keep returning
     # its existing shape - no `auto_resolved` key at all for the common case.

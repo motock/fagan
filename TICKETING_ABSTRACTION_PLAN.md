@@ -5,6 +5,14 @@
 > `PlaneTicketProvider`, `JiraTicketProvider` (stub), and `get_ticket_provider()`
 > now live in `pipeline_mcp_server.py`. All 756 existing + 14 new tests pass
 > unchanged. Follow-up: a real `JiraTicketProvider` implementation (see S5/bottom).
+>
+> **2026-07-11:** "optional" now also covers Plane *configured but temporarily
+> unreachable* (connection refused/timeout/any `httpx` transport error), not just
+> unconfigured — `PlaneTicketProvider.create_epic`/`create_story` catch any
+> failure and return `None` so `ingest_plan` falls back to local/synthetic story
+> keys instead of raising, with a `Warning:` print surfacing the failure. See the
+> "PlaneTicketProvider.create_epic/create_story must never raise on a Plane
+> connection failure" story (3ff4018d-3f82-46ac-97df-30672dccc82a).
 
 ## Goal
 Replace the Plane-specific calls scattered through `pipeline_mcp_server.py` with a small

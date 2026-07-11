@@ -74,6 +74,18 @@ NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
 MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "40"))
 TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
+# Qwen3 hybrid thinking control. Qwen3.6-27B (and other Qwen3 dense models)
+# emit a  Mattis... Mattis reasoning block by default; in this tool-calling
+# loop that breaks dispatch — the block lands in `content` with no native
+# tool_calls and the driver spins "no tool call" forever (observed:
+# charaf/Huihui-Qwen3.6-27B-abliterated-mlx-nvfp4:thinking-coding, 60-step
+# degenerate loop, 2026-07-11). Ollama's /api/chat accepts a top-level
+# "think": false to suppress the block at the source so the model emits a
+# clean native tool call. Opt-in via LOCAL_AGENT_THINK ("false"/"true");
+# omitted from the request when unset so non-Qwen3 models (devstral, gpt-oss,
+# qwen3-coder) get an unchanged body. See _ollama_payload() and
+# test_local_agent.py.
+THINK = os.environ.get("LOCAL_AGENT_THINK", "").strip().lower()
 # Per-bash-invocation timeout. The model can call `cargo fetch` and wedge on
 # a network index update forever; without this the agent loop blocks on a
 # single subprocess.run until cargo eventually times out (if at all).
@@ -279,6 +291,21 @@ def _provider_chat_turn(messages):
     return envelope["message"]
 
 
+def _ollama_payload(messages):
+    """Build the Ollama /api/chat request body for one turn.
+
+    Extracted from chat() so the Qwen3 thinking-mode flag (THINK) is
+    unit-testable without an HTTP boundary. `think` is included only when
+    LOCAL_AGENT_THINK is explicitly "true"/"false" — omitted otherwise so
+    non-Qwen3 models get an unchanged request body (see THINK's comment).
+    """
+    payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": True,
+               "options": {"num_ctx": NUM_CTX, "temperature": TEMPERATURE}}
+    if THINK in ("true", "false"):
+        payload["think"] = (THINK == "true")
+    return payload
+
+
 def chat(messages):
     """One LLM turn, with retry.
 
@@ -293,8 +320,7 @@ def chat(messages):
     to main()'s except, which commits WIP and returns 1 — same terminal
     behavior as before, but only after we've genuinely tried.
     """
-    payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": True,
-               "options": {"num_ctx": NUM_CTX, "temperature": TEMPERATURE}}
+    payload = _ollama_payload(messages)
     last_exc: Exception | None = None
     for attempt in range(1, CHAT_MAX_ATTEMPTS + 1):
         try:

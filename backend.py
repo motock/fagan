@@ -849,6 +849,16 @@ class OllamaDriver:
             os.environ.get("PIPELINE_LOCAL_MAX_STEPS", str(self.max_steps))
         )
         env["LOCAL_AGENT_MAX_STEPS"] = str(max_steps)
+        # Qwen3 hybrid thinking control — re-read live per dispatch (mirroring
+        # PIPELINE_LOCAL_MAX_STEPS above) so an env edit takes effect without
+        # restarting the MCP server. Only the exact tokens "true"/"false" opt
+        # in; anything else leaves LOCAL_AGENT_THINK unset and local_agent.py
+        # omits the `think` key from the /api/chat body entirely (no-op for
+        # non-Qwen3 models like devstral/gpt-oss/qwen3-coder). See
+        # scripts/local_agent.py THINK/_ollama_payload and test_backend.py.
+        think = os.environ.get("PIPELINE_LOCAL_THINK", "").strip().lower()
+        if think in ("true", "false"):
+            env["LOCAL_AGENT_THINK"] = think
         if oracle_mode:
             env["LOCAL_AGENT_ACCEPTANCE"] = json.dumps(acceptance)
             env["LOCAL_AGENT_MODE"] = "oracle"

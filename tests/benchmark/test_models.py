@@ -84,3 +84,20 @@ def test_gptoss_devstral_review_routes_review_to_devstral_locally():
     # Dispatch model must NOT equal the review model - otherwise this isn't
     # actually testing asymmetric review.
     assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] != env["PIPELINE_LOCAL_REVIEW_MODEL"]
+
+
+def test_qwen36_cell_disables_thinking_and_inherits_shared_defaults():
+    """The qwen36 cell runs a Qwen3 hybrid model (batiai/qwen3.6-27b:q3) with
+    thinking suppressed via PIPELINE_LOCAL_THINK=false, and otherwise inherits
+    the shared local-agent defaults. Guards against accidental removal of the
+    think flag (which would silently re-break the tool-calling loop) and
+    against drift in the model tag."""
+    env = MODELS["qwen36"]["env"]
+    assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] == "batiai/qwen3.6-27b:q3"
+    assert env["PIPELINE_LOCAL_THINK"] == "false"
+    assert env["PIPELINE_BACKEND_DISPATCH"] == "local"
+    # Inherits the shared defaults (same Ollama endpoint/ctx/steps as devstral).
+    assert env["PIPELINE_LOCAL_TEMPERATURE"] == _LOCAL_AGENT_ENV["PIPELINE_LOCAL_TEMPERATURE"]
+    assert env["PIPELINE_LOCAL_NUM_CTX"] == _LOCAL_AGENT_ENV["PIPELINE_LOCAL_NUM_CTX"]
+    assert env["PIPELINE_LOCAL_MAX_STEPS"] == _LOCAL_AGENT_ENV["PIPELINE_LOCAL_MAX_STEPS"]
+    assert env["PIPELINE_LOCAL_ENDPOINT"] == _LOCAL_AGENT_ENV["PIPELINE_LOCAL_ENDPOINT"]

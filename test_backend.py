@@ -843,6 +843,52 @@ def test_dispatch_resolves_model_tier_and_passes_runtime_knobs(tmp_path, monkeyp
     assert captured["env"]["LOCAL_AGENT_MAX_STEPS"] == "12"
 
 
+def test_dispatch_passes_think_flag_to_subprocess(tmp_path, monkeypatch):
+    """PIPELINE_LOCAL_THINK=false must reach the dispatch subprocess as
+    LOCAL_AGENT_THINK=false so local_agent.py can pass "think": false to
+    Ollama's /api/chat for a Qwen3 hybrid model. Re-read live per dispatch
+    (mirroring PIPELINE_LOCAL_MAX_STEPS) so an env edit takes effect without
+    restarting the MCP server."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr: captured.update(env=env)
+        or _FakePopenResult(4245),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setenv("PIPELINE_LOCAL_THINK", "false")
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_THINK"] == "false"
+
+
+def test_dispatch_omits_think_flag_when_unset(tmp_path, monkeypatch):
+    """Unset PIPELINE_LOCAL_THINK must not inject LOCAL_AGENT_THINK at all —
+    non-Qwen3 models (devstral, gpt-oss, qwen3-coder) get an unchanged env and
+    local_agent.py omits the `think` key from the request body."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr: captured.update(env=env)
+        or _FakePopenResult(4246),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert "LOCAL_AGENT_THINK" not in captured["env"]
+
+
 def test_dispatch_passes_acceptance_to_oracle_harness(tmp_path, monkeypatch):
     """When dispatch() is given an `acceptance` list, it switches to the
     oracle-graded harness variant and passes the paths through env. This is

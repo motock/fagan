@@ -889,6 +889,30 @@ def test_dispatch_omits_think_flag_when_unset(tmp_path, monkeypatch):
     assert "LOCAL_AGENT_THINK" not in captured["env"]
 
 
+def test_dispatch_omits_think_flag_for_invalid_value(tmp_path, monkeypatch):
+    """A garbage PIPELINE_LOCAL_THINK value (not "true"/"false") must not
+    inject LOCAL_AGENT_THINK — the backend guard mirrors local_agent.py's
+    `if THINK in ("true", "false")` so a typo neither silently disables
+    reasoning on a model the caller intended to think nor enables it on one
+    they didn't. Only the exact tokens opt in."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr: captured.update(env=env)
+        or _FakePopenResult(4247),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setenv("PIPELINE_LOCAL_THINK", "yes")
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert "LOCAL_AGENT_THINK" not in captured["env"]
+
+
 def test_dispatch_passes_acceptance_to_oracle_harness(tmp_path, monkeypatch):
     """When dispatch() is given an `acceptance` list, it switches to the
     oracle-graded harness variant and passes the paths through env. This is

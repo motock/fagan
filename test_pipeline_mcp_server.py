@@ -6200,7 +6200,11 @@ def test_check_story_status_step_cap_streak_ignored_without_fallback_configured(
     """A plan with no manifest["local_model_fallback"] (the default for every
     plan except the ones that opt in) must not track or act on a step-cap
     streak at all - existing behavior for the vast majority of plans is
-    unchanged."""
+    unchanged. Pinned to non-auto dispatch: under PIPELINE_BACKEND_DISPATCH=
+    auto a no-fallback plan now escalates to Claude instead (see the
+    escalates_to_claude_at_threshold test below), so this test's "no streak
+    tracking at all" guarantee only holds outside auto mode - pin it
+    explicitly rather than relying on the ambient shell env."""
     worktree = tmp_path / "wt"
     worktree.mkdir()
     (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
@@ -6208,6 +6212,7 @@ def test_check_story_status_step_cap_streak_ignored_without_fallback_configured(
         "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
                "worktree": str(worktree), "dispatched_model": "gpt-oss:20b"},
     })
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "claude")
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("detect_test_command must not run on a step-cap exit")
@@ -6363,6 +6368,332 @@ def test_check_story_status_step_cap_streak_ignores_claude_backend_story(
     assert story["backend"] == "claude"
     notif_path = plan_dir / "cap7.notifications.log"
     assert not notif_path.exists() or "switching to fallback model" not in notif_path.read_text()
+
+
+def test_check_story_status_step_cap_streak_escalates_to_claude_at_threshold(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Under PIPELINE_BACKEND_DISPATCH=auto, a plan with NO
+    local_model_fallback configured must not spin forever on a struggling
+    local model: once the step-cap streak reaches STEP_CAP_FALLBACK_THRESHOLD
+    the story escalates to Claude via the same clean-slate teardown
+    _escalate_to_claude already performs for test-failure escalation
+    (worktree/branch removed, journal cleared, backend flips to claude,
+    status reset to todo) - and check_story_status returns early with the
+    step-cap-specific reason instead of reporting stale 'interrupted'."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap8", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "backend": "local", "dispatched_model": "gpt-oss:20b",
+               "step_cap_streak": p.STEP_CAP_FALLBACK_THRESHOLD - 1,
+               "step_cap_streak_model": "gpt-oss:20b"},
+    })
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            returncode = 0
+            stdout = "deadbeef\n" if cmd[:3] == ["git", "rev-parse", "HEAD"] else ""
+            stderr = ""
+        return Result()
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_story_status("cap8", "S1")
+
+    assert result == {"status": "todo", "reason": "step_cap_escalated_to_claude", "pid": 4242}
+    story = _read_manifest(plan_dir, "cap8")["stories"]["S1"]
+    assert story["backend"] == "claude"
+    assert story["escalated"] is True
+    assert story["status"] == "todo"
+    assert "step_cap_streak" not in story
+    assert "step_cap_streak_model" not in story
+    assert any(c[:3] == ["git", "worktree", "remove"] for c in calls)
+    assert any(c[:3] == ["git", "branch", "-D"] for c in calls)
+    journal_path = plan_dir / "cap8.S1.journal.json"
+    assert not journal_path.exists()
+    notif = (plan_dir / "cap8.notifications.log").read_text()
+    assert "Claude" in notif
+    assert "step cap" in notif.lower()
+
+
+def test_check_story_status_step_cap_streak_below_threshold_no_claude_escalation(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Same setup as the threshold-crossing test, but the streak has not yet
+    reached STEP_CAP_FALLBACK_THRESHOLD: the story must stay 'interrupted',
+    backend must be untouched, the streak fields must be incremented (never
+    reset), and no teardown or notification must fire."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap9", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "backend": "local", "dispatched_model": "gpt-oss:20b",
+               "step_cap_streak": 1, "step_cap_streak_model": "gpt-oss:20b"},
+    })
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            returncode = 0
+            stdout = "deadbeef\n" if cmd[:3] == ["git", "rev-parse", "HEAD"] else ""
+            stderr = ""
+        return Result()
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_story_status("cap9", "S1")
+
+    assert result["status"] == "interrupted"
+    story = _read_manifest(plan_dir, "cap9")["stories"]["S1"]
+    assert story["backend"] == "local"
+    assert story["step_cap_streak"] == 2
+    assert story["step_cap_streak_model"] == "gpt-oss:20b"
+    assert not any(c[:3] == ["git", "worktree", "remove"] for c in calls)
+    assert not any(c[:3] == ["git", "branch", "-D"] for c in calls)
+    notif_path = plan_dir / "cap9.notifications.log"
+    assert not notif_path.exists() or "escalating to Claude" not in notif_path.read_text()
+
+
+def test_check_story_status_step_cap_streak_local_fallback_takes_priority_over_claude(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Regression guard: local_model_fallback and Claude escalation are
+    mutually exclusive with no chaining. When a plan has opted into
+    local_model_fallback, crossing the threshold under
+    PIPELINE_BACKEND_DISPATCH=auto must still route through the existing
+    local-fallback-model switch, never through Claude escalation."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap10", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "backend": "local", "dispatched_model": "gpt-oss:20b",
+               "step_cap_streak": p.STEP_CAP_FALLBACK_THRESHOLD - 1,
+               "step_cap_streak_model": "gpt-oss:20b"},
+    })
+    manifest_path = plan_dir / "cap10.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "glm-5.2:cloud"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    result = p.check_story_status("cap10", "S1")
+
+    story = _read_manifest(plan_dir, "cap10")["stories"]["S1"]
+    assert story["model"] == "glm-5.2:cloud"
+    assert story["backend"] == "local"
+    assert "escalated" not in story
+    assert result["status"] == "interrupted"
+
+
+def test_check_story_status_step_cap_streak_local_fallback_never_escalates_to_claude(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Sibling to test_check_story_status_step_cap_streak_noop_once_already_on_
+    fallback_model: even when the streak on the fallback model itself is
+    already several multiples past STEP_CAP_FALLBACK_THRESHOLD (i.e. the
+    fallback model keeps step-capping too) and PIPELINE_BACKEND_DISPATCH=
+    auto, a plan with local_model_fallback configured must never escalate to
+    Claude - no chaining from local fallback to Claude."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap11", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "glm-5.2:cloud",
+               "backend": "local", "dispatched_model": "glm-5.2:cloud",
+               "step_cap_streak": p.STEP_CAP_FALLBACK_THRESHOLD * 5,
+               "step_cap_streak_model": "glm-5.2:cloud"},
+    })
+    manifest_path = plan_dir / "cap11.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "glm-5.2:cloud"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    result = p.check_story_status("cap11", "S1")
+
+    story = _read_manifest(plan_dir, "cap11")["stories"]["S1"]
+    assert story["backend"] == "local"
+    assert story.get("model") == "glm-5.2:cloud"
+    assert "escalated" not in story
+    assert result["status"] == "interrupted"
+    assert story["step_cap_streak"] == p.STEP_CAP_FALLBACK_THRESHOLD * 5
+    assert story["step_cap_streak_model"] == "glm-5.2:cloud"
+
+
+@pytest.mark.parametrize("dispatch_env", ["local", "claude", None])
+def test_check_story_status_step_cap_streak_noop_without_auto_dispatch(
+    plan_dir, tmp_path, monkeypatch, dispatch_env,
+):
+    """No local_model_fallback configured AND PIPELINE_BACKEND_DISPATCH is
+    not 'auto' (explicit 'local', explicit 'claude', or unset/default): the
+    new Claude-escalation branch must never fire, and today's byte-for-byte
+    behavior is preserved - the streak fields are not even created."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap12", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "backend": "local",
+               "dispatched_model": "gpt-oss:20b"},
+    })
+    if dispatch_env is None:
+        monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
+    else:
+        monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", dispatch_env)
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    result = p.check_story_status("cap12", "S1")
+
+    story = _read_manifest(plan_dir, "cap12")["stories"]["S1"]
+    assert result["status"] == "interrupted"
+    assert "step_cap_streak" not in story
+    assert "step_cap_streak_model" not in story
+    assert story["backend"] == "local"
+
+
+def test_check_story_status_step_cap_streak_does_not_reescalate_already_escalated_story(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Mirrors test_advance_pipeline_does_not_escalate_already_escalated's
+    invariant for the step-cap streak path: a story with escalated=True must
+    never be escalated a second time, even past the threshold. Uses a
+    backend='local', escalated=True fixture explicitly (not inferred from
+    backend=='claude')."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap13", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "backend": "local", "dispatched_model": "gpt-oss:20b",
+               "escalated": True,
+               "step_cap_streak": p.STEP_CAP_FALLBACK_THRESHOLD - 1,
+               "step_cap_streak_model": "gpt-oss:20b"},
+    })
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            returncode = 0
+            stdout = "deadbeef\n" if cmd[:3] == ["git", "rev-parse", "HEAD"] else ""
+            stderr = ""
+        return Result()
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_story_status("cap13", "S1")
+
+    story = _read_manifest(plan_dir, "cap13")["stories"]["S1"]
+    assert result["status"] == "interrupted"
+    assert story["backend"] == "local"
+    assert not any(c[:3] == ["git", "worktree", "remove"] for c in calls)
+    assert not any(c[:3] == ["git", "branch", "-D"] for c in calls)
+
+
+def test_check_story_status_step_cap_streak_ignores_claude_backend_without_fallback_configured(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Extends test_check_story_status_step_cap_streak_ignores_claude_backend_
+    story to the no-fallback-configured case: a story already on backend=
+    'claude' with streak fields present must never enter the new
+    Claude-escalation branch, even under PIPELINE_BACKEND_DISPATCH=auto with
+    no local_model_fallback configured (defense in depth - STEP_CAP_MARKERS
+    are only ever printed by local agent scripts)."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(f"{_STEP_CAP_MARKER_LOCAL}\n")
+    _write_manifest(plan_dir, "cap14", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "sonnet",
+               "backend": "claude", "dispatched_model": "sonnet",
+               "step_cap_streak": p.STEP_CAP_FALLBACK_THRESHOLD - 1,
+               "step_cap_streak_model": "sonnet"},
+    })
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("detect_test_command must not run on a step-cap exit")
+    ))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    result = p.check_story_status("cap14", "S1")
+
+    story = _read_manifest(plan_dir, "cap14")["stories"]["S1"]
+    assert result["status"] == "interrupted"
+    assert story["backend"] == "claude"
+    assert story["step_cap_streak"] == p.STEP_CAP_FALLBACK_THRESHOLD - 1
+    assert story["step_cap_streak_model"] == "sonnet"
+
+
+def test_escalate_to_claude_pops_step_cap_streak_fields(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """_escalate_to_claude is now also invoked from the step-cap streak path
+    (see check_story_status), in addition to its original test-failure
+    caller. Its existing pop-key teardown must additionally clear
+    step_cap_streak / step_cap_streak_model so stale local-streak state never
+    lingers on a story that has moved to the claude backend."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    manifest_path = plan_dir / "escg.manifest.json"
+    manifest = {
+        "epics": {},
+        "stories": {
+            "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+                   "worktree": str(worktree), "backend": "local",
+                   "step_cap_streak": 3, "step_cap_streak_model": "gpt-oss:20b",
+                   "dispatch_attempts": 1, "dispatch_error": "boom"},
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p._escalate_to_claude(manifest, "escg", "S1", manifest_path)
+
+    story = manifest["stories"]["S1"]
+    assert "step_cap_streak" not in story
+    assert "step_cap_streak_model" not in story
+    assert story["backend"] == "claude"
+    assert story["escalated"] is True
+    assert story["status"] == "todo"
 
 
 def test_check_story_status_normal_completion_still_routes_to_tests_passed(

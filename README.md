@@ -507,7 +507,7 @@ time the active local model changes. Currently populated:
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` | `1` | Rework budget for a story carrying a non-empty `acceptance` block — lower than `PIPELINE_REWORK_MAX_ATTEMPTS` because an oracle-backed story already has an objective, pre-verified correctness signal (it only reaches review after tests, including the oracle, pass); a reviewer that keeps finding beyond-oracle issues mostly spends cycles rather than changing the outcome, so a lower cap parks it for human review faster. Falls back to `PIPELINE_REWORK_MAX_ATTEMPTS` for any story without a truthy `acceptance` list. Superseded by `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` once a story is escalated (see below). |
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` | `3` | Rework budget for a story that has already been escalated to Claude (`story["escalated"]`), taking priority over `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` regardless of whether the story also carries an acceptance oracle. `_ORACLE`'s tight cap exists to converge *local* review fast; once escalation has already paid its cost (real Claude usage, and per 2026-07-04's benchmark validation, sometimes real wall-clock time if the Claude reviewer gets rate-limited), reusing that same cap just throttles Claude's shot at the same feedback for no benefit — 6 of 11 escalated cells in that run parked after exactly one post-escalation cycle. |
 | `PIPELINE_LOCAL_MAX_RISK` | `low` | Highest story risk the `auto` router sends to the local agent: `low` \| `medium` \| `high`. Stories above this threshold go straight to Claude. Security-persona stories always go to Claude regardless of this setting. |
-| `PIPELINE_STEP_CAP_FALLBACK_THRESHOLD` | `3` | Consecutive same-model step-cap interrupts before a story's `model` is switched to the plan's `local_model_fallback` (see below). Only takes effect on plans that set that manifest field; a story with no fallback configured hits the step cap indefinitely on the same model, as before. |
+| `PIPELINE_STEP_CAP_FALLBACK_THRESHOLD` | `3` | Consecutive same-model step-cap interrupts before a story's `model` is switched to the plan's `local_model_fallback` (see below). Only takes effect on plans that set that manifest field. On a plan with **no** `local_model_fallback` set, the same threshold instead gates escalation **to Claude** under `PIPELINE_BACKEND_DISPATCH=auto` (see routing item 2 below) — a story with no fallback configured no longer hits the step cap indefinitely on the same model under `auto`; outside `auto` (explicit `local`/`claude`), behavior is unchanged. |
 
 **Backend routing:** dispatch, review, and overlord each resolve independently
 via `backend.get_backend(role)` (see `backend.py`) — moving one role off Claude
@@ -545,7 +545,15 @@ enables a layered routing strategy:
    agent. If the local run fails (tests don't pass), the orchestrator wipes the
    local worktree, resets the story, and re-dispatches it on Claude starting clean.
    A second failure on Claude is terminal (same behavior as today). The escalation
-   flag (`story["escalated"]`) prevents infinite looping.
+   flag (`story["escalated"]`) prevents infinite looping. The same escalation
+   (`_escalate_to_claude`, same clean-slate teardown) also fires when a story
+   keeps hitting the step cap on the same local model: see
+   `PIPELINE_STEP_CAP_FALLBACK_THRESHOLD` and routing item 4 below — a
+   repeated step-cap streak is treated as a local-model capability problem,
+   the same way a test failure is. This only applies when the plan has **not**
+   opted into `local_model_fallback` (item 4); the two are mutually exclusive
+   with no chaining — a plan with `local_model_fallback` configured always
+   stays on the local-fallback path, even past the threshold.
 3. **Review-side escalation (local review can't converge):** under `auto`, a
    story that exhausts its rework budget (`PIPELINE_REWORK_MAX_ATTEMPTS[_ORACLE]`)
    or its inconclusive-review budget (`PIPELINE_REVIEW_INCONCLUSIVE_MAX`) escalates
@@ -585,6 +593,14 @@ enables a layered routing strategy:
      starting over. Once a story is already running on the fallback model,
      further step-cap hits are a no-op (there is no fallback past the
      fallback), and this path only ever applies to a `local`-backend story.
+
+   On a plan that has **not** set `local_model_fallback`, a repeated
+   step-cap streak takes a different path entirely: under
+   `PIPELINE_BACKEND_DISPATCH=auto` it escalates the story to Claude instead
+   (item 2 above), rather than looping on the same model forever. The two
+   fallbacks never chain — whether a plan escalates to a different local
+   model or to Claude is decided once, by whether `local_model_fallback` is
+   set, not by trying one then the other.
 
 To activate, set `PIPELINE_BACKEND_DISPATCH=auto` in your env (e.g.
 `~/.claude.json` `mcpServers.pipeline.env`). Stories already carrying

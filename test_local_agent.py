@@ -1138,3 +1138,51 @@ def test_stream_one_turn_no_thinking_key_is_noop(monkeypatch):
     assert msg["role"] == "assistant"
     assert msg["content"] == "I'll create a file."
     assert "tool_calls" not in msg
+
+
+# --- Qwen3 hybrid thinking-mode control (PIPELINE_LOCAL_THINK / LOCAL_AGENT_THINK) ---
+#
+# Qwen3.6-27B (and other Qwen3 dense models) emit a  Mattis... Mattis reasoning
+# block by default. In the tool-calling loop that breaks dispatch: the block
+# lands in `content` with no native tool_calls and the driver spins "no tool
+# call" forever. Ollama's /api/chat accepts a top-level "think": false to
+# suppress the block at the source so the model emits a clean native tool call.
+# The flag is opt-in via LOCAL_AGENT_THINK ("false"/"true"); omitted entirely
+# when unset so non-Qwen3 models (devstral, gpt-oss, qwen3-coder) get an
+# unchanged request body.
+
+def test_ollama_payload_omits_think_by_default(monkeypatch):
+    """Unset LOCAL_AGENT_THINK must not add a `think` key — non-Qwen3 models
+    get an unchanged /api/chat request."""
+    monkeypatch.setattr(la, "THINK", "")
+    p = la._ollama_payload([{"role": "user", "content": "hi"}])
+    assert "think" not in p
+    # The rest of the payload is intact.
+    assert p["model"] == la.MODEL
+    assert p["stream"] is True
+    assert p["options"]["num_ctx"] == la.NUM_CTX
+    assert p["options"]["temperature"] == la.TEMPERATURE
+
+
+def test_ollama_payload_think_false_suppresses_qwen3_reasoning(monkeypatch):
+    """LOCAL_AGENT_THINK=false adds "think": False so a Qwen3 hybrid model
+    skips its  Mattis block and emits a clean native tool call."""
+    monkeypatch.setattr(la, "THINK", "false")
+    p = la._ollama_payload([{"role": "user", "content": "hi"}])
+    assert p["think"] is False
+
+
+def test_ollama_payload_think_true_when_explicitly_enabled(monkeypatch):
+    """LOCAL_AGENT_THINK=true is honored for runs that DO want reasoning."""
+    monkeypatch.setattr(la, "THINK", "true")
+    p = la._ollama_payload([{"role": "user", "content": "hi"}])
+    assert p["think"] is True
+
+
+def test_ollama_payload_think_unknown_value_is_omitted(monkeypatch):
+    """A garbage value must not produce a bogus "think": false that silently
+    disables reasoning on a model the caller intended to think. Only the
+    exact tokens "true"/"false" opt in; anything else is a no-op."""
+    monkeypatch.setattr(la, "THINK", "yes")
+    p = la._ollama_payload([{"role": "user", "content": "hi"}])
+    assert "think" not in p

@@ -99,6 +99,25 @@ MODELS: dict[str, dict] = {
         "BENCH_QWEN36CODER_TAG",
         "SetneufPT/Qwen3.6-27B-CODER-MTP_Q4_105k_24GB-GPU:latest",
     )),
+    # Qwen3.6-27B base (dense, hybrid thinking) via Ollama, in NON-thinking
+    # mode. Unlike qwen3-coder (MoE, inherently non-thinking), the dense 27B
+    # is a hybrid model that emits  Mattis... Mattis blocks by default — which
+    # break the tool-calling loop (the driver sees no native tool_call and
+    # spins "no tool call" until the step cap). PIPELINE_LOCAL_THINK=false
+    # passes "think": false to /api/chat, suppressing the block at the source
+    # so the model emits clean native tool calls. The Q3_K_M quant (13 GB)
+    # fits the ~17.3 GiB Ollama ceiling on a 24 GB Mac with ~4 GB headroom
+    # (comfortable for 16k KV cache); override BENCH_QWEN36_TAG for a different
+    # quant — q4 (16 GB, tight) or iq3 (11 GB, very safe). Tool calling uses
+    # Ollama's qwen3_coder parser; all quants emit valid tool-call JSON when
+    # "think": false is passed (per batiai/qwen3.6-27b model docs).
+    "qwen36": {
+        "mock": False,
+        "env": {
+            **_local(os.environ.get("BENCH_QWEN36_TAG", "batiai/qwen3.6-27b:q3"))["env"],
+            "PIPELINE_LOCAL_THINK": "false",
+        },
+    },
     "gptoss": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="1.0", num_ctx="32768"),
     "gptoss_temp03": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="0.3", num_ctx="32768"),
     # Same dispatch/review settings as gptoss_temp03, but PIPELINE_BACKEND_

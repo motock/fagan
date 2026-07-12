@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -947,7 +948,26 @@ def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -
         review_model_override = os.environ.get("PIPELINE_LOCAL_REVIEW_MODEL")
         if review_model_override:
             model = review_model_override
+    # The reviewer model has no access to detect_test_command's Python-level
+    # venv resolution, so a bare "Run the test suite" instruction leaves it
+    # to guess a shell command - e.g. the relative `.venv/bin/python -m
+    # pytest`, which does not exist inside a worktree (worktrees are
+    # gitignored and never contain .venv). Resolve the same command
+    # check_story_status's test gate trusts and hand it over verbatim. Any
+    # resolution failure (nonexistent worktree, no recognized build marker)
+    # must not block review - fall back to the generic instruction below.
+    test_command_instruction = ""
+    try:
+        test_dir, test_cmd = detect_test_command(Path(worktree))
+        test_command_instruction = (
+            f"Run the test suite with exactly this command (do not "
+            f"substitute a different interpreter path): cd "
+            f"{shlex.quote(str(test_dir))} && {shlex.join(test_cmd)}\n\n"
+        )
+    except Exception:
+        pass
     prompt = (
+        f"{test_command_instruction}"
         f"Review the changes on branch {branch} in this worktree against our "
         f"standards. Run the test suite. Specifically check: (1) any function "
         f"taking a mutable argument (list, dict, set) does not mutate it in "

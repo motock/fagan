@@ -1107,3 +1107,206 @@ def test_stream_one_turn_raises_on_5xx(monkeypatch):
         assert False, "expected HTTPStatusError(500)"
     except httpx.HTTPStatusError as e:
         assert e.response.status_code == 500
+
+
+# ---------- transcript persistence + resume (ported from local_agent.py, see
+# test_local_agent_persistence.py for the reference test suite) ----------
+# These tests need a fresh module import per test with different env vars
+# (LOCAL_AGENT_RESUME_TRANSCRIPT_PATH etc. are read at call time via
+# os.environ.get, but loading a fresh module keeps each test isolated from
+# the module-level `lao` instance shared by the rest of this file).
+
+def load_oracle_module_with_env(env_vars):
+    os.environ.setdefault("LOCAL_AGENT_MODEL", "test-model")
+    for k, v in env_vars.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = str(v)
+    spec = importlib.util.spec_from_file_location(
+        "local_agent_oracle", str(Path(__file__).parent / "scripts" / "local_agent_oracle.py")
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_oracle_persistence_writes_valid_json(tmp_path):
+    transcript_file = tmp_path / "transcript.json"
+    env = {"LOCAL_AGENT_TRANSCRIPT_PATH": str(transcript_file)}
+    mod = load_oracle_module_with_env(env)
+    messages = mod.PersistingList(transcript_path=str(transcript_file))
+    msg = {"role": "assistant", "content": "hi"}
+    messages.append(msg)
+    assert transcript_file.exists()
+    with open(transcript_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data == [msg]
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_oracle_resume_loads_valid_transcript(tmp_path):
+    transcript_file = tmp_path / "resume.json"
+    data = [{"role": "system", "content": "sys"}, {"role": "user", "content": "task"}]
+    transcript_file.write_text(json.dumps(data), encoding="utf-8")
+    env = {"LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(transcript_file)}
+    mod = load_oracle_module_with_env(env)
+    assert mod._load_resume_transcript() == data
+
+
+def test_oracle_resume_appends_new_user_turn(tmp_path):
+    transcript_file = tmp_path / "resume.json"
+    data = [{"role": "system", "content": "sys"}, {"role": "user", "content": "task"}]
+    transcript_file.write_text(json.dumps(data), encoding="utf-8")
+    env = {
+        "LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(transcript_file),
+        "LOCAL_AGENT_RESUME_APPEND_CONTENT": "feedback",
+    }
+    mod = load_oracle_module_with_env(env)
+    loaded = mod._load_resume_transcript()
+    messages = mod.PersistingList()
+    messages.extend(loaded)
+    if loaded and env.get("LOCAL_AGENT_RESUME_APPEND_CONTENT"):
+        messages.append({"role": "user", "content": env["LOCAL_AGENT_RESUME_APPEND_CONTENT"]})
+    assert messages[-1] == {"role": "user", "content": "feedback"}
+    assert len(messages) == 3
+
+
+def test_oracle_resume_fallback_missing_file(tmp_path, capsys):
+    env = {"LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(tmp_path / "nonexistent.json")}
+    mod = load_oracle_module_with_env(env)
+    loaded = mod._load_resume_transcript()
+    assert loaded is None
+    out, _ = capsys.readouterr()
+    assert "RESUME FAILED" in out
+
+
+def test_oracle_resume_fallback_invalid_json(tmp_path, capsys):
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("{invalid json", encoding="utf-8")
+    env = {"LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(bad_file)}
+    mod = load_oracle_module_with_env(env)
+    loaded = mod._load_resume_transcript()
+    assert loaded is None
+    out, _ = capsys.readouterr()
+    assert "RESUME FAILED" in out
+
+
+def test_oracle_resume_fallback_invalid_shape_empty_list(tmp_path, capsys):
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("[]", encoding="utf-8")
+    env = {"LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(bad_file)}
+    mod = load_oracle_module_with_env(env)
+    loaded = mod._load_resume_transcript()
+    assert loaded is None
+    out, _ = capsys.readouterr()
+    assert "RESUME FAILED" in out
+
+
+def test_oracle_resume_fallback_invalid_shape_dict(tmp_path, capsys):
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text(json.dumps({"role": "system", "content": "sys"}), encoding="utf-8")
+    env = {"LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(bad_file)}
+    mod = load_oracle_module_with_env(env)
+    loaded = mod._load_resume_transcript()
+    assert loaded is None
+    out, _ = capsys.readouterr()
+    assert "RESUME FAILED" in out
+
+
+def test_oracle_resume_fallback_invalid_shape_unknown_role(tmp_path, capsys):
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text(json.dumps([{"role": "narrator", "content": "sys"}]), encoding="utf-8")
+    env = {"LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(bad_file)}
+    mod = load_oracle_module_with_env(env)
+    loaded = mod._load_resume_transcript()
+    assert loaded is None
+    out, _ = capsys.readouterr()
+    assert "RESUME FAILED" in out
+
+
+def test_oracle_no_persistence_when_path_unset(tmp_path):
+    env = {"LOCAL_AGENT_TRANSCRIPT_PATH": None}
+    mod = load_oracle_module_with_env(env)
+    messages = mod.PersistingList()
+    messages.append({"role": "assistant", "content": "hi"})
+    assert not list(tmp_path.glob("*.json"))
+
+
+def test_oracle_atomic_write_no_temp_file(tmp_path):
+    transcript_file = tmp_path / "transcript.json"
+    env = {"LOCAL_AGENT_TRANSCRIPT_PATH": str(transcript_file)}
+    mod = load_oracle_module_with_env(env)
+    messages = mod.PersistingList(transcript_path=str(transcript_file))
+    messages.append({"role": "assistant", "content": "hi"})
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_oracle_main_uses_fresh_messages_when_no_resume_path(monkeypatch, tmp_path):
+    """When LOCAL_AGENT_RESUME_TRANSCRIPT_PATH is unset, main() must build the
+    fresh [system, user-task] pair, matching local_agent.py's fallback."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LOCAL_AGENT_RESUME_TRANSCRIPT_PATH", raising=False)
+    monkeypatch.delenv("LOCAL_AGENT_TRANSCRIPT_PATH", raising=False)
+    monkeypatch.delenv("LOCAL_AGENT_RESUME_APPEND_CONTENT", raising=False)
+    monkeypatch.setenv("LOCAL_AGENT_TASK", "do the task")
+    monkeypatch.setenv("LOCAL_AGENT_MAX_STEPS", "1")
+    monkeypatch.setattr(lao, "MAX_STEPS", 1)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+
+    captured = {}
+
+    def _fake_chat(messages):
+        captured["messages"] = list(messages)
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(lao, "chat", _fake_chat)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, ""))
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "exclude_runtime_artifacts", lambda: None)
+
+    lao.main()
+
+    messages = captured["messages"]
+    assert messages[0]["role"] == "system"
+    assert messages[1] == {"role": "user", "content": "do the task"}
+
+
+def test_oracle_main_resumes_transcript_and_skips_fresh_pair(monkeypatch, tmp_path):
+    """When LOCAL_AGENT_RESUME_TRANSCRIPT_PATH points at a valid transcript,
+    main() must load it instead of building the fresh system/task pair."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    transcript_file = tmp_path / "resume.json"
+    resumed = [{"role": "system", "content": "orig sys"},
+               {"role": "user", "content": "orig task"},
+               {"role": "assistant", "content": "prior reply"}]
+    transcript_file.write_text(json.dumps(resumed), encoding="utf-8")
+    monkeypatch.setenv("LOCAL_AGENT_RESUME_TRANSCRIPT_PATH", str(transcript_file))
+    monkeypatch.delenv("LOCAL_AGENT_TRANSCRIPT_PATH", raising=False)
+    monkeypatch.setenv("LOCAL_AGENT_RESUME_APPEND_CONTENT", "reviewer feedback")
+    monkeypatch.setenv("LOCAL_AGENT_TASK", "do the task")
+    monkeypatch.setattr(lao, "MAX_STEPS", 1)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+
+    captured = {}
+
+    def _fake_chat(messages):
+        captured["messages"] = list(messages)
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(lao, "chat", _fake_chat)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, ""))
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "exclude_runtime_artifacts", lambda: None)
+
+    lao.main()
+
+    messages = captured["messages"]
+    assert messages[0] == resumed[0]
+    assert messages[1] == resumed[1]
+    assert messages[2] == resumed[2]
+    assert messages[3] == {"role": "user", "content": "reviewer feedback"}

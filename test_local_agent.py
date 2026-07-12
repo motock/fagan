@@ -7,6 +7,7 @@ HTTP call) are not exercised here — these cover the pure-logic helpers.
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -1186,3 +1187,69 @@ def test_ollama_payload_think_unknown_value_is_omitted(monkeypatch):
     monkeypatch.setattr(la, "THINK", "yes")
     p = la._ollama_payload([{"role": "user", "content": "hi"}])
     assert "think" not in p
+
+
+def _init_git_repo(path):
+    subprocess.run(["git", "init"], cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, capture_output=True, text=True)
+
+
+def test_exclude_runtime_artifacts_adds_agent_transcript_json(tmp_path, monkeypatch):
+    """The transcript-persistence file must be excluded the same way
+    agent.log already is, so backend.py's LOCAL_AGENT_TRANSCRIPT_PATH write
+    inside the worktree doesn't get swept into commits."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+
+    la.exclude_runtime_artifacts()
+
+    exclude_path = tmp_path / ".git" / "info" / "exclude"
+    lines = exclude_path.read_text().splitlines()
+    assert ".agent_transcript.json" in lines
+
+
+def test_exclude_runtime_artifacts_agent_transcript_json_not_duplicated(tmp_path, monkeypatch):
+    """Calling exclude_runtime_artifacts() twice must not duplicate the
+    .agent_transcript.json line, matching the existing idempotent behavior
+    for agent.log."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+
+    la.exclude_runtime_artifacts()
+    la.exclude_runtime_artifacts()
+
+    exclude_path = tmp_path / ".git" / "info" / "exclude"
+    lines = exclude_path.read_text().splitlines()
+    assert lines.count(".agent_transcript.json") == 1
+
+
+def test_exclude_runtime_artifacts_still_excludes_agent_log_and_pycache(tmp_path, monkeypatch):
+    """Regression guard: adding .agent_transcript.json must not remove or
+    reorder the pre-existing exclusions."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+
+    la.exclude_runtime_artifacts()
+
+    exclude_path = tmp_path / ".git" / "info" / "exclude"
+    lines = exclude_path.read_text().splitlines()
+    assert "agent.log" in lines
+    assert "__pycache__/" in lines
+    assert "*.pyc" in lines
+
+
+def test_exclude_runtime_artifacts_hides_transcript_file_from_git_status(tmp_path, monkeypatch):
+    """The actual observable behavior this fix delivers: once
+    exclude_runtime_artifacts() has run, a real .agent_transcript.json file
+    sitting in the worktree must not show up as untracked in `git status`."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+
+    la.exclude_runtime_artifacts()
+    (tmp_path / ".agent_transcript.json").write_text('{"messages": []}')
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True
+    ).stdout
+    assert ".agent_transcript.json" not in status

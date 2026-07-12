@@ -2498,9 +2498,26 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
 
+        # A rework redispatch (changes_requested with stored review_feedback)
+        # on the local Ollama driver can resume the prior dispatch's message
+        # transcript instead of rebuilding a cold-start prompt via
+        # _build_dispatch_command's rework_instruction - the transcript
+        # already holds the full prior context, so only the reviewer's new
+        # feedback needs to be appended. Guard on the transcript file actually
+        # existing (backend.py writes it to cwd/.agent_transcript.json on
+        # every dispatch): a story whose first dispatch predates this
+        # feature, ran on a different backend, or had its transcript cleaned
+        # up must fall back to the existing from-scratch rework prompt rather
+        # than crash.
+        review_feedback = story.get("review_feedback")
+        transcript_path = worktree_path / ".agent_transcript.json"
+        resume_via_transcript = (
+            dispatch_backend == "local" and review_feedback and transcript_path.exists()
+        )
+
         spec = _build_dispatch_command(
             story, story_key, plan_name=plan_name, resume_journal=journal or None,
-            review_feedback=story.get("review_feedback"),
+            review_feedback=None if resume_via_transcript else review_feedback,
         )
         worktree_path.mkdir(parents=True, exist_ok=True)
         log_path = worktree_path / "agent.log"
@@ -2553,6 +2570,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # we're actually invoking that driver so Claude's signature stays clean.
         if dispatch_backend == "local" and acceptance_paths:
             dispatch_kwargs["acceptance"] = acceptance_paths
+
+        if resume_via_transcript:
+            dispatch_kwargs["resume_transcript_path"] = transcript_path
+            dispatch_kwargs["resume_append_content"] = (
+                "The code reviewer REQUESTED CHANGES on your previous attempt. "
+                f"Address this feedback:\n{review_feedback}"
+            )
 
         handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(**dispatch_kwargs)
 

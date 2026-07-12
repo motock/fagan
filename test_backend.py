@@ -913,6 +913,123 @@ def test_dispatch_omits_think_flag_for_invalid_value(tmp_path, monkeypatch):
     assert "LOCAL_AGENT_THINK" not in captured["env"]
 
 
+# ---------- Transcript persistence / resume env-var plumbing ----------
+
+def test_dispatch_always_sets_transcript_path_inside_cwd(tmp_path, monkeypatch):
+    """Every local dispatch must persist its transcript so a later rework
+    can resume it. LOCAL_AGENT_TRANSCRIPT_PATH is always set to a deterministic
+    path inside the given cwd (cwd / ".agent_transcript.json") on every
+    dispatch call — not just rework ones."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env, cwd=cwd) or _FakePopenResult(4248),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    transcript = captured["env"]["LOCAL_AGENT_TRANSCRIPT_PATH"]
+    assert transcript == str(tmp_path / ".agent_transcript.json")
+
+
+def test_dispatch_passes_resume_transcript_path_when_set(tmp_path, monkeypatch):
+    """When resume_transcript_path is given, it must reach the subprocess as
+    LOCAL_AGENT_RESUME_TRANSCRIPT_PATH so local_agent.py loads the prior
+    transcript instead of cold-starting."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(4249),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    resume_path = tmp_path / "prior_transcript.json"
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+        resume_transcript_path=resume_path,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_RESUME_TRANSCRIPT_PATH"] == str(resume_path)
+
+
+def test_dispatch_omits_resume_transcript_path_when_unset(tmp_path, monkeypatch):
+    """Without resume_transcript_path (a first/non-rework dispatch),
+    LOCAL_AGENT_RESUME_TRANSCRIPT_PATH must not appear in the subprocess env
+    at all — no behavior change for a cold-start dispatch."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(4250),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert "LOCAL_AGENT_RESUME_TRANSCRIPT_PATH" not in captured["env"]
+
+
+def test_dispatch_passes_resume_append_content_when_set(tmp_path, monkeypatch):
+    """When resume_append_content is given alongside resume_transcript_path,
+    it must reach the subprocess as LOCAL_AGENT_RESUME_APPEND_CONTENT so
+    local_agent.py appends it as a user message after loading the transcript."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(4251),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    resume_path = tmp_path / "prior_transcript.json"
+    append_content = "The code reviewer REQUESTED CHANGES on your previous attempt. Address this feedback:\nfix the bug"
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+        resume_transcript_path=resume_path,
+        resume_append_content=append_content,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_RESUME_APPEND_CONTENT"] == append_content
+
+
+def test_dispatch_omits_resume_append_content_when_unset(tmp_path, monkeypatch):
+    """Without resume_append_content, LOCAL_AGENT_RESUME_APPEND_CONTENT must
+    not appear in the subprocess env — local_agent.py just resumes the
+    transcript with no appended user message."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(4252),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    resume_path = tmp_path / "prior_transcript.json"
+
+    b.OllamaDriver().dispatch(
+        "fix the bug", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+        resume_transcript_path=resume_path,
+    )
+
+    assert "LOCAL_AGENT_RESUME_APPEND_CONTENT" not in captured["env"]
+
+
 def test_dispatch_passes_acceptance_to_oracle_harness(tmp_path, monkeypatch):
     """When dispatch() is given an `acceptance` list, it switches to the
     oracle-graded harness variant and passes the paths through env. This is

@@ -7912,6 +7912,163 @@ def test_dispatch_story_skips_oracle_write_when_resumed(
     assert (wt / "tests/test_x.py").read_text() == "# evolved by the agent\n"
 
 
+def test_dispatch_story_local_rework_resumes_transcript_when_present(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A rework redispatch on the local Ollama driver whose worktree already
+    holds a transcript from the prior attempt must resume that transcript
+    (LOCAL_AGENT_RESUME_TRANSCRIPT_PATH + LOCAL_AGENT_RESUME_APPEND_CONTENT)
+    instead of rebuilding the from-scratch rework_instruction prompt."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    transcript_path = worktree_path / ".agent_transcript.json"
+    transcript_path.write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "localrw", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(6001)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("localrw", "S1")
+
+    assert result["resumed"] is True
+    env = popen_calls[0]["env"]
+    assert env["LOCAL_AGENT_RESUME_TRANSCRIPT_PATH"] == str(transcript_path)
+    assert env["LOCAL_AGENT_RESUME_APPEND_CONTENT"] == (
+        "The code reviewer REQUESTED CHANGES on your previous attempt. "
+        "Address this feedback:\nThe SQL is injectable; parameterize it."
+    )
+    # The old-style rework_instruction must not be baked into the cold-start
+    # task prompt in this path - the transcript already carries prior context
+    # and the append content carries the new feedback.
+    assert "REQUESTED CHANGES" not in env["LOCAL_AGENT_TASK"]
+    assert "The SQL is injectable" not in env["LOCAL_AGENT_TASK"]
+
+
+def test_dispatch_story_local_rework_falls_back_when_transcript_missing(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """If the worktree has no transcript file (first dispatch predated this
+    feature, ran on a different backend, or the file was cleaned up), the
+    local-driver rework redispatch must fall back to the existing
+    from-scratch rework_instruction prompt rather than crash."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    _write_manifest(plan_dir, "localrwmiss", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(6002)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("localrwmiss", "S1")
+
+    assert result["resumed"] is True
+    env = popen_calls[0]["env"]
+    assert "LOCAL_AGENT_RESUME_TRANSCRIPT_PATH" not in env
+    assert "LOCAL_AGENT_RESUME_APPEND_CONTENT" not in env
+    assert "The SQL is injectable; parameterize it." in env["LOCAL_AGENT_TASK"]
+
+
+def test_dispatch_story_local_rework_empty_review_feedback_skips_resume_path(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """An empty review_feedback string is falsy, matching the existing
+    rework_instruction guard (`if review_feedback:`) - it must not trigger
+    the transcript-resume path even when a transcript file exists."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / ".agent_transcript.json").write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "localrwempty", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": ""},
+    })
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(6003)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("localrwempty", "S1")
+
+    env = popen_calls[0]["env"]
+    assert "LOCAL_AGENT_RESUME_TRANSCRIPT_PATH" not in env
+    assert "LOCAL_AGENT_RESUME_APPEND_CONTENT" not in env
+
+
+def test_dispatch_story_claude_rework_unaffected_by_transcript_resume(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The claude backend's rework redispatch must be completely unchanged by
+    this feature: it never sees LOCAL_AGENT_* env vars and still builds the
+    full from-scratch rework prompt via _build_dispatch_command, even when a
+    transcript file happens to exist in the worktree (e.g. left over from a
+    prior local-backend attempt before an escalation flip)."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / ".agent_transcript.json").write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "clauderw", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: popen_calls.append(cmd) or _FakeProc(6004))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("clauderw", "S1")
+
+    assert result["resumed"] is True
+    prompt = popen_calls[0][popen_calls[0].index("-p") + 1]
+    assert "The SQL is injectable; parameterize it." in prompt
+    assert "REQUESTED CHANGES" in prompt
+
+
 # ---------- Gap 7: surface multi-model concurrent-dispatch risk ----------
 def test_dispatch_warns_on_loaded_model_mismatch(
     plan_dir, worktree_root, agents_dir, monkeypatch,

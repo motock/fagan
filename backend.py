@@ -70,6 +70,9 @@ class Backend(Protocol):
     def dispatch(
         self, prompt: str, *, system: str | None, model: str,
         allowed_tools: str | None, cwd: Path, log_path: Path, append: bool,
+        acceptance: list[str] | None = None,
+        resume_transcript_path: Path | None = None,
+        resume_append_content: str | None = None,
     ) -> AgentHandle:
         """Spawn a non-blocking agentic run, streaming output to log_path."""
         ...
@@ -801,6 +804,8 @@ class OllamaDriver:
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: Path, log_path: Path, append: bool,
         acceptance: list[str] | None = None,
+        resume_transcript_path: Path | None = None,
+        resume_append_content: str | None = None,
     ) -> AgentHandle:
         if allowed_tools and not ({"Edit", "Write"} & set(allowed_tools.split(","))):
             raise NotImplementedError(
@@ -862,6 +867,19 @@ class OllamaDriver:
         if oracle_mode:
             env["LOCAL_AGENT_ACCEPTANCE"] = json.dumps(acceptance)
             env["LOCAL_AGENT_MODE"] = "oracle"
+        # Always persist the transcript so a later rework redispatch can
+        # resume the prior message history instead of rebuilding a cold-start
+        # prompt. The path is deterministic and lives inside the worktree (cwd)
+        # so reworks — which reuse the existing worktree — find the same file.
+        env["LOCAL_AGENT_TRANSCRIPT_PATH"] = str(Path(cwd) / ".agent_transcript.json")
+        # Resume path: when set (a rework redispatch with an existing
+        # transcript), local_agent.py loads the prior transcript and appends
+        # resume_append_content (the reviewer's feedback) as a user message
+        # instead of cold-starting from LOCAL_AGENT_TASK.
+        if resume_transcript_path is not None:
+            env["LOCAL_AGENT_RESUME_TRANSCRIPT_PATH"] = str(resume_transcript_path)
+        if resume_append_content is not None:
+            env["LOCAL_AGENT_RESUME_APPEND_CONTENT"] = resume_append_content
         argv = [str(self._VENV_PYTHON), str(agent_script)]
         log_file = open(log_path, "a" if append else "w")
         proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log_file, stderr=log_file)

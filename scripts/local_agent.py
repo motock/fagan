@@ -61,11 +61,15 @@ import httpx
 # Persistence helpers
 import tempfile
 
+_VALID_ROLES = {"system", "user", "assistant", "tool"}
+
 def _validate_message_list(msgs):
     if not isinstance(msgs, list) or not msgs:
         return False
     for m in msgs:
         if not isinstance(m, dict) or 'role' not in m or 'content' not in m:
+            return False
+        if m['role'] not in _VALID_ROLES:
             return False
     return True
 
@@ -100,6 +104,12 @@ class PersistingList(list):
     def __init__(self, *args, transcript_path=None):
         super().__init__(*args)
         self.transcript_path = transcript_path
+    # Only append() triggers persistence. extend() is intentionally
+    # non-persisting: main() uses extend() for the initial load (both the
+    # fresh system+task pair and a resumed transcript), and that initial
+    # state is either trivially reconstructible (fresh pair) or already
+    # durable in its source resume file. If a future extend() call site
+    # needs durability, override extend() too — do not assume it persists.
     def append(self, item):
         super().append(item)
         if self.transcript_path:

@@ -53,8 +53,39 @@ import sys
 import time
 from pathlib import Path
 
+def _resolve_pipeline_repo(bench_dir: Path) -> Path:
+    """Resolve the canonical pipeline repo root from bench_dir.
+
+    bench_dir may sit inside a git worktree of the pipeline repo rather than
+    the canonical checkout (e.g. when harness.py runs from a story's agent
+    worktree). A worktree never contains .venv (it is gitignored), so
+    naively taking bench_dir.parents[1] would point VENV_PY at a
+    nonexistent interpreter, making setup_workspace's pytest-ecosystem
+    fixture symlink .venv to a path that doesn't exist and every trial fall
+    back to a bare `pytest` that isn't on PATH.
+
+    Mirrors pipeline_mcp_server.py's _venv_python_for: `git rev-parse
+    --git-common-dir` always resolves to the MAIN repo's .git, even when
+    invoked from one of its worktrees, so its parent is the canonical repo
+    root regardless of where bench_dir actually lives.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(bench_dir), "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            common_path = Path(result.stdout.strip())
+            if not common_path.is_absolute():
+                common_path = (bench_dir / common_path).resolve()
+            return common_path.parent
+    except Exception:
+        pass
+    return bench_dir.parents[1]
+
+
 BENCH_DIR = Path(__file__).resolve().parent
-PIPELINE_REPO = BENCH_DIR.parents[1]
+PIPELINE_REPO = _resolve_pipeline_repo(BENCH_DIR)
 TASKS_DIR = BENCH_DIR / "tasks"
 VENV_PY = PIPELINE_REPO / ".venv" / "bin" / "python"
 

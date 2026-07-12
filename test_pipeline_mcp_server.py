@@ -1315,6 +1315,122 @@ def test_run_reviewer_explicit_local_backend_name_honors_review_model_override(a
     assert captured["model"] == "devstral:24b"
 
 
+def test_run_reviewer_prompt_includes_resolved_venv_pytest_command(agents_dir, monkeypatch, tmp_path):
+    """The reviewer model has no access to detect_test_command's Python-level
+    venv resolution, so a bare "Run the test suite" instruction leaves it to
+    guess a shell command. Observed failure: the reviewer guessed the
+    relative `.venv/bin/python -m pytest`, which does not exist inside a
+    worktree (worktrees are gitignored and never contain .venv), got 'No
+    such file or directory', and burned its full step budget -- two
+    consecutive UNKNOWN verdicts on an otherwise-correct, fully-tested
+    change. The prompt must inject the exact resolved command verbatim."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+    resolved_python = tmp_path / "main-repo" / ".venv" / "bin" / "python"
+    resolved_dir = tmp_path / "worktree"
+
+    def _fake_detect(cwd):
+        assert cwd == Path("/tmp/some-worktree")
+        return resolved_dir, [str(resolved_python), "-m", "pytest"]
+
+    monkeypatch.setattr(p, "detect_test_command", _fake_detect)
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    prompt = captured["prompt"]
+    assert f"cd {resolved_dir}" in prompt
+    assert f"{resolved_python} -m pytest" in prompt
+    assert "do not substitute" in prompt.lower()
+    # Existing review criteria must still be present, unchanged.
+    assert "Run the test suite" in prompt
+    for num in ["(1)", "(2)", "(3)", "(4)"]:
+        assert num in prompt
+
+
+def test_run_reviewer_prompt_reflects_non_python_fallback_command(agents_dir, monkeypatch, tmp_path):
+    """detect_test_command's resolution is multi-language (Makefile/npm/mvn
+    etc, see _test_command_for) - the injected instruction must reflect
+    whatever it actually resolved to, not a hardcoded Python assumption."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+    resolved_dir = tmp_path / "worktree"
+    monkeypatch.setattr(p, "detect_test_command", lambda cwd: (resolved_dir, ["npm", "test"]))
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    prompt = captured["prompt"]
+    assert f"cd {resolved_dir}" in prompt
+    assert "npm test" in prompt
+    assert ".venv" not in prompt
+    assert "-m pytest" not in prompt
+
+
+def test_run_reviewer_falls_back_to_generic_instruction_when_detection_raises(
+    agents_dir, monkeypatch,
+):
+    """A resolution failure (e.g. the worktree path doesn't exist, or has no
+    recognizable build marker at all) must never crash _run_reviewer or
+    block review from running - it must fall back to the generic 'Run the
+    test suite' instruction that existed before this story."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    def _boom(cwd):
+        raise OSError("boom")
+
+    monkeypatch.setattr(p, "detect_test_command", _boom)
+
+    output = p._run_reviewer("/tmp/does-not-exist", "agent/some-branch")
+
+    assert output == "VERDICT: APPROVE"
+    prompt = captured["prompt"]
+    assert "Run the test suite" in prompt
+    assert "do not substitute" not in prompt.lower()
+
+
+def test_run_reviewer_handles_worktree_with_no_recognizable_build_marker(
+    agents_dir, monkeypatch, tmp_path,
+):
+    """Negative/boundary case: a worktree with no recognizable build marker
+    at all still resolves via detect_test_command's ultimate npm-test
+    fallback rather than raising - the resolved fallback command must still
+    reach the prompt."""
+    empty_worktree = tmp_path / "empty-worktree"
+    empty_worktree.mkdir()
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer(str(empty_worktree), "agent/some-branch")
+
+    prompt = captured["prompt"]
+    assert f"cd {empty_worktree}" in prompt
+    assert "npm test" in prompt
+
+
 def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
     _write_manifest(plan_dir, "rv", {
         "S1": {"summary": "Add thing", "status": "in_progress",

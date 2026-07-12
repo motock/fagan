@@ -100,6 +100,18 @@ def test_resume_fallback_invalid_shape(tmp_path, capsys):
     out, err = capsys.readouterr()
     assert "RESUME FAILED" in out
 
+# Test resume fallback invalid shape (dict instead of list)
+
+def test_resume_fallback_invalid_shape_dict(tmp_path, capsys):
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text(json.dumps({"role": "system", "content": "sys"}), encoding="utf-8")
+    env = {"LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(bad_file)}
+    la = load_module_with_env(env)
+    loaded = la._load_resume_transcript()
+    assert loaded is None
+    out, err = capsys.readouterr()
+    assert "RESUME FAILED" in out
+
 # Test transcript path unset: no file written
 
 def test_no_persistence_when_path_unset(tmp_path):

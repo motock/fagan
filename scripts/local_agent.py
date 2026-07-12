@@ -59,8 +59,7 @@ from pathlib import Path
 import httpx
 
 # Persistence helpers
-import json, os, tempfile
-from pathlib import Path
+import tempfile
 
 def _validate_message_list(msgs):
     if not isinstance(msgs, list) or not msgs:
@@ -618,21 +617,27 @@ def main() -> int:
     )
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
-    system_content = HARNESS_RULES + ("\n\n" + system if system else "")
-    # Initialize messages list with optional persistence support
-transcript_path = os.environ.get("LOCAL_AGENT_TRANSCRIPT_PATH")
-resume_transcript_path = os.environ.get("LOCAL_AGENT_RESUME_TRANSCRIPT_PATH")
-messages = PersistingList(transcript_path=transcript_path)
-if resume := _load_resume_transcript():
-    messages.extend(resume)
-else:
-    system_content = HARNESS_RULES + ("\n\n" + system if system else "")
-    messages.extend([{"role": "system", "content": system_content},
-                     {"role": "user", "content": task}])
-# If resuming, optionally append new user turn
-resume_append = os.environ.get("LOCAL_AGENT_RESUME_APPEND_CONTENT")
-if resume and resume_append:
-    messages.append({"role": "user", "content": resume_append})
+    # Initialize messages list with optional persistence support.
+    # Resume path: if LOCAL_AGENT_RESUME_TRANSCRIPT_PATH points at a valid
+    # transcript, load it instead of building the fresh system/task pair (the
+    # loaded transcript already contains the original system+task prompt).
+    # Otherwise fall back to the fresh pair. LOCAL_AGENT_TRANSCRIPT_PATH
+    # (persistence) is independent of resume — a dispatch can persist without
+    # resuming, resume without persisting, or both.
+    transcript_path = os.environ.get("LOCAL_AGENT_TRANSCRIPT_PATH")
+    messages = PersistingList(transcript_path=transcript_path)
+    if resume := _load_resume_transcript():
+        messages.extend(resume)
+    else:
+        system_content = HARNESS_RULES + ("\n\n" + system if system else "")
+        messages.extend([{"role": "system", "content": system_content},
+                         {"role": "user", "content": task}])
+    # When resuming, optionally append exactly one new user turn as a
+    # continuation (e.g. reviewer feedback) instead of re-injecting the
+    # original system/task prompt.
+    resume_append = os.environ.get("LOCAL_AGENT_RESUME_APPEND_CONTENT")
+    if resume and resume_append:
+        messages.append({"role": "user", "content": resume_append})
 
     exclude_runtime_artifacts()
 

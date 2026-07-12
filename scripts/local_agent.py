@@ -58,9 +58,6 @@ from pathlib import Path
 
 import httpx
 
-# Persistence helpers
-import tempfile
-
 _VALID_ROLES = {"system", "user", "assistant", "tool"}
 
 def _validate_message_list(msgs):

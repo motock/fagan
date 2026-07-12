@@ -58,6 +58,54 @@ from pathlib import Path
 
 import httpx
 
+# Persistence helpers
+import json, os, tempfile
+from pathlib import Path
+
+def _validate_message_list(msgs):
+    if not isinstance(msgs, list) or not msgs:
+        return False
+    for m in msgs:
+        if not isinstance(m, dict) or 'role' not in m or 'content' not in m:
+            return False
+    return True
+
+def _load_resume_transcript() -> list | None:
+    path = os.environ.get("LOCAL_AGENT_RESUME_TRANSCRIPT_PATH")
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not _validate_message_list(data):
+            print("[local_agent] RESUME FAILED: transcript shape invalid", flush=True)
+            return None
+        return data
+    except Exception as e:
+        print(f"[local_agent] RESUME FAILED: {e}", flush=True)
+        return None
+
+def _persist_messages(messages, path):
+    if not path:
+        return
+    dirpath = os.path.dirname(path) or "."
+    tmp_path = Path(dirpath) / f".{Path(path).name}.tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(messages, f, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception as e:
+        print(f"[local_agent] persistence error: {e}", flush=True)
+
+class PersistingList(list):
+    def __init__(self, *args, transcript_path=None):
+        super().__init__(*args)
+        self.transcript_path = transcript_path
+    def append(self, item):
+        super().append(item)
+        if self.transcript_path:
+            _persist_messages(self, self.transcript_path)
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pipeline_mcp_server as p  # noqa: E402  (reuses _checkpoint_impl + PLAN_DIR config)
 import inference_providers  # noqa: E402  (non-Ollama chat() branch, see PROVIDER below)
@@ -571,8 +619,20 @@ def main() -> int:
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
     system_content = HARNESS_RULES + ("\n\n" + system if system else "")
-    messages = [{"role": "system", "content": system_content},
-                {"role": "user", "content": task}]
+    # Initialize messages list with optional persistence support
+transcript_path = os.environ.get("LOCAL_AGENT_TRANSCRIPT_PATH")
+resume_transcript_path = os.environ.get("LOCAL_AGENT_RESUME_TRANSCRIPT_PATH")
+messages = PersistingList(transcript_path=transcript_path)
+if resume := _load_resume_transcript():
+    messages.extend(resume)
+else:
+    system_content = HARNESS_RULES + ("\n\n" + system if system else "")
+    messages.extend([{"role": "system", "content": system_content},
+                     {"role": "user", "content": task}])
+# If resuming, optionally append new user turn
+resume_append = os.environ.get("LOCAL_AGENT_RESUME_APPEND_CONTENT")
+if resume and resume_append:
+    messages.append({"role": "user", "content": resume_append})
 
     exclude_runtime_artifacts()
 

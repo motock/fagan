@@ -7,6 +7,11 @@ import pytest
 # Helper to load module fresh with given env vars
 
 def load_module_with_env(env_vars):
+    # scripts/local_agent.py reads LOCAL_AGENT_MODEL at import time
+    # (os.environ["LOCAL_AGENT_MODEL"]); set a default before import so the
+    # module loads cleanly in any environment, matching the pattern used by
+    # the sibling test files (test_local_agent.py, test_local_agent_oracle.py).
+    os.environ.setdefault("LOCAL_AGENT_MODEL", "test-model")
     for k, v in env_vars.items():
         if v is None:
             os.environ.pop(k, None)

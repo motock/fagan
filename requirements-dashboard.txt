@@ -2,4 +2,4 @@
 # Optional - only needed if you run the dashboard. Install with:
 #   pip install -r requirements-dashboard.txt
 fastapi>=0.139.0
-uvicorn>=0.49.0
+uvicorn>=0.51.0

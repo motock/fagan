@@ -1862,6 +1862,58 @@ def test_review_story_low_risk_skips_security_reviewer(plan_dir, agents_dir, mon
     assert len(security_calls) == 0, "security reviewer must NOT be called for low-risk stories"
 
 
+def test_run_security_reviewer_always_uses_claude_backend_even_under_local_review(agents_dir, monkeypatch):
+    """T11/T12: the security-engineer pass is the one place "cloud only as
+    reviewer" and "security review needs human-grade scrutiny" are the same
+    requirement - it must never silently run on the local reviewer just
+    because PIPELINE_BACKEND_REVIEW=local is set for ordinary review."""
+    (agents_dir / "security-engineer.md").write_text(
+        '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "local")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            return "VERDICT: APPROVE"
+
+    def _fake_get_backend(role, name=None):
+        captured["role"] = role
+        captured["name"] = name
+        return _FakeDriver()
+
+    monkeypatch.setattr(p.backend, "get_backend", _fake_get_backend)
+
+    p._run_security_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    assert captured["role"] == "review"
+    assert captured["name"] == "claude"
+
+
+def test_run_reviewer_ordinary_review_still_honors_local_backend_setting(agents_dir, monkeypatch):
+    """Regression guard for T12: forcing the security pass onto Claude must
+    not leak into the ordinary code-reviewer pass, which should still honor
+    PIPELINE_BACKEND_REVIEW=local exactly as before."""
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "local")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            return "VERDICT: APPROVE"
+
+    def _fake_get_backend(role, name=None):
+        captured["role"] = role
+        captured["name"] = name
+        return _FakeDriver()
+
+    monkeypatch.setattr(p.backend, "get_backend", _fake_get_backend)
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    assert captured["role"] == "review"
+    assert captured["name"] is None
+
+
 # ---------- Per-plan repo_root ----------
 def test_repo_root_for_returns_manifest_value_when_present(plan_dir):
     _write_manifest(plan_dir, "rr1", {})

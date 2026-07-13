@@ -7365,6 +7365,153 @@ def test_dispatch_story_honors_stored_backend_override(
     assert popen_calls[0][0] == "claude"
 
 
+def test_dispatch_story_explicit_local_security_persona_routes_to_claude(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_BACKEND_DISPATCH=local must not bypass the security-persona
+    safety override: a security-engineer story still dispatches to Claude."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    (agents_dir / "security-engineer.md").write_text(
+        '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    _write_manifest(plan_dir, "sec1", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [], "persona": "security-engineer"},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(55))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("sec1", "S1")
+
+    assert _read_manifest(plan_dir, "sec1")["stories"]["S1"]["backend"] == "claude"
+    assert popen_calls[0][0] == "claude"
+
+
+def test_dispatch_story_explicit_local_non_security_persona_stays_local(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Non-skip personas are unaffected by the security-persona override under
+    explicit local dispatch - no regression from the new persona check."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "sec2", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [], "persona": "software-engineer"},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(56))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("sec2", "S1")
+
+    assert _read_manifest(plan_dir, "sec2")["stories"]["S1"]["backend"] == "local"
+    assert popen_calls[0][0] != "claude"
+
+
+def test_dispatch_story_explicit_local_missing_persona_stays_local(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A story with no persona field at all must not crash the override check
+    and must fall through to the existing local resolution."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "sec3", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": []},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(57))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("sec3", "S1")
+
+    assert _read_manifest(plan_dir, "sec3")["stories"]["S1"]["backend"] == "local"
+    assert popen_calls[0][0] != "claude"
+
+
+def test_dispatch_story_explicit_local_security_persona_case_insensitive(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The persona override must use the same case-insensitive normalization
+    as _route_dispatch_backend, so 'Security-Engineer' is still caught."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    (agents_dir / "security-engineer.md").write_text(
+        '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    _write_manifest(plan_dir, "sec4", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [], "persona": "Security-Engineer"},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(58))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("sec4", "S1")
+
+    assert _read_manifest(plan_dir, "sec4")["stories"]["S1"]["backend"] == "claude"
+    assert popen_calls[0][0] == "claude"
+
+
+def test_dispatch_story_stored_backend_wins_over_security_persona(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """An already-escalated story['backend'] (e.g. from _escalate_to_local_fallback_model)
+    must not be re-routed by the persona check even if persona is security-engineer."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    (agents_dir / "security-engineer.md").write_text(
+        '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    _write_manifest(plan_dir, "sec5", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "persona": "security-engineer", "backend": "local"},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(59))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("sec5", "S1")
+
+    # story["backend"] was already explicitly "local" - the persona override
+    # must not clobber it, even though persona is in _LOCAL_SKIP_PERSONAS.
+    assert _read_manifest(plan_dir, "sec5")["stories"]["S1"]["backend"] == "local"
+    assert popen_calls[0][0] != "claude"
+
+
+def test_dispatch_story_explicit_claude_security_persona_stays_claude(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_BACKEND_DISPATCH=claude is already always Claude; the persona
+    override must be a no-op here (no regression)."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "claude")
+    (agents_dir / "security-engineer.md").write_text(
+        '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    _write_manifest(plan_dir, "sec6", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [], "persona": "security-engineer"},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(60))[1])
+    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("sec6", "S1")
+
+    assert _read_manifest(plan_dir, "sec6")["stories"]["S1"]["backend"] == "claude"
+    assert popen_calls[0][0] == "claude"
+
+
 def test_advance_pipeline_escalates_local_failure_to_claude(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):

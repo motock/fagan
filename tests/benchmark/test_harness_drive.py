@@ -49,6 +49,7 @@ class _FakePipeline:
         self.statuses = list(statuses)
         self.summaries = list(summaries)
         self.calls = 0
+        self.interrupted: list[str] = []
 
     def advance_pipeline(self, plan_name: str) -> dict:
         i = self.calls
@@ -58,6 +59,10 @@ class _FakePipeline:
         manifest["stories"][self.story_key]["status"] = self.statuses[i]
         manifest_path.write_text(json.dumps(manifest))
         return self.summaries[i]
+
+    def interrupt_story(self, plan_name: str, story_key: str) -> dict:
+        self.interrupted.append(story_key)
+        return {"ok": True, "status": "interrupted"}
 
 
 def _write_manifest(plan_dir: Path, plan_name: str, story_key: str, status: str) -> None:
@@ -129,6 +134,7 @@ class _FakeMultiPipeline:
         self.statuses_by_key = statuses_by_key
         self.summaries = list(summaries)
         self.calls = 0
+        self.interrupted: list[str] = []
 
     def advance_pipeline(self, plan_name: str) -> dict:
         i = self.calls
@@ -139,6 +145,10 @@ class _FakeMultiPipeline:
             manifest["stories"][key]["status"] = self.statuses_by_key[key][i]
         manifest_path.write_text(json.dumps(manifest))
         return self.summaries[i]
+
+    def interrupt_story(self, plan_name: str, story_key: str) -> dict:
+        self.interrupted.append(story_key)
+        return {"ok": True, "status": "interrupted"}
 
 
 def _write_multi_manifest(plan_dir: Path, plan_name: str, story_keys, initial_status: str) -> None:
@@ -270,3 +280,116 @@ def test_drive_plan_stops_early_for_a_transitively_blocked_dependency_chain(tmp_
 
     assert ticks[-1]["statuses"] == {"S1": "parked", "S2": "todo", "S3": "todo"}
     assert fake_p.calls == 2
+
+
+def test_drive_reaps_dispatch_when_deadline_passes_without_terminal_status(
+    tmp_path, monkeypatch,
+):
+    """A dispatch subprocess that's still running when drive()'s own deadline
+    passes must not be left orphaned (observed directly: an MLX dispatch
+    survived past the harness's own timeout, found still running minutes
+    later, had to be killed manually). drive() must call interrupt_story on
+    the still-outstanding story before giving up."""
+    plan_dir = tmp_path
+    plan_name = "plan_hung"
+    story_key = "S1"
+    _write_manifest(plan_dir, plan_name, story_key, "in_progress")
+
+    clock = _FakeClock(start=0.0)
+    monkeypatch.setattr(harness, "time", clock)
+
+    # The story never leaves "in_progress" — simulating a hung dispatch
+    # subprocess that produced no output and never reached a terminal status.
+    statuses = ["in_progress"] * 5
+    summaries = [{"review_deferred": []} for _ in range(5)]
+    fake_p = _FakePipeline(plan_dir, story_key, statuses, summaries)
+
+    deadline = clock.now + 3.0
+    ticks = harness.drive(fake_p, plan_name, story_key, deadline, tick_interval=1.0)
+
+    assert ticks[-1]["status"] == "in_progress"
+    assert fake_p.interrupted == [story_key]
+
+
+def test_drive_does_not_reap_when_story_reaches_terminal_status(tmp_path, monkeypatch):
+    """The common case: the story finishes within the deadline. No reap call
+    should ever fire — the dispatch subprocess already exited on its own."""
+    plan_dir = tmp_path
+    plan_name = "plan_ok"
+    story_key = "S1"
+    _write_manifest(plan_dir, plan_name, story_key, "dispatched")
+
+    clock = _FakeClock(start=0.0)
+    monkeypatch.setattr(harness, "time", clock)
+
+    statuses = ["dispatched", "tests_passed", "done"]
+    summaries = [{"review_deferred": []} for _ in range(3)]
+    fake_p = _FakePipeline(plan_dir, story_key, statuses, summaries)
+
+    deadline = clock.now + 10.0
+    ticks = harness.drive(fake_p, plan_name, story_key, deadline, tick_interval=1.0)
+
+    assert ticks[-1]["status"] == "done"
+    assert fake_p.interrupted == []
+
+
+def test_drive_plan_reaps_non_terminal_stories_when_deadline_passes(tmp_path, monkeypatch):
+    """Same reasoning as drive()'s single-story case, for a dependency-chained
+    plan: any story still non-terminal when drive_plan gives up must be
+    reaped rather than left as an orphaned subprocess."""
+    plan_dir = tmp_path
+    plan_name = "plan_multi_hung"
+    story_keys = ["S1", "S2"]
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest_path.write_text(json.dumps({"stories": {
+        "S1": {"status": "dispatched", "dependencies": [], "pid": 111},
+        "S2": {"status": "dispatched", "dependencies": [], "pid": 222},
+    }}))
+
+    clock = _FakeClock(start=0.0)
+    monkeypatch.setattr(harness, "time", clock)
+
+    # S1 finishes; S2 hangs indefinitely in "in_progress".
+    statuses_by_key = {
+        "S1": ["dispatched", "done", "done", "done"],
+        "S2": ["dispatched", "in_progress", "in_progress", "in_progress"],
+    }
+    summaries = [{"review_deferred": []} for _ in range(4)]
+    fake_p = _FakeMultiPipeline(plan_dir, story_keys, statuses_by_key, summaries)
+
+    deadline = clock.now + 3.0
+    ticks = harness.drive_plan(fake_p, plan_name, story_keys, deadline, tick_interval=1.0)
+
+    assert ticks[-1]["statuses"]["S2"] == "in_progress"
+    assert fake_p.interrupted == ["S2"]
+
+
+def test_drive_plan_does_not_reap_a_never_dispatched_blocked_story(tmp_path, monkeypatch):
+    """S2 depends on S1, which fails — S2 is permanently blocked and stays
+    "todo" (never dispatched, no subprocess to reap). Only S1, which actually
+    ran, is a candidate for reaping — but S1 already reached its own terminal
+    status ("failed"), so nothing should be reaped at all here."""
+    plan_dir = tmp_path
+    plan_name = "plan_blocked_no_reap"
+    story_keys = ["S1", "S2"]
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest_path.write_text(json.dumps({"stories": {
+        "S1": {"status": "dispatched", "dependencies": [], "pid": 111},
+        "S2": {"status": "todo", "dependencies": ["S1"]},
+    }}))
+
+    clock = _FakeClock(start=0.0)
+    monkeypatch.setattr(harness, "time", clock)
+
+    statuses_by_key = {
+        "S1": ["dispatched", "failed", "failed"],
+        "S2": ["todo", "todo", "todo"],
+    }
+    summaries = [{"review_deferred": []} for _ in range(3)]
+    fake_p = _FakeMultiPipeline(plan_dir, story_keys, statuses_by_key, summaries)
+
+    deadline = clock.now + 100.0
+    ticks = harness.drive_plan(fake_p, plan_name, story_keys, deadline, tick_interval=1.0)
+
+    assert ticks[-1]["statuses"] == {"S1": "failed", "S2": "todo"}
+    assert fake_p.interrupted == []

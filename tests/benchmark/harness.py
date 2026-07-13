@@ -724,6 +724,13 @@ def drive(p, plan_name: str, story_key: str, deadline: float,
             deadline += tick_interval
             extension_used += tick_interval
         time.sleep(tick_interval)
+    else:
+        # Deadline passed without the story ever reaching a terminal status -
+        # reap any still-running dispatch subprocess instead of leaving it
+        # orphaned (observed directly: a hung MLX dispatch subprocess
+        # survived past this harness's own timeout, found still running
+        # minutes later, had to be killed manually).
+        p.interrupt_story(plan_name, story_key)
     return ticks
 
 
@@ -761,6 +768,8 @@ def drive_plan(p, plan_name: str, story_keys: list[str], deadline: float,
 
     ticks: list[dict] = []
     extension_used = 0.0
+    statuses: dict[str, str] = {}
+    stories: dict = {}
     while time.time() < deadline:
         summary = p.advance_pipeline(plan_name)
         manifest = json.loads(
@@ -784,6 +793,14 @@ def drive_plan(p, plan_name: str, story_keys: list[str], deadline: float,
             deadline += tick_interval
             extension_used += tick_interval
         time.sleep(tick_interval)
+    # Reap any story left non-terminal when the loop above stopped (deadline
+    # passed, or the chain is permanently blocked) instead of leaving its
+    # dispatch subprocess orphaned - same reasoning as drive()'s single-story
+    # case. A never-dispatched (permanently blocked) story has no pid, so it's
+    # excluded rather than issuing a no-op interrupt call for it.
+    for key in story_keys:
+        if statuses.get(key) not in TERMINAL and "pid" in stories.get(key, {}):
+            p.interrupt_story(plan_name, key)
     return ticks
 
 

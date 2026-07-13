@@ -141,6 +141,19 @@ DISPATCH_STARTUP_GRACE_SECONDS = int(
     os.environ.get("PIPELINE_DISPATCH_STARTUP_GRACE_SECONDS", "90")
 )
 
+# Absolute ceiling on how long a dispatched agent process may stay alive
+# before check_story_status treats it as hung rather than "running". The
+# step cap and per-call LLM timeout are supposed to bound a dispatch, but a
+# blocking, non-streaming provider call can stall indefinitely on a single
+# stuck request (observed directly during MLX provider validation: a
+# dispatch subprocess sat at 0% CPU with no error, past the outer harness's
+# own timeout, and was found still running minutes later — the harness never
+# killed it). Generous default so a legitimately slow local run isn't killed
+# mid-flight.
+DISPATCH_WATCHDOG_SECONDS = int(
+    os.environ.get("PIPELINE_DISPATCH_WATCHDOG_SECONDS", "3600")
+)
+
 # Terminal markers the headless agent prints on the LAST line of its
 # agent.log when it hits its step cap and exits with code 2. The agent
 # has already WIP-committed its in-progress work before printing these,
@@ -2640,6 +2653,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
         story["status"] = "in_progress"
         story["pid"] = handle.pid
+        story["dispatched_at"] = datetime.now(timezone.utc).isoformat()
         story["worktree"] = str(worktree_path)
         story["log"] = str(log_path)
         # Record the concrete model the agent actually boots with (the local
@@ -2725,6 +2739,25 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         )
         stat = ps.stdout.strip()
         if stat and not stat.startswith("Z"):
+            dispatched_at = story.get("dispatched_at")
+            if dispatched_at is not None:
+                elapsed = (
+                    datetime.now(timezone.utc) - datetime.fromisoformat(dispatched_at)
+                ).total_seconds()
+                if elapsed > DISPATCH_WATCHDOG_SECONDS:
+                    _terminate_and_checkpoint(
+                        manifest, manifest_path, plan_name, story_key, story,
+                        pid=pid, step="dispatch_watchdog_timeout",
+                        summary=(
+                            f"Dispatch watchdog: no completion after "
+                            f"{elapsed:.0f}s; process terminated."
+                        ),
+                    )
+                    story["dispatch_error"] = (
+                        f"watchdog killed after {elapsed:.0f}s with no completion"
+                    )
+                    _atomic_write_json(manifest_path, manifest)
+                    return {"status": "interrupted", "pid": pid, "watchdog_killed": True}
             return {"status": "running", "pid": pid}
         # process is zombie or gone — fall through to test detection
     except ProcessLookupError:
@@ -2954,6 +2987,36 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
+def _terminate_and_checkpoint(
+    manifest: dict[str, Any], manifest_path: Path, plan_name: str, story_key: str,
+    story: dict[str, Any], *, pid: int, step: str, summary: str,
+) -> str:
+    """SIGTERM the dispatched process, checkpoint its worktree, journal the
+    event, and mark the story interrupted (dispatch-eligible for resume).
+    Shared by interrupt_story (manual) and check_story_status's dispatch
+    watchdog (automatic, on a hung process past DISPATCH_WATCHDOG_SECONDS)."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+    sha = _commit_wip(story["worktree"], story_key, step)
+    interrupted_at = datetime.now(timezone.utc).isoformat()
+    _append_journal(plan_name, story_key, {
+        "step": step,
+        "summary": summary,
+        "next_hint": "",
+        "commit": sha,
+        "ts": interrupted_at,
+    })
+
+    story["status"] = "interrupted"
+    story["last_commit"] = sha
+    story["interrupted_at"] = interrupted_at
+    _atomic_write_json(manifest_path, manifest)
+    return sha
+
+
 @mcp.tool()
 def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
@@ -2986,25 +3049,11 @@ def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
         if "pid" not in story:
             return {"ok": False, "error": "Story not dispatched"}
 
-        try:
-            os.kill(story["pid"], signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-
-        sha = _commit_wip(story["worktree"], story_key, "interrupted")
-        interrupted_at = datetime.now(timezone.utc).isoformat()
-        _append_journal(plan_name, story_key, {
-            "step": "interrupted",
-            "summary": "Agent process terminated; checkpointed for resume.",
-            "next_hint": "",
-            "commit": sha,
-            "ts": interrupted_at,
-        })
-
-        story["status"] = "interrupted"
-        story["last_commit"] = sha
-        story["interrupted_at"] = interrupted_at
-        _atomic_write_json(manifest_path, manifest)
+        sha = _terminate_and_checkpoint(
+            manifest, manifest_path, plan_name, story_key, story,
+            pid=story["pid"], step="interrupted",
+            summary="Agent process terminated; checkpointed for resume.",
+        )
 
         return {"ok": True, "status": "interrupted", "commit": sha}
 
@@ -3775,8 +3824,24 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             # in-flight agents (they run on the dispatch backend and are
             # resumable via their checkpoint journal) rather than letting them
             # keep burning the resource we're protecting.
+            #
+            # Exception: a local-memory-pressure gate ("insufficient free
+            # memory") is self-inflicted by an in-progress dispatch actively
+            # loading its model into memory - it is not burning a shared,
+            # exhaustible resource the way Claude usage or a downed server
+            # would be. Killing it doesn't free anything real; it destroys
+            # progress and the redispatch (interrupted stories are dispatch-
+            # eligible) immediately re-triggers the identical gate once the
+            # new process starts loading again. Observed live 2026-07-13: a
+            # new PID every ~10-20s across three separate model runs, never
+            # converging. Every OTHER gate reason (Claude usage exhausted,
+            # Ollama unreachable, ...) still interrupts as before - those
+            # really do mean "stop spending this backend now."
+            memory_pressure = "insufficient free memory" in dispatch_reason
             for key, story in stories.items():
                 if story["status"] == "in_progress" and "pid" in story:
+                    if memory_pressure:
+                        continue
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
             _notify_user(plan_name, f"Dispatch backend gated ({dispatch_reason}): deferring dispatch.")

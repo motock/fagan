@@ -664,7 +664,12 @@ def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
 # ---------- resource_status() (per-backend gate, Step 5) ----------
 def test_ollama_resource_status_ok_when_endpoint_reachable(monkeypatch):
     monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
-    status = b.OllamaDriver().resource_status()
+    driver = b.OllamaDriver()
+    # T13 (2026-07-12): isolate from live host memory state, same as the
+    # httpx mock above isolates from live network state - this test asserts
+    # reachability only, not the machine's actual free memory at test time.
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 4096)
+    status = driver.resource_status()
     assert status["ok"] is True
 
 
@@ -674,6 +679,76 @@ def test_ollama_resource_status_not_ok_when_endpoint_unreachable(monkeypatch):
 
     monkeypatch.setattr(b.httpx, "get", _boom)
     status = b.OllamaDriver().resource_status()
+    assert status["ok"] is False
+    assert "unreachable" in status["reason"]
+
+
+# ---------- T13: free-memory floor gate on resource_status() ----------
+def test_ollama_resource_status_not_ok_when_free_memory_below_floor(monkeypatch):
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 512)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+
+    status = driver.resource_status()
+
+    assert status["ok"] is False
+    assert "insufficient free memory" in status["reason"]
+
+
+def test_ollama_resource_status_ok_when_free_memory_above_floor(monkeypatch):
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 4096)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+
+    status = driver.resource_status()
+
+    assert status["ok"] is True
+
+
+def test_ollama_resource_status_memory_floor_defaults_to_2048mb(monkeypatch):
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    monkeypatch.delenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", raising=False)
+    driver = b.OllamaDriver()
+
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 2047)
+    assert driver.resource_status()["ok"] is False
+
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 2048)
+    assert driver.resource_status()["ok"] is True
+
+
+def test_ollama_resource_status_fails_open_when_memory_read_fails(monkeypatch):
+    # A vm_stat parse failure (or a platform without vm_stat) must not block
+    # dispatch - "can't determine memory" is not the same as "low memory".
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: None)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "999999")  # would fail if checked
+
+    status = driver.resource_status()
+
+    assert status["ok"] is True
+
+
+def test_ollama_resource_status_reachability_failure_takes_priority_over_memory(monkeypatch):
+    # When both the endpoint is unreachable AND memory is below floor, the
+    # reason must reflect the (actionable) reachability failure - an
+    # unreachable server can't dispatch regardless of memory, so the memory
+    # check should never even run.
+    def _boom(url, timeout):
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(b.httpx, "get", _boom)
+    driver = b.OllamaDriver()
+
+    def _boom_memory():
+        raise AssertionError("memory should not be checked when unreachable")
+    monkeypatch.setattr(driver, "_free_memory_mb", _boom_memory)
+
+    status = driver.resource_status()
+
     assert status["ok"] is False
     assert "unreachable" in status["reason"]
 

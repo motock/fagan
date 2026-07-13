@@ -893,21 +893,64 @@ class OllamaDriver:
         )
 
     def resource_status(self) -> dict:
-        """Local backend has no usage/cost limit to respect, so the only gate
-        is whether the local inference server is up. (The concurrency ceiling
-        is enforced separately by advance_pipeline via MAX_CONCURRENT_AGENTS.)
-        This is what unlocks overnight autonomy decoupled from Claude's weekly
-        limit: as long as the server is reachable, local dispatch keeps
-        running. Delegates to self.provider (never raises: an unimplemented
-        stub provider reports "not ok" here rather than propagating
+        """Local backend has no usage/cost limit to respect, so the gate is
+        (1) whether the local inference server is up, and (2) T13: whether
+        the host has enough free memory to actually run a dispatch on it -
+        reachability alone doesn't mean there's headroom to complete one (see
+        the qwen3-coder:30b session where free memory dropped to ~70MB and
+        macOS silently killed backgrounded processes). (The concurrency
+        ceiling is enforced separately by advance_pipeline via
+        MAX_CONCURRENT_AGENTS.) This is what unlocks overnight autonomy
+        decoupled from Claude's weekly limit: as long as the server is
+        reachable and the host has headroom, local dispatch keeps running.
+        Delegates to self.provider (never raises: an unimplemented stub
+        provider reports "not ok" here rather than propagating
         NotImplementedError out of a method whose contract is to always
-        return an {ok, reason} dict).
+        return an {ok, reason} dict). Reachability is checked first and
+        short-circuits the memory check entirely - an unreachable server
+        can't dispatch regardless of memory, and that failure is the more
+        actionable one to report.
         """
         try:
             ok, reason = self.provider.reachable(self.endpoint)
         except NotImplementedError as e:
             return {"ok": False, "reason": str(e)}
+        if not ok:
+            return {"ok": ok, "reason": reason}
+        free_mb = self._free_memory_mb()
+        if free_mb is not None:
+            floor_mb = int(os.environ.get("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048"))
+            if free_mb < floor_mb:
+                return {
+                    "ok": False,
+                    "reason": f"insufficient free memory ({free_mb}mb < {floor_mb}mb floor)",
+                }
         return {"ok": ok, "reason": reason}
+
+    def _free_memory_mb(self) -> int | None:
+        """Best-effort free-memory read via macOS's vm_stat, in MB.
+
+        Returns None (never raises) on any subprocess/parse failure - a
+        non-macOS host without vm_stat, an unexpected output shape, or a
+        timeout - so resource_status()'s memory-floor check fails open
+        ("can't determine memory" is not the same as "low memory") rather
+        than blocking dispatch on a platform where the check can't run.
+        """
+        try:
+            result = subprocess.run(
+                ["vm_stat"], capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            page_size_match = re.search(r"page size of (\d+) bytes", result.stdout)
+            free_pages_match = re.search(r"Pages free:\s+(\d+)\.", result.stdout)
+            if not page_size_match or not free_pages_match:
+                return None
+            page_size = int(page_size_match.group(1))
+            free_pages = int(free_pages_match.group(1))
+            return (free_pages * page_size) // (1024 * 1024)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
 
 
 def _ollama_loaded_models(endpoint: str) -> set[str]:

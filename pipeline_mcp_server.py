@@ -1033,7 +1033,7 @@ def _run_security_reviewer(worktree: str, branch: str) -> str:
         cell_dir = str(Path(worktree).resolve().parent)
     else:
         cell_dir = None
-    return backend.get_backend("review").complete(
+    return backend.get_backend("review", name="claude").complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
         max_tokens=int(os.environ.get("PIPELINE_SECURITY_REVIEW_MAX_TOKENS",
                                       os.environ.get("PIPELINE_REVIEW_MAX_TOKENS", "4096"))),

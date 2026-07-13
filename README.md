@@ -519,7 +519,12 @@ never touches the others. Two drivers exist today:
   - **review** — a blocking **read-only** tool loop (the model runs the tests
     and reads files via `bash`/`view_file` — no edit tools — then submits a
     verdict). Routing review local is best kept to low-risk stories; see the
-    tiering note in `Local_LLM_Port_Plan.md`.
+    tiering note in `Local_LLM_Port_Plan.md`. **Exception:** the additional
+    security-engineer pass run for `risk: "high"` stories (`_run_security_reviewer`)
+    always uses the Claude backend regardless of `PIPELINE_BACKEND_REVIEW` —
+    unlike the ordinary code-reviewer pass, it is never routed local. This is
+    distinct from (and in addition to) the `auto`-only, dispatch-side
+    security-persona guarantee described below.
   - **dispatch** — a native-tool-calling **write** agent loop
     (`scripts/local_agent.py`, run as a subprocess: `create_file`/`str_replace`/
     `view_file`/`bash`/`checkpoint`/`done`, with a non-destructive editor, loop

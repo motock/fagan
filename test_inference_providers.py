@@ -41,6 +41,32 @@ def test_get_local_provider_is_case_insensitive(monkeypatch):
     assert isinstance(ip.get_local_provider(), ip.OllamaProvider)
 
 
+# ---------- T16: get_local_provider(name=) explicit override ----------
+def test_get_local_provider_explicit_name_overrides_env(monkeypatch):
+    # An explicit name bypasses PIPELINE_LOCAL_PROVIDER entirely - lets a
+    # caller pin a specific provider (e.g. per-role backend selection)
+    # regardless of the process-wide env default.
+    monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "ollama")
+    provider = ip.get_local_provider("lmstudio")
+    assert isinstance(provider, ip.LMStudioProvider)
+
+
+def test_get_local_provider_explicit_name_works_with_no_env_set(monkeypatch):
+    monkeypatch.delenv("PIPELINE_LOCAL_PROVIDER", raising=False)
+    assert isinstance(ip.get_local_provider("mlx"), ip.MLXProvider)
+
+
+def test_get_local_provider_explicit_unknown_name_raises(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "ollama")
+    with pytest.raises(ValueError, match="bogus"):
+        ip.get_local_provider("bogus")
+
+
+def test_get_local_provider_none_still_falls_back_to_env(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "mlx")
+    assert isinstance(ip.get_local_provider(None), ip.MLXProvider)
+
+
 # ---------- OllamaProvider.chat() ----------
 def test_ollama_provider_chat_posts_native_api_chat_with_options(monkeypatch):
     calls = []

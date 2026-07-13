@@ -1315,6 +1315,25 @@ def test_run_reviewer_explicit_local_backend_name_honors_review_model_override(a
     assert captured["model"] == "devstral:24b"
 
 
+def test_run_reviewer_explicit_provider_name_honors_review_model_override(agents_dir, monkeypatch):
+    """T16: an explicitly-pinned provider name (not just the "local" alias)
+    must also count as local-family for the review-model override gate."""
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_REVIEW_MODEL", "devstral:24b")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            captured["model"] = model
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch", backend_name="lmstudio")
+
+    assert captured["model"] == "devstral:24b"
+
+
 def test_run_reviewer_prompt_includes_resolved_venv_pytest_command(agents_dir, monkeypatch, tmp_path):
     """The reviewer model has no access to detect_test_command's Python-level
     venv resolution, so a bare "Run the test suite" instruction leaves it to
@@ -7911,6 +7930,41 @@ def test_dispatch_story_forwards_acceptance_paths_to_local_driver(
     ]
 
 
+def test_dispatch_story_forwards_acceptance_paths_under_explicit_provider_name(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """T16: an explicitly-pinned provider name (e.g. "lmstudio"), not just
+    the "local" alias, must also count as local-family for the acceptance
+    passthrough gate."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "lmstudio")
+    _write_manifest(plan_dir, "oracle_env_lmstudio", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "acceptance": [
+                   {"path": "tests/test_x.py", "source": "import pytest\n"},
+               ]},
+    })
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(7778)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("oracle_env_lmstudio", "S1")
+
+    assert len(popen_calls) == 1
+    env = popen_calls[0]["env"]
+    assert env["LOCAL_AGENT_MODE"] == "oracle"
+    assert json.loads(env["LOCAL_AGENT_ACCEPTANCE"]) == ["tests/test_x.py"]
+
+
 def test_dispatch_story_omits_oracle_env_when_no_acceptance(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
@@ -8022,6 +8076,44 @@ def test_dispatch_story_local_rework_resumes_transcript_when_present(
     # and the append content carries the new feedback.
     assert "REQUESTED CHANGES" not in env["LOCAL_AGENT_TASK"]
     assert "The SQL is injectable" not in env["LOCAL_AGENT_TASK"]
+
+
+def test_dispatch_story_explicit_provider_rework_resumes_transcript_when_present(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """T16: an explicitly-pinned provider name (e.g. "lmstudio"), not just
+    the "local" alias, must also count as local-family for the
+    transcript-resume-on-rework gate."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "lmstudio")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    transcript_path = worktree_path / ".agent_transcript.json"
+    transcript_path.write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "lmstudiorw", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(6005)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("lmstudiorw", "S1")
+
+    assert result["resumed"] is True
+    env = popen_calls[0]["env"]
+    assert env["LOCAL_AGENT_RESUME_TRANSCRIPT_PATH"] == str(transcript_path)
 
 
 def test_dispatch_story_local_rework_falls_back_when_transcript_missing(
@@ -8172,6 +8264,38 @@ def test_dispatch_warns_on_loaded_model_mismatch(
     swap_notes = [n for n in notes if "multi-model concurrent dispatch" in n]
     assert swap_notes, f"expected VRAM-swap warning, got: {notes}"
     assert any("devstral:24b" in n for n in swap_notes)
+
+
+def test_dispatch_warns_on_loaded_model_mismatch_under_explicit_provider_name(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """T16: an explicitly-pinned provider name (e.g. "lmstudio"), not just
+    the "local" alias, must also count as local-family for the VRAM-swap
+    concurrent-dispatch warning gate."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "lmstudio")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: {"devstral:24b"})
+
+    _write_manifest(plan_dir, "swap_warn_lmstudio", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "gpt-oss:20b"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1235))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("swap_warn_lmstudio", "S1")
+
+    swap_notes = [n for n in notes if "multi-model concurrent dispatch" in n]
+    assert swap_notes, f"expected VRAM-swap warning, got: {notes}"
 
 
 def test_dispatch_no_warn_when_same_model_loaded(
@@ -8675,6 +8799,37 @@ def test_review_story_review_fallback_to_local_after_repeated_rate_limit(plan_di
     story = _read_manifest(plan_dir, "fb_local")["stories"]["S1"]
     assert story["review_verdict"] == "APPROVE"
     assert story["review_deferred_count"] == 0
+
+
+def test_review_story_review_fallback_to_explicit_provider_after_repeated_rate_limit(
+    plan_dir, agents_dir, monkeypatch,
+):
+    # T16: PIPELINE_REVIEW_FALLBACK accepts an explicit provider name (not
+    # just the "local" alias) and passes it straight through to
+    # _run_reviewer's backend_name override.
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK", "lmstudio")
+    monkeypatch.setenv("PIPELINE_REVIEW_FALLBACK_AFTER", "2")
+    _write_manifest(plan_dir, "fb_lmstudio", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    calls = []
+
+    def _stub(wt, br, backend_name=None):
+        calls.append(backend_name)
+        if len(calls) <= 2:
+            return _RATE_LIMIT_MSG
+        return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _stub)
+    monkeypatch.setattr(p, "_open_pr", lambda *a, **k: "https://example.com/pr/1")
+    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+
+    p.review_story("fb_lmstudio", "S1")
+    result2 = p.review_story("fb_lmstudio", "S1")
+
+    assert result2["status"] == "pr_open"
+    assert calls == [None, None, "lmstudio"]
 
 
 def test_review_story_fallback_disabled_by_default_keeps_deferring(plan_dir, agents_dir, monkeypatch):

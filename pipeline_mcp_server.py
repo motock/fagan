@@ -789,7 +789,13 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 
 
 def _persona_path(persona: str) -> Path:
-    return AGENTS_DIR / f"{persona}.md"
+    # Persona files are named lowercase-hyphenated (e.g. "security-engineer.md").
+    # Normalize here so every caller matches regardless of the case the persona
+    # string arrives in - callers like _persona_requires_claude already lowercase
+    # for their own comparison, and this must agree or a mixed-case persona value
+    # (e.g. "Security-Engineer") resolves the routing decision correctly but then
+    # crashes loading the prompt body (masked on case-insensitive filesystems).
+    return AGENTS_DIR / f"{persona.lower()}.md"
 
 
 def _persona_body(persona: str) -> str:

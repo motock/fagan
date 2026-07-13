@@ -2521,6 +2521,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         dispatch_backend = story.get("backend") or (
             _route_dispatch_backend(story) if env_backend == "auto" else env_backend
         )
+        # Apply persona-based override to Claude for security-engineer personas unless already set.
+        if not story.get("backend"):
+            persona = (story.get("persona") or "").lower()
+            if persona in _LOCAL_SKIP_PERSONAS:
+                dispatch_backend = "claude"
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
 

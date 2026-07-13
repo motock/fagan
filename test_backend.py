@@ -753,6 +753,60 @@ def test_ollama_resource_status_reachability_failure_takes_priority_over_memory(
     assert "unreachable" in status["reason"]
 
 
+# ---------- T12 (2026-07-13 review): _free_memory_mb counts reclaimable pages ----------
+def _vm_stat_output(free=0, inactive=0, purgeable=0, page_size=16384, include_inactive=True, include_purgeable=True):
+    lines = [f"Mach Virtual Memory Statistics: (page size of {page_size} bytes)"]
+    lines.append(f"Pages free:                                    {free}.")
+    lines.append("Pages active:                                 100.")
+    if include_inactive:
+        lines.append(f"Pages inactive:                               {inactive}.")
+    if include_purgeable:
+        lines.append(f"Pages purgeable:                               {purgeable}.")
+    return "\n".join(lines) + "\n"
+
+
+class _FakeCompletedProcess:
+    def __init__(self, stdout, returncode=0):
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+def _fake_vm_stat_run(stdout):
+    def _run(cmd, capture_output, text, timeout):
+        return _FakeCompletedProcess(stdout)
+    return _run
+
+
+def test_free_memory_mb_sums_free_inactive_and_purgeable_pages(monkeypatch):
+    # 64 pages each of free/inactive/purgeable at a 16384-byte page size is
+    # 1MB per bucket - strict free-only would read 1MB here; the fix must
+    # report 3MB, matching how macOS's own memory-pressure tooling treats
+    # inactive/purgeable pages as reclaimable, not scarce.
+    stdout = _vm_stat_output(free=64, inactive=64, purgeable=64, page_size=16384)
+    monkeypatch.setattr(b.subprocess, "run", _fake_vm_stat_run(stdout))
+
+    assert b.OllamaDriver()._free_memory_mb() == 3
+
+
+def test_free_memory_mb_defaults_missing_inactive_or_purgeable_to_zero(monkeypatch):
+    # An unexpected vm_stat output shape missing one of the optional fields
+    # should degrade to treating that term as 0, not abort the whole read -
+    # free alone is still a valid (if less generous) answer.
+    stdout = _vm_stat_output(free=64, page_size=16384, include_inactive=False, include_purgeable=False)
+    monkeypatch.setattr(b.subprocess, "run", _fake_vm_stat_run(stdout))
+
+    assert b.OllamaDriver()._free_memory_mb() == 1
+
+
+def test_free_memory_mb_still_returns_none_when_free_pages_missing(monkeypatch):
+    # "Pages free" is the one field that must be present - without it there's
+    # no baseline to report, so the read still fails open as before.
+    stdout = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages active: 100.\n"
+    monkeypatch.setattr(b.subprocess, "run", _fake_vm_stat_run(stdout))
+
+    assert b.OllamaDriver()._free_memory_mb() is None
+
+
 def test_claude_resource_status_reflects_usage_paused_flag(monkeypatch):
     import pipeline_mcp_server as p
     monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": True})

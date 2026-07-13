@@ -1449,6 +1449,16 @@ def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
 
 
 def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypatch):
+    # T11 (2026-07-12): updated. This test's reviewer stub is a bare
+    # "VERDICT: REQUEST_CHANGES" with no findings text - previously asserted
+    # as a genuine rejection (changes_requested, rework_attempts consumed),
+    # but that was exactly the bug T11 fixes: an empty REQUEST_CHANGES gives
+    # a redispatched agent nothing to act on and was silently burning rework
+    # budget. It now takes the inconclusive path (status unchanged, no PR,
+    # no rework_attempts) - see test_review_story_bare_request_changes_is_treated_as_inconclusive
+    # for the dedicated coverage of that path and
+    # test_review_story_genuine_request_changes_still_increments_rework for
+    # the regression guard confirming real findings text still counts.
     _write_manifest(plan_dir, "rv", {
         "S1": {"summary": "Add thing", "status": "in_progress",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
@@ -1462,10 +1472,12 @@ def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypa
 
     result = p.review_story("rv", "S1")
     assert result["verdict"] == "REQUEST_CHANGES"
-    assert result["status"] == "changes_requested"
+    assert result["status"] == "in_progress"
     assert result.get("pr_url") is None
     story = _read_manifest(plan_dir, "rv")["stories"]["S1"]
     assert "pr_url" not in story
+    assert "rework_attempts" not in story
+    assert story["review_inconclusive_count"] == 1
 
 
 def test_review_story_persists_feedback_on_request_changes(plan_dir, agents_dir, monkeypatch):
@@ -8397,6 +8409,65 @@ def test_review_story_genuine_request_changes_still_increments_rework(plan_dir, 
     story = _read_manifest(plan_dir, "rl_regression")["stories"]["S1"]
     assert story["rework_attempts"] == 1
     assert story["status"] == "changes_requested"
+
+
+# ---------- T11: content-free REQUEST_CHANGES must not burn rework budget ----------
+
+def test_review_story_bare_request_changes_is_treated_as_inconclusive(plan_dir, agents_dir, monkeypatch):
+    # A REQUEST_CHANGES with no findings text gives the redispatched agent
+    # nothing to act on - it must be treated like an inconclusive review
+    # (retry, review_inconclusive_count), not a genuine rejection that burns
+    # the rework budget.
+    _write_manifest(plan_dir, "rc_empty", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_open_pr",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on empty REQUEST_CHANGES")))
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    result = p.review_story("rc_empty", "S1")
+
+    assert result["verdict"] == "REQUEST_CHANGES"
+    assert result["status"] == "tests_passed"
+    story = _read_manifest(plan_dir, "rc_empty")["stories"]["S1"]
+    assert story["status"] == "tests_passed"
+    assert "rework_attempts" not in story
+    assert "review_feedback" not in story
+    assert story["review_inconclusive_count"] == 1
+    assert any("no findings" in n.lower() or "empty" in n.lower() for n in notes)
+
+
+def test_review_story_bare_request_changes_parks_after_max_inconclusive_attempts(plan_dir, agents_dir, monkeypatch):
+    # Default max is 2: a second consecutive content-free REQUEST_CHANGES
+    # must park for human review rather than retrying forever, and must
+    # never open a PR or consume rework budget along the way.
+    _write_manifest(plan_dir, "rc_empty_park", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    pr_calls = []
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_open_pr", lambda *a, **k: pr_calls.append(1))
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    result1 = p.review_story("rc_empty_park", "S1")
+    assert result1["status"] == "tests_passed"
+
+    result2 = p.review_story("rc_empty_park", "S1")
+
+    assert result2["verdict"] == "REQUEST_CHANGES"
+    assert result2["status"] == "parked"
+    story = _read_manifest(plan_dir, "rc_empty_park")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert story["review_inconclusive_count"] == 2
+    assert "inconclusive after 2 attempts" in story["parked_reason"]
+    assert "rework_attempts" not in story
+    assert pr_calls == [], "a content-free REQUEST_CHANGES must never open a PR"
+    assert any("parked" in n.lower() for n in notes)
 
 
 # ---------- Gap 5: Ollama 429 (RateLimitedError) on review path -> deferral ----------

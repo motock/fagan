@@ -1046,6 +1046,22 @@ def _parse_verdict(text: str) -> str:
     return m.group(1).upper() if m else "UNKNOWN"
 
 
+# T11: a REQUEST_CHANGES response with no substantive findings text - just
+# the VERDICT line itself, or whitespace around it - gives a redispatched
+# agent nothing to act on. Checked only when _parse_verdict returns
+# REQUEST_CHANGES, mirroring how _is_rate_limited/_is_transient_backend_error
+# are checked only after UNKNOWN. Deliberately a bare emptiness check, not a
+# length floor: this codebase's own reviewer-stub convention (see
+# test_review_story_parks_after_rework_budget_exhausted and its siblings, all
+# using "still bad\nVERDICT: REQUEST_CHANGES") treats even a terse one-line
+# finding as genuine, so any non-whitespace content beyond the verdict line
+# must count.
+def _has_review_findings(text: str) -> bool:
+    """True when `text` contains findings beyond the bare VERDICT line."""
+    stripped = re.sub(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", "", text, flags=re.IGNORECASE)
+    return bool(stripped.strip())
+
+
 # Anchors that identify an infrastructure rate-limit response, not a genuine
 # review. Checked only when _parse_verdict returns UNKNOWN (i.e. no VERDICT
 # line) so that a review discussing rate-limiting code is never misclassified.
@@ -3384,6 +3400,39 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                                         f"{inconclusive} attempts - needs human review.")
         else:
             _notify_user(plan_name, f"{story_key} review inconclusive; will retry.")
+        _atomic_write_json(manifest_path, manifest)
+        return {"ok": True, "verdict": verdict, "status": story["status"]}
+
+    # T11: a REQUEST_CHANGES with no substantive findings text is not a
+    # genuine rejection - it gives the redispatched agent nothing to fix, and
+    # treating it as one silently burns the rework budget on nothing (the
+    # 2026-07-02 gpt-oss run parked a story this way). Route it through the
+    # same inconclusive-handling shape as UNKNOWN above - before the
+    # review_inconclusive_count reset below, so repeated empty responses
+    # still accumulate toward REVIEW_INCONCLUSIVE_MAX - but leave the verdict
+    # itself visible and never touch rework_attempts/review_feedback. Checked
+    # here (not merged into the UNKNOWN branch above) because it applies
+    # equally to a content-free REQUEST_CHANGES from either the ordinary
+    # reviewer or a security-reviewer override.
+    if verdict == "REQUEST_CHANGES" and not _has_review_findings(reviewer_output):
+        inconclusive = story.get("review_inconclusive_count", 0) + 1
+        story["review_inconclusive_count"] = inconclusive
+        if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
+            if _auto_escalation_enabled() and not story.get("escalated"):
+                _escalate_review_to_claude(
+                    story, story_key, plan_name,
+                    f"review inconclusive after {inconclusive} attempts (empty REQUEST_CHANGES)",
+                )
+            else:
+                story["status"] = "parked"
+                story["parked_reason"] = (
+                    f"review inconclusive after {inconclusive} attempts - needs human review"
+                )
+                _notify_user(plan_name, f"{story_key} parked: review inconclusive after "
+                                        f"{inconclusive} attempts - needs human review.")
+        else:
+            _notify_user(plan_name, f"{story_key} review approved-changes-requested-empty: "
+                                    f"REQUEST_CHANGES with no findings text; will retry.")
         _atomic_write_json(manifest_path, manifest)
         return {"ok": True, "verdict": verdict, "status": story["status"]}
 

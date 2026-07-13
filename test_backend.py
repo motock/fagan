@@ -74,6 +74,33 @@ def test_get_backend_auto_raises_with_helpful_message():
         b.get_backend("dispatch", name="auto")
 
 
+# ---------- T16: explicit provider names as top-level backend names ----------
+@pytest.mark.parametrize("name,provider_cls", [
+    ("ollama", "OllamaProvider"),
+    ("lmstudio", "LMStudioProvider"),
+    ("mlx", "MLXProvider"),
+])
+def test_get_backend_explicit_provider_name_pins_that_provider(name, provider_cls, monkeypatch):
+    # Regardless of PIPELINE_LOCAL_PROVIDER, naming the provider directly as
+    # the backend must resolve to exactly that provider - this is what lets
+    # PIPELINE_BACKEND_DISPATCH=lmstudio work without also setting
+    # PIPELINE_LOCAL_PROVIDER=lmstudio.
+    monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "ollama")
+    driver = b.get_backend("dispatch", name=name)
+    assert isinstance(driver, b.OllamaDriver)
+    assert isinstance(driver.provider, getattr(b.inference_providers, provider_cls))
+
+
+def test_get_backend_local_alias_still_resolves_via_env(monkeypatch):
+    # "local" stays a permanent back-compat alias - it must keep resolving via
+    # PIPELINE_LOCAL_PROVIDER exactly as before these explicit names existed
+    # (manifests persist "backend": "local" for already-dispatched stories).
+    monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "mlx")
+    driver = b.get_backend("dispatch", name="local")
+    assert isinstance(driver, b.OllamaDriver)
+    assert isinstance(driver.provider, b.inference_providers.MLXProvider)
+
+
 # ---------- OllamaDriver.complete() ----------
 class _FakeResponse:
     def __init__(self, payload):
@@ -826,6 +853,19 @@ def test_ollama_driver_defaults_to_ollama_provider(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_PROVIDER", raising=False)
     driver = b.OllamaDriver()
     assert isinstance(driver.provider, b.inference_providers.OllamaProvider)
+
+
+# ---------- T16: OllamaDriver(provider_name=) explicit pin ----------
+def test_ollama_driver_provider_name_overrides_env(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "ollama")
+    driver = b.OllamaDriver(provider_name="mlx")
+    assert isinstance(driver.provider, b.inference_providers.MLXProvider)
+
+
+def test_ollama_driver_no_provider_name_still_reads_env(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "lmstudio")
+    driver = b.OllamaDriver()
+    assert isinstance(driver.provider, b.inference_providers.LMStudioProvider)
 
 
 class _UnimplementedFakeProvider:

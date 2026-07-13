@@ -156,7 +156,13 @@ BASH_TIMEOUT = float(os.environ.get("LOCAL_AGENT_BASH_TIMEOUT_SECONDS", "600"))
 # to MAX_CONCURRENT_AGENTS there's no steady queue, so these guard the
 # residual transients (prefill, network, Ollama 5xx). See the oracle
 # harness's local_agent_oracle.py for the full rationale.
+#
+# CONNECT_TIMEOUT_SECONDS defaults to 60s, not the old hardcoded 10s - see
+# local_agent_oracle.py's CONNECT_TIMEOUT_SECONDS comment for the live
+# 2026-07-13 incident (glm-4.7-flash / qwen3-coder:30b both timed out cold
+# at 10s, causing an infinite load/abort/retry memory-burst cycle).
 READ_SILENCE_SECONDS = float(os.environ.get("LOCAL_AGENT_READ_SILENCE_SECONDS", "180"))
+CONNECT_TIMEOUT_SECONDS = float(os.environ.get("LOCAL_AGENT_CONNECT_TIMEOUT_SECONDS", "60"))
 CHAT_MAX_ATTEMPTS = int(os.environ.get("LOCAL_AGENT_CHAT_MAX_ATTEMPTS", "3"))
 CHAT_RETRY_BACKOFF = float(os.environ.get("LOCAL_AGENT_CHAT_RETRY_BACKOFF", "5"))
 
@@ -285,7 +291,7 @@ def _stream_one_turn(payload):
     role = "assistant"
     with httpx.stream(
         "POST", f"{ENDPOINT}/api/chat", json=payload,
-        timeout=httpx.Timeout(connect=10.0, read=READ_SILENCE_SECONDS,
+        timeout=httpx.Timeout(connect=CONNECT_TIMEOUT_SECONDS, read=READ_SILENCE_SECONDS,
                               write=10.0, pool=10.0),
     ) as r:
         r.raise_for_status()

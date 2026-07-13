@@ -1141,6 +1141,27 @@ def test_stream_one_turn_no_thinking_key_is_noop(monkeypatch):
     assert "tool_calls" not in msg
 
 
+def test_stream_one_turn_uses_configurable_connect_timeout(monkeypatch):
+    """connect=10.0 was hardcoded and too short for a cold local-model load -
+    observed live 2026-07-13: both glm-4.7-flash (~17s cold load) and
+    qwen3-coder:30b timed out identically. Ollama aborts the in-flight load
+    and frees the memory it had claimed the instant the client gives up, so
+    a too-short connect timeout causes an infinite load/abort/retry cycle
+    that never completes rather than a genuine failure. Mirrors the same
+    fix in local_agent_oracle.py (CONNECT_TIMEOUT_SECONDS)."""
+    monkeypatch.setattr(la, "CONNECT_TIMEOUT_SECONDS", 45.0)
+    captured = {}
+
+    def _fake_stream(method, url, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        lines = [json.dumps({"message": {"role": "assistant", "content": "hi"}, "done": True})]
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    la._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert captured["timeout"].connect == 45.0
+
+
 # --- Qwen3 hybrid thinking-mode control (PIPELINE_LOCAL_THINK / LOCAL_AGENT_THINK) ---
 #
 # Qwen3.6-27B (and other Qwen3 dense models) emit a  Mattis... Mattis reasoning

@@ -1110,6 +1110,28 @@ def test_stream_one_turn_raises_on_5xx(monkeypatch):
         assert e.response.status_code == 500
 
 
+def test_stream_one_turn_uses_configurable_connect_timeout(monkeypatch):
+    """connect=10.0 was hardcoded and too short for a cold local-model load -
+    observed live 2026-07-13: both glm-4.7-flash (~17s cold load) and
+    qwen3-coder:30b timed out identically. Ollama aborts the in-flight load
+    and frees the memory it had claimed the instant the client gives up, so
+    a too-short connect timeout causes an infinite load/abort/retry cycle
+    that never completes rather than a genuine failure. CONNECT_TIMEOUT_
+    SECONDS makes this configurable like the other chat-retry knobs
+    (READ_SILENCE_SECONDS, CHAT_MAX_ATTEMPTS)."""
+    monkeypatch.setattr(lao, "CONNECT_TIMEOUT_SECONDS", 45.0)
+    captured = {}
+
+    def _fake_stream(method, url, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        lines = [json.dumps({"message": {"role": "assistant", "content": "hi"}, "done": True})]
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(lao.httpx, "stream", _fake_stream)
+    lao._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert captured["timeout"].connect == 45.0
+
+
 # ---------- transcript persistence + resume (ported from local_agent.py, see
 # test_local_agent_persistence.py for the reference test suite) ----------
 # These tests need a fresh module import per test with different env vars

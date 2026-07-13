@@ -150,11 +150,23 @@ BASH_TIMEOUT = float(os.environ.get("LOCAL_AGENT_BASH_TIMEOUT_SECONDS", "600"))
 #       chunk every ~1-2s, so this only fires on a genuine stall (no bytes
 #       for N seconds). 180s is generous enough to absorb prompt prefill
 #       (30-60s on a 16k-ctx 24b model) plus any residual queue wait.
+#   CONNECT_TIMEOUT_SECONDS — time to wait for Ollama to start responding to
+#       a *cold* model load, before the client gives up. Was hardcoded to
+#       10.0 - too short: observed live 2026-07-13, both glm-4.7-flash
+#       (~17s cold load) and qwen3-coder:30b timed out identically on a
+#       fresh (never-loaded-this-session) dispatch. Worse than a plain
+#       failure: Ollama aborts the in-flight load and frees the memory it
+#       had claimed the instant the client disconnects, so a too-short
+#       connect timeout produces an infinite load/abort/retry cycle (visible
+#       as repeating multi-GB memory bursts) that can never converge, rather
+#       than a genuine, retryable failure. 60s covers a cold load of a
+#       20GB-class model on Apple Silicon with headroom.
 #   CHAT_MAX_ATTEMPTS — turns to try before giving up (main()'s except
 #       then commits WIP and returns 1, same as before, but only after all
 #       attempts are exhausted).
 #   CHAT_RETRY_BACKOFF — sleep before attempt N is BACKOFF * N seconds.
 READ_SILENCE_SECONDS = float(os.environ.get("LOCAL_AGENT_READ_SILENCE_SECONDS", "180"))
+CONNECT_TIMEOUT_SECONDS = float(os.environ.get("LOCAL_AGENT_CONNECT_TIMEOUT_SECONDS", "60"))
 CHAT_MAX_ATTEMPTS = int(os.environ.get("LOCAL_AGENT_CHAT_MAX_ATTEMPTS", "3"))
 CHAT_RETRY_BACKOFF = float(os.environ.get("LOCAL_AGENT_CHAT_RETRY_BACKOFF", "5"))
 
@@ -280,7 +292,7 @@ def _stream_one_turn(payload):
     role = "assistant"
     with httpx.stream(
         "POST", f"{ENDPOINT}/api/chat", json=payload,
-        timeout=httpx.Timeout(connect=10.0, read=READ_SILENCE_SECONDS,
+        timeout=httpx.Timeout(connect=CONNECT_TIMEOUT_SECONDS, read=READ_SILENCE_SECONDS,
                               write=10.0, pool=10.0),
     ) as r:
         r.raise_for_status()

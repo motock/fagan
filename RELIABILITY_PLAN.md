@@ -582,6 +582,140 @@ fail — pick one order and test it explicitly).
 
 ---
 
+---
+
+### T14 — `_ci_status`'s `gh pr checks` call has no `cwd`, so it silently queries the wrong repo  *(confirmed, high-confidence root cause)*
+
+**Where:** `pipeline_mcp_server.py:1497-1499`, inside `_ci_status()`:
+```python
+r = subprocess.run(["gh", "pr", "checks", branch, "--json", "bucket"],
+                   capture_output=True, text=True)
+```
+No `cwd=` argument. `gh pr checks <branch>` (no `--repo` flag) resolves which
+GitHub repo to query from the current process's working directory's git
+remote — and `_scoped_repo_root()` (line 355), the mechanism every caller
+relies on to target the right repo for a given plan, only reassigns the
+module-level `REPO_ROOT` **Python variable**; it never calls `os.chdir()`
+(confirmed by reading its full body — a `try/finally` around a plain
+variable reassignment). The MCP server process's actual OS-level cwd is
+whatever it was at launch (no `cwd` is set in `~/.claude.json`'s
+`mcpServers.pipeline` entry, so it's inherited from whatever process/session
+happened to start it — not necessarily, and with a multi-plan/multi-repo
+pipeline server, not reliably, the plan's own repo). Every sibling call in
+the same code path gets this right: `_rebase_onto_master`'s `git fetch`/`git
+rebase` (`cwd=REPO_ROOT`/`worktree`) and `approve_merge`'s `git push`
+(`cwd=REPO_ROOT`, line ~4016) all explicitly thread the repo path through.
+`_ci_status`'s own `gh` call is the one call in this sequence that doesn't.
+
+**Observed impact (this session):** `approve_merge` on three separate,
+independently-verified-green PRs (confirmed via `gh pr checks <PR>` run
+directly against the correct repo — same head SHA, every job `pass`) all
+returned `"CI still pending: CI did not complete within timeout"` on every
+attempt, including retries several minutes apart — a pattern consistent
+with querying a repo where the branch/PR simply doesn't exist (so `gh pr
+checks` returns empty output every time, which `_ci_status` treats as
+"checks configured but not yet registered" and polls the full
+`PIPELINE_MERGE_CI_TIMEOUT` — default 300s — before giving up as
+`"pending"`), not with actually-slow CI. Ended up merging all three
+manually via `gh pr merge` with explicit user sign-off, bypassing the gate
+entirely — exactly the failure mode T3's `_ci_status` hardening was
+originally meant to prevent (a merge landing without the tool's own CI
+confirmation), just via a different root cause than PR #48's.
+
+**Change:** Add `cwd=REPO_ROOT` to the `gh pr checks` call in `_ci_status`
+(line ~1498), matching every sibling call in this file. Since `_ci_status`
+doesn't currently take a repo-root parameter (it reads the module-level
+`REPO_ROOT` global implicitly via being called only from within a
+`_scoped_repo_root()` block), either capture `REPO_ROOT` at call time inside
+the function body, or — more robust against a future caller that forgets
+the `_scoped_repo_root` wrapper — add an explicit `repo_root: str | None =
+None` parameter, defaulting to the global, and have callers pass it
+explicitly the way `worktree`/`branch` already are.
+
+**Tests (new, in `test_pipeline_mcp_server.py`):** mock `subprocess.run` and
+assert the `gh pr checks` call receives `cwd=<the scoped REPO_ROOT>` (not
+the ambient process cwd) — mirror however `_rebase_onto_master`'s `cwd`
+threading is already tested, if it is; if untested, add a test that sets
+`REPO_ROOT` to a value distinct from the test process's actual cwd and
+asserts the mocked call's `cwd` kwarg matches it. Also worth a regression
+test at the `approve_merge` level: with `gh` mocked to only succeed when
+invoked with the expected `cwd`, `approve_merge` succeeds — this is the
+scenario that silently failed three times in a row this session.
+
+---
+
+---
+
+### T15 — Memory-floor gate can self-inflict its own trip every dispatch round *(confirmed, observed repeatedly this session)*
+
+> **Status: Fix #1 (measurement) implemented and merged 2026-07-13 (PR #101, `3d2bc69`).**
+> `_free_memory_mb()` now sums free + inactive + purgeable pages instead of free-only
+> (live sanity check on this machine: ~410MB strict-free vs. ~3028MB combined - confirms
+> the diagnosis below exactly). 3 new tests added in `test_backend.py` mocking
+> `subprocess.run` directly against a synthetic `vm_stat` output (not just mocking
+> `_free_memory_mb()` itself, which the existing `resource_status()` tests already did).
+> Fix #2 (accounting for the dispatched model's own resident footprint - proactive
+> idle-unload or per-model floor sizing) is **not** implemented; left as the harder,
+> lower-urgency follow-up described below. Default floor left at 2048MB - the measurement
+> fix alone should make it trip only under genuine pressure now.
+
+**Where:** `backend.py:895-923` (`OllamaDriver.resource_status()`) and `:930-951`
+(`_free_memory_mb()`). The floor (`PIPELINE_LOCAL_MIN_FREE_MEMORY_MB`, default
+2048MB) compares against **strict `vm_stat` "Pages free"** only — it does not
+count macOS's inactive/purgeable pages, which are readily reclaimable and
+counted as "available" by Activity Monitor and most memory-pressure tooling.
+This makes the gate materially more conservative than the OS's own notion of
+memory pressure.
+
+**Observed impact (this session, repeatedly):** a single loaded local model
+(`gpt-oss:20b` via Ollama's `llama-server` subprocess) was observed holding
+**~12.8GB RSS** by itself — nowhere near the 2048MB floor's assumption of what
+"enough headroom for a dispatch" looks like. Because Ollama keeps a model warm
+in memory for a while after last use (its own idle-unload timer, not
+controlled by this pipeline), the sequence became self-reinforcing: a tick
+dispatches, `llama-server` loads/keeps the model resident, free memory drops
+under 2048MB, the *next* tick's `resource_status()` check gates on the very
+memory the prior tick's own dispatch is holding, stories get interrupted, and
+the cycle repeats until something outside the pipeline (the user closing
+other apps, or Ollama's own idle-unload finally firing) frees enough. This
+recurred across 10+ consecutive ticks (~3 hours of wall-clock) in this
+session before free memory happened to clear on its own.
+
+**Change (two independent, complementary fixes):**
+1. **Fix the measurement.** Use a metric closer to true "available" memory
+   (e.g. `vm_stat`'s free + inactive + purgeable pages, or shell out to
+   `memory_pressure` / `sysctl vm.page_free_count` if a more authoritative
+   API is available) instead of strict free-only. Free-only understates
+   headroom on a system that's simply caching aggressively but would
+   readily yield that memory under real pressure.
+2. **Account for the local model's own footprint.** The floor currently
+   only asks "is there 2048MB free," never "is the thing I'm about to load
+   already taking up 13GB that would be released if idle-unloaded." Either
+   (a) proactively unload an idle Ollama model before the floor check when
+   the check is about to fail — a `POST /api/generate` with
+   `keep_alive: 0` against the currently-loaded model, or an equivalent
+   `ollama stop` — so the pipeline manages the tradeoff itself instead of
+   waiting on Ollama's own idle timer; or (b) size the floor relative to
+   the specific model about to be dispatched (a small model needs much
+   less headroom than a large one) rather than one flat constant for every
+   model tag.
+3. This session's workaround was setting `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB=0`
+   in the MCP server's env (`~/.claude.json`'s `mcpServers.pipeline.env`) to
+   disable the gate entirely for the remainder of a stalled plan — acceptable
+   as a manual one-off, but confirms the gate has no lighter-weight "trust me,
+   proceed anyway for this plan" escape hatch short of disabling it globally
+   for every plan this server manages. A per-plan or per-call override (mirroring
+   how `local_model_fallback` is plan-scoped) would avoid a global config edit
+   for what was actually a single-plan, temporary decision.
+
+**Tests (new, in `test_backend.py`):** `_free_memory_mb`'s replacement metric
+(if changed) returns a value consistent with `vm_stat`'s free+inactive+purgeable
+sum on a mocked `vm_stat` output; `resource_status()` with a mocked "model
+already loaded and holding N GB" scenario either triggers the proactive
+unload path (if implemented) or is documented as a known gap if not.
+
+---
+
 ## Notes carried from the retro (context, not tasks)
 - `approve_merge` already does the full rebase→CI→reverify→merge gate — the §4 gap was
   *bypassing* it with a manual merge, plus the `none`-grace hole (T3).

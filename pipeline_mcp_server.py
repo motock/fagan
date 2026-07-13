@@ -181,7 +181,11 @@ STEP_CAP_FALLBACK_THRESHOLD = int(
 #      or a security persona go straight to Claude.
 #   2. A-posteriori: if the local agent fails (bad code / test failure), the
 #      orchestrator escalates that specific story to Claude and starts clean.
-# Explicit "local" or "claude" values bypass this router entirely.
+# Explicit "local" or "claude" values bypass the risk-ceiling half of this
+# router, but NOT the security-persona half: dispatch_story applies the
+# persona override (see _persona_requires_claude) regardless of dispatch
+# mode, unless the story already has an explicit story["backend"] (e.g. from
+# a prior escalation), which always wins as-is.
 PIPELINE_LOCAL_MAX_RISK = os.environ.get("PIPELINE_LOCAL_MAX_RISK", "low").lower()
 _LOCAL_SKIP_PERSONAS = {"security-engineer"}
 
@@ -1949,6 +1953,17 @@ def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
     return False
 
 
+def _persona_requires_claude(story: dict[str, Any]) -> bool:
+    """Whether story["persona"] (case-insensitive) is in _LOCAL_SKIP_PERSONAS.
+
+    Shared by _route_dispatch_backend (auto-mode a-priori routing) and
+    dispatch_story's explicit-mode override, so both apply the identical
+    normalization to the same safety boundary instead of drifting apart.
+    """
+    persona = (story.get("persona") or "").lower()
+    return persona in _LOCAL_SKIP_PERSONAS
+
+
 def _route_dispatch_backend(story: dict[str, Any]) -> str:
     """A-priori backend choice for a new dispatch (called only when
     PIPELINE_BACKEND_DISPATCH=auto). Returns "local" or "claude".
@@ -1964,8 +1979,7 @@ def _route_dispatch_backend(story: dict[str, Any]) -> str:
     risk_rank = _RISK_ORDER.get(story_risk, _RISK_ORDER["high"])
     if risk_rank > max_risk_rank:
         return "claude"
-    persona = (story.get("persona") or "").lower()
-    if persona in _LOCAL_SKIP_PERSONAS:
+    if _persona_requires_claude(story):
         return "claude"
     return "local"
 
@@ -2521,11 +2535,12 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         dispatch_backend = story.get("backend") or (
             _route_dispatch_backend(story) if env_backend == "auto" else env_backend
         )
-        # Apply persona-based override to Claude for security-engineer personas unless already set.
-        if not story.get("backend"):
-            persona = (story.get("persona") or "").lower()
-            if persona in _LOCAL_SKIP_PERSONAS:
-                dispatch_backend = "claude"
+        # Persona-based safety override: a security persona always dispatches to
+        # Claude, regardless of dispatch mode (auto/local/claude) - unless the
+        # story already had an explicit backend (a prior escalation flip), which
+        # wins as-is and is never re-routed here.
+        if not story.get("backend") and _persona_requires_claude(story):
+            dispatch_backend = "claude"
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
 

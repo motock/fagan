@@ -296,12 +296,16 @@ _PROVIDERS: dict[str, type] = {
 }
 
 
-def get_local_provider() -> LocalInferenceProvider:
-    """Resolve the active local inference provider from
-    PIPELINE_LOCAL_PROVIDER (default "ollama", preserving today's behavior
-    exactly). "mlx" and "lmstudio" are both working implementations.
+def get_local_provider(name: str | None = None) -> LocalInferenceProvider:
+    """Resolve the active local inference provider.
+
+    name= is a per-call override (e.g. a per-role pinned provider) that
+    bypasses the PIPELINE_LOCAL_PROVIDER env lookup entirely, mirroring
+    backend.get_backend(role, name=)'s override pattern. Omitted/None keeps
+    today's behavior: resolve from PIPELINE_LOCAL_PROVIDER (default "ollama").
+    "mlx" and "lmstudio" are both working implementations.
     """
-    choice = os.environ.get("PIPELINE_LOCAL_PROVIDER", "ollama").strip().lower()
+    choice = (name or os.environ.get("PIPELINE_LOCAL_PROVIDER", "ollama")).strip().lower()
     provider_cls = _PROVIDERS.get(choice)
     if provider_cls is None:
         raise ValueError(

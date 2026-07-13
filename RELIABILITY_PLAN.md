@@ -716,6 +716,42 @@ unload path (if implemented) or is documented as a known gap if not.
 
 ---
 
+### T16 — Flatten "local" backend naming into explicit provider names *(implemented 2026-07-13)*
+
+**Status: Done, direct-edit, pending commit/PR.** `PIPELINE_BACKEND_<ROLE>` (and
+`PIPELINE_REVIEW_FALLBACK`) now accept `ollama`/`lmstudio`/`mlx` directly, not just
+the generic `local`, which incorrectly implied "runs on this machine" when Ollama/
+LM Studio can equally proxy `:cloud`-tagged models. `local` stays a **permanent**
+back-compat alias (env-resolved via `PIPELINE_LOCAL_PROVIDER`, unchanged) since
+manifests already persist `"backend": "local"` for previously-dispatched stories.
+
+**Change:**
+- `inference_providers.get_local_provider(name=)` — explicit override, bypassing
+  the `PIPELINE_LOCAL_PROVIDER` env lookup when given.
+- `backend.OllamaDriver(provider_name=)` — threads through to the above.
+- `backend._DRIVERS` gains `"ollama"`/`"lmstudio"`/`"mlx"` keys via
+  `functools.partial(OllamaDriver, provider_name=...)`, so
+  `PIPELINE_BACKEND_DISPATCH=lmstudio` now resolves end-to-end.
+- New `pipeline_mcp_server._LOCAL_BACKEND_NAMES` predicate broadens 4 call sites
+  that previously gated on a literal `== "local"` (the `PIPELINE_LOCAL_REVIEW_MODEL`
+  override, transcript-resume-on-rework, the VRAM-swap warning, and `acceptance`
+  passthrough) so they also fire for an explicitly-pinned provider name. The
+  `auto`-router's own `{local, claude}` output space (`_route_dispatch_backend`,
+  `_role_resource_ok`, and the escalation checks in `check_story_status`/
+  `advance_all_plans`) is deliberately left untouched — auto-mode routes only
+  local-vs-claude, not to a specific provider.
+- `PIPELINE_REVIEW_FALLBACK` generalized from the literal `"local"` to any name in
+  `_LOCAL_BACKEND_NAMES`, passing that name through as `_run_reviewer`'s
+  `backend_name` override.
+- README env-var table updated (`PIPELINE_BACKEND_*`, `PIPELINE_LOCAL_PROVIDER`,
+  `PIPELINE_REVIEW_FALLBACK` — the latter previously undocumented).
+
+**Tests:** 15 new tests across `test_inference_providers.py`, `test_backend.py`,
+`test_pipeline_mcp_server.py` (full suite: 900 passed, up from 885). No existing
+test assertion was modified — verified via `git diff` showing additions only.
+
+---
+
 ## Notes carried from the retro (context, not tasks)
 - `approve_merge` already does the full rebase→CI→reverify→merge gate — the §4 gap was
   *bypassing* it with a manual merge, plus the `none`-grace hole (T3).

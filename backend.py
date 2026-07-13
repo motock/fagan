@@ -16,13 +16,14 @@ inference_providers.py.
 from __future__ import annotations
 
 import datetime
+import functools
 import json
 import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 import httpx
 
@@ -444,7 +445,7 @@ class OllamaDriver:
     tools.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, provider_name: str | None = None) -> None:
         # Resolved per-instance (not module-cached) so a PIPELINE_LOCAL_PROVIDER
         # change between OllamaDriver() constructions takes effect, mirroring
         # this class's own live-env-read pattern elsewhere (see e.g.
@@ -453,7 +454,11 @@ class OllamaDriver:
         # as LOCAL_AGENT_PROVIDER, which scripts/local_agent(_oracle).py use
         # to pick between Ollama's streaming /api/chat and a provider's
         # blocking chat() (see MODEL_PROVIDER_ABSTRACTION_PLAN.md S3).
-        self.provider = inference_providers.get_local_provider()
+        # provider_name= pins a specific provider (see _DRIVERS' "ollama"/
+        # "lmstudio"/"mlx" entries, RELIABILITY_PLAN.md T16), bypassing the
+        # env lookup; omitted/None keeps today's PIPELINE_LOCAL_PROVIDER-
+        # resolved behavior (the "local" back-compat alias in _DRIVERS).
+        self.provider = inference_providers.get_local_provider(provider_name)
         self.endpoint = os.environ.get(
             "PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434",
         ).rstrip("/")
@@ -991,9 +996,21 @@ def _ollama_loaded_models(endpoint: str) -> set[str]:
 
 # Registry of available drivers by config name. Register new drivers here -
 # orchestration code never changes.
-_DRIVERS: dict[str, type] = {
+#
+# "local" is a permanent back-compat alias (env-resolved via
+# PIPELINE_LOCAL_PROVIDER, default ollama) - manifests persist
+# "backend": "local" for already-dispatched stories, so it must never be
+# removed. "ollama"/"lmstudio"/"mlx" (RELIABILITY_PLAN.md T16) let a role
+# name the actual local transport directly instead of the generic "local",
+# which incorrectly implies "runs on this machine" when Ollama/LM Studio can
+# equally proxy :cloud-tagged models - and lets different roles pin
+# different local providers, since PIPELINE_LOCAL_PROVIDER is process-wide.
+_DRIVERS: dict[str, type | Callable[[], "OllamaDriver"]] = {
     "claude": ClaudeCliDriver,
     "local": OllamaDriver,
+    "ollama": functools.partial(OllamaDriver, provider_name="ollama"),
+    "lmstudio": functools.partial(OllamaDriver, provider_name="lmstudio"),
+    "mlx": functools.partial(OllamaDriver, provider_name="mlx"),
 }
 
 

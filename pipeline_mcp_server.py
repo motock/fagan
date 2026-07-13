@@ -185,6 +185,16 @@ STEP_CAP_FALLBACK_THRESHOLD = int(
 PIPELINE_LOCAL_MAX_RISK = os.environ.get("PIPELINE_LOCAL_MAX_RISK", "low").lower()
 _LOCAL_SKIP_PERSONAS = {"security-engineer"}
 
+# RELIABILITY_PLAN.md T16: "local" (env-resolved via PIPELINE_LOCAL_PROVIDER)
+# is a permanent back-compat alias; "ollama"/"lmstudio"/"mlx" let a role name
+# the actual local transport directly (backend._DRIVERS). A resolved backend
+# name that could be any of these four must be treated identically by any
+# gate keyed on "is this dispatch local-family" - NOT the two-value
+# {"local","claude"} space _route_dispatch_backend()'s auto router returns,
+# which is intentionally left alone (auto-mode doesn't route to a specific
+# provider, only local-vs-claude).
+_LOCAL_BACKEND_NAMES = frozenset({"local", "ollama", "lmstudio", "mlx"})
+
 # Rework budget. When the reviewer returns REQUEST_CHANGES the story is sent
 # back for rework (redispatched with the reviewer's feedback). To stop a story
 # the reviewer keeps rejecting from looping through review/rework forever, cap
@@ -944,7 +954,7 @@ def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -
     resolved_backend = (
         backend_name or os.environ.get("PIPELINE_BACKEND_REVIEW", "claude")
     ).strip().lower()
-    if resolved_backend == "local":
+    if resolved_backend in _LOCAL_BACKEND_NAMES:
         review_model_override = os.environ.get("PIPELINE_LOCAL_REVIEW_MODEL")
         if review_model_override:
             model = review_model_override
@@ -2528,7 +2538,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         review_feedback = story.get("review_feedback")
         transcript_path = worktree_path / ".agent_transcript.json"
         resume_via_transcript = (
-            dispatch_backend == "local" and review_feedback and transcript_path.exists()
+            dispatch_backend in _LOCAL_BACKEND_NAMES and review_feedback and transcript_path.exists()
         )
 
         spec = _build_dispatch_command(
@@ -2545,7 +2555,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # different model, Ollama will swap the existing model out to make room
         # (or OOM-split if 24GB unified memory is tight). Warn, don't block:
         # same-model concurrency is safe, and even a swap is just slow.
-        if (dispatch_backend == "local"
+        if (dispatch_backend in _LOCAL_BACKEND_NAMES
                 and MAX_CONCURRENT_AGENTS > 1
                 and _count_in_progress_agents() > 0):
             target_model = spec.get("model") or story.get("model")
@@ -2584,7 +2594,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         )
         # Only the local driver accepts/uses `acceptance`; pass it through when
         # we're actually invoking that driver so Claude's signature stays clean.
-        if dispatch_backend == "local" and acceptance_paths:
+        if dispatch_backend in _LOCAL_BACKEND_NAMES and acceptance_paths:
             dispatch_kwargs["acceptance"] = acceptance_paths
 
         if resume_via_transcript:
@@ -3327,10 +3337,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
         fallback_mode = os.environ.get("PIPELINE_REVIEW_FALLBACK", "off").strip().lower()
         fallback_after = int(os.environ.get("PIPELINE_REVIEW_FALLBACK_AFTER", "3"))
-        if fallback_mode == "local" and story["review_deferred_count"] >= fallback_after:
-            _notify_user(plan_name, f"{story_key} review falling back to local backend "
+        if fallback_mode in _LOCAL_BACKEND_NAMES and story["review_deferred_count"] >= fallback_after:
+            _notify_user(plan_name, f"{story_key} review falling back to {fallback_mode} backend "
                                     f"after {story['review_deferred_count']} rate-limited attempts.")
-            reviewer_output = _run_reviewer(worktree, branch, backend_name="local")
+            reviewer_output = _run_reviewer(worktree, branch, backend_name=fallback_mode)
             verdict = _parse_verdict(reviewer_output)
             # Fall through into the normal verdict-handling code below —
             # this is a genuine review attempt now, not a deferral.

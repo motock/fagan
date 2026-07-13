@@ -8571,6 +8571,81 @@ def test_dispatch_no_warn_for_claude_backend(
     assert not any("multi-model concurrent dispatch" in n for n in notes)
 
 
+def test_dispatch_no_warn_when_resolved_tier_matches_loaded(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """T-false-positive-fix: the story's declared model is a *tier* name
+    ("sonnet"), not a concrete Ollama tag. The unresolved tier will never
+    match anything in `loaded` (a set of concrete tags), which is exactly
+    the false-positive this warning must not produce. Once the tier is
+    resolved through backend._resolve_local_model to the concrete tag that
+    is actually already loaded, there is no swap risk and no warning
+    should fire."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_SONNET", "gpt-oss:20b")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    # The concrete tag the tier resolves to is already loaded.
+    monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: {"gpt-oss:20b"})
+
+    _write_manifest(plan_dir, "tier_resolves_to_loaded", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "sonnet"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1236))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("tier_resolves_to_loaded", "S1")
+
+    assert not any("multi-model concurrent dispatch" in n for n in notes), \
+        f"unexpected VRAM-swap warning (false positive on unresolved tier): {notes}"
+
+
+def test_dispatch_warns_with_resolved_tag_when_tier_mismatches_loaded(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """T-true-positive-preserved: the story's declared model is a tier name
+    ("sonnet") that resolves to a concrete tag NOT currently loaded. The
+    warning must still fire, and its message must contain the resolved
+    concrete tag ("gpt-oss:20b"), not the raw tier name ("sonnet")."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_SONNET", "gpt-oss:20b")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: {"devstral:24b"})
+
+    _write_manifest(plan_dir, "tier_resolves_to_mismatch", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "sonnet"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1237))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("tier_resolves_to_mismatch", "S1")
+
+    swap_notes = [n for n in notes if "multi-model concurrent dispatch" in n]
+    assert swap_notes, f"expected VRAM-swap warning, got: {notes}"
+    assert any("gpt-oss:20b" in n for n in swap_notes)
+    assert not any("sonnet" in n for n in swap_notes), \
+        f"warning message must use the resolved concrete tag, not the raw tier name: {swap_notes}"
+
+
 # ---------- FM-B: reviewer rate-limit must defer, not consume rework budget ----------
 
 _RATE_LIMIT_MSG = (

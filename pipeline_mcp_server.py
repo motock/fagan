@@ -2585,6 +2585,12 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 and MAX_CONCURRENT_AGENTS > 1
                 and _count_in_progress_agents() > 0):
             target_model = spec.get("model") or story.get("model")
+            if target_model:
+                # spec["model"]/story["model"] may be an unresolved tier
+                # name (e.g. "sonnet"), which never matches anything in
+                # `loaded` (concrete Ollama tags) and would otherwise warn
+                # on every dispatch regardless of what's actually loaded.
+                target_model = backend._resolve_local_model(target_model)
             try:
                 loaded = backend._ollama_loaded_models(
                     os.environ.get("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")

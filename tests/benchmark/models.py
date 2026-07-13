@@ -118,6 +118,12 @@ MODELS: dict[str, dict] = {
             "PIPELINE_LOCAL_THINK": "false",
         },
     },
+    # qwen3-coder:30b (MoE, non-thinking, proven Metal-stable) implementing
+    # AND self-reviewing - the direct qwen counterpart to gptoss_temp03,
+    # same temperature/num_ctx, for a like-for-like rework-cycle comparison
+    # against the gpt-oss self-review baseline established this session.
+    "qwen3coder": _local(os.environ.get("BENCH_QWEN36CODER_TAG", "qwen3-coder:30b"),
+                          temperature="0.3", num_ctx="32768"),
     "gptoss": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="1.0", num_ctx="32768"),
     "gptoss_temp03": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="0.3", num_ctx="32768"),
     # Same dispatch/review settings as gptoss_temp03, but PIPELINE_BACKEND_
@@ -206,6 +212,25 @@ MODELS: dict[str, dict] = {
             **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
                      temperature="0.3", num_ctx="32768")["env"],
             "PIPELINE_BACKEND_REVIEW": "claude",
+        },
+    },
+    # Asymmetric review on qwen3-coder:30b (MoE, non-thinking, proven Metal-
+    # stable across 7 runs this session - unlike the dense Qwen3.6-27B, which
+    # crashes/hangs on both LM Studio and Ollama). Same dispatch settings as
+    # gptoss_temp03 (gpt-oss:20b implements locally); review routed to
+    # qwen3-coder:30b instead of gpt-oss reviewing its own weights. Tests
+    # whether a 30B MoE model can catch the kind of subtle correctness bug
+    # Claude caught in the token_bucket trials (refill double-counting on a
+    # rejected request) that the acceptance oracle itself missed.
+    "gptoss_qwen36coder_review": {
+        "mock": False,
+        "env": {
+            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
+                     temperature="0.3", num_ctx="32768")["env"],
+            "PIPELINE_BACKEND_REVIEW": "local",
+            "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get(
+                "BENCH_QWEN36CODER_TAG", "qwen3-coder:30b"
+            ),
         },
     },
     # --- local (LM Studio) ---

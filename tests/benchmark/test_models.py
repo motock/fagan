@@ -101,3 +101,12 @@ def test_qwen36_cell_disables_thinking_and_inherits_shared_defaults():
     assert env["PIPELINE_LOCAL_NUM_CTX"] == _LOCAL_AGENT_ENV["PIPELINE_LOCAL_NUM_CTX"]
     assert env["PIPELINE_LOCAL_MAX_STEPS"] == _LOCAL_AGENT_ENV["PIPELINE_LOCAL_MAX_STEPS"]
     assert env["PIPELINE_LOCAL_ENDPOINT"] == _LOCAL_AGENT_ENV["PIPELINE_LOCAL_ENDPOINT"]
+
+
+def test_gptoss_qwen36coder_review_routes_review_to_qwen36coder_locally():
+    env = MODELS["gptoss_qwen36coder_review"]["env"]
+    assert env["PIPELINE_BACKEND_REVIEW"] == "local"
+    assert env["PIPELINE_LOCAL_REVIEW_MODEL"] == "qwen3-coder:30b"
+    # Dispatch model must NOT equal the review model - otherwise this isn't
+    # actually testing asymmetric review.
+    assert env["PIPELINE_LOCAL_MODEL_DEFAULT"] != env["PIPELINE_LOCAL_REVIEW_MODEL"]

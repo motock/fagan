@@ -928,7 +928,18 @@ class OllamaDriver:
         return {"ok": ok, "reason": reason}
 
     def _free_memory_mb(self) -> int | None:
-        """Best-effort free-memory read via macOS's vm_stat, in MB.
+        """Best-effort available-memory read via macOS's vm_stat, in MB.
+
+        Sums free + inactive + purgeable pages, not free alone: inactive and
+        purgeable pages are readily reclaimable under real pressure - the
+        same accounting macOS's own memory-pressure tooling uses - so a
+        free-only read materially understates real headroom.
+        RELIABILITY_PLAN.md's T12 (2026-07-13) observed the strict-free
+        floor tripping every dispatch tick while a resident model held pages
+        that were never actually scarce, stalling dispatch for hours.
+        Missing inactive/purgeable fields (an unexpected vm_stat output
+        shape) degrade that term to 0 rather than aborting the whole read -
+        free alone is still a valid, if less generous, answer.
 
         Returns None (never raises) on any subprocess/parse failure - a
         non-macOS host without vm_stat, an unexpected output shape, or a
@@ -948,7 +959,12 @@ class OllamaDriver:
                 return None
             page_size = int(page_size_match.group(1))
             free_pages = int(free_pages_match.group(1))
-            return (free_pages * page_size) // (1024 * 1024)
+            inactive_match = re.search(r"Pages inactive:\s+(\d+)\.", result.stdout)
+            purgeable_match = re.search(r"Pages purgeable:\s+(\d+)\.", result.stdout)
+            inactive_pages = int(inactive_match.group(1)) if inactive_match else 0
+            purgeable_pages = int(purgeable_match.group(1)) if purgeable_match else 0
+            available_pages = free_pages + inactive_pages + purgeable_pages
+            return (available_pages * page_size) // (1024 * 1024)
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
 

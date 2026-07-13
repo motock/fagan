@@ -2113,6 +2113,42 @@ def test_dispatch_story_records_resolved_model_on_manifest(
     assert story["dispatched_model"] == "minimax-m3:cloud"  # actual model recorded
 
 
+def test_dispatch_story_records_dispatched_at_timestamp(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    """dispatch_story records when the agent was launched so check_story_status
+    can bound how long a dispatch is allowed to run before its subprocess is
+    treated as hung (see the watchdog tests on check_story_status)."""
+    real_repo = tmp_path / "real-repo"
+    _write_manifest(plan_dir, "dat", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    manifest_path = plan_dir / "dat.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(real_repo)
+    manifest_path.write_text(json.dumps(manifest))
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, cwd=None, **kw: _R())
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda argv, **kw: _FakeProc(123))
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+
+    before = datetime.now(timezone.utc)
+    p.dispatch_story("dat", "S1")
+    after = datetime.now(timezone.utc)
+
+    story = json.loads(manifest_path.read_text())["stories"]["S1"]
+    dispatched_at = datetime.fromisoformat(story["dispatched_at"])
+    assert before <= dispatched_at <= after
+
+
 def test_advance_pipeline_merge_uses_plan_repo_root(plan_dir, monkeypatch, tmp_path):
     real_repo = tmp_path / "real-repo"
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
@@ -3201,6 +3237,47 @@ def test_advance_pipeline_actually_interrupts_in_progress_when_dispatch_gated(
     assert story["status"] == "interrupted"
 
 
+def test_advance_pipeline_does_not_interrupt_in_progress_on_memory_pressure_gate(
+    plan_dir, agents_dir, monkeypatch, tmp_path,
+):
+    """A local-memory-pressure gate ('insufficient free memory') is
+    self-inflicted by an in-progress dispatch actively loading its model -
+    killing it doesn't free a shared/exhaustible resource, it just destroys
+    progress and immediately re-triggers the same gate on redispatch.
+    Observed live 2026-07-13: a repeating load/interrupt/redispatch cycle
+    (a new PID every ~10-20s, never converging) on both glm-4.7-flash and
+    qwen3-coder:30b. Only THIS specific reason should be exempted from the
+    interrupt sweep; test_advance_pipeline_actually_interrupts_in_progress_
+    when_dispatch_gated covers that every other gate reason still
+    interrupts as before."""
+    _write_manifest(plan_dir, "memgate", {
+        "R1": {"summary": "running", "status": "in_progress", "pid": 111,
+               "worktree": str(tmp_path / "wt"), "dependencies": []},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(
+        p, "_role_resource_ok",
+        lambda role: (False, "insufficient free memory (1024mb < 2048mb floor)"),
+    )
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
+
+    class _GitResult:
+        returncode = 0
+        stdout = "sha123\n"
+        stderr = ""
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _GitResult())
+
+    result = p.advance_pipeline("memgate")
+
+    assert result["ok"] is True
+    assert result["dispatch_paused"] is True
+    assert result["interrupted"] == []
+    story = _read_manifest(plan_dir, "memgate")["stories"]["R1"]
+    assert story["status"] == "in_progress"
+    assert story["pid"] == 111
+
+
 def test_dispatch_story_proceeds_when_lock_free(plan_dir, worktree_root, agents_dir, monkeypatch):
     """Sanity check: with no lock held, dispatch_story runs normally. Catches
     a regression where the lock is held unconditionally (no caller would ever
@@ -3542,6 +3619,114 @@ def test_check_story_status_treats_empty_log_as_failed_launch_after_grace(
     story = _read_manifest(plan_dir, "g2")["stories"]["S1"]
     assert story["status"] == "interrupted"
     assert story["dispatch_attempts"] == 1
+
+
+def test_check_story_status_kills_hung_process_past_watchdog_timeout(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A dispatch subprocess that's still alive well past the watchdog ceiling
+    is a hang, not legitimate progress — observed directly during MLX
+    provider validation: a blocking, non-streaming chat call can stall
+    indefinitely on a single stuck request (0% CPU, no error), and the outer
+    harness's own timeout never killed the orphaned subprocess (found running
+    minutes later, had to be killed manually). Past the ceiling,
+    check_story_status must terminate the process and checkpoint rather than
+    reporting "running" forever."""
+    monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 60)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    old_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    _write_manifest(plan_dir, "wd1", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "dispatched_at": old_dispatched_at},
+    })
+
+    killed = []
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            if cmd[0] == "ps":
+                stdout = "S\n"
+            elif cmd[:2] == ["git", "rev-parse"]:
+                stdout = "sha-wd\n"
+            else:
+                stdout = ""
+            stderr = ""
+        return Result()
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_story_status("wd1", "S1")
+
+    assert (4242, p.signal.SIGTERM) in killed
+    assert result["status"] == "interrupted"
+    assert result.get("watchdog_killed") is True
+
+    story = _read_manifest(plan_dir, "wd1")["stories"]["S1"]
+    assert story["status"] == "interrupted"
+    assert "dispatch_error" in story
+    journal = json.loads((plan_dir / "wd1.S1.journal.json").read_text())
+    assert journal[-1]["step"] == "dispatch_watchdog_timeout"
+
+
+def test_check_story_status_running_within_watchdog_window_is_not_killed(
+    plan_dir, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 3600)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    recent_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    _write_manifest(plan_dir, "wd2", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "dispatched_at": recent_dispatched_at},
+    })
+
+    killed = []
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "S\n" if cmd[0] == "ps" else ""
+            stderr = ""
+        return Result()
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_story_status("wd2", "S1")
+
+    assert result == {"status": "running", "pid": 4242}
+    assert p.signal.SIGTERM not in [sig for _, sig in killed]
+    story = _read_manifest(plan_dir, "wd2")["stories"]["S1"]
+    assert story["status"] == "in_progress"
+
+
+def test_check_story_status_running_without_dispatched_at_skips_watchdog(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A story dispatched before this field existed has no dispatched_at —
+    check_story_status must not crash and must not spuriously kill it; the
+    watchdog simply can't apply without a known start time."""
+    monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 1)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    _write_manifest(plan_dir, "wd3", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: None)
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "S\n" if cmd[0] == "ps" else ""
+            stderr = ""
+        return Result()
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_story_status("wd3", "S1")
+
+    assert result == {"status": "running", "pid": 4242}
 
 
 # ---------- advance_pipeline orchestration ----------

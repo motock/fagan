@@ -26,23 +26,39 @@ Config via env vars (no CLI flags, matching the advance-scheduler's plist
         default "<repo root>/mlx-server.log". Not to be confused with this
         supervisor script's own StandardOutPath/StandardErrorPath in the
         launchd plist - this is the log of the server subprocess it starts.
-    MLX_PROMPT_CACHE_SIZE - default "2". Passed as mlx_lm.server's
+    MLX_PROMPT_CACHE_SIZE - default "1". Passed as mlx_lm.server's
         --prompt-cache-size (max distinct KV caches held at once). The
         server's own default is 10 with no byte ceiling
         (MLX_PROMPT_CACHE_BYTES below) - on a 24GB host running a ~16GB
         model, 10 held caches at a few GB each is what turned an
         unattended multi-trial benchmark run into a real kernel panic
-        (IOGPUGroupMemory.cpp, 2026-07-14 incident, see
+        (IOGPUGroupMemory.cpp:528, 2026-07-14 incident, see
         MLX_DEFAULT_PROVIDER_PLAN.md) - the LRU had room to accumulate far
-        past physical memory before it ever evicted anything. 2 is enough
-        for this project's own dispatch pattern (one active conversation
-        at a time, occasionally a review turn) without starving intra-run
-        cache reuse.
+        past physical memory before it ever evicted anything. Lowered from
+        2 to 1 after a second, distinct panic (IOGPUGroupMemory.cpp:323,
+        "remove_memory_object() memory object not found", 2026-07-14):
+        LRUPromptCache.insert_cache() allocates the new (Nth) cache before
+        evicting the oldest one once the LRU is over its cap, so a cap of 2
+        still let a transient 3rd cache exist at the moment of eviction - a
+        memory spike right at the wired-memory ceiling. A cap of 1 removes
+        that transient window entirely, at the cost of one conversation's
+        cache never surviving a second concurrent one.
     MLX_PROMPT_CACHE_BYTES - default "4G". Passed as mlx_lm.server's
         --prompt-cache-bytes (byte ceiling across all held caches,
         mlx_lm.utils._parse_size format, e.g. "4G"/"512M"). Belt-and-braces
         alongside MLX_PROMPT_CACHE_SIZE: bounds memory even if a single
         conversation's own KV cache is unusually large.
+    MLX_PROMPT_CONCURRENCY - default "1". Passed as mlx_lm.server's
+        --prompt-concurrency (mlx_lm.server's own default is 8: "when a
+        request is batchable then process that many prompts in parallel").
+        MLX's own issue tracker documents independent graph evaluations as
+        not thread-safe (ml-explore/mlx#2133), and mlx-lm's tracker already
+        has crashes tied to server-side concurrency (KV-cache
+        cross-contamination in ml-explore/mlx-lm#965, a batch-merge crash in
+        #754) - forcing this to 1 serializes GPU graph evaluation inside the
+        server as a stopgap against the same class of bug, pending an
+        upstream fix. Not proven to be this project's exact trigger; see
+        MLX_DEFAULT_PROVIDER_PLAN.md for what's confirmed vs. hypothesized.
     MLX_HEALTHCHECK_TIMEOUT_SECONDS - default "30". Timeout for is_serving()'s
         real completion probe (see below) - long enough that a slow-but-alive
         server isn't mistaken for wedged, short enough that a genuinely
@@ -63,9 +79,11 @@ PYTHON = os.environ.get("MLX_SERVER_PYTHON")
 LOG_PATH = os.environ.get(
     "MLX_SERVER_LOG_PATH", str(Path(__file__).resolve().parent.parent / "mlx-server.log")
 )
-PROMPT_CACHE_SIZE = os.environ.get("MLX_PROMPT_CACHE_SIZE", "2")
+PROMPT_CACHE_SIZE = os.environ.get("MLX_PROMPT_CACHE_SIZE", "1")
 PROMPT_CACHE_BYTES = os.environ.get("MLX_PROMPT_CACHE_BYTES", "4G")
+PROMPT_CONCURRENCY = os.environ.get("MLX_PROMPT_CONCURRENCY", "1")
 HEALTHCHECK_TIMEOUT = float(os.environ.get("MLX_HEALTHCHECK_TIMEOUT_SECONDS", "30"))
+WRAPPER_PATH = Path(__file__).resolve().parent / "mlx_server_wrapper.py"
 
 
 def is_reachable(endpoint: str, timeout: float = 5.0) -> bool:
@@ -132,6 +150,15 @@ def start_server(model_path: str, port: str) -> subprocess.Popen:
     disk, not silently discarded (this made a real failed launch
     indistinguishable from a slow cold-load with nothing to grep).
 
+    Launches scripts/mlx_server_wrapper.py rather than `-m mlx_lm server`
+    directly, so its soft in-process memory ceiling and per-request
+    instrumentation (see that module's docstring) are always in effect - the
+    wrapper forwards these same CLI args on to mlx_lm.server.main() itself.
+
+    Always passes --prompt-concurrency (PROMPT_CONCURRENCY) ahead of the
+    cache flags - forced to 1 to serialize GPU graph evaluation inside the
+    server (see PROMPT_CONCURRENCY's module-docstring entry for why).
+
     Always passes --prompt-cache-size/--prompt-cache-bytes (PROMPT_CACHE_SIZE/
     PROMPT_CACHE_BYTES) - mlx_lm.server's own defaults (10 caches, no byte
     ceiling) let its LRU accumulate well past physical memory across many
@@ -141,7 +168,8 @@ def start_server(model_path: str, port: str) -> subprocess.Popen:
     log_file = open(LOG_PATH, "a")
     proc = subprocess.Popen(
         [
-            PYTHON, "-m", "mlx_lm", "server", "--model", model_path, "--port", str(port),
+            PYTHON, str(WRAPPER_PATH), "--model", model_path, "--port", str(port),
+            "--prompt-concurrency", PROMPT_CONCURRENCY,
             "--prompt-cache-size", PROMPT_CACHE_SIZE, "--prompt-cache-bytes", PROMPT_CACHE_BYTES,
         ],
         stdout=log_file, stderr=log_file, start_new_session=True,

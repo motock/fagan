@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AbandonProcessGroup</key>
+	<true/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/Users/jessecarroll/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>MLX_SERVER_MODEL_PATH</key>
+		<string>REPLACE-WITH-EXACT-MODEL-PATH-USED-TO-LAUNCH-THE-SERVER</string>
+		<key>MLX_SERVER_PORT</key>
+		<string>8080</string>
+		<key>MLX_SERVER_PYTHON</key>
+		<string>REPLACE-WITH-PATH-TO-A-PYTHON-WITH-MLX-LM-INSTALLED</string>
+	</dict>
+	<key>Label</key>
+	<string>com.claude.pipeline.mlx-supervisor</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>REPLACE-WITH-PATH-TO-A-PYTHON-WITH-MLX-LM-INSTALLED</string>
+		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/scripts/mlx_server_supervisor.py</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/mlx-supervisor.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/mlx-supervisor.log</string>
+	<key>StartInterval</key>
+	<integer>120</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline</string>
+</dict>
+</plist>

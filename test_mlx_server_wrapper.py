@@ -50,6 +50,35 @@ def test_apply_memory_limit_honors_configured_value(monkeypatch):
     assert fake_mx.limit_set_to == 1024 * 1024 * 1024
 
 
+def test_configure_logging_does_not_configure_root_logger(monkeypatch, tmp_path):
+    """logging.basicConfig() configures the ROOT logger and is a no-op if the
+    root logger already has handlers - mlx_lm.server.main() makes its own
+    basicConfig() call right after this module hands off to it, and if we'd
+    claimed the root logger first, that call would silently do nothing,
+    rerouting mlx_lm's own Prompt Cache/progress logging into this wrapper's
+    log file instead of mlx-server.log. Confirmed live 2026-07-14."""
+    root = logging.getLogger()
+    root_handlers_before = list(root.handlers)
+    monkeypatch.setattr(wrapper, "LOG_PATH", str(tmp_path / "wrapper.log"))
+    monkeypatch.setattr(wrapper._logger, "handlers", [])
+
+    wrapper.configure_logging()
+
+    assert root.handlers == root_handlers_before
+
+
+def test_configure_logging_is_idempotent(monkeypatch, tmp_path):
+    """Calling it twice must not accumulate duplicate handlers (which would
+    duplicate every log line)."""
+    monkeypatch.setattr(wrapper, "LOG_PATH", str(tmp_path / "wrapper.log"))
+    monkeypatch.setattr(wrapper._logger, "handlers", [])
+
+    wrapper.configure_logging()
+    wrapper.configure_logging()
+
+    assert len(wrapper._logger.handlers) == 1
+
+
 class _FakeHandler:
     do_GET_calls = []
     do_POST_calls = []

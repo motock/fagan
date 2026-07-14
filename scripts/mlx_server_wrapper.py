@@ -36,6 +36,25 @@ LOG_PATH = os.environ.get(
 _logger = logging.getLogger("mlx_server_wrapper")
 
 
+def configure_logging() -> None:
+    """Gives _logger its own file handler instead of calling
+    logging.basicConfig() - basicConfig() configures the ROOT logger, and
+    mlx_lm.server.main() makes its own basicConfig() call right after this
+    module hands off to it (server.py ~1892). logging.basicConfig() is a
+    no-op if the root logger already has handlers, so claiming the root
+    logger here would silently swallow mlx_lm's own structured logging
+    (Prompt Cache/Prompt processing progress lines) into this wrapper's log
+    instead of mlx-server.log where every prior incident's analysis expects
+    to find them. Idempotent - safe to call more than once (e.g. from
+    tests) without accumulating duplicate handlers/duplicate log lines."""
+    if not _logger.handlers:
+        handler = logging.FileHandler(LOG_PATH)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        _logger.addHandler(handler)
+        _logger.setLevel(logging.INFO)
+        _logger.propagate = False
+
+
 def apply_memory_limit(mx_module) -> int:
     """Sets mx's soft memory ceiling from MEMORY_LIMIT_MB, returns the byte
     value applied. Takes the mx module as a parameter (rather than importing
@@ -78,7 +97,7 @@ def main() -> None:
     import mlx.core as mx
     import mlx_lm.server as server_mod
 
-    logging.basicConfig(filename=LOG_PATH, level=logging.INFO, format="%(asctime)s %(message)s")
+    configure_logging()
 
     if mx.metal.is_available():
         applied = apply_memory_limit(mx)

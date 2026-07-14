@@ -34,6 +34,7 @@ def test_is_reachable_false_on_http_error(monkeypatch):
 
 
 def test_ensure_running_skips_start_when_already_reachable(monkeypatch):
+    monkeypatch.setattr(sup, "PYTHON", "python3")
     monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: True)
     started = []
     monkeypatch.setattr(sup, "start_server", lambda model_path, port: started.append((model_path, port)))
@@ -45,6 +46,7 @@ def test_ensure_running_skips_start_when_already_reachable(monkeypatch):
 
 
 def test_ensure_running_starts_server_when_not_reachable(monkeypatch):
+    monkeypatch.setattr(sup, "PYTHON", "python3")
     monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: False)
     started = []
     monkeypatch.setattr(sup, "start_server", lambda model_path, port: started.append((model_path, port)))
@@ -74,7 +76,34 @@ def test_ensure_running_does_not_probe_reachability_before_checking_model_path(m
     assert probed == []
 
 
-def test_start_server_launches_mlx_lm_server_with_model_and_port(monkeypatch):
+def test_ensure_running_raises_without_python_interpreter(monkeypatch):
+    """MLX_SERVER_PYTHON must be explicit, same as MLX_SERVER_MODEL_PATH - a
+    silent 'python3' default would resolve to whatever interpreter happens to
+    be first on PATH, which on this host has no mlx-lm installed and fails
+    with output swallowed by start_server's DEVNULL redirect (the exact
+    failure mode that made a real crash hard to diagnose)."""
+    monkeypatch.setattr(sup, "PYTHON", None)
+    monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: False)
+
+    with pytest.raises(ValueError, match="MLX_SERVER_PYTHON"):
+        sup.ensure_running("http://localhost:8080", "/path/to/model", "8080")
+
+
+def test_ensure_running_does_not_probe_reachability_before_checking_python(monkeypatch):
+    """Same fail-fast contract as the model-path check."""
+    monkeypatch.setattr(sup, "PYTHON", None)
+    probed = []
+    monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: probed.append(1) or True)
+
+    with pytest.raises(ValueError):
+        sup.ensure_running("http://localhost:8080", "/path/to/model", "8080")
+
+    assert probed == []
+
+
+
+
+def test_start_server_launches_mlx_lm_server_with_model_and_port(monkeypatch, tmp_path):
     captured = {}
 
     class _FakeProc:
@@ -87,6 +116,7 @@ def test_start_server_launches_mlx_lm_server_with_model_and_port(monkeypatch):
 
     monkeypatch.setattr(sup.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(sup, "PYTHON", "python3")
+    monkeypatch.setattr(sup, "LOG_PATH", str(tmp_path / "mlx-server.log"))
 
     proc = sup.start_server("/path/to/model", "8080")
 
@@ -95,6 +125,29 @@ def test_start_server_launches_mlx_lm_server_with_model_and_port(monkeypatch):
     ]
     assert captured["kwargs"]["start_new_session"] is True
     assert proc.pid == 999
+
+
+def test_start_server_does_not_discard_output(monkeypatch, tmp_path):
+    """A wrong interpreter, a bad model path, or an mlx-lm import error must
+    land somewhere readable - DEVNULL made a real failed launch indistinguishable
+    from a slow cold-load, with nothing to grep to find out which."""
+    captured = {}
+
+    class _FakeProc:
+        pid = 999
+
+    def _fake_popen(cmd, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeProc()
+
+    monkeypatch.setattr(sup.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(sup, "PYTHON", "python3")
+    monkeypatch.setattr(sup, "LOG_PATH", str(tmp_path / "mlx-server.log"))
+
+    sup.start_server("/path/to/model", "8080")
+
+    assert captured["kwargs"]["stdout"] != sup.subprocess.DEVNULL
+    assert captured["kwargs"]["stderr"] != sup.subprocess.DEVNULL
 
 
 def test_main_prints_error_and_returns_1_when_model_path_unset(monkeypatch, capsys):
@@ -109,6 +162,7 @@ def test_main_prints_error_and_returns_1_when_model_path_unset(monkeypatch, caps
 
 def test_main_prints_already_running_and_returns_0(monkeypatch, capsys):
     monkeypatch.setattr(sup, "MODEL_PATH", "/path/to/model")
+    monkeypatch.setattr(sup, "PYTHON", "python3")
     monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: True)
 
     exit_code = sup.main()

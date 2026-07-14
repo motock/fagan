@@ -260,6 +260,77 @@ deliberately reproducing the exact disconnect-mid-generation condition on demand
 treat this as proven-by-construction (the fix targets the exact confirmed symptom) rather than
 live-validated until it's observed catching a real recurrence.
 
+**Correction to G5c's trigger attribution:** closer review of the timeline shows `token_bucket`
+t1 (the *first* run's own second cell, finished before any manual intervention) already showed
+the identical "alive pid, zero server activity" symptom - the wedge predates the `TaskStop` kill
+originally blamed above. It's now suspected the operator also ran two `matrix.py` processes
+concurrently against the same `--workdir` and cell set for a period (a second `--resume` run was
+launched without first stopping the first), which could independently corrupt a cell's worktree/
+plan state - a distinct confound from the server-level wedge, not yet separated out. The
+`is_serving()` fix stands regardless (directly curl-confirmed a real, server-level wedge
+independent of either explanation), but the precise trigger is unconfirmed - treat "a client
+timing out or disconnecting mid-generation can wedge the server" as the working hypothesis, not
+a proven mechanism, and avoid running concurrent harness/matrix processes against the same
+workdir as a separate operational hazard either way.
+
+**G5d — a second, distinct kernel panic surfaced 7 minutes after the G5c/cache-bound fixes
+shipped (2026-07-14, 12:18:23).** Panic string: `"IOGPUGroupMemory::remove_memory_object()
+memory object not found" @IOGPUGroupMemory.cpp:323` - different from the `@528` panic
+`--prompt-cache-size`/`--prompt-cache-bytes` targeted, and different from any prior incident here.
+Timeline: `mlx_cachebound_20260714/ratelimiter_inspect__mlx__t0` was mid-dispatch (2 of N steps
+done, no `result.json`); `mlx-server.log`'s last logged activity was a `GET /v1/models` at
+12:17:33, panic at 12:18:23 - no completions call logged in between, consistent with one in
+flight and never reaching its completion log line. The supervisor's launchd job was not loaded
+at the time (`launchctl list` showed nothing), so `is_serving()`'s periodic probe was not a
+factor in this specific incident.
+
+Two candidate mechanisms, both externally corroborated, not mutually exclusive:
+
+1. **Eviction-triggered spike.** `LRUPromptCache.insert_cache()` (mlx_lm/models/cache.py)
+   allocates the new cache entry *before* evicting the oldest one once the LRU is over
+   `--prompt-cache-size`. With the cap at 2 (G5c's value), a transient 3rd cache could exist for
+   one GPU-touching moment - right at the wired-memory ceiling (`mlx_lm.server` unconditionally
+   calls `mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])`, measured at
+   19.07GB on this 25.77GB host; the ~16-21GB model resident set leaves almost no headroom). The
+   log shows a first eviction succeeding cleanly (12:16:03→12:16:17); the panic lines up with
+   where a second one would be needed.
+2. **Concurrent GPU graph evaluation inside the server.** `mlx_lm.server` runs on a
+   `ThreadingHTTPServer` with no lock anywhere in its source, and separately defaults
+   `--prompt-concurrency 8` ("process that many prompts in parallel" via its internal batch
+   generator) - parallel graph evaluation MLX's own tracker documents as unsafe
+   ([ml-explore/mlx#2133](https://github.com/ml-explore/mlx/issues/2133)). mlx-lm's tracker has
+   already tied server-side concurrency to real bugs on this exact version family: KV-cache
+   cross-contamination between concurrent requests
+   ([#965](https://github.com/ml-explore/mlx-lm/issues/965)) and a batch-merge crash
+   ([#754](https://github.com/ml-explore/mlx-lm/issues/754)). No second GPU-touching request was
+   confirmed in flight for *this* panic specifically (the concurrent request would have to be
+   `--prompt-concurrency`'s own internal batching, not an external client - we dispatch serially),
+   so this is a plausible contributor, not a confirmed one for this incident.
+
+**Stopgap shipped (2026-07-14), Phase 1a+1b of the response plan:**
+- `MLX_PROMPT_CACHE_SIZE` default lowered `2`→`1` (removes the transient N+1-cache eviction spike
+  entirely, at the cost of one conversation's cache never surviving a second concurrent one).
+- `MLX_PROMPT_CONCURRENCY` (new, default `1`) passed as `--prompt-concurrency`, overriding
+  mlx_lm.server's own default of `8` - serializes internal batch GPU graph evaluation.
+- New `scripts/mlx_server_wrapper.py`, launched by the supervisor in place of `-m mlx_lm server`:
+  sets a soft `mx.set_memory_limit()` ceiling (`MLX_MEMORY_LIMIT_MB`, default `22528` = 22GiB,
+  derived from this host's 25.77GB minus ~3GB OS headroom - not portable to other hosts as-is) so
+  crossing it fails the allocation in-process (a crash the supervisor can restart) rather than
+  reaching the kernel panic path, plus per-request start/end + peak-memory instrumentation
+  (`MLX_WRAPPER_LOG_PATH`) to observe, from real logs, whether memory pressure and/or concurrency
+  is the actual trigger on the next occurrence.
+- 12 new tests (`test_mlx_server_wrapper.py` ×6, `test_mlx_server_supervisor.py` +2 new/updated),
+  939/939 suite green.
+
+**Not yet validated live**: none of the above has been exercised against a real dispatch run yet
+- this is a mitigation grounded in code inspection + upstream issue research, not a proven fix.
+Next: re-run an MLX matrix long enough to force 2-3 real cache-eviction cycles, watch for both a
+repeat panic and the wrapper's instrumentation log, and feed the result into an explicit decision
+(`request_decision`) on whether continuing to harden 30B-MLX-on-24GB is worth it vs. a smaller
+MLX model or staying on Ollama. A from-scratch mlx-lm fork (evict-before-insert ordering,
+configurable wired limit, Metal-OOM→HTTP-503 instead of a process crash) remains on the table if
+the stopgap doesn't hold up, but is out of scope until that data comes back.
+
 **G6 — No apples-to-apples benchmark vs. the Ollama baseline.** Devstral MLX vs. `devstral:24b`
 Ollama is actually a clean experiment design — same weights family, only the serving runtime
 differs — so this is more tractable than it looked before G1's research. Still needs a real

@@ -186,7 +186,11 @@ def test_is_serving_sends_minimal_completion_request(monkeypatch):
 
 
 
-def test_start_server_launches_mlx_lm_server_with_model_and_port(monkeypatch, tmp_path):
+def test_start_server_launches_wrapper_with_model_and_port(monkeypatch, tmp_path):
+    """start_server launches scripts/mlx_server_wrapper.py (not `-m mlx_lm
+    server` directly) so the wrapper's memory-limit + instrumentation hooks
+    are always in effect - see mlx_server_wrapper.py's module docstring for
+    why (2026-07-14 IOGPUGroupMemory panics)."""
     captured = {}
 
     class _FakeProc:
@@ -200,14 +204,16 @@ def test_start_server_launches_mlx_lm_server_with_model_and_port(monkeypatch, tm
     monkeypatch.setattr(sup.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(sup, "PYTHON", "python3")
     monkeypatch.setattr(sup, "LOG_PATH", str(tmp_path / "mlx-server.log"))
-    monkeypatch.setattr(sup, "PROMPT_CACHE_SIZE", "2")
+    monkeypatch.setattr(sup, "PROMPT_CONCURRENCY", "1")
+    monkeypatch.setattr(sup, "PROMPT_CACHE_SIZE", "1")
     monkeypatch.setattr(sup, "PROMPT_CACHE_BYTES", "4G")
 
     proc = sup.start_server("/path/to/model", "8080")
 
     assert captured["cmd"] == [
-        "python3", "-m", "mlx_lm", "server", "--model", "/path/to/model", "--port", "8080",
-        "--prompt-cache-size", "2", "--prompt-cache-bytes", "4G",
+        "python3", str(sup.WRAPPER_PATH), "--model", "/path/to/model", "--port", "8080",
+        "--prompt-concurrency", "1",
+        "--prompt-cache-size", "1", "--prompt-cache-bytes", "4G",
     ]
     assert captured["kwargs"]["start_new_session"] is True
     assert proc.pid == 999
@@ -237,6 +243,36 @@ def test_start_server_uses_configured_prompt_cache_bounds(monkeypatch, tmp_path)
     assert captured["cmd"][-4:] == [
         "--prompt-cache-size", "5", "--prompt-cache-bytes", "8G",
     ]
+
+
+def test_start_server_uses_configured_prompt_concurrency(monkeypatch, tmp_path):
+    """MLX_PROMPT_CONCURRENCY must reach the launched server - mlx_lm.server's
+    own default (--prompt-concurrency 8) batches multiple prompts through
+    concurrent GPU graph evaluation, which MLX documents as not thread-safe
+    (ml-explore/mlx#2133) and which mlx-lm's own issue tracker has already
+    tied to crashes under concurrency (ml-explore/mlx-lm#754, #965). Forcing
+    it to 1 serializes GPU access as a stopgap pending an upstream fix."""
+    captured = {}
+
+    class _FakeProc:
+        pid = 999
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc()
+
+    monkeypatch.setattr(sup.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(sup, "PYTHON", "python3")
+    monkeypatch.setattr(sup, "LOG_PATH", str(tmp_path / "mlx-server.log"))
+    monkeypatch.setattr(sup, "PROMPT_CONCURRENCY", "1")
+    monkeypatch.setattr(sup, "PROMPT_CACHE_SIZE", "1")
+    monkeypatch.setattr(sup, "PROMPT_CACHE_BYTES", "4G")
+
+    sup.start_server("/path/to/model", "8080")
+
+    assert "--prompt-concurrency" in captured["cmd"]
+    idx = captured["cmd"].index("--prompt-concurrency")
+    assert captured["cmd"][idx + 1] == "1"
 
 
 def test_start_server_does_not_discard_output(monkeypatch, tmp_path):

@@ -15,14 +15,18 @@
 > a model with a complete, standard tool-calling template out of the box - see the corrected G1
 > section below for the full model-compatibility research trail.
 >
-> **3 trials total on this model, 3/3 GT-correct:** `token_bucket` t0 (parked on the real
-> reviewer finding above), `token_bucket` t1 (`done`/`merged`/`APPROVE`, 179.5s, 6 ticks),
-> `ratelimiter_inspect` t0 (`done`/`merged`/`APPROVE`, 204.3s, 6 ticks) - 2/3 merged cleanly, 1/3
-> correctly blocked pre-merge. Consistent, fast (~180-205s/trial) across two different T1 task
-> types. Strongest local-dispatch result of any model tried on this host to date (higher and
-> more consistent than devstral:24b/gpt-oss:20b/qwen3-coder:30b's historical Ollama numbers -
-> see `[[project_provider_dispatch_s3]]` for those baselines; a controlled Ollama-side re-run
-> for a true head-to-head is deferred, not done this session).
+> **5 trials total on this model, 5/5 GT-correct:** `token_bucket` t0 (parked, real reviewer
+> finding above), t1 (`done`/`merged`/`APPROVE`, 179.5s), t2 (parked, **same bug as t0** -
+> rejected calls don't advance the clock, found independently by the reviewer on a separate
+> implementation - a reproducible model blind spot on this specific edge case, not a fluke);
+> `ratelimiter_inspect` t0 (`done`/`merged`/`APPROVE`, 204.3s) and t1 (`done`/`merged`/`APPROVE`,
+> 159.7s). Tally: 3/5 merged cleanly, 2/5 correctly blocked pre-merge (both on the identical
+> token-bucket clock bug) - `ratelimiter_inspect` is 2/2 clean, `token_bucket` is 1/3 clean with
+> a consistent, characterizable failure mode. Fast (~160-208s/trial) and 100% GT-correct across
+> both task types. Strongest local-dispatch result of any model tried on this host to date
+> (higher and more consistent than devstral:24b/gpt-oss:20b/qwen3-coder:30b's historical Ollama
+> numbers - see `[[project_provider_dispatch_s3]]` for those baselines; a controlled Ollama-side
+> re-run for a true head-to-head is deferred, not done this session).
 >
 > **New operational gap found and worked around, not yet fixed in code:** `mlx_lm.server`'s
 > request `"model"` field must **exactly** match its `--model` launch argument (or be omitted)

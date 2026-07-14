@@ -15,15 +15,24 @@
 > a model with a complete, standard tool-calling template out of the box - see the corrected G1
 > section below for the full model-compatibility research trail.
 >
-> **5 trials total on this model, 5/5 GT-correct:** `token_bucket` t0 (parked, real reviewer
-> finding above), t1 (`done`/`merged`/`APPROVE`, 179.5s), t2 (parked, **same bug as t0** -
-> rejected calls don't advance the clock, found independently by the reviewer on a separate
-> implementation - a reproducible model blind spot on this specific edge case, not a fluke);
-> `ratelimiter_inspect` t0 (`done`/`merged`/`APPROVE`, 204.3s) and t1 (`done`/`merged`/`APPROVE`,
-> 159.7s). Tally: 3/5 merged cleanly, 2/5 correctly blocked pre-merge (both on the identical
-> token-bucket clock bug) - `ratelimiter_inspect` is 2/2 clean, `token_bucket` is 1/3 clean with
-> a consistent, characterizable failure mode. Fast (~160-208s/trial) and 100% GT-correct across
-> both task types. Strongest local-dispatch result of any model tried on this host to date
+> **8 trials total on this model:** `token_bucket` t0 (parked, real reviewer finding), t1
+> (`done`/`merged`/`APPROVE`, 179.5s), t2 (parked, **same bug as t0** - rejected calls don't
+> advance the clock, found independently by the reviewer on a separate implementation - a
+> reproducible-but-not-deterministic model blind spot, ~50% hit rate on this specific edge
+> case), t3 (`done`/`merged`/`APPROVE`, 116.4s); `ratelimiter_inspect` t0 and t1 (both
+> `done`/`merged`/`APPROVE`, 204.3s/159.7s) - 2/2 clean. `lru_cache` t0: **first non-clean
+> result** - `interrupted`/`timed_out` at 1838s/42 ticks, a read-heavy loop (5x identical
+> `view_file` calls on the same test file, never progressing to an edit), the same failure mode
+> already characterized for other local models on this host (see
+> `[[project_dispatch_failure_modes]]` Mode 1). **This is also the first live confirmation that
+> the S2 harness-reaping fix works correctly**: no orphaned subprocess was left behind (verified
+> via `ps`) - the harness's own 1800s deadline triggered `interrupt_story`, checkpointed cleanly,
+> and marked the story `interrupted` rather than leaving a zombie process like the pre-S2 MLX
+> incidents. Tally across all 8: 6/7 completed trials GT-correct and reviewed (5 merged, 2
+> correctly blocked on the same real bug), 1/8 timed out on task-specific read-looping unrelated
+> to the MLX wiring itself. Fast (~116-208s) on the two simpler T1 tasks; `lru_cache` exposed a
+> genuine model-capability limit at 30B on a harder task, not an MLX-specific problem. Strongest
+> local-dispatch result of any model tried on this host to date on the tasks it does handle
 > (higher and more consistent than devstral:24b/gpt-oss:20b/qwen3-coder:30b's historical Ollama
 > numbers - see `[[project_provider_dispatch_s3]]` for those baselines; a controlled Ollama-side
 > re-run for a true head-to-head is deferred, not done this session).

@@ -117,14 +117,43 @@ def test_start_server_launches_mlx_lm_server_with_model_and_port(monkeypatch, tm
     monkeypatch.setattr(sup.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(sup, "PYTHON", "python3")
     monkeypatch.setattr(sup, "LOG_PATH", str(tmp_path / "mlx-server.log"))
+    monkeypatch.setattr(sup, "PROMPT_CACHE_SIZE", "2")
+    monkeypatch.setattr(sup, "PROMPT_CACHE_BYTES", "4G")
 
     proc = sup.start_server("/path/to/model", "8080")
 
     assert captured["cmd"] == [
         "python3", "-m", "mlx_lm", "server", "--model", "/path/to/model", "--port", "8080",
+        "--prompt-cache-size", "2", "--prompt-cache-bytes", "4G",
     ]
     assert captured["kwargs"]["start_new_session"] is True
     assert proc.pid == 999
+
+
+def test_start_server_uses_configured_prompt_cache_bounds(monkeypatch, tmp_path):
+    """MLX_PROMPT_CACHE_SIZE/MLX_PROMPT_CACHE_BYTES must reach the launched
+    server unbounded by the module's defaults - an operator raising or
+    lowering the bound needs it to actually take effect."""
+    captured = {}
+
+    class _FakeProc:
+        pid = 999
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc()
+
+    monkeypatch.setattr(sup.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(sup, "PYTHON", "python3")
+    monkeypatch.setattr(sup, "LOG_PATH", str(tmp_path / "mlx-server.log"))
+    monkeypatch.setattr(sup, "PROMPT_CACHE_SIZE", "5")
+    monkeypatch.setattr(sup, "PROMPT_CACHE_BYTES", "8G")
+
+    sup.start_server("/path/to/model", "8080")
+
+    assert captured["cmd"][-4:] == [
+        "--prompt-cache-size", "5", "--prompt-cache-bytes", "8G",
+    ]
 
 
 def test_start_server_does_not_discard_output(monkeypatch, tmp_path):

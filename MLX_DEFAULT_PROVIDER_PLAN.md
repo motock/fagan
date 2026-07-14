@@ -183,11 +183,22 @@ version-pinned `.venv-mlx` in this repo (`uv venv --python 3.14 .venv-mlx && uv 
 requires `MLX_SERVER_PYTHON` explicitly (previously defaulted to a bare `"python3"`, which
 silently resolves to whichever interpreter is first on `PATH` — not guaranteed to have mlx-lm —
 and `start_server`'s old `stdout=DEVNULL, stderr=DEVNULL` made that failure mode undiagnosable;
-it now logs to `MLX_SERVER_LOG_PATH`, default `<repo root>/mlx-server.log`). **Not yet fixed:**
-nothing in this codebase periodically restarts `mlx_lm.server` to bound GPU-memory churn across
-many trials — the actual proximate trigger for the panic. A max-age/max-request restart policy
-in the supervisor is the natural next step, scoped separately since it's a design decision
-(safe restart cadence, whether it's safe to kill mid-dispatch) rather than a mechanical fix.
+it now logs to `MLX_SERVER_LOG_PATH`, default `<repo root>/mlx-server.log`).
+
+**Recurred (2026-07-14 09:35):** a third panic with the identical signature
+(`panic-full-2026-07-14-093510.0002.panic`) hit while `mlx_lm.server` was idling after normal
+request traffic (`mlx-server.log` shows routine `/v1/models` polling up to 09:34:09, nothing
+unusual, then the panic 61s later) — this session's own reboot. The server that crashed was
+running without any prompt-cache bound: the fix below was sitting uncommitted in the worktree
+when the reboot hit, so it was never deployed to the process that panicked. Fixed now:
+`scripts/mlx_server_supervisor.py` always passes `--prompt-cache-size`/`--prompt-cache-bytes`
+(`MLX_PROMPT_CACHE_SIZE`/`MLX_PROMPT_CACHE_BYTES` env vars, default `2`/`4G`) so
+`mlx_lm.server`'s own LRU self-evicts instead of accumulating GPU-backed KV-cache buffers past
+physical memory — belt-and-braces over the "periodic restart" idea originally proposed here,
+since bounding the cache at the source needs no restart-cadence judgment call at all. **Not yet
+validated live:** this crash predates the fix's deployment, so it has not been observed to
+actually prevent a repeat — worth watching the next several sessions' worth of trials before
+treating G5 as closed.
 
 **G6 — No apples-to-apples benchmark vs. the Ollama baseline.** Devstral MLX vs. `devstral:24b`
 Ollama is actually a clean experiment design — same weights family, only the serving runtime

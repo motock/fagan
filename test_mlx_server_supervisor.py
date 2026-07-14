@@ -36,6 +36,7 @@ def test_is_reachable_false_on_http_error(monkeypatch):
 def test_ensure_running_skips_start_when_already_reachable(monkeypatch):
     monkeypatch.setattr(sup, "PYTHON", "python3")
     monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: True)
+    monkeypatch.setattr(sup, "is_serving", lambda endpoint, timeout=30.0: True)
     started = []
     monkeypatch.setattr(sup, "start_server", lambda model_path, port: started.append((model_path, port)))
 
@@ -54,6 +55,41 @@ def test_ensure_running_starts_server_when_not_reachable(monkeypatch):
     result = sup.ensure_running("http://localhost:8080", "/path/to/model", "8080")
 
     assert result == "started"
+    assert started == [("/path/to/model", "8080")]
+
+
+def test_ensure_running_does_not_check_serving_when_not_reachable(monkeypatch):
+    """No point probing completions on a server that isn't even up - go
+    straight to starting one."""
+    monkeypatch.setattr(sup, "PYTHON", "python3")
+    monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: False)
+    probed = []
+    monkeypatch.setattr(sup, "is_serving", lambda endpoint, timeout=30.0: probed.append(1) or True)
+    monkeypatch.setattr(sup, "start_server", lambda model_path, port: None)
+
+    sup.ensure_running("http://localhost:8080", "/path/to/model", "8080")
+
+    assert probed == []
+
+
+def test_ensure_running_restarts_when_reachable_but_wedged(monkeypatch):
+    """mlx_lm.server can be reachable (answers /v1/models instantly) while
+    every /v1/chat/completions call hangs forever - observed live 2026-07-14
+    after a client disconnected mid-generation. Nothing about plain
+    reachability catches this, so a wedged server would otherwise sit
+    "already_running" forever with no real dispatch ever completing again."""
+    monkeypatch.setattr(sup, "PYTHON", "python3")
+    monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: True)
+    monkeypatch.setattr(sup, "is_serving", lambda endpoint, timeout=30.0: False)
+    killed = []
+    monkeypatch.setattr(sup, "_kill_listening_process", lambda port: killed.append(port))
+    started = []
+    monkeypatch.setattr(sup, "start_server", lambda model_path, port: started.append((model_path, port)))
+
+    result = sup.ensure_running("http://localhost:8080", "/path/to/model", "8080")
+
+    assert result == "restarted_wedged"
+    assert killed == ["8080"]
     assert started == [("/path/to/model", "8080")]
 
 
@@ -99,6 +135,53 @@ def test_ensure_running_does_not_probe_reachability_before_checking_python(monke
         sup.ensure_running("http://localhost:8080", "/path/to/model", "8080")
 
     assert probed == []
+
+
+def test_is_serving_true_on_successful_completion(monkeypatch):
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(sup.httpx, "post", lambda url, json, timeout: _Resp())
+    assert sup.is_serving("http://localhost:8080") is True
+
+
+def test_is_serving_false_on_timeout(monkeypatch):
+    def _raise(url, json, timeout):
+        raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(sup.httpx, "post", _raise)
+    assert sup.is_serving("http://localhost:8080") is False
+
+
+def test_is_serving_false_on_http_error(monkeypatch):
+    def _raise(url, json, timeout):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(sup.httpx, "post", _raise)
+    assert sup.is_serving("http://localhost:8080") is False
+
+
+def test_is_serving_sends_minimal_completion_request(monkeypatch):
+    """The probe must be cheap (tiny max_tokens) - it runs on every
+    supervisor tick, not just once."""
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+    def _fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr(sup.httpx, "post", _fake_post)
+    sup.is_serving("http://localhost:8080")
+
+    assert captured["url"] == "http://localhost:8080/v1/chat/completions"
+    assert captured["json"]["max_tokens"] == 1
+    assert captured["json"]["stream"] is False
 
 
 
@@ -193,6 +276,7 @@ def test_main_prints_already_running_and_returns_0(monkeypatch, capsys):
     monkeypatch.setattr(sup, "MODEL_PATH", "/path/to/model")
     monkeypatch.setattr(sup, "PYTHON", "python3")
     monkeypatch.setattr(sup, "is_reachable", lambda endpoint, timeout=5.0: True)
+    monkeypatch.setattr(sup, "is_serving", lambda endpoint, timeout=30.0: True)
 
     exit_code = sup.main()
 

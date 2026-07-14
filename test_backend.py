@@ -746,6 +746,53 @@ def test_ollama_resource_status_memory_floor_defaults_to_2048mb(monkeypatch):
     assert driver.resource_status()["ok"] is True
 
 
+def test_resource_status_memory_floor_uses_provider_specific_override(monkeypatch):
+    # MLX pins one model's full footprint in memory for the server's entire
+    # lifetime (no VRAM-swap eviction like Ollama), so free memory settles at
+    # a permanently lower steady state once a model is loaded - the generic
+    # 2048mb floor (calibrated for Ollama's evictable footprint) never clears
+    # again for the life of the server, livelocking dispatch forever. A
+    # provider-scoped override lets MLX use a floor suited to its own memory
+    # model without weakening Ollama's.
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver(provider_name="mlx")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 1024)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX", "512")
+
+    status = driver.resource_status()
+
+    assert status["ok"] is True
+
+
+def test_resource_status_memory_floor_falls_back_to_generic_without_override(monkeypatch):
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver(provider_name="mlx")
+    monkeypatch.delenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 1024)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is False
+    assert "insufficient free memory" in status["reason"]
+
+
+def test_resource_status_memory_floor_override_is_provider_scoped(monkeypatch):
+    # An override set for mlx must not loosen ollama's own floor - each
+    # provider's override is read by its own provider name, never globally.
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver(provider_name="ollama")
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX", "128")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 1024)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is False
+    assert "insufficient free memory" in status["reason"]
+
+
 def test_ollama_resource_status_fails_open_when_memory_read_fails(monkeypatch):
     # A vm_stat parse failure (or a platform without vm_stat) must not block
     # dispatch - "can't determine memory" is not the same as "low memory".

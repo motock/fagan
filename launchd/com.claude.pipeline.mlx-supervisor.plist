@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!-- MLX_SERVER_PYTHON points at .venv-mlx, a dedicated in-repo venv
+     (uv venv --python 3.14 .venv-mlx && uv pip install --python
+     .venv-mlx/bin/python3 mlx-lm==0.31.3), not any other project's venv.
+     A prior session had borrowed an unrelated project's venv for this,
+     which cost real time to rediscover later - keep it self-contained. -->
 <dict>
 	<key>AbandonProcessGroup</key>
 	<true/>
@@ -9,17 +14,17 @@
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/Users/jessecarroll/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<key>MLX_SERVER_MODEL_PATH</key>
-		<string>REPLACE-WITH-EXACT-MODEL-PATH-USED-TO-LAUNCH-THE-SERVER</string>
+		<string>/Users/jessecarroll/.cache/qwen3_30b_a3b_manual</string>
 		<key>MLX_SERVER_PORT</key>
 		<string>8080</string>
 		<key>MLX_SERVER_PYTHON</key>
-		<string>REPLACE-WITH-PATH-TO-A-PYTHON-WITH-MLX-LM-INSTALLED</string>
+		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv-mlx/bin/python3</string>
 	</dict>
 	<key>Label</key>
 	<string>com.claude.pipeline.mlx-supervisor</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>REPLACE-WITH-PATH-TO-A-PYTHON-WITH-MLX-LM-INSTALLED</string>
+		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv-mlx/bin/python3</string>
 		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/scripts/mlx_server_supervisor.py</string>
 	</array>
 	<key>RunAtLoad</key>

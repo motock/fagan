@@ -14,18 +14,32 @@ Config via env vars (no CLI flags, matching the advance-scheduler's plist
         request should omit ("model") to hit - see MLXProvider.chat()'s
         docstring for why the request body never sends "model" at all.
     MLX_SERVER_PORT - default "8080".
-    MLX_SERVER_PYTHON - interpreter to launch the server with (must have
-        mlx-lm installed); default "python3".
+    MLX_SERVER_PYTHON - required. Interpreter to launch the server with
+        (must have mlx-lm installed). No default: a bare "python3" resolves
+        to whatever's first on PATH, which is not guaranteed to have mlx-lm
+        installed - see the repo's `.venv-mlx` (created via `uv venv
+        --python 3.14 .venv-mlx && uv pip install --python
+        .venv-mlx/bin/python3 mlx-lm==0.31.3`) for a self-contained,
+        version-pinned interpreter to point this at, instead of borrowing
+        an unrelated project's venv.
+    MLX_SERVER_LOG_PATH - where mlx_lm.server's own stdout/stderr goes;
+        default "<repo root>/mlx-server.log". Not to be confused with this
+        supervisor script's own StandardOutPath/StandardErrorPath in the
+        launchd plist - this is the log of the server subprocess it starts.
 """
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import httpx
 
 MODEL_PATH = os.environ.get("MLX_SERVER_MODEL_PATH")
 PORT = os.environ.get("MLX_SERVER_PORT", "8080")
-PYTHON = os.environ.get("MLX_SERVER_PYTHON", "python3")
+PYTHON = os.environ.get("MLX_SERVER_PYTHON")
+LOG_PATH = os.environ.get(
+    "MLX_SERVER_LOG_PATH", str(Path(__file__).resolve().parent.parent / "mlx-server.log")
+)
 
 
 def is_reachable(endpoint: str, timeout: float = 5.0) -> bool:
@@ -39,21 +53,36 @@ def is_reachable(endpoint: str, timeout: float = 5.0) -> bool:
 def start_server(model_path: str, port: str) -> subprocess.Popen:
     """Launch mlx_lm.server detached, so it survives this script exiting -
     this is meant to be invoked as a short-lived periodic health check
-    (e.g. every few minutes via launchd), not stay running itself."""
-    return subprocess.Popen(
+    (e.g. every few minutes via launchd), not stay running itself.
+
+    stdout/stderr go to LOG_PATH, not DEVNULL - a wrong interpreter, a bad
+    model path, or an import error inside mlx_lm must be diagnosable from
+    disk, not silently discarded (this made a real failed launch
+    indistinguishable from a slow cold-load with nothing to grep)."""
+    log_file = open(LOG_PATH, "a")
+    proc = subprocess.Popen(
         [PYTHON, "-m", "mlx_lm", "server", "--model", model_path, "--port", str(port)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        stdout=log_file, stderr=log_file, start_new_session=True,
     )
+    log_file.close()
+    return proc
 
 
 def ensure_running(endpoint: str, model_path: str | None, port: str) -> str:
     """Returns "already_running" or "started". Raises ValueError if
-    model_path is unset - refuse to guess which model to launch rather than
-    silently starting nothing or picking an arbitrary default."""
+    model_path or the interpreter is unset - refuse to guess which model or
+    which python to launch rather than silently starting nothing or picking
+    an arbitrary default (a bare "python3" would resolve to whatever's first
+    on PATH, not necessarily one with mlx-lm installed)."""
     if not model_path:
         raise ValueError(
             "MLX_SERVER_MODEL_PATH is not set - refusing to start mlx_lm.server "
             "without knowing which model to load"
+        )
+    if not PYTHON:
+        raise ValueError(
+            "MLX_SERVER_PYTHON is not set - refusing to start mlx_lm.server "
+            "without knowing which interpreter has mlx-lm installed"
         )
     if is_reachable(endpoint):
         return "already_running"

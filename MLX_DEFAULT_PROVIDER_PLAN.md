@@ -159,6 +159,36 @@ keep the right model loaded, restart it on crash, or reflect a model mismatch in
 `resource_status()`. This directly threatens the user's explicit #1 priority — autonomous,
 unattended overnight continuity — if MLX becomes default.
 
+**G5 confirmed the hard way (2026-07-14): 8 back-to-back S3 trials against one long-lived
+`mlx_lm.server` process crashed the host with a real kernel panic**, not an app-level bug —
+`panic-full-2026-07-13-230934.0002.panic`: `"pending memory object unexpectedly found in non
+pending hash" @IOGPUGroupMemory.cpp:528`, a macOS/Metal GPU memory-object bookkeeping fault.
+The panic's own process/memory snapshot showed ~21.3GB wired of 24GB total RAM with none of it
+attributable to any single process's RSS (consistent with GPU-backed KV-cache buffers held via
+IOSurface/IOKit, not counted against the server's own footprint) — i.e. sustained GPU-memory
+churn across many trials without ever restarting the server, not any one trial's payload, is
+the plausible trigger. The 8th trial's dispatch subprocess (`retry_backoff__mlx__t0`) is
+captured mid-launch in the panic snapshot (`TH_WAIT`, ~230ms CPU used) — it didn't fail on its
+own, the whole machine went down under it, which is also why its `agent.log` was 0 bytes
+(indistinguishable from a genuine failed launch per `local_agent_oracle.py`'s documented
+convention, until cross-referenced against `/Library/Logs/DiagnosticReports/`). Re-running the
+same trial against a freshly-started server succeeded cleanly (171.0s, GT-pass, 1/1) —
+confirming the trial itself was never the problem. Separately, the server for that whole S3
+session had been started from `/Users/jessecarroll/git/loveline_search/.venv` — an unrelated
+project's venv, built by a different session and not documented anywhere in this repo — which
+cost real time to rediscover afterward. Both fixed in the same pass: (1) a dedicated,
+version-pinned `.venv-mlx` in this repo (`uv venv --python 3.14 .venv-mlx && uv pip install
+--python .venv-mlx/bin/python3 mlx-lm==0.31.3`) replaces the borrowed venv, wired into
+`launchd/com.claude.pipeline.mlx-supervisor.plist`; (2) `scripts/mlx_server_supervisor.py` now
+requires `MLX_SERVER_PYTHON` explicitly (previously defaulted to a bare `"python3"`, which
+silently resolves to whichever interpreter is first on `PATH` — not guaranteed to have mlx-lm —
+and `start_server`'s old `stdout=DEVNULL, stderr=DEVNULL` made that failure mode undiagnosable;
+it now logs to `MLX_SERVER_LOG_PATH`, default `<repo root>/mlx-server.log`). **Not yet fixed:**
+nothing in this codebase periodically restarts `mlx_lm.server` to bound GPU-memory churn across
+many trials — the actual proximate trigger for the panic. A max-age/max-request restart policy
+in the supervisor is the natural next step, scoped separately since it's a design decision
+(safe restart cadence, whether it's safe to kill mid-dispatch) rather than a mechanical fix.
+
 **G6 — No apples-to-apples benchmark vs. the Ollama baseline.** Devstral MLX vs. `devstral:24b`
 Ollama is actually a clean experiment design — same weights family, only the serving runtime
 differs — so this is more tractable than it looked before G1's research. Still needs a real

@@ -200,6 +200,66 @@ validated live:** this crash predates the fix's deployment, so it has not been o
 actually prevent a repeat — worth watching the next several sessions' worth of trials before
 treating G5 as closed.
 
+**G5b — memory-floor livelock discovered validating the above (2026-07-14).** Re-running trials
+against the cache-bound server (no crash, confirmed stable through 2 real cells) surfaced a
+second, unrelated bug: `token_bucket` t0/t1 both finished `interrupted` at ~1806-1808s (the
+matrix run's own per-cell timeout) instead of the historical ~180-210s. Traced via
+`agent.log`/`mlx-server.log`/`.notifications.log`: the model actually finished real work fast
+(t0 reached 9 steps with tests passing, matching baseline), then `advance_pipeline` started
+logging `Dispatch backend gated (insufficient free memory (~1000-1900mb < 2048mb floor))` on
+every tick - live free memory on this 24GB host settles in that range for as long as the 16GB
+MLX model is resident and never once clears 2048mb. `backend.py`'s T13 memory floor (`resource_
+status()`) and its Mode 18/T18 exception in `advance_pipeline` (never interrupt an in-progress
+story on a memory-pressure gate, since that pressure is normally a transient cold-load spike
+that clears on its own) both predate MLX: Ollama can evict a model under pressure so the
+exception's "will clear" assumption holds, but mlx_lm.server pins one model's full footprint for
+its entire process lifetime with nothing to evict - the assumption breaks, and dispatch is
+gated *permanently*, not transiently, for the life of the server. Left as-is, this would silently
+paralyze all future dispatch on any plan using MLX once a large-enough model is loaded - a direct
+threat to the "autonomous, unattended overnight continuity" priority G5 already flagged.
+**Fixed:** `resource_status()`'s floor is now per-provider
+(`PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX`, falling back to the generic
+`PIPELINE_LOCAL_MIN_FREE_MEMORY_MB` when unset) so an operator can give MLX a floor suited to its
+own non-evictable memory model without loosening Ollama's. No default value is shipped for the
+override - Ollama's 2048mb default is unchanged, and MLX keeps the same 2048mb floor until an
+operator opts into a lower one, since the "safe" number depends on total host RAM vs. model size
+and shouldn't be guessed generically. **Not yet fixed:** whether the actual stall in this
+specific cell was *caused* by the outer gate (which only controls whether advance_pipeline
+interrupts/redispatches, not whether the already-running dispatch subprocess itself makes
+progress) or a separate hang inside `local_agent.py`'s own step loop is still unconfirmed - the
+subprocess's pid stayed alive with no further mlx-server requests or transcript entries for the
+whole stall window, which points at a hang independent of this gate. Re-running with the new
+override set is the next step to see whether it resolves the stall in practice, not just the
+theoretical permanent-gate risk.
+
+**G5c — resolved: the actual cause of the G5b stalls was a wedged server, not the memory floor
+(2026-07-14).** Re-running with the `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX` override set did
+*not* resolve the stall - `ratelimiter_inspect` t0 hit the same ~1807s timeout with zero
+`agent.log` output and zero new `mlx-server.log` activity for the entire run, `dispatch_attempts:
+0`. Root cause, confirmed directly: `curl -m 30 .../v1/chat/completions` hung the full 30s and
+timed out (`exit 28`), while `GET /v1/models` kept answering instantly throughout. The server had
+been left **wedged** - reachable, alive, passing every naive health check, but permanently unable
+to complete a real generation - after an earlier matrix run's client process was killed
+mid-request (`TaskStop` on the harness while a cell was in flight). `mlx_lm.server` is a
+`ThreadingHTTPServer` with no request-level lock visible in its own source, so this isn't simple
+serialization; a client disconnecting mid-generation most likely leaves some shared MLX/Metal
+generation state (KV cache, command queue) in a state that blocks all subsequent generation
+threads without touching the trivial GET handler. Nothing in this codebase could previously
+detect or recover from this - `is_reachable()` (`GET /v1/models`) is exactly the check that stays
+green through the whole failure. **Fixed:** `scripts/mlx_server_supervisor.py` adds `is_serving()`,
+a real 1-token `/v1/chat/completions` probe (`MLX_HEALTHCHECK_TIMEOUT_SECONDS`, default 30s) run
+whenever `is_reachable()` is already true; `ensure_running()` now kills whatever's listening on
+`MLX_SERVER_PORT` (`_kill_listening_process`, via `lsof`) and starts a fresh server when reachable
+but not serving, returning `"restarted_wedged"` (vs. `"already_running"`/`"started"`) so this is
+distinguishable in logs. Live-validated: a fresh server answers the real probe in ~9s (first-
+request overhead) and a second supervisor run against it correctly reports `"already_running"`
+with no false-positive restart. 7 new tests (`test_mlx_server_supervisor.py`), 938/938 suite
+green. **Not yet validated:** the wedge-recovery path itself (kill + restart on a genuinely wedged
+server) has only been unit-tested with mocks, not exercised against a real wedged process live -
+deliberately reproducing the exact disconnect-mid-generation condition on demand is unreliable;
+treat this as proven-by-construction (the fix targets the exact confirmed symptom) rather than
+live-validated until it's observed catching a real recurrence.
+
 **G6 — No apples-to-apples benchmark vs. the Ollama baseline.** Devstral MLX vs. `devstral:24b`
 Ollama is actually a clean experiment design — same weights family, only the serving runtime
 differs — so this is more tractable than it looked before G1's research. Still needs a real

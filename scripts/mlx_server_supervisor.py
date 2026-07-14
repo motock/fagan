@@ -43,6 +43,12 @@ Config via env vars (no CLI flags, matching the advance-scheduler's plist
         mlx_lm.utils._parse_size format, e.g. "4G"/"512M"). Belt-and-braces
         alongside MLX_PROMPT_CACHE_SIZE: bounds memory even if a single
         conversation's own KV cache is unusually large.
+    MLX_HEALTHCHECK_TIMEOUT_SECONDS - default "30". Timeout for is_serving()'s
+        real completion probe (see below) - long enough that a slow-but-alive
+        server isn't mistaken for wedged, short enough that a genuinely
+        wedged one (observed live 2026-07-14: hangs indefinitely, no
+        response ever) is caught and restarted within one supervisor tick
+        rather than blocking it.
 """
 import os
 import subprocess
@@ -59,6 +65,7 @@ LOG_PATH = os.environ.get(
 )
 PROMPT_CACHE_SIZE = os.environ.get("MLX_PROMPT_CACHE_SIZE", "2")
 PROMPT_CACHE_BYTES = os.environ.get("MLX_PROMPT_CACHE_BYTES", "4G")
+HEALTHCHECK_TIMEOUT = float(os.environ.get("MLX_HEALTHCHECK_TIMEOUT_SECONDS", "30"))
 
 
 def is_reachable(endpoint: str, timeout: float = 5.0) -> bool:
@@ -67,6 +74,52 @@ def is_reachable(endpoint: str, timeout: float = 5.0) -> bool:
         return True
     except httpx.HTTPError:
         return False
+
+
+def is_serving(endpoint: str, timeout: float = HEALTHCHECK_TIMEOUT) -> bool:
+    """A real completion probe, not just reachability - mlx_lm.server can
+    stay reachable (/v1/models answers instantly, on its own request thread)
+    while every /v1/chat/completions call hangs forever. Observed live
+    2026-07-14: a client disconnecting mid-generation left the server in
+    exactly this state - alive, listening, permanently unable to complete a
+    real request, with no crash and no log line to notice by. is_reachable()
+    alone cannot catch this; only actually asking it to generate can."""
+    try:
+        httpx.post(
+            f"{endpoint}/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 1,
+                "stream": False,
+            },
+            timeout=timeout,
+        ).raise_for_status()
+        return True
+    except httpx.HTTPError:
+        return False
+
+
+def _kill_listening_process(port: str) -> None:
+    """Best-effort: find and terminate whatever's listening on PORT so
+    start_server() can bind a fresh one. Used only when is_serving() has
+    already proven the current process is wedged, not merely slow - so a
+    firm SIGTERM (not a negotiated shutdown mlx_lm.server has no API for
+    anyway) is appropriate here. Swallows failures (no lsof, process already
+    gone, permission issue): a restart that fails to free the port surfaces
+    as the ensuing start_server() failing to bind, which is diagnosable from
+    MLX_SERVER_LOG_PATH - better than this cleanup step itself crashing the
+    supervisor tick."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"], capture_output=True, text=True, timeout=5,
+        )
+        for pid_str in result.stdout.split():
+            try:
+                os.kill(int(pid_str), 15)
+            except (ProcessLookupError, ValueError):
+                pass
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def start_server(model_path: str, port: str) -> subprocess.Popen:
@@ -98,11 +151,18 @@ def start_server(model_path: str, port: str) -> subprocess.Popen:
 
 
 def ensure_running(endpoint: str, model_path: str | None, port: str) -> str:
-    """Returns "already_running" or "started". Raises ValueError if
-    model_path or the interpreter is unset - refuse to guess which model or
-    which python to launch rather than silently starting nothing or picking
-    an arbitrary default (a bare "python3" would resolve to whatever's first
-    on PATH, not necessarily one with mlx-lm installed)."""
+    """Returns "already_running", "started", or "restarted_wedged". Raises
+    ValueError if model_path or the interpreter is unset - refuse to guess
+    which model or which python to launch rather than silently starting
+    nothing or picking an arbitrary default (a bare "python3" would resolve
+    to whatever's first on PATH, not necessarily one with mlx-lm installed).
+
+    Reachable is necessary but not sufficient: a wedged server (see
+    is_serving()'s docstring) stays reachable forever, so a reachability-only
+    check would report "already_running" indefinitely with no real dispatch
+    ever completing again. is_serving() is only worth its cost (a real
+    generation, not a cheap GET) once is_reachable() has already confirmed
+    there's a server there to probe."""
     if not model_path:
         raise ValueError(
             "MLX_SERVER_MODEL_PATH is not set - refusing to start mlx_lm.server "
@@ -114,7 +174,11 @@ def ensure_running(endpoint: str, model_path: str | None, port: str) -> str:
             "without knowing which interpreter has mlx-lm installed"
         )
     if is_reachable(endpoint):
-        return "already_running"
+        if is_serving(endpoint):
+            return "already_running"
+        _kill_listening_process(port)
+        start_server(model_path, port)
+        return "restarted_wedged"
     start_server(model_path, port)
     return "started"
 

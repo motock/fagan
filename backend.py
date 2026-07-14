@@ -915,6 +915,25 @@ class OllamaDriver:
         short-circuits the memory check entirely - an unreachable server
         can't dispatch regardless of memory, and that failure is the more
         actionable one to report.
+
+        The floor itself is per-provider (`PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_
+        <PROVIDER>`, e.g. `_MLX`, falling back to the generic
+        `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB` when unset): Ollama can evict a
+        model under pressure, so headroom above the generic floor is a real
+        safety margin against runaway VRAM swapping, but mlx_lm.server pins
+        one model's full footprint for its entire process lifetime with
+        nothing to evict - once a model large enough to leave under 2048mb
+        free is loaded, free memory never recovers, and the generic floor
+        gates dispatch permanently (not transiently) for as long as the
+        server runs (observed live 2026-07-14: free memory settled at
+        ~1000-1900mb for the whole session with a 16GB model resident,
+        never once clearing 2048mb). advance_pipeline's memory-pressure
+        exception (RELIABILITY_PLAN.md Mode 18/T18) deliberately never
+        interrupts an in-progress story on this gate on the theory that the
+        pressure is transient and will clear - true for a one-time cold-load
+        spike, false for MLX's steady state, so an ungated MLX floor would
+        silently paralyze all future dispatch on this plan. The override
+        does not change the generic floor or any other provider's default.
         """
         try:
             ok, reason = self.provider.reachable(self.endpoint)
@@ -924,7 +943,11 @@ class OllamaDriver:
             return {"ok": ok, "reason": reason}
         free_mb = self._free_memory_mb()
         if free_mb is not None:
-            floor_mb = int(os.environ.get("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048"))
+            provider_env = f"PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_{self.provider.name.upper()}"
+            floor_mb = int(os.environ.get(
+                provider_env,
+                os.environ.get("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048"),
+            ))
             if free_mb < floor_mb:
                 return {
                     "ok": False,

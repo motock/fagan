@@ -324,12 +324,42 @@ Two candidate mechanisms, both externally corroborated, not mutually exclusive:
 
 **Not yet validated live**: none of the above has been exercised against a real dispatch run yet
 - this is a mitigation grounded in code inspection + upstream issue research, not a proven fix.
-Next: re-run an MLX matrix long enough to force 2-3 real cache-eviction cycles, watch for both a
-repeat panic and the wrapper's instrumentation log, and feed the result into an explicit decision
-(`request_decision`) on whether continuing to harden 30B-MLX-on-24GB is worth it vs. a smaller
-MLX model or staying on Ollama. A from-scratch mlx-lm fork (evict-before-insert ordering,
-configurable wired limit, Metal-OOM→HTTP-503 instead of a process crash) remains on the table if
-the stopgap doesn't hold up, but is out of scope until that data comes back.
+
+**Phase 2 - validate.** Re-run an `mlx_cachebound_20260714`-style matrix (`ratelimiter_inspect` +
+`token_bucket` cells) long enough to force at least 2-3 real cache-eviction cycles under the new
+`MLX_PROMPT_CACHE_SIZE=1`/`MLX_PROMPT_CONCURRENCY=1` settings. Success is no host panic across
+that window; read `mlx-server-wrapper.log` (start/end + peak-memory per request, thread name) to
+see whether any two requests ever actually overlapped and how close peak memory got to
+`MLX_MEMORY_LIMIT_MB`, so Phase 3's decision is made on data rather than the same guesswork this
+incident started from.
+
+**Phase 3 - decision gate (`request_decision`).** Feed Phase 2's data into an explicit,
+recorded decision: continue hardening 30B-MLX-on-this-24GB-host, drop to a smaller/more-quantized
+MLX model, or concede MLX-on-this-host and stay on Ollama for local dispatch. A panic every few
+hours is a real operating cost that deserves a decision on record, not indefinite drift while we
+patch around each new symptom.
+
+**Phase 4 - fork mlx-lm (conditional on Phase 3, not abandoned).** If Phase 3 says keep going,
+these are Python-only changes against the exact source already vendored in `.venv-mlx`
+(mlx-lm==0.31.3), all plausibly upstreamable as PRs rather than a permanent divergent fork:
+1. **Evict-before-insert in `LRUPromptCache.insert_cache()`** (`mlx_lm/models/cache.py`) - evict
+   the oldest entry *before* inserting the new one, not after, eliminating the transient N+1-cache
+   spike at its source instead of just shrinking the cap to 1 and giving up multi-conversation
+   cache reuse entirely.
+2. **Configurable wired-memory ceiling** - remove the hardcoded
+   `mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])` at `server.py:1889`
+   in favor of a CLI flag/env var, so the wired limit itself (not just our own soft
+   `mx.set_memory_limit()` ceiling on top of it) can be tuned per host.
+3. **Catch Metal OOM and return HTTP 503** instead of letting the generation handler crash the
+   process - the exact ask in upstream
+   [ml-explore/mlx-lm#854](https://github.com/ml-explore/mlx-lm/issues/854) and
+   [#1015](https://github.com/ml-explore/mlx-lm/issues/1015), both still open.
+
+**Scope boundary, explicit:** the `IOGPUGroupMemory` fault itself lives in Apple's `IOGPU.kext`
+GPU driver, not in mlx-lm - unreachable from a Python-level fork. Phase 4 can reduce how often the
+kernel's bookkeeping gets pushed into the failure state and shrink the blast radius when it does;
+it cannot eliminate the underlying kernel bug. Treat Phase 4 as risk *reduction*, not a fix, when
+weighing it against simply not running a 30B model on a 24GB host in Phase 3.
 
 **G6 — No apples-to-apples benchmark vs. the Ollama baseline.** Devstral MLX vs. `devstral:24b`
 Ollama is actually a clean experiment design — same weights family, only the serving runtime

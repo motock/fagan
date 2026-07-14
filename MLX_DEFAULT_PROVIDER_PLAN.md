@@ -1,5 +1,49 @@
 # Plan: Make MLX the default local inference provider
 
+> **Status (2026-07-14):** S1 live-validated. `mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit`
+> (17.2GB, manually downloaded — `huggingface_hub`'s own multi-connection download path stalled
+> indefinitely twice in a row on this host for both this repo and the earlier Devstral attempt;
+> a plain sequential `curl` per-file download worked reliably instead, worth carrying forward as
+> the default download method here) served via `mlx_lm.server`, dispatched through the existing
+> `LOCAL_AGENT_PROVIDER=mlx` plumbing with **zero new code** — first real MLX dispatch success on
+> this host. `token_bucket` benchmark cell: model wrote a correct `TokenBucket` implementation +
+> its own tests in 2 steps (~191s total), hidden acceptance oracle passed (`groundtruth_passed:
+> true`), and Claude's review caught a genuine double-refill/rate-limit-bypass bug the acceptance
+> suite didn't exercise (`REQUEST_CHANGES`, verified against the actual diff - not a review-gate
+> false positive). This closes G1/G2 for this specific model: the earlier Devstral (missing tool
+> template) and Qwen3-Coder (incompatible XML tool format) dead ends are now bypassed by picking
+> a model with a complete, standard tool-calling template out of the box - see the corrected G1
+> section below for the full model-compatibility research trail.
+>
+> **3 trials total on this model, 3/3 GT-correct:** `token_bucket` t0 (parked on the real
+> reviewer finding above), `token_bucket` t1 (`done`/`merged`/`APPROVE`, 179.5s, 6 ticks),
+> `ratelimiter_inspect` t0 (`done`/`merged`/`APPROVE`, 204.3s, 6 ticks) - 2/3 merged cleanly, 1/3
+> correctly blocked pre-merge. Consistent, fast (~180-205s/trial) across two different T1 task
+> types. Strongest local-dispatch result of any model tried on this host to date (higher and
+> more consistent than devstral:24b/gpt-oss:20b/qwen3-coder:30b's historical Ollama numbers -
+> see `[[project_provider_dispatch_s3]]` for those baselines; a controlled Ollama-side re-run
+> for a true head-to-head is deferred, not done this session).
+>
+> **New operational gap found and worked around, not yet fixed in code:** `mlx_lm.server`'s
+> request `"model"` field must **exactly** match its `--model` launch argument (or be omitted)
+> to reuse the preloaded weights — any other string (including the model's own metadata id, the
+> same string `/v1/models` reports) makes the server treat it as an unrecognized model and
+> attempt a fresh resolution/fetch, which is what caused two apparent "stalled/failed load"
+> incidents that were actually this mismatch, not a broken download. Confirmed via `ModelProvider
+> .load()`'s source: it only skips reloading when the request's model string maps (via
+> `default_model_map`) to the exact value passed at server launch. **Practical requirement for
+> S5 (flip the default):** `PIPELINE_LOCAL_MODEL_DEFAULT` for the `mlx` provider must be set to
+> the exact same string used to launch `mlx_lm.server --model <X>` (a local path in this
+> validation), not an HF repo id, or every real dispatch would silently hang on this same
+> mismatch. Worth a defensive fix in `MLXProvider`/docs before S5, tracked as follow-up.
+>
+> **Also confirmed via direct model-file inspection (research, not yet acted on):** `gpt-oss`
+> MLX builds use OpenAI's Harmony format (`<|channel|>...to=functions.X...<|call|>`) for tool
+> calls — verified by reading the actual chat template's tool-call rendering block — which
+> neither `mlx_lm.server`'s native parser nor `local_agent.py`'s `recover_tool_calls()` fallback
+> recognizes. Confirmed incompatible without a dedicated Harmony parser (a bigger, gpt-oss-family-
+> only lift); not pursued this session given a working alternative (Qwen3) was available.
+
 ## Goal
 `PIPELINE_LOCAL_PROVIDER` currently defaults to `ollama`, and `devstral:24b` (Ollama) is the
 only local model with a proven, reliable dispatch track record. The user's own comparison of
@@ -116,34 +160,42 @@ record than Ollama's proven baseline.
 
 ## Stories (TDD, in order)
 
-**S1 — Validate Devstral MLX end-to-end as a real dispatcher.** Stand up `mlx_lm.server` with
-`mlx-community/Devstral-Small-2505-6bit` (or the newer `Devstral-Small-2-24B-Instruct-2512-
-4bit` as a second data point once the first is proven), point `LOCAL_AGENT_PROVIDER=mlx` +
-`BENCH_MLX_TAG` at it, and run the existing `token_bucket` benchmark cell. This is primarily a
-live-validation spike (per `[[project_provider_dispatch_s3]]`'s established pattern), not new
-code — the provider plumbing already exists. If `recover_tool_calls()` doesn't catch the
-`[TOOL_CALLS]` format as expected, that's the one piece of new code this story would need: an
-explicit unit test + fix for the bracket-stripping path (it already strips `[TOOL_CALLS]`
-verbatim per its source, so this is a should-already-work verification, not a blind bet).
+**S1 — DONE (2026-07-14).** Devstral MLX turned out not to be viable (see status header):
+every conversion checked — `mlx-community` and LM Studio's own official upload — ships a chat
+template missing the `[AVAILABLE_TOOLS]` tool-rendering block entirely, a structural gap in
+how Mistral distributes these weights, not fixable by trying another upload. Validated
+`mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit` instead (complete, standard tool-calling
+template out of the box) — real `token_bucket` dispatch succeeded: correct implementation +
+tests in 2 steps/~191s, oracle green, a real (not false-positive) reviewer finding. No new code
+was needed; the existing provider plumbing worked as designed once a compatible model was
+picked.
 
-**S2 — Reap the dispatch subprocess on timeout.** Wherever the harness/pipeline judges a
-dispatch timed out (`advance_pipeline`/`check_story_status`'s poll path), actively terminate
-the `AgentHandle`'s process (SIGTERM, escalate to SIGKILL) instead of leaving it orphaned.
-Tests: a simulated hung subprocess is killed when its deadline passes; non-timeout Ollama paths
-unaffected. Independent of S1 — can be done first or in parallel.
+**S2 — DONE (2026-07-13).** `check_story_status` now kills+checkpoints a dispatch past a
+configurable watchdog ceiling (`PIPELINE_DISPATCH_WATCHDOG_SECONDS`, default 3600s); the
+benchmark harness's `drive()`/`drive_plan()` reap any still-outstanding dispatch when they give
+up. Commits `6436d93`/`937fb79`.
 
-**S3 — Head-to-head benchmark vs. the Ollama baseline.** Once S1 produces a clean GT-pass, run
-the same task set (`token_bucket`, `ratelimiter_inspect`) against both Devstral-MLX and
-`devstral:24b`-Ollama, same reviewer, multiple trials, and compare tick count/wall time/GT-pass
-rate — the actual evidence for or against "MLX is more performant." If Devstral MLX
-underperforms or fails outright, fall back to surveying further `mlx-community` candidates
-using the same tool-call-format-verification method from G1 (check the real chat template
-before running a benchmark, not after).
+**S3 — IN PROGRESS.** 3 trials of Qwen3-30B-A3B-Instruct-2507-MLX run so far (see status
+header): 3/3 GT-correct, 2/3 merged, 1/3 correctly blocked pre-merge, ~180-205s/trial. A
+controlled same-session `devstral:24b`-Ollama re-run for a true head-to-head has **not** been
+done yet (deferred by user request, 2026-07-14) — `devstral:24b` isn't currently pulled on this
+host. Remaining: either pull it and run the same task set for direct comparison, or continue
+building up the MLX-side trial count first and compare against the historical Ollama numbers
+already in `[[project_provider_dispatch_s3]]`/`[[project_gptoss_run_learnings]]`.
 
-**S4 — `mlx_lm.server` lifecycle supervision.** Minimal supervisor (launchd plist, following
-the existing scheduler-plist pattern, or a wrapper the pipeline health-checks before dispatch)
-so the right model is loaded before a dispatch is attempted; `resource_status()`/`reachable()`
-reports not-ok on a model mismatch, not just HTTP reachability. May split further once scoped.
+**S4 — DONE (2026-07-14).** `MLXProvider.chat()` no longer sends a `"model"` field in the
+request body at all (mlx_lm.server serves exactly one model per process, so there's nothing to
+select — and any string that doesn't exactly match the server's `--model` launch argument
+triggers a hang, per the operational gap found during S1). New
+`scripts/mlx_server_supervisor.py`: checks reachability, starts `mlx_lm.server` with the
+configured model (`MLX_SERVER_MODEL_PATH`) if not already running; refuses to guess a model if
+unset. `launchd/com.claude.pipeline.mlx-supervisor.plist` template added (mirrors the
+advance-scheduler pattern, `StartInterval` 120s), not installed. `resource_status()` reporting
+a model *mismatch* (as opposed to mere unreachability) was scoped out — with the model field
+now never sent, MLX has no per-request model-selection concept left to mismatch on; "is the
+right model loaded" is now purely a deployment-time concern the supervisor's config addresses,
+not a runtime API check. 9 new tests (`test_mlx_server_supervisor.py`) + 1
+(`test_mlx_provider_chat_omits_model_field`); 925/925 passing.
 
 **S5 — Flip the default + docs (gated on S1-S4 clean).** `PIPELINE_LOCAL_PROVIDER` default →
 `mlx` in `backend.py`; populate model-tier env vars with S1/S3's validated model; update

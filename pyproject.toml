@@ -14,4 +14,5 @@ testpaths = [
     "test_local_agent_oracle.py",
     "test_local_agent_persistence.py",
     "test_dashboard_script.py",
+    "test_mlx_server_supervisor.py",
 ]

@@ -492,6 +492,43 @@ def test_mlx_provider_chat_includes_tools_when_given(monkeypatch):
     assert captured["tools"] == tools
 
 
+def test_mlx_provider_chat_omits_model_field(monkeypatch):
+    """mlx_lm.server serves exactly one model per process (loaded_models()
+    already reflects this - no VRAM-swap concept). Its ModelProvider.load()
+    only reuses the preloaded weights when the request's "model" field maps
+    (via an internal alias table) to the exact string mlx_lm.server was
+    launched with; any other value - including the model's own metadata id,
+    the same string /v1/models reports - makes it attempt a fresh model
+    resolution instead, which can hang indefinitely (observed live: two
+    separate "server never responds" incidents were actually this mismatch,
+    not a broken download). Since there is only ever one model to select,
+    the safest fix is to never send "model" at all - the server always
+    falls back to its preloaded default in that case."""
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"role": "assistant", "content": ""}}],
+                     "usage": {}}
+
+    def _fake_post(url, json, timeout):
+        captured.update(json)
+        return _Resp()
+
+    monkeypatch.setattr(ip.httpx, "post", _fake_post)
+    ip.MLXProvider().chat(
+        [{"role": "user", "content": "hi"}],
+        model="mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit",
+        num_ctx=16384, temperature=0.3, endpoint="http://localhost:8080", timeout=600,
+    )
+    assert "model" not in captured
+
+
 def test_mlx_provider_chat_normalizes_tool_call_response(monkeypatch):
     # Live-captured shape: tool_calls[].function.arguments is a JSON-encoded
     # STRING (not a dict) and tool_calls[].id is always null on this server

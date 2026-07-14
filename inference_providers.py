@@ -243,6 +243,20 @@ class MLXProvider:
     - mlx_lm.server serves exactly one model per process, so unlike Ollama
       there is no VRAM-swap concept to warn about - loaded_models() returns
       an empty set without making any network call.
+    - The request body never includes a "model" field. mlx_lm.server's
+      ModelProvider.load() only reuses the preloaded weights when the
+      request's model string maps (via an internal alias table) to the
+      exact value the server was launched with (its --model CLI argument);
+      any other string - including the model's own metadata id, the same
+      one /v1/models reports - makes it attempt a fresh model resolution,
+      which can hang indefinitely (observed live 2026-07-14: two separate
+      "server never responds" incidents were actually this mismatch, not a
+      broken download or a corrupt model). Since the server only ever hosts
+      one model, there is nothing to select per-request - omitting "model"
+      entirely makes it fall back to its preloaded default unconditionally.
+      `model` is still accepted as a parameter here (used in the
+      RateLimitedError message) for signature parity with the other
+      providers, which do need per-request model selection.
     """
 
     name = "mlx"
@@ -255,7 +269,7 @@ class MLXProvider:
     ) -> dict:
         endpoint = (endpoint or self.default_endpoint).rstrip("/")
         body = {
-            "model": model, "messages": messages, "stream": False,
+            "messages": messages, "stream": False,
             "temperature": temperature,
             "max_tokens": num_ctx,
         }

@@ -26,6 +26,23 @@ Config via env vars (no CLI flags, matching the advance-scheduler's plist
         default "<repo root>/mlx-server.log". Not to be confused with this
         supervisor script's own StandardOutPath/StandardErrorPath in the
         launchd plist - this is the log of the server subprocess it starts.
+    MLX_PROMPT_CACHE_SIZE - default "2". Passed as mlx_lm.server's
+        --prompt-cache-size (max distinct KV caches held at once). The
+        server's own default is 10 with no byte ceiling
+        (MLX_PROMPT_CACHE_BYTES below) - on a 24GB host running a ~16GB
+        model, 10 held caches at a few GB each is what turned an
+        unattended multi-trial benchmark run into a real kernel panic
+        (IOGPUGroupMemory.cpp, 2026-07-14 incident, see
+        MLX_DEFAULT_PROVIDER_PLAN.md) - the LRU had room to accumulate far
+        past physical memory before it ever evicted anything. 2 is enough
+        for this project's own dispatch pattern (one active conversation
+        at a time, occasionally a review turn) without starving intra-run
+        cache reuse.
+    MLX_PROMPT_CACHE_BYTES - default "4G". Passed as mlx_lm.server's
+        --prompt-cache-bytes (byte ceiling across all held caches,
+        mlx_lm.utils._parse_size format, e.g. "4G"/"512M"). Belt-and-braces
+        alongside MLX_PROMPT_CACHE_SIZE: bounds memory even if a single
+        conversation's own KV cache is unusually large.
 """
 import os
 import subprocess
@@ -40,6 +57,8 @@ PYTHON = os.environ.get("MLX_SERVER_PYTHON")
 LOG_PATH = os.environ.get(
     "MLX_SERVER_LOG_PATH", str(Path(__file__).resolve().parent.parent / "mlx-server.log")
 )
+PROMPT_CACHE_SIZE = os.environ.get("MLX_PROMPT_CACHE_SIZE", "2")
+PROMPT_CACHE_BYTES = os.environ.get("MLX_PROMPT_CACHE_BYTES", "4G")
 
 
 def is_reachable(endpoint: str, timeout: float = 5.0) -> bool:
@@ -58,10 +77,20 @@ def start_server(model_path: str, port: str) -> subprocess.Popen:
     stdout/stderr go to LOG_PATH, not DEVNULL - a wrong interpreter, a bad
     model path, or an import error inside mlx_lm must be diagnosable from
     disk, not silently discarded (this made a real failed launch
-    indistinguishable from a slow cold-load with nothing to grep)."""
+    indistinguishable from a slow cold-load with nothing to grep).
+
+    Always passes --prompt-cache-size/--prompt-cache-bytes (PROMPT_CACHE_SIZE/
+    PROMPT_CACHE_BYTES) - mlx_lm.server's own defaults (10 caches, no byte
+    ceiling) let its LRU accumulate well past physical memory across many
+    dispatch trials with nothing evicting it, which is what preceded the
+    2026-07-14 kernel panic. Bounding it here means the server self-evicts;
+    no periodic restart or manual flush is needed to keep memory in check."""
     log_file = open(LOG_PATH, "a")
     proc = subprocess.Popen(
-        [PYTHON, "-m", "mlx_lm", "server", "--model", model_path, "--port", str(port)],
+        [
+            PYTHON, "-m", "mlx_lm", "server", "--model", model_path, "--port", str(port),
+            "--prompt-cache-size", PROMPT_CACHE_SIZE, "--prompt-cache-bytes", PROMPT_CACHE_BYTES,
+        ],
         stdout=log_file, stderr=log_file, start_new_session=True,
     )
     log_file.close()

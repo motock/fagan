@@ -401,6 +401,38 @@ def chat(messages):
     raise last_exc
 
 
+def _repair_triple_quoted_strings(candidate):
+    """Rewrite Python-style triple-quoted string literals (\"\"\"...\"\"\" or
+    '''...''') as JSON-encoded strings. Weaker local models emit multi-line
+    code arguments (a str_replace's new_str/old_str) using Python triple-quote
+    syntax with literal newlines, which is not valid JSON - json.loads rejects
+    it at the opening \"\"\", so the tool call is silently dropped and the
+    edit never lands (observed systematically with Qwen2.5-Coder-14B-4bit on
+    mlx: 12/12 dropped calls, see MLX_DEFAULT_PROVIDER_PLAN.md). json.dumps of
+    the inner text produces a correctly-escaped JSON string in its place."""
+    def _sub(m):
+        inner = m.group(1) if m.group(1) is not None else m.group(2)
+        return json.dumps(inner)
+    return re.sub(r'"""(.*?)"""|\'\'\'(.*?)\'\'\'', _sub, candidate, flags=re.DOTALL)
+
+
+def _loads_tolerant(candidate):
+    """json.loads, falling back to a triple-quote repair pass only when the
+    raw parse fails. Valid JSON is never transformed - the repair is a
+    last resort for known model malformations, not a general rewrite."""
+    try:
+        return json.loads(candidate)
+    except Exception:
+        pass
+    repaired = _repair_triple_quoted_strings(candidate)
+    if repaired != candidate:
+        try:
+            return json.loads(repaired)
+        except Exception:
+            pass
+    return None
+
+
 def recover_tool_calls(content):
     """Pull a tool call out of message text when the native field is empty."""
     if not content:
@@ -411,9 +443,8 @@ def recover_tool_calls(content):
     if m:
         candidates.append(m.group(1))
     for c in candidates:
-        try:
-            obj = json.loads(c)
-        except Exception:
+        obj = _loads_tolerant(c)
+        if obj is None:
             continue
         items = obj if isinstance(obj, list) else [obj]
         out = [{"function": {"name": it["name"], "arguments": it.get("arguments", it.get("parameters", {}))}}

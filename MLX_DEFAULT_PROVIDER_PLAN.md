@@ -594,6 +594,38 @@ the token_bucket oracle's forward-reject gap. The review gate itself is **not th
 noisy** - Claude Sonnet produced a genuinely excellent review on t0; its one real defect here was
 inconsistency (missing on t1 the exact bug it caught on t0).
 
+**Capability ceiling map + escalation proof (2026-07-14, all fixes in place).** Ran the 14B across
+4 tasks (`_runs/mlx_14b_ceiling_20260714`) and gpt-oss:20b (Ollama) across the 14B's 3 failures
+(`_runs/gptoss_escalation_20260714`), same harness + Claude review, 0 panics throughout:
+
+| task | 14B-MLX (gt) | gpt-oss:20b Ollama (gt) |
+|------|-------------|-------------------------|
+| lru_cache | **True** | (not run — 14B already passed) |
+| token_bucket | False (double-refill, now caught) | **True** |
+| ratelimiter_inspect | False | **True** |
+| retry_backoff | False* | False* |
+
+14B: **1/4 truly correct**. gpt-oss: **2/3** on the exact tasks the 14B failed. (*retry_backoff:
+both models reached `done` but gt=False — a likely third acceptance-vs-groundtruth oracle gap, like
+token_bucket's, worth a separate fix.)
+
+**Strategic conclusion (2026-07-14): the MLX effort succeeded technically but gpt-oss:20b on Ollama
+is the better LOCAL driver on this host right now.** MLX-14B is stable (0 panics across 6 runs) and
+fast (~150-290s/cell) but capability-limited (1/4). gpt-oss:20b runs fully local on this same 24GB
+host with no panics (Ollama's evict-capable memory model sidesteps the IOGPU fault entirely) and is
+materially more capable (handles the hard tasks the 14B can't). The two can't co-reside in 24GB, so
+this is an either/or for the local driver, not a layered local pair. Practical options:
+- **gpt-oss:20b (Ollama)** — best capability for a *fully local* driver; the recommended local
+  daily-driver on this host if local capability is the priority. Slower than MLX, no panic.
+- **14B-MLX** — best when speed matters and tasks are simple; pair with Claude escalation (not a
+  second local model - memory) for anything harder, via the existing `PIPELINE_BACKEND_DISPATCH=auto`
+  risk router.
+- **glm-5.2:cloud (current live default)** — capable but *cloud*, so it doesn't advance the
+  local-LLM goal; a Claude-usage-conscious stopgap.
+The MLX-as-default-provider goal (this plan's original aim) is achievable and stable, but only worth
+flipping to if its speed matters more than the capability gap vs gpt-oss-on-Ollama for a given
+workload. Escalation to Claude for high-risk/failed stories is already wired (`auto` router).
+
 **Original Phase 2/3/4 plan retained below for provenance** — Phase 4 (fork mlx-lm) is now gated
 behind the smaller-model experiment failing, not the immediate next step.
 

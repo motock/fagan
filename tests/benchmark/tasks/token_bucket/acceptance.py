@@ -60,6 +60,25 @@ def test_backward_jump_does_not_rewind_high_water_mark():
     assert b.allow(1, now=5.0) is False    # still behind the true high-water mark (10.0)
 
 
+def test_rejected_forward_call_does_not_double_count_refill():
+    """A REJECTED allow() at a FORWARD `now` must still advance the bucket's
+    internal clock, so a later call is not over-refilled. Concrete bug this
+    catches: an implementation that mutates its available-token balance on
+    every call but only advances its last-seen timestamp on SUCCESS. After a
+    rejected call at a forward time, the next call recomputes elapsed from the
+    stale (earlier) timestamp and double-counts the refill for the interval
+    already folded into the balance - a rate-limit bypass. The other
+    adversarial tests here only hold `now` constant or move it backward on the
+    failing call, never forward, so they miss this."""
+    b = TokenBucket(10, 1, now=0.0)
+    assert b.allow(9, now=0.0) is True     # drain to 1
+    assert b.allow(5, now=3.0) is False    # rejected at t=3 (have 1 + 3 = 4, need 5)
+    # A correct bucket is at 7 by t=6 (the [0,3] refill was already counted at
+    # the rejected call); it must REJECT a request for 9. A bucket that
+    # double-counts [0,3] reaches 10 and wrongly allows it.
+    assert b.allow(9, now=6.0) is False
+
+
 def test_over_capacity_never_succeeds():
     b = TokenBucket(2, 1, now=0.0)
     assert b.allow(3, now=1000.0) is False

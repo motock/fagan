@@ -1,5 +1,14 @@
 # Plan: Make MLX the default local inference provider
 
+> **CURRENT STATE (2026-07-14, latest):** MLX dispatch *quality* is proven (fast, correct,
+> oracle-passing) but the 30B model repeatedly kernel-panics this 24GB host — **7 MLX-attributed
+> panics**, the latest (14:52:56, `@IOGPUMemory.cpp:550`) surviving every application-layer
+> mitigation on a single serialized generation. **Decision (with user): stop hardening the 30B /
+> don't fork mlx-lm; right-size to `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` (~8.3GB, ~10GB
+> headroom under the ~19GB GPU wired ceiling) and re-validate on the same task set.** Full
+> analysis + benchmark research under **Phase 3 decision — REVISED** below. The S1 header that
+> follows documents the earlier 30B validation and remains accurate for that model.
+>
 > **Status (2026-07-14):** S1 live-validated. `mlx-community/Qwen3-30B-A3B-Instruct-2507-4bit`
 > (17.2GB, manually downloaded — `huggingface_hub`'s own multi-connection download path stalled
 > indefinitely twice in a row on this host for both this repo and the earlier Devstral attempt;
@@ -324,6 +333,252 @@ Two candidate mechanisms, both externally corroborated, not mutually exclusive:
 
 **Not yet validated live**: none of the above has been exercised against a real dispatch run yet
 - this is a mitigation grounded in code inspection + upstream issue research, not a proven fix.
+
+**Phase 2 result: FAILED (2026-07-14, 14:29:40).** A 6th panic hit, same `@528` signature as the
+original incident, **~4.5 minutes** after the server was restarted with Phase 1a/1b live
+(`mlx-server-wrapper.log` confirms `memory limit set bytes=23622320128` applied at 14:25:20)
+while a real benchmark trial (`mlx_stopgap_validation_20260714/ratelimiter_inspect__mlx__t0`) was
+in flight. Two things this run adds beyond the existing hypotheses:
+- The soft `mx.set_memory_limit()` ceiling never tripped or logged before the kernel panic -
+  `mlx-server-wrapper.log`'s last line (14:28:29) shows peak resident climbing steadily (17.1GB
+  -> 18.9GB over ~3 minutes) but still well under the 22GiB cap when the panic hit 70s later.
+  Memory *volume* alone is looking less likely as the sole trigger; this is more consistent with
+  the eviction-ordering race (mechanism 1) than sheer pressure.
+- Direct inspection of `mlx_server_wrapper.py` confirms it adds **no actual lock** around
+  generation - serialization relied entirely on `--prompt-concurrency 1`
+  (`mlx_lm.server`'s *internal batch* concurrency knob), not a mutex on the
+  `ThreadingHTTPServer`'s per-connection threads. The "no lock anywhere in its source" gap G5d
+  already flagged was still open at the time of this panic.
+
+**Phase 3 decision (2026-07-14, made with the user):** one more targeted fix, then a short
+*attended* (not overnight/unattended) re-validation - not a full stop to hardening, but not
+proceeding to unattended use either. Two fixes shipped in this pass, both in this repo's own
+code (not a hand-edit inside `.venv-mlx/site-packages`, so they're git-tracked, reviewable, and
+survive a venv rebuild):
+1. **`serialize_generation()`** (`scripts/mlx_server_wrapper.py`) - wraps `do_POST` in a real
+   `threading.Lock()`, independent of `--prompt-concurrency`, so at most one generation request
+   executes at a time regardless of what the server's own internal batching does. `do_GET` (e.g.
+   `/v1/models` health checks) is left unlocked since it never touches the GPU.
+2. **`patch_lru_prompt_cache_evict_before_insert()`** (`scripts/mlx_server_wrapper.py`) -
+   monkeypatches `LRUPromptCache.insert_cache` (Phase 4 item 1, pulled forward) so the LRU-oldest
+   entry is evicted *before* a new key is added, not after. Confirmed by reading
+   `mlx_lm/models/cache.py` directly: the shipped ordering adds the new entry to the trie first
+   and only then evicts - so *any* configured `max_size` (not just the old cap of 2) transiently
+   holds one extra entry's GPU-backed cache alive at the moment a new key arrives. Lowering the
+   cap 2->1 earlier today shrank this window's absolute size but could not close it - a cap of 1
+   still transiently holds 2, right at the wired-memory ceiling. The patch only reorders *when*
+   eviction happens; it delegates to the original method for everything else (existing-key
+   updates, prefix trimming, the trailing max_bytes safety net), so the library's own
+   trie/byte-accounting is reused unchanged. Both new functions wired into `main()`. Verified
+   directly against the real `.venv-mlx` `mlx_lm.models.cache.LRUPromptCache` (not just a fake) -
+   3 distinct inserts at `max_size=1` leave `len(_lru) == 1`, confirmed live. 6 new tests in
+   `test_mlx_server_wrapper.py`, 939/939 suite green.
+
+**Not yet validated live**: same caveat as Phase 1 - these are two more targeted, individually
+tested mitigations, not proof the panics stop. The next step is the short attended re-run in
+Phase 2 (below), watched in person, not left running unattended overnight.
+
+**Phase 2 revalidation result: FAILED again — 7th MLX-attributed panic (2026-07-14, 14:52:56).**
+The short attended re-run panicked the host ~3.5 minutes after the Phase 3 fixes went live and the
+server restarted (`mlx-server-wrapper.log`: `memory limit set` at 14:49:07, first real generation
+at 14:50:05, panic at 14:52:56). This is the decisive data point, and it argues against continuing
+down the application-layer path:
+- **Third distinct panic signature**: `"completeMemory() prepare count underflow"
+  @IOGPUMemory.cpp:550` (`panic-full-2026-07-14-145256.0002.panic`) — different from both the
+  original `@IOGPUGroupMemory.cpp:528` and the G5d `@IOGPUGroupMemory.cpp:323`. Three different
+  fault sites in Apple's `IOGPU.kext` in one day is the signature of a driver-level fault being
+  *provoked* from different code paths, not one app-level bug with one fix.
+- **Every mitigation was simultaneously live and none prevented it**: the real `threading.Lock`
+  around `do_POST` (Phase 3), evict-before-insert (Phase 3, wrapper mtime 14:42 predates the
+  14:49 server start), `MLX_PROMPT_CACHE_SIZE=1`, `--prompt-concurrency 1`, and the 22GiB soft
+  `mx.set_memory_limit()` ceiling.
+- **Only ONE generation was in flight** at the panic (wrapper log: `do_POST` Thread-21 started
+  14:51:48, no `end` line before the crash) — so with the new lock actually serializing every
+  `do_POST`, concurrent GPU graph evaluation (mechanism 2 / `--prompt-concurrency`) is ruled out
+  as the trigger for *this* incident. It was a single, serialized generation.
+- **Peak logged memory ~18.8GB** — under the 22GiB soft cap and under `mlx_lm.server`'s own
+  ~19.07GB wired limit, so sheer allocation *volume* didn't trip anything catchable either. But
+  ~18.8GB resident sits right against the ~19GB GPU working-set ceiling with almost no headroom —
+  which is the through-line across every one of these panics.
+
+**Read: the application-layer hardening is not converging.** Lock, cache-eviction reordering,
+concurrency serialization, and a soft memory ceiling were all in place, on a single serialized
+generation, and the host still panicked with a novel driver fault site. This is consistent with
+the plan's own "scope boundary" caveat (the `IOGPUGroupMemory`/`IOGPUMemory` fault lives in
+Apple's GPU driver, unreachable from a Python fork). The one factor that has been constant across
+all 5+ MLX panics is a ~17-19GB-resident model pinned against this 24GB host's ~19GB wired ceiling
+with near-zero headroom.
+
+**Phase 3 decision — REVISED (2026-07-14, with the user): right-size the model, do not fork
+mlx-lm.** The user's priority is to keep MLX (early results are genuinely strong — fast, correct,
+oracle-passing; the *runtime* is not the problem). The panics track the 30B model's memory
+footprint against the GPU ceiling, not the MLX runtime itself, and those two are separable. Two
+observations make forking (Phase 4) the wrong next move:
+1. Phase 4 item 1 (evict-before-insert) is **already shipped** in the wrapper and did not prevent
+   the 7th panic. Phase 4 item 3 (catch Metal OOM → HTTP 503) cannot help — a *kernel panic* in
+   the driver's memory-object bookkeeping is not a catchable userspace allocation failure.
+2. Phase 4 item 2 (configurable wired-memory ceiling) and "use a smaller model" are the **same
+   lever wearing two hats** — both just create headroom below the GPU working-set ceiling. A
+   smaller model delivers that headroom today with zero fork to maintain; if headroom is *not*
+   the fix, a fork of item 2 wouldn't save us either. Forking is dominated by the smaller-model
+   experiment.
+
+**Replacement model — researched against proven benchmarks (2026-07-14).** Requirements: (a)
+tool-call wire-format compatible with `mlx_lm.server`'s native `<tool_call>`-JSON parser (G1, the
+#1 gate), (b) non-thinking (G1b — no per-request thinking toggle on the OpenAI-compat path), (c)
+coding-capable, (d) footprint well below the ~19GB ceiling. Recommended:
+**`mlx-community/Qwen2.5-Coder-14B-Instruct-4bit`** (~8.3GB weights; `lmstudio-community`'s
+MLX-4bit build measures 8.33GB) — leaving ~10GB of headroom under the wired ceiling vs the 30B's
+~0-1GB.
+- **Lowest wire-format risk of any candidate**: same Qwen Hermes-style `<tool_call>{"name":...,
+  "arguments":...}</tool_call>` template family as the *proven-working* Qwen3-30B-A3B-Instruct-2507
+  and the already format-verified `Qwen2.5-Coder-32B-Instruct` (see Follow-up). Non-thinking.
+  (Still verify the actual chat-template file in `.venv-mlx`'s tokenizer before the run, per
+  verify-before-assuming — but the family-level evidence is strong.)
+- **Benchmarks (Qwen2.5-Coder Technical Report, arXiv:2409.12186v3)** — 14B-Instruct vs the 32B it
+  under-cuts and the 7B fallback:
+
+  | model (4bit MLX)        | ~size  | HumanEval | HumanEval+ | MBPP | LiveCodeBench | BigCodeBench(Full) | Aider Pass@2 |
+  |-------------------------|--------|-----------|------------|------|---------------|--------------------|--------------|
+  | Coder-7B-Instruct       | ~4.3GB | 88.4      | 84.1       | 83.5 | 18.2          | 41.0               | 68.4         |
+  | **Coder-14B-Instruct**  | ~8.3GB | **89.6**  | **87.2**   | 86.2 | 23.4          | 48.4               | 69.2         |
+  | Coder-32B-Instruct      | ~18GB  | 92.7      | 87.2       | 90.2 | 31.4          | 49.6               | 73.7         |
+
+  The 14B lands only ~3 HumanEval points below the 32B and *ties* it on HumanEval+, while less
+  than half the footprint. The 32B rules itself out for the stability goal — its ~18GB footprint
+  reproduces the exact no-headroom condition that tracks the panics. The benchmark dispatch cells
+  (`token_bucket`, `ratelimiter_inspect`) are HumanEval-class tasks the 30B already cleared in
+  ~2 steps, comfortably within a 89.6-HumanEval coder's range.
+- **Fallback ladder if the 14B still panics**: drop to `Qwen2.5-Coder-7B-Instruct-4bit` (~4.3GB,
+  ~14GB headroom). If *that* still panics, the panic is proven independent of memory headroom →
+  it's a genuine `IOGPU.kext` driver bug on this host, and the honest answer is hardware (a Mac
+  with more unified memory for 30B-class MLX unattended), not more code. Either outcome is a
+  decisive result rather than continued patch-and-drift.
+
+**Confidence (my estimate, not a measurement):** a right-sized 14B MLX model gives a stable
+overnight driver on this host at **~45-60%** (headroom is the single best-supported lever across
+every panic); continuing to harden the 30B ~15%; forking mlx-lm ~20% (its one useful lever
+overlaps the smaller-model test, its other two are shipped-and-failed or uncatchable). The
+smaller-model run is the cheap, high-information experiment that either unblocks S5 today or
+converts "keep patching" into a clean hardware decision.
+
+**Right-size step 1 — DONE (2026-07-14).** Downloaded `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit`
+(sequential-`curl` method, 8.31GB / 2 shards, to `/Users/jessecarroll/.cache/qwen2.5_coder_14b_manual`;
+integrity-checked against the safetensors index). **G1 gate verified by direct template inspection,
+PASS**: the chat template in `tokenizer_config.json` renders tool calls as `<tool_call>\n{"name":
+..., "arguments": ...}\n</tool_call>` — the exact `json.loads`-able Hermes/Qwen shape
+`mlx_lm.server`'s native parser handles, identical to the proven 30B and the verified Coder-32B;
+no `<think>` block (confirmed non-thinking, no G1b problem). Started via the supervisor
+(`MLX_SERVER_MODEL_PATH` repointed, plist updated); a real 1-token `/v1/chat/completions` probe
+returned cleanly in ~2s. **Footprint confirms the headroom thesis**: `mlx-server-wrapper.log` peak
+GPU allocation after a real generation was **8.42GB** (`peak_bytes=8424058837`) — ~10.6GB below the
+~19GB wired ceiling, vs the ~0-1GB headroom that tracked every panic. Next: the attended validation
+run (`token_bucket` + `ratelimiter_inspect`), watching for any panic across the window.
+
+**Right-size step 2 — attended validation run (2026-07-14, `_runs/mlx_14b_validation_20260714`).**
+4 cells (`ratelimiter_inspect` + `token_bucket`, 2 trials each), `--jobs 1`, against the running
+14B server. Two clearly separable outcomes:
+
+- **STABILITY: PASS — the panics stopped.** No host panic across the full 1680.9s (28-min) run
+  (panic-report count held at 7, latest still `145256` from *before* the run). `mlx-server-wrapper.log`
+  peak GPU allocation stayed **9.0-9.7GB the entire run** — never near the ~19GB wired ceiling or the
+  22GiB soft cap, across all 4 cells and their cache evictions. This is the decisive result the
+  right-size decision was built to get: the 14B's ~8GB footprint gives the driver enough headroom
+  that the `IOGPU` fault does not trigger. On the memory/stability axis, MLX-on-this-host is viable.
+
+- **DISPATCH CORRECTNESS: 0/4 GT-pass — but the cause is a specific, fixable tool-call malformation,
+  NOT a coding-capability ceiling.** Diagnosed to root by reading the transcripts + reproducing
+  against `recover_tool_calls()`: the 14B emits multi-line code arguments (`new_str`/`old_str` in
+  `str_replace` edits) using **Python `"""triple-quoted"""` string syntax with literal newlines**,
+  which is **invalid JSON**. `json.loads` rejects it (`Expecting ',' delimiter` at the `"""`), the
+  harness logs "no tool call", and the edit is silently dropped. **12 of 12** dropped tool calls
+  across all 4 cells carry this exact signature. Consequences: `token_bucket` t0/t1 never wrote
+  `rate_limiter.py` at all (impl edits all dropped → tests fail on a missing file); `ratelimiter_inspect`
+  t0/t1 wrote the impl but lost at least one edit each → incomplete code → both the reviewer
+  (`REQUEST_CHANGES`) and the independent oracle (`groundtruth_passed: false`) rejected it. Simple
+  single-line tool calls (`bash`, `create_file`) have valid JSON and executed fine throughout — the
+  break is specific to multi-line code payloads.
+
+  **This is distinct from G1's tag-format gate** (the model DOES use the right `<tool_call>`/fenced
+  structure — the template is correct, confirmed step 1) and distinct from a raw-capability failure
+  (the code it writes looks correct). It's a JSON-string-escaping discipline weakness — a known trait
+  of smaller models that the proven 30B did not exhibit. So step 2 does **not** give a clean
+  capability read on the 14B: a harness-recoverable malformation corrupted every cell before the
+  model's actual coding could be graded.
+
+**Harness fix — DONE (2026-07-14, direct edit per user request, not via the pipeline).**
+`scripts/local_agent.py::recover_tool_calls()` now runs a tolerant loader (`_loads_tolerant` →
+`_repair_triple_quoted_strings`): when a candidate fails a raw `json.loads`, it rewrites Python
+triple-quoted string literals (`"""..."""` / `'''...'''`) as JSON-encoded strings (`json.dumps` of
+the inner text) and retries. Valid JSON is never transformed (repair only runs after a raw-parse
+failure), and it fails closed on prose (no phantom tool calls). 2 new tests in `test_local_agent.py`
+(the real triple-quote case + a prose negative); `test_local_agent.py` 86/86 and
+`test_local_agent_oracle.py` 76/76 green. **Verified end-to-end against the run's real transcripts:
+all 12/12 previously-dropped `str_replace` calls now recover.** Helps any local model with this
+malformation, not just the 14B. **Next: re-run the step-2 validation** — only now can the 14B's true
+dispatch capability be graded, since its edits will actually land. If it still can't clear the tasks
+with edits landing, that's a capability verdict; if it does, we have a stable MLX daily driver. The
+stability win stands regardless: this host no longer panics at the ~8-9GB footprint.
+
+**Right-size step 2, run 3 — tool-call fix live, but result CONFOUNDED by a broken host `pytest`
+(2026-07-14, `_runs/mlx_14b_validation_20260714_run3`).** The triple-quote fix works: **0 dropped
+tool calls** all run (vs 12/17 before), impl files now land (`token_bucket` wrote `rate_limiter.py`
+for the first time), still no panic (peak 14.25GB under longer/heavier load — another stability data
+point). But all 4 cells `interrupted` at timeout, 0/4 GT-pass, with wildly varying ticks (88/5/19/13)
+and visible thrashing loops (`pytest` → `which python3` → `str_replace`, repeated). **Root cause of
+the thrashing, found by reading the tool outputs (NOT a clean capability verdict):** the host's bare
+`pytest` shim (`/opt/homebrew/bin/pytest`) has a stale shebang pointing at
+`/opt/homebrew/opt/python@3.13/bin/python3.13`, a Homebrew Python that no longer exists (host now has
+3.10/3.11/3.14, no 3.13) — so every `pytest ...` the model runs returns `bad interpreter: No such
+file or directory`. The agent's shell PATH resolves bare `pytest` to this broken global shim rather
+than the worktree's *working* `.venv/bin/pytest` (valid shebang, symlinked into every worktree). The
+model gets a cryptic error instead of real test feedback, can't iterate, and thrashes (token_bucket
+t0 literally left `pass`-body stubs because it never saw a working test tell it the impl was empty).
+**The oracle grading is unaffected and trustworthy** — `detect_test_command` returns
+`[.venv/bin/python, -m, pytest]` (the working venv path), verified live (correctly fails the stub
+code 9/9); so `gt=False` is real, but the model never had a fair shot to reach passing code. **This
+is a host-environment confound, not a measured 14B capability limit — a clean re-run requires the
+agent to use a working pytest first.** Fix options: (a) repair the global `pytest` shim's shebang
+(host mutation, unblocks bare `pytest` everywhere) or (b) put the worktree `.venv/bin` first on the
+dispatched agent's PATH so its `pytest` matches the venv the oracle already grades in (harness code
+change, more correct/isolated — agent and oracle then share one interpreter). Recommend (b).
+
+**Right-size step 2, run 4 — clean read blocked by a self-inflicted dispatch stall
+(`_runs/mlx_14b_validation_20260714_run4`).** With pytest fixed, **GT-pass jumped to 2/4** —
+`token_bucket` both cells produced GT-correct code (t1 reached "ORACLE GREEN — committed & done"),
+first real capability from the 14B. But all cells still `interrupted` at timeout because of ~950s
+dead-time stalls. Root-caused precisely: the Phase 3 stopgap `mlx_server_wrapper.py` instrumentation
+calls `mx.get_peak_memory()` in its per-request `finally` block, and that call blocks for ~950s while
+`serialize_generation()`'s lock is held across it — wedging every following request until the harness
+kills the cell (confirmed: 3 mega-stalls of 974/966/930s ↔ the 3 interrupted cells; the one cell that
+finished had no stall). The lock never prevented panics in the first place — the right-sized footprint
+did — so it was pure downside.
+
+**Wrapper fix — DONE (2026-07-14, direct edit).** Removed the `instrument_handler()` and
+`serialize_generation()` calls from `mlx_server_wrapper.py::main()` (functions kept defined +
+unit-tested; 14/14 green), leaving only the cheap startup-only `mx.set_memory_limit()` and the
+cache-evict patch in the live path.
+
+**Right-size step 2, run 5 — the payoff (`_runs/mlx_14b_validation_20260714_run5`).** Stalls
+**completely gone**: whole run 751.7s (was 4850s), per-cell 143-291s (matching the 30B's historical
+speed), **0/4 interrupted** (was 3/4), 0 panics. Clean capability read at last:
+- `token_bucket`: **2/2 GT-correct** — t1 fully `done`+merged (success), t0 correct code but the
+  review gate `parked` it (a review false-negative).
+- `ratelimiter_inspect`: **0/2 GT-correct** — t1 reached `done` on *wrong* code (merged-but-wrong=1,
+  a review-gate false-positive), t0 parked. The harder inspect/debug-existing-code task is beyond
+  the 14B.
+
+**Net verdict (2026-07-14):** on this 24GB host, `Qwen2.5-Coder-14B-Instruct-4bit` via MLX is now
+**stable (0 panics across runs 1-5), fast (~150-290s/cell), and capable of simpler agentic coding
+(token_bucket 2/2 correct)** — but hits a real capability ceiling on harder inspect/fix tasks
+(ratelimiter_inspect 0/2). Three genuine bugs were found and fixed getting here: the tool-call
+triple-quote drop (`recover_tool_calls`), the broken host `pytest` shim, and the wrapper's
+lock/instrumentation stall. Remaining, separable from the MLX/model question: the local **review
+gate is noisy** on these runs — it parked correct code (token_bucket t0) and merged wrong code
+(ratelimiter t1) in the same run.
+
+**Original Phase 2/3/4 plan retained below for provenance** — Phase 4 (fork mlx-lm) is now gated
+behind the smaller-model experiment failing, not the immediate next step.
 
 **Phase 2 - validate.** Re-run an `mlx_cachebound_20260714`-style matrix (`ratelimiter_inspect` +
 `token_bucket` cells) long enough to force at least 2-3 real cache-eviction cycles under the new

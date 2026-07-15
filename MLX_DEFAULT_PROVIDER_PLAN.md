@@ -561,21 +561,38 @@ cache-evict patch in the live path.
 
 **Right-size step 2, run 5 — the payoff (`_runs/mlx_14b_validation_20260714_run5`).** Stalls
 **completely gone**: whole run 751.7s (was 4850s), per-cell 143-291s (matching the 30B's historical
-speed), **0/4 interrupted** (was 3/4), 0 panics. Clean capability read at last:
-- `token_bucket`: **2/2 GT-correct** — t1 fully `done`+merged (success), t0 correct code but the
-  review gate `parked` it (a review false-negative).
-- `ratelimiter_inspect`: **0/2 GT-correct** — t1 reached `done` on *wrong* code (merged-but-wrong=1,
-  a review-gate false-positive), t0 parked. The harder inspect/debug-existing-code task is beyond
-  the 14B.
+speed), **0/4 interrupted** (was 3/4), 0 panics. The dispatch pipeline is now sound; the run also
+surfaced a benchmark-oracle gap (below) that initially made the result look better than it is.
+
+**Correction after inspecting the merged code (2026-07-14):** the headline "token_bucket 2/2
+GT-correct" was WRONG. Both token_bucket cells' code carries the same double-refill / rate-limit-
+bypass bug (`available_tokens` mutated on every call but `last_checked` advanced only on success);
+verified by reproducing Claude's exact repro against both merged implementations. They passed only
+because **neither the acceptance oracle nor `groundtruth.py` tested a rejected call at a FORWARD
+`now`** followed by a later accept — both only held `now` constant or moved it backward on the
+failing call. So `gt=True` was an oracle false-positive on this bug class, not correct code.
+- `token_bucket`: **0/2 truly-correct** (2/2 oracle-pass). The review gate (Claude Sonnet, not the
+  14B - the reviewer runs `backend=claude, model=sonnet`) caught the bug on **t0** (REQUEST_CHANGES,
+  an *exemplary* review that reproduced it and named the exact oracle gap) but **missed the
+  identical bug on t1** (APPROVE -> merged). So t1's "success" is really a hidden merged-but-wrong.
+- `ratelimiter_inspect`: **0/2** - t1 APPROVE+`gt=False`, t0 parked. Genuinely beyond the 14B.
+
+**Oracle gap FIXED (2026-07-14, direct edit).** Added
+`test_rejected_forward_call_does_not_double_count_refill` to **both**
+`tasks/token_bucket/acceptance.py` and `groundtruth.py` (a rejected forward-`now` call must still
+advance the clock). Verified it FAILS the buggy 14B code and PASSES a correct impl; full suites green
+(acceptance 10, groundtruth 15). Now buggy token_bucket code can no longer reach `gt=True`.
 
 **Net verdict (2026-07-14):** on this 24GB host, `Qwen2.5-Coder-14B-Instruct-4bit` via MLX is now
-**stable (0 panics across runs 1-5), fast (~150-290s/cell), and capable of simpler agentic coding
-(token_bucket 2/2 correct)** — but hits a real capability ceiling on harder inspect/fix tasks
-(ratelimiter_inspect 0/2). Three genuine bugs were found and fixed getting here: the tool-call
-triple-quote drop (`recover_tool_calls`), the broken host `pytest` shim, and the wrapper's
-lock/instrumentation stall. Remaining, separable from the MLX/model question: the local **review
-gate is noisy** on these runs — it parked correct code (token_bucket t0) and merged wrong code
-(ratelimiter t1) in the same run.
+**stable (0 panics across runs 1-5) and fast (~150-290s/cell)** - the dispatch/serving side is solid.
+But once the oracle gap is closed, its **coding capability on these tasks is weaker than it first
+appeared**: 0/2 truly-correct on token_bucket (subtle refill bug both times - though this same bug
+also trips the 30B ~50% of the time, so it's a hard edge case) and 0/2 on ratelimiter_inspect. Four
+genuine issues were found and fixed getting here: the tool-call triple-quote drop
+(`recover_tool_calls`), the broken host `pytest` shim, the wrapper's lock/instrumentation stall, and
+the token_bucket oracle's forward-reject gap. The review gate itself is **not the 14B and not broadly
+noisy** - Claude Sonnet produced a genuinely excellent review on t0; its one real defect here was
+inconsistency (missing on t1 the exact bug it caught on t0).
 
 **Original Phase 2/3/4 plan retained below for provenance** — Phase 4 (fork mlx-lm) is now gated
 behind the smaller-model experiment failing, not the immediate next step.

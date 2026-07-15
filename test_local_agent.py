@@ -311,6 +311,42 @@ def test_recover_tool_calls_parses_text_formats(content, expected_name):
     assert out and out[0]["function"]["name"] == expected_name
 
 
+def test_recover_tool_calls_repairs_python_triple_quoted_arguments():
+    """Weaker local models (observed: Qwen2.5-Coder-14B-4bit on mlx) emit a
+    str_replace's multi-line code argument using Python triple-quote syntax
+    with literal newlines, which is invalid JSON. The recovery path must
+    salvage it so the edit is not silently dropped."""
+    content = (
+        '```json\n'
+        '{\n'
+        '  "name": "str_replace",\n'
+        '  "arguments": {\n'
+        '    "path": "rate_limiter.py",\n'
+        '    "old_str": "# TODO",\n'
+        '    "new_str": """\n'
+        'class TokenBucket:\n'
+        '    def __init__(self, capacity):\n'
+        '        self.capacity = capacity\n'
+        '"""\n'
+        '  }\n'
+        '}\n'
+        '```'
+    )
+    out = la.recover_tool_calls(content)
+    assert out and out[0]["function"]["name"] == "str_replace"
+    args = out[0]["function"]["arguments"]
+    assert args["path"] == "rate_limiter.py"
+    assert args["new_str"].startswith("\nclass TokenBucket:")
+    assert "def __init__(self, capacity):" in args["new_str"]
+
+
+def test_recover_tool_calls_returns_none_on_non_toolcall_prose():
+    """A repair pass must not manufacture a tool call out of ordinary prose
+    (no name/JSON object present) - failing closed keeps the step loop from
+    executing a phantom call."""
+    assert la.recover_tool_calls("I think the tests pass now, nothing to do.") is None
+
+
 def test_local_agent_main_writes_boot_line_before_first_chat(tmp_path, monkeypatch, capsys):
     """The startup heartbeat in main() must flush to stdout *before* the
     first LLM call. check_story_status relies on this: a 0-byte agent.log

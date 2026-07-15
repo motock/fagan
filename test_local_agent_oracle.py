@@ -1399,3 +1399,36 @@ def test_oracle_exclude_runtime_artifacts_hides_transcript_file_from_git_status(
         ["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True
     ).stdout
     assert ".agent_transcript.json" not in status
+
+
+def test_recover_tool_calls_repairs_python_triple_quoted_arguments():
+    """Kept in sync with test_local_agent's copy: the oracle agent (which the
+    benchmark harness dispatches through) must also salvage a str_replace whose
+    multi-line code argument is emitted with Python triple-quote syntax, or the
+    edit is silently dropped (observed with Qwen2.5-Coder-14B-4bit on mlx)."""
+    content = (
+        '```json\n'
+        '{\n'
+        '  "name": "str_replace",\n'
+        '  "arguments": {\n'
+        '    "path": "rate_limiter.py",\n'
+        '    "old_str": "# TODO",\n'
+        '    "new_str": """\n'
+        'class TokenBucket:\n'
+        '    def __init__(self, capacity):\n'
+        '        self.capacity = capacity\n'
+        '"""\n'
+        '  }\n'
+        '}\n'
+        '```'
+    )
+    out = lao.recover_tool_calls(content)
+    assert out and out[0]["function"]["name"] == "str_replace"
+    args = out[0]["function"]["arguments"]
+    assert args["path"] == "rate_limiter.py"
+    assert "def __init__(self, capacity):" in args["new_str"]
+
+
+def test_recover_tool_calls_returns_none_on_non_toolcall_prose():
+    """The repair pass must fail closed on ordinary prose - no phantom call."""
+    assert lao.recover_tool_calls("Looks good, nothing left to change.") is None

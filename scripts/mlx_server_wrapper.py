@@ -65,6 +65,65 @@ def apply_memory_limit(mx_module) -> int:
     return limit_bytes
 
 
+def serialize_generation(handler_class) -> None:
+    """Wraps handler_class.do_POST in a shared threading.Lock so at most one
+    generation request executes at a time, independent of mlx_lm.server's own
+    --prompt-concurrency flag. mlx_lm.server runs on a ThreadingHTTPServer
+    with no lock anywhere in its own source (confirmed by reading
+    mlx_lm/server.py) - --prompt-concurrency only bounds how many prompts its
+    internal batch generator merges into one forward pass, it does not stop
+    two separate HTTP threads from both being inside a generation call
+    simultaneously. MLX's own issue tracker documents concurrent graph
+    evaluation as unsafe (ml-explore/mlx#2133); this closes that gap at the
+    HTTP-handler level rather than trusting the server's internal batching
+    knob to do it. do_GET is left untouched - it never touches the GPU
+    (e.g. /v1/models), so serializing it too would needlessly queue cheap
+    health-check polling behind a real generation in flight."""
+    lock = threading.Lock()
+    original_do_post = handler_class.do_POST
+
+    def locked_do_post(self, _original=original_do_post):
+        with lock:
+            return _original(self)
+
+    handler_class.do_POST = locked_do_post
+
+
+def patch_lru_prompt_cache_evict_before_insert(cache_module) -> None:
+    """Monkeypatches mlx_lm.models.cache.LRUPromptCache.insert_cache so the
+    LRU-oldest entry is evicted BEFORE a new key is added, not after.
+
+    The shipped ordering (confirmed by reading
+    .venv-mlx/lib/python3.14/site-packages/mlx_lm/models/cache.py directly)
+    adds the new entry to the trie first and only then checks whether the
+    LRU is over max_size - so any never-before-seen key briefly holds
+    max_size+1 entries' GPU-backed cache arrays alive at once, regardless of
+    what max_size is configured to. Lowering MLX_PROMPT_CACHE_SIZE 2->1
+    (2026-07-14) shrank that window's absolute size but could not close it -
+    a cap of 1 still transiently holds 2. That transient spike, sitting right
+    at mlx_lm.server's wired-memory ceiling, is the leading hypothesis for
+    the repeated IOGPUGroupMemory kernel panics on this host (see
+    MLX_DEFAULT_PROVIDER_PLAN.md, Phase 4 item 1).
+
+    Only reorders WHEN eviction happens for a new key; delegates to the
+    original method for everything else (existing-key updates, prefix
+    trimming, the trailing max_bytes safety net), so the library's own
+    trie/byte-accounting is reused unchanged rather than reimplemented."""
+    cls = cache_module.LRUPromptCache
+    original_insert_cache = cls.insert_cache
+
+    def patched_insert_cache(self, model, tokens, prompt_cache, *, cache_type="assistant"):
+        is_new_key = self._trie.search(model, tokens).exact is None
+        if is_new_key and self.max_size > 0 and len(self._lru) >= self.max_size:
+            evict_model, evict_tokens = self._lru.pop()
+            evict_entry = self._trie.pop(evict_model, evict_tokens)
+            self._n_bytes -= evict_entry.nbytes
+            self._n_bytes_by_type[evict_entry.cache_type] -= evict_entry.nbytes
+        return original_insert_cache(self, model, tokens, prompt_cache, cache_type=cache_type)
+
+    cls.insert_cache = patched_insert_cache
+
+
 def instrument_handler(handler_class, mx_module) -> None:
     """Wraps handler_class's do_GET/do_POST in place to log start/end + peak
     memory around every request. Purely observational - does not change
@@ -95,6 +154,7 @@ def instrument_handler(handler_class, mx_module) -> None:
 
 def main() -> None:
     import mlx.core as mx
+    import mlx_lm.models.cache as cache_mod
     import mlx_lm.server as server_mod
 
     configure_logging()
@@ -103,7 +163,18 @@ def main() -> None:
         applied = apply_memory_limit(mx)
         _logger.info("memory limit set bytes=%d", applied)
 
-    instrument_handler(server_mod.APIHandler, mx)
+    patch_lru_prompt_cache_evict_before_insert(cache_mod)
+
+    # instrument_handler() and serialize_generation() are deliberately NOT wired
+    # in here anymore (2026-07-14). They were Phase 3 stopgaps against the kernel
+    # panics, but the panics were actually resolved by right-sizing to a model
+    # whose footprint (~9-15GB) sits well under the wired-memory ceiling - not by
+    # the lock. Worse, they were the direct cause of ~950s dispatch stalls: the
+    # instrumentation's per-request mx.get_peak_memory() call blocks for minutes
+    # while serialize_generation()'s lock is held across it, wedging every
+    # subsequent request until the harness kills the cell (see
+    # MLX_DEFAULT_PROVIDER_PLAN.md, run4 diagnosis). The functions are kept
+    # defined (and unit-tested) for reference, but must stay out of the hot path.
 
     server_mod.main()
 

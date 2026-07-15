@@ -14,7 +14,7 @@
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/Users/jessecarroll/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<key>MLX_SERVER_MODEL_PATH</key>
-		<string>/Users/jessecarroll/.cache/qwen3_30b_a3b_manual</string>
+		<string>/Users/jessecarroll/.cache/qwen2.5_coder_14b_manual</string>
 		<key>MLX_SERVER_PORT</key>
 		<string>8080</string>
 		<key>MLX_SERVER_PYTHON</key>

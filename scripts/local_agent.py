@@ -45,7 +45,6 @@ made).
 """
 from __future__ import annotations
 
-import ast
 import json
 import os
 import re
@@ -243,7 +242,7 @@ HARNESS_RULES = (
 
 TOOLS = [
     {"type": "function", "function": {
-        "name": "create_file", "description": "Create a NEW file. Fails if the file already exists and is non-empty (use str_replace to edit existing files).",
+        "name": "create_file", "description": "Create a new file, or overwrite one with its full corrected contents. To overwrite a file that already exists on disk, view_file it first, then create_file with the complete new contents (a whole-file rewrite is preferred over str_replace for the file you are implementing).",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {
@@ -500,6 +499,35 @@ def auto_wip_commit(reason: str) -> None:
 # refused; this only tracks how many times in a row that refusal happened.
 _SYNTAX_REJECT_COUNTS: dict[str, int] = {}
 
+# Paths successfully written via create_file THIS process run. The
+# non-destructive-editor guard (see run_tool's create_file branch) exists to
+# protect PRE-EXISTING repo/seed files from being clobbered by a confused
+# model - it was never meant to also block the model from overwriting a file
+# it wrote itself moments ago. A weak model that can't construct a correct
+# str_replace old_str often has "rewrite the whole small file" as its only
+# real recovery strategy; forcing surgical edits it can't produce just
+# deadlocks it. Observed live 2026-07-15 (lru_cache): a model alternated
+# rejected create_file / rejected str_replace calls for dozens of steps,
+# never finishing, because create_file on its own just-created file was
+# unconditionally rejected. Scoped to this process's lifetime (module-level,
+# reset on every fresh dispatch/rework subprocess) so a REWORK's inherited
+# file - which may need a surgical fix, not a wholesale rewrite - is still
+# protected until the model creates it again itself in the new process.
+_CREATED_THIS_RUN: set[str] = set()
+
+# Companion to _CREATED_THIS_RUN for the RESUME/rework case. On a step-cap
+# resume, the impl and test files already exist on disk from the interrupted
+# run, so they are NOT in _CREATED_THIS_RUN in the fresh process - and the
+# create_file guard would force the weak model onto str_replace it cannot
+# construct. Requiring the model to view_file the target first makes the
+# overwrite an INFORMED one (it read the current contents before replacing
+# them), which preserves the guard's real purpose - stopping a blind clobber
+# of a file the model has never seen - while unblocking the whole-file rewrite
+# recovery path. Observed live 2026-07-16 (interval_merge resume): the guard
+# steered a resumed run to str_replace, which then ground through 28+ rejected
+# surgical-edit cycles (~2310s) instead of one whole-file rewrite.
+_VIEWED_THIS_RUN: set[str] = set()
+
 
 def _python_syntax_error(path_str: str, content: str) -> str | None:
     """Return an ERROR string if `path_str` is a .py file and `content` is not
@@ -514,7 +542,15 @@ def _python_syntax_error(path_str: str, content: str) -> str | None:
     if not path_str.endswith(".py"):
         return None
     try:
-        ast.parse(content)
+        # compile(), not ast.parse(): ast.parse() only validates grammar
+        # (parens balanced, indentation forms a legal block structure) - it
+        # does NOT check that `return`/`yield` sit inside a function or
+        # `break`/`continue` inside a loop. Those are SyntaxErrors too, but
+        # only surface at compile() time. Observed live: a dedented `for`
+        # loop landed `return` at module scope, ast.parse() accepted it, and
+        # the file reached the groundtruth oracle as an import-breaking
+        # SyntaxError this guard exists specifically to catch before disk.
+        compile(content, path_str, "exec")
     except SyntaxError as e:
         lines = content.splitlines()
         lineno = e.lineno or 0
@@ -550,8 +586,14 @@ def _record_syntax_rejection(path_str: str, err: str) -> str:
 def run_tool(fn, args) -> str:
     if fn == "create_file":
         path = CWD / args["path"]
-        if path.exists() and path.read_text().strip():
-            return f"ERROR: {args['path']} already exists and is non-empty. Use str_replace to edit it."
+        if (path.exists() and path.read_text().strip()
+                and args["path"] not in _CREATED_THIS_RUN
+                and args["path"] not in _VIEWED_THIS_RUN):
+            return (
+                f"ERROR: {args['path']} already exists and is non-empty. Use "
+                f"view_file to read it first, then create_file to overwrite it "
+                f"with the full corrected contents."
+            )
         content = args.get("content", "")
         err = _python_syntax_error(args["path"], content)
         if err:
@@ -559,6 +601,7 @@ def run_tool(fn, args) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
+        _CREATED_THIS_RUN.add(args["path"])
         return f"created {args['path']}"
     if fn == "str_replace":
         path = CWD / args["path"]
@@ -581,6 +624,7 @@ def run_tool(fn, args) -> str:
         path = CWD / args["path"]
         if not path.exists():
             return f"ERROR: {args['path']} does not exist."
+        _VIEWED_THIS_RUN.add(args["path"])
         lines = path.read_text().splitlines(keepends=True)
         return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
     if fn == "bash":
@@ -747,18 +791,6 @@ def main() -> int:
             # read-heavy guard (MUTATING_TOOLS) still catches a model stuck
             # in a bad edit loop — str_replace calls reset that window.
             #
-            # Any mutating call (str_replace/create_file) also resets every
-            # OTHER signature's accumulated count: `seen` was a lifetime
-            # cumulative counter, so re-viewing a file 2x, editing it, then
-            # viewing it again to check the edit landed hit the >=3 threshold
-            # from stale pre-edit reads, even though real progress happened
-            # in between. That false-triggered on gpt-oss's ratelimiter_
-            # inspect RLI-2 runs on 2026-07-04: view, view, edit, view (3rd
-            # cumulative view -> nudge), view (park) -- despite the edit and
-            # a test run in between. A real edit invalidates prior reads'
-            # staleness, so the count for everything else should start over.
-            if fn in MUTATING_TOOLS:
-                seen.clear()
             above_threshold = False
             if fn != "str_replace":
                 seen[sig] = seen.get(sig, 0) + 1
@@ -788,7 +820,42 @@ def main() -> int:
             # like str_replace without old_str) must nudge the model with a
             # recoverable error, not crash the whole unattended agent with an
             # uncaught exception.
-            messages.append({"role": "tool", "content": safe_run_tool(fn, args)})
+            tool_result = safe_run_tool(fn, args)
+            messages.append({"role": "tool", "content": tool_result})
+
+            # A GENUINELY SUCCESSFUL mutation (str_replace/create_file)
+            # resets every OTHER signature's accumulated count: `seen` was a
+            # lifetime cumulative counter, so re-viewing a file 2x, editing
+            # it, then viewing it again to check the edit landed hit the >=3
+            # threshold from stale pre-edit reads, even though real progress
+            # happened in between. That false-triggered on gpt-oss's
+            # ratelimiter_inspect RLI-2 runs on 2026-07-04: view, view, edit,
+            # view (3rd cumulative view -> nudge), view (park) -- despite the
+            # edit and a test run in between. A real edit invalidates prior
+            # reads' staleness, so the count for everything else should start
+            # over.
+            #
+            # Gated on SUCCESS (a result that isn't an "ERROR..." string),
+            # not merely on tool identity — a REJECTED create_file/str_replace
+            # changed nothing on disk and must not be treated as progress.
+            # Pre-fix, this clear ran unconditionally on every mutating call
+            # regardless of outcome, which broke it two ways: (1) create_file
+            # is itself one of MUTATING_TOOLS, so its own repeated FAILURES
+            # wiped their own accumulating count before ever reaching the
+            # threshold (34 consecutive rejected create_file calls, live
+            # 2026-07-15, zero nudges); (2) a failed str_replace interleaved
+            # between failed create_file attempts also wiped create_file's
+            # count, so even alternating the two tools indefinitely never
+            # tripped the guard (same incident - the actual failure pattern
+            # observed was create_file/str_replace/str_replace/bash on
+            # repeat, not pure consecutive create_file).
+            if fn in MUTATING_TOOLS:
+                succeeded = isinstance(tool_result, str) and not tool_result.startswith("ERROR")
+                if succeeded:
+                    current = seen.get(sig, 0)
+                    seen.clear()
+                    if fn != "str_replace":
+                        seen[sig] = current
 
             # Read-heavy-pattern guard. Tracked separately from the per-target
             # repetition guard: the per-target one misses this case because

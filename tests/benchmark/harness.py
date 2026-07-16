@@ -654,6 +654,22 @@ class MockBackend:
 
     def __init__(self, task: dict):
         self.task = task
+        # Calls the guided-decomposition planner made against this backend
+        # (GUIDED_DECOMPOSITION_PLAN.md) - empty unless PIPELINE_DECOMPOSE is
+        # enabled for the run, since dispatch_story only calls complete() at
+        # all when decompose is on. compound_harness.py surfaces the count
+        # in result.json so an offline mock run can prove the planner path
+        # was actually exercised, not just that dispatch() still succeeds.
+        self.complete_calls: list[dict] = []
+
+    def complete(self, prompt, *, system=None, model=None, allowed_tools=None,
+                 cwd=None, max_tokens=None, cell_dir=None):
+        """Canned single-shot response, so an offline `mock` run can exercise
+        the guided-decomposition planner call (backend.Backend.complete())
+        with no real model/network. Not meant to look like a REAL checklist -
+        just enough structure for the harness's own plumbing tests."""
+        self.complete_calls.append({"prompt": prompt, "system": system, "model": model})
+        return "1. [mock] Write a failing test.\n2. [mock] Implement it."
 
     def dispatch(self, *, prompt, system, model, allowed_tools, cwd, log_path,
                  append=False, acceptance=None):

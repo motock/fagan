@@ -10104,3 +10104,649 @@ def test_review_story_transient_500_retry_also_fails_increments_inconclusive_onc
     story = _read_manifest(plan_dir, "transient_fail")["stories"]["S1"]
     assert story["review_inconclusive_count"] == 1  # incremented exactly once
     assert story["status"] == "tests_passed"
+
+
+# ---------- Guided decomposition (GUIDED_DECOMPOSITION_PLAN.md) ----------
+# A "tech lead" planner call that turns a coarse story into an ordered
+# sub-step checklist for the weak local executor to follow within a single
+# worktree/transcript. _run_planner() is a bounded, single complete() call
+# (never an agent loop); dispatch_story() gates it behind PIPELINE_DECOMPOSE
+# (default "off") and only for local-family backends.
+
+class _FakePlannerBackend:
+    """Stand-in for whatever backend.get_backend(...) returns, capturing the
+    exact kwargs _run_planner passed to complete()."""
+    def __init__(self, response=None, raises=None):
+        self._response = response
+        self._raises = raises
+        self.calls = []
+
+    def complete(self, prompt, **kwargs):
+        self.calls.append({"prompt": prompt, **kwargs})
+        if self._raises is not None:
+            raise self._raises
+        return self._response
+
+
+def test_run_planner_cloud_mode_calls_claude_backend_with_overlord_model(
+    agents_dir, monkeypatch,
+):
+    fake = _FakePlannerBackend(response="1. Write a failing test\n2. Implement it")
+    calls = []
+
+    def _fake_get_backend(role, *, name=None):
+        calls.append({"role": role, "name": name})
+        return fake
+
+    monkeypatch.setattr(backend, "get_backend", _fake_get_backend)
+
+    result = p._run_planner(
+        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        local_model="gpt-oss:20b",
+    )
+
+    assert result == "1. Write a failing test\n2. Implement it"
+    assert calls == [{"role": "planner", "name": "claude"}]
+    assert fake.calls[0]["prompt"] == "Add a rate limiter."
+    assert fake.calls[0]["system"] == p._PLANNER_SYSTEM
+    # agents_dir's overlord.md declares model: opus - cloud mode reuses the
+    # same "principal" tier _invoke_overlord already uses.
+    assert fake.calls[0]["model"] == "opus"
+
+
+def test_run_planner_cloud_mode_honors_model_override(agents_dir, monkeypatch):
+    """PIPELINE_DECOMPOSE_CLOUD_MODEL lets an operator pin the cloud planner
+    to a specific tier (e.g. "sonnet") instead of the overlord's default
+    "opus" - mirrors PIPELINE_LOCAL_REVIEW_MODEL's existing override pattern
+    for the local reviewer. Unset must preserve the current default (covered
+    by test_run_planner_cloud_mode_calls_claude_backend_with_overlord_model)."""
+    fake = _FakePlannerBackend(response="1. Step one")
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+    monkeypatch.setenv("PIPELINE_DECOMPOSE_CLOUD_MODEL", "sonnet")
+
+    p._run_planner(
+        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        local_model="gpt-oss:20b",
+    )
+
+    assert fake.calls[0]["model"] == "sonnet"
+
+
+def test_run_planner_local_mode_calls_dispatch_backend_with_local_model(
+    agents_dir, monkeypatch,
+):
+    fake = _FakePlannerBackend(response="1. Do the thing")
+    calls = []
+
+    def _fake_get_backend(role, *, name=None):
+        calls.append({"role": role, "name": name})
+        return fake
+
+    monkeypatch.setattr(backend, "get_backend", _fake_get_backend)
+
+    result = p._run_planner(
+        "Add a rate limiter.", mode="local", dispatch_backend="ollama",
+        local_model="gpt-oss:20b",
+    )
+
+    assert result == "1. Do the thing"
+    assert calls == [{"role": "planner", "name": "ollama"}]
+    assert fake.calls[0]["model"] == "gpt-oss:20b"
+
+
+def test_run_planner_returns_none_on_backend_failure(agents_dir, monkeypatch):
+    """A broken/unreachable planner backend must fail open, not raise -
+    dispatch_story must be able to proceed with no plan."""
+    fake = _FakePlannerBackend(raises=RuntimeError("endpoint unreachable"))
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    result = p._run_planner(
+        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        local_model="gpt-oss:20b",
+    )
+
+    assert result is None
+
+
+def test_run_planner_returns_none_on_empty_response(agents_dir, monkeypatch):
+    fake = _FakePlannerBackend(response="   \n  ")
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    result = p._run_planner(
+        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        local_model="gpt-oss:20b",
+    )
+
+    assert result is None
+
+
+def test_planner_system_steers_away_from_editing_test_files():
+    """The tech-lead checklist must steer the weak executor to put all
+    implementation work in the implementation file and never edit the test
+    files. Without this, a weak model that lands an incomplete stub spends
+    its whole budget editing the test file instead of completing the
+    implementation (observed live: lru_cache t4, temp 1.0, 56 consecutive
+    str_replace calls on test_lru_cache.py, never implementing get/put/size).
+    The steering rule reaches the agent verbatim because _PLANNER_SYSTEM
+    instructs the planner to make it the checklist's first line."""
+    assert "implementation file" in p._PLANNER_SYSTEM
+    assert "test_" in p._PLANNER_SYSTEM
+    # The rule must forbid editing tests AND direct fixes to the impl, or a
+    # weak model will keep mutating tests to make them pass.
+    assert "NEVER" in p._PLANNER_SYSTEM or "never" in p._PLANNER_SYSTEM.lower()
+    # The weak model reliably fails surgical str_replace (observed live in
+    # t2/t5: every str_replace in a stubs-then-edit loop is rejected as
+    # 'old_str occurs N times' / 'not found'). The checklist must direct the
+    # executor to write COMPLETE files via create_file instead of
+    # stubs-then-surgically-edit, or the model never gets past stubs.
+    assert "create_file" in p._PLANNER_SYSTEM
+    assert "NotImplementedError" in p._PLANNER_SYSTEM
+
+
+def test_run_rework_planner_cloud_mode_calls_claude_backend_with_review_feedback(
+    agents_dir, monkeypatch,
+):
+    """The rework planner translates review feedback into a fix checklist -
+    same bounded-call/backend-resolution machinery as _run_planner, but a
+    distinct system prompt and the review feedback (not agent_instructions)
+    as the input."""
+    fake = _FakePlannerBackend(response="1. Fix the double-count bug\n2. Add a regression test")
+    calls = []
+
+    def _fake_get_backend(role, *, name=None):
+        calls.append({"role": role, "name": name})
+        return fake
+
+    monkeypatch.setattr(backend, "get_backend", _fake_get_backend)
+
+    result = p._run_rework_planner(
+        "allow() double-counts refill on every call.",
+        mode="cloud", dispatch_backend="local", local_model="gpt-oss:20b",
+    )
+
+    assert result == "1. Fix the double-count bug\n2. Add a regression test"
+    assert calls == [{"role": "planner", "name": "claude"}]
+    assert fake.calls[0]["prompt"] == "allow() double-counts refill on every call."
+    assert fake.calls[0]["system"] == p._REWORK_PLANNER_SYSTEM
+    assert fake.calls[0]["system"] != p._PLANNER_SYSTEM
+    assert fake.calls[0]["model"] == "opus"
+
+
+def test_run_rework_planner_local_mode_calls_dispatch_backend(agents_dir, monkeypatch):
+    fake = _FakePlannerBackend(response="1. Fix it")
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    result = p._run_rework_planner(
+        "bug description", mode="local", dispatch_backend="ollama",
+        local_model="gpt-oss:20b",
+    )
+
+    assert result == "1. Fix it"
+    assert fake.calls[0]["model"] == "gpt-oss:20b"
+
+
+def test_run_rework_planner_returns_none_on_backend_failure(agents_dir, monkeypatch):
+    fake = _FakePlannerBackend(raises=RuntimeError("endpoint unreachable"))
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    result = p._run_rework_planner(
+        "bug description", mode="cloud", dispatch_backend="local",
+        local_model="gpt-oss:20b",
+    )
+
+    assert result is None
+
+
+def test_dispatch_story_decompose_rework_translates_feedback_into_fix_checklist(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When PIPELINE_DECOMPOSE is on and a rework redispatch resumes via
+    transcript, the raw review feedback must be translated into a tech-lead
+    fix checklist (via _run_rework_planner) before being appended - not
+    pasted verbatim, mirroring the initial-dispatch checklist treatment."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    transcript_path = worktree_path / ".agent_transcript.json"
+    transcript_path.write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "dcrework", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "allow() double-counts refill on every call."},
+    })
+
+    rework_calls = []
+
+    def _fake_rework_planner(review_feedback, *, mode, dispatch_backend, local_model):
+        rework_calls.append({
+            "review_feedback": review_feedback, "mode": mode,
+            "dispatch_backend": dispatch_backend, "local_model": local_model,
+        })
+        return "1. Reproduce the double-count with a test.\n2. Fix allow()."
+
+    monkeypatch.setattr(p, "_run_rework_planner", _fake_rework_planner)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9010)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcrework", "S1")
+
+    assert result["ok"] is True
+    assert len(rework_calls) == 1
+    assert rework_calls[0]["review_feedback"] == "allow() double-counts refill on every call."
+    assert rework_calls[0]["mode"] == "cloud"
+
+    append_content = popen_calls[0]["env"]["LOCAL_AGENT_RESUME_APPEND_CONTENT"]
+    assert "1. Reproduce the double-count with a test." in append_content
+    # The original raw feedback stays present for reference, not replaced.
+    assert "allow() double-counts refill on every call." in append_content
+
+
+def test_dispatch_story_decompose_off_rework_uses_raw_feedback_unchanged(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_DECOMPOSE off (default) must leave the existing rework path
+    byte-for-byte unchanged - no rework planner call, raw feedback only."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / ".agent_transcript.json").write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "dcreworkoff", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("rework planner must not run when PIPELINE_DECOMPOSE is off")
+
+    monkeypatch.setattr(p, "_run_rework_planner", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9011)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcreworkoff", "S1")
+
+    assert result["ok"] is True
+    assert popen_calls[0]["env"]["LOCAL_AGENT_RESUME_APPEND_CONTENT"] == (
+        "The code reviewer REQUESTED CHANGES on your previous attempt. "
+        "Address this feedback:\nThe SQL is injectable; parameterize it."
+    )
+
+
+def test_dispatch_story_decompose_rework_fails_open_when_fix_planner_returns_none(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A failed rework-planner call must fall back to the raw-feedback
+    format, never block or corrupt the rework redispatch."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / ".agent_transcript.json").write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "dcreworknone", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+
+    monkeypatch.setattr(p, "_run_rework_planner", lambda *a, **k: None)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9012)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcreworknone", "S1")
+
+    assert result["ok"] is True
+    assert popen_calls[0]["env"]["LOCAL_AGENT_RESUME_APPEND_CONTENT"] == (
+        "The code reviewer REQUESTED CHANGES on your previous attempt. "
+        "Address this feedback:\nThe SQL is injectable; parameterize it."
+    )
+
+
+def test_dispatch_story_decompose_off_by_default_skips_planner(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_DECOMPOSE unset must be a strict no-op: the planner is never
+    invoked and no plan artifact appears in the worktree."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "dcoff", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("planner must not run when PIPELINE_DECOMPOSE is off")
+
+    monkeypatch.setattr(p, "_run_planner", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9001))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcoff", "S1")
+
+    assert result["ok"] is True
+    assert not (worktree_root / "S1" / ".agent_plan.md").exists()
+
+
+def test_dispatch_story_decompose_cloud_writes_plan_and_augments_local_prompt(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    _write_manifest(plan_dir, "dccloud", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    planner_calls = []
+
+    def _fake_planner(agent_instructions, *, mode, dispatch_backend, local_model):
+        planner_calls.append({
+            "agent_instructions": agent_instructions, "mode": mode,
+            "dispatch_backend": dispatch_backend, "local_model": local_model,
+        })
+        return "1. Write a failing test for the limiter.\n2. Implement it."
+
+    monkeypatch.setattr(p, "_run_planner", _fake_planner)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9002)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dccloud", "S1")
+
+    assert result["ok"] is True
+    assert len(planner_calls) == 1
+    assert planner_calls[0]["mode"] == "cloud"
+    assert planner_calls[0]["dispatch_backend"] == "local"
+    assert planner_calls[0]["agent_instructions"] == "Build it."
+
+    plan_path = worktree_root / "S1" / ".agent_plan.md"
+    assert plan_path.exists()
+    assert plan_path.read_text() == "1. Write a failing test for the limiter.\n2. Implement it."
+
+    task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    assert "1. Write a failing test for the limiter." in task
+    assert ".agent_scratchpad.md" in task
+
+
+def test_dispatch_story_decompose_scratchpad_off_omits_scratchpad_instruction(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_DECOMPOSE_SCRATCHPAD=off is the H3 ablation arm (checklist
+    only, no persistent scratchpad) - the checklist must still reach the
+    executor, but the scratchpad instruction must not."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE_SCRATCHPAD", "off")
+    _write_manifest(plan_dir, "dcnoscratch", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p, "_run_planner",
+                        lambda *a, **k: "1. Write a failing test.\n2. Implement it.")
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9007)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcnoscratch", "S1")
+
+    assert result["ok"] is True
+    task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    assert "1. Write a failing test." in task
+    assert ".agent_scratchpad.md" not in task
+
+
+def test_dispatch_story_decompose_scratchpad_defaults_on(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_DECOMPOSE_SCRATCHPAD unset must default to "on" - the
+    scratchpad instruction ships by default whenever decompose is enabled."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    _write_manifest(plan_dir, "dcscratchdefault", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p, "_run_planner", lambda *a, **k: "1. Step one.")
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9008)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcscratchdefault", "S1")
+
+    assert result["ok"] is True
+    assert ".agent_scratchpad.md" in popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+
+
+def test_dispatch_story_decompose_skips_for_claude_backend(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The checklist crutch exists for the weak local executor only - a
+    Claude dispatch must never trigger planning even with decompose enabled."""
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    _write_manifest(plan_dir, "dcclaude", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("planner must not run for a Claude dispatch")
+
+    monkeypatch.setattr(p, "_run_planner", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9003))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcclaude", "S1")
+
+    assert result["ok"] is True
+    assert not (worktree_root / "S1" / ".agent_plan.md").exists()
+
+
+def test_dispatch_story_decompose_fails_open_when_planner_returns_none(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A planner that fails (returns None) must not block or alter dispatch -
+    the story proceeds exactly like PIPELINE_DECOMPOSE=off."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    _write_manifest(plan_dir, "dcnone", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    monkeypatch.setattr(p, "_run_planner", lambda *a, **k: None)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9004)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcnone", "S1")
+
+    assert result["ok"] is True
+    assert not (worktree_root / "S1" / ".agent_plan.md").exists()
+    assert ".agent_scratchpad.md" not in popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+
+
+def test_dispatch_story_decompose_skips_replanning_on_resume_but_keeps_referencing_plan(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A resumed (interrupted) local story whose worktree already carries a
+    plan from its first dispatch must NOT call the planner again (spending a
+    second LLM call) but the rebuilt resume prompt must still reference the
+    existing checklist, so the executor doesn't lose the guidance on resume."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / ".agent_plan.md").write_text("1. Existing checklist step.")
+    _write_manifest(plan_dir, "dcresume", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "interrupted", "worktree": str(worktree_path),
+               "last_commit": "sha-1"},
+    })
+    (plan_dir / "dcresume.S1.journal.json").write_text(json.dumps([
+        {"step": "step-1", "summary": "Wrote the parser",
+         "next_hint": "add validation", "commit": "sha-1", "ts": "x"},
+    ]))
+
+    def _boom(*a, **k):
+        raise AssertionError("planner must not re-run on a resumed dispatch")
+
+    monkeypatch.setattr(p, "_run_planner", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9005)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("dcresume", "S1")
+
+    assert result["ok"] is True
+    assert result["resumed"] is True
+    # Plan file untouched - not overwritten by a (forbidden) re-plan call.
+    assert (worktree_path / ".agent_plan.md").read_text() == "1. Existing checklist step."
+    assert "1. Existing checklist step." in popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+
+
+def test_dispatch_story_excludes_decompose_artifacts_from_worktree_tracking(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    """Mirrors test_dispatch_story_excludes_review_and_agent_log_from_worktree_tracking
+    (Mode 17) for the two new guided-decomposition artifacts: an untracked
+    .agent_plan.md/.agent_scratchpad.md that later gets swept into a rework
+    WIP-commit's `git add -A` would dirty the tree ahead of the pre-merge
+    rebase the same way review.log did."""
+    real_repo = tmp_path / "real-repo"
+    real_repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=real_repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=real_repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=real_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"],
+                    cwd=real_repo, check=True)
+    bare_origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "master", str(bare_origin)], check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(bare_origin)], cwd=real_repo, check=True)
+    subprocess.run(["git", "push", "-q", "-u", "origin", "master"], cwd=real_repo, check=True)
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    _write_manifest(plan_dir, "dcexcl", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    manifest_path = plan_dir / "dcexcl.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["repo_root"] = str(real_repo)
+    manifest_path.write_text(json.dumps(manifest))
+
+    monkeypatch.setattr(p, "_run_planner",
+                        lambda *a, **k: "1. Checklist step.")
+    real_popen = backend.subprocess.Popen
+
+    def _discriminating_popen(cmd, **kw):
+        if cmd and str(cmd[0]).endswith("python3"):
+            return _FakeProc(9006)
+        return real_popen(cmd, **kw)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _discriminating_popen)
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "master")
+
+    result = p.dispatch_story("dcexcl", "S1")
+    assert result["ok"] is True
+
+    exclude_content = (real_repo / ".git" / "info" / "exclude").read_text()
+    assert ".agent_plan.md" in exclude_content
+    assert ".agent_scratchpad.md" in exclude_content
+
+    worktree_path = worktree_root / "S1"
+    assert (worktree_path / ".agent_plan.md").exists()
+    (worktree_path / ".agent_scratchpad.md").write_text("step 1 done\n")
+    subprocess.run(["git", "add", "-A"], cwd=worktree_path, check=True)
+    staged = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                             cwd=worktree_path, capture_output=True, text=True, check=True)
+    assert ".agent_plan.md" not in staged.stdout
+    assert ".agent_scratchpad.md" not in staged.stdout

@@ -728,6 +728,30 @@ main {
   opacity: 0.85;
 }
 
+/* === Story Checklist section (per-story progress) ========================
+   The tech-lead's ordered checklist (.agent_plan.md) and the executor's
+   running scratchpad (.agent_scratchpad.md), rendered read-only. These only
+   exist for stories run under PIPELINE_DECOMPOSE. Both are agent-written
+   text shown in scrollable monospace blocks (reusing pre.mono's wrapping) so
+   the exact formatting survives and a long plan/scratchpad never outgrows the
+   modal. */
+.modal-content .dsh-checklist-plan,
+.modal-content .dsh-checklist-scratch {
+  max-height: 240px;
+  overflow: auto;
+  margin: 4px 0 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+.modal-content .modal-subsection {
+  margin: 12px 0 0 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
 /* Usage-gate health banner */
 .usage-banner {
   padding: 8px 16px;

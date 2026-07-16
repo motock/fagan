@@ -1204,3 +1204,32 @@ overwrite succeeds, and an unseen sibling file stays protected.
 **Not yet validated live** against a fresh interval_merge resume run — the
 unit + end-to-end replay cover the mechanism, but a real dispatched resume is
 the remaining confirmation.
+
+### Live re-run after the fix (interval_merge t8, 2026-07-16)
+
+Re-ran interval_merge under identical conditions to t7 (steering + whole-file
++ worked examples, temp 1.0, MLX 14B, Sonnet planner+reviewer, rework cap 3;
+`PIPELINE_DECOMPOSE=cloud PIPELINE_DECOMPOSE_CLOUD_MODEL=sonnet
+PIPELINE_BACKEND_REVIEW=claude PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE=3
+PIPELINE_LOCAL_TEMPERATURE=1.0`), trial t8, after the informed-overwrite fix
+above landed.
+
+| task | final_status | merged | review | groundtruth | elapsed |
+|---|---|---|---|---|---|
+| interval_merge t7 (pre-fix) | done | true | APPROVE | passed | 2309.8s |
+| interval_merge t8 (post-fix) | done | true | APPROVE | passed | **222.0s** |
+
+**~10.4x speedup**, landing in line with the fast lru_cache/cron_field
+baselines (~235s). 14 ticks, 0 rework attempts, 0 dispatch attempts — a clean
+first-try run, no step-cap resume needed to reach it. `groundtruth_ran: true`,
+`groundtruth_passed: true`, `impl_changed: true`, `test_changed: true`
+(correct code, proper TDD).
+
+**Honest caveat:** this run did not hit a step-cap resume, so it doesn't
+*directly* observe the `view_file` -> `create_file` informed-overwrite path
+firing live — it demonstrates the system is fast and correct post-fix, not
+that this specific run exercised the fixed code path. The resume-funnel
+mechanism itself is directly exercised by the unit tests and the end-to-end
+replay in the section above. A run that deliberately forces a step-cap
+resume (e.g. a low step budget) would be needed to observe the fix's exact
+mechanism fire in a live dispatch, and remains undone.

@@ -980,6 +980,36 @@ _PLANNER_SYSTEM = (
     "then the numbered steps - no other preamble, no closing remarks."
 )
 
+# Optional clause spliced into _PLANNER_SYSTEM when the H3 scratchpad is on.
+# Rationale (GUIDED_DECOMPOSITION_PLAN.md, 2026-07-16): a trailing "also keep
+# a scratchpad" aside appended after the checklist was consumed in only 2 of
+# 22 guided runs (9%) - the executor follows the numbered checklist and
+# ignores anything outside it. Making the planner fold the scratchpad update
+# INTO each step (a first-class item with its own action) is the fix, so the
+# executor treats it as part of the work rather than an afterthought. Kept
+# separate from _PLANNER_SYSTEM (not concatenated into the constant) so the
+# ablation "off" arm and the existing by-reference tests still see the base
+# prompt unchanged.
+_PLANNER_SCRATCHPAD_CLAUSE = (
+    " SCRATCHPAD (state memory): the junior engineer keeps a running note "
+    "file .agent_scratchpad.md across steps. Fold this into the checklist as "
+    "explicit actions, not a side remark: make the very first numbered step "
+    "create .agent_scratchpad.md (via create_file) listing the planned steps, "
+    "and end each subsequent numbered step with '- then update "
+    ".agent_scratchpad.md: mark this step done and note the next step (rewrite "
+    "the whole file via create_file).' Treat updating the scratchpad as part "
+    "of a step's done-criterion, so it is never skipped."
+)
+
+
+def _planner_system(*, include_scratchpad: bool = False) -> str:
+    """The planner's system prompt, optionally augmented with the scratchpad
+    clause. Base prompt (_PLANNER_SYSTEM) is returned unchanged when the
+    scratchpad is off, preserving the H3 ablation and the by-reference tests."""
+    if not include_scratchpad:
+        return _PLANNER_SYSTEM
+    return _PLANNER_SYSTEM + _PLANNER_SCRATCHPAD_CLAUSE
+
 
 def _resolve_planner_backend(
     mode: str, dispatch_backend: str, local_model: str,
@@ -997,6 +1027,7 @@ def _resolve_planner_backend(
 
 def _run_planner(
     agent_instructions: str, *, mode: str, dispatch_backend: str, local_model: str,
+    include_scratchpad: bool = False,
 ) -> str | None:
     """Call a bounded, single-turn LLM to produce an ordered sub-step
     checklist for agent_instructions.
@@ -1022,7 +1053,9 @@ def _run_planner(
     backend_name, model = _resolve_planner_backend(mode, dispatch_backend, local_model)
     try:
         text = backend.get_backend("planner", name=backend_name).complete(
-            agent_instructions, system=_PLANNER_SYSTEM, model=model,
+            agent_instructions,
+            system=_planner_system(include_scratchpad=include_scratchpad),
+            model=model,
         )
     except Exception:
         # Broad and intentional: this call must never be a gate. Mirrors
@@ -2801,6 +2834,15 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # corrupts dispatch - the story simply proceeds with no checklist,
         # exactly like PIPELINE_DECOMPOSE=off.
         decompose_mode = os.environ.get("PIPELINE_DECOMPOSE", "off").strip().lower()
+        # H3 ablation (GUIDED_DECOMPOSITION_PLAN.md §4.1's G-cloud-noscratch
+        # condition): default "on" ships the persistent scratchpad; "off"
+        # tests whether the checklist alone accounts for the benefit,
+        # independent of cross-step memory. Read once here because it now
+        # feeds BOTH the planner call (so the scratchpad becomes a first-class
+        # generated step) and the trailing-instruction backstop below.
+        scratchpad_on = (
+            os.environ.get("PIPELINE_DECOMPOSE_SCRATCHPAD", "on").strip().lower() != "off"
+        )
         plan_path = worktree_path / ".agent_plan.md"
         if (
             decompose_mode in ("cloud", "local")
@@ -2811,6 +2853,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             plan_text = _run_planner(
                 story.get("agent_instructions", ""), mode=decompose_mode,
                 dispatch_backend=dispatch_backend, local_model=spec["model"],
+                include_scratchpad=scratchpad_on,
             )
             if plan_text:
                 plan_path.write_text(plan_text)
@@ -2820,11 +2863,12 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # first dispatch, without spending a second planner call for it.
         if plan_path.exists():
             scratchpad_instruction = ""
-            # H3 ablation (GUIDED_DECOMPOSITION_PLAN.md §4.1's G-cloud-
-            # noscratch condition): default "on" ships the persistent
-            # scratchpad; "off" tests whether the checklist alone accounts
-            # for the benefit, independent of cross-step memory.
-            if os.environ.get("PIPELINE_DECOMPOSE_SCRATCHPAD", "on").strip().lower() != "off":
+            # Backstop to the planner-woven scratchpad steps above: even with
+            # the clause folded into the checklist, keep the explicit trailing
+            # reminder so a resumed dispatch (whose stored .agent_plan.md may
+            # predate the clause) and any run whose planner under-emitted it
+            # still get told to maintain the scratchpad.
+            if scratchpad_on:
                 scratchpad_instruction = (
                     " After finishing each step, keep .agent_scratchpad.md "
                     "up to date with a short running summary of what you've "

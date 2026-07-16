@@ -1301,3 +1301,172 @@ overwrite mechanism is now confirmed by: (1) unit tests, (2) an offline
 end-to-end replay of the interval_merge resume sequence, and (3) this live
 dispatched run, where the exact `view_file` -> `create_file` sequence was
 observed firing in the real transcript on a genuine fresh-process resume.
+
+### H3 scratchpad ablation — first attempt, INCONCLUSIVE (lru_cache t7/t8, 2026-07-16)
+
+Ran the first matched H3 pair on lru_cache (the task with the best-
+characterised failure history), identical config to the t6/t8/t9 runs
+otherwise (steering + whole-file + worked examples, temp 1.0, MLX 14B,
+Sonnet planner+reviewer, rework cap 3), varying only
+`PIPELINE_DECOMPOSE_SCRATCHPAD`:
+
+| trial | scratchpad | final_status | merged | groundtruth | elapsed |
+|---|---|---|---|---|---|
+| lru_cache t7 | **off** | failed (parked) | no | not run | 178.4s |
+| lru_cache t8 | **on** | failed (parked) | no | not run | 245.7s |
+
+**Both failed — but the comparison does NOT isolate H3, because the
+scratchpad was never consumed.** Verified from the t8 transcript:
+
+- The scratchpad instruction WAS delivered (msg[1] ends verbatim with "After
+  finishing each step, keep .agent_scratchpad.md up to date with a short
+  running summary..."), and t7's prompt correctly omitted it (ablation
+  plumbing works).
+- But the t8 model never once called `create_file`/`str_replace` on
+  `.agent_scratchpad.md` — zero scratchpad tool activity across the whole
+  run, and no `.agent_scratchpad.md` file exists in the worktree afterward.
+  The "memory" lever was available but never pulled, so t8's behaviour can't
+  be attributed to the scratchpad's presence. Single pair, inconclusive on
+  H3 by construction.
+
+**What the pair DID surface (both independent of the scratchpad):**
+
+1. **A confirmed, reproducible model defect.** This 14B writes `@property`
+   immediately followed by a wrongly-indented `def size(self):` (dedented to
+   column 0), producing `SyntaxError: unexpected unindent`. It then
+   reproduces that exact broken content near-verbatim across retries — the
+   same determinism-lock mechanism first seen at t3, now observed a 2nd and
+   3rd time and specifically localised to this `@property` + `size` pattern.
+   Both t7 and t8 hit it; neither escaped it before parking.
+2. **A new steering violation (t8 only).** Under repetition-nudge pressure,
+   t8 abandoned the impl file and `str_replace`'d the TEST file
+   (`test_lru_cache.py` — changing `from lru_cache import LRUCache` to a
+   broken relative `from .lru_cache import LRUCache`), which the steering
+   directive explicitly forbids ("NEVER edit the test files"). That
+   introduced an ImportError it then looped on until parking. t7 did not do
+   this. Not attributable to the scratchpad, but a real directive-adherence
+   gap under pressure worth its own follow-up.
+
+**Open question this raises (to investigate next):** why did the executor
+ignore an explicit, delivered instruction to maintain `.agent_scratchpad.md`?
+Candidate causes: the instruction sits at the very end of a 7.7k-char prompt
+(recency/primacy burial); it's phrased as an aside after "Work through these
+steps in order" rather than as a numbered step with its own done-criterion;
+the model may deprioritise a non-functional bookkeeping action when it's
+already struggling with the functional task; or the tool-selection pressure
+(every turn spent on scratchpad is a turn not spent on the failing tests).
+Needs a deeper look at prompt structure + a re-run with the scratchpad step
+promoted to a first-class checklist item before H3 can be fairly tested.
+
+### Why the scratchpad is (almost) never consumed — root cause (2026-07-16)
+
+Dug into the t8 "instruction delivered but ignored" finding by measuring
+scratchpad consumption across the whole `_runs` corpus, not just t8.
+
+**Corpus measurement:** of 22 guided runs (those with a generated
+`.agent_plan.md`) across the mlx tree, only **2 ever touched
+`.agent_scratchpad.md` — a 9% consumption rate.** And those 2 were the two
+LONGEST runs in the entire tree:
+
+| run | steps | scratchpad writes | status | elapsed |
+|---|---|---|---|---|
+| ratelimiter_bugfix mlx t0 | 407 | 7 | interrupted | 3602s |
+| token_bucket mlx t0 | 90 | 4 | failed | 1526s |
+| (every other guided run, 8-112 steps) | — | 0 | failed | — |
+
+**Three structural causes, all evidence-backed:**
+
+1. **The scratchpad is orphaned from the checklist the model actually
+   follows (primary cause).** The executor works the *planner-generated*
+   checklist in `.agent_plan.md` step by step. That checklist NEVER mentions
+   the scratchpad — `_PLANNER_SYSTEM` doesn't tell the planner to include it,
+   and t8's actual `.agent_plan.md` has zero references. The scratchpad ask
+   lives in a separate hardcoded sentence (`pipeline_mcp_server.py` ~L2828)
+   appended AFTER the checklist, tacked onto "Work through these steps in
+   order." So the model sees N numbered steps each with a done-criterion,
+   plus one trailing bookkeeping aside that belongs to no step and has no
+   done-criterion. Under any pressure the numbered steps win.
+2. **It's a non-functional action competing for turns against the functional
+   task.** The only runs that used it were long, sprawling ones where
+   tracking state paid off. In short parked runs (t7/t8, ~10 steps) the model
+   was fighting a syntax deadlock from step 2 on and never spent a turn on
+   optional bookkeeping.
+3. **Not weak-model-specific — it's prompt structure.** 9% consumption
+   regardless of run length points at instruction design, not capability.
+
+**Implication for H3:** even the 2 runs that DID write the scratchpad both
+still FAILED. Across the entire corpus there is not one example of the
+scratchpad being written AND the run succeeding — so H3 (does persistent
+cross-step memory help?) is currently untestable, not because a pair was
+unlucky, but because the affordance is almost never exercised. You can't
+measure the benefit of a lever nobody pulls.
+
+**Fix to make H3 testable:** promote the scratchpad from a trailing aside to
+a first-class checklist step — have the planner weave "update
+`.agent_scratchpad.md` with a one-line status after each step" into the
+generated checklist as an explicit instruction the executor treats as part
+of the work, rather than bolting it on after the fact.
+
+**Implemented (2026-07-16).** Added `_PLANNER_SCRATCHPAD_CLAUSE` +
+`_planner_system(include_scratchpad=...)` in `pipeline_mcp_server.py`, and
+threaded an `include_scratchpad` flag through `_run_planner`. When the H3
+scratchpad is on, the clause is appended to the planner's system prompt,
+directing it to (a) make the FIRST numbered step create
+`.agent_scratchpad.md`, and (b) end each subsequent step with "then update
+.agent_scratchpad.md ... (rewrite the whole file via create_file)" as part of
+that step's done-criterion — so the scratchpad lives INSIDE the checklist the
+executor actually follows, not in a trailing sentence it skips. Gated on the
+same `PIPELINE_DECOMPOSE_SCRATCHPAD` env var, so the ablation "off" arm sends
+the byte-identical base `_PLANNER_SYSTEM` (verified). The old trailing-
+sentence instruction is kept as a backstop for resumed dispatches whose stored
+`.agent_plan.md` predates the clause. TDD: 3 new tests (planner-augments-
+system, omits-by-default, dispatch-passes-flag) + a mechanical `**kwargs`
+signature fix to one existing planner mock; full server suite 531 pass, ruff
+clean. **Not yet validated live** — a fresh scratchpad-on run must confirm the
+generated checklist now contains the scratchpad steps AND that the executor
+follows them (that live re-run is the next step before H3 can be scored).
+
+### Live validation of the first-class-step fix (lru_cache t10, 2026-07-16) —
+mechanism CONFIRMED, task still fails on a pre-existing model defect
+
+Re-ran lru_cache with scratchpad on, on the `feat/h3-scratchpad-first-class-
+step` branch (this fix's own code), identical conditions to t7/t8 otherwise.
+
+**The fix works exactly as designed.** The generated `.agent_plan.md`
+contained the scratchpad steps verbatim: step 1 was "Create
+`.agent_scratchpad.md` via create_file listing the planned steps ... Done:
+file exists with all 6 steps listed," and steps 3/5 each ended with "— then
+update `.agent_scratchpad.md`: mark step N done, note step N+1 is next." The
+executor's very FIRST tool call (step 0) was `create_file:
+.agent_scratchpad.md`, and it went on to update it twice more (steps 2, 4)
+tracking real progress through the test-writing and red-confirmation steps —
+3 genuine scratchpad touches, up from 0 in both t7 and t8. Consumption rate
+for this run: 100%, not 9%.
+
+**The task still failed** (`failed`, parked, 269.9s, `groundtruth_ran:
+false`) — but at the SAME juncture as t7 and t8, for the SAME reason,
+independent of the scratchpad: the model wrote `@property` immediately
+followed by a wrongly-indented `def size(self):` (dedented to column 0) in
+`lru_cache.py`, producing `SyntaxError: unexpected unindent`, then reproduced
+the identical broken content 3x (steps 5-7), tripping the repetition guard,
+then looped on `pytest` 3x after the nudge (steps 8-10) without ever calling
+`view_file` or attempting a corrected `create_file`, and parked. This is now
+the THIRD confirmed observation of this exact `@property`/`size` defect
+(t7, t8, t10) — a reproducible, scratchpad-independent weakness in this 14B
+model's handling of that specific decorator+property pattern.
+
+**Conclusion:** the scratchpad-delivery fix is validated and should ship as-
+is — it demonstrably gets the affordance used (0% -> 100% in this trial,
+consistent with the corpus-wide fix). But it cannot and does not fix a
+model-level syntax defect that occurs upstream of any scratchpad update (the
+model never got past generating valid Python for `lru_cache.py`, so there
+was nothing for cross-step memory to help retain). H3 itself (does the now-
+reliably-used scratchpad improve OUTCOMES, not just get consumed) remains
+**unanswered** — every trial in this task's history that could exercise it
+has been blocked by this unrelated defect. Testing H3 properly needs either
+(a) a task/prompt where the model doesn't hit this specific syntax trap, or
+(b) fixing the `@property`/`size` defect first (e.g. a worked example in the
+checklist showing the correct `@property` + `def size(self):` indentation,
+mirroring how the EDITING MECHANICS worked-example fixed the str_replace
+deadlock) so runs survive long enough to reach a scratchpad-relevant
+decision point.

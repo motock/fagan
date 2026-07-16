@@ -1233,3 +1233,56 @@ mechanism itself is directly exercised by the unit tests and the end-to-end
 replay in the section above. A run that deliberately forces a step-cap
 resume (e.g. a low step budget) would be needed to observe the fix's exact
 mechanism fire in a live dispatch, and remains undone.
+
+### Forced-interruption live verification (interval_merge t9, 2026-07-16)
+
+The t8 caveat above ("remains undone") was closed by deliberately forcing an
+interruption mid-run and observing the resume live, rather than waiting for
+one to occur naturally.
+
+**Setup:** relaunched interval_merge with `PIPELINE_LOCAL_MAX_STEPS=6` (t8
+had landed `intervals.py` via `create_file` at step 4, so a tight cap should
+interrupt shortly after the impl file exists on disk but before the task
+finishes). Same conditions otherwise (steering + whole-file + worked
+examples, temp 1.0, MLX 14B, Sonnet planner+reviewer, rework cap 3).
+
+**What actually triggered the interruption:** not the step cap directly —
+three identical `pytest -q test_intervals.py` bash calls tripped the
+per-target repetition guard first (bash is not excluded from that guard,
+unlike `str_replace`), which nudged once, then parked on the next repeat.
+The park led to a reviewer REQUEST_CHANGES and a fix-checklist redispatch in
+a **fresh process** with `test_intervals.py`/`intervals.py` already on disk —
+the identical precondition a step-cap resume produces (`_CREATED_THIS_RUN`
+empty, files pre-existing). A different trigger than intended, but the same
+code path under test, so it's a valid observation of the mechanism.
+
+**Transcript evidence the fix fired** (`.agent_transcript.json`, msgs 17-21):
+
+1. msg[17]: rework redispatch delivers the reviewer's fix-checklist in the
+   fresh process.
+2. msg[18]: `view_file: test_intervals.py` — the model reads the file
+   before touching it (not a blind overwrite attempt).
+3. msg[19]: tool result returns the actual file contents.
+4. msg[20]: `create_file` with the corrected full contents — an informed
+   whole-file rewrite of a pre-existing file.
+5. msg[21]: tool result is `created test_intervals.py` — **accepted**. Pre-
+   fix, this exact call would have returned `"ERROR: test_intervals.py
+   already exists and is non-empty. Use str_replace to edit it."` and
+   funnelled the model into the old str_replace deadlock.
+
+The very next agent.log line is `ORACLE GREEN — acceptance tests pass;
+committed & done`.
+
+**Outcome:** `final_status: done`, `merged: true`, `review_verdict: APPROVE`,
+`groundtruth_passed: true`, `groundtruth_ran: true`, `impl_changed: true`,
+`test_changed: true`, `elapsed_s: 504.5`, `ticks: 21`. Slower than t8's clean
+first-try 222.0s (this run did genuine rework: nudge, park, redispatch,
+fix-checklist, informed overwrite) but still far under t7's pre-fix 2309.8s,
+and — unlike t7 — it never fell into a str_replace grind; the fix resolved
+the file in one `view_file` + one `create_file` cycle.
+
+**This closes the "not yet validated live" gap noted above.** The informed-
+overwrite mechanism is now confirmed by: (1) unit tests, (2) an offline
+end-to-end replay of the interval_merge resume sequence, and (3) this live
+dispatched run, where the exact `view_file` -> `create_file` sequence was
+observed firing in the real transcript on a genuine fresh-process resume.

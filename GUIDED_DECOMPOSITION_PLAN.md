@@ -1301,3 +1301,59 @@ overwrite mechanism is now confirmed by: (1) unit tests, (2) an offline
 end-to-end replay of the interval_merge resume sequence, and (3) this live
 dispatched run, where the exact `view_file` -> `create_file` sequence was
 observed firing in the real transcript on a genuine fresh-process resume.
+
+### H3 scratchpad ablation — first attempt, INCONCLUSIVE (lru_cache t7/t8, 2026-07-16)
+
+Ran the first matched H3 pair on lru_cache (the task with the best-
+characterised failure history), identical config to the t6/t8/t9 runs
+otherwise (steering + whole-file + worked examples, temp 1.0, MLX 14B,
+Sonnet planner+reviewer, rework cap 3), varying only
+`PIPELINE_DECOMPOSE_SCRATCHPAD`:
+
+| trial | scratchpad | final_status | merged | groundtruth | elapsed |
+|---|---|---|---|---|---|
+| lru_cache t7 | **off** | failed (parked) | no | not run | 178.4s |
+| lru_cache t8 | **on** | failed (parked) | no | not run | 245.7s |
+
+**Both failed — but the comparison does NOT isolate H3, because the
+scratchpad was never consumed.** Verified from the t8 transcript:
+
+- The scratchpad instruction WAS delivered (msg[1] ends verbatim with "After
+  finishing each step, keep .agent_scratchpad.md up to date with a short
+  running summary..."), and t7's prompt correctly omitted it (ablation
+  plumbing works).
+- But the t8 model never once called `create_file`/`str_replace` on
+  `.agent_scratchpad.md` — zero scratchpad tool activity across the whole
+  run, and no `.agent_scratchpad.md` file exists in the worktree afterward.
+  The "memory" lever was available but never pulled, so t8's behaviour can't
+  be attributed to the scratchpad's presence. Single pair, inconclusive on
+  H3 by construction.
+
+**What the pair DID surface (both independent of the scratchpad):**
+
+1. **A confirmed, reproducible model defect.** This 14B writes `@property`
+   immediately followed by a wrongly-indented `def size(self):` (dedented to
+   column 0), producing `SyntaxError: unexpected unindent`. It then
+   reproduces that exact broken content near-verbatim across retries — the
+   same determinism-lock mechanism first seen at t3, now observed a 2nd and
+   3rd time and specifically localised to this `@property` + `size` pattern.
+   Both t7 and t8 hit it; neither escaped it before parking.
+2. **A new steering violation (t8 only).** Under repetition-nudge pressure,
+   t8 abandoned the impl file and `str_replace`'d the TEST file
+   (`test_lru_cache.py` — changing `from lru_cache import LRUCache` to a
+   broken relative `from .lru_cache import LRUCache`), which the steering
+   directive explicitly forbids ("NEVER edit the test files"). That
+   introduced an ImportError it then looped on until parking. t7 did not do
+   this. Not attributable to the scratchpad, but a real directive-adherence
+   gap under pressure worth its own follow-up.
+
+**Open question this raises (to investigate next):** why did the executor
+ignore an explicit, delivered instruction to maintain `.agent_scratchpad.md`?
+Candidate causes: the instruction sits at the very end of a 7.7k-char prompt
+(recency/primacy burial); it's phrased as an aside after "Work through these
+steps in order" rather than as a numbered step with its own done-criterion;
+the model may deprioritise a non-functional bookkeeping action when it's
+already struggling with the functional task; or the tool-selection pressure
+(every turn spent on scratchpad is a turn not spent on the failing tests).
+Needs a deeper look at prompt structure + a re-run with the scratchpad step
+promoted to a first-class checklist item before H3 can be fairly tested.

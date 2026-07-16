@@ -819,6 +819,40 @@ function renderJournal(data) {
   `;
 }
 
+// Render the per-story Checklist section (DASHBOARD_STORY_PROGRESS_PLAN.md
+// Tier 0): the tech-lead's ordered checklist (.agent_plan.md) and the
+// executor's running scratchpad (.agent_scratchpad.md), both fetched from the
+// story's worktree. `data` matches the /checklist endpoint response:
+//   { plan: {available, text}, scratchpad: {available, text} }
+//
+// These artifacts only exist for stories run under PIPELINE_DECOMPOSE; every
+// other story (the common case) gets the "No checklist" empty state. The
+// agent writes both files, so their text is HTML-escaped (never trusted) —
+// mirroring renderJournal's escaping contract.
+function renderChecklist(data) {
+  const empty = `
+    <h3 class="modal-section">Checklist</h3>
+    <p class="modal-empty" data-checklist-empty>No checklist (story not run with guided decomposition).</p>
+  `;
+  if (!data) return empty;
+  const plan = (data.plan && typeof data.plan === "object") ? data.plan : {};
+  const scratch = (data.scratchpad && typeof data.scratchpad === "object") ? data.scratchpad : {};
+  if (!plan.available && !scratch.available) return empty;
+  const parts = [`<h3 class="modal-section">Checklist</h3>`];
+  if (plan.available) {
+    parts.push(
+      `<pre class="dsh-checklist-plan mono" data-checklist-plan>${escapeHtml(plan.text || "")}</pre>`
+    );
+  }
+  if (scratch.available) {
+    parts.push(`<h4 class="modal-subsection">Progress notes</h4>`);
+    parts.push(
+      `<pre class="dsh-checklist-scratch mono" data-checklist-scratch>${escapeHtml(scratch.text || "")}</pre>`
+    );
+  }
+  return parts.join("");
+}
+
 // Fetch the journal for the currently-open story and inject the rendered
 // HTML into the modal body. Guards against races with modal close /
 // re-open by checking `openStoryRef` before mutating DOM. Failures (network
@@ -851,6 +885,30 @@ async function loadStoryJournal(plan, key, container) {
         <p class="modal-empty">No journal yet.</p>
       `;
     }
+  }
+}
+
+// Fetch the checklist + scratchpad for the currently-open story and inject
+// the rendered HTML into the modal's checklist slot. Same race-guard
+// contract as loadStoryJournal (openStoryRef): a slow fetch that resolves
+// after the user opened a different story is dropped, never overwriting the
+// new view. Failures (network, 500) fall back to the empty state, never
+// throw — the checklist is informational, like the journal.
+async function loadStoryChecklist(plan, key, container) {
+  if (!plan || !key || !container) return;
+  openStoryRef.plan = plan;
+  openStoryRef.key = key;
+  try {
+    const data = await fetchJson(
+      `/api/plans/${encodeURIComponent(plan)}/stories/${encodeURIComponent(key)}/checklist`
+    );
+    if (openStoryRef.plan !== plan || openStoryRef.key !== key) return;
+    const slot = container.querySelector("[data-checklist-slot]");
+    if (slot) slot.innerHTML = renderChecklist(data);
+  } catch {
+    if (openStoryRef.plan !== plan || openStoryRef.key !== key) return;
+    const slot = container.querySelector("[data-checklist-slot]");
+    if (slot) slot.innerHTML = renderChecklist(null);
   }
 }
 
@@ -997,6 +1055,10 @@ function showStoryModal(planName, story, key) {
   body.innerHTML = `
     <h2 class="modal-title">${escapeHtml(key)}</h2>
     ${sections || "<p class=\"modal-empty\">No fields to display.</p>"}
+    <div data-checklist-slot>
+      <h3 class="modal-section">Checklist</h3>
+      <p class="modal-empty" data-checklist-empty>No checklist yet.</p>
+    </div>
     <div data-journal-slot>
       <h3 class="modal-section">Journal</h3>
       <p class="modal-empty" data-journal-empty>No journal yet.</p>
@@ -1019,6 +1081,11 @@ function showStoryModal(planName, story, key) {
   // state on error / unavailable). The race guard in loadStoryJournal
   // ensures a slow prior fetch can't clobber a newly-opened story.
   if (planName) loadStoryJournal(planName, key, body);
+
+  // Same fire-and-forget pattern for the worktree checklist + scratchpad
+  // (Tier 0 progress view). Most stories have no checklist (not run under
+  // PIPELINE_DECOMPOSE), so the slot usually stays at the empty state.
+  if (planName) loadStoryChecklist(planName, key, body);
 
   // Kick off the tail fetch now that the modal is shown. The fetch
   // resolves into the placeholder by class — if the user opens a different
@@ -1505,5 +1572,6 @@ if (typeof module !== "undefined" && module.exports) {
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
     showStoryModal, handleCopyClick,
     renderOverview, selectOverview, refresh, state,
+    renderChecklist,
   };
 }

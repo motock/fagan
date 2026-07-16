@@ -614,6 +614,71 @@ def _python_syntax_error(path_str: str, content: str) -> str | None:
     return None
 
 
+def _try_repair_indentation(content: str) -> tuple[str, str] | None:
+    """Attempt a deterministic, semantics-preserving indentation repair on
+    `content` when compile() rejects it with an IndentationError (unexpected
+    indent / unexpected unindent / unindent does not match any outer level).
+
+    The repair: re-indent the offending line (e.lineno) to the leading
+    whitespace of the nearest preceding non-blank, non-comment line, then
+    re-compile. If the repaired content compiles clean, return
+    (repaired_content, note); otherwise return None (fall through to the
+    normal rejection path).
+
+    Rationale (GUIDED_DECOMPOSITION_PLAN.md, 2026-07-16, lru_cache t7/t8/
+    t10/t11): the 14B has a reproducible decoding defect that drops the
+    leading indentation on the line immediately after a decorator - it
+    writes `    @property` then `def size(self):` at column 0, a SyntaxError
+    (unexpected unindent) it resubmits byte-identical until it parks. A
+    prompt-level worked example did NOT prevent it (t11: the defect is
+    decoding-level, not understanding-level). Re-indenting the dedented
+    line to match the preceding decorator is exactly what the model
+    intended and is whitespace-only, so the groundtruth logic gate still
+    catches any real error; this converts a syntax death-loop into
+    executable code the test gate can evaluate.
+
+    Scoped to IndentationError only: other SyntaxErrors (return/yield
+    outside a function, dangling triple-quote, stray diff '+') are real
+    logic/format errors the model must fix, not indentation, and are left
+    for the normal rejection path."""
+    try:
+        compile(content, "<repair>", "exec")
+        return None  # already valid - nothing to repair
+    except IndentationError as e:
+        lineno = e.lineno or 0
+    except SyntaxError:
+        return None  # non-indentation syntax error - do not touch
+    lines = content.splitlines(keepends=True)
+    if not (1 <= lineno <= len(lines)):
+        return None
+    # Find the nearest preceding non-blank, non-comment line to take the
+    # target indentation from.
+    target = None
+    for i in range(lineno - 1, 0, -1):
+        prev = lines[i - 1]
+        stripped = prev.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        target = len(prev) - len(prev.lstrip(" \t"))
+        break
+    if target is None:
+        return None  # no preceding line to reference (e.g. top-level indent)
+    cur = lines[lineno - 1]
+    cur_stripped = cur.lstrip(" \t")
+    cur_indent = len(cur) - len(cur_stripped)
+    if cur_indent == target:
+        return None  # already at the target level - re-indent won't help
+    lines[lineno - 1] = (" " * target) + cur_stripped
+    repaired = "".join(lines)
+    try:
+        compile(repaired, "<repair>", "exec")
+    except SyntaxError:
+        return None  # re-indent didn't fix it - leave for normal rejection
+    note = (f"auto-reindented line {lineno} from {cur_indent} to {target} "
+            f"spaces to match the preceding line")
+    return repaired, note
+
+
 def _record_syntax_rejection(path_str: str, err: str) -> str:
     """Bump the consecutive-rejection counter for `path_str` and, from the
     second consecutive rejection onward, append a nudge to regenerate the
@@ -645,13 +710,17 @@ def run_tool(fn, args) -> str:
             )
         content = args.get("content", "")
         err = _python_syntax_error(args["path"], content)
+        note = None
         if err:
-            return _record_syntax_rejection(args["path"], err)
+            repair = _try_repair_indentation(content)
+            if repair is None:
+                return _record_syntax_rejection(args["path"], err)
+            content, note = repair
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         _CREATED_THIS_RUN.add(args["path"])
-        return f"created {args['path']}"
+        return f"created {args['path']}" + (f" ({note})" if note else "")
     if fn == "str_replace":
         path = CWD / args["path"]
         if not path.exists():
@@ -664,11 +733,15 @@ def run_tool(fn, args) -> str:
             return f"ERROR: old_str occurs {n} times in {args['path']}; include more context to make it unique."
         new_text = text.replace(args["old_str"], args["new_str"])
         err = _python_syntax_error(args["path"], new_text)
+        note = None
         if err:
-            return _record_syntax_rejection(args["path"], err)
+            repair = _try_repair_indentation(new_text)
+            if repair is None:
+                return _record_syntax_rejection(args["path"], err)
+            new_text, note = repair
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
-        return f"edited {args['path']}"
+        return f"edited {args['path']}" + (f" ({note})" if note else "")
     if fn == "view_file":
         path = CWD / args["path"]
         if not path.exists():

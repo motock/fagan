@@ -1470,3 +1470,152 @@ checklist showing the correct `@property` + `def size(self):` indentation,
 mirroring how the EDITING MECHANICS worked-example fixed the str_replace
 deadlock) so runs survive long enough to reach a scratchpad-relevant
 decision point.
+
+### Worked-example fix FAILED live (lru_cache t11, 2026-07-16) — the defect is decoding-level, not prompt-level
+
+Tried option (b): added a DECORATOR INDENTATION clause to `_PLANNER_SYSTEM`
++ `_REWORK_PLANNER_SYSTEM` (mirroring the EDITING MECHANICS clause) directing
+the planner to weave a correctly-indented `@property` + `def size(self):`
+snippet into the checklist when the task uses a decorator. TDD: 1 new test
+asserting the clause carries `@property\n    def size` (never the broken
+column-0 `@property\ndef size`); 532 pass, ruff clean.
+
+**The prompt-level mechanism worked perfectly.** t11's generated
+`.agent_plan.md` contained a verbatim "DECORATOR INDENTATION (applies to
+step 3)" item with the correct 4-space-indented snippet and a recovery
+note ("the def must NOT dedent to column 0 ... if IndentationError ...
+rewrite with the def correctly indented — do not resubmit the same
+bytes"). The worked example reached the executor exactly as designed.
+
+**But the executor STILL emitted the broken bytes.** t11 `final_status:
+failed`, `lru_cache.py` never landed (syntax guard rejected it every
+time, 279.7s). The transcript shows the model's `create_file` content
+was:
+
+```
+    def put(self, key, value):
+        ...
+    @property
+def size(self):              # <-- column 0, SAME defect as t7/t8/t10
+        return len(self._data)
+```
+
+**Every other method in the file is correctly indented at 4 spaces.**
+Only the line immediately after `@property` is dedented to column 0. The
+defect is not that the model doesn't know the def should be indented —
+the prompt shows it the correct form — it's that the decoder, after
+emitting `@property\n`, drops the leading-whitespace tokens on the next
+line. This is the 4th confirmed observation (t7/t8/t10/t11) and the first
+under a prompt that explicitly hands the model the correct indentation.
+
+**Decisive implication: the str_replace precedent does NOT carry over.**
+The EDITING MECHANICS worked example fixed str_replace because "write the
+whole file, no stubs" is BEHAVIORAL guidance the model can follow at
+generation time. The decorator-indentation defect is a TOKENIZATION/
+DECODING artifact on a specific token boundary (`@property` + newline),
+which the model cannot control by "trying harder" — it reproduces the
+broken bytes even with the correct form in front of it, and regenerates
+the same defect after the "do not resubmit the same content" nudge. A
+worked example (prevention) and, by the same logic, a better syntax-guard
+error message (cure) are both expected to fail: the model is not
+misunderstanding, it is mechanically emitting column-0.
+
+**What would actually work (candidate cures, not yet tried):**
+- (c) Harness-side auto-repair: when `_python_syntax_error` catches
+  `unexpected unindent` on a line dedented below the preceding non-blank
+  line, deterministically re-indent that line to match and re-validate.
+  Semantics-preserving (whitespace only, to the established block level);
+  the groundtruth oracle still gates logic. Risk: silently mutates model
+  output, which the guard's docstring ("never a repaired version") and
+  CLAUDE.md's minimal-footprint principle caution against — needs an
+  explicit policy decision.
+- (d) Steer the planner to AVOID decorators: direct the executor to
+  implement read-only attributes like `size` as a plain instance
+  attribute kept in sync, not `@property`. Sidesteps the token boundary
+  entirely, but trades a clean idiom for mutation-prone manual sync a
+  weak model may get wrong on eviction (the acceptance test accesses
+  `c.size`, which a plain attribute satisfies).
+- (e) Accept this 14B cannot emit `@property` reliably and route
+  decorator-bearing tasks to a different model (gpt-oss:20b /
+  qwen3-coder:30b are validated alternatives per
+  project_provider_dispatch_s3 / project_mlx_24gb_footprint_ceiling).
+
+t11 code (the clause + test) is on branch
+`feat/decorator-indentation-worked-example`, unmerged — the fix is
+prompt-correct but ineffective, so it should not merge as-is. Pivoting to
+(c), (d), or (e) next; the originally-planned diagnostic syntax-guard
+hint (fix #2 in the "Both, sequenced" plan) is now downgraded to
+optional hardening, not a cure.
+
+### Harness auto-repair VALIDATED live (lru_cache t13, 2026-07-16) — the @property defect is cured; a separate prose-loop failure mode surfaced
+
+Chose option (c): added `_try_repair_indentation` to
+`scripts/local_agent.py` + the verbatim mirror `scripts/local_agent_oracle.py`.
+When `_python_syntax_error` catches an `IndentationError` (unexpected
+indent/unindent), the repair re-indents the offending line (e.lineno) to
+the leading whitespace of the nearest preceding non-blank, non-comment
+line, re-compiles, and — if clean — accepts the repaired content and
+returns `created <path> (auto-reindented line N from X to Y spaces to
+match the preceding line)` so the model is told, not silently mutated.
+Scoped to IndentationError only; other SyntaxErrors (return/yield outside
+a function, dangling triple-quote, stray diff '+') still reject. Wired
+into both `create_file` and `str_replace`. TDD: 6 new tests per file
+(repair-fixes-decorator-dedent, create_file-auto-repairs-and-writes,
+does-not-repair-non-indentation, returns-none-no-preceding-line,
+returns-none-valid-content, str_replace-auto-repairs); 1009 pass, ruff
+clean.
+
+**t12 was inconclusive** (lru_cache, same config as t11, on the auto-repair
+branch): the executor derailed BEFORE reaching `lru_cache.py` — at step 2
+it hit a pre-existing `test_lru_cache.py` (the "already exists" guard),
+ran `pytest` prematurely, then declared "Done: 7 of 7" in prose ~50 times
+without ever attempting `lru_cache.py`. The auto-repair never fired. This
+is a different failure mode than t11 (which DID reach `lru_cache.py`);
+the divergence is cloud-planner nondeterminism (different checklist wording
+across runs).
+
+**t13 VALIDATED the fix.** Same config, on the auto-repair branch. The
+executor reached `lru_cache.py` and emitted the SAME column-0
+`@property`/`def size` defect as t7/t8/t10/t11. The transcript shows
+`auto-reindented: 2` — the repair fired, re-indented the `def` to 4 spaces,
+and `lru_cache.py` LANDED (the file that never landed in any of t7/t8/
+t10/t11). The landed file has correct indentation:
+
+```python
+    @property
+    def size(self):
+        return len(self.od)
+```
+
+And the repaired file is not just syntactically valid but LOGICALLY
+CORRECT: run against the hidden acceptance oracle
+(`tasks/lru_cache/acceptance.py`), all 5 tests pass — basic get/put, LRU
+eviction, recency refresh, update-in-place, capacity validation. The
+repair was semantics-preserving (whitespace-only, to the established block
+level) and the groundtruth logic gate confirms it. **The @property/size
+defect — the sole blocker across four prior trials — is cured.**
+
+**But the t13 run still "failed"** (`final_status: failed`, not merged):
+after landing `lru_cache.py`, the executor entered a PROSE LOOP — it
+emitted "Which step to do next: Run the full suite `pytest ...`" as prose
+~50 times instead of calling the `bash`/`done` tool, and the harness
+looped its "Call a tool now (do not write prose)" nudge until the step
+cap parked it. The oracle never auto-committed (tests were never run
+through the harness). This is the SAME prose-loop failure mode first
+seen in t12, NOT the @property defect, NOT caused by the auto-repair,
+and NOT cured by it. It is a distinct executor-behavior defect (the
+model narrates the next action instead of emitting the tool call) worth
+its own follow-up — candidate names: "prose-narration loop" / "premature
+declarative done."
+
+**Conclusion:** the auto-repair fix does exactly what it was designed to
+do — it converts the @property decoding defect from a syntax death-loop
+into executable, correct code — and should ship. It does not (and was
+never meant to) fix the separate prose-narration loop that now becomes
+the next blocker on this task. Branch `fix/syntax-guard-auto-repair-
+indentation` (this fix + the t11/t12/t13 record) is ready for review/PR.
+The failed worked-example branch (`feat/decorator-indentation-worked-
+example`) stays unmerged; its prompt-correct-but-ineffective clause is
+superseded by the auto-repair. H3 (does the now-reliably-used scratchpad
+improve outcomes) remains open, still blocked — but now by the prose-
+narration loop rather than the @property defect.

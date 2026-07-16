@@ -95,6 +95,83 @@ def test_oracle_create_file_rejects_return_outside_function(tmp_path, monkeypatc
     assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
 
 
+def test_oracle_try_repair_indentation_fixes_decorator_dedent():
+    """Mirrors test_local_agent.test_try_repair_indentation_fixes_decorator_dedent
+    - the 14B's @property/column-0 decoding defect (lru_cache t7/t8/t10/t11)
+    is cured by a deterministic re-indent of the dedented line to match the
+    preceding decorator. Verbatim-mirror guard: both local_agent.py and
+    local_agent_oracle.py must carry the fix in lockstep."""
+    broken = (
+        "class C:\n"
+        "    def __init__(self):\n"
+        "        self._data = {}\n"
+        "    @property\n"
+        "def size(self):\n"
+        "        return len(self._data)\n"
+    )
+    repair = lao._try_repair_indentation(broken)
+    assert repair is not None
+    repaired, note = repair
+    assert "    @property\n    def size(self):\n" in repaired
+    assert "auto-reindented" in note
+    compile(repaired, "<test>", "exec")
+
+
+def test_oracle_create_file_auto_repairs_decorator_dedent_and_writes(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_create_file_auto_repairs_decorator_dedent_and_writes."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    broken = (
+        "class C:\n"
+        "    @property\n"
+        "def size(self):\n"
+        "        return 1\n"
+    )
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": broken})
+    assert result.startswith("created mod.py")
+    assert "auto-reindented" in result
+    on_disk = (tmp_path / "mod.py").read_text()
+    assert "    @property\n    def size(self):\n" in on_disk
+    compile(on_disk, "<test>", "exec")
+
+
+def test_oracle_create_file_does_not_auto_repair_non_indentation_error(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_create_file_does_not_auto_repair_non_indentation_error
+    - auto-repair is scoped to IndentationError only."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    bad = "def foo():\n    x = 1\nfor i in range(3):\n    return i\n"
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": bad})
+    assert result.startswith("ERROR")
+    assert "invalid" in result.lower() and "syntax" in result.lower()
+    assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
+
+
+def test_oracle_try_repair_indentation_returns_none_when_no_preceding_line():
+    assert lao._try_repair_indentation("    x = 1\n") is None
+
+
+def test_oracle_try_repair_indentation_returns_none_for_valid_content():
+    assert lao._try_repair_indentation("def foo():\n    return 1\n") is None
+
+
+def test_oracle_str_replace_auto_repairs_indentation(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_str_replace_auto_repairs_indentation."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    (tmp_path / "mod.py").write_text("class C:\n    def m(self):\n        return 1\n")
+    result = lao.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "    def m(self):\n        return 1\n",
+        "new_str": "    def m(self):\n        return 1\n    @property\ndef size(self):\n        return 2\n",
+    })
+    assert result.startswith("edited mod.py")
+    assert "auto-reindented" in result
+    on_disk = (tmp_path / "mod.py").read_text()
+    assert "    @property\n    def size(self):\n" in on_disk
+    compile(on_disk, "<test>", "exec")
+
+
 def test_oracle_str_replace_rejects_edit_that_produces_invalid_python_syntax(tmp_path, monkeypatch):
     """A rejected edit must not partially apply — the file's on-disk content
     must be byte-for-byte unchanged from before the call."""

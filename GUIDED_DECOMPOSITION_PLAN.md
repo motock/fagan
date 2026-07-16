@@ -1357,3 +1357,71 @@ already struggling with the functional task; or the tool-selection pressure
 (every turn spent on scratchpad is a turn not spent on the failing tests).
 Needs a deeper look at prompt structure + a re-run with the scratchpad step
 promoted to a first-class checklist item before H3 can be fairly tested.
+
+### Why the scratchpad is (almost) never consumed — root cause (2026-07-16)
+
+Dug into the t8 "instruction delivered but ignored" finding by measuring
+scratchpad consumption across the whole `_runs` corpus, not just t8.
+
+**Corpus measurement:** of 22 guided runs (those with a generated
+`.agent_plan.md`) across the mlx tree, only **2 ever touched
+`.agent_scratchpad.md` — a 9% consumption rate.** And those 2 were the two
+LONGEST runs in the entire tree:
+
+| run | steps | scratchpad writes | status | elapsed |
+|---|---|---|---|---|
+| ratelimiter_bugfix mlx t0 | 407 | 7 | interrupted | 3602s |
+| token_bucket mlx t0 | 90 | 4 | failed | 1526s |
+| (every other guided run, 8-112 steps) | — | 0 | failed | — |
+
+**Three structural causes, all evidence-backed:**
+
+1. **The scratchpad is orphaned from the checklist the model actually
+   follows (primary cause).** The executor works the *planner-generated*
+   checklist in `.agent_plan.md` step by step. That checklist NEVER mentions
+   the scratchpad — `_PLANNER_SYSTEM` doesn't tell the planner to include it,
+   and t8's actual `.agent_plan.md` has zero references. The scratchpad ask
+   lives in a separate hardcoded sentence (`pipeline_mcp_server.py` ~L2828)
+   appended AFTER the checklist, tacked onto "Work through these steps in
+   order." So the model sees N numbered steps each with a done-criterion,
+   plus one trailing bookkeeping aside that belongs to no step and has no
+   done-criterion. Under any pressure the numbered steps win.
+2. **It's a non-functional action competing for turns against the functional
+   task.** The only runs that used it were long, sprawling ones where
+   tracking state paid off. In short parked runs (t7/t8, ~10 steps) the model
+   was fighting a syntax deadlock from step 2 on and never spent a turn on
+   optional bookkeeping.
+3. **Not weak-model-specific — it's prompt structure.** 9% consumption
+   regardless of run length points at instruction design, not capability.
+
+**Implication for H3:** even the 2 runs that DID write the scratchpad both
+still FAILED. Across the entire corpus there is not one example of the
+scratchpad being written AND the run succeeding — so H3 (does persistent
+cross-step memory help?) is currently untestable, not because a pair was
+unlucky, but because the affordance is almost never exercised. You can't
+measure the benefit of a lever nobody pulls.
+
+**Fix to make H3 testable:** promote the scratchpad from a trailing aside to
+a first-class checklist step — have the planner weave "update
+`.agent_scratchpad.md` with a one-line status after each step" into the
+generated checklist as an explicit instruction the executor treats as part
+of the work, rather than bolting it on after the fact.
+
+**Implemented (2026-07-16).** Added `_PLANNER_SCRATCHPAD_CLAUSE` +
+`_planner_system(include_scratchpad=...)` in `pipeline_mcp_server.py`, and
+threaded an `include_scratchpad` flag through `_run_planner`. When the H3
+scratchpad is on, the clause is appended to the planner's system prompt,
+directing it to (a) make the FIRST numbered step create
+`.agent_scratchpad.md`, and (b) end each subsequent step with "then update
+.agent_scratchpad.md ... (rewrite the whole file via create_file)" as part of
+that step's done-criterion — so the scratchpad lives INSIDE the checklist the
+executor actually follows, not in a trailing sentence it skips. Gated on the
+same `PIPELINE_DECOMPOSE_SCRATCHPAD` env var, so the ablation "off" arm sends
+the byte-identical base `_PLANNER_SYSTEM` (verified). The old trailing-
+sentence instruction is kept as a backstop for resumed dispatches whose stored
+`.agent_plan.md` predates the clause. TDD: 3 new tests (planner-augments-
+system, omits-by-default, dispatch-passes-flag) + a mechanical `**kwargs`
+signature fix to one existing planner mock; full server suite 531 pass, ruff
+clean. **Not yet validated live** — a fresh scratchpad-on run must confirm the
+generated checklist now contains the scratchpad steps AND that the executor
+follows them (that live re-run is the next step before H3 can be scored).

@@ -10243,6 +10243,48 @@ def test_planner_system_steers_away_from_editing_test_files():
     assert "NotImplementedError" in p._PLANNER_SYSTEM
 
 
+def test_run_planner_include_scratchpad_augments_system_prompt(agents_dir, monkeypatch):
+    """When include_scratchpad=True, the planner's system prompt must direct it
+    to weave .agent_scratchpad.md updates into the GENERATED checklist as
+    first-class steps - not left to a trailing aside the executor ignores.
+    Root cause (GUIDED_DECOMPOSITION_PLAN.md, 2026-07-16): across 22 guided
+    runs the scratchpad was consumed only twice (9%) because the checklist the
+    model actually follows never mentioned it. The clause must reach the
+    backend's system arg."""
+    fake = _FakePlannerBackend(response="1. Step one.")
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    p._run_planner(
+        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        local_model="gpt-oss:20b", include_scratchpad=True,
+    )
+
+    system = fake.calls[0]["system"]
+    # The base steering must still be present ...
+    assert "implementation file" in system
+    # ... plus the scratchpad clause, naming the file and asking for it as a
+    # per-step checklist item rather than an afterthought.
+    assert ".agent_scratchpad.md" in system
+    assert system != p._PLANNER_SYSTEM
+
+
+def test_run_planner_omits_scratchpad_by_default(agents_dir, monkeypatch):
+    """include_scratchpad defaults to False (the H3 ablation "off" arm and any
+    caller that doesn't opt in): the system prompt must be exactly
+    _PLANNER_SYSTEM, unchanged, so the existing by-reference assertions and the
+    scratchpad-off behavior both hold."""
+    fake = _FakePlannerBackend(response="1. Step one.")
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    p._run_planner(
+        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        local_model="gpt-oss:20b",
+    )
+
+    assert fake.calls[0]["system"] == p._PLANNER_SYSTEM
+    assert ".agent_scratchpad.md" not in fake.calls[0]["system"]
+
+
 def test_run_rework_planner_cloud_mode_calls_claude_backend_with_review_feedback(
     agents_dir, monkeypatch,
 ):
@@ -10477,7 +10519,8 @@ def test_dispatch_story_decompose_cloud_writes_plan_and_augments_local_prompt(
 
     planner_calls = []
 
-    def _fake_planner(agent_instructions, *, mode, dispatch_backend, local_model):
+    def _fake_planner(agent_instructions, *, mode, dispatch_backend, local_model,
+                      **kwargs):
         planner_calls.append({
             "agent_instructions": agent_instructions, "mode": mode,
             "dispatch_backend": dispatch_backend, "local_model": local_model,
@@ -10580,6 +10623,54 @@ def test_dispatch_story_decompose_scratchpad_defaults_on(
 
     assert result["ok"] is True
     assert ".agent_scratchpad.md" in popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+
+
+def test_dispatch_story_decompose_passes_include_scratchpad_flag_to_planner(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The scratchpad must be a first-class step IN the generated checklist,
+    not just a trailing aside on the prompt. So when the scratchpad is enabled,
+    dispatch must call _run_planner with include_scratchpad=True (so the
+    planner weaves it into the steps); when disabled (H3 ablation), with
+    include_scratchpad=False. Regression guard for the 9%-consumption root
+    cause (GUIDED_DECOMPOSITION_PLAN.md, 2026-07-16)."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+
+    def _run_dispatch(plan_name, story_key, scratchpad_env):
+        if scratchpad_env is None:
+            monkeypatch.delenv("PIPELINE_DECOMPOSE_SCRATCHPAD", raising=False)
+        else:
+            monkeypatch.setenv("PIPELINE_DECOMPOSE_SCRATCHPAD", scratchpad_env)
+        # Distinct story_key per sub-dispatch: the worktree (and its
+        # .agent_plan.md) is keyed by story_key, so reusing one would let the
+        # second dispatch find the first's plan and skip _run_planner.
+        _write_manifest(plan_dir, plan_name, {
+            story_key: {"summary": "Do thing", "agent_instructions": "Build it.",
+                        "status": "todo", "dependencies": []},
+        })
+        planner_kwargs = {}
+
+        def _fake_planner(agent_instructions, **kwargs):
+            planner_kwargs.update(kwargs)
+            return "1. Step one."
+
+        monkeypatch.setattr(p, "_run_planner", _fake_planner)
+        monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+        monkeypatch.setattr(backend.subprocess, "Popen",
+                            lambda cmd, env, **kw: _FakeProc(9009))
+        monkeypatch.setattr(p, "plane_request",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+        monkeypatch.setattr(p, "_default_branch", lambda: "main")
+        assert p.dispatch_story(plan_name, story_key)["ok"] is True
+        return planner_kwargs
+
+    # Default (unset) -> on -> planner told to include the scratchpad step.
+    assert _run_dispatch("dcincl_default", "SDEF", None)["include_scratchpad"] is True
+    # Explicit on -> same.
+    assert _run_dispatch("dcincl_on", "SON", "on")["include_scratchpad"] is True
+    # H3 ablation off -> planner must NOT weave it in.
+    assert _run_dispatch("dcincl_off", "SOFF", "off")["include_scratchpad"] is False
 
 
 def test_dispatch_story_decompose_skips_for_claude_backend(

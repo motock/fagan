@@ -1147,3 +1147,60 @@ the model eventually cracked the last edge case (validation) and passed.
 **Preserved artifacts:** `tests/benchmark/_runs/guided_decomp_mlx_6tasks/
 _preserve_for_analysis/` holds snapshots of all three generalize trials
 (inflight + final where captured) for later analysis.
+
+---
+
+## Whole-file directive: root cause found + fixed (2026-07-16)
+
+Followed up the "whole-file directive is necessary but not always followed"
+item above by reading the **preserved interval_merge t7 artifacts** rather
+than theorising. The 10x slowdown was NOT the executor ignoring the directive.
+
+**What the transcript actually shows** (`_preserve_for_analysis/
+interval_merge__mlx__t7__inflight_snapshot/worktrees/INTERVAL-MERGE/
+.agent_transcript.json`):
+
+1. The whole-file directive **was delivered in full**. The planner paraphrases
+   the `_PLANNER_SYSTEM` steering into the checklist's own prose; the delivered
+   resume prompt (msg[1], the last ~700 chars) reads verbatim: *"Write each
+   file completely via create_file in one shot (no stubs-then-surgically-edit;
+   rewrite the whole file when fixing)."* (An earlier pass keyword-searched for
+   the *system-prompt* wording — `CRITICAL STEERING`, `NEVER edit`,
+   `NotImplementedError` — and wrongly concluded "not delivered." Retracted.)
+
+2. The executor **tried to comply** — it opened with `create_file` on both
+   `test_intervals.py` and `intervals.py` (steps 0 and 2). But this was a
+   **step-cap RESUME**: both files already existed on disk from the interrupted
+   run, so they were not in `_CREATED_THIS_RUN` (a per-process set, empty in the
+   fresh resume process). `create_file` refused with *"already exists and is
+   non-empty. Use str_replace to edit it"* — **the guard's own error message
+   funnelled the model onto str_replace**, directly defeating the directive it
+   had just been given. Result: 28+ rejected surgical-edit cycles, ~2310s.
+
+**Root cause:** the non-destructive `create_file` guard (added to protect
+pre-existing repo/seed files from blind clobber) had no exception for the
+resume/rework case, and its error text actively recommended the exact tool
+(str_replace) the weak model cannot drive.
+
+**Fix (informed overwrite):** a pre-existing file the model has read via
+`view_file` THIS run is now eligible for a whole-file `create_file` overwrite
+(tracked in a new `_VIEWED_THIS_RUN` set, companion to `_CREATED_THIS_RUN`),
+and the refusal message now steers to `view_file` -> `create_file`, never
+str_replace. The blind-clobber protection is preserved exactly: a file the
+model has neither authored nor read this run is still refused. Applied in
+lockstep to `scripts/local_agent.py` and `scripts/local_agent_oracle.py`
+(verbatim mirror), plus the `create_file` tool description in both.
+
+TDD: modified the pinning test `..._still_rejects_overwrite_of_pre_existing_file`
+-> `..._rejects_overwrite_of_unseen_pre_existing_file` (with explicit user
+approval per CLAUDE.md Step 4; it now asserts the view_file-steering message
+and the narrowed guard) and added `..._overwrites_a_pre_existing_file_after_
+view_file`, mirrored in the oracle test. All four failed for the right reason
+(no `_VIEWED_THIS_RUN`) before the impl, green after; full local_agent +
+oracle suites 176 passed. End-to-end replay of the interval_merge resume
+sequence confirms: blind overwrite refused -> view_file -> whole-file
+overwrite succeeds, and an unseen sibling file stays protected.
+
+**Not yet validated live** against a fresh interval_merge resume run — the
+unit + end-to-end replay cover the mechanism, but a real dispatched resume is
+the remaining confirmation.

@@ -168,15 +168,35 @@ def test_oracle_create_file_overwrites_a_file_it_created_earlier_this_run(tmp_pa
     assert (tmp_path / "mod.py").read_text() == "x = 2\n"
 
 
-def test_oracle_create_file_still_rejects_overwrite_of_pre_existing_file(tmp_path, monkeypatch):
-    """Regression: a file that exists on disk but was NOT created via
-    create_file this run must still be protected."""
+def test_oracle_create_file_rejects_overwrite_of_unseen_pre_existing_file(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_create_file_rejects_overwrite_of_unseen_pre_existing_file.
+    A pre-existing file not created and not viewed this run stays protected
+    from blind clobber, and the refusal steers to view_file, not str_replace."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
     monkeypatch.setattr(lao, "_CREATED_THIS_RUN", set())
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
     (tmp_path / "mod.py").write_text("x = 1\n")
     result = lao.run_tool("create_file", {"path": "mod.py", "content": "x = 2\n"})
-    assert result == "ERROR: mod.py already exists and is non-empty. Use str_replace to edit it."
+    assert result == (
+        "ERROR: mod.py already exists and is non-empty. Use view_file to read "
+        "it first, then create_file to overwrite it with the full corrected "
+        "contents."
+    )
     assert (tmp_path / "mod.py").read_text() == "x = 1\n"
+
+
+def test_oracle_create_file_overwrites_a_pre_existing_file_after_view_file(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_create_file_overwrites_a_pre_existing_file_after_view_file.
+    Once read via view_file this run, a pre-existing file may be overwritten
+    with a full rewrite (unblocks whole-file recovery on resume)."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_CREATED_THIS_RUN", set())
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "mod.py").write_text("def merge():\n    raise NotImplementedError\n")
+    lao.run_tool("view_file", {"path": "mod.py"})
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": "def merge():\n    return []\n"})
+    assert result == "created mod.py"
+    assert (tmp_path / "mod.py").read_text() == "def merge():\n    return []\n"
 
 
 def test_oracle_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monkeypatch):

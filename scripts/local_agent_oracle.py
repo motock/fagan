@@ -251,7 +251,7 @@ HARNESS_RULES = (
 
 TOOLS = [
     {"type": "function", "function": {
-        "name": "create_file", "description": "Create a NEW file. Fails if the file already exists and is non-empty (use str_replace to edit existing files).",
+        "name": "create_file", "description": "Create a new file, or overwrite one with its full corrected contents. To overwrite a file that already exists on disk, view_file it first, then create_file with the complete new contents (a whole-file rewrite is preferred over str_replace for the file you are implementing).",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {
@@ -568,6 +568,14 @@ _SYNTAX_REJECT_COUNTS: dict[str, int] = {}
 # from local_agent.py; keep both copies in sync.
 _CREATED_THIS_RUN: set[str] = set()
 
+# Companion to _CREATED_THIS_RUN for the RESUME/rework case: a pre-existing
+# file the model has read via view_file THIS run becomes eligible for an
+# informed whole-file overwrite, so a resumed run isn't forced onto str_replace
+# it can't construct. Ported verbatim from local_agent.py; keep both copies in
+# sync. See local_agent.py for the full rationale (interval_merge resume,
+# 2026-07-16).
+_VIEWED_THIS_RUN: set[str] = set()
+
 
 def _python_syntax_error(path_str: str, content: str) -> str | None:
     """Return an ERROR string if `path_str` is a .py file and `content` is not
@@ -629,8 +637,13 @@ def run_tool(fn, args) -> str:
     if fn == "create_file":
         path = CWD / args["path"]
         if (path.exists() and path.read_text().strip()
-                and args["path"] not in _CREATED_THIS_RUN):
-            return f"ERROR: {args['path']} already exists and is non-empty. Use str_replace to edit it."
+                and args["path"] not in _CREATED_THIS_RUN
+                and args["path"] not in _VIEWED_THIS_RUN):
+            return (
+                f"ERROR: {args['path']} already exists and is non-empty. Use "
+                f"view_file to read it first, then create_file to overwrite it "
+                f"with the full corrected contents."
+            )
         content = args.get("content", "")
         err = _python_syntax_error(args["path"], content)
         if err:
@@ -661,6 +674,7 @@ def run_tool(fn, args) -> str:
         path = CWD / args["path"]
         if not path.exists():
             return f"ERROR: {args['path']} does not exist."
+        _VIEWED_THIS_RUN.add(args["path"])
         lines = path.read_text().splitlines(keepends=True)
         return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
     if fn == "bash":

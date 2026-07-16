@@ -165,17 +165,45 @@ def test_create_file_overwrites_a_file_it_created_earlier_this_run(tmp_path, mon
     assert (tmp_path / "mod.py").read_text() == "x = 2\n"
 
 
-def test_create_file_still_rejects_overwrite_of_pre_existing_file(tmp_path, monkeypatch):
-    """Regression: a file that exists on disk but was NOT created via
-    create_file this run (e.g. a pre-existing repo/seed file, or one written
-    directly to disk before the agent started) must still be protected -
-    only self-authored-this-run files are eligible for overwrite."""
+def test_create_file_rejects_overwrite_of_unseen_pre_existing_file(tmp_path, monkeypatch):
+    """Regression: a file that exists on disk, was NOT created via create_file
+    this run, and has NOT been read via view_file this run must still be
+    protected from blind clobber. Only a file the agent authored or has read
+    this run is eligible for overwrite. The refusal steers to view_file (read
+    before you overwrite), not str_replace — a weak model reliably cannot
+    build a matching old_str, so directing it to str_replace traps it in the
+    surgical-edit deadlock (observed live: interval_merge resume, 28+ rejected
+    str_replace cycles, 2026-07-16)."""
     monkeypatch.setattr(la, "CWD", tmp_path)
     monkeypatch.setattr(la, "_CREATED_THIS_RUN", set())
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
     (tmp_path / "mod.py").write_text("x = 1\n")
     result = la.run_tool("create_file", {"path": "mod.py", "content": "x = 2\n"})
-    assert result == "ERROR: mod.py already exists and is non-empty. Use str_replace to edit it."
+    assert result == (
+        "ERROR: mod.py already exists and is non-empty. Use view_file to read "
+        "it first, then create_file to overwrite it with the full corrected "
+        "contents."
+    )
     assert (tmp_path / "mod.py").read_text() == "x = 1\n"
+
+
+def test_create_file_overwrites_a_pre_existing_file_after_view_file(tmp_path, monkeypatch):
+    """Informed overwrite: once the agent has read a pre-existing file via
+    view_file this run, create_file may overwrite it with a full rewrite. This
+    unblocks the whole-file recovery path on a step-cap RESUME, where the impl
+    and test files already exist on disk from the interrupted run (so they are
+    not in _CREATED_THIS_RUN) — without it, the create_file guard forces the
+    weak model onto str_replace and the surgical-edit deadlock (interval_merge
+    resume, 2026-07-16). The blind-clobber protection is preserved: only a
+    file the agent has actually read this run becomes eligible."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_CREATED_THIS_RUN", set())
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "mod.py").write_text("def merge():\n    raise NotImplementedError\n")
+    la.run_tool("view_file", {"path": "mod.py"})
+    result = la.run_tool("create_file", {"path": "mod.py", "content": "def merge():\n    return []\n"})
+    assert result == "created mod.py"
+    assert (tmp_path / "mod.py").read_text() == "def merge():\n    return []\n"
 
 
 def test_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monkeypatch):

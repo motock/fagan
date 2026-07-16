@@ -26,6 +26,15 @@ PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
 USAGE_STATE_PATH = Path(
     os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_state.json")
 ).expanduser()
+# Where dispatched stories' worktrees live — the same root
+# pipeline_mcp_server.WORKTREE_ROOT reads (default ~/.claude/worktrees, see
+# pipeline_mcp_server.py). Read independently here rather than importing the
+# orchestrator module: the dashboard's contract is read-only and must not
+# pull pipeline_mcp_server's write surface into its import graph (see this
+# module's docstring). The checklist endpoint reads agent artifacts
+# (.agent_plan.md / .agent_scratchpad.md) out of a story's worktree, which is
+# a NEW read boundary for the dashboard — but still only a read.
+WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).expanduser()
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
@@ -274,6 +283,71 @@ def _read_story_log(
     all_lines = text.splitlines()
     tail = all_lines[-lines:]
     return {"available": True, "lines": tail}
+
+
+def _read_worktree_file(story: dict[str, Any], filename: str) -> dict[str, Any]:
+    """Read a named agent artifact (e.g. .agent_plan.md, .agent_scratchpad.md)
+    from a dispatched story's worktree, for the dashboard's per-story progress
+    view (DASHBOARD_STORY_PROGRESS_PLAN.md Tier 0).
+
+    Mirrors _read_story_log's containment discipline but roots the read at the
+    story's worktree (story['worktree'], an absolute path the orchestrator
+    records under WORKTREE_ROOT) rather than PLAN_DIR. A worktree is routinely
+    deleted after merge/cleanup, so "gone" is a NORMAL state -> available=False,
+    never a 500.
+
+    Containment / path safety:
+      - The worktree path is taken ONLY from the manifest (story['worktree']);
+        the request supplies nothing the helper trusts.
+      - filename is a fixed artifact name passed by the endpoint. It is
+        hardened here regardless: a name with a path separator, a '..'
+        component, or an absolute path is rejected so a future caller can't
+        escape the worktree dir via this helper (a '..' filename would
+        otherwise reach a sibling worktree's file while still staying under
+        WORKTREE_ROOT, a mild cross-story leak).
+      - The resolved target is contain-checked under WORKTREE_ROOT, so a
+        hand-edited manifest pointing worktree outside WORKTREE_ROOT (e.g.
+        '/etc') cannot read arbitrary files.
+
+    Non-UTF-8 bytes decode with errors='replace' (same as _read_story_log) so
+    a binary-corrupt artifact degrades to replacement chars, not a 500.
+
+    Returns {"available": bool, "text": str}. Never raises.
+    """
+    empty = {"available": False, "text": ""}
+    if not isinstance(story, dict):
+        return empty
+    # Reject any filename that could escape the worktree directory. A plain
+    # artifact name like ".agent_plan.md" passes; "../x", "/etc/passwd", and
+    # "a/b" do not.
+    if not isinstance(filename, str) or not filename:
+        return empty
+    if "/" in filename or "\\" in filename or filename == ".." or filename == ".":
+        return empty
+    raw_wt = story.get("worktree")
+    if not isinstance(raw_wt, str) or not raw_wt:
+        return empty
+    wt_path = Path(raw_wt)
+    # The orchestrator records an absolute worktree; a relative value is a
+    # corrupt manifest we fail closed on (resolving a relative path under a
+    # CWD we don't control would be unsafe).
+    if not wt_path.is_absolute():
+        return empty
+    target = wt_path / filename
+    try:
+        target = target.resolve(strict=False)
+        root = WORKTREE_ROOT.resolve()
+        if target != root and not target.is_relative_to(root):
+            return empty
+    except OSError:
+        return empty
+    if not target.exists() or not target.is_file():
+        return empty
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return empty
+    return {"available": True, "text": text}
 
 
 def _plan_summary(
@@ -689,6 +763,42 @@ def get_story_log(
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
     return _read_story_log(plan_name, story_key, manifest, lines=lines)
+
+
+@app.get("/api/plans/{plan_name}/stories/{story_key}/checklist")
+def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
+    """Return the tech-lead checklist (`.agent_plan.md`) and the executor's
+    running scratchpad (`.agent_scratchpad.md`) from the story's worktree, so
+    the dashboard can show how far an in-progress story's attempt has gotten
+    (DASHBOARD_STORY_PROGRESS_PLAN.md Tier 0).
+
+    Response shape:
+      { "plan": {"available": bool, "text": str},
+        "scratchpad": {"available": bool, "text": str} }
+
+    These artifacts only exist for stories run under PIPELINE_DECOMPOSE
+    (GUIDED_DECOMPOSITION_PLAN.md); every other story — the common case —
+    returns available:false for both. 404 is reserved for an unknown plan or
+    story key; a missing/gone worktree or a story never dispatched is the
+    normal available:false state, never a 500. See _read_worktree_file for the
+    containment contract.
+    """
+    manifest = _read_manifest(plan_name)
+    if manifest is None:
+        raise HTTPException(
+            status_code=404, detail=f"No manifest for plan '{plan_name}'"
+        )
+    stories = manifest.get("stories") if isinstance(manifest, dict) else {}
+    if not isinstance(stories, dict) or story_key not in stories:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No story '{story_key}' in plan '{plan_name}'",
+        )
+    story = stories[story_key]
+    return {
+        "plan": _read_worktree_file(story, ".agent_plan.md"),
+        "scratchpad": _read_worktree_file(story, ".agent_scratchpad.md"),
+    }
 
 
 # Mounted last so it never shadows the /api/* routes above; html=True serves

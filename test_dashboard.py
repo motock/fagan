@@ -1621,6 +1621,99 @@ def test_render_journal_escapes_html_in_entry_text():
     assert "<img onerror=" not in html
 
 
+# --- Checklist section rendering in app.js (Tier 0 progress view) ---------
+#
+# renderChecklist consumes the /checklist endpoint response
+# {plan:{available,text}, scratchpad:{available,text}} and must: render the
+# "No checklist" empty state when neither file is available (the common case
+# for stories not run under PIPELINE_DECOMPOSE); render the plan text in a
+# scrollable <pre> when available; add a Progress-notes subsection + <pre>
+# when the scratchpad is available; and HTML-escape agent-written text so a
+# stray <script> in an artifact can't execute in the modal. Same shelled-Node
+# approach as the renderJournal tests above.
+
+
+def test_render_checklist_empty_state_for_null_data():
+    """No response (fetch threw) -> the 'No checklist' empty state, never an
+    exception."""
+    html = _run_app_js("renderChecklist(null)")
+    assert "Checklist" in html
+    assert "No checklist" in html
+    assert "data-checklist-empty" in html
+    assert "data-checklist-plan" not in html
+
+
+def test_render_checklist_empty_state_when_neither_available():
+    """The common case: a story not run under PIPELINE_DECOMPOSE has neither
+    file -> empty state, same as a missing-file response."""
+    data = {"plan": {"available": False, "text": ""},
+            "scratchpad": {"available": False, "text": ""}}
+    html = _run_app_js(f"renderChecklist({json.dumps(data)})")
+    assert "No checklist" in html
+    assert "data-checklist-empty" in html
+    assert "data-checklist-plan" not in html
+    assert "data-checklist-scratch" not in html
+
+
+def test_render_checklist_plan_only_when_scratchpad_absent():
+    """A story that just got its plan but hasn't checkpointed yet renders the
+    plan but no Progress-notes subsection."""
+    data = {"plan": {"available": True, "text": "1. tests\n2. impl\n"},
+            "scratchpad": {"available": False, "text": ""}}
+    html = _run_app_js(f"renderChecklist({json.dumps(data)})")
+    assert "data-checklist-plan" in html
+    assert "1. tests" in html
+    assert "2. impl" in html
+    # No scratchpad subsection when scratchpad unavailable
+    assert "data-checklist-scratch" not in html
+    assert "Progress notes" not in html
+
+
+def test_render_checklist_renders_both_plan_and_scratchpad():
+    """Positive: both artifacts available -> plan <pre>, a Progress-notes
+    subsection, and a scratchpad <pre>, in that order."""
+    data = {"plan": {"available": True, "text": "1. step one"},
+            "scratchpad": {"available": True, "text": "done: one"}}
+    html = _run_app_js(f"renderChecklist({json.dumps(data)})")
+    assert "data-checklist-plan" in html
+    assert "data-checklist-scratch" in html
+    assert "Progress notes" in html
+    assert "done: one" in html
+    # Plan block precedes the scratchpad block.
+    assert html.find("data-checklist-plan") < html.find("data-checklist-scratch")
+
+
+def test_render_checklist_escapes_html_in_artifact_text():
+    """Security: the plan and scratchpad are agent-written, so their text is
+    HTML-escaped — a stray <script> in an artifact must not survive raw."""
+    data = {"plan": {"available": True, "text": "<script>x</script>"},
+            "scratchpad": {"available": False, "text": ""}}
+    html = _run_app_js(f"renderChecklist({json.dumps(data)})")
+    assert "&lt;script&gt;" in html
+    assert "<script>" not in html
+
+
+def test_render_checklist_empty_plan_text_still_renders_block():
+    """Boundary: a zero-byte .agent_plan.md (available:true, text:'') still
+    renders an empty plan <pre> block — 'file present but empty' is distinct
+    from 'file absent' (the latter hits the empty state)."""
+    data = {"plan": {"available": True, "text": ""},
+            "scratchpad": {"available": False, "text": ""}}
+    html = _run_app_js(f"renderChecklist({json.dumps(data)})")
+    assert "data-checklist-plan" in html
+    assert "No checklist" not in html
+
+
+def test_static_style_css_defines_checklist_classes(client):
+    """The checklist section uses .dsh-checklist-plan / .dsh-checklist-scratch
+    / .modal-subsection — the CSS must define them so the section renders
+    visibly (scrollable monospace blocks) rather than as unstyled elements."""
+    css = client.get("/style.css").text
+    for sel in (".dsh-checklist-plan", ".dsh-checklist-scratch",
+                ".modal-subsection"):
+        assert sel in css, f"missing CSS selector: {sel}"
+
+
 def test_static_style_css_defines_plan_archive_classes(client):
     """The rendered sidebar uses .plan-item-row / .plan-archive-btn /
     .plan-archived / .plan-list-footer / .show-archived-toggle - the CSS
@@ -1643,3 +1736,200 @@ def test_static_style_css_defines_journal_timeline_classes(client):
         assert sel in css, f"missing CSS selector: {sel}"
     # And the muted utility class used inside timeline entries
     assert ".muted" in css
+
+
+# ---------- story checklist endpoint (worktree .agent_plan.md/.agent_scratchpad) ----------
+#
+# Surfaces the tech-lead checklist + running scratchpad the guided-
+# decomposition step writes into a story's WORKTREE (not PLAN_DIR), so the
+# dashboard can show how far an in-progress story's attempt has gotten.
+# Rules mirror the log/journal endpoints:
+#   * Returns {plan: {available, text}, scratchpad: {available, text}}.
+#   * Most stories have no worktree (never dispatched, or run without
+#     PIPELINE_DECOMPOSE) -> available:false, text:"" — NOT a 404 or 500.
+#   * A worktree that's been deleted post-merge -> available:false (normal).
+#   * The worktree path comes from the manifest only; the resolved path is
+#     contain-checked under WORKTREE_ROOT so a hand-edited manifest pointing
+#     outside WORKTREE_ROOT cannot read arbitrary files.
+#   * 404 only for an unknown plan or story key.
+
+
+@pytest.fixture
+def worktree_dir(tmp_path, monkeypatch):
+    """A throwaway WORKTREE_ROOT the dashboard reads worktree artifacts from.
+    Mirrors the `plan_dir` fixture's monkeypatch of PLAN_DIR so tests never
+    touch the real ~/.claude/worktrees."""
+    wt_root = tmp_path / "worktrees"
+    wt_root.mkdir()
+    monkeypatch.setattr(d, "WORKTREE_ROOT", wt_root)
+    return wt_root
+
+
+def test_checklist_endpoint_returns_both_files_when_present(client, plan_dir, worktree_dir):
+    """A story run under PIPELINE_DECOMPOSE has both .agent_plan.md (the
+    tech-lead checklist) and .agent_scratchpad.md (running state) in its
+    worktree -> both available:true with their text."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("1. write tests\n2. implement\n")
+    (wt / ".agent_scratchpad.md").write_text("done: step 1\nnext: step 2\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "guided", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+
+    res = client.get("/api/plans/demo/stories/S1/checklist")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["plan"]["available"] is True
+    assert body["plan"]["text"] == "1. write tests\n2. implement\n"
+    assert body["scratchpad"]["available"] is True
+    assert body["scratchpad"]["text"] == "done: step 1\nnext: step 2\n"
+
+
+def test_checklist_endpoint_partial_when_only_plan_present(client, plan_dir, worktree_dir):
+    """The scratchpad is written incrementally by the executor; a story that
+    just got its plan but hasn't checkpointed yet has plan:available but
+    scratchpad:unavailable — each file is reported independently."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("1. step\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "just planned", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["plan"]["available"] is True
+    assert body["plan"]["text"] == "1. step\n"
+    assert body["scratchpad"]["available"] is False
+    assert body["scratchpad"]["text"] == ""
+
+
+def test_checklist_endpoint_no_worktree_field_returns_unavailable(client, plan_dir, worktree_dir):
+    """A story that was never dispatched (still todo) has no 'worktree' field
+    — the normal case for most stories. available:false for both, never a 404
+    or 500."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "fresh", "status": "todo", "dependencies": []},
+    })
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body == {"plan": {"available": False, "text": ""},
+                    "scratchpad": {"available": False, "text": ""}}
+
+
+def test_checklist_endpoint_worktree_dir_gone_returns_unavailable_not_500(client, plan_dir, worktree_dir):
+    """A worktree recorded in the manifest but deleted on disk (post-merge
+    cleanup) is a normal state, not an error — must degrade to available:false
+    rather than 500."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "merged", "status": "done",
+               "worktree": str(worktree_dir / "gone-S1"), "dependencies": []},
+    })
+    res = client.get("/api/plans/demo/stories/S1/checklist")
+    assert res.status_code == 200
+    assert res.json() == {"plan": {"available": False, "text": ""},
+                          "scratchpad": {"available": False, "text": ""}}
+
+
+def test_checklist_endpoint_empty_file_is_available_with_empty_text(client, plan_dir, worktree_dir):
+    """Boundary: a zero-byte .agent_plan.md exists (planner wrote nothing /
+    truncated) -> available:true with text:'', distinguishing 'file present
+    but empty' from 'file absent'."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "empty plan", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["plan"]["available"] is True
+    assert body["plan"]["text"] == ""
+
+
+def test_checklist_endpoint_garbage_bytes_decode_replacement(client, plan_dir, worktree_dir):
+    """Non-UTF-8 bytes in an agent-written artifact must not 500; replacement
+    characters are accepted so the dashboard surfaces whatever's on disk."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_bytes(b"good\n\xff\xfe\nmore\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "binary", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["plan"]["available"] is True
+    assert body["plan"]["text"].startswith("good\n")
+    assert "�" in body["plan"]["text"]
+
+
+def test_checklist_endpoint_404_for_unknown_plan(client, plan_dir, worktree_dir):
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "x", "status": "todo", "dependencies": []},
+    })
+    assert client.get("/api/plans/nope/stories/S1/checklist").status_code == 404
+
+
+def test_checklist_endpoint_404_for_unknown_story(client, plan_dir, worktree_dir):
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "x", "status": "todo", "dependencies": []},
+    })
+    assert client.get("/api/plans/demo/stories/NOPE/checklist").status_code == 404
+
+
+def test_read_worktree_file_rejects_worktree_outside_root(client, plan_dir, worktree_dir, tmp_path):
+    """Security: a manifest hand-edited to point worktree outside WORKTREE_ROOT
+    (e.g. '/etc') must not let the dashboard read arbitrary files. The
+    resolved path is contain-checked; an outside-root worktree degrades to
+    available:false."""
+    outside = tmp_path / "outside-root"
+    outside.mkdir()
+    (outside / ".agent_plan.md").write_text("SECRET")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "evil", "status": "in_progress",
+               "worktree": str(outside), "dependencies": []},
+    })
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["plan"]["available"] is False
+    assert "SECRET" not in body["plan"]["text"]
+
+
+def test_read_worktree_file_rejects_relative_worktree_path(client, plan_dir, worktree_dir):
+    """A non-absolute worktree (corrupt manifest) is not resolvable safely ->
+    unavailable, never a 500. The orchestrator always stores an absolute path,
+    so a relative one is a corruption signal we fail closed on."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "corrupt", "status": "in_progress",
+               "worktree": "S1", "dependencies": []},
+    })
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["plan"]["available"] is False
+    assert body["scratchpad"]["available"] is False
+
+
+def test_read_worktree_file_rejects_filename_with_traversal(worktree_dir):
+    """The filename is fixed by the endpoint, but _read_worktree_file guards
+    against a '..' / absolute / separator-bearing filename so a future caller
+    can't escape the worktree dir via the helper. A traversal filename must
+    return unavailable even when a matching file exists under WORKTREE_ROOT."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("plan\n")
+    # A sibling worktree whose file a '..' filename would reach.
+    sibling = worktree_dir / "S2"
+    sibling.mkdir()
+    (sibling / ".agent_plan.md").write_text("OTHER")
+    story = {"worktree": str(wt)}
+    assert d._read_worktree_file(story, "../S2/.agent_plan.md")["available"] is False
+    assert d._read_worktree_file(story, "/etc/passwd")["available"] is False
+
+
+def test_read_worktree_file_helper_reads_named_artifact(worktree_dir):
+    """Positive: the helper returns the named artifact's text from the
+    worktree, contain-checked under WORKTREE_ROOT."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_scratchpad.md").write_text("running notes")
+    out = d._read_worktree_file({"worktree": str(wt)}, ".agent_scratchpad.md")
+    assert out == {"available": True, "text": "running notes"}

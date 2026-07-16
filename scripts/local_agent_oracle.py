@@ -127,7 +127,35 @@ PROVIDER = os.environ.get("LOCAL_AGENT_PROVIDER", "ollama").strip().lower()
 NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
 MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "30"))
+# Cap consecutive assistant turns that emit no tool call. A weak model stuck
+# on a self-inflicted phantom failure — its own test asserts non-standard
+# behavior the correct implementation can never satisfy — will narrate its
+# "next step" as prose indefinitely; the generic "call a tool" nudge cannot
+# break this because no real action resolves a self-contradictory test. Park
+# after this many consecutive no-tool turns rather than burning the whole run.
+NO_TOOL_CAP = int(os.environ.get("LOCAL_AGENT_NO_TOOL_CAP", "5"))
 TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
+
+
+def _no_tool_nudge(consecutive: int) -> str:
+    """Nudge for an assistant turn that emitted no tool call.
+
+    Early turns get the plain call-to-action (the model may simply have
+    forgotten). From the third consecutive narration turn onward, escalate to
+    behavioral guidance: a weak model stuck looping on a failing self-test is
+    usually chasing a phantom — its own test asserts behavior the correct
+    implementation can never satisfy. Tell it to re-check the spec and fix the
+    *test*, not the implementation, then call done.
+    """
+    if consecutive < 3:
+        return "Call a tool now (do not write prose)."
+    return (
+        "You have not called a tool for several turns. If you are stuck on a "
+        "failing test that you wrote, that test may assert the wrong behavior — "
+        "re-read the task spec. If your implementation already matches the spec, "
+        "fix or delete the failing test rather than the implementation, then call "
+        "done. Otherwise call a tool now (do not write prose)."
+    )
 # Per-bash-invocation timeout. The model can call `cargo fetch` and wedge on
 # a network index update forever; without this the agent loop blocks on a
 # single subprocess.run until cargo eventually times out (if at all).
@@ -851,6 +879,7 @@ def main() -> int:
     nudged_read_heavy = False
     recent_tools: deque[tuple[str, str]] = deque(maxlen=READ_HEAVY_WINDOW)
     distinct_windows = 0
+    consecutive_no_tool = 0
     start_time = time.monotonic()
 
     for step in range(MAX_STEPS):
@@ -869,9 +898,18 @@ def main() -> int:
         messages.append(m)
         tcs = m.get("tool_calls") or recover_tool_calls(m.get("content", ""))
         if not tcs:
-            print(f"[step {step}] no tool call: {(m.get('content') or '')[:100]!r}", flush=True)
-            messages.append({"role": "user", "content": "Call a tool now (do not write prose)."})
+            consecutive_no_tool += 1
+            print(f"[step {step}] no tool call ({consecutive_no_tool} consecutive): "
+                  f"{(m.get('content') or '')[:100]!r}", flush=True)
+            if consecutive_no_tool >= NO_TOOL_CAP:
+                print(f"[step {step}] narration cap ({NO_TOOL_CAP} consecutive "
+                      f"no-tool turns) reached; parking", flush=True)
+                if worktree_dirty():
+                    auto_commit("WIP (narration cap)")
+                return 2
+            messages.append({"role": "user", "content": _no_tool_nudge(consecutive_no_tool)})
             continue
+        consecutive_no_tool = 0
 
         for tc in tcs:
             fn = tc["function"]["name"]

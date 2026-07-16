@@ -197,6 +197,59 @@ def test_str_replace_auto_repairs_indentation(tmp_path, monkeypatch):
     compile(on_disk, "<test>", "exec")
 
 
+def test_no_tool_nudge_escalates_after_consecutive_turns():
+    """The static 'Call a tool now' nudge cannot break a narration loop where
+    the model is stuck on a self-inflicted phantom failure (its own test
+    asserts wrong behavior the correct impl can never satisfy). The nudge
+    escalates: plain call-to-action for the first two consecutive no-tool
+    turns, then behavioral guidance telling the model a stuck self-test may
+    be wrong and to fix the test, not the impl."""
+    assert la._no_tool_nudge(1) == "Call a tool now (do not write prose)."
+    assert la._no_tool_nudge(2) == "Call a tool now (do not write prose)."
+    escalated = la._no_tool_nudge(3)
+    assert "failing test that you wrote" in escalated
+    assert "fix or delete the failing test" in escalated
+    # Still escalates at higher counts (no regression to the plain nudge).
+    assert la._no_tool_nudge(5) == escalated
+
+
+def test_local_agent_narration_cap_parks_after_consecutive_no_tool_turns(
+    tmp_path, monkeypatch, capsys
+):
+    """A model that emits prose instead of tool calls indefinitely (the
+    t12/t13 narration loop) must park after NO_TOOL_CAP consecutive no-tool
+    turns, not burn the full MAX_STEPS budget. The cap is a deterministic
+    safety net under the escalating nudge: even when the nudge fails to
+    recover the run, the waste is bounded."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NO_TOOL_CAP", 5)
+    monkeypatch.setattr(la, "MAX_STEPS", 40)
+
+    # Every turn returns pure prose, no tool_calls, and plain content so
+    # recover_tool_calls() finds nothing to recover - exactly the narration
+    # collapse observed in t13 (turns 35+ after the pytest failure).
+    def _prose_chat(messages):
+        return {"role": "assistant",
+                "content": "Next I will run the full test suite to confirm.",
+                "tool_calls": []}
+
+    monkeypatch.setattr(la, "chat", _prose_chat)
+
+    rc = la.main()
+
+    out = capsys.readouterr().out
+    assert rc == 2, f"expected parking exit 2, got {rc}\noutput: {out!r}"
+    assert "narration cap (5 consecutive no-tool turns) reached; parking" in out, (
+        f"expected narration-cap park line, output: {out!r}"
+    )
+    # The run must stop at the cap (5 chat calls), nowhere near MAX_STEPS=40.
+    # _prose_chat doesn't record calls, so count the [step N] no-tool lines.
+    assert out.count("no tool call (") == 5, (
+        f"expected exactly 5 no-tool turns before the cap, output: {out!r}"
+    )
+
+
 def test_create_file_accepts_valid_python_syntax(tmp_path, monkeypatch):
     """Regression: valid Python content must still write exactly as before."""
     monkeypatch.setattr(la, "CWD", tmp_path)

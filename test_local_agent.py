@@ -107,6 +107,96 @@ def test_create_file_rejects_return_outside_function(tmp_path, monkeypatch):
     assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
 
 
+def test_try_repair_indentation_fixes_decorator_dedent():
+    """The 14B's reproducible decoding defect: after `@property` it drops the
+    leading indentation on the next line, writing `    @property` then
+    `def size(self):` at column 0 - a SyntaxError (unexpected unindent) it
+    resubmits byte-identical until it parks (lru_cache t7/t8/t10/t11). A
+    prompt-level worked example did NOT prevent it (t11 - decoding-level, not
+    understanding-level). The deterministic repair re-indents the dedented
+    line to match the preceding decorator and re-validates."""
+    broken = (
+        "class C:\n"
+        "    def __init__(self):\n"
+        "        self._data = {}\n"
+        "    @property\n"
+        "def size(self):\n"
+        "        return len(self._data)\n"
+    )
+    repair = la._try_repair_indentation(broken)
+    assert repair is not None
+    repaired, note = repair
+    # The def must now sit at 4 spaces, matching the @property decorator.
+    assert "    @property\n    def size(self):\n" in repaired
+    assert "auto-reindented" in note
+    # And the repaired content must actually compile.
+    compile(repaired, "<test>", "exec")
+
+
+def test_create_file_auto_repairs_decorator_dedent_and_writes(tmp_path, monkeypatch):
+    """When create_file receives the decorator-dedent defect, it must write the
+    REPAIRED content to disk (not reject it into the death-loop) and tell the
+    model what it did - no silent mutation."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    broken = (
+        "class C:\n"
+        "    @property\n"
+        "def size(self):\n"
+        "        return 1\n"
+    )
+    result = la.run_tool("create_file", {"path": "mod.py", "content": broken})
+    assert result.startswith("created mod.py")
+    assert "auto-reindented" in result
+    on_disk = (tmp_path / "mod.py").read_text()
+    assert "    @property\n    def size(self):\n" in on_disk
+    compile(on_disk, "<test>", "exec")
+
+
+def test_create_file_does_not_auto_repair_non_indentation_error(tmp_path, monkeypatch):
+    """Auto-repair is scoped to IndentationError only. A non-indentation
+    SyntaxError (return outside a function - the original reason this guard
+    uses compile() not ast.parse()) must still be rejected, not silently
+    rewritten."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    bad = "def foo():\n    x = 1\nfor i in range(3):\n    return i\n"
+    result = la.run_tool("create_file", {"path": "mod.py", "content": bad})
+    assert result.startswith("ERROR")
+    assert "invalid" in result.lower() and "syntax" in result.lower()
+    assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
+
+
+def test_try_repair_indentation_returns_none_when_no_preceding_line():
+    """A top-level indented line has no preceding non-blank line to take a
+    target indentation from - the repair cannot apply, so it returns None and
+    the normal rejection path handles it."""
+    assert la._try_repair_indentation("    x = 1\n") is None
+
+
+def test_try_repair_indentation_returns_none_for_valid_content():
+    """Already-valid content is not a repair candidate (no error to fix)."""
+    assert la._try_repair_indentation("def foo():\n    return 1\n") is None
+
+
+def test_str_replace_auto_repairs_indentation(tmp_path, monkeypatch):
+    """The same auto-repair applies to str_replace edits that produce an
+    indentation error - the repaired result is written, not rejected."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    (tmp_path / "mod.py").write_text("class C:\n    def m(self):\n        return 1\n")
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "    def m(self):\n        return 1\n",
+        "new_str": "    def m(self):\n        return 1\n    @property\ndef size(self):\n        return 2\n",
+    })
+    assert result.startswith("edited mod.py")
+    assert "auto-reindented" in result
+    on_disk = (tmp_path / "mod.py").read_text()
+    assert "    @property\n    def size(self):\n" in on_disk
+    compile(on_disk, "<test>", "exec")
+
+
 def test_create_file_accepts_valid_python_syntax(tmp_path, monkeypatch):
     """Regression: valid Python content must still write exactly as before."""
     monkeypatch.setattr(la, "CWD", tmp_path)

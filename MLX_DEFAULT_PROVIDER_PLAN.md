@@ -745,3 +745,73 @@ explicit `ollama` override is an unchanged regression gate.
   Qwen3.6-class model is ever specifically wanted.
 - G1b's per-request thinking suppression for the OpenAI-compatible path — only needed if a
   hybrid-thinking model is deliberately chosen later.
+
+---
+
+## Wedge diagnosis: mlx-lm 0.31.3 permanent server hang on generation-thread death (2026-07-15)
+
+**Observed:** during a guided-decomposition benchmark trial (Qwen2.5-Coder-14B via
+`mlx_lm.server`), the server stopped completing any generation at ~step 53 of a
+dispatch. Symptom set: `/v1/models` (GET) kept returning 200 instantly, every
+`/v1/chat/completions` (POST) hung indefinitely (probed live: no response after
+120s), the process sat at 0% CPU / "sleeping", 18.2 GB physical footprint, no panic,
+no error line in `mlx-server.log`. Persisted ~13+ min until manually killed.
+
+**Root cause (proven by `sample <pid>` of the wedged process):**
+mlx-lm 0.31.3's server (`.venv-mlx/.../mlx_lm/server.py`) runs on a
+`ThreadingHTTPServer` but funnels ALL generation through a **single background
+`_generate` thread** (`self.requests = Queue()` at ~L444; `Thread(target=self._generate)`
+at ~L451). Each `do_POST` puts its request on that shared queue and then **blocks on
+`response_queue.get()` with NO timeout** (~L1037/L1048). The sample showed all three
+in-flight HTTP handler threads (the dispatch's request + two diagnostic probes) parked
+in `lock_PyThread_acquire_lock` inside that `.get()`, the main thread idle in `poll()`,
+and every MLX worker thread idle in `condition_variable::wait` — i.e. **nothing was
+computing**. The `_generate` thread was gone/incapacitated: its per-request `try/except:
+rqueue.put(e)` blocks (~L741/L809/L1023) cover per-request errors, but a failure of the
+worker *itself* (strongly inferred: a native Metal/GPU memory fault at this host's wired
+ceiling — consistent with the footprint-at-ceiling, the panic history, and the ABSENCE
+of any Python traceback in the log) escapes them, the thread stops servicing the queue,
+and every current and future `response_queue.get()` blocks forever. A single worker
+death = permanent full-server wedge. (Symptom = proven; exact trigger = strongly
+inferred, since the death itself logged nothing.)
+
+**Is it a design flaw?** The single-worker batched design is deliberate and correct —
+MLX/Metal concurrent graph eval is unsafe (ml-explore/mlx#2133), so serializing through
+one thread + batching (`--prompt-concurrency`→`prefill_batch_size`) is the right call,
+and the blocking `.get()` is a reasonable contract *assuming the worker always
+responds*. The unrecovered worker-death is an unhandled edge, not an intended behavior.
+
+**Why it didn't self-recover:**
+1. Client side: our dispatch httpx timeout is 900s (not 600s), so a single wedged
+   request eventually raises — but that only frees that one request; the SERVER stays
+   wedged and poisons every subsequent dispatch for the rest of the run.
+2. The actual recovery mechanism — `scripts/mlx_server_supervisor.py`, whose
+   `is_serving()` fires a REAL generation probe (not a cheap `/v1/models` GET) and
+   `ensure_running()` kills+restarts a wedged server (`"restarted_wedged"`) — was NOT
+   running periodically. The server had been started via a one-shot manual supervisor
+   invocation; the launchd job (`launchd/com.claude.pipeline.mlx-supervisor.plist`,
+   `StartInterval` 120s) was not loaded, so no health-check tick ever came.
+
+**Recovery validated:** running the supervisor once against the wedged server returned
+`restarted_wedged` and the fresh server passed a real generation probe in ~1.1s.
+
+**Decision — do NOT patch mlx-lm internals; fix at the supervision layer.** Reasons:
+(a) a `get(timeout=…)` only converts one hang into one failure while the worker stays
+dead (next request re-hangs) and risks false-aborting legitimately slow generations;
+(b) in-process worker respawn can't reliably recover a GPU-level fault — only a fresh
+process can, which is exactly what the supervisor does; (c) the server internals are
+private and already shifted between versions (the wrapper's "no lock anywhere in
+mlx_lm.server" comment is stale for 0.31.3's batched architecture), so any monkeypatch
+is brittle across upgrades; (d) the batched single-thread design must not be "enhanced"
+toward concurrency — that reintroduces the exact eval race it prevents.
+
+**Actions:**
+- Run the supervisor periodically whenever MLX is in use (launchd job, or a session-
+  scoped supervisor loop during a benchmark run) so a worker death auto-recovers within
+  one tick instead of silently killing the rest of a run. NOTE: starting the server via
+  a one-shot `mlx_server_supervisor.py` call does NOT provide ongoing supervision — it
+  only launches once and exits.
+- Optional low-risk hardening (our code, not mlx-lm): a shorter health-probe cadence
+  during active runs, and/or a bounded client-side read-timeout in
+  `inference_providers.py` paired with supervisor restart (set high enough not to abort
+  valid slow generations).

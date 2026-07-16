@@ -34,7 +34,6 @@ Exit codes:
 """
 from __future__ import annotations
 
-import ast
 import json
 import os
 import re
@@ -251,7 +250,7 @@ HARNESS_RULES = (
 
 TOOLS = [
     {"type": "function", "function": {
-        "name": "create_file", "description": "Create a NEW file. Fails if the file already exists and is non-empty (use str_replace to edit existing files).",
+        "name": "create_file", "description": "Create a new file, or overwrite one with its full corrected contents. To overwrite a file that already exists on disk, view_file it first, then create_file with the complete new contents (a whole-file rewrite is preferred over str_replace for the file you are implementing).",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {
@@ -560,6 +559,22 @@ def _restore_tampered_oracle_files() -> str:
 # Ported verbatim from local_agent.py; keep both copies in sync.
 _SYNTAX_REJECT_COUNTS: dict[str, int] = {}
 
+# Paths successfully written via create_file THIS process run - lets the
+# model overwrite a file it just wrote itself (full rewrite is often the
+# only real recovery strategy for a weak model that can't construct a
+# correct str_replace old_str) without weakening protection for
+# pre-existing repo/seed files or a rework's inherited file. Ported verbatim
+# from local_agent.py; keep both copies in sync.
+_CREATED_THIS_RUN: set[str] = set()
+
+# Companion to _CREATED_THIS_RUN for the RESUME/rework case: a pre-existing
+# file the model has read via view_file THIS run becomes eligible for an
+# informed whole-file overwrite, so a resumed run isn't forced onto str_replace
+# it can't construct. Ported verbatim from local_agent.py; keep both copies in
+# sync. See local_agent.py for the full rationale (interval_merge resume,
+# 2026-07-16).
+_VIEWED_THIS_RUN: set[str] = set()
+
 
 def _python_syntax_error(path_str: str, content: str) -> str | None:
     """Return an ERROR string if `path_str` is a .py file and `content` is not
@@ -575,7 +590,12 @@ def _python_syntax_error(path_str: str, content: str) -> str | None:
     if not path_str.endswith(".py"):
         return None
     try:
-        ast.parse(content)
+        # compile(), not ast.parse(): ast.parse() only validates grammar,
+        # not that `return`/`yield` sit inside a function or `break`/
+        # `continue` inside a loop - those are SyntaxErrors too, but only
+        # surface at compile() time. See local_agent.py's copy for the live
+        # incident that found this gap.
+        compile(content, path_str, "exec")
     except SyntaxError as e:
         lines = content.splitlines()
         lineno = e.lineno or 0
@@ -615,8 +635,14 @@ def run_tool(fn, args) -> str:
                 f"must NOT be modified. Change the implementation file instead.")
     if fn == "create_file":
         path = CWD / args["path"]
-        if path.exists() and path.read_text().strip():
-            return f"ERROR: {args['path']} already exists and is non-empty. Use str_replace to edit it."
+        if (path.exists() and path.read_text().strip()
+                and args["path"] not in _CREATED_THIS_RUN
+                and args["path"] not in _VIEWED_THIS_RUN):
+            return (
+                f"ERROR: {args['path']} already exists and is non-empty. Use "
+                f"view_file to read it first, then create_file to overwrite it "
+                f"with the full corrected contents."
+            )
         content = args.get("content", "")
         err = _python_syntax_error(args["path"], content)
         if err:
@@ -624,6 +650,7 @@ def run_tool(fn, args) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
+        _CREATED_THIS_RUN.add(args["path"])
         return f"created {args['path']}"
     if fn == "str_replace":
         path = CWD / args["path"]
@@ -646,6 +673,7 @@ def run_tool(fn, args) -> str:
         path = CWD / args["path"]
         if not path.exists():
             return f"ERROR: {args['path']} does not exist."
+        _VIEWED_THIS_RUN.add(args["path"])
         lines = path.read_text().splitlines(keepends=True)
         return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
     if fn == "bash":
@@ -805,14 +833,6 @@ def main() -> int:
             # read-heavy guard (MUTATING_TOOLS) still catches a model stuck
             # in a bad edit loop — str_replace calls reset that window.
             #
-            # Any mutating call (str_replace/create_file) also resets every
-            # OTHER signature's accumulated count: `seen` was a lifetime
-            # cumulative counter, so re-viewing a file 2x, editing it, then
-            # viewing it again to check the edit landed hit the >=3 threshold
-            # from stale pre-edit reads, even though real progress happened
-            # in between (see local_agent.py's mirrored fix).
-            if fn in MUTATING_TOOLS:
-                seen.clear()
             above_threshold = False
             if fn != "str_replace":
                 seen[sig] = seen.get(sig, 0) + 1
@@ -841,7 +861,34 @@ def main() -> int:
             # A malformed tool call (e.g. a model that omits a required arg
             # like old_str) must nudge the model with a recoverable error, not
             # crash the whole unattended agent with an uncaught exception.
-            messages.append({"role": "tool", "content": safe_run_tool(fn, args)})
+            tool_result = safe_run_tool(fn, args)
+            messages.append({"role": "tool", "content": tool_result})
+
+            # A GENUINELY SUCCESSFUL mutation (str_replace/create_file)
+            # resets every OTHER signature's accumulated count: `seen` was a
+            # lifetime cumulative counter, so re-viewing a file 2x, editing
+            # it, then viewing it again to check the edit landed hit the >=3
+            # threshold from stale pre-edit reads, even though real progress
+            # happened in between (see local_agent.py's mirrored comment).
+            #
+            # Gated on SUCCESS (a result that isn't an "ERROR..." string),
+            # not merely on tool identity — a REJECTED create_file/str_replace
+            # changed nothing on disk and must not be treated as progress.
+            # Pre-fix, this clear ran unconditionally on every mutating call
+            # regardless of outcome: create_file's own repeated FAILURES
+            # wiped their own accumulating count before ever reaching the
+            # threshold, AND a failed str_replace interleaved between failed
+            # create_file attempts also wiped create_file's count - so even
+            # alternating the two tools indefinitely never tripped the guard
+            # (observed live 2026-07-15: create_file/str_replace/str_replace/
+            # bash on repeat, dozens of times, zero nudges).
+            if fn in MUTATING_TOOLS:
+                succeeded = isinstance(tool_result, str) and not tool_result.startswith("ERROR")
+                if succeeded:
+                    current = seen.get(sig, 0)
+                    seen.clear()
+                    if fn != "str_replace":
+                        seen[sig] = current
 
             # Read-heavy-pattern guard. Tracked separately from the per-target
             # repetition guard: the per-target one misses this case because

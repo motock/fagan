@@ -106,6 +106,19 @@ def main() -> int:
                     help="wall-clock budget for the WHOLE plan, seconds")
     ap.add_argument("--tick", type=float, default=10.0)
     ap.add_argument("--max-defer-extension", type=int, default=14400)
+    ap.add_argument(
+        "--decompose", choices=["off", "cloud", "local"], default="off",
+        help="GUIDED_DECOMPOSITION_PLAN.md: sets PIPELINE_DECOMPOSE for this "
+             "run - off (default, matches condition M as-is), cloud (the "
+             "G-cloud arm: a Claude planner checklist), local (the H2 "
+             "ablation: the same local model plans for itself).",
+    )
+    ap.add_argument(
+        "--decompose-scratchpad", choices=["on", "off"], default="on",
+        help="Sets PIPELINE_DECOMPOSE_SCRATCHPAD. 'off' is the H3 ablation "
+             "(the G-cloud-noscratch arm: checklist only, no persistent "
+             "scratchpad instruction). Ignored when --decompose is off.",
+    )
     args = ap.parse_args()
 
     from models import MODELS
@@ -128,6 +141,8 @@ def main() -> int:
     os.environ["PIPELINE_AUTONOMY"] = "full"
     os.environ["PIPELINE_RISK_THRESHOLD"] = "low"
     os.environ["PIPELINE_MAX_CONCURRENT_AGENTS"] = "1"
+    os.environ["PIPELINE_DECOMPOSE"] = args.decompose
+    os.environ["PIPELINE_DECOMPOSE_SCRATCHPAD"] = args.decompose_scratchpad
     harness._set_review_backend_env()
     for k in ("PIPELINE_LOCAL_MODEL_SONNET", "PIPELINE_LOCAL_MODEL_OPUS",
               "PIPELINE_LOCAL_MODEL_HAIKU"):
@@ -137,6 +152,7 @@ def main() -> int:
     import pipeline_mcp_server as p
     harness.install_merge_stubs(p, repo)
 
+    mock = None
     if model_cfg.get("mock"):
         import backend as _backend
         mock = harness.MockBackend(task)
@@ -188,6 +204,8 @@ def main() -> int:
         "condition": args.condition,
         "model": args.model,
         "trial": args.trial,
+        "decompose": args.decompose,
+        "decompose_scratchpad": args.decompose_scratchpad,
         "story_count": len(stories),
         "story_statuses": story_statuses,
         "final_status": final_status,
@@ -200,6 +218,12 @@ def main() -> int:
         "timed_out": final_status == "incomplete",
         "tick_log": ticks,
         "groundtruth_tail": gt.get("tail", gt.get("reason", "")),
+        # Only meaningful under --model mock (GUIDED_DECOMPOSITION_PLAN.md's
+        # offline self-test): the number of complete() calls the planner
+        # made against MockBackend, proving the planner path was actually
+        # exercised rather than silently skipped. None for a real model,
+        # since a real backend has no equivalent call-count to surface here.
+        "decompose_planner_calls": len(mock.complete_calls) if mock else None,
     }
     (cell / "result.json").write_text(json.dumps(result, indent=2))
 

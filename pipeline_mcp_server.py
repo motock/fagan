@@ -936,6 +936,156 @@ def _invoke_overlord(prompt: str) -> str:
     )
 
 
+# GUIDED_DECOMPOSITION_PLAN.md: a "tech lead" planner call that turns a
+# coarse story into an ordered sub-step checklist for the weak local
+# executor to work through inside its own single worktree/transcript. This
+# is deliberately NOT the story-splitting approach already tried and
+# disproven (tests/benchmark/PRODUCT_ANALYST_VALIDATION_PLAN.md) - the
+# checklist augments one story's prompt, it never creates new stories or
+# new cold dispatches.
+_PLANNER_SYSTEM = (
+    "You are a tech lead writing an implementation checklist for a junior "
+    "engineer who will work alone and may not reason precisely through "
+    "subtle edge cases unassisted. Read the task below and produce an "
+    "ordered checklist of concrete sub-steps (as many as the task genuinely "
+    "needs - typically 3-10; split a step further rather than bundling "
+    "tricky reasoning into one line), each with a short, verifiable "
+    "done-criterion. Preserve test-driven-development ordering: a failing "
+    "test before the implementation that makes it pass. For any step "
+    "involving timing, state mutation, or a behavior that is easy to get "
+    "subtly wrong (e.g. what happens on a rejected/failed call, a "
+    "backwards-moving clock, or a read that must not have side effects), "
+    "include a concrete worked example with actual numbers showing the "
+    "correct result, and name the specific mistake a less careful "
+    "implementation would make there. Do not invent scope beyond what the "
+    "task describes. "
+    "CRITICAL STEERING for the junior engineer: all implementation work goes "
+    "in the ONE implementation file named by the task; NEVER edit, rename, "
+    "weaken, or delete the test files (anything matching test_*.py). If a "
+    "test fails, the bug is in the implementation file - fix it there, never "
+    "change the test. "
+    "EDITING MECHANICS: this engineer reliably fails at surgical str_replace "
+    "edits - they cannot construct a unique, matching old_str (observed "
+    "live: every str_replace in a stubs-then-edit loop is rejected as "
+    "'old_str occurs N times' or 'old_str not found', so they never make "
+    "progress past stubs). Direct them to write COMPLETE files via "
+    "create_file in one shot instead of a stubs-then-surgically-edit "
+    "sequence: each implementation step should produce the WHOLE file with "
+    "every method fully implemented (no `raise NotImplementedError` stubs "
+    "to be filled in later by str_replace). If a fix is needed after running "
+    "tests, rewrite the whole file via create_file again, do not str_replace. "
+    "Make the checklist's FIRST line the steering rule above (name the "
+    "implementation file and say: do not edit the test files), then the "
+    "numbered sub-steps. Output ONLY the checklist - the steering line, "
+    "then the numbered steps - no other preamble, no closing remarks."
+)
+
+
+def _resolve_planner_backend(
+    mode: str, dispatch_backend: str, local_model: str,
+) -> tuple[str, str]:
+    """Shared backend/model resolution for both the initial-dispatch planner
+    and the rework-feedback planner (same mode semantics, same "principal
+    tech lead vs weak local model" choice - see _run_planner)."""
+    if mode == "cloud":
+        return "claude", (
+            os.environ.get("PIPELINE_DECOMPOSE_CLOUD_MODEL")
+            or _persona_default_model("overlord") or "opus"
+        )
+    return dispatch_backend, local_model
+
+
+def _run_planner(
+    agent_instructions: str, *, mode: str, dispatch_backend: str, local_model: str,
+) -> str | None:
+    """Call a bounded, single-turn LLM to produce an ordered sub-step
+    checklist for agent_instructions.
+
+    This is one complete() call, never an agent loop - it must stay cheap
+    relative to the story's own dispatch or the economics this feature
+    exists for collapse (see GUIDED_DECOMPOSITION_PLAN.md §3.1/§4.5).
+
+    mode="cloud" routes the call to the Claude backend at the same
+    "principal" tier _invoke_overlord uses - the primary, expected
+    configuration (a strong tech lead planning for a weak jr executor).
+    mode="local" routes the call to the same backend/model the executor
+    itself will run on (the H2 ablation: is planner *strength* the active
+    ingredient, or does having any checklist help regardless of who wrote
+    it?).
+
+    Returns the raw checklist text, or None on any failure. Callers MUST
+    treat None as "no plan" and fall open to the existing no-plan dispatch
+    path - a broken, slow, or rate-limited planner call must never block or
+    corrupt a story's dispatch. External boundary: delegates to the
+    configured Backend. Tests mock this function.
+    """
+    backend_name, model = _resolve_planner_backend(mode, dispatch_backend, local_model)
+    try:
+        text = backend.get_backend("planner", name=backend_name).complete(
+            agent_instructions, system=_PLANNER_SYSTEM, model=model,
+        )
+    except Exception:
+        # Broad and intentional: this call must never be a gate. Mirrors
+        # the Gap-7 multi-model warning's "observability hook, never a
+        # gate" except-Exception pattern elsewhere in dispatch_story.
+        return None
+    text = (text or "").strip()
+    return text or None
+
+
+# The same "too high-level for a jr model" problem that motivates the
+# initial-dispatch checklist applies to rework: a reviewer's prose feedback
+# (diagnosis + implicit fix reasoning) is itself a coarse brief. Translating
+# it into an explicit fix-checklist before handing it to the weak executor
+# is the same tech-lead-decomposition logic applied one step later in the
+# story's lifecycle.
+_REWORK_PLANNER_SYSTEM = (
+    "You are a tech lead helping a junior engineer act on code review "
+    "feedback; they may not reason precisely through subtle edge cases "
+    "unassisted. Read the review feedback below and produce an ordered "
+    "checklist of concrete fix steps: what is wrong, which file/lines are "
+    "implicated, and how to verify the fix (e.g. a test to add or run). If "
+    "the bug involves timing, state mutation, or another subtle edge case, "
+    "include a concrete worked example with actual numbers showing the "
+    "correct result, and name the specific mistake that produced the wrong "
+    "one. Preserve test-driven-development ordering where it applies "
+    "(reproduce the bug with a failing test before fixing it). Do not "
+    "invent issues beyond what the feedback describes. "
+    "CRITICAL STEERING for the junior engineer: fixes go in the "
+    "implementation file named by the task; NEVER edit, rename, weaken, or "
+    "delete the test files (anything matching test_*.py) to make a test "
+    "pass - if a test fails, the bug is in the implementation, so fix it "
+    "there. "
+    "EDITING MECHANICS: this engineer reliably fails at surgical str_replace "
+    "edits (cannot construct a unique matching old_str). Direct them to "
+    "rewrite the WHOLE implementation file via create_file with every method "
+    "fully fixed in one shot, not a sequence of str_replace patches. "
+    "Make the checklist's FIRST line the steering rule above, then the "
+    "numbered fix steps. Output ONLY the checklist - the steering line, "
+    "then the numbered steps - no other preamble, no closing remarks."
+)
+
+
+def _run_rework_planner(
+    review_feedback: str, *, mode: str, dispatch_backend: str, local_model: str,
+) -> str | None:
+    """Like _run_planner, but translates code-review feedback into an
+    ordered fix-checklist instead of translating a coarse task into an
+    implementation checklist. Same bounded single-call contract, same
+    mode="cloud"/"local" backend resolution, same fail-open-to-None
+    contract - see _run_planner's docstring for the shared rationale.
+    """
+    backend_name, model = _resolve_planner_backend(mode, dispatch_backend, local_model)
+    try:
+        text = backend.get_backend("planner", name=backend_name).complete(
+            review_feedback, system=_REWORK_PLANNER_SYSTEM, model=model,
+        )
+    except Exception:
+        return None
+    text = (text or "").strip()
+    return text or None
+
+
 def _parse_ruling(text: str) -> dict[str, Any]:
     """Parse the overlord's output contract into a structured ruling."""
     fields: dict[str, str] = {}
@@ -2465,7 +2615,13 @@ def list_ready_stories(plan_name: str) -> list[dict]:
 # `git rev-parse --git-path info/exclude` from inside a worktree resolves to
 # the MAIN repo's .git/info/exclude, not a per-worktree file), so writing it
 # once per repo, idempotently, covers every past and future worktree.
-_WORKTREE_LOG_EXCLUDES = ("agent.log", "review.log")
+#
+# .agent_plan.md/.agent_scratchpad.md (GUIDED_DECOMPOSITION_PLAN.md) are the
+# same kind of untracked runtime artifact as agent.log/review.log - written
+# into the worktree outside of any commit, and vulnerable to the identical
+# Mode 17 failure (a rework's `git add -A` WIP-commit would track them,
+# dirtying the tree ahead of the pre-merge rebase) if not excluded up front.
+_WORKTREE_LOG_EXCLUDES = ("agent.log", "review.log", ".agent_plan.md", ".agent_scratchpad.md")
 
 
 def _exclude_worktree_logs_from_tracking(repo_root: Path) -> None:
@@ -2632,6 +2788,57 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(entry["source"])
 
+        # GUIDED_DECOMPOSITION_PLAN.md: PIPELINE_DECOMPOSE=cloud|local turns
+        # on a "tech lead" checklist for the weak local executor. Default
+        # "off" - opt-in, per Secure Defaults. Gated on:
+        #   - a local-family backend (the crutch exists for the weak local
+        #     executor; Claude doesn't need it)
+        #   - not resuming (plan once on the story's first dispatch; a
+        #     rework must never spend a second planner call)
+        #   - no plan already on disk (belt-and-suspenders with `resuming`)
+        # The LLM call itself is best-effort (_run_planner fails open to
+        # None) so a broken/slow/rate-limited planner never blocks or
+        # corrupts dispatch - the story simply proceeds with no checklist,
+        # exactly like PIPELINE_DECOMPOSE=off.
+        decompose_mode = os.environ.get("PIPELINE_DECOMPOSE", "off").strip().lower()
+        plan_path = worktree_path / ".agent_plan.md"
+        if (
+            decompose_mode in ("cloud", "local")
+            and dispatch_backend in _LOCAL_BACKEND_NAMES
+            and not resuming
+            and not plan_path.exists()
+        ):
+            plan_text = _run_planner(
+                story.get("agent_instructions", ""), mode=decompose_mode,
+                dispatch_backend=dispatch_backend, local_model=spec["model"],
+            )
+            if plan_text:
+                plan_path.write_text(plan_text)
+        # Referencing an existing plan is independent of generating one, so
+        # a resumed dispatch that rebuilds its prompt from scratch (no
+        # transcript to resume) still sees the checklist from the story's
+        # first dispatch, without spending a second planner call for it.
+        if plan_path.exists():
+            scratchpad_instruction = ""
+            # H3 ablation (GUIDED_DECOMPOSITION_PLAN.md §4.1's G-cloud-
+            # noscratch condition): default "on" ships the persistent
+            # scratchpad; "off" tests whether the checklist alone accounts
+            # for the benefit, independent of cross-step memory.
+            if os.environ.get("PIPELINE_DECOMPOSE_SCRATCHPAD", "on").strip().lower() != "off":
+                scratchpad_instruction = (
+                    " After finishing each step, keep .agent_scratchpad.md "
+                    "up to date with a short running summary of what you've "
+                    "done and which step is next (create_file for the first "
+                    "note, str_replace to rewrite it after that) before "
+                    "moving on to the next step."
+                )
+            spec["prompt"] = (
+                f"{spec['prompt']}\n\n"
+                "--- Implementation checklist from your tech lead ---\n"
+                f"{plan_path.read_text()}\n\n"
+                f"Work through these steps in order.{scratchpad_instruction}"
+            )
+
         dispatch_kwargs: dict[str, Any] = dict(
             prompt=spec["prompt"], system=spec["system"], model=spec["model"],
             allowed_tools=spec["allowed_tools"],
@@ -2644,10 +2851,34 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
         if resume_via_transcript:
             dispatch_kwargs["resume_transcript_path"] = transcript_path
-            dispatch_kwargs["resume_append_content"] = (
-                "The code reviewer REQUESTED CHANGES on your previous attempt. "
-                f"Address this feedback:\n{review_feedback}"
-            )
+            # Same tech-lead-decomposition logic as the initial checklist,
+            # applied to review feedback: a reviewer's prose diagnosis is
+            # itself a coarse brief for a weak executor. Re-run per rework
+            # cycle (unlike the initial checklist, which plans once) since
+            # each cycle's feedback is different. Fails open to the raw
+            # feedback format on any planner failure - identical contract
+            # to the initial-dispatch checklist.
+            fix_checklist = None
+            if (
+                decompose_mode in ("cloud", "local")
+                and dispatch_backend in _LOCAL_BACKEND_NAMES
+            ):
+                fix_checklist = _run_rework_planner(
+                    review_feedback, mode=decompose_mode,
+                    dispatch_backend=dispatch_backend, local_model=spec["model"],
+                )
+            if fix_checklist:
+                dispatch_kwargs["resume_append_content"] = (
+                    "The code reviewer REQUESTED CHANGES on your previous "
+                    "attempt. Your tech lead has translated the feedback "
+                    f"into a fix checklist:\n{fix_checklist}\n\n"
+                    f"Original review feedback (for reference):\n{review_feedback}"
+                )
+            else:
+                dispatch_kwargs["resume_append_content"] = (
+                    "The code reviewer REQUESTED CHANGES on your previous attempt. "
+                    f"Address this feedback:\n{review_feedback}"
+                )
 
         handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(**dispatch_kwargs)
 

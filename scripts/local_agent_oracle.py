@@ -34,7 +34,6 @@ Exit codes:
 """
 from __future__ import annotations
 
-import ast
 import json
 import os
 import re

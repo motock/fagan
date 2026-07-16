@@ -1425,3 +1425,48 @@ signature fix to one existing planner mock; full server suite 531 pass, ruff
 clean. **Not yet validated live** — a fresh scratchpad-on run must confirm the
 generated checklist now contains the scratchpad steps AND that the executor
 follows them (that live re-run is the next step before H3 can be scored).
+
+### Live validation of the first-class-step fix (lru_cache t10, 2026-07-16) —
+mechanism CONFIRMED, task still fails on a pre-existing model defect
+
+Re-ran lru_cache with scratchpad on, on the `feat/h3-scratchpad-first-class-
+step` branch (this fix's own code), identical conditions to t7/t8 otherwise.
+
+**The fix works exactly as designed.** The generated `.agent_plan.md`
+contained the scratchpad steps verbatim: step 1 was "Create
+`.agent_scratchpad.md` via create_file listing the planned steps ... Done:
+file exists with all 6 steps listed," and steps 3/5 each ended with "— then
+update `.agent_scratchpad.md`: mark step N done, note step N+1 is next." The
+executor's very FIRST tool call (step 0) was `create_file:
+.agent_scratchpad.md`, and it went on to update it twice more (steps 2, 4)
+tracking real progress through the test-writing and red-confirmation steps —
+3 genuine scratchpad touches, up from 0 in both t7 and t8. Consumption rate
+for this run: 100%, not 9%.
+
+**The task still failed** (`failed`, parked, 269.9s, `groundtruth_ran:
+false`) — but at the SAME juncture as t7 and t8, for the SAME reason,
+independent of the scratchpad: the model wrote `@property` immediately
+followed by a wrongly-indented `def size(self):` (dedented to column 0) in
+`lru_cache.py`, producing `SyntaxError: unexpected unindent`, then reproduced
+the identical broken content 3x (steps 5-7), tripping the repetition guard,
+then looped on `pytest` 3x after the nudge (steps 8-10) without ever calling
+`view_file` or attempting a corrected `create_file`, and parked. This is now
+the THIRD confirmed observation of this exact `@property`/`size` defect
+(t7, t8, t10) — a reproducible, scratchpad-independent weakness in this 14B
+model's handling of that specific decorator+property pattern.
+
+**Conclusion:** the scratchpad-delivery fix is validated and should ship as-
+is — it demonstrably gets the affordance used (0% -> 100% in this trial,
+consistent with the corpus-wide fix). But it cannot and does not fix a
+model-level syntax defect that occurs upstream of any scratchpad update (the
+model never got past generating valid Python for `lru_cache.py`, so there
+was nothing for cross-step memory to help retain). H3 itself (does the now-
+reliably-used scratchpad improve OUTCOMES, not just get consumed) remains
+**unanswered** — every trial in this task's history that could exercise it
+has been blocked by this unrelated defect. Testing H3 properly needs either
+(a) a task/prompt where the model doesn't hit this specific syntax trap, or
+(b) fixing the `@property`/`size` defect first (e.g. a worked example in the
+checklist showing the correct `@property` + `def size(self):` indentation,
+mirroring how the EDITING MECHANICS worked-example fixed the str_replace
+deadlock) so runs survive long enough to reach a scratchpad-relevant
+decision point.

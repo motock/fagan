@@ -1619,3 +1619,54 @@ example`) stays unmerged; its prompt-correct-but-ineffective clause is
 superseded by the auto-repair. H3 (does the now-reliably-used scratchpad
 improve outcomes) remains open, still blocked — but now by the prose-
 narration loop rather than the @property defect.
+
+### Narration-cap + escalating nudge (prose-loop fix, 2026-07-16) — unit-tested, no regression; in-vivo cap fire not observed across 5 trials
+
+Follows the `@property`/`size` auto-repair (PR #113, separate), which cures
+the syntax death-loop so `lru_cache.py` lands. With that defect gone, the
+next blocker on this task is a **prose-narration loop**: the executor emits
+its "next step" as prose instead of a tool call, and the harness's static
+"Call a tool now (do not write prose)" nudge (local_agent_oracle.py) cannot
+break it — the model loops the nudge until the step cap parks it, never
+running the acceptance suite through the harness.
+
+**Root cause.** This is the known *self-test-wrong-expected-value* failure
+mode, not a generic tool-calling collapse. In the trial that surfaced it
+(t13), the model wrote `test_get_hit_marks_mru` asserting `cache.get('b')
+== 2` — wrong LRU semantics: after `get('a')` marks `a` MRU, `b` is LRU,
+so `put('c')` correctly evicts `b` and `get('b')` is `None`. The
+implementation was correct (acceptance oracle 5/5); the model's *own* test
+had the wrong expected value. The model looped trying to "fix" the correct
+implementation to satisfy a self-contradictory test and, unable to resolve
+it, narrated the next action as prose. This is behavioral (the model *can*
+emit tool calls — it did for 34 turns in t13), not decoding-level, so a
+prompt-level nudge had a real chance.
+
+**Fix (verbatim-mirror pair, scripts/local_agent.py +
+local_agent_oracle.py).** (1) `NO_TOOL_CAP` (default 5, env
+`LOCAL_AGENT_NO_TOOL_CAP`): park (rc=2, WIP-commit if dirty) after N
+consecutive no-tool turns instead of nudging indefinitely. (2)
+`_no_tool_nudge(consecutive)`: plain "Call a tool now" for turns 1–2, then
+escalates to behavioral guidance — "if stuck on a failing test you wrote,
+that test may assert wrong behavior; re-read the spec; if your impl matches
+the spec, fix or delete the failing test, not the impl, then call done." The
+cap is the deterministic safety net; the nudge attempts to cure the run. 4
+new tests per file pin the escalation wording and the cap (rc=2, exactly 5
+no-tool turns, not the full step budget). Full suite green (1001).
+
+**Live validation (lru_cache t14–t18, same config, fix applied).** The t13
+prose-narration collapse did **not** reproduce in 5 fresh trials — it
+appears rarer than estimated (1 clear instance in ~7 total trials). The cap
+was not exercised in vivo. What the trials did show: **no happy-path
+regression** (3/5 clean oracle-green), and the two non-green runs hit
+*pre-existing* guards for *different* failure modes (a capability
+tool-loop on a correct self-test; a per-target repetition-guard park) — not
+the narration mode the cap targets. The fix ships as a low-risk safety net
+for the t13 narration variant; the in-vivo fire remains to be observed.
+
+**Failure-mode space clarified.** "Stuck on own test" has ≥3 variants:
+(a) wrong-expected-value test + prose narration [what the cap targets];
+(b) correct test + capability tool-loop [not addressed — different mode];
+(c) repeated re-creation of the impl file [caught by the existing per-target
+repetition guard]. The narration cap does not address (b) or (c); those
+remain open if they recur at frequency.

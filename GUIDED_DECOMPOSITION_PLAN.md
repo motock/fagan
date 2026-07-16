@@ -1135,14 +1135,29 @@ the model eventually cracked the last edge case (validation) and passed.
    3-identical-call threshold; it remains a latent trap.
 
 **Remaining genuinely-open items (not blocking; recorded for later):**
-- A real rework trial (H4) is still unexercised — no run all session reached
-  REQUEST_CHANGES with the rework cap open; the fix-checklist mechanism is
-  built + TDD'd but never validated live.
-- H3 (scratchpad's independent contribution) was never tested.
-- The whole-file directive could be strengthened or enforced (e.g., make
-  the harness prefer/permit create_file-overwrite more aggressively, or
-  gate str_replace behind a nudge) so the efficient path is followed more
-  reliably — interval_merge's 10x time cost is the evidence this would help.
+- ~~A real rework trial (H4) is still unexercised~~ **RESOLVED (t9,
+  2026-07-16, see below)** — t9's forced interruption produced a genuine
+  REQUEST_CHANGES -> `_run_rework_planner` fix-checklist -> rework
+  redispatch, unintentionally exercising exactly this path. The fix-checklist
+  arrived in the transcript verbatim and the rework succeeded (APPROVE,
+  merged, groundtruth passed).
+- H3 (scratchpad's independent contribution) was never tested. **Still open**
+  — no trial this session isolated `PIPELINE_DECOMPOSE_SCRATCHPAD=on` vs
+  `off` on a matched task.
+- The whole-file directive could be strengthened or enforced: **(a) make the
+  harness prefer/permit create_file-overwrite more aggressively — DONE**, see
+  the informed-overwrite fix + t8/t9 live validation below; **(b) gate
+  str_replace behind a nudge — explicitly scoped OUT** (user chose
+  informed-overwrite only, not the nudge, when the fix was approved). (b)
+  remains a real gap for a task where str_replace's anchors are unique
+  enough that it never deadlocks and the model is never steered toward
+  create_file at all — worth revisiting if a future task grinds through
+  repeated str_replace cycles despite the whole-file directive.
+- The repetition-guard TDD false-positive (mechanism 3 above) remains
+  **exactly as open as before** — t9's guard trip was a genuine stuck-loop
+  (3 identical `pytest` calls with no intervening progress), not the
+  false-positive case (progress between reads) the plan worried about, so
+  it neither confirms nor refutes the latent trap.
 
 **Preserved artifacts:** `tests/benchmark/_runs/guided_decomp_mlx_6tasks/
 _preserve_for_analysis/` holds snapshots of all three generalize trials

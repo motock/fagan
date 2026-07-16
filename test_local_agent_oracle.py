@@ -76,6 +76,25 @@ def test_oracle_create_file_rejects_invalid_python_syntax_dangling_triple_quote(
     assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
 
 
+def test_oracle_create_file_rejects_return_outside_function(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_create_file_rejects_return_outside_function
+    - ast.parse() alone accepts this (grammar-only check, doesn't validate
+    that `return` sits inside a function); the guard must use compile()."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    bad_content = (
+        "def foo():\n"
+        "    x = 1\n"
+        "for i in range(3):\n"
+        "    y = i\n"
+        "    return y\n"
+    )
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": bad_content})
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "invalid" in result.lower() and "syntax" in result.lower()
+    assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
+
+
 def test_oracle_str_replace_rejects_edit_that_produces_invalid_python_syntax(tmp_path, monkeypatch):
     """A rejected edit must not partially apply — the file's on-disk content
     must be byte-for-byte unchanged from before the call."""
@@ -131,6 +150,33 @@ def test_oracle_create_file_empty_content_on_py_path_is_not_rejected(tmp_path, m
     result = lao.run_tool("create_file", {"path": "empty.py"})
     assert result == "created empty.py"
     assert (tmp_path / "empty.py").read_text() == ""
+
+
+def test_oracle_create_file_overwrites_a_file_it_created_earlier_this_run(tmp_path, monkeypatch):
+    """Mirrors test_local_agent's version: a model that mistakenly calls
+    create_file again on a path it already successfully created THIS run
+    should be allowed to overwrite it - a full rewrite is often the natural
+    recovery strategy for a weak model that can't construct a correct
+    str_replace old_str. The non-destructive guard exists to protect
+    PRE-EXISTING repo/seed files, not files the agent itself just wrote."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_CREATED_THIS_RUN", set())
+    r1 = lao.run_tool("create_file", {"path": "mod.py", "content": "x = 1\n"})
+    assert r1 == "created mod.py"
+    r2 = lao.run_tool("create_file", {"path": "mod.py", "content": "x = 2\n"})
+    assert r2 == "created mod.py"
+    assert (tmp_path / "mod.py").read_text() == "x = 2\n"
+
+
+def test_oracle_create_file_still_rejects_overwrite_of_pre_existing_file(tmp_path, monkeypatch):
+    """Regression: a file that exists on disk but was NOT created via
+    create_file this run must still be protected."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_CREATED_THIS_RUN", set())
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": "x = 2\n"})
+    assert result == "ERROR: mod.py already exists and is non-empty. Use str_replace to edit it."
+    assert (tmp_path / "mod.py").read_text() == "x = 1\n"
 
 
 def test_oracle_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monkeypatch):
@@ -534,6 +580,79 @@ def test_oracle_str_replace_repetitions_do_not_fire_per_target_guard(
     # AND the oracle_result() returns True (which it does in this test
     # because ACCEPTANCE_PATHS is empty -> line 165 short-circuits).
     assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
+
+
+def test_oracle_repeated_create_file_on_existing_path_trips_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    """Mirrors test_local_agent.test_local_agent_repeated_create_file_on_
+    existing_path_trips_repetition_guard for the oracle harness: create_file's
+    own membership in MUTATING_TOOLS made `if fn in MUTATING_TOOLS:
+    seen.clear()` wipe its own signature's count on every call, so repeated
+    create_file attempts against an existing path could never accumulate
+    past 1 and the per-target guard was permanently inert for this pattern."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "lru_cache.py").write_text("class LRUCache:\n    pass\n")
+    responses = [("create_file", {"path": "lru_cache.py", "content": "class LRUCache:\n    x = 1\n"})
+                 for _ in range(6)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, (
+        f"repeated create_file on an existing path must trip the per-target "
+        f"guard; output: {out!r}"
+    )
+    assert "[parking: repeated action after nudge]" in out, (
+        f"ignoring the nudge must park the run; output: {out!r}"
+    )
+    assert rc == 3, f"expected parking exit 3, got {rc}\noutput: {out!r}"
+    assert len(calls) <= 6, (
+        f"guard should stop well before burning the whole scripted sequence, "
+        f"got {len(calls)} chat calls"
+    )
+
+
+def test_oracle_interleaved_failed_mutations_still_trip_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    """Mirrors test_local_agent's version: reproduces the real 2026-07-15
+    lru_cache incident where failed str_replace/bash calls interleaved
+    between failed create_file attempts kept wiping create_file's
+    accumulating failure count (clearing was gated on tool identity, not
+    outcome), making the guard inert for this exact pattern."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "lru_cache.py").write_text("class LRUCache:\n    pass\n")
+    responses = [
+        ("create_file", {"path": "lru_cache.py", "content": "content1"}),
+        ("str_replace", {"path": "lru_cache.py", "old_str": "NOPE", "new_str": "x"}),
+        ("bash", {"command": "true"}),
+        ("create_file", {"path": "lru_cache.py", "content": "content2"}),
+        ("str_replace", {"path": "lru_cache.py", "old_str": "NOPE2", "new_str": "x"}),
+        ("bash", {"command": "true"}),
+        ("create_file", {"path": "lru_cache.py", "content": "content3"}),
+        ("create_file", {"path": "lru_cache.py", "content": "content4"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, (
+        f"interleaved failed mutations must still trip the per-target "
+        f"guard; output: {out!r}"
+    )
+    assert "[parking: repeated action after nudge]" in out, (
+        f"ignoring the nudge must park the run; output: {out!r}"
+    )
+    assert rc == 3, f"expected parking exit 3, got {rc}\noutput: {out!r}"
+    assert len(calls) <= 8, (
+        f"guard should stop well before burning the whole scripted sequence, "
+        f"got {len(calls)} chat calls"
+    )
 
 
 def test_oracle_edit_between_reads_resets_per_target_repetition_counter(

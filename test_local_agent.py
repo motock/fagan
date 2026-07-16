@@ -85,6 +85,28 @@ def test_str_replace_rejects_edit_that_produces_invalid_python_syntax(tmp_path, 
     assert (tmp_path / "mod.py").read_text() == original
 
 
+def test_create_file_rejects_return_outside_function(tmp_path, monkeypatch):
+    """ast.parse() alone accepts this (it only validates grammar, not that
+    `return` sits inside a function) - observed live 2026-07-15: a dedented
+    `for` loop landed a `return` at module scope, ast.parse() let it through,
+    and the file reached the groundtruth oracle as an import-breaking
+    SyntaxError only python's compile() step catches. The guard must use
+    compile(), not ast.parse(), to close this gap."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    bad_content = (
+        "def foo():\n"
+        "    x = 1\n"
+        "for i in range(3):\n"
+        "    y = i\n"
+        "    return y\n"
+    )
+    result = la.run_tool("create_file", {"path": "mod.py", "content": bad_content})
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "invalid" in result.lower() and "syntax" in result.lower()
+    assert not (tmp_path / "mod.py").exists() or not (tmp_path / "mod.py").read_text().strip()
+
+
 def test_create_file_accepts_valid_python_syntax(tmp_path, monkeypatch):
     """Regression: valid Python content must still write exactly as before."""
     monkeypatch.setattr(la, "CWD", tmp_path)
@@ -123,6 +145,37 @@ def test_create_file_empty_content_on_py_path_is_not_rejected(tmp_path, monkeypa
     result = la.run_tool("create_file", {"path": "empty.py"})
     assert result == "created empty.py"
     assert (tmp_path / "empty.py").read_text() == ""
+
+
+def test_create_file_overwrites_a_file_it_created_earlier_this_run(tmp_path, monkeypatch):
+    """A model that mistakenly calls create_file again on a path it already
+    successfully created THIS run should be allowed to overwrite it (a full
+    rewrite is often the natural recovery strategy for a weak model that
+    can't construct a correct str_replace old_str) - the non-destructive
+    guard exists to protect PRE-EXISTING repo/seed files from being
+    clobbered, not files the agent itself just wrote. Observed live
+    2026-07-15 (lru_cache): a model stuck alternating rejected create_file
+    and rejected str_replace calls for dozens of steps, never finishing."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_CREATED_THIS_RUN", set())
+    r1 = la.run_tool("create_file", {"path": "mod.py", "content": "x = 1\n"})
+    assert r1 == "created mod.py"
+    r2 = la.run_tool("create_file", {"path": "mod.py", "content": "x = 2\n"})
+    assert r2 == "created mod.py"
+    assert (tmp_path / "mod.py").read_text() == "x = 2\n"
+
+
+def test_create_file_still_rejects_overwrite_of_pre_existing_file(tmp_path, monkeypatch):
+    """Regression: a file that exists on disk but was NOT created via
+    create_file this run (e.g. a pre-existing repo/seed file, or one written
+    directly to disk before the agent started) must still be protected -
+    only self-authored-this-run files are eligible for overwrite."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_CREATED_THIS_RUN", set())
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    result = la.run_tool("create_file", {"path": "mod.py", "content": "x = 2\n"})
+    assert result == "ERROR: mod.py already exists and is non-empty. Use str_replace to edit it."
+    assert (tmp_path / "mod.py").read_text() == "x = 1\n"
 
 
 def test_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monkeypatch):
@@ -778,6 +831,88 @@ def test_local_agent_str_replace_repetitions_do_not_fire_per_target_guard(
     )
     # After 1 done rejection, the harness auto-WIP-commits and accepts.
     assert rc == 0, f"expected done exit 0, got {rc}\noutput: {out!r}"
+
+
+def test_local_agent_repeated_create_file_on_existing_path_trips_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    """The per-target repetition guard must catch a model stuck resubmitting
+    create_file against a path that already exists (non-destructive-editor
+    rejects each one with "already exists" - it should use str_replace
+    instead). Observed live 2026-07-15: create_file's own membership in
+    MUTATING_TOOLS made `if fn in MUTATING_TOOLS: seen.clear()` wipe out its
+    OWN signature's count on every single call, so seen[sig] could never
+    accumulate past 1 - the guard was permanently inert for this exact
+    pattern, and a real trial burned 34 consecutive create_file calls (its
+    entire step budget) with no nudge ever firing."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "lru_cache.py").write_text("class LRUCache:\n    pass\n")
+    responses = [("create_file", {"path": "lru_cache.py", "content": "class LRUCache:\n    x = 1\n"})
+                 for _ in range(6)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, (
+        f"repeated create_file on an existing path must trip the per-target "
+        f"guard; output: {out!r}"
+    )
+    assert "[parking: repeated action after nudge]" in out, (
+        f"ignoring the nudge must park the run; output: {out!r}"
+    )
+    assert rc == 3, f"expected parking exit 3, got {rc}\noutput: {out!r}"
+    assert len(calls) <= 6, (
+        f"guard should stop well before burning the whole scripted sequence, "
+        f"got {len(calls)} chat calls"
+    )
+
+
+def test_local_agent_interleaved_failed_mutations_still_trip_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    """Reproduces the real 2026-07-15 lru_cache incident precisely: a model
+    alternates create_file (rejected: already exists) with str_replace
+    (rejected: old_str not found) and the occasional successful bash check,
+    never making real progress. Pre-fix, `if fn in MUTATING_TOOLS:
+    seen.clear()` ran on every mutating call REGARDLESS OF OUTCOME, so each
+    failed str_replace wiped out create_file's accumulating failure count
+    before it could ever reach the threshold - the guard was inert for this
+    exact interleaved pattern (34 consecutive calls burned live with zero
+    nudges). The fix must gate clearing on the mutation actually SUCCEEDING,
+    not merely being attempted, so failed str_replace/bash calls in between
+    do not reset create_file's accumulating failure count."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "lru_cache.py").write_text("class LRUCache:\n    pass\n")
+    responses = [
+        ("create_file", {"path": "lru_cache.py", "content": "content1"}),  # fails: exists
+        ("str_replace", {"path": "lru_cache.py", "old_str": "NOPE", "new_str": "x"}),  # fails: not found
+        ("bash", {"command": "true"}),  # succeeds, not a mutating tool
+        ("create_file", {"path": "lru_cache.py", "content": "content2"}),  # fails: exists
+        ("str_replace", {"path": "lru_cache.py", "old_str": "NOPE2", "new_str": "x"}),  # fails: not found
+        ("bash", {"command": "true"}),  # succeeds
+        ("create_file", {"path": "lru_cache.py", "content": "content3"}),  # 3rd failure -> nudge
+        ("create_file", {"path": "lru_cache.py", "content": "content4"}),  # ignored nudge -> park
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, (
+        f"interleaved failed mutations must still trip the per-target "
+        f"guard; output: {out!r}"
+    )
+    assert "[parking: repeated action after nudge]" in out, (
+        f"ignoring the nudge must park the run; output: {out!r}"
+    )
+    assert rc == 3, f"expected parking exit 3, got {rc}\noutput: {out!r}"
+    assert len(calls) <= 8, (
+        f"guard should stop well before burning the whole scripted sequence, "
+        f"got {len(calls)} chat calls"
+    )
 
 
 def test_local_agent_edit_between_reads_resets_per_target_repetition_counter(

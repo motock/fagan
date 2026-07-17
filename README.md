@@ -470,6 +470,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` \| `auto` (layered local-first with Claude fallback — see below) |
 | `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
 | `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
+| `PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV` | *(unset)* | Off by default: every `claude` subprocess call strips `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL`/`CLAUDE_CODE_USE_BEDROCK`/`CLAUDE_CODE_USE_VERTEX` from its environment so an interactive session's 3rd-party-provider redirect can't silently leak into dispatch/review/overlord. Set truthy only for a legitimate enterprise Bedrock/Vertex deployment that intentionally routes the CLI elsewhere — see "Claude backend provider isolation" below. |
 | `PIPELINE_LOCAL_PROVIDER` | `ollama` | Wire protocol the `local` alias's `complete()`/`resource_status()` speak when a role is set to the generic `local` name: `ollama` \| `mlx` \| `lmstudio`. Naming the provider directly in `PIPELINE_BACKEND_<ROLE>` (`ollama`/`lmstudio`/`mlx`, RELIABILITY_PLAN.md T16) pins that provider for that role regardless of this setting — `local` stays a permanent back-compat alias (existing manifests persist `"backend": "local"`) and is the only name this variable actually affects. All three providers are working, live-validated implementations (including real tool-calling round trips and, for `lmstudio`, a full multi-turn review-loop convergence to a verdict). Neither `mlx` (targets `mlx_lm.server`) nor `lmstudio` (targets LM Studio's local server) has a per-request context-window control like Ollama's `num_ctx` — both send that value as `max_tokens` instead. `lmstudio`'s loaded-model check uses its own `/api/v0/models` (`state: loaded/not-loaded`), not Ollama's `/api/ps`, and LM Studio JIT-loads a model on its first request (~30s for a small model) rather than expecting it pre-loaded. **Does not yet affect `dispatch()`** — the coding-agent subprocess always talks to Ollama's native API regardless of this setting (`MODEL_PROVIDER_ABSTRACTION_PLAN.md` S3, deferred). **MLX/LM Studio model names have no `:` like Ollama tags do** — `_resolve_local_model` treats any model string without a `:` as a tier name, so a Hugging Face repo id (e.g. `mlx-community/Qwen2.5-1.5B-Instruct-4bit`, `google/gemma-4-e4b`) must be set via `PIPELINE_LOCAL_MODEL_DEFAULT`/`_OPUS`/`_SONNET`/`_HAIKU`, not passed as a raw `model=` value. |
 | `PIPELINE_LOCAL_ENDPOINT` | `http://localhost:11434` | Ollama base URL for the `local` driver (it uses Ollama's native `/api/chat`, the only surface that accepts `num_ctx`). Point at a remote Ollama to use another box. |
 | `PIPELINE_LOCAL_MODEL_DEFAULT` | `devstral:24b` | Local model used for any tier without its own override below |
@@ -620,6 +621,43 @@ capability gap — see Secure by Design.
 
 Setting any `PIPELINE_BACKEND_*` var to a name that isn't registered raises
 `NotImplementedError` naming the offending var.
+
+**Claude backend provider isolation.** Every `claude` subprocess call
+(`complete()`, `dispatch()`, `usage_probe_text()`) runs with a stripped
+environment: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`,
+`ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `CLAUDE_CODE_USE_BEDROCK`, and
+`CLAUDE_CODE_USE_VERTEX` are removed before the call, regardless of what the
+invoking shell (an interactive session, or the scheduler's) has exported. This
+matters because the pipeline MCP server is a child process of the top-level
+`claude` session — without this isolation, pointing your *interactive* session
+at a 3rd-party provider (a real, documented `claude` CLI feature) would
+silently carry over into every `PIPELINE_BACKEND_<ROLE>=claude` dispatch/
+review/overlord call, while the audit sidecar (`review_token_costs.jsonl`)
+still reported `"backend": "claude"` regardless of what actually served the
+request.
+
+- `PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV` (default unset/off) restores full
+  environment inheritance for legitimate enterprise Bedrock/Vertex
+  deployments that intentionally route the `claude` CLI elsewhere. Leave this
+  unset unless you know you need it — the default is deny-by-default per
+  Secure by Design.
+- `review_token_costs.jsonl` records both `"model"` (the requested tier, e.g.
+  `"sonnet"`) and `"served_model"` (the CLI's own reported model string, from
+  its `--output-format json` payload) on every structured `complete()` call —
+  a `jq`-able trail that surfaces provider drift even for calls predating this
+  isolation, or when the escape hatch above is set intentionally.
+- `ClaudeCliDriver.verify_identity()` runs a one-time, cheap preflight
+  (`claude -p "1+1" --model sonnet --output-format json`) confirming the
+  served model's name genuinely starts with `claude-sonnet-`; the result is
+  cached for the process's lifetime and folded into `resource_status()` —
+  a confirmed mismatch blocks dispatch/review through the exact same gate a
+  tripped Claude usage-pause already uses. An unchecked (never-probed)
+  identity fails open, same as missing usage state.
+- Independently, `complete()`'s own structured-output path raises
+  `backend.ProviderIdentityMismatch` (a `RuntimeError` subclass) if a single
+  call's served model diverges from its requested tier — `review_story`'s
+  generic exception handler already treats this as an inconclusive review
+  (fail-closed, never a false APPROVE) without any special-casing.
 
 **Autonomy levels:**
 - `dry-run` — plan and log only; never dispatch, merge, or take irreversible

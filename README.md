@@ -119,11 +119,28 @@ log as an audit record.
 ## MCP tools reference
 
 ### Planning
+- `decompose_plan(request)` — turn a raw goal/feature request into epics/
+  stories JSON via the product-analyst persona, on whichever provider the
+  `decompose` role is configured for (see "Per-role provider/model
+  configuration" below). Does **not** call `save_plan` itself — review the
+  returned plan (same as you would the interactive `product-analyst`
+  subagent's output), then `save_plan` it yourself. Returns `{"ok": true,
+  "plan": {...}}` on success, or `{"ok": false, "error": ..., "raw": ...}`
+  if the model's response wasn't valid/shaped JSON.
 - `save_plan(plan_name, plan_json)` — save a plan JSON to `~/.claude/plans/`.
 - `list_plans()` — list saved plans.
 - `ingest_plan(plan_name, only_epics=None)` — push a plan into Plane (epics +
   issues), tag with `agent-pipeline`, write `<plan>.manifest.json`. Carries each
-  story's `persona`, `model`, and `risk` into the manifest.
+  story's `persona`, `model`, `risk`, and `backend` into the manifest. A
+  story's `backend` (`claude` \| `local` \| `ollama` \| `lmstudio` \| `mlx` \|
+  `auto`) pins its dispatch provider from the plan itself, independent of the
+  process-wide `PIPELINE_BACKEND_DISPATCH` — an unknown value is rejected at
+  ingest time with a clear error, before any Plane side effects.
+- `get_role_config(plan_name=None)` — show the resolved `(provider, model)`
+  for every role (`overlord`, `planner`, `dispatch`, `review`, `decompose`)
+  given the current env vars and `model_registry.json`, optionally layered
+  with a specific plan's `role_config` (see below). Pure read — check what a
+  plan will actually run on *before* executing it.
 
 ### Dispatch & status
 - `list_ready_stories(plan_name)` — stories whose dependencies are all `done`.
@@ -390,11 +407,15 @@ the cost gate.
           "persona": "software-engineer",
           "model": "sonnet",
           "risk": "low",
+          "backend": "optional: claude | local | ollama | lmstudio | mlx | auto",
           "key": "optional explicit story key; omit to auto-mint a UUID"
         }
       ]
     }
-  ]
+  ],
+  "role_config": {
+    "review": {"provider": "mlx", "model": "qwen"}
+  }
 }
 ```
 
@@ -415,6 +436,70 @@ the cost gate.
 - `agent_instructions` — the implementation brief the dispatched agent receives. This is where the testable success criteria belong (what tests to write, including negative/boundary cases); it is the single most influential field on outcome quality.
 - `acceptance` — *optional* array of `{path, source}` read-only test fixtures. When present, the harness writes each `source` to `path` in the worktree (read-only — the agent may not edit them) and the oracle grades the run on whether the implementation makes them pass. Omit it for ordinary TDD stories where the agent writes its own tests per `agent_instructions`; the story then runs on the base harness with a "tests pass" bar. Do **not** use `acceptance_criteria` or a list of strings — `ingest_plan` reads `acceptance` and expects `{path, source}` dicts; a list of strings raises `TypeError: string indices must be integers` in `dispatch_story`.
 - `key` — optional explicit story key; omit to auto-mint a UUID. `dependencies` may reference a story by its exact `summary` string or its explicit `key`.
+- `backend` — *optional*, per-story dispatch provider override:
+  `claude | local | ollama | lmstudio | mlx | auto`. Pins that one story to
+  a specific provider from the plan itself, independent of the process-wide
+  `PIPELINE_BACKEND_DISPATCH`. `ingest_plan` validates it against the
+  registered drivers and rejects an unknown value before any Plane calls.
+  Omit to use `PIPELINE_BACKEND_DISPATCH`'s normal resolution (unchanged).
+- `role_config` — *optional*, plan-level (not per-story): per-role provider/
+  model overrides for `overlord`, `planner`, `dispatch`, `review`, and
+  `decompose`, e.g. `{"review": {"provider": "mlx", "model": "qwen"}}`. Set
+  once at the top level of the plan JSON, alongside `epics`; carried into
+  the manifest and consulted by `dispatch_story`, `review_story`, and
+  `request_decision` on every tick for that plan. Not required — omitting
+  it (or any individual role) falls through to `model_registry.json`, then
+  the existing `PIPELINE_BACKEND_<ROLE>` env vars, then today's hardcoded
+  defaults. See "Per-role provider/model configuration" below.
+
+---
+
+## Per-role provider/model configuration
+
+Every pipeline role — **overlord**, **planner** (the guided-decomposition
+checklist role), **dispatch** (the implementer), **review**, and
+**decompose** (`decompose_plan`) — is independently configurable to a
+provider (`claude` / `ollama` / `mlx` / `lmstudio`) and a model.
+`model_registry.json` (repo root, or `PIPELINE_MODEL_REGISTRY_PATH`) is the
+single editable place to see and change what's available, instead of
+scattered env vars:
+
+```json
+{
+  "providers": {
+    "claude":   {"models": {"opus": {"tag": "opus"}, "sonnet": {"tag": "sonnet"}}},
+    "ollama":   {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}, "glm": {"tag": "glm-4.7-flash:cloud"}}},
+    "mlx":      {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}}
+  },
+  "roles": {
+    "review": {"provider": "mlx", "model": "qwen"}
+  }
+}
+```
+
+`providers.<name>.models.<friendly name>.tag` maps a short name (what you'd
+say out loud — "gpt-oss", "qwen") to the literal string a provider expects
+(an Ollama tag, an MLX model path, or a Claude tier). `roles.<role>` sets
+that role's default `(provider, model)` — resolved via the friendly name
+above, so a typo is caught immediately rather than silently falling back to
+some other model. Both sections are optional and can be partial; an
+unconfigured role falls through to today's existing behavior unchanged.
+
+**Resolution priority** (`role_registry.resolve_role`, highest wins), the
+same for provider and model independently:
+
+1. A plan's `role_config` block (see the schema above) — set once per plan,
+   applies to every tick.
+2. The existing `PIPELINE_BACKEND_<ROLE>` env var (and, for local models,
+   the existing `PIPELINE_LOCAL_MODEL_*`/`PIPELINE_LOCAL_REVIEW_MODEL`/
+   `PIPELINE_DECOMPOSE_CLOUD_MODEL` vars) — unchanged, still the fastest way
+   to override ad hoc.
+3. `model_registry.json`'s `roles.<role>` entry.
+4. The role's existing hardcoded/persona-frontmatter default.
+
+Use `get_role_config(plan_name=None)` to see what actually resolves right
+now (optionally layered with a specific plan's `role_config`) before
+running that plan.
 
 ---
 
@@ -470,6 +555,8 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` \| `auto` (layered local-first with Claude fallback — see below) |
 | `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
 | `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
+| `PIPELINE_BACKEND_PLANNER` | *(unset)* | Backend for the guided-decomposition planner (the in-story checklist + rework-feedback checklist role, `PIPELINE_DECOMPOSE`'s `mode="local"` path): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Unset means the planner mirrors whatever backend `dispatch` resolved to for that story (today's default) — set this to pin the planner to a specific provider independent of dispatch, e.g. dispatch on `ollama` with the planner on `mlx`. `mode="cloud"` is unaffected (always `claude`, see `PIPELINE_DECOMPOSE_CLOUD_MODEL`). |
+| `PIPELINE_BACKEND_DECOMPOSE` | `claude` | Backend for the `decompose_plan` tool (turns a raw request into epics/stories JSON via the product-analyst persona): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Independent of the interactive `product-analyst` subagent (invoked via the `Agent` tool), which is always Claude and unaffected by this setting. |
 | `PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV` | *(unset)* | Off by default: every `claude` subprocess call strips `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL`/`CLAUDE_CODE_USE_BEDROCK`/`CLAUDE_CODE_USE_VERTEX` from its environment so an interactive session's 3rd-party-provider redirect can't silently leak into dispatch/review/overlord. Set truthy only for a legitimate enterprise Bedrock/Vertex deployment that intentionally routes the CLI elsewhere — see "Claude backend provider isolation" below. |
 | `PIPELINE_LOCAL_PROVIDER` | `ollama` | Wire protocol the `local` alias's `complete()`/`resource_status()` speak when a role is set to the generic `local` name: `ollama` \| `mlx` \| `lmstudio`. Naming the provider directly in `PIPELINE_BACKEND_<ROLE>` (`ollama`/`lmstudio`/`mlx`, RELIABILITY_PLAN.md T16) pins that provider for that role regardless of this setting — `local` stays a permanent back-compat alias (existing manifests persist `"backend": "local"`) and is the only name this variable actually affects. All three providers are working, live-validated implementations (including real tool-calling round trips and, for `lmstudio`, a full multi-turn review-loop convergence to a verdict). Neither `mlx` (targets `mlx_lm.server`) nor `lmstudio` (targets LM Studio's local server) has a per-request context-window control like Ollama's `num_ctx` — both send that value as `max_tokens` instead. `lmstudio`'s loaded-model check uses its own `/api/v0/models` (`state: loaded/not-loaded`), not Ollama's `/api/ps`, and LM Studio JIT-loads a model on its first request (~30s for a small model) rather than expecting it pre-loaded. **Does not yet affect `dispatch()`** — the coding-agent subprocess always talks to Ollama's native API regardless of this setting (`MODEL_PROVIDER_ABSTRACTION_PLAN.md` S3, deferred). **MLX/LM Studio model names have no `:` like Ollama tags do** — `_resolve_local_model` treats any model string without a `:` as a tier name, so a Hugging Face repo id (e.g. `mlx-community/Qwen2.5-1.5B-Instruct-4bit`, `google/gemma-4-e4b`) must be set via `PIPELINE_LOCAL_MODEL_DEFAULT`/`_OPUS`/`_SONNET`/`_HAIKU`, not passed as a raw `model=` value. |
 | `PIPELINE_LOCAL_ENDPOINT` | `http://localhost:11434` | Ollama base URL for the `local` driver (it uses Ollama's native `/api/chat`, the only surface that accepts `num_ctx`). Point at a remote Ollama to use another box. |
@@ -477,8 +564,10 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_LOCAL_MODEL_OPUS` | — | Local model for the `opus` tier (falls back to the default) |
 | `PIPELINE_LOCAL_MODEL_SONNET` | — | Local model for the `sonnet` tier (falls back to the default) |
 | `PIPELINE_LOCAL_MODEL_HAIKU` | — | Local model for the `haiku` tier (falls back to the default) |
+| `PIPELINE_LOCAL_MODEL_<PROVIDER>_<TIER>` | — | Provider-scoped tier override, e.g. `PIPELINE_LOCAL_MODEL_MLX_SONNET`, `PIPELINE_LOCAL_MODEL_OLLAMA_OPUS`. Checked **before** the provider-agnostic `PIPELINE_LOCAL_MODEL_<TIER>` above. Exists because two roles on two different local providers (e.g. review on `mlx`, dispatch on `ollama`) previously shared one global tier→model mapping meant for a single wire format/model namespace — a real correctness gap, not just an ergonomics one, since an MLX model path and an Ollama tag are different string shapes entirely. Falls back to `PIPELINE_LOCAL_MODEL_<TIER>`, then `PIPELINE_LOCAL_MODEL_DEFAULT`, when unset. |
 | `PIPELINE_LOCAL_NUM_CTX` | `16384` | Ollama context window for local calls (sized to fit 100% on a 24GB M4 GPU; raising it risks a slow CPU/GPU split) |
 | `PIPELINE_LOCAL_TEMPERATURE` | `0.3` | Sampling temperature for local model calls |
+| `PIPELINE_MODEL_REGISTRY_PATH` | `<repo root>/model_registry.json` | Path to the model/role registry file — see "Per-role provider/model configuration" below. |
 
 **Per-model tuning table.** `backend.py`'s `_LOCAL_MODEL_TUNING` dict holds
 empirically-settled `temperature`/`num_ctx` overrides keyed by the *resolved

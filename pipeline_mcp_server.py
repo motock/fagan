@@ -54,6 +54,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 import backend
+import role_registry
 
 # ---------- Config ----------
 PLANE_BASE      = os.environ.get("PLANE_BASE", "http://localhost").rstrip("/")
@@ -923,16 +924,26 @@ def _load_policy() -> str:
     return "\n".join(parts)
 
 
-def _invoke_overlord(prompt: str) -> str:
+def _invoke_overlord(prompt: str, plan_role_config: dict | None = None) -> str:
     """Run the overlord persona headless and return its raw stdout.
 
     External boundary: delegates to the configured Backend. Tests mock this
-    function.
+    function. Provider/model fall through role_registry (PIPELINE_BACKEND_
+    OVERLORD / a plan's role_config / model_registry.json's "overlord"
+    entry), falling back to the persona's declared tier ("opus") when none
+    of those apply - so an unconfigured install resolves identically to
+    before role_registry existed. Passing name=resolution.provider
+    explicitly (rather than relying on get_backend's own internal env
+    lookup, as before) is required so a registry/plan-configured provider
+    actually takes effect.
     """
-    model = _persona_default_model("overlord") or "opus"
     system = _persona_body("overlord")
-    return backend.get_backend("overlord").complete(
-        prompt, system=system, model=model, allowed_tools="Read",
+    resolution = role_registry.resolve_role(
+        "overlord", plan_role_config=plan_role_config,
+        model_fallback=lambda: _persona_default_model("overlord") or "opus",
+    )
+    return backend.get_backend("overlord", name=resolution.provider).complete(
+        prompt, system=system, model=resolution.model, allowed_tools="Read",
     )
 
 
@@ -957,8 +968,17 @@ _PLANNER_SYSTEM = (
     "backwards-moving clock, or a read that must not have side effects), "
     "include a concrete worked example with actual numbers showing the "
     "correct result, and name the specific mistake a less careful "
-    "implementation would make there. Do not invent scope beyond what the "
-    "task describes. "
+    "implementation would make there. If the edge case touches state that "
+    "persists across calls (a clock, counter, or high-water mark), the "
+    "worked example must not stop at that one call's return value - trace "
+    "at least one follow-up call afterward and confirm the state left "
+    "behind still produces the correct result for it. A common mistake: "
+    "correctly computing the CURRENT call's result (e.g. clamping a "
+    "rejected/backwards step to no-op) while still overwriting the tracked "
+    "state with a value that corrupts a later comparison - getting the "
+    "immediate return value right is not sufficient if it leaves the "
+    "object in a bad state for what comes next. Do not invent scope beyond "
+    "what the task describes. "
     "CRITICAL STEERING for the junior engineer: all implementation work goes "
     "in the ONE implementation file named by the task; NEVER edit, rename, "
     "weaken, or delete the test files (anything matching test_*.py). If a "
@@ -1013,21 +1033,43 @@ def _planner_system(*, include_scratchpad: bool = False) -> str:
 
 def _resolve_planner_backend(
     mode: str, dispatch_backend: str, local_model: str,
+    plan_role_config: dict | None = None,
 ) -> tuple[str, str]:
     """Shared backend/model resolution for both the initial-dispatch planner
     and the rework-feedback planner (same mode semantics, same "principal
-    tech lead vs weak local model" choice - see _run_planner)."""
+    tech lead vs weak local model" choice - see _run_planner).
+
+    mode="local" makes the planner independently routable
+    (PIPELINE_BACKEND_PLANNER, a plan's role_config, or model_registry.json's
+    "planner" entry) instead of always mirroring dispatch's own
+    backend/model - e.g. dispatch on ollama with planner pinned to mlx. When
+    none of those name a provider, it mirrors dispatch_backend/local_model
+    exactly as before this existed, so an unconfigured install is unchanged.
+    """
     if mode == "cloud":
         return "claude", (
             os.environ.get("PIPELINE_DECOMPOSE_CLOUD_MODEL")
             or _persona_default_model("overlord") or "opus"
         )
-    return dispatch_backend, local_model
+    plan_cfg = (plan_role_config or {}).get("planner", {})
+    registry = role_registry.load_registry()
+    provider_override = (
+        plan_cfg.get("provider")
+        or os.environ.get("PIPELINE_BACKEND_PLANNER")
+        or registry.get("roles", {}).get("planner", {}).get("provider")
+    )
+    if not provider_override:
+        return dispatch_backend, local_model
+    resolution = role_registry.resolve_role(
+        "planner", plan_role_config=plan_role_config, registry=registry,
+        model_fallback=lambda: local_model,
+    )
+    return resolution.provider, resolution.model
 
 
 def _run_planner(
     agent_instructions: str, *, mode: str, dispatch_backend: str, local_model: str,
-    include_scratchpad: bool = False,
+    include_scratchpad: bool = False, plan_role_config: dict | None = None,
 ) -> str | None:
     """Call a bounded, single-turn LLM to produce an ordered sub-step
     checklist for agent_instructions.
@@ -1050,7 +1092,9 @@ def _run_planner(
     corrupt a story's dispatch. External boundary: delegates to the
     configured Backend. Tests mock this function.
     """
-    backend_name, model = _resolve_planner_backend(mode, dispatch_backend, local_model)
+    backend_name, model = _resolve_planner_backend(
+        mode, dispatch_backend, local_model, plan_role_config=plan_role_config,
+    )
     try:
         text = backend.get_backend("planner", name=backend_name).complete(
             agent_instructions,
@@ -1081,7 +1125,13 @@ _REWORK_PLANNER_SYSTEM = (
     "the bug involves timing, state mutation, or another subtle edge case, "
     "include a concrete worked example with actual numbers showing the "
     "correct result, and name the specific mistake that produced the wrong "
-    "one. Preserve test-driven-development ordering where it applies "
+    "one. If the edge case touches state that persists across calls (a "
+    "clock, counter, or high-water mark), the worked example must not stop "
+    "at that one call's return value - trace at least one follow-up call "
+    "afterward and confirm the state left behind still produces the "
+    "correct result for it; getting the immediate return value right is "
+    "not sufficient if it leaves the object in a bad state for what comes "
+    "next. Preserve test-driven-development ordering where it applies "
     "(reproduce the bug with a failing test before fixing it). Do not "
     "invent issues beyond what the feedback describes. "
     "CRITICAL STEERING for the junior engineer: fixes go in the "
@@ -1101,6 +1151,7 @@ _REWORK_PLANNER_SYSTEM = (
 
 def _run_rework_planner(
     review_feedback: str, *, mode: str, dispatch_backend: str, local_model: str,
+    plan_role_config: dict | None = None,
 ) -> str | None:
     """Like _run_planner, but translates code-review feedback into an
     ordered fix-checklist instead of translating a coarse task into an
@@ -1108,10 +1159,52 @@ def _run_rework_planner(
     mode="cloud"/"local" backend resolution, same fail-open-to-None
     contract - see _run_planner's docstring for the shared rationale.
     """
-    backend_name, model = _resolve_planner_backend(mode, dispatch_backend, local_model)
+    backend_name, model = _resolve_planner_backend(
+        mode, dispatch_backend, local_model, plan_role_config=plan_role_config,
+    )
     try:
         text = backend.get_backend("planner", name=backend_name).complete(
             review_feedback, system=_REWORK_PLANNER_SYSTEM, model=model,
+        )
+    except Exception:
+        return None
+    text = (text or "").strip()
+    return text or None
+
+
+# ---------- Decompose (provider-configurable product-analyst) ----------
+def _extract_json_block(text: str) -> str:
+    """Strip a ```json ... ``` / ``` ... ``` fence around a JSON payload, if
+    present, else return the text unchanged (trimmed). Models routinely wrap
+    JSON output in a markdown fence even when asked not to; callers
+    json.loads() the result themselves and handle a parse failure - this
+    only handles the fence, not validation."""
+    stripped = text.strip()
+    m = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
+    return m.group(1).strip() if m else stripped
+
+
+def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str | None:
+    """Call a bounded, single-turn LLM (the product-analyst persona) to turn
+    a raw goal/feature request into epics/stories JSON matching save_plan's
+    schema.
+
+    Structurally identical to _run_planner/_invoke_overlord: one complete()
+    call, never an agent loop. Provider/model fall through role_registry
+    (PIPELINE_BACKEND_DECOMPOSE / a plan's role_config / model_registry
+    .json's "decompose" entry), falling back to Claude at the persona's
+    declared tier when none of those apply. Fails open (returns None) on
+    any exception - a broken/slow/rate-limited decompose call must never
+    raise past this function, mirroring _run_planner's contract.
+    """
+    resolution = role_registry.resolve_role(
+        "decompose", plan_role_config=plan_role_config,
+        model_fallback=lambda: _persona_default_model("product-analyst") or "opus",
+    )
+    try:
+        text = backend.get_backend("decompose", name=resolution.provider).complete(
+            request, system=_persona_body("product-analyst"), model=resolution.model,
+            allowed_tools="Read",
         )
     except Exception:
         return None
@@ -1136,7 +1229,10 @@ def _parse_ruling(text: str) -> dict[str, Any]:
 
 
 # ---------- Review / PR helpers ----------
-def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -> str:
+def _run_reviewer(
+    worktree: str, branch: str, backend_name: str | None = None,
+    plan_role_config: dict | None = None,
+) -> str:
     """Run the code-reviewer persona over a branch and return its raw output.
 
     External boundary: delegates to the configured Backend. Tests mock this
@@ -1145,25 +1241,49 @@ def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -
     get_backend already treats name=None as "use the env-resolved default".
     """
     body = _persona_body("code-reviewer")
-    model = _persona_default_model("code-reviewer") or DEFAULT_MODEL
+    # Provider/model fall through role_registry (PIPELINE_BACKEND_REVIEW /
+    # a plan's role_config / model_registry.json's "review" entry), falling
+    # back to the persona's declared tier when none of those apply - so an
+    # unconfigured install resolves identically to before role_registry
+    # existed. backend_name (an explicit caller override, e.g. review_story's
+    # FM-B rate-limit fallback) always wins over the registry-resolved
+    # provider, exactly as it already won over the plain env lookup.
+    resolution = role_registry.resolve_role(
+        "review", plan_role_config=plan_role_config,
+        model_fallback=lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
+    )
+    model = resolution.model
     # Asymmetric review: software-engineer.md and code-reviewer.md both
     # declare `model: sonnet`, so without an override dispatch and review
     # resolve to the identical concrete local model - a model reviewing its
     # own work with identical weights. When the review backend is actually
     # local, an explicit PIPELINE_LOCAL_REVIEW_MODEL overrides the tier so
-    # review can run on a different (e.g. stronger) local model. Gated on
+    # review can run on a different (e.g. stronger) local model - and stays
+    # the top-priority override even when the registry also configures a
+    # model, since it is the most specific, most recently-set knob. Gated on
     # backend == "local" so a bare Ollama tag never leaks into a cloud
     # review as a bogus --model value. backend_name may already be the
     # explicit "local" (review_story's FM-B rate-limit fallback); otherwise
-    # fall back to the env-resolved default, mirroring how get_backend
+    # fall back to the registry-resolved provider, mirroring how get_backend
     # itself treats name=None.
-    resolved_backend = (
-        backend_name or os.environ.get("PIPELINE_BACKEND_REVIEW", "claude")
-    ).strip().lower()
+    resolved_backend = (backend_name or resolution.provider).strip().lower()
     if resolved_backend in _LOCAL_BACKEND_NAMES:
         review_model_override = os.environ.get("PIPELINE_LOCAL_REVIEW_MODEL")
         if review_model_override:
             model = review_model_override
+    # Only pass an explicit resolved name to get_backend when a plan/registry
+    # override actually named a provider - otherwise keep passing
+    # backend_name (None in the common case) unchanged, so an unconfigured
+    # install still relies on get_backend's own internal PIPELINE_BACKEND_
+    # REVIEW lookup exactly as before (behaviorally identical either way,
+    # but this preserves what a mocked get_backend observes).
+    plan_cfg_review = (plan_role_config or {}).get("review", {})
+    registry_review_provider = (
+        role_registry.load_registry().get("roles", {}).get("review", {}).get("provider")
+    )
+    name_for_get_backend = backend_name
+    if backend_name is None and (plan_cfg_review.get("provider") or registry_review_provider):
+        name_for_get_backend = resolution.provider
     # The reviewer model has no access to detect_test_command's Python-level
     # venv resolution, so a bare "Run the test suite" instruction leaves it
     # to guess a shell command - e.g. the relative `.venv/bin/python -m
@@ -1224,7 +1344,7 @@ def _run_reviewer(worktree: str, branch: str, backend_name: str | None = None) -
         cell_dir = str(Path(worktree).resolve().parent)
     else:
         cell_dir = None
-    return backend.get_backend("review", name=backend_name).complete(
+    return backend.get_backend("review", name=name_for_get_backend).complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
         max_tokens=int(os.environ.get("PIPELINE_REVIEW_MAX_TOKENS", "4096")),
         cell_dir=cell_dir,
@@ -2053,6 +2173,23 @@ def _read_journal(plan_name: str, story_key: str) -> list[dict[str, Any]]:
     return json.loads(path.read_text()) if path.exists() else []
 
 
+def _plan_role_config(plan_name: str) -> dict:
+    """A plan's role_config block (per-role provider/model overrides, set at
+    save_plan/ingest_plan time - see role_registry.py's resolve_role()),
+    or {} if the plan/manifest doesn't exist, doesn't set one, or the
+    manifest is unreadable. Read fresh each call, mirroring the codebase's
+    other small manifest readers (_read_journal above) - never a gate, so
+    any read failure degrades to "no override" rather than raising.
+    """
+    path = PLAN_DIR / f"{plan_name}.manifest.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text()).get("role_config", {})
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 # ---------- Usage probe ----------
 # Legacy format (Claude Code ≤ ~Jun 2026): "Current session: N% used · resets …"
 _SESSION_USAGE_RE = re.compile(r"Current session:\s*(\d+)%\s*used\s*·\s*resets\s*(.+)")
@@ -2420,6 +2557,79 @@ def _worktree_has_new_commits(worktree: Path, story_key: str, base_branch: str) 
 
 # ---------- Tools ----------
 @mcp.tool()
+def get_role_config(plan_name: str | None = None) -> dict[str, Any]:
+    """
+    Show the resolved (provider, model) for every pipeline role - overlord,
+    planner, dispatch, review, decompose - given the current env vars and
+    model_registry.json, optionally layered with a specific plan's
+    role_config (pass plan_name to include it). Lets you check what a plan
+    will actually run on *before* executing it. Pure read; makes no changes.
+
+    "planner" here reports its own explicit configuration layer (env var /
+    plan role_config / registry) using the same "claude" bottom-of-chain
+    default as the other roles - it does NOT reproduce the extra "mirror
+    dispatch's own backend when nothing else is configured" fallback that
+    _resolve_planner_backend applies at actual dispatch time (that fallback
+    depends on a specific story's already-resolved dispatch backend, which
+    doesn't exist outside of a real dispatch call).
+    """
+    plan_role_config = _plan_role_config(plan_name) if plan_name else None
+    role_fallbacks = {
+        "overlord": lambda: _persona_default_model("overlord") or "opus",
+        "planner": lambda: DEFAULT_MODEL,
+        "dispatch": lambda: DEFAULT_MODEL,
+        "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
+        "decompose": lambda: _persona_default_model("product-analyst") or "opus",
+    }
+    roles = {}
+    for role, fallback in role_fallbacks.items():
+        resolution = role_registry.resolve_role(
+            role, plan_role_config=plan_role_config, model_fallback=fallback,
+        )
+        roles[role] = {"provider": resolution.provider, "model": resolution.model}
+    return {"ok": True, "roles": roles}
+
+
+@mcp.tool()
+def decompose_plan(request: str) -> dict[str, Any]:
+    """
+    Turn a raw goal/feature request into epics/stories JSON via the
+    product-analyst persona, run on whichever provider the "decompose" role
+    is configured for (PIPELINE_BACKEND_DECOMPOSE env var, or a "decompose"
+    entry in model_registry.json - defaults to Claude when neither is set).
+    This is a separate, additional path from the interactive product-analyst
+    subagent (invoked via the Agent tool, which is always Claude) - that
+    path remains available and is still the default choice for
+    Claude-quality decomposition; this tool exists so decomposition can also
+    run on a local provider when desired.
+
+    Does NOT call save_plan itself - review the returned plan the same way
+    you would review the interactive subagent's output, then save_plan it
+    yourself.
+
+    Returns {"ok": True, "plan": {...}} on success. On failure, returns
+    {"ok": False, "error": ...}, with "raw": <raw model output> included
+    whenever the backend actually returned text that failed to parse (never
+    raises).
+    """
+    text = _run_decompose(request)
+    if not text:
+        return {"ok": False, "error": "decompose backend returned no output"}
+    candidate = _extract_json_block(text)
+    try:
+        plan = json.loads(candidate)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"invalid JSON: {e}", "raw": text}
+    if not isinstance(plan, dict) or not isinstance(plan.get("epics"), list):
+        return {
+            "ok": False,
+            "error": "response JSON is missing an 'epics' list",
+            "raw": text,
+        }
+    return {"ok": True, "plan": plan}
+
+
+@mcp.tool()
 def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
     """
     Save a generated project plan to disk. Plan should be JSON matching the
@@ -2460,8 +2670,14 @@ def list_plans() -> list[str]:
 # (T1, 2026-07-07 web-client-epic retro incident #2).
 _INGEST_AUTHORED_STORY_FIELDS = (
     "summary", "agent_instructions", "dependencies", "persona", "model",
-    "acceptance", "risk",
+    "acceptance", "risk", "backend",
 )
+
+# Valid story["backend"] values at ingest time: every registered driver name
+# (backend._DRIVERS) plus "auto" - a valid runtime value even though it is
+# not itself a driver (get_backend rejects it; _route_dispatch_backend
+# resolves it to "local"/"claude" first, per PIPELINE_BACKEND_DISPATCH=auto).
+_VALID_STORY_BACKENDS = frozenset(backend._DRIVERS) | {"auto"}
 
 
 @mcp.tool()
@@ -2501,6 +2717,24 @@ def ingest_plan(
     repo_root = plan.get("repo_root")
     if not repo_root or not Path(repo_root).is_dir():
         return {"ok": False, "error": f"Plan repo_root is missing or not a directory: {repo_root!r}"}
+
+    # Validate story["backend"] upfront, before any Plane side effects, so a
+    # typo'd provider name fails closed here rather than surfacing as a
+    # NotImplementedError deep inside get_backend at dispatch time.
+    for epic in plan["epics"]:
+        if only_epics and epic["summary"] not in only_epics:
+            continue
+        for story in epic.get("stories", []):
+            story_backend = story.get("backend")
+            if story_backend is not None and story_backend not in _VALID_STORY_BACKENDS:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"Story {story.get('summary', '?')!r} has unknown "
+                        f"backend {story_backend!r}. Valid values: "
+                        f"{sorted(_VALID_STORY_BACKENDS)}"
+                    ),
+                }
 
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 
@@ -2552,6 +2786,7 @@ def ingest_plan(
                     "model": story.get("model"),
                     "acceptance": story.get("acceptance", []),
                     "risk": story.get("risk", "low"),
+                    "backend": story.get("backend"),
                     "status": "todo",
                 }
 
@@ -2854,6 +3089,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 story.get("agent_instructions", ""), mode=decompose_mode,
                 dispatch_backend=dispatch_backend, local_model=spec["model"],
                 include_scratchpad=scratchpad_on,
+                plan_role_config=_plan_role_config(plan_name),
             )
             if plan_text:
                 plan_path.write_text(plan_text)
@@ -2910,6 +3146,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 fix_checklist = _run_rework_planner(
                     review_feedback, mode=decompose_mode,
                     dispatch_backend=dispatch_backend, local_model=spec["model"],
+                    plan_role_config=_plan_role_config(plan_name),
                 )
             if fix_checklist:
                 dispatch_kwargs["resume_append_content"] = (
@@ -3613,7 +3850,9 @@ def request_decision(
         f"DECISION POLICY:\n{policy}\n\n"
         f"Rule now, using your output contract exactly."
     )
-    ruling = _parse_ruling(_invoke_overlord(prompt))
+    ruling = _parse_ruling(
+        _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
+    )
     record = {
         "story_key": story_key,
         "question": question,
@@ -3651,6 +3890,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
     branch = f"agent/{story_key.lower()}"
     worktree = story.get("worktree", "")
+    plan_role_config = _plan_role_config(plan_name)
     try:
         # Once a story is escalated (see _escalate_review_to_claude below),
         # every subsequent review must go to Claude regardless of the global
@@ -3658,8 +3898,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # resolved purely from that env var with no per-story override, so
         # this is the one seam that needs an explicit check.
         reviewer_output = (
-            _run_reviewer(worktree, branch, backend_name="claude")
-            if story.get("escalated") else _run_reviewer(worktree, branch)
+            _run_reviewer(worktree, branch, backend_name="claude",
+                          plan_role_config=plan_role_config)
+            if story.get("escalated") else
+            _run_reviewer(worktree, branch, plan_role_config=plan_role_config)
         )
     except backend.RateLimitedError:
         # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
@@ -3696,7 +3938,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         if fallback_mode in _LOCAL_BACKEND_NAMES and story["review_deferred_count"] >= fallback_after:
             _notify_user(plan_name, f"{story_key} review falling back to {fallback_mode} backend "
                                     f"after {story['review_deferred_count']} rate-limited attempts.")
-            reviewer_output = _run_reviewer(worktree, branch, backend_name=fallback_mode)
+            reviewer_output = _run_reviewer(
+                worktree, branch, backend_name=fallback_mode,
+                plan_role_config=plan_role_config,
+            )
             verdict = _parse_verdict(reviewer_output)
             # Fall through into the normal verdict-handling code below —
             # this is a genuine review attempt now, not a deferral.
@@ -3714,8 +3959,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     if verdict == "UNKNOWN" and _is_transient_backend_error(reviewer_output):
         _notify_user(plan_name, f"{story_key} review hit transient backend error; retrying once.")
         reviewer_output = (
-            _run_reviewer(worktree, branch, backend_name="claude")
-            if story.get("escalated") else _run_reviewer(worktree, branch)
+            _run_reviewer(worktree, branch, backend_name="claude",
+                          plan_role_config=plan_role_config)
+            if story.get("escalated") else
+            _run_reviewer(worktree, branch, plan_role_config=plan_role_config)
         )
         verdict = _parse_verdict(reviewer_output)
         _transient_retried = True

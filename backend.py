@@ -377,7 +377,7 @@ _LOCAL_TIER_ENV = {
 _LOCAL_DEFAULT_MODEL = "devstral:24b"
 
 
-def _resolve_local_model(tier: str) -> str:
+def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # A value containing ':' (Ollama's tag separator, e.g. "devstral:24b")
     # is already a concrete model tag, not a tier name - return as-is
     # rather than looking it up in _LOCAL_TIER_ENV, where it would never
@@ -388,7 +388,21 @@ def _resolve_local_model(tier: str) -> str:
         return tier
     default = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL)
     env_var = _LOCAL_TIER_ENV.get(tier.lower())
-    return os.environ.get(env_var, default) if env_var else default
+    if not env_var:
+        return default
+    # Provider-scoped override (e.g. PIPELINE_LOCAL_MODEL_MLX_SONNET) is
+    # checked before the provider-agnostic PIPELINE_LOCAL_MODEL_SONNET, so
+    # two roles on different local providers never silently share one
+    # tier->model mapping meant for a single wire format/model namespace.
+    # provider= defaults to "ollama" - the historical implicit assumption
+    # every existing caller made before this parameter existed.
+    scoped_env_var = env_var.replace(
+        "PIPELINE_LOCAL_MODEL_", f"PIPELINE_LOCAL_MODEL_{provider.upper()}_"
+    )
+    scoped = os.environ.get(scoped_env_var)
+    if scoped:
+        return scoped
+    return os.environ.get(env_var, default)
 
 
 # Per-model tuned defaults, keyed by the RESOLVED concrete model tag (e.g.
@@ -576,8 +590,20 @@ class OllamaDriver:
         # env lookup; omitted/None keeps today's PIPELINE_LOCAL_PROVIDER-
         # resolved behavior (the "local" back-compat alias in _DRIVERS).
         self.provider = inference_providers.get_local_provider(provider_name)
-        self.endpoint = os.environ.get(
-            "PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434",
+        # Provider-scoped PIPELINE_LOCAL_ENDPOINT_<PROVIDER> is checked
+        # before the process-wide PIPELINE_LOCAL_ENDPOINT, which is checked
+        # before the provider's own default_endpoint (not a hardcoded
+        # Ollama-specific fallback) - so two roles pinned to two different
+        # local providers in the same process (e.g. dispatch=mlx,
+        # review=ollama) resolve independent endpoints instead of silently
+        # sharing one global override meant for a single provider. Found via
+        # a live production-shaped run where review (ollama) inherited
+        # dispatch's (mlx) PIPELINE_LOCAL_ENDPOINT override and 404'd
+        # probing Ollama's /api/tags against MLX's port.
+        self.endpoint = (
+            os.environ.get(f"PIPELINE_LOCAL_ENDPOINT_{self.provider.name.upper()}")
+            or os.environ.get("PIPELINE_LOCAL_ENDPOINT")
+            or self.provider.default_endpoint
         ).rstrip("/")
         self.timeout = float(os.environ.get("PIPELINE_LOCAL_TIMEOUT_SECONDS", "600"))
         # 16384 fits 100% on GPU on a 24GB M4 and gives the agentic loop real
@@ -610,7 +636,7 @@ class OllamaDriver:
             return self._review_loop(prompt, system=system, model=model,
                                      cwd=cwd, cell_dir=cell_dir)
 
-        resolved_model = _resolve_local_model(model)
+        resolved_model = _resolve_local_model(model, provider=getattr(self.provider, "name", "ollama"))
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -693,7 +719,7 @@ class OllamaDriver:
         with the Claude path, scans it unchanged). Uses the same tolerant parsing
         as dispatch, plus key-based tool inference, since the local model
         intermittently emits tool calls as text and drops the tool name."""
-        resolved_model = _resolve_local_model(model)
+        resolved_model = _resolve_local_model(model, provider=getattr(self.provider, "name", "ollama"))
         _append_review_log(
             cwd,
             f"=== review cycle "
@@ -936,7 +962,7 @@ class OllamaDriver:
                 f"the agent edit files anyway). Keep this role on claude until a "
                 f"read-only local tool set is implemented and verified."
             )
-        resolved_model = _resolve_local_model(model)
+        resolved_model = _resolve_local_model(model, provider=getattr(self.provider, "name", "ollama"))
         # Fix #1: if the story carries an `acceptance` block, switch to the
         # oracle-graded harness variant (script + MODE env). The list is
         # passed as a JSON string to keep the env-var contract uniform with

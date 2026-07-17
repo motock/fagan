@@ -208,6 +208,74 @@ def test_detect_test_command_worktree_uses_main_repo_venv_via_git_common_dir(tmp
     assert cmd == [str(repo / ".venv" / "bin" / "python"), "-m", "pytest"]
 
 
+# ---------- _scope_test_cmd_to_acceptance (FM-A non-pytest scoping) ----------
+def test_scope_pytest_appends_acceptance_paths():
+    scoped = p._scope_test_cmd_to_acceptance(
+        ["pytest"], ["tests/acceptance.py"], Path("/w"))
+    assert scoped == ["pytest", "tests/acceptance.py"]
+
+
+def test_scope_pytest_venv_form_appends_acceptance_paths():
+    scoped = p._scope_test_cmd_to_acceptance(
+        ["/w/.venv/bin/python", "-m", "pytest"], ["tests/acceptance.py"], Path("/w"))
+    assert scoped == ["/w/.venv/bin/python", "-m", "pytest", "tests/acceptance.py"]
+
+
+def test_scope_cargo_uses_test_stem_to_exclude_implementers_own_test():
+    # The acceptance fixture tests/test_acceptance.rs becomes --test
+    # test_acceptance, which runs ONLY that integration test — NOT the
+    # implementer's own tests/test_lru_cache.rs (FM-A: interval_merge_js was
+    # rejected because unscoped `npm test` ran the implementer's buggy test).
+    scoped = p._scope_test_cmd_to_acceptance(
+        ["cargo", "test"], ["/w/tests/test_acceptance.rs"], Path("/w"))
+    assert scoped == ["cargo", "test", "--test", "test_acceptance"]
+
+
+def test_scope_cargo_multiple_acceptance_fixtures():
+    scoped = p._scope_test_cmd_to_acceptance(
+        ["cargo", "test"],
+        ["/w/tests/test_acceptance.rs", "/w/tests/test_oracle2.rs"], Path("/w"))
+    assert scoped == ["cargo", "test", "--test", "test_acceptance",
+                      "--test", "test_oracle2"]
+
+
+def test_scope_cargo_falls_back_when_acceptance_not_under_tests_dir():
+    # A unit-test acceptance file (src/...) can't be named via --test; fall
+    # back to None so the caller runs the full suite (no regression).
+    assert p._scope_test_cmd_to_acceptance(
+        ["cargo", "test"], ["/w/src/acceptance.rs"], Path("/w")) is None
+
+
+def test_scope_npm_node_test_uses_explicit_paths(tmp_path):
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"test": "node --test test/*.test.js"}}))
+    scoped = p._scope_test_cmd_to_acceptance(
+        ["npm", "test"], [str(tmp_path / "test" / "acceptance.test.js")], tmp_path)
+    assert scoped == ["node", "--test", str(tmp_path / "test" / "acceptance.test.js")]
+
+
+def test_scope_npm_falls_back_for_jest_script(tmp_path):
+    # jest can't be safely scoped without knowing its -t filter syntax; fall
+    # back to None (full suite) so we never run a nonsense command.
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"test": "jest"}}))
+    assert p._scope_test_cmd_to_acceptance(
+        ["npm", "test"], [str(tmp_path / "test" / "acceptance.test.js")], tmp_path) is None
+
+
+def test_scope_returns_none_when_no_acceptance_paths():
+    assert p._scope_test_cmd_to_acceptance(["pytest"], [], Path("/w")) is None
+    assert p._scope_test_cmd_to_acceptance(["cargo", "test"], [], Path("/w")) is None
+
+
+def test_scope_returns_none_for_unrecognized_runner():
+    # mvn/gradle/make: no safe scoping -> None (full suite).
+    assert p._scope_test_cmd_to_acceptance(
+        ["mvn", "test"], ["acceptance.py"], Path("/w")) is None
+    assert p._scope_test_cmd_to_acceptance(
+        ["make", "test"], ["acceptance.py"], Path("/w")) is None
+
+
 # ---------- detect_build_command (T4) ----------
 def test_detect_build_command_finds_npm_build_script(tmp_path):
     (tmp_path / "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}}))
@@ -5486,13 +5554,13 @@ def test_reverify_acceptance_full_suite_opt_out_restores_none(monkeypatch, tmp_p
     assert result == {"state": "none", "error": ""}
 
 
-def test_reverify_acceptance_reruns_full_suite_for_non_pytest_runner(monkeypatch, tmp_path):
-    # Gap 1: non-pytest runners (cargo, npm) also get the full suite
-    # re-run for stories without an acceptance block. With an
-    # acceptance block + non-pytest, the runner is non-pytest so the
-    # scoped path doesn't apply, and the suite re-runs in full (we
-    # can't scope `cargo test` or `node --test` to a single file with
-    # the project's runner without changing the test config).
+def test_reverify_acceptance_scopes_cargo_to_acceptance_test_stem(monkeypatch, tmp_path):
+    # FM-A fix: a non-pytest runner with an acceptance block is now scoped to
+    # the oracle fixture, not run as the full suite. cargo names integration
+    # tests by file stem, so tests/acc.rs -> `cargo test --test acc` runs ONLY
+    # the oracle, excluding the implementer's own tests/<name>.rs (previously
+    # the full `cargo test` graded the implementer's own tests — the
+    # "graded on own buggy tests" failure mode).
     seen_cmd = {}
     def _fake_run(cmd, **kwargs):
         seen_cmd["cmd"] = cmd
@@ -5506,8 +5574,28 @@ def test_reverify_acceptance_reruns_full_suite_for_non_pytest_runner(monkeypatch
     )
 
     assert result == {"state": "pass", "error": ""}
-    # cargo test runs the full suite - no path scoping.
-    assert seen_cmd["cmd"] == ["cargo", "test"]
+    assert seen_cmd["cmd"] == ["cargo", "test", "--test", "acc"]
+
+
+def test_reverify_acceptance_reruns_full_suite_for_unscopeable_runner(monkeypatch, tmp_path):
+    # Safety net preserved: runners we can't safely scope (mvn, gradle, make,
+    # jest-style npm) fall back to the full suite, so a post-rebase break in a
+    # real-project story without a scoping-safe runner still can't slip through.
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["mvn", "test"]))
+
+    result = p._reverify_acceptance(
+        {"summary": "x", "acceptance": [{"path": "tests/acc.rs", "source": "// x"}]},
+        str(tmp_path),
+    )
+
+    assert result == {"state": "pass", "error": ""}
+    # mvn can't be safely scoped -> full suite.
+    assert seen_cmd["cmd"] == ["mvn", "test"]
 
 
 def test_reverify_acceptance_returns_none_for_missing_worktree(monkeypatch):
@@ -6584,6 +6672,115 @@ def test_check_story_status_handles_git_error_safely(plan_dir, monkeypatch):
     result = p.check_story_status("broken", "S1")
     assert result["status"] == "failed"
     assert result["reason"] == "empty_agent_branch"
+
+
+def test_check_story_status_routes_acceptance_fail_to_review_when_opted_in(
+    plan_dir, monkeypatch,
+):
+    """PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1: a dispatch whose acceptance oracle
+    FAILED but which produced real work (new commits on the agent branch) is
+    routed to review instead of straight to "failed", so the reviewer sees the
+    failing submission and the rework loop re-dispatches the model. Without
+    this routing every acceptance-failing cell parked at "failed" before
+    reaching review, so the configured rework budget and reviewer never ran
+    (observed live: 0/9 mlx cells reached review, zero GLM reviewer usage)."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("the agent did real work\n")
+    _write_manifest(plan_dir, "revfail", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class _Fail:
+        returncode = 1   # acceptance oracle FAILED
+        stdout = "1 failed"
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: _Fail())
+
+    monkeypatch.setenv("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "1")
+
+    result = p.check_story_status("revfail", "S1")
+
+    # Routed to reviewable state, NOT terminal "failed".
+    assert result["status"] == "tests_passed"
+    assert result["tests_passed"] is False
+    story = _read_manifest(plan_dir, "revfail")["stories"]["S1"]
+    assert story["status"] == "tests_passed"
+    assert story["acceptance_failed_review"] is True
+
+
+def test_check_story_status_acceptance_fail_stays_failed_without_opt_in(
+    plan_dir, monkeypatch,
+):
+    """Without PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL the default behavior is
+    unchanged: a failing-acceptance dispatch with real work lands at terminal
+    "failed" (no review, no rework)."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("the agent did real work\n")
+    _write_manifest(plan_dir, "nofail", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class _Fail:
+        returncode = 1
+        stdout = "1 failed"
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: _Fail())
+
+    monkeypatch.delenv("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", raising=False)
+
+    result = p.check_story_status("nofail", "S1")
+
+    assert result["status"] == "failed"
+    story = _read_manifest(plan_dir, "nofail")["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert "acceptance_failed_review" not in story
+
+
+def test_check_story_status_acceptance_fail_stays_failed_for_empty_branch(
+    plan_dir, monkeypatch,
+):
+    """Even with the opt-in set, a failing-acceptance dispatch with NO new
+    commits (agent parked without writing code) stays "failed" — re-dispatching
+    the same stuck prompt to the same model won't help, so it is not worth a
+    review round-trip."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("the agent looped without writing\n")
+    _write_manifest(plan_dir, "emptyfail", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: False)
+
+    class _Fail:
+        returncode = 1
+        stdout = "1 failed"
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: _Fail())
+
+    monkeypatch.setenv("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "1")
+
+    result = p.check_story_status("emptyfail", "S1")
+
+    assert result["status"] == "failed"
+    story = _read_manifest(plan_dir, "emptyfail")["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert "acceptance_failed_review" not in story
 
 
 # ---------- reset_false_positive_tests_passed.py unit tests ----------

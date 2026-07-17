@@ -617,11 +617,21 @@ def _try_repair_indentation(content: str) -> tuple[str, str] | None:
     `content` when compile() rejects it with an IndentationError (unexpected
     indent / unexpected unindent / unindent does not match any outer level).
 
-    The repair: re-indent the offending line (e.lineno) to the leading
-    whitespace of the nearest preceding non-blank, non-comment line, then
-    re-compile. If the repaired content compiles clean, return
-    (repaired_content, note); otherwise return None (fall through to the
+    The repair ITERATES: re-indent the offending line (e.lineno) to the
+    leading whitespace of the nearest preceding non-blank, non-comment line,
+    re-compile, and if compile still flags an IndentationError fix the next
+    offending line too, until the content compiles clean or a non-indentation
+    error (or no progress) is hit. Only when the final content compiles clean
+    is (repaired_content, note) returned; otherwise None (fall through to the
     normal rejection path).
+
+    The iteration is required because the decoding defect drops the
+    indentation on the `def` line after EVERY decorator in the file, not
+    just the first (observed live, 2026-07-17, lru_cache: both the
+    `@property` getter `def size` AND the `@size.setter` `def size` were
+    dedented to column 0). A single-line repair fixed the getter, but the
+    setter still broke compile, so the repair returned None and correct code
+    was rejected every retry until the wall-clock park (Mode 21 sibling).
 
     Rationale (GUIDED_DECOMPOSITION_PLAN.md, 2026-07-16, lru_cache t7/t8/
     t10/t11): the 14B has a reproducible decoding defect that drops the
@@ -639,42 +649,51 @@ def _try_repair_indentation(content: str) -> tuple[str, str] | None:
     outside a function, dangling triple-quote, stray diff '+') are real
     logic/format errors the model must fix, not indentation, and are left
     for the normal rejection path."""
+    lines_changed = 0
+    last_lineno = None
+    for _ in range(64):  # bound: no real file has >64 dedented decorator lines
+        try:
+            compile(content, "<repair>", "exec")
+            break  # clean - done
+        except IndentationError as e:
+            lineno = e.lineno or 0
+        except SyntaxError:
+            return None  # non-indentation syntax error - do not touch
+        if lineno == last_lineno:
+            return None  # re-indent didn't advance past this line - can't fix
+        lines = content.splitlines(keepends=True)
+        if not (1 <= lineno <= len(lines)):
+            return None
+        # Find the nearest preceding non-blank, non-comment line to take the
+        # target indentation from.
+        target = None
+        for i in range(lineno - 1, 0, -1):
+            prev = lines[i - 1]
+            stripped = prev.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            target = len(prev) - len(prev.lstrip(" \t"))
+            break
+        if target is None:
+            return None  # no preceding line to reference (e.g. top-level indent)
+        cur = lines[lineno - 1]
+        cur_stripped = cur.lstrip(" \t")
+        cur_indent = len(cur) - len(cur_stripped)
+        if cur_indent == target:
+            return None  # already at target - re-indenting won't help this line
+        lines[lineno - 1] = (" " * target) + cur_stripped
+        content = "".join(lines)
+        lines_changed += 1
+        last_lineno = lineno
     try:
         compile(content, "<repair>", "exec")
-        return None  # already valid - nothing to repair
-    except IndentationError as e:
-        lineno = e.lineno or 0
     except SyntaxError:
-        return None  # non-indentation syntax error - do not touch
-    lines = content.splitlines(keepends=True)
-    if not (1 <= lineno <= len(lines)):
-        return None
-    # Find the nearest preceding non-blank, non-comment line to take the
-    # target indentation from.
-    target = None
-    for i in range(lineno - 1, 0, -1):
-        prev = lines[i - 1]
-        stripped = prev.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        target = len(prev) - len(prev.lstrip(" \t"))
-        break
-    if target is None:
-        return None  # no preceding line to reference (e.g. top-level indent)
-    cur = lines[lineno - 1]
-    cur_stripped = cur.lstrip(" \t")
-    cur_indent = len(cur) - len(cur_stripped)
-    if cur_indent == target:
-        return None  # already at the target level - re-indent won't help
-    lines[lineno - 1] = (" " * target) + cur_stripped
-    repaired = "".join(lines)
-    try:
-        compile(repaired, "<repair>", "exec")
-    except SyntaxError:
-        return None  # re-indent didn't fix it - leave for normal rejection
-    note = (f"auto-reindented line {lineno} from {cur_indent} to {target} "
-            f"spaces to match the preceding line")
-    return repaired, note
+        return None  # exhausted without compiling clean - leave for rejection
+    if lines_changed == 0:
+        return None  # original was already valid
+    note = (f"auto-reindented {lines_changed} dedented line(s) to match the "
+            f"preceding line's indentation (decorator-dedent decoding defect)")
+    return content, note
 
 
 def _record_syntax_rejection(path_str: str, err: str) -> str:

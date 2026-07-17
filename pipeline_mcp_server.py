@@ -1307,23 +1307,25 @@ def _run_reviewer(
     try:
         test_dir, test_cmd = detect_test_command(Path(worktree))
         scope_note = ""
-        if acceptance and _is_pytest_cmd(test_cmd):
+        if acceptance:
             acceptance_paths = [
                 str(test_dir / entry["path"]) for entry in acceptance
             ]
-            test_cmd = test_cmd + acceptance_paths
-            scope_note = (
-                "This story carries a harness-owned acceptance oracle; the "
-                "command below is scoped to ONLY those acceptance tests, "
-                "which are the authoritative spec for required behavior. A "
-                "failure in the implementer's OWN test file that the "
-                "acceptance oracle does not require is not sufficient "
-                "grounds for REQUEST_CHANGES on its own - note it as a "
-                "Suggestion if you notice it, but base your verdict on the "
-                "acceptance oracle plus your own code-quality/security "
-                "review, not on re-running the implementer's full test "
-                "file.\n\n"
-            )
+            scoped = _scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
+            if scoped is not None:
+                test_cmd = scoped
+                scope_note = (
+                    "This story carries a harness-owned acceptance oracle; the "
+                    "command below is scoped to ONLY those acceptance tests, "
+                    "which are the authoritative spec for required behavior. A "
+                    "failure in the implementer's OWN test file that the "
+                    "acceptance oracle does not require is not sufficient "
+                    "grounds for REQUEST_CHANGES on its own - note it as a "
+                    "Suggestion if you notice it, but base your verdict on the "
+                    "acceptance oracle plus your own code-quality/security "
+                    "review, not on re-running the implementer's full test "
+                    "file.\n\n"
+                )
         test_command_instruction = (
             f"{scope_note}"
             f"Run the test suite with exactly this command (do not "
@@ -1460,6 +1462,69 @@ def _is_pytest_cmd(cmd: list[str]) -> bool:
         return False
     last = cmd[-1]
     return last == "pytest" or last.endswith("/pytest")
+
+
+def _scope_test_cmd_to_acceptance(
+    test_cmd: list[str], acceptance_paths: list[str], test_dir: Path
+) -> list[str] | None:
+    """Return ``test_cmd`` scoped to run ONLY the acceptance fixtures, or
+    ``None`` when the runner can't be safely scoped to specific files (caller
+    falls back to the full suite — the MBW safety net).
+
+    This closes the FM-A family for non-pytest runners. A story carrying a
+    harness-owned ``acceptance`` block must be graded on those oracle files
+    alone, not on the implementer's own test file, whose assertions may be
+    wrong (observed live: interval_merge_js wrote a correct src/merge.js —
+    gt=True — but a buggy merge.test.js; unscoped ``npm test`` ran both and
+    rejected correct work). Previously only pytest was scoped (``pytest
+    <files>`` accepts path args); cargo/npm fell back to the full suite, so
+    every non-pytest benchmark cell was graded on the implementer's own tests.
+
+    Scoping is applied only where it is well-defined and safe; anything we
+    can't scope correctly falls back to the full suite (no regression vs. the
+    prior behavior for real-project stories using jest/mocha/etc.):
+
+      - pytest: ``[pytest, *paths]`` (path args; unchanged).
+      - cargo:  ``cargo test --test <stem>`` per acceptance fixture under
+        ``tests/``. cargo names integration tests by file stem
+        (``tests/test_acceptance.rs`` -> ``--test test_acceptance``), so this
+        runs ONLY the oracle, excluding the implementer's own
+        ``tests/test_<name>.rs``. Only applied when every acceptance path is
+        a ``tests/*.rs`` integration test.
+      - npm/yarn whose package.json ``test`` script IS ``node --test``:
+        ``node --test <paths>``. Node's test runner accepts explicit paths.
+        Only applied when the script starts with ``node --test`` (jest/mocha
+        can't be safely scoped without knowing their filter flags).
+    """
+    if not test_cmd or not acceptance_paths:
+        return None
+    if _is_pytest_cmd(test_cmd):
+        return [*test_cmd, *acceptance_paths]
+    # cargo test --test <stem> ...
+    if test_cmd[:2] == ["cargo", "test"]:
+        stems: list[str] = []
+        for p in acceptance_paths:
+            pp = Path(p)
+            if pp.suffix == ".rs" and pp.parent.name == "tests":
+                stems.append(pp.stem)
+            else:
+                return None
+        args: list[str] = []
+        for s in stems:
+            args += ["--test", s]
+        return ["cargo", "test", *args]
+    # npm test / yarn test whose script is `node --test ...`
+    if test_cmd[:2] in (["npm", "test"], ["yarn", "test"]):
+        pkg = Path(test_dir) / "package.json"
+        try:
+            scripts = json.loads(pkg.read_text()).get("scripts", {})
+            test_script = str(scripts.get("test") or "").strip()
+        except Exception:
+            return None
+        if test_script.startswith("node --test"):
+            return ["node", "--test", *acceptance_paths]
+        return None
+    return None
 
 
 def _is_rate_limited(text: str) -> bool:
@@ -1952,18 +2017,20 @@ def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]
         return {"state": "none", "error": ""}
     test_dir, test_cmd = detect_test_command(Path(worktree))
     # Decide what to run: scoped to acceptance paths when the story carries
-    # an acceptance block AND the runner is pytest (the only runner where
-    # `pytest <files>` is well-defined); otherwise the full suite. The
-    # full-suite path is the MBW safety net — a story without an acceptance
-    # block (the common case for real-project stories) still gets the
-    # rebased branch's full test suite re-run before merge.
-    scope_to_acceptance = bool(acceptance) and _is_pytest_cmd(test_cmd)
-    if scope_to_acceptance:
+    # an acceptance block AND the runner can be safely scoped (pytest path
+    # args, cargo --test, npm/yarn node --test — see _scope_test_cmd_to_acceptance);
+    # otherwise the full suite. The full-suite path is the MBW safety net — a
+    # story without an acceptance block (the common case for real-project
+    # stories) still gets the rebased branch's full test suite re-run before
+    # merge.
+    scoped = None
+    if acceptance:
         acceptance_paths = [str(Path(worktree) / p) for p in _acceptance_rel_paths(story)]
-        test_cmd = test_cmd + acceptance_paths
-    elif not (acceptance and _is_pytest_cmd(test_cmd)):
-        # No acceptance block, or non-pytest runner: run the full suite
-        # unless the operator opted out.
+        scoped = _scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
+    if scoped is not None:
+        test_cmd = scoped
+    elif not acceptance:
+        # No acceptance block: run the full suite unless the operator opted out.
         if os.environ.get("PIPELINE_REVERIFY_FULL_SUITE", "1") == "0":
             return {"state": "none", "error": ""}
     # Same operational-env stripping as check_story_status: PIPELINE_*/
@@ -3426,18 +3493,21 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # oracle test files rather than the full worktree suite. The model's own
     # tests can contain wrong assertions (the "graded on own buggy tests"
     # failure mode); the harness-owned oracle is the authoritative bar.
-    # Scoping is only safe for pytest, which accepts path args; other runners
-    # fall back to the whole suite (documented limitation — all benchmark tasks
-    # and the pipeline's own test stories are pytest).
+    # _scope_test_cmd_to_acceptance scopes pytest (path args), cargo
+    # (--test <stem>), and npm/yarn-with-node --test; other runners fall back
+    # to the whole suite (the MBW safety net — a story without an acceptance
+    # block, or a runner we can't safely scope, still gets the full re-run).
     #
     # Paths are materialized relative to the worktree root (dispatch_story),
     # but test_dir can be a child subdirectory when the buildable project
     # doesn't live at the worktree root (detect_test_command's fallback).
     # Use absolute paths so the scoped run works regardless of test_dir.
     acceptance = story.get("acceptance") or []
-    if acceptance and _is_pytest_cmd(test_cmd):
+    if acceptance:
         acceptance_paths = [str(worktree / p) for p in _acceptance_rel_paths(story)]
-        test_cmd = test_cmd + acceptance_paths
+        scoped = _scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
+        if scoped is not None:
+            test_cmd = scoped
 
     # Grade in a clean dev env, not the MCP server's operational one. The
     # server carries PIPELINE_* (pause/resume thresholds, backend dispatch,
@@ -3505,6 +3575,30 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         return {"status": "failed", "reason": "empty_agent_branch"}
 
     story["status"] = "tests_passed" if passed else "failed"
+
+    # Opt-in review-on-acceptance-fail (PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1):
+    # route a dispatch whose acceptance oracle FAILED — but which produced real
+    # work (new commits on the agent branch) — to review instead of straight to
+    # "failed", so the reviewer evaluates the failing submission and the rework
+    # loop re-dispatches the model up to REWORK_MAX_ATTEMPTS with the reviewer's
+    # feedback. This engages the reviewer (previously unreachable for any
+    # acceptance-failing cell: every such cell parked at "failed" with
+    # rework_attempts=0, review_verdict=None, so the configured rework budget
+    # and reviewer never ran — observed live, 2026-07-17, 0/9 mlx cells reached
+    # review, zero GLM reviewer usage). Production-aligned: a reviewer sees
+    # failing CI and REQUEST_CHANGES; the merge gate (_reverify_acceptance)
+    # still blocks any APPROVEd-but-failing merge, so this never lands wrong
+    # code. An empty-branch park (no real work) stays "failed" — re-dispatching
+    # the same stuck prompt to the same model won't help. Opt-in so default
+    # production behavior is unchanged; review_story's existing rework cap
+    # (park/escalate after REWORK_MAX_ATTEMPTS) bounds the cycles.
+    if (not passed
+            and story["status"] == "failed"
+            and os.environ.get("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "0") == "1"
+            and _worktree_has_new_commits(
+                worktree, story_key, base_branch=_default_branch())):
+        story["status"] = "tests_passed"  # reviewable; reviewer sees the failure
+        story["acceptance_failed_review"] = True
 
     # T6: distinguish an explicit agent surrender from an ordinary red test
     # run. A missing/wrong API is a story-scoping bug, not a model-capability

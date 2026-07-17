@@ -13,10 +13,15 @@ reaching the kernel panic path. This is a mitigation, not a proven fix - the
 per-request instrumentation below exists to find out, from real logs, whether
 memory pressure, concurrent requests, or both are the actual trigger.
 
-MLX_MEMORY_LIMIT_MB - default "22528" (22 GiB). Passed to mx.set_memory_limit()
-    before mlx_lm.server.main() runs. Derived from this host's 25.77GB
-    physical RAM minus ~3GB OS/other-process headroom - tune per host, this is
-    not a general-purpose default.
+MLX_MEMORY_LIMIT_MB - default "14336" (14 GiB). Passed to mx.set_memory_limit()
+    before mlx_lm.server.main() runs. The prior 22528 (22 GiB) default on this
+    host's 25.77GB physical RAM left only ~3GB headroom, which still panicked
+    (2026-07-16 IOGPUGroupMemory panic, ~700MB-2GB free for 6 minutes before
+    the crash) - the soft limit failed to trip before the kernel's GPU driver
+    bookkeeping bug did. 14336 keeps wired memory in the ~15-16GB range this
+    host has run stable at for hours (see MLX_DEFAULT_PROVIDER_PLAN.md /
+    project_mlx_24gb_footprint_ceiling memory) - tune per host, this is not a
+    general-purpose default.
 
 MLX_WRAPPER_LOG_PATH - where per-request start/end + peak-memory instrumentation
     goes; default mlx-server-wrapper.log alongside this repo's other MLX logs.
@@ -28,7 +33,7 @@ import threading
 import time
 from pathlib import Path
 
-MEMORY_LIMIT_MB = os.environ.get("MLX_MEMORY_LIMIT_MB", "22528")
+MEMORY_LIMIT_MB = os.environ.get("MLX_MEMORY_LIMIT_MB", "14336")
 LOG_PATH = os.environ.get(
     "MLX_WRAPPER_LOG_PATH", str(Path(__file__).resolve().parent.parent / "mlx-server-wrapper.log")
 )

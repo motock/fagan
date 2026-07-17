@@ -8,3 +8,5 @@ node_modules/
 # Dashboard start/stop script runtime artifacts (scripts/dashboard.sh)
 .dashboard.*.pid
 .venv-mlx/
+.DS_Store
+*.bak

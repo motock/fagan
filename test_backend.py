@@ -6,6 +6,7 @@ pipeline_mcp_server.py's own tests cover the orchestration call sites
 itself - which driver a role resolves to under which config, and what each
 driver actually does.
 """
+import json
 import plistlib
 from pathlib import Path
 
@@ -892,6 +893,336 @@ def test_claude_resource_status_reflects_usage_paused_flag(monkeypatch):
 def test_claude_resource_status_fails_open_when_no_usage_state(monkeypatch):
     import pipeline_mcp_server as p
     monkeypatch.setattr(p, "_read_usage_state", lambda: {})
+    assert b.ClaudeCliDriver().resource_status()["ok"] is True
+
+
+# ---------- T1: Claude backend provider-redirect env isolation ----------
+# A `claude` subprocess launched with no `env=` kwarg inherits the calling
+# process's full environment. If that shell has a 3rd-party-provider
+# redirect exported (ANTHROPIC_BASE_URL et al — a real, documented `claude`
+# CLI feature), every review/dispatch/overlord call silently rides it while
+# the audit trail still claims "backend": "claude". These vars must be
+# stripped before every `claude` subprocess call unless explicitly
+# re-enabled via PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV.
+_PROVIDER_REDIRECT_ENV_SAMPLE = {
+    "ANTHROPIC_BASE_URL": "https://evil.example.com",
+    "ANTHROPIC_AUTH_TOKEN": "not-a-real-token",
+    "ANTHROPIC_API_KEY": "not-a-real-key",
+    "ANTHROPIC_MODEL": "some-other-vendor-model",
+    "ANTHROPIC_SMALL_FAST_MODEL": "some-other-vendor-model-fast",
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "CLAUDE_CODE_USE_VERTEX": "1",
+}
+
+
+def _set_provider_redirect_env(monkeypatch):
+    for var, value in _PROVIDER_REDIRECT_ENV_SAMPLE.items():
+        monkeypatch.setenv(var, value)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("MY_HARMLESS_TEST_VAR", "keep-me")
+
+
+def test_complete_strips_provider_redirect_env_vars(monkeypatch):
+    _set_provider_redirect_env(monkeypatch)
+    monkeypatch.delenv("PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV", raising=False)
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, env=None):
+        captured["env"] = env
+        return _FakeCompletedProcess(stdout="ok")
+
+    monkeypatch.setattr(b.subprocess, "run", _fake_run)
+
+    b.ClaudeCliDriver().complete("hi", model="sonnet")
+
+    env = captured["env"]
+    assert env is not None
+    for var in _PROVIDER_REDIRECT_ENV_SAMPLE:
+        assert var not in env
+    assert env["MY_HARMLESS_TEST_VAR"] == "keep-me"
+    assert env["PATH"] == "/usr/bin:/bin"
+
+
+def test_dispatch_strips_provider_redirect_env_vars(tmp_path, monkeypatch):
+    _set_provider_redirect_env(monkeypatch)
+    monkeypatch.delenv("PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV", raising=False)
+    captured = {}
+
+    def _fake_popen(cmd, cwd, env, stdout, stderr):
+        captured["env"] = env
+        return _FakePopenResult(42)
+
+    monkeypatch.setattr(b.subprocess, "Popen", _fake_popen)
+
+    b.ClaudeCliDriver().dispatch(
+        "implement", system=None, model="sonnet", allowed_tools="Bash",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    env = captured["env"]
+    assert env is not None
+    for var in _PROVIDER_REDIRECT_ENV_SAMPLE:
+        assert var not in env
+    assert env["MY_HARMLESS_TEST_VAR"] == "keep-me"
+
+
+def test_usage_probe_text_strips_provider_redirect_env_vars(monkeypatch):
+    _set_provider_redirect_env(monkeypatch)
+    monkeypatch.delenv("PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV", raising=False)
+    captured = {}
+
+    def _fake_run(cmd, capture_output, text, check, env=None):
+        captured["env"] = env
+        return _FakeCompletedProcess(stdout=json.dumps({"result": "usage text"}))
+
+    monkeypatch.setattr(b.subprocess, "run", _fake_run)
+
+    b.ClaudeCliDriver().usage_probe_text()
+
+    env = captured["env"]
+    assert env is not None
+    for var in _PROVIDER_REDIRECT_ENV_SAMPLE:
+        assert var not in env
+
+
+def test_claude_provider_env_allow_escape_hatch_restores_full_inheritance(monkeypatch):
+    _set_provider_redirect_env(monkeypatch)
+    monkeypatch.setenv("PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV", "1")
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, env=None):
+        captured["env"] = env
+        return _FakeCompletedProcess(stdout="ok")
+
+    monkeypatch.setattr(b.subprocess, "run", _fake_run)
+
+    b.ClaudeCliDriver().complete("hi", model="sonnet")
+
+    env = captured["env"]
+    for var, value in _PROVIDER_REDIRECT_ENV_SAMPLE.items():
+        assert env[var] == value
+
+
+# ---------- T4: served vs requested model in the audit sidecar ----------
+def test_complete_records_served_model_alongside_requested_tier(tmp_path, monkeypatch):
+    """The JSON payload's own "model" field is what the CLI actually served -
+    distinct from the requested tier string ("sonnet"). Both must land in the
+    sidecar so a provider-redirect drift is visible even without T2/T3."""
+    payload = {
+        "result": "the answer",
+        "model": "claude-sonnet-4-5-20260101",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "total_cost_usd": 0.01,
+        "duration_ms": 123,
+    }
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout=json.dumps(payload)
+        ),
+    )
+
+    b.ClaudeCliDriver().complete(
+        "hi", model="sonnet", cell_dir=str(tmp_path),
+    )
+
+    lines = (tmp_path / "review_token_costs.jsonl").read_text().splitlines()
+    record = json.loads(lines[0])
+    assert record["model"] == "sonnet"
+    assert record["served_model"] == "claude-sonnet-4-5-20260101"
+
+
+def test_record_token_usage_writes_null_served_model_when_absent(tmp_path):
+    """Older call sites (or the non-JSON text-output path) don't have a
+    served-model value at all - the sidecar write must degrade to null,
+    not raise KeyError."""
+    b.ClaudeCliDriver().record_token_usage(
+        {"input_tokens": 1, "output_tokens": 1, "model": "sonnet"},
+        cell_dir=str(tmp_path),
+    )
+
+    lines = (tmp_path / "review_token_costs.jsonl").read_text().splitlines()
+    record = json.loads(lines[0])
+    assert record["served_model"] is None
+
+
+# ---------- T2: served model must match the requested tier ----------
+def test_complete_raises_provider_identity_mismatch_when_served_model_diverges(
+    tmp_path, monkeypatch,
+):
+    """If the requested tier is "sonnet" but the CLI's own JSON payload
+    reports a non-Anthropic model string, a 3rd-party-provider redirect got
+    through despite T1 (e.g. PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV set
+    intentionally, or a redirect var outside the known set) - this must be a
+    loud failure, not a silently wrong review/dispatch."""
+    payload = {
+        "result": "the answer",
+        "model": "mistral-large-2",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout=json.dumps(payload)
+        ),
+    )
+
+    with pytest.raises(b.ProviderIdentityMismatch):
+        b.ClaudeCliDriver().complete("hi", model="sonnet", cell_dir=str(tmp_path))
+
+
+def test_complete_records_usage_even_on_identity_mismatch(tmp_path, monkeypatch):
+    """The mismatch must still be visible in the audit sidecar (feeds T4) -
+    raising must not skip the record_token_usage() call."""
+    payload = {
+        "result": "the answer",
+        "model": "mistral-large-2",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout=json.dumps(payload)
+        ),
+    )
+
+    with pytest.raises(b.ProviderIdentityMismatch):
+        b.ClaudeCliDriver().complete("hi", model="sonnet", cell_dir=str(tmp_path))
+
+    lines = (tmp_path / "review_token_costs.jsonl").read_text().splitlines()
+    record = json.loads(lines[0])
+    assert record["served_model"] == "mistral-large-2"
+
+
+def test_complete_passes_silently_when_served_model_matches_tier_prefix(
+    tmp_path, monkeypatch,
+):
+    payload = {
+        "result": "the answer",
+        "model": "claude-opus-4-1-20260101",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout=json.dumps(payload)
+        ),
+    )
+
+    result = b.ClaudeCliDriver().complete("hi", model="opus", cell_dir=str(tmp_path))
+    assert result == "the answer"
+
+
+def test_complete_skips_identity_check_when_cell_dir_none(monkeypatch):
+    """Callers that don't request structured output (cell_dir=None, e.g. the
+    overlord path) never parse the JSON payload at all - no identity check to
+    skip, and a non-JSON stdout still passes through unaffected."""
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout="plain text reply, not JSON"
+        ),
+    )
+
+    result = b.ClaudeCliDriver().complete("hi", model="sonnet")
+    assert result == "plain text reply, not JSON"
+
+
+def test_complete_skips_identity_check_for_unrecognized_tier(tmp_path, monkeypatch):
+    """A model string outside the known opus/sonnet/haiku tiers has no
+    expected prefix to check against - fail open (no crash) rather than
+    guessing, matching the documented "only known tiers" scope."""
+    payload = {
+        "result": "the answer",
+        "model": "anything-at-all",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout=json.dumps(payload)
+        ),
+    )
+
+    result = b.ClaudeCliDriver().complete(
+        "hi", model="some-custom-tier", cell_dir=str(tmp_path),
+    )
+    assert result == "the answer"
+
+
+# ---------- T3: fail-closed identity preflight wired into resource_status() ----------
+def test_verify_identity_returns_ok_true_for_genuine_anthropic_response(monkeypatch):
+    monkeypatch.setattr(b, "_claude_identity_status", None)
+    payload = {"model": "claude-sonnet-4-5-20260101"}
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout=json.dumps(payload)
+        ),
+    )
+
+    result = b.ClaudeCliDriver().verify_identity()
+
+    assert result == {"ok": True, "model": "claude-sonnet-4-5-20260101", "reason": ""}
+
+
+def test_verify_identity_returns_ok_false_for_non_anthropic_model(monkeypatch):
+    monkeypatch.setattr(b, "_claude_identity_status", None)
+    payload = {"model": "mistral-large-2"}
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout=json.dumps(payload)
+        ),
+    )
+
+    result = b.ClaudeCliDriver().verify_identity()
+
+    assert result["ok"] is False
+    assert "mistral-large-2" in result["reason"]
+
+
+def test_verify_identity_caches_result_and_does_not_reprobe(monkeypatch):
+    monkeypatch.setattr(b, "_claude_identity_status", None)
+    calls = []
+
+    def _fake_run(cmd, capture_output, text, env=None):
+        calls.append(cmd)
+        return _FakeCompletedProcess(stdout=json.dumps({"model": "claude-sonnet-4-5"}))
+
+    monkeypatch.setattr(b.subprocess, "run", _fake_run)
+
+    driver = b.ClaudeCliDriver()
+    first = driver.verify_identity()
+    second = driver.verify_identity()
+
+    assert first == second
+    assert len(calls) == 1
+
+
+def test_resource_status_reflects_failed_identity_check_same_as_usage_pause(monkeypatch):
+    import pipeline_mcp_server as p
+    monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": False})
+    monkeypatch.setattr(
+        b, "_claude_identity_status",
+        {"ok": False, "model": "mistral-large-2",
+         "reason": "Claude backend identity check failed: served 'mistral-large-2', expected claude-sonnet-*"},
+    )
+
+    status = b.ClaudeCliDriver().resource_status()
+
+    assert status["ok"] is False
+    assert "identity" in status["reason"].lower()
+
+
+def test_resource_status_ok_when_identity_not_yet_checked(monkeypatch):
+    """An empty (never-probed) identity cache must fail OPEN, not block every
+    role before any preflight has ever run - matches resource_status()'s
+    existing fail-open behavior for missing usage state."""
+    import pipeline_mcp_server as p
+    monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": False})
+    monkeypatch.setattr(b, "_claude_identity_status", None)
+
     assert b.ClaudeCliDriver().resource_status()["ok"] is True
 
 
@@ -1787,7 +2118,7 @@ def test_dispatch_streams_claude_cli_output_so_log_size_is_a_reliable_signal(
     captured = {}
     monkeypatch.setattr(
         b.subprocess, "Popen",
-        lambda cmd, cwd, stdout, stderr: captured.update(cmd=cmd) or _FakePopenResult(99),
+        lambda cmd, cwd, env, stdout, stderr: captured.update(cmd=cmd) or _FakePopenResult(99),
     )
 
     b.ClaudeCliDriver().dispatch(
@@ -1834,7 +2165,7 @@ def test_claude_dispatch_handle_records_passed_model(tmp_path, monkeypatch):
     resolution), so the handle records exactly what was passed."""
     monkeypatch.setattr(
         b.subprocess, "Popen",
-        lambda cmd, cwd, stdout, stderr: _FakePopenResult(12),
+        lambda cmd, cwd, env, stdout, stderr: _FakePopenResult(12),
     )
     handle = b.ClaudeCliDriver().dispatch(
         "do it", system=None, model="opus",

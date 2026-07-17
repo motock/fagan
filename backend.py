@@ -109,6 +109,62 @@ class Backend(Protocol):
         ...
 
 
+# Vars that can redirect the `claude` CLI off the first-party Anthropic API
+# (Bedrock/Vertex, a custom ANTHROPIC_BASE_URL, or an injected auth token/key)
+# — see `claude --help`'s "3P providers" section. With no `env=` passed to a
+# `claude` subprocess call, it inherits the caller's full environment; if the
+# invoking shell (or the scheduler's) has one of these exported, every
+# "claude"-backend call (dispatch/review/overlord) silently rides it while
+# the audit sidecar still reports "backend": "claude". Stripped by default
+# from every ClaudeCliDriver subprocess call; PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV
+# opts back into full inheritance for legitimate enterprise Bedrock/Vertex
+# deployments.
+_CLAUDE_PROVIDER_REDIRECT_VARS = (
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+    "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+)
+
+
+def _first_party_claude_env() -> dict:
+    """Environment for a `claude` subprocess call, isolated from provider
+    redirects unless PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV explicitly restores
+    full inheritance (deny-by-default, per Secure by Design)."""
+    if os.environ.get("PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV", "").strip():
+        return dict(os.environ)
+    env = dict(os.environ)
+    for var in _CLAUDE_PROVIDER_REDIRECT_VARS:
+        env.pop(var, None)
+    return env
+
+
+class ProviderIdentityMismatch(RuntimeError):
+    """The `claude` CLI's own JSON payload reports a served model that does
+    not match the requested tier - T1's env strip was bypassed (e.g. via
+    PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV) or a redirect var outside the known
+    set got through. Loud by design: a silent divergence here means review/
+    dispatch/overlord decisions were made by a different model than the one
+    requested."""
+
+
+# Only tiers with a known Anthropic model-name prefix are checked; a custom
+# or unrecognized tier string has no expected prefix to compare against, so
+# verification is skipped for it (fail open on the unknown, not a guess).
+_CLAUDE_TIER_MODEL_PREFIXES = {
+    "opus": "claude-opus-",
+    "sonnet": "claude-sonnet-",
+    "haiku": "claude-haiku-",
+}
+
+
+# Cached result of ClaudeCliDriver.verify_identity(), module-scoped for the
+# process's lifetime — mirrors the usage-gate's own cached, poller-fed state
+# (see resource_status()'s docstring) rather than re-probing on every call.
+# None means "never checked yet"; resource_status() must fail OPEN on that,
+# not treat an unchecked identity as a failure.
+_claude_identity_status: dict | None = None
+
+
 class ClaudeCliDriver:
     """Backend driver wrapping the `claude` CLI."""
 
@@ -136,7 +192,10 @@ class ClaudeCliDriver:
         # doesn't pass cell_dir (the overlord path, ad-hoc single-shots).
         if cell_dir is not None:
             cmd += ["--output-format", "json"]
-        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True,
+            env=_first_party_claude_env(),
+        )
         if cell_dir is None:
             return proc.stdout
         # Structured path: parse the JSON envelope, record usage, return
@@ -161,9 +220,16 @@ class ClaudeCliDriver:
                 "total_cost_usd": payload.get("total_cost_usd"),
                 "duration_ms": payload.get("duration_ms"),
                 "model": model,
+                "served_model": payload.get("model"),
             },
             cell_dir=cell_dir, role="complete",
         )
+        expected_prefix = _CLAUDE_TIER_MODEL_PREFIXES.get(model)
+        served_model = payload.get("model")
+        if expected_prefix and served_model and not served_model.startswith(expected_prefix):
+            raise ProviderIdentityMismatch(
+                f"requested tier {model!r} but backend served {served_model!r}"
+            )
         return result_text
 
     def record_token_usage(
@@ -186,6 +252,7 @@ class ClaudeCliDriver:
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "backend": "claude",
                 "model": usage.get("model", "?"),
+                "served_model": usage.get("served_model"),
                 "role": role,
                 "step": step,
                 "input_tokens": usage.get("input_tokens", 0),
@@ -219,7 +286,10 @@ class ClaudeCliDriver:
         if allowed_tools:
             cmd += ["--allowedTools", allowed_tools]
         log_file = open(log_path, "a" if append else "w")
-        proc = subprocess.Popen(cmd, cwd=cwd, stdout=log_file, stderr=log_file)
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, env=_first_party_claude_env(),
+            stdout=log_file, stderr=log_file,
+        )
         log_file.close()
         return AgentHandle(pid=proc.pid, model=model)
 
@@ -227,12 +297,50 @@ class ClaudeCliDriver:
         proc = subprocess.run(
             ["claude", "-p", "/cost", "--output-format", "json"],
             capture_output=True, text=True, check=True,
+            env=_first_party_claude_env(),
         )
         try:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Usage probe returned invalid JSON: {e}") from e
         return payload.get("result", "")
+
+    def verify_identity(self) -> dict:
+        """Confirm the `claude` CLI genuinely serves Anthropic Claude and not
+        a 3rd-party-provider redirect that got past T1 (e.g. via the
+        PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV escape hatch, or a redirect var
+        outside T1's known set). Runs the cheapest possible call once per
+        process and caches the result at module scope — see
+        `_claude_identity_status`'s docstring. A malformed/unreadable
+        response fails open (ok: True): this preflight can only report a
+        confirmed mismatch, not prove a negative.
+        """
+        global _claude_identity_status
+        if _claude_identity_status is not None:
+            return _claude_identity_status
+        tier = "sonnet"
+        proc = subprocess.run(
+            ["claude", "-p", "1+1", "--model", tier, "--output-format", "json"],
+            capture_output=True, text=True, env=_first_party_claude_env(),
+        )
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            _claude_identity_status = {"ok": True, "model": None, "reason": ""}
+            return _claude_identity_status
+        served = payload.get("model")
+        expected_prefix = _CLAUDE_TIER_MODEL_PREFIXES[tier]
+        if served and not served.startswith(expected_prefix):
+            _claude_identity_status = {
+                "ok": False, "model": served,
+                "reason": (
+                    f"Claude backend identity check failed: served {served!r}, "
+                    f"expected {expected_prefix}*"
+                ),
+            }
+        else:
+            _claude_identity_status = {"ok": True, "model": served, "reason": ""}
+        return _claude_identity_status
 
     def resource_status(self) -> dict:
         """Claude's gate is the poller-fed, hysteresis-stabilized usage state
@@ -242,10 +350,19 @@ class ClaudeCliDriver:
         orchestrator imports this module (a top-level import would cycle); by
         call time pipeline_mcp_server is fully loaded. Failing open (ok) on
         missing/garbled state matches check_usage's own fail-open behavior.
+
+        Also folds in the cached provider-identity check (verify_identity) -
+        an unchecked (None) cache fails open, same as missing usage state;
+        only a confirmed mismatch blocks, through this same gate a tripped
+        usage pause already uses.
         """
         import pipeline_mcp_server as _p  # local: avoids an import cycle
         paused = bool(_p._read_usage_state().get("paused", False))
-        return {"ok": not paused, "reason": "Claude usage gate tripped" if paused else ""}
+        if paused:
+            return {"ok": False, "reason": "Claude usage gate tripped"}
+        if _claude_identity_status is not None and not _claude_identity_status.get("ok", True):
+            return {"ok": False, "reason": _claude_identity_status.get("reason", "")}
+        return {"ok": True, "reason": ""}
 
 
 # Tier names (opus/sonnet/haiku) come from Claude persona frontmatter and

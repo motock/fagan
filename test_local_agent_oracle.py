@@ -117,6 +117,35 @@ def test_oracle_try_repair_indentation_fixes_decorator_dedent():
     compile(repaired, "<test>", "exec")
 
 
+def test_oracle_try_repair_indentation_fixes_multiple_dedented_decorators():
+    """The decoding defect drops the `def` line after EVERY decorator in the
+    file, not just the first (observed live, 2026-07-17, lru_cache: both the
+    `@property` getter `def size` AND the `@size.setter` `def size` were
+    dedented to column 0). The single-line repair fixed the getter, but the
+    setter still broke compile, so the repair returned None and correct code
+    was rejected every retry until the wall-clock park. The repair must
+    ITERATE. Mirrors test_local_agent.test_try_repair_indentation_fixes_multiple_dedented_decorators."""
+    broken = (
+        "from collections import OrderedDict\n"
+        "class LRUCache:\n"
+        "    def __init__(self, capacity):\n"
+        "        self._data = OrderedDict()\n"
+        "    @property\n"
+        "def size(self):\n"
+        "        return len(self._data)\n"
+        "    @size.setter\n"
+        "def size(self, value):\n"
+        "        raise AttributeError('read-only')\n"
+    )
+    repair = lao._try_repair_indentation(broken)
+    assert repair is not None, "multi-decorator dedent must be repaired, not rejected"
+    repaired, note = repair
+    assert "    @property\n    def size(self):\n" in repaired
+    assert "    @size.setter\n    def size(self, value):\n" in repaired
+    assert "auto-reindented" in note
+    compile(repaired, "<test>", "exec")
+
+
 def test_oracle_create_file_auto_repairs_decorator_dedent_and_writes(tmp_path, monkeypatch):
     """Mirrors test_local_agent.test_create_file_auto_repairs_decorator_dedent_and_writes."""
     monkeypatch.setattr(lao, "CWD", tmp_path)

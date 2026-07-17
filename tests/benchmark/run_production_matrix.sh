@@ -88,6 +88,16 @@ export PIPELINE_DECOMPOSE_SCRATCHPAD=on
 export PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE=3
 export PIPELINE_REWORK_MAX_ATTEMPTS=3
 export PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED=3
+# Route an acceptance-failing dispatch that produced real work to review
+# instead of straight to "failed", so the reviewer evaluates the failing
+# submission and the rework loop above (REWORK_MAX_ATTEMPTS=3) retries the
+# model with the reviewer's feedback. Without this, every acceptance-failing
+# cell parks at "failed" before reaching review, so the rework budget and the
+# GLM reviewer below never run (observed: 0/9 mlx cells reached review, zero
+# reviewer usage). Opt-in here so the production-mimicking run exercises the
+# full review+rework safety net; the merge gate still blocks any
+# APPROVEd-but-failing merge.
+export PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1
 
 # Reviewer: glm-5.2:cloud (cloud-routed via Ollama — `ollama list` shows SIZE
 # "-", i.e. NOT a local model file), so it consumes NO local memory and is NOT

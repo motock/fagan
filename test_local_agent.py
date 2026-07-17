@@ -133,6 +133,37 @@ def test_try_repair_indentation_fixes_decorator_dedent():
     compile(repaired, "<test>", "exec")
 
 
+def test_try_repair_indentation_fixes_multiple_dedented_decorators():
+    """The decoding defect drops the `def` line after EVERY decorator in the
+    file, not just the first (observed live, 2026-07-17, lru_cache: both the
+    `@property` getter `def size` AND the `@size.setter` `def size` were
+    dedented to column 0). The single-line repair fixed the getter, but the
+    setter still broke compile, so the repair returned None and correct code
+    was rejected every retry until the wall-clock park. The repair must
+    ITERATE: fix one dedented def, re-compile, fix the next, until clean."""
+    broken = (
+        "from collections import OrderedDict\n"
+        "class LRUCache:\n"
+        "    def __init__(self, capacity):\n"
+        "        self._data = OrderedDict()\n"
+        "    @property\n"
+        "def size(self):\n"
+        "        return len(self._data)\n"
+        "    @size.setter\n"
+        "def size(self, value):\n"
+        "        raise AttributeError('read-only')\n"
+    )
+    repair = la._try_repair_indentation(broken)
+    assert repair is not None, "multi-decorator dedent must be repaired, not rejected"
+    repaired, note = repair
+    # BOTH dedented defs must now sit at 4 spaces, matching their decorators.
+    assert "    @property\n    def size(self):\n" in repaired
+    assert "    @size.setter\n    def size(self, value):\n" in repaired
+    assert "auto-reindented" in note
+    # And the repaired content must actually compile.
+    compile(repaired, "<test>", "exec")
+
+
 def test_create_file_auto_repairs_decorator_dedent_and_writes(tmp_path, monkeypatch):
     """When create_file receives the decorator-dedent defect, it must write the
     REPAIRED content to disk (not reject it into the death-loop) and tell the

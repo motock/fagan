@@ -4650,6 +4650,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             branch = f"agent/{key.lower()}"
             worktree = story.get("worktree", "")
             gate_error = ""
+            ci_definitive_fail = False
             rb = _rebase_onto_master(worktree, branch)
             if rb.get("auto_resolved"):
                 _notify_user(plan_name, f"{key} rebase auto-resolved an additive-import "
@@ -4679,7 +4680,15 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         story["ci_rerun_attempted"] = True
                         _ci_rerun(branch)
                         ci = _ci_status(branch)
-                    if ci["state"] in ("fail", "cancelled"):
+                    if ci["state"] == "fail":
+                        gate_error = f"ci fail: {ci['error']}"
+                        # Only a genuine test-failure verdict is "definitive" -
+                        # cancelled (queue/infra flake, already given one
+                        # auto-rerun above) and pending are NOT, and must keep
+                        # retrying via the ordinary merge_attempts path below,
+                        # not consume rework budget.
+                        ci_definitive_fail = True
+                    elif ci["state"] == "cancelled":
                         gate_error = f"ci fail: {ci['error']}"
                     elif ci["state"] == "pending":
                         gate_error = f"ci pending: {ci['error']}"
@@ -4700,6 +4709,58 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         gate_error = f"build reverify fail: {build['error']}"
 
             if gate_error:
+                # Opt-in (PIPELINE_REWORK_ON_CI_FAIL=1): a DEFINITIVE CI test
+                # failure - not a transient rebase/push error, not
+                # pending/cancelled - can be caused by the agent's own
+                # committed test file rather than the reviewed implementation
+                # (the reviewer is acceptance-scoped and never saw it). Retrying
+                # an unchanged branch identically MERGE_MAX_ATTEMPTS times can
+                # never fix that; hand the CI failure back to the implementer as
+                # rework feedback instead, bounded by the SAME rework budget
+                # review_story uses, so a story that never converges still
+                # parks/escalates rather than looping forever. See
+                # MERGE_CI_REWORK_PLAN.md, 2026-07-17 (gpt-oss retry_backoff /
+                # token_bucket: ground-truth-correct code abandoned because the
+                # agent's own broken self-test tripped this gate).
+                rework_ok = (
+                    ci_definitive_fail
+                    and os.environ.get("PIPELINE_REWORK_ON_CI_FAIL", "0") == "1"
+                )
+                if rework_ok:
+                    # Bound by MERGE_MAX_ATTEMPTS via the merge_attempts
+                    # counter, which PERSISTS across the rework -> review
+                    # APPROVE -> merge-gate cycle. rework_attempts does NOT:
+                    # the review APPROVE path (~line 4189) pops it on every
+                    # pass (the reviewer APPROVEs because it is acceptance-
+                    # scoped and the oracle is green), so reusing
+                    # rework_attempts here loops forever - each CI-fail
+                    # re-increments 0->1 and the cap never exhausts (verified
+                    # 2026-07-17 on token_bucket: four identical "routed to
+                    # rework (1/3)" notifications, same broken assertion
+                    # every round). merge_attempts is the merge gate's own
+                    # counter and is not reset by review, so it bounds the
+                    # loop: MERGE_MAX_ATTEMPTS rework rounds, then the
+                    # fall-through below terminal-fails.
+                    rework_ok = story.get("merge_attempts", 0) < MERGE_MAX_ATTEMPTS
+
+                if rework_ok:
+                    attempts = story.get("merge_attempts", 0) + 1
+                    story["merge_attempts"] = attempts
+                    story["review_feedback"] = (
+                        "The merge-gate CI check failed on your submitted branch "
+                        f"(reviewer already APPROVEd this work):\n{gate_error}\n\n"
+                        "This is often caused by a test file YOU wrote containing "
+                        "an incorrect assertion, not the implementation. Re-examine "
+                        "your own test files against the spec, fix any incorrect "
+                        "assertions, and ensure the full suite passes before "
+                        "resubmitting."
+                    )
+                    story["status"] = "changes_requested"
+                    _notify_user(plan_name, f"{key} merge-gate CI failed ({gate_error}); "
+                                            f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).")
+                    summary["notify"].append(key)
+                    continue
+
                 attempts = story.get("merge_attempts", 0) + 1
                 story["merge_attempts"] = attempts
                 if attempts >= MERGE_MAX_ATTEMPTS:

@@ -5325,6 +5325,249 @@ def test_advance_pipeline_ci_fail_blocks_merge(plan_dir, monkeypatch):
     assert result["failed"] == []
 
 
+def test_advance_pipeline_ci_fail_routes_to_rework_when_opted_in(plan_dir, monkeypatch):
+    # PIPELINE_REWORK_ON_CI_FAIL=1: a definitive CI test failure on an
+    # APPROVEd branch (e.g. the agent's own broken self-test, invisible to
+    # the acceptance-scoped reviewer) is handed back to the implementer as
+    # rework feedback instead of silently retrying the unchanged branch.
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cifailrework", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "fail", "error": "test_clamp_boundary failed"})
+    merged_calls = []
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
+
+    result = p.advance_pipeline("cifailrework")
+
+    story = _read_manifest(plan_dir, "cifailrework")["stories"]["P1"]
+    assert story["status"] == "changes_requested"
+    assert story["merge_attempts"] == 1
+    assert "rework_attempts" not in story
+    assert "test_clamp_boundary failed" in story["review_feedback"]
+    assert merged_calls == []
+    assert result["merged"] == []
+    assert result["failed"] == []
+
+
+def test_advance_pipeline_ci_fail_stays_terminal_without_opt_in(plan_dir, monkeypatch):
+    # Without the flag, a definitive CI failure keeps today's exact behavior:
+    # merge_attempts increments and the story terminal-fails at the cap - no
+    # rework routing.
+    monkeypatch.delenv("PIPELINE_REWORK_ON_CI_FAIL", raising=False)
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 1)
+    _write_manifest(plan_dir, "cifailnorework", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "fail", "error": "boom"})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+
+    result = p.advance_pipeline("cifailnorework")
+
+    story = _read_manifest(plan_dir, "cifailnorework")["stories"]["P1"]
+    assert story["status"] == "failed"
+    assert story["merge_attempts"] == 1
+    assert "rework_attempts" not in story
+    assert "P1" in result["failed"]
+
+
+def test_advance_pipeline_ci_fail_rework_exhausted_falls_to_terminal_fail(plan_dir, monkeypatch):
+    # Once the merge-CI rework budget is already spent (merge_attempts has
+    # reached MERGE_MAX_ATTEMPTS), a further CI fail must not loop forever on
+    # rework - it falls through to the existing terminal-fail path.
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cifailexhausted", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x", "merge_attempts": 3},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "fail", "error": "still broken"})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+
+    result = p.advance_pipeline("cifailexhausted")
+
+    story = _read_manifest(plan_dir, "cifailexhausted")["stories"]["P1"]
+    assert story["status"] == "failed"
+    assert story["merge_attempts"] == 4  # was 3, +1 in the terminal-fail fall-through
+    assert "rework_attempts" not in story
+    assert "P1" in result["failed"]
+
+
+def test_advance_pipeline_ci_fail_rework_counter_survives_review_approve(plan_dir, monkeypatch):
+    # Regression (2026-07-17, token_bucket live run): the merge-CI->rework
+    # loop MUST be bounded by merge_attempts, not rework_attempts. The review
+    # APPROVE path (~line 4189) pops rework_attempts on every pass because the
+    # acceptance-scoped reviewer APPROVEs whenever the oracle is green - so a
+    # bound on rework_attempts resets to 0 each cycle and the loop never
+    # exhausts (observed: four identical "routed to rework (1/3)"
+    # notifications, same broken assertion every round). merge_attempts is the
+    # merge gate's own counter and is NOT reset by review, so it must advance
+    # 1->2->3 across rework -> review APPROVE -> merge-gate cycles, then
+    # terminal-fail instead of looping forever.
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cicycle", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "fail", "error": "test_x failed"})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+
+    def _simulate_rework_then_review_approve():
+        # The agent re-dispatched off the rework feedback, the acceptance-
+        # scoped reviewer APPROVEd (oracle green), and the review APPROVE
+        # path popped rework_attempts. Story returns to pr_open for the
+        # merge gate to re-run CI on the next tick.
+        st = _read_manifest(plan_dir, "cicycle")["stories"]["P1"]
+        st["status"] = "pr_open"
+        st["review_verdict"] = "APPROVE"
+        st.pop("rework_attempts", None)  # what review APPROVE does (~line 4189)
+        _write_manifest(plan_dir, "cicycle", {"P1": st})
+
+    # Tick 1: CI fail -> routed to rework, merge_attempts 0->1.
+    p.advance_pipeline("cicycle")
+    story = _read_manifest(plan_dir, "cicycle")["stories"]["P1"]
+    assert story["status"] == "changes_requested"
+    assert story["merge_attempts"] == 1
+
+    # Tick 2: same CI fail after a review APPROVE that reset rework_attempts.
+    # The bound must advance to 2/3, NOT reset back to 1/3 (the bug).
+    _simulate_rework_then_review_approve()
+    p.advance_pipeline("cicycle")
+    story = _read_manifest(plan_dir, "cicycle")["stories"]["P1"]
+    assert story["status"] == "changes_requested"
+    assert story["merge_attempts"] == 2
+
+    # Tick 3: advances to 3/3 (still within budget, routes once more).
+    _simulate_rework_then_review_approve()
+    p.advance_pipeline("cicycle")
+    story = _read_manifest(plan_dir, "cicycle")["stories"]["P1"]
+    assert story["status"] == "changes_requested"
+    assert story["merge_attempts"] == 3
+
+    # Tick 4: budget exhausted (merge_attempts=3 >= MERGE_MAX_ATTEMPTS=3) ->
+    # terminal fail, no further rework routing (no infinite loop).
+    _simulate_rework_then_review_approve()
+    result = p.advance_pipeline("cicycle")
+    story = _read_manifest(plan_dir, "cicycle")["stories"]["P1"]
+    assert story["status"] == "failed"
+    assert "P1" in result["failed"]
+
+
+def test_advance_pipeline_transient_push_failure_not_routed_to_rework(plan_dir, monkeypatch):
+    # A push/network failure is not a CI verdict at all - it must never
+    # consume rework budget even with the opt-in flag set.
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cipushfail", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(Path, "is_dir", lambda self: True)
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda *a, **k: type("R", (), {"returncode": 1, "stdout": "", "stderr": "network down"})(),
+    )
+    ci_calls = []
+    monkeypatch.setattr(p, "_ci_status", lambda br, **_: ci_calls.append(br))
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+
+    result = p.advance_pipeline("cipushfail")
+
+    story = _read_manifest(plan_dir, "cipushfail")["stories"]["P1"]
+    assert ci_calls == []  # push failed before CI was ever consulted
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert "rework_attempts" not in story
+    assert result["merged"] == []
+
+
+def test_advance_pipeline_ci_pending_not_routed_to_rework(plan_dir, monkeypatch):
+    # A pending CI result is not a definitive failure - it must keep retrying
+    # via the ordinary merge_attempts path, never rework, even with the flag on.
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cipendingrework", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "pending", "error": "timeout"})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+
+    result = p.advance_pipeline("cipendingrework")
+
+    story = _read_manifest(plan_dir, "cipendingrework")["stories"]["P1"]
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert "rework_attempts" not in story
+    assert result["merged"] == []
+
+
+def test_advance_pipeline_cancelled_ci_not_routed_to_rework(plan_dir, monkeypatch):
+    # A cancelled-only CI result (after its one auto-rerun) carries no
+    # code-quality signal - it must fall to the ordinary retry path, not rework.
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cicancelrework", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x", "ci_rerun_attempted": True},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "cancelled", "error": ""})
+    monkeypatch.setattr(p, "_ci_rerun", lambda br: True)
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+
+    result = p.advance_pipeline("cicancelrework")
+
+    story = _read_manifest(plan_dir, "cicancelrework")["stories"]["P1"]
+    assert story["status"] == "pr_open"
+    assert story["merge_attempts"] == 1
+    assert "rework_attempts" not in story
+    assert result["merged"] == []
+
+
 def test_advance_pipeline_ci_pending_blocks_merge(plan_dir, monkeypatch):
     # Pending CI must not merge yet; it retries within budget instead.
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")

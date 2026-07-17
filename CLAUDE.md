@@ -367,11 +367,13 @@ These are mandatory procedural steps that must be followed for every task, in or
              "persona": "software-engineer",
              "model": "sonnet",
              "risk": "low",
+             "backend": "optional: claude | local | ollama | lmstudio | mlx | auto",
              "key": "optional explicit story key; omit to auto-mint a UUID"
            }
          ]
        }
-     ]
+     ],
+     "role_config": {"review": {"provider": "mlx", "model": "qwen"}}
    }
    ```
 
@@ -382,6 +384,8 @@ These are mandatory procedural steps that must be followed for every task, in or
    - **`acceptance`** — *optional*: an array of `{path, source}` read-only test fixtures. The harness writes each `source` to `path` in the worktree (read-only — the agent may not edit them) and the oracle grades the run on whether the implementation makes them pass. Omit it for ordinary TDD stories where the agent writes its own tests (per `agent_instructions`) and the "tests pass" bar plus the code-reviewer gate suffice; reserve it for cases where you want to pre-specify the acceptance test the implementation must satisfy.
    - **`persona` / `model` / `risk`** — match the work: `software-engineer`/`sonnet`/`low` for mechanical backend work, `security-engineer`/`opus`/`high` for auth or crypto, etc. `risk` drives the overlord's merge gating.
    - **`description`** — optional human context for plan review (and the Plane issue body). Useful but not dispatched.
+   - **`backend`** — *optional*: pins this one story's dispatch provider (`claude`/`local`/`ollama`/`lmstudio`/`mlx`/`auto`), independent of the process-wide `PIPELINE_BACKEND_DISPATCH`. `ingest_plan` rejects an unrecognized value at ingest time. Omit to use the process-wide default.
+   - **`role_config`** — *optional, plan-level* (a sibling of `epics`, not a story field): per-role provider/model overrides for `overlord`/`planner`/`dispatch`/`review`/`decompose`, e.g. `{"review": {"provider": "mlx", "model": "qwen"}}`. See the README's "Per-role provider/model configuration" section and `model_registry.json` for the full priority chain and the list of available providers/models.
 
    Do **not** invent fields like `id`, `title`, `acceptance_criteria` (there is no such field — testable criteria go in `agent_instructions`; `acceptance` is an optional array of `{path, source}` file fixtures, not a list of strings), or `depends_on` — `ingest_plan` will fail with a bare `'summary'` KeyError if a story is missing `summary`, and `dependencies` must reference other stories by their exact `summary` string (or their explicit `key`), not by an invented ID. If in doubt, read an existing file under `~/.claude/plans/*.json` as ground truth before guessing.
 2. Find available work with `mcp__pipeline__list_ready_stories`, or check a specific story with `mcp__pipeline__check_story_status`.

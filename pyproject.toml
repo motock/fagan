@@ -8,6 +8,7 @@
 testpaths = [
     "test_backend.py",
     "test_inference_providers.py",
+    "test_role_registry.py",
     "test_pipeline_mcp_server.py",
     "test_dashboard.py",
     "test_local_agent.py",

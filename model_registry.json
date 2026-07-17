@@ -1,0 +1,27 @@
+{
+  "providers": {
+    "claude": {
+      "models": {
+        "opus": {"tag": "opus"},
+        "sonnet": {"tag": "sonnet"},
+        "haiku": {"tag": "haiku"}
+      }
+    },
+    "ollama": {
+      "models": {
+        "gpt-oss": {"tag": "gpt-oss:20b"},
+        "glm": {"tag": "glm-4.7-flash:cloud"},
+        "devstral": {"tag": "devstral:24b"}
+      }
+    },
+    "mlx": {
+      "models": {
+        "qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}
+      }
+    },
+    "lmstudio": {
+      "models": {}
+    }
+  },
+  "roles": {}
+}

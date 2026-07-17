@@ -188,6 +188,60 @@ def test_resolve_local_model_passes_through_a_concrete_tag_unchanged(monkeypatch
     assert b._resolve_local_model("devstral:24b") == "devstral:24b"
 
 
+def test_resolve_local_model_provider_scoped_env_var_wins_over_generic(monkeypatch):
+    """Two roles on different local providers must not silently share one
+    tier->model mapping: PIPELINE_LOCAL_MODEL_MLX_SONNET (provider-scoped)
+    must be checked before the provider-agnostic PIPELINE_LOCAL_MODEL_SONNET,
+    so an mlx-routed role and an ollama-routed role can independently resolve
+    the same tier name to two different concrete models."""
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_SONNET", "devstral:24b")
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_MLX_SONNET", "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit")
+    assert b._resolve_local_model("sonnet", provider="mlx") == (
+        "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+    )
+    assert b._resolve_local_model("sonnet", provider="ollama") == "devstral:24b"
+
+
+def test_resolve_local_model_falls_back_to_generic_tier_env_when_provider_scoped_unset(
+    monkeypatch,
+):
+    monkeypatch.delenv("PIPELINE_LOCAL_MODEL_MLX_SONNET", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_SONNET", "devstral:24b")
+    assert b._resolve_local_model("sonnet", provider="mlx") == "devstral:24b"
+
+
+def test_resolve_local_model_default_provider_arg_is_ollama():
+    """Existing callers that don't pass provider= (pre-dating this change)
+    must resolve identically to before - the parameter defaults to 'ollama',
+    the historical implicit assumption."""
+    import inspect
+    assert inspect.signature(b._resolve_local_model).parameters["provider"].default == "ollama"
+
+
+def test_complete_threads_provider_name_into_local_model_resolution(monkeypatch):
+    """OllamaDriver(provider_name='mlx').complete() must resolve tiers via
+    the mlx-scoped env var, not the ollama-scoped/generic one - regression
+    test for the tier-collision bug (both providers sharing one global
+    PIPELINE_LOCAL_MODEL_OPUS)."""
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_OPUS", "devstral:24b")
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_MLX_OPUS", "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit")
+    captured = {}
+
+    class _FakeProvider:
+        name = "mlx"
+
+        def chat(self, messages, *, model, **kwargs):
+            captured["model"] = model
+            return {"message": {"content": "ok"}}
+
+    driver = b.OllamaDriver(provider_name="mlx")
+    monkeypatch.setattr(driver, "provider", _FakeProvider())
+
+    driver.complete("p", model="opus")
+
+    assert captured["model"] == "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+
+
 def test_complete_falls_back_to_devstral_default_for_unmapped_tier(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_MODEL_DEFAULT", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_MODEL_SONNET", raising=False)
@@ -1244,6 +1298,47 @@ def test_ollama_driver_no_provider_name_still_reads_env(monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_PROVIDER", "lmstudio")
     driver = b.OllamaDriver()
     assert isinstance(driver.provider, b.inference_providers.LMStudioProvider)
+
+
+# ---------- PIPELINE_LOCAL_ENDPOINT provider-scoped resolution ----------
+# Regression coverage for a live-discovered bug: PIPELINE_LOCAL_ENDPOINT is a
+# single global env var, so a dispatch role pinned to mlx (endpoint :8080)
+# and a review role pinned to ollama (endpoint :11434) running in the SAME
+# process silently shared one endpoint - review's reachability probe hit
+# MLX's port and 404'd, permanently gating review ("Review backend gated...
+# 404 Not Found for url 'http://localhost:8080/api/tags'") even though a
+# real Ollama server was listening on :11434 the whole time. Found running a
+# live production-shaped benchmark trial (dispatch=mlx, review/overlord/
+# planner=ollama).
+def test_endpoint_defaults_to_providers_own_default_when_nothing_set(monkeypatch):
+    """Regression guard for the latent half of the same bug: with NO env var
+    set at all, every provider previously defaulted to Ollama's port
+    (11434) regardless of which provider was actually selected - only
+    masked in practice because callers always set PIPELINE_LOCAL_ENDPOINT
+    explicitly. mlx's own default_endpoint is :8080; that must now win."""
+    monkeypatch.delenv("PIPELINE_LOCAL_ENDPOINT", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_ENDPOINT_MLX", raising=False)
+    driver = b.OllamaDriver(provider_name="mlx")
+    assert driver.endpoint == "http://localhost:8080"
+
+
+def test_endpoint_global_env_var_still_works_when_provider_scoped_unset(monkeypatch):
+    monkeypatch.delenv("PIPELINE_LOCAL_ENDPOINT_MLX", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:9999")
+    driver = b.OllamaDriver(provider_name="mlx")
+    assert driver.endpoint == "http://localhost:9999"
+
+
+def test_endpoint_provider_scoped_env_var_wins_over_global(monkeypatch):
+    """The actual bug fix: dispatch (mlx) and review (ollama) must resolve
+    independent endpoints even when the process-wide PIPELINE_LOCAL_ENDPOINT
+    is set for one of them."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:8080")
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT_OLLAMA", "http://localhost:11434")
+    mlx_driver = b.OllamaDriver(provider_name="mlx")
+    ollama_driver = b.OllamaDriver(provider_name="ollama")
+    assert mlx_driver.endpoint == "http://localhost:8080"
+    assert ollama_driver.endpoint == "http://localhost:11434"
 
 
 class _UnimplementedFakeProvider:

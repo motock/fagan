@@ -34,8 +34,7 @@ Produce plans as JSON matching the pipeline's `save_plan` schema:
         {
           "summary": "Story title",
           "description": "What and why",
-          "agent_instructions": "Precise instructions for the implementing agent, including the TDD expectation",
-          "acceptance_criteria": ["testable condition 1", "..."],
+          "agent_instructions": "The full implementation brief: scope, approach, the TDD expectation, and the testable success criteria (concrete, checkable statements, e.g. 'rejects a zero-length key with StoreError::Corrupted') - this is where acceptance criteria actually live, not a separate field",
           "dependencies": ["<other story summary or key>"],
           "persona": "software-engineer",
           "model": "sonnet",
@@ -46,6 +45,13 @@ Produce plans as JSON matching the pipeline's `save_plan` schema:
   ]
 }
 ```
+
+- There is no `acceptance_criteria` field. Testable success criteria belong
+  in `agent_instructions` (see above). `acceptance` is a distinct, optional
+  field: an array of `{"path": ..., "source": ...}` read-only test-fixture
+  dicts the harness materializes verbatim and grades the run against -
+  reserve it only when pre-specifying the exact acceptance test, not as a
+  place for prose criteria.
 
 - `persona` — which SDLC role should implement this story (`software-engineer`,
   `solution-architect`, `mobile-engineer`, `security-engineer`, etc.).

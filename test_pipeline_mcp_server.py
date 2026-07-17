@@ -23,6 +23,7 @@ import pytest
 
 import backend
 import pipeline_mcp_server as p
+import role_registry
 
 
 # ---------- Fixtures ----------
@@ -66,6 +67,9 @@ def agents_dir(tmp_path, monkeypatch):
     )
     (d / "code-reviewer.md").write_text(
         '---\nname: "code-reviewer"\nmodel: sonnet\n---\n\nReviewer body.\n'
+    )
+    (d / "product-analyst.md").write_text(
+        '---\nname: "product-analyst"\nmodel: opus\n---\n\nAnalyst body.\n'
     )
     monkeypatch.setattr(p, "AGENTS_DIR", d)
     return d
@@ -265,7 +269,106 @@ def test_persona_default_model_unknown_returns_none(agents_dir):
     assert p._persona_default_model("does-not-exist") is None
 
 
+# ---------- _invoke_overlord consults role_registry ----------
+def test_invoke_overlord_defaults_to_claude_persona_model_when_unconfigured(
+    agents_dir, monkeypatch,
+):
+    """Zero-config regression guard: with no registry entry, plan_role_config,
+    or PIPELINE_BACKEND_OVERLORD override, overlord must resolve exactly as
+    before - claude, persona-declared model ("opus" per agents_dir's
+    overlord.md)."""
+    monkeypatch.delenv("PIPELINE_BACKEND_OVERLORD", raising=False)
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            captured["model"] = model
+            return "ok"
+
+    def _fake_get_backend(role, name=None):
+        captured["name"] = name
+        return _FakeDriver()
+
+    monkeypatch.setattr(p.backend, "get_backend", _fake_get_backend)
+
+    p._invoke_overlord("a question")
+
+    assert captured["name"] == "claude"
+    assert captured["model"] == "opus"
+
+
+def test_invoke_overlord_provider_from_registry(agents_dir, monkeypatch):
+    monkeypatch.delenv("PIPELINE_BACKEND_OVERLORD", raising=False)
+    registry = {
+        "providers": {"ollama": {"models": {"devstral": {"tag": "devstral:24b"}}}},
+        "roles": {"overlord": {"provider": "ollama", "model": "devstral"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            captured["model"] = model
+            return "ok"
+
+    def _fake_get_backend(role, name=None):
+        captured["name"] = name
+        return _FakeDriver()
+
+    monkeypatch.setattr(p.backend, "get_backend", _fake_get_backend)
+
+    p._invoke_overlord("a question")
+
+    assert captured["name"] == "ollama"
+    assert captured["model"] == "devstral:24b"
+
+
+def test_invoke_overlord_plan_role_config_beats_registry(agents_dir, monkeypatch):
+    registry = {
+        "providers": {"ollama": {"models": {}}, "claude": {"models": {}}},
+        "roles": {"overlord": {"provider": "ollama"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    captured = {}
+
+    def _fake_get_backend(role, name=None):
+        captured["name"] = name
+
+        class _FakeDriver:
+            def complete(self, prompt, *, model, **kwargs):
+                return "ok"
+        return _FakeDriver()
+
+    monkeypatch.setattr(p.backend, "get_backend", _fake_get_backend)
+
+    p._invoke_overlord(
+        "a question", plan_role_config={"overlord": {"provider": "claude"}},
+    )
+
+    assert captured["name"] == "claude"
+
+
 # ---------- request_decision / list_decisions ----------
+def test_request_decision_passes_plan_role_config_from_manifest_to_overlord(
+    plan_dir, agents_dir, monkeypatch,
+):
+    (plan_dir / "rdcfg.manifest.json").write_text(json.dumps({
+        "epics": {}, "stories": {},
+        "role_config": {"overlord": {"provider": "mlx"}},
+    }))
+    captured = {}
+
+    def _fake_invoke(prompt, plan_role_config=None):
+        captured["plan_role_config"] = plan_role_config
+        return "RULING: x\nTIER: routine\nRISK: low\nRATIONALE: y\nNOTIFY_USER: no\n"
+
+    monkeypatch.setattr(p, "_invoke_overlord", _fake_invoke)
+
+    p.request_decision("rdcfg", "S1", "q", ["a", "b"])
+
+    assert captured["plan_role_config"] == {"overlord": {"provider": "mlx"}}
+
+
 def test_request_decision_records_and_returns(plan_dir, agents_dir, monkeypatch):
     canned = (
         "RULING: Use the existing http client; do not add a new dependency.\n"
@@ -274,7 +377,7 @@ def test_request_decision_records_and_returns(plan_dir, agents_dir, monkeypatch)
         "RATIONALE: The stack already includes httpx; adding requests duplicates it.\n"
         "NOTIFY_USER: no\n"
     )
-    monkeypatch.setattr(p, "_invoke_overlord", lambda prompt: canned)
+    monkeypatch.setattr(p, "_invoke_overlord", lambda prompt, **k: canned)
 
     result = p.request_decision(
         "myplan", "PIPE-7",
@@ -302,7 +405,7 @@ def test_request_decision_notify_and_high_risk_parsed(plan_dir, agents_dir, monk
         "RATIONALE: Touches auth.\n"
         "NOTIFY_USER: yes\n"
     )
-    monkeypatch.setattr(p, "_invoke_overlord", lambda prompt: canned)
+    monkeypatch.setattr(p, "_invoke_overlord", lambda prompt, **k: canned)
     result = p.request_decision("myplan", "PIPE-9", "q", ["a", "b"])
     assert result["notify_user"] is True
     assert result["risk"] == "high"
@@ -313,13 +416,88 @@ def test_list_decisions_empty_then_populated(plan_dir, agents_dir, monkeypatch):
     assert p.list_decisions("emptyplan") == []
     monkeypatch.setattr(
         p, "_invoke_overlord",
-        lambda prompt: "RULING: x\nTIER: routine\nRISK: low\nRATIONALE: y\nNOTIFY_USER: no\n",
+        lambda prompt, **k: "RULING: x\nTIER: routine\nRISK: low\nRATIONALE: y\nNOTIFY_USER: no\n",
     )
     p.request_decision("myplan", "S1", "q", ["a"])
     p.request_decision("myplan", "S2", "q", ["a"])
     items = p.list_decisions("myplan")
     assert len(items) == 2
     assert {i["story_key"] for i in items} == {"S1", "S2"}
+
+
+# ---------- _plan_role_config / get_role_config (discoverability) ----------
+def test_plan_role_config_returns_empty_dict_when_manifest_missing(plan_dir):
+    assert p._plan_role_config("does-not-exist") == {}
+
+
+def test_plan_role_config_returns_empty_dict_when_manifest_has_no_role_config(
+    plan_dir,
+):
+    (plan_dir / "noroles.manifest.json").write_text(
+        json.dumps({"epics": {}, "stories": {}, "repo_root": "/tmp"})
+    )
+    assert p._plan_role_config("noroles") == {}
+
+
+def test_plan_role_config_reads_role_config_block(plan_dir):
+    (plan_dir / "withroles.manifest.json").write_text(json.dumps({
+        "epics": {}, "stories": {}, "repo_root": "/tmp",
+        "role_config": {"review": {"provider": "mlx", "model": "qwen"}},
+    }))
+    assert p._plan_role_config("withroles") == {
+        "review": {"provider": "mlx", "model": "qwen"},
+    }
+
+
+def test_plan_role_config_survives_malformed_manifest(plan_dir):
+    (plan_dir / "broken.manifest.json").write_text("{not valid json")
+    assert p._plan_role_config("broken") == {}
+
+
+def test_get_role_config_reports_all_five_roles_with_no_config(agents_dir, monkeypatch):
+    monkeypatch.delenv("PIPELINE_BACKEND_OVERLORD", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_DECOMPOSE", raising=False)
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
+
+    result = p.get_role_config()
+
+    assert result["ok"] is True
+    assert set(result["roles"]) == {"overlord", "planner", "dispatch", "review", "decompose"}
+    assert result["roles"]["overlord"]["provider"] == "claude"
+    assert result["roles"]["review"]["provider"] == "claude"
+
+
+def test_get_role_config_reflects_registry_override(agents_dir, monkeypatch):
+    registry = {
+        "providers": {"mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}}},
+        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_OVERLORD", raising=False)
+
+    result = p.get_role_config()
+
+    assert result["roles"]["review"] == {
+        "provider": "mlx", "model": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit",
+    }
+    # Unrelated roles are unaffected by review's override.
+    assert result["roles"]["overlord"]["provider"] == "claude"
+
+
+def test_get_role_config_reflects_plan_role_config(plan_dir, agents_dir, monkeypatch):
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
+    (plan_dir / "cfgplan.manifest.json").write_text(json.dumps({
+        "epics": {}, "stories": {}, "repo_root": "/tmp",
+        "role_config": {"overlord": {"provider": "ollama"}},
+    }))
+
+    result = p.get_role_config(plan_name="cfgplan")
+
+    assert result["roles"]["overlord"]["provider"] == "ollama"
 
 
 # ---------- Persona/model-aware dispatch ----------
@@ -467,6 +645,87 @@ def test_ingest_plan_carries_persona_model_risk_into_manifest(plan_dir, monkeypa
     assert story["persona"] == "security-engineer"
     assert story["model"] == "opus"
     assert story["risk"] == "high"
+
+
+def test_ingest_plan_carries_backend_into_manifest(plan_dir, monkeypatch, tmp_path):
+    """A plan can pin a story's dispatch provider upfront (e.g. "mlx"), not
+    just via a runtime escalation flip - _LOCAL_BACKEND_NAMES already
+    includes ollama/lmstudio/mlx, so this is purely a plan-authoring gap."""
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [_story(backend="mlx")]}],
+    }
+    (plan_dir / "ing2.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("ing2")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "ing2.manifest.json").read_text())
+    assert manifest["stories"]["issue-1"]["backend"] == "mlx"
+
+
+def test_ingest_plan_backend_defaults_to_none_when_omitted(plan_dir, monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [_story()]}],
+    }
+    (plan_dir / "ing3.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("ing3")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "ing3.manifest.json").read_text())
+    assert manifest["stories"]["issue-1"]["backend"] is None
+
+
+def test_ingest_plan_rejects_unknown_backend_value(plan_dir, monkeypatch, tmp_path):
+    """Fail closed on a typo'd backend name at ingest time rather than
+    letting it reach dispatch_story and raise NotImplementedError deep
+    inside get_backend."""
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [_story(backend="some-typo")]}],
+    }
+    (plan_dir / "ing4.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("ing4")
+    assert result["ok"] is False
+    assert "some-typo" in result["error"]
+    assert not (plan_dir / "ing4.manifest.json").exists()
+
+
+def test_ingest_plan_accepts_auto_backend_value(plan_dir, monkeypatch, tmp_path):
+    """"auto" is a valid story["backend"] value (resolved by
+    _route_dispatch_backend before reaching get_backend), even though it's
+    not a registered driver in backend._DRIVERS."""
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [_story(backend="auto")]}],
+    }
+    (plan_dir / "ing5.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("ing5")
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "ing5.manifest.json").read_text())
+    assert manifest["stories"]["issue-1"]["backend"] == "auto"
+
+
+def test_ingest_plan_reingest_refreshes_backend_field(plan_dir, monkeypatch, tmp_path):
+    """"backend" must be included in _INGEST_AUTHORED_STORY_FIELDS so a
+    re-ingest updates it, like persona/model/risk already do."""
+    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{"summary": "E1", "stories": [_story(key="S1", backend="ollama")]}],
+    }
+    (plan_dir / "ing6.json").write_text(json.dumps(plan))
+    p.ingest_plan("ing6")
+
+    plan["epics"][0]["stories"] = [_story(key="S1", backend="mlx")]
+    (plan_dir / "ing6.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("ing6")
+
+    assert result["ok"] is True
+    manifest = json.loads((plan_dir / "ing6.manifest.json").read_text())
+    assert manifest["stories"]["issue-1"]["backend"] == "mlx"
 
 
 def test_ingest_plan_remaps_local_keys_to_issue_ids_in_dependencies(plan_dir, monkeypatch, tmp_path):
@@ -1334,6 +1593,96 @@ def test_run_reviewer_explicit_provider_name_honors_review_model_override(agents
     assert captured["model"] == "devstral:24b"
 
 
+# ---------- review consults role_registry (provider + model fallback) ----------
+def test_run_reviewer_provider_from_registry_when_env_and_backend_name_unset(
+    agents_dir, monkeypatch,
+):
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_REVIEW_MODEL", raising=False)
+    registry = {
+        "providers": {"mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}}},
+        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    calls = []
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            calls.append(model)
+            return "VERDICT: APPROVE"
+
+    captured_name = {}
+
+    def _fake_get_backend(role, name=None):
+        captured_name["name"] = name
+        return _FakeDriver()
+
+    monkeypatch.setattr(p.backend, "get_backend", _fake_get_backend)
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    assert captured_name["name"] == "mlx"
+    assert calls == ["mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"]
+
+
+def test_run_reviewer_plan_role_config_beats_registry(agents_dir, monkeypatch):
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_REVIEW_MODEL", raising=False)
+    registry = {
+        "providers": {
+            "mlx": {"models": {"qwen": {"tag": "mlx-tag"}}},
+            "claude": {"models": {}},
+        },
+        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    captured_name = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            return "VERDICT: APPROVE"
+
+    def _fake_get_backend(role, name=None):
+        captured_name["name"] = name
+        return _FakeDriver()
+
+    monkeypatch.setattr(p.backend, "get_backend", _fake_get_backend)
+
+    p._run_reviewer(
+        "/tmp/some-worktree", "agent/some-branch",
+        plan_role_config={"review": {"provider": "claude"}},
+    )
+
+    assert captured_name["name"] == "claude"
+
+
+def test_run_reviewer_local_review_model_override_still_beats_registry(
+    agents_dir, monkeypatch,
+):
+    """PIPELINE_LOCAL_REVIEW_MODEL must remain the top-priority override for
+    local-family reviews, even when the registry also configures a model for
+    the resolved provider."""
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_REVIEW_MODEL", "devstral:24b")
+    registry = {
+        "providers": {"mlx": {"models": {"qwen": {"tag": "mlx-tag"}}}},
+        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    calls = []
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            calls.append(model)
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    assert calls == ["devstral:24b"]
+
+
 def test_run_reviewer_prompt_includes_resolved_venv_pytest_command(agents_dir, monkeypatch, tmp_path):
     """The reviewer model has no access to detect_test_command's Python-level
     venv resolution, so a bare "Run the test suite" instruction leaves it to
@@ -1455,7 +1804,7 @@ def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
         "S1": {"summary": "Add thing", "status": "in_progress",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
 
     result = p.review_story("rv", "S1")
@@ -1465,6 +1814,35 @@ def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
     story = _read_manifest(plan_dir, "rv")["stories"]["S1"]
     assert story["status"] == "pr_open"
     assert story["pr_url"] == "https://gh/pr/1"
+
+
+def test_review_story_passes_plan_role_config_from_manifest_to_reviewer(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """End-to-end: a plan's manifest role_config block must actually reach
+    _run_reviewer's plan_role_config kwarg - not just be tolerated by
+    signature, but genuinely read from the plan on disk and threaded
+    through review_story."""
+    (plan_dir / "rvcfg.manifest.json").write_text(json.dumps({
+        "epics": {},
+        "stories": {
+            "S1": {"summary": "Add thing", "status": "in_progress",
+                   "worktree": str(plan_dir / "wt"), "risk": "low"},
+        },
+        "role_config": {"review": {"provider": "ollama"}},
+    }))
+    captured = {}
+
+    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None):
+        captured["plan_role_config"] = plan_role_config
+        return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _fake_reviewer)
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("rvcfg", "S1")
+
+    assert captured["plan_role_config"] == {"review": {"provider": "ollama"}}
 
 
 def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypatch):
@@ -1482,7 +1860,7 @@ def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypa
         "S1": {"summary": "Add thing", "status": "in_progress",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: REQUEST_CHANGES")
 
     def _boom(*a, **k):
         raise AssertionError("PR must not be opened on REQUEST_CHANGES")
@@ -1509,7 +1887,7 @@ def test_review_story_persists_feedback_on_request_changes(plan_dir, agents_dir,
     })
     reviewer_output = ("The error path is untested and the SQL is injectable.\n"
                        "VERDICT: REQUEST_CHANGES")
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: reviewer_output)
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
 
     p.review_story("rvfb", "S1")
 
@@ -1527,7 +1905,7 @@ def test_review_story_clears_feedback_and_rework_on_approve(plan_dir, agents_dir
                "worktree": str(plan_dir / "wt"), "risk": "low",
                "review_feedback": "old gripes", "rework_attempts": 2},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
 
     p.review_story("rvclear", "S1")
@@ -1547,7 +1925,7 @@ def test_review_story_parks_after_rework_budget_exhausted(plan_dir, agents_dir, 
                "worktree": str(plan_dir / "wt"), "risk": "low",
                "rework_attempts": 2},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "still bad\nVERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "still bad\nVERDICT: REQUEST_CHANGES")
     notes = []
     monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
 
@@ -1577,7 +1955,7 @@ def test_review_story_oracle_backed_story_parks_after_lower_rework_cap(
                "acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: "edge case missing\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, **k: "edge case missing\nVERDICT: REQUEST_CHANGES")
 
     result = p.review_story("rvoracle", "S1")
 
@@ -1601,7 +1979,7 @@ def test_review_story_non_oracle_story_still_uses_full_rework_budget(
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: "needs work\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, **k: "needs work\nVERDICT: REQUEST_CHANGES")
 
     result = p.review_story("rvnoacc", "S1")
 
@@ -1625,7 +2003,7 @@ def test_review_story_oracle_backed_empty_acceptance_list_uses_full_budget(
                "acceptance": []},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: "needs work\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, **k: "needs work\nVERDICT: REQUEST_CHANGES")
 
     p.review_story("rvempty", "S1")
 
@@ -1652,7 +2030,7 @@ def test_review_story_escalated_oracle_story_gets_escalated_cap_not_oracle_cap(
                "rework_attempts": 0},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br, backend_name=None: "still bad\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, backend_name=None, **k: "still bad\nVERDICT: REQUEST_CHANGES")
 
     result = p.review_story("escoracle", "S1")
 
@@ -1677,7 +2055,7 @@ def test_review_story_escalated_oracle_story_parks_after_escalated_cap_exhausted
                "rework_attempts": 2},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br, backend_name=None: "still bad\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, backend_name=None, **k: "still bad\nVERDICT: REQUEST_CHANGES")
 
     result = p.review_story("escoracledone", "S1")
 
@@ -1701,7 +2079,7 @@ def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_di
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
 
-    def _boom(wt, br):
+    def _boom(wt, br, **k):
         raise KeyError("message")
 
     monkeypatch.setattr(p, "_run_reviewer", _boom)
@@ -1822,8 +2200,8 @@ def test_review_story_high_risk_calls_security_reviewer(plan_dir, agents_dir, mo
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
     security_calls = []
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
-    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: (security_calls.append(1), "VERDICT: APPROVE")[1])
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br, **k: (security_calls.append(1), "VERDICT: APPROVE")[1])
     monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
 
     p.review_story("secgate", "S1")
@@ -1836,8 +2214,8 @@ def test_review_story_high_risk_both_approve_opens_pr(plan_dir, agents_dir, monk
         "S1": {"summary": "Crypto change", "status": "in_progress",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
-    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
 
     result = p.review_story("secboth", "S1")
@@ -1851,8 +2229,8 @@ def test_review_story_high_risk_security_request_changes_blocks_merge(plan_dir, 
         "S1": {"summary": "Token store", "status": "in_progress",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
-    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: "Security issue found.\nVERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br, **k: "Security issue found.\nVERDICT: REQUEST_CHANGES")
 
     def _boom(*a, **k):
         raise AssertionError("PR must not be opened when security reviewer blocks")
@@ -1869,8 +2247,8 @@ def test_review_story_high_risk_security_verdict_recorded(plan_dir, agents_dir, 
         "S1": {"summary": "RBAC impl", "status": "in_progress",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
-    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
 
     p.review_story("secrecord", "S1")
@@ -1885,8 +2263,8 @@ def test_review_story_low_risk_skips_security_reviewer(plan_dir, agents_dir, mon
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     security_calls = []
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
-    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: (security_calls.append(1), "VERDICT: APPROVE")[1])
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br, **k: (security_calls.append(1), "VERDICT: APPROVE")[1])
     monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
 
     p.review_story("secskip", "S1")
@@ -2199,7 +2577,7 @@ def test_request_decision_loads_policy_override_from_plan_repo_root(
 
     captured_prompt = {}
 
-    def _fake_invoke(prompt):
+    def _fake_invoke(prompt, **k):
         captured_prompt["text"] = prompt
         return "RULING: x\nTIER: routine\nRISK: low\nRATIONALE: y\nNOTIFY_USER: no\n"
 
@@ -4678,7 +5056,7 @@ def test_advance_pipeline_rebase_conflict_retries_within_budget(plan_dir, monkey
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": False, "conflict": True,
+                        lambda wt, br, **k: {"ok": False, "conflict": True,
                                         "error": "conflict in app.js"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
@@ -4705,7 +5083,7 @@ def test_advance_pipeline_rebase_conflict_exhausts_budget(plan_dir, monkeypatch)
                "risk": "low", "worktree": "/x", "merge_attempts": 2},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": False, "conflict": True, "error": "boom"})
+                        lambda wt, br, **k: {"ok": False, "conflict": True, "error": "boom"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
     result = p.advance_pipeline("rbgiveup")
@@ -4728,7 +5106,7 @@ def test_advance_pipeline_ci_fail_blocks_merge(plan_dir, monkeypatch):
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status",
                         lambda br, **_: {"state": "fail", "error": "ruff"})
     merged_calls = []
@@ -4754,7 +5132,7 @@ def test_advance_pipeline_ci_pending_blocks_merge(plan_dir, monkeypatch):
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status",
                         lambda br, **_: {"state": "pending", "error": "timeout"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
@@ -4777,7 +5155,7 @@ def test_advance_pipeline_rebase_and_ci_ok_merges(plan_dir, monkeypatch):
                "risk": "low", "worktree": "/x", "merge_attempts": 1},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status",
                         lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
@@ -4804,7 +5182,7 @@ def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
 
     def _boom_run(*a, **k):
         raise AssertionError("subprocess must not run when CI gate is disabled")
@@ -4830,7 +5208,7 @@ def test_advance_pipeline_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, 
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     ci_calls = []
 
     def _fake_ci_status(br, **_):
@@ -4866,7 +5244,7 @@ def test_advance_pipeline_cancelled_ci_second_time_does_not_rerun_again(plan_dir
                "risk": "low", "worktree": "/x", "ci_rerun_attempted": True},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status",
                         lambda br, **_: {"state": "cancelled", "error": ""})
     rerun_calls = []
@@ -4890,7 +5268,7 @@ def test_approve_merge_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, mon
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     ci_calls = []
 
     def _fake_ci_status(br, **_):
@@ -5123,7 +5501,7 @@ def test_advance_pipeline_build_reverify_fail_blocks_merge(plan_dir, monkeypatch
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "pass", "error": ""})
@@ -5149,7 +5527,7 @@ def test_advance_pipeline_build_reverify_pass_merges(plan_dir, monkeypatch):
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "pass", "error": ""})
@@ -5172,7 +5550,7 @@ def test_approve_merge_build_reverify_fail_returns_error(plan_dir, monkeypatch):
                "risk": "medium", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "pass", "error": ""})
@@ -5200,7 +5578,7 @@ def test_advance_pipeline_acceptance_reverify_fail_blocks_merge(plan_dir, monkey
                "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "fail", "error": "AttributeError"})
@@ -5234,7 +5612,7 @@ def test_advance_pipeline_full_suite_reverify_fail_blocks_merge(plan_dir, monkey
                },
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "fail", "error": "ModuleNotFoundError: shared"})
@@ -5259,7 +5637,7 @@ def test_advance_pipeline_acceptance_reverify_pass_merges(plan_dir, monkeypatch)
                "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "pass", "error": ""})
@@ -5282,7 +5660,7 @@ def test_approve_merge_acceptance_reverify_fail_returns_error(plan_dir, monkeypa
                "acceptance": [{"path": "test_acceptance.py", "source": "x"}]},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "fail", "error": "AttributeError"})
@@ -5304,7 +5682,7 @@ def test_approve_merge_rebase_conflict_returns_error(plan_dir, monkeypatch):
                "risk": "medium", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": False, "conflict": True, "error": "boom"})
+                        lambda wt, br, **k: {"ok": False, "conflict": True, "error": "boom"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
 
@@ -5322,7 +5700,7 @@ def test_approve_merge_ci_fail_returns_error(plan_dir, monkeypatch):
                "risk": "medium", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status",
                         lambda br, **_: {"state": "fail", "error": "ruff"})
     merged_calls = []
@@ -8874,7 +9252,7 @@ def test_review_story_rate_limited_leaves_status_tests_passed(plan_dir, agents_d
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: _RATE_LIMIT_MSG)
 
     def _boom(*a, **k):
         raise AssertionError("PR must not be opened on rate-limit deferral")
@@ -8897,7 +9275,7 @@ def test_review_story_rate_limited_does_not_increment_rework_attempts(plan_dir, 
                "worktree": str(plan_dir / "wt"), "risk": "low",
                "rework_attempts": 2},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: _RATE_LIMIT_MSG)
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
 
@@ -8913,7 +9291,7 @@ def test_review_story_rate_limited_notifies_user(plan_dir, agents_dir, monkeypat
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: _RATE_LIMIT_MSG)
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
     notes = []
@@ -8932,7 +9310,7 @@ def test_review_story_genuine_request_changes_still_increments_rework(plan_dir, 
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: "The error path is untested.\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, **k: "The error path is untested.\nVERDICT: REQUEST_CHANGES")
     monkeypatch.setattr(p, "_notify_user", lambda *a: None)
 
     p.review_story("rl_regression", "S1")
@@ -8953,7 +9331,7 @@ def test_review_story_bare_request_changes_is_treated_as_inconclusive(plan_dir, 
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: REQUEST_CHANGES")
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on empty REQUEST_CHANGES")))
     notes = []
@@ -8980,7 +9358,7 @@ def test_review_story_bare_request_changes_parks_after_max_inconclusive_attempts
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     pr_calls = []
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: REQUEST_CHANGES")
     monkeypatch.setattr(p, "_open_pr", lambda *a, **k: pr_calls.append(1))
     notes = []
     monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
@@ -9013,7 +9391,7 @@ def test_review_story_defers_on_ollama_rate_limited(plan_dir, agents_dir, monkey
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
 
-    def _raise_429(wt, br):
+    def _raise_429(wt, br, **k):
         raise backend.RateLimitedError("simulated 429 from ollama-cloud")
 
     monkeypatch.setattr(p, "_run_reviewer", _raise_429)
@@ -9048,7 +9426,7 @@ def test_review_story_ollama_rate_limited_does_not_burn_inconclusive_budget(
                "review_inconclusive_count": 1},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: (_ for _ in ()).throw(
+                        lambda wt, br, **k: (_ for _ in ()).throw(
                             backend.RateLimitedError("simulated 429")))
     monkeypatch.setattr(p, "_notify_user", lambda *a: None)
 
@@ -9074,7 +9452,7 @@ def test_review_story_ollama_rate_limited_accumulates_deferred_count(
                "review_deferred_count": 2},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: (_ for _ in ()).throw(
+                        lambda wt, br, **k: (_ for _ in ()).throw(
                             backend.RateLimitedError("simulated 429")))
     monkeypatch.setattr(p, "_notify_user", lambda *a: None)
 
@@ -9095,7 +9473,7 @@ def test_review_story_non_rate_limited_exception_still_falls_to_inconclusive(
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
 
-    def _raise_other(wt, br):
+    def _raise_other(wt, br, **k):
         raise ValueError("malformed tool call shape")
 
     monkeypatch.setattr(p, "_run_reviewer", _raise_other)
@@ -9118,8 +9496,8 @@ def test_review_story_high_risk_security_rate_limited_defers(plan_dir, agents_di
         "S1": {"summary": "Auth change", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "VERDICT: APPROVE")
-    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br, **k: _RATE_LIMIT_MSG)
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on security defer")))
     monkeypatch.setattr(p, "_notify_user", lambda *a: None)
@@ -9141,7 +9519,7 @@ def test_advance_pipeline_reports_review_deferred_on_rate_limit(plan_dir, agents
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: _RATE_LIMIT_MSG)
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on defer")))
     monkeypatch.setattr(p, "_notify_user", lambda *a: None)
@@ -9159,7 +9537,7 @@ def test_advance_pipeline_does_not_report_genuine_verdict_as_deferred(plan_dir, 
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: "The error path is untested.\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, **k: "The error path is untested.\nVERDICT: REQUEST_CHANGES")
     monkeypatch.setattr(p, "_notify_user", lambda *a: None)
 
     result = p.advance_pipeline("no_defer")
@@ -9183,7 +9561,7 @@ def test_review_story_review_fallback_to_local_after_repeated_rate_limit(plan_di
     })
     calls = []
 
-    def _stub(wt, br, backend_name=None):
+    def _stub(wt, br, backend_name=None, **k):
         calls.append(backend_name)
         if len(calls) <= 2:
             return _RATE_LIMIT_MSG
@@ -9222,7 +9600,7 @@ def test_review_story_review_fallback_to_explicit_provider_after_repeated_rate_l
     })
     calls = []
 
-    def _stub(wt, br, backend_name=None):
+    def _stub(wt, br, backend_name=None, **k):
         calls.append(backend_name)
         if len(calls) <= 2:
             return _RATE_LIMIT_MSG
@@ -9251,7 +9629,7 @@ def test_review_story_fallback_disabled_by_default_keeps_deferring(plan_dir, age
     })
     calls = []
 
-    def _stub(wt, br, backend_name=None):
+    def _stub(wt, br, backend_name=None, **k):
         calls.append(backend_name)
         return _RATE_LIMIT_MSG
 
@@ -9276,7 +9654,7 @@ def test_review_story_review_fallback_off_setting_keeps_deferring(plan_dir, agen
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, backend_name=None: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, backend_name=None, **k: _RATE_LIMIT_MSG)
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
     monkeypatch.setattr(p, "_notify_user", lambda *a: None)
@@ -9298,7 +9676,7 @@ def test_review_story_deferred_count_resets_on_genuine_verdict(plan_dir, agents_
     })
     calls = []
 
-    def _stub(wt, br, backend_name=None):
+    def _stub(wt, br, backend_name=None, **k):
         calls.append(backend_name)
         if len(calls) == 1:
             return _RATE_LIMIT_MSG
@@ -9330,7 +9708,7 @@ def test_review_story_review_fallback_after_one_triggers_on_first_deferral(plan_
     })
     calls = []
 
-    def _stub(wt, br, backend_name=None):
+    def _stub(wt, br, backend_name=None, **k):
         calls.append(backend_name)
         if backend_name == "local":
             return "VERDICT: APPROVE"
@@ -9359,7 +9737,7 @@ def test_review_story_high_risk_security_ignores_review_fallback(plan_dir, agent
         "S1": {"summary": "Auth change", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, backend_name=None: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, backend_name=None, **k: "VERDICT: APPROVE")
     sec_calls = []
 
     def _sec_stub(wt, br):
@@ -9391,7 +9769,7 @@ def test_review_story_unknown_leaves_rework_and_feedback_untouched(plan_dir, age
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "no verdict line here")
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on UNKNOWN")))
 
@@ -9411,7 +9789,7 @@ def test_review_story_unknown_notifies_user_will_retry(plan_dir, agents_dir, mon
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "no verdict line here")
     notes = []
     monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
 
@@ -9429,7 +9807,7 @@ def test_review_story_unknown_parks_after_max_inconclusive_attempts(plan_dir, ag
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     pr_calls = []
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "no verdict line here")
     monkeypatch.setattr(p, "_open_pr", lambda *a, **k: pr_calls.append(1))
     notes = []
     monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
@@ -9460,7 +9838,7 @@ def test_review_story_conclusive_verdict_after_unknown_resets_and_reworks(plan_d
     })
     calls = []
 
-    def _stub(wt, br):
+    def _stub(wt, br, **k):
         calls.append(1)
         if len(calls) == 1:
             return "no verdict line here"
@@ -9491,7 +9869,7 @@ def test_review_story_unknown_rate_limited_still_defers_not_inconclusive(plan_di
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: _RATE_LIMIT_MSG)
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: _RATE_LIMIT_MSG)
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
 
@@ -9512,7 +9890,7 @@ def test_review_story_unknown_inconclusive_max_one_parks_on_first_attempt(plan_d
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "no verdict line here")
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on UNKNOWN")))
 
@@ -9548,7 +9926,7 @@ def test_review_story_rework_exhausted_escalates_to_claude_under_auto(
                "backend": "local", "rework_attempts": 2},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: "still bad\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, **k: "still bad\nVERDICT: REQUEST_CHANGES")
 
     result = p.review_story("rvesc", "S1")
 
@@ -9577,7 +9955,7 @@ def test_review_story_rework_exhausted_parks_when_already_escalated(
                "backend": "claude", "escalated": True, "rework_attempts": 2},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br, backend_name=None: "still bad\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, backend_name=None, **k: "still bad\nVERDICT: REQUEST_CHANGES")
 
     result = p.review_story("rvescdone", "S1")
 
@@ -9599,7 +9977,7 @@ def test_review_story_rework_exhausted_parks_when_auto_disabled(
                "backend": "local", "rework_attempts": 2},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br: "still bad\nVERDICT: REQUEST_CHANGES")
+                        lambda wt, br, **k: "still bad\nVERDICT: REQUEST_CHANGES")
 
     result = p.review_story("rvnoauto", "S1")
 
@@ -9619,7 +9997,7 @@ def test_review_story_inconclusive_exhausted_escalates_to_claude_under_auto(
                "worktree": str(plan_dir / "wt"), "risk": "low",
                "backend": "local", "review_inconclusive_count": 1},
     })
-    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br: "no verdict line here")
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "no verdict line here")
 
     result = p.review_story("unkesc", "S1")
 
@@ -9644,7 +10022,7 @@ def test_review_story_inconclusive_exhausted_parks_when_already_escalated(
                "review_inconclusive_count": 1},
     })
     monkeypatch.setattr(p, "_run_reviewer",
-                        lambda wt, br, backend_name=None: "no verdict line here")
+                        lambda wt, br, backend_name=None, **k: "no verdict line here")
 
     result = p.review_story("unkescdone", "S1")
 
@@ -9669,7 +10047,7 @@ def test_review_story_escalated_story_reviews_via_claude_backend(
     })
     captured = {}
 
-    def _fake_reviewer(wt, br, backend_name=None):
+    def _fake_reviewer(wt, br, backend_name=None, **k):
         captured["backend_name"] = backend_name
         return "VERDICT: APPROVE"
 
@@ -9846,7 +10224,7 @@ def test_approve_merge_rereads_manifest_inside_lock(plan_dir, monkeypatch):
 
     seen_worktrees = []
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "pass"})
@@ -9972,7 +10350,7 @@ def test_scheduler_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_rebase_onto_master",
-                        lambda wt, br: {"ok": True, "conflict": False, "error": ""})
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "pass"})
@@ -10055,7 +10433,7 @@ def test_review_story_transient_500_retry_resolves_to_approve(
 
     call_count = {"n": 0}
 
-    def _reviewer(wt, br, backend_name=None):
+    def _reviewer(wt, br, backend_name=None, **k):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return _TRANSIENT_500_MSG
@@ -10088,7 +10466,7 @@ def test_review_story_transient_500_retry_also_fails_increments_inconclusive_onc
 
     call_count = {"n": 0}
 
-    def _reviewer(wt, br, backend_name=None):
+    def _reviewer(wt, br, backend_name=None, **k):
         call_count["n"] += 1
         return _TRANSIENT_500_MSG  # always fails
 
@@ -10243,6 +10621,24 @@ def test_planner_system_steers_away_from_editing_test_files():
     assert "NotImplementedError" in p._PLANNER_SYSTEM
 
 
+def test_planner_system_worked_examples_must_verify_persisted_state():
+    """Live-discovered bug (2026-07-16, production-config benchmark run,
+    token_bucket via glm-5.2:cloud/Ollama planner + mlx implementer): the
+    planner's own worked example for a backward-clock edge case correctly
+    computed the CURRENT call's return value (no refill, return False) but
+    then instructed unconditionally overwriting the tracked clock/high-water
+    mark with the backward value - which corrupts a LATER call's elapsed-time
+    computation (a rate-limit-bypass bug). The implementer followed this
+    worked example exactly and failed the hidden acceptance oracle's
+    multi-call high-water-mark test as a direct result. _PLANNER_SYSTEM must
+    instruct the planner to trace a follow-up call, not just the edge case's
+    own immediate return value, whenever the edge case touches state that
+    persists across calls."""
+    for prompt in (p._PLANNER_SYSTEM, p._REWORK_PLANNER_SYSTEM):
+        assert "persist" in prompt.lower()
+        assert "follow-up" in prompt.lower() or "subsequent" in prompt.lower()
+
+
 def test_run_planner_include_scratchpad_augments_system_prompt(agents_dir, monkeypatch):
     """When include_scratchpad=True, the planner's system prompt must direct it
     to weave .agent_scratchpad.md updates into the GENERATED checklist as
@@ -10283,6 +10679,58 @@ def test_run_planner_omits_scratchpad_by_default(agents_dir, monkeypatch):
 
     assert fake.calls[0]["system"] == p._PLANNER_SYSTEM
     assert ".agent_scratchpad.md" not in fake.calls[0]["system"]
+
+
+# ---------- planner independently routable (not just mirroring dispatch) ----------
+def test_resolve_planner_backend_local_mode_mirrors_dispatch_when_unconfigured(
+    monkeypatch,
+):
+    """Zero-config regression guard: with no PIPELINE_BACKEND_PLANNER and no
+    registry/plan_role_config entry, mode='local' must still mirror
+    dispatch_backend/local_model exactly as before this change."""
+    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    backend_name, model = p._resolve_planner_backend(
+        "local", "ollama", "gpt-oss:20b",
+    )
+    assert (backend_name, model) == ("ollama", "gpt-oss:20b")
+
+
+def test_resolve_planner_backend_local_mode_honors_env_var_independent_of_dispatch(
+    monkeypatch,
+):
+    """PIPELINE_BACKEND_PLANNER must route the planner to a provider
+    independent of whatever dispatch_backend is - this is the gap fix:
+    previously mode='local' always mirrored dispatch_backend regardless of
+    this env var."""
+    monkeypatch.setenv("PIPELINE_BACKEND_PLANNER", "mlx")
+    backend_name, model = p._resolve_planner_backend(
+        "local", "ollama", "gpt-oss:20b",
+    )
+    assert backend_name == "mlx"
+
+
+def test_resolve_planner_backend_local_mode_honors_plan_role_config(monkeypatch):
+    """plan_role_config's model value is a friendly registry key (like the
+    registry's own roles.* entries), validated/resolved against
+    model_registry.json's real "mlx" provider - "qwen" is the repo-root
+    registry's declared mlx model."""
+    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    backend_name, model = p._resolve_planner_backend(
+        "local", "ollama", "gpt-oss:20b",
+        plan_role_config={"planner": {"provider": "mlx", "model": "qwen"}},
+    )
+    assert backend_name == "mlx"
+    assert model == "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+
+
+def test_resolve_planner_backend_cloud_mode_ignores_plan_role_config(monkeypatch):
+    """mode='cloud' keeps its existing, simpler always-claude contract -
+    plan_role_config only affects mode='local' routing."""
+    backend_name, model = p._resolve_planner_backend(
+        "cloud", "ollama", "gpt-oss:20b",
+        plan_role_config={"planner": {"provider": "mlx"}},
+    )
+    assert backend_name == "claude"
 
 
 def test_run_rework_planner_cloud_mode_calls_claude_backend_with_review_feedback(
@@ -10339,6 +10787,120 @@ def test_run_rework_planner_returns_none_on_backend_failure(agents_dir, monkeypa
     assert result is None
 
 
+# ---------- decompose role (provider-configurable product-analyst) ----------
+def test_extract_json_block_strips_json_fence():
+    text = '```json\n{"epics": []}\n```'
+    assert p._extract_json_block(text) == '{"epics": []}'
+
+
+def test_extract_json_block_strips_bare_fence_without_json_tag():
+    text = '```\n{"epics": []}\n```'
+    assert p._extract_json_block(text) == '{"epics": []}'
+
+
+def test_extract_json_block_returns_text_unchanged_when_no_fence():
+    text = '{"epics": []}'
+    assert p._extract_json_block(text) == '{"epics": []}'
+
+
+def test_run_decompose_calls_claude_backend_with_product_analyst_persona(
+    agents_dir, monkeypatch,
+):
+    fake = _FakePlannerBackend(response='{"epics": []}')
+    calls = []
+
+    def _fake_get_backend(role, *, name=None):
+        calls.append({"role": role, "name": name})
+        return fake
+
+    monkeypatch.setattr(backend, "get_backend", _fake_get_backend)
+
+    result = p._run_decompose("Build a CLI todo app.")
+
+    assert result == '{"epics": []}'
+    assert calls == [{"role": "decompose", "name": "claude"}]
+    assert fake.calls[0]["prompt"] == "Build a CLI todo app."
+    assert "Analyst body." in fake.calls[0]["system"]
+    # agents_dir's product-analyst.md declares model: opus.
+    assert fake.calls[0]["model"] == "opus"
+
+
+def test_run_decompose_routes_to_registry_configured_provider(agents_dir, monkeypatch):
+    fake = _FakePlannerBackend(response='{"epics": []}')
+    registry = {
+        "providers": {"ollama": {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}}}},
+        "roles": {"decompose": {"provider": "ollama", "model": "gpt-oss"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    calls = []
+
+    def _fake_get_backend(role, *, name=None):
+        calls.append({"role": role, "name": name})
+        return fake
+
+    monkeypatch.setattr(backend, "get_backend", _fake_get_backend)
+
+    p._run_decompose("Build a CLI todo app.")
+
+    assert calls == [{"role": "decompose", "name": "ollama"}]
+    assert fake.calls[0]["model"] == "gpt-oss:20b"
+
+
+def test_run_decompose_returns_none_on_backend_failure(agents_dir, monkeypatch):
+    fake = _FakePlannerBackend(raises=RuntimeError("endpoint unreachable"))
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    assert p._run_decompose("Build a CLI todo app.") is None
+
+
+def test_run_decompose_returns_none_on_empty_response(agents_dir, monkeypatch):
+    fake = _FakePlannerBackend(response="   \n  ")
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    assert p._run_decompose("Build a CLI todo app.") is None
+
+
+def test_decompose_plan_happy_path_parses_fenced_json(agents_dir, monkeypatch):
+    plan_json = json.dumps({"epics": [{"summary": "E1", "stories": []}]})
+    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: f"```json\n{plan_json}\n```")
+
+    result = p.decompose_plan("Build a CLI todo app.")
+
+    assert result["ok"] is True
+    assert result["plan"]["epics"][0]["summary"] == "E1"
+
+
+def test_decompose_plan_malformed_json_fails_with_raw_text_preserved(
+    agents_dir, monkeypatch,
+):
+    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: "not json at all")
+
+    result = p.decompose_plan("Build a CLI todo app.")
+
+    assert result["ok"] is False
+    assert "raw" in result
+    assert result["raw"] == "not json at all"
+
+
+def test_decompose_plan_rejects_json_missing_epics_list(agents_dir, monkeypatch):
+    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: '{"not_epics": []}')
+
+    result = p.decompose_plan("Build a CLI todo app.")
+
+    assert result["ok"] is False
+    assert "epics" in result["error"]
+
+
+def test_decompose_plan_fails_open_when_backend_returns_none(agents_dir, monkeypatch):
+    """_run_decompose already fails open (returns None) on a broken backend -
+    decompose_plan must surface that as ok=False, never raise."""
+    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: None)
+
+    result = p.decompose_plan("Build a CLI todo app.")
+
+    assert result["ok"] is False
+
+
 def test_dispatch_story_decompose_rework_translates_feedback_into_fix_checklist(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
@@ -10362,7 +10924,7 @@ def test_dispatch_story_decompose_rework_translates_feedback_into_fix_checklist(
 
     rework_calls = []
 
-    def _fake_rework_planner(review_feedback, *, mode, dispatch_backend, local_model):
+    def _fake_rework_planner(review_feedback, *, mode, dispatch_backend, local_model, **k):
         rework_calls.append({
             "review_feedback": review_feedback, "mode": mode,
             "dispatch_backend": dispatch_backend, "local_model": local_model,
@@ -10671,6 +11233,42 @@ def test_dispatch_story_decompose_passes_include_scratchpad_flag_to_planner(
     assert _run_dispatch("dcincl_on", "SON", "on")["include_scratchpad"] is True
     # H3 ablation off -> planner must NOT weave it in.
     assert _run_dispatch("dcincl_off", "SOFF", "off")["include_scratchpad"] is False
+
+
+def test_dispatch_story_passes_plan_role_config_from_manifest_to_planner(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """End-to-end: a plan's manifest role_config block must actually reach
+    _run_planner's plan_role_config kwarg via dispatch_story - not just be
+    tolerated by signature."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
+    (plan_dir / "dpcfg.manifest.json").write_text(json.dumps({
+        "epics": {},
+        "stories": {
+            "SPC": {"summary": "Do thing", "agent_instructions": "Build it.",
+                     "status": "todo", "dependencies": []},
+        },
+        "repo_root": str(plan_dir),
+        "role_config": {"planner": {"provider": "mlx"}},
+    }))
+    captured = {}
+
+    def _fake_planner(agent_instructions, **kwargs):
+        captured.update(kwargs)
+        return "1. Step one."
+
+    monkeypatch.setattr(p, "_run_planner", _fake_planner)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, env, **kw: _FakeProc(9009))
+    monkeypatch.setattr(p, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    assert p.dispatch_story("dpcfg", "SPC")["ok"] is True
+
+    assert captured["plan_role_config"] == {"planner": {"provider": "mlx"}}
 
 
 def test_dispatch_story_decompose_skips_for_claude_backend(

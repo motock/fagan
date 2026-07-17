@@ -1509,6 +1509,63 @@ def test_run_reviewer_prompt_does_not_block_on_docs_for_brand_new_code(
     assert "brand-new" in prompt or "brand new" in prompt
 
 
+def test_run_reviewer_scopes_test_command_to_acceptance_paths(
+    agents_dir, tmp_path, monkeypatch,
+):
+    """Mode 20 (2026-07-17): a reviewer given a bare full-suite pytest command
+    can rediscover and block on the AGENT'S OWN buggy test file, even when the
+    harness's acceptance oracle already passes -- this is FM-A's exact
+    root cause resurrected in the review path (the harness test gate was
+    already scoped to the acceptance oracle; _run_reviewer never was). When
+    the story carries an `acceptance` block and the detected command is
+    pytest, the reviewer's test command must be scoped to ONLY the acceptance
+    paths, and the prompt must tell the reviewer that a failure in an
+    agent-authored test the acceptance oracle doesn't require is not
+    sufficient grounds for REQUEST_CHANGES on its own."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (tmp_path / "test_acceptance.py").write_text("def test_x(): assert True\n")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer(
+        str(tmp_path), "agent/some-branch",
+        acceptance=[{"path": "test_acceptance.py"}],
+    )
+
+    prompt = captured["prompt"]
+    assert f"pytest {tmp_path / 'test_acceptance.py'}" in prompt
+    assert "acceptance oracle" in prompt.lower()
+    assert "not sufficient grounds" in prompt.lower()
+
+
+def test_run_reviewer_runs_full_suite_when_no_acceptance_block(agents_dir, tmp_path, monkeypatch):
+    """Without an acceptance block (the common case for real-project stories),
+    behavior is unchanged from before Mode 20's fix: the full detected suite,
+    no scoping language."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer(str(tmp_path), "agent/some-branch")
+
+    prompt = captured["prompt"]
+    assert f"cd {tmp_path} && pytest" in prompt
+    assert "test_acceptance" not in prompt
+    assert "acceptance oracle" not in prompt.lower()
+
+
 def test_run_reviewer_uses_review_model_override_when_backend_is_local(agents_dir, monkeypatch):
     """Asymmetric review: both software-engineer.md and code-reviewer.md
     declare `model: sonnet`, so without an override dispatch and review
@@ -1833,7 +1890,7 @@ def test_review_story_passes_plan_role_config_from_manifest_to_reviewer(
     }))
     captured = {}
 
-    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None):
+    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None, acceptance=None):
         captured["plan_role_config"] = plan_role_config
         return "VERDICT: APPROVE"
 
@@ -1895,6 +1952,84 @@ def test_review_story_persists_feedback_on_request_changes(plan_dir, agents_dir,
     assert story["status"] == "changes_requested"
     assert story["review_feedback"] == reviewer_output
     assert story["rework_attempts"] == 1
+
+
+def test_review_story_request_changes_warns_rework_when_acceptance_oracle_currently_passes(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Mode 20 (2026-07-17, verified by replay): when a story carries an
+    acceptance block and the oracle currently PASSES against the worktree but
+    the reviewer still returned REQUEST_CHANGES (e.g. it flagged something
+    outside the oracle's scope, such as a bug in the agent's OWN test file),
+    the rework feedback must say so explicitly. Without this, a redispatched
+    agent has no signal that a whole-file rewrite risks regressing already-
+    correct, oracle-green behavior - observed: this exact gap let a rework
+    destroy a passing backward-jump fix (token_bucket/mlx,
+    role_registry_prod_verify5_20260717_073857)."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 3)
+    _write_manifest(plan_dir, "rvoracle", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance": [{"path": "test_acceptance.py"}]},
+    })
+    reviewer_output = "Some unrelated nit.\nVERDICT: REQUEST_CHANGES"
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "pass", "error": ""})
+
+    p.review_story("rvoracle", "S1")
+
+    story = _read_manifest(plan_dir, "rvoracle")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
+    assert "acceptance oracle is currently passing" in story["review_feedback"].lower()
+    assert reviewer_output in story["review_feedback"]
+
+
+def test_review_story_request_changes_no_oracle_warning_when_oracle_fails(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """When the acceptance oracle is ALSO failing, no false reassurance
+    should be injected - the feedback stays exactly the reviewer's own
+    text, since there's nothing green to protect from regression."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 3)
+    _write_manifest(plan_dir, "rvoraclefail", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance": [{"path": "test_acceptance.py"}]},
+    })
+    reviewer_output = "Real bug found.\nVERDICT: REQUEST_CHANGES"
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: {"state": "fail", "error": "boom"})
+
+    p.review_story("rvoraclefail", "S1")
+
+    story = _read_manifest(plan_dir, "rvoraclefail")["stories"]["S1"]
+    assert story["review_feedback"] == reviewer_output
+
+
+def test_review_story_request_changes_no_oracle_check_without_acceptance_block(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Stories without an acceptance block (the common case) are unaffected -
+    no oracle re-verification call, feedback unchanged from before Mode 20's
+    fix."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "rvnoacc", {
+        "S1": {"summary": "Add thing", "status": "in_progress",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    reviewer_output = "Real bug found.\nVERDICT: REQUEST_CHANGES"
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
+    calls = []
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt: calls.append(1) or {"state": "pass", "error": ""})
+
+    p.review_story("rvnoacc", "S1")
+
+    story = _read_manifest(plan_dir, "rvnoacc")["stories"]["S1"]
+    assert story["review_feedback"] == reviewer_output
+    assert calls == []
 
 
 def test_review_story_clears_feedback_and_rework_on_approve(plan_dir, agents_dir, monkeypatch):

@@ -1232,6 +1232,7 @@ def _parse_ruling(text: str) -> dict[str, Any]:
 def _run_reviewer(
     worktree: str, branch: str, backend_name: str | None = None,
     plan_role_config: dict | None = None,
+    acceptance: list[dict] | None = None,
 ) -> str:
     """Run the code-reviewer persona over a branch and return its raw output.
 
@@ -1239,6 +1240,16 @@ def _run_reviewer(
     function. backend_name lets a caller override the env-resolved default
     (e.g. review_story's rate-limit fallback routing to "local");
     get_backend already treats name=None as "use the env-resolved default".
+
+    acceptance is the story's acceptance block (Mode 20, 2026-07-17): when
+    present and the detected test command is pytest, the reviewer's test
+    command is scoped to ONLY those paths, exactly like _reverify_acceptance
+    scopes the pre-merge re-check. Without this, the reviewer's own free-form
+    `pytest` invocation can rediscover and block on a bug in the AGENT'S OWN
+    test file even when the harness's acceptance oracle already passes -
+    FM-A's exact root cause (see project-benchmark-failure-modes memory),
+    resurrected here because the harness test gate was scoped but the
+    reviewer never was.
     """
     body = _persona_body("code-reviewer")
     # Provider/model fall through role_registry (PIPELINE_BACKEND_REVIEW /
@@ -1295,7 +1306,26 @@ def _run_reviewer(
     test_command_instruction = ""
     try:
         test_dir, test_cmd = detect_test_command(Path(worktree))
+        scope_note = ""
+        if acceptance and _is_pytest_cmd(test_cmd):
+            acceptance_paths = [
+                str(test_dir / entry["path"]) for entry in acceptance
+            ]
+            test_cmd = test_cmd + acceptance_paths
+            scope_note = (
+                "This story carries a harness-owned acceptance oracle; the "
+                "command below is scoped to ONLY those acceptance tests, "
+                "which are the authoritative spec for required behavior. A "
+                "failure in the implementer's OWN test file that the "
+                "acceptance oracle does not require is not sufficient "
+                "grounds for REQUEST_CHANGES on its own - note it as a "
+                "Suggestion if you notice it, but base your verdict on the "
+                "acceptance oracle plus your own code-quality/security "
+                "review, not on re-running the implementer's full test "
+                "file.\n\n"
+            )
         test_command_instruction = (
+            f"{scope_note}"
             f"Run the test suite with exactly this command (do not "
             f"substitute a different interpreter path): cd "
             f"{shlex.quote(str(test_dir))} && {shlex.join(test_cmd)}\n\n"
@@ -3899,9 +3929,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # this is the one seam that needs an explicit check.
         reviewer_output = (
             _run_reviewer(worktree, branch, backend_name="claude",
-                          plan_role_config=plan_role_config)
+                          plan_role_config=plan_role_config,
+                          acceptance=story.get("acceptance"))
             if story.get("escalated") else
-            _run_reviewer(worktree, branch, plan_role_config=plan_role_config)
+            _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
+                          acceptance=story.get("acceptance"))
         )
     except backend.RateLimitedError:
         # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
@@ -3941,6 +3973,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             reviewer_output = _run_reviewer(
                 worktree, branch, backend_name=fallback_mode,
                 plan_role_config=plan_role_config,
+                acceptance=story.get("acceptance"),
             )
             verdict = _parse_verdict(reviewer_output)
             # Fall through into the normal verdict-handling code below —
@@ -3960,9 +3993,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         _notify_user(plan_name, f"{story_key} review hit transient backend error; retrying once.")
         reviewer_output = (
             _run_reviewer(worktree, branch, backend_name="claude",
-                          plan_role_config=plan_role_config)
+                          plan_role_config=plan_role_config,
+                          acceptance=story.get("acceptance"))
             if story.get("escalated") else
-            _run_reviewer(worktree, branch, plan_role_config=plan_role_config)
+            _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
+                          acceptance=story.get("acceptance"))
         )
         verdict = _parse_verdict(reviewer_output)
         _transient_retried = True
@@ -4063,7 +4098,31 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # redispatched agent knows what to fix, and count the cycle against
         # the rework budget so a perpetually-rejected story eventually parks
         # for a human instead of looping review -> rework forever.
-        story["review_feedback"] = reviewer_output
+        #
+        # Mode 20 (2026-07-17, verified by replay): a REQUEST_CHANGES verdict
+        # on an acceptance-bearing story can be correct about SOMETHING
+        # outside the oracle's scope while the oracle itself is currently
+        # green - and a whole-file rework, given only the reviewer's raw
+        # feedback, has no signal that it must not regress that already-
+        # correct behavior (observed: this exact gap let a rework destroy a
+        # passing backward-jump fix). Re-verify the oracle against the
+        # CURRENT worktree state before dispatching rework and, if it still
+        # passes, prepend an explicit warning. This does not change the
+        # verdict or control flow - the story still goes to rework - it only
+        # gives the next dispatch a fact the reviewer's own text can't convey.
+        feedback = reviewer_output
+        if story.get("acceptance"):
+            oracle_now = _reverify_acceptance(story, worktree)
+            if oracle_now.get("state") == "pass":
+                feedback = (
+                    "NOTE: the acceptance oracle is currently PASSING against "
+                    "this worktree. The reviewer's feedback below may be about "
+                    "something outside the oracle's required behavior - do "
+                    "NOT regress the acceptance-oracle-passing behavior while "
+                    "addressing it, and re-run the acceptance tests after your "
+                    "change to confirm they are still green.\n\n" + reviewer_output
+                )
+        story["review_feedback"] = feedback
         attempts = story.get("rework_attempts", 0) + 1
         story["rework_attempts"] = attempts
         if story.get("escalated"):

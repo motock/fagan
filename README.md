@@ -35,26 +35,54 @@ and safety controls.
 ## Architecture
 
 ```
-                ┌─────────────────────────────────────────┐
-                │  Orchestrator loop (cron / /loop skill)  │
-                │  advance_pipeline(plan)  — one tick      │
-                └───────────────┬─────────────────────────┘
-        ready stories           │ gates adjudicated by overlord
-        (deps satisfied)        ▼
-   ┌──────────────┐   dispatch w/ persona+model   ┌────────────────────┐
-   │ Plan/Manifest│ ───────────────────────────►  │ Headless story agent│
-   │ (JSON, Plane)│                                │ in git worktree     │
-   └──────────────┘ ◄───── decision ruling ─────── │ (persona prompt +   │
-        ▲                request_decision()         │  model)             │
-        │                      │                    └─────────┬──────────┘
-        │                      ▼                              │ tests pass
-        │            ┌──────────────────┐                     ▼
-        │            │   OVERLORD       │            ┌────────────────────┐
-        └─ audit ────│  (Opus, policy)  │ ◄──────────│ code-reviewer →     │
-           decisions │  decides gates   │  merge gate│ gh pr create        │
-           log       └──────────────────┘ ──────────►│ (auto-PR + merge)   │
-                                                      └────────────────────┘
+            ┌─────────────────────────────────────────────────┐
+            │ Orchestrator loop (cron / /loop skill)          │
+            │ advance_pipeline(plan) — one idempotent tick    │
+            └───────────────────────┬─────────────────────────┘
+    ready stories                   │  gates adjudicated by overlord
+    (deps satisfied)                │
+                                    ▼
+
+ ┌───────────────┐ resolve backend + persona/model  ┌─────────────────────────────┐
+ │ Plan/Manifest │─────────────────────────────────►│ Dispatch:                   │
+ │ (JSON, Plane) │                                  │  • claude -p  OR  local loop│
+ └──────────┴────┘                                  │  • tech-lead planner →      │
+            │                                       │    .agent_plan.md (local)   │
+            │                                       │                             │
+            │                                       └──────────────┬──────────────┘
+            │                                                      │
+            │ audit → decisions log                                ▼
+            │                                       ┌─────────────────────────────┐
+            │                                       │ Headless story agent        │
+            │                                       │ in git worktree             │
+            │                                       └──────────────┬──────────────┘
+            │                       tests + acceptance oracle      │
+            │                   local fail → escalate to Claude    │
+            │                                                      ▼
+        ┌───┬───────────────────┐                   ┌─────────────────────────────┐
+        │    OVERLORD           │◄────── merge ──── │ code-reviewer → VERDICT     │
+        │  (Opus, policy)       │────── approve ──► │ APPROVE → gh pr create      │
+        │  decides gates        │                   │ (auto-PR + merge)           │
+        └───────────────────────┘                   └─────────────────────────────┘
+        story agents escalate blocks via request_decision()
 ```
+
+The diagram folds in the three dimensions that layer on the core flow; each has
+its own section below:
+
+- **Backends.** Dispatch, review, and overlord each resolve a backend
+  independently (`claude` / `ollama` / `lmstudio` / `mlx` / `local`), so a role
+  can run on a local model while the others stay on Claude — see *Per-role
+  provider/model configuration* and the `PIPELINE_BACKEND_*` vars.
+- **Tech-lead planner.** For a local dispatch backend, a stronger planner can
+  first decompose the story into an ordered checklist the local agent executes
+  in the same worktree (`.agent_plan.md` / `.agent_scratchpad.md`) — see
+  *Guided decomposition*.
+- **Auto escalation.** Under `PIPELINE_BACKEND_DISPATCH=auto`, stories start
+  local and escalate to Claude (or to a fallback local model) on test failure,
+  step-cap streaks, or a review loop that can't converge — see *`auto` —
+  layered local-first dispatch*. The acceptance oracle grades local runs before
+  they reach review.
 
 ---
 
@@ -156,13 +184,23 @@ log as an audit record.
 - `check_story_status(plan_name, story_key)` — has the agent finished? If so,
   runs the detected test suite and sets `tests_passed`/`failed`. An
   `interrupted` story is reported as-is without running tests against its
-  incomplete tree. If the story carries an `acceptance` block and the detected
-  runner is pytest, the gate runs **only** the acceptance fixture file(s), not
-  the whole worktree suite — this prevents a correct implementation from being
-  blocked by the model's own wrong test assertions, but it also means the gate
-  no longer catches regressions elsewhere in the worktree; the reviewer's own
-  "run the test suite" instruction is the remaining backstop for those. Stories
-  without an `acceptance` block still run the full suite as before.
+  incomplete tree. If the story carries an `acceptance` block, the gate runs
+  **only** the acceptance fixture file(s), not the whole worktree suite —
+  `_scope_test_cmd_to_acceptance` derives the scoped command per runner
+  (pytest: append the fixture paths; cargo: `cargo test --test <stem>` per
+  `tests/*.rs` fixture; npm/yarn: `node --test <paths>` when `scripts.test`
+  is `node --test`); an unscopeable runner falls back to the full suite. This
+  prevents a correct implementation from being blocked by the model's own wrong
+  test assertions, but it also means the gate no longer catches regressions
+  elsewhere in the worktree; the reviewer's own "run the test suite"
+  instruction is the remaining backstop for those. Stories without an
+  `acceptance` block still run the full suite as before. When
+  `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
+  nonetheless produced real work (new commits) is routed to the reviewer
+  instead of straight to terminal `failed`, so the rework loop can re-dispatch
+  it with feedback; an empty-branch failure (no commits) still goes to
+  `failed`. The merge gate (`_reverify_acceptance`) still blocks any
+  APPROVE'd-but-failing merge.
 
 ### Resumability (checkpoint / interrupt)
 - `checkpoint(plan_name, story_key, step, summary, next_hint="")` — commits
@@ -356,6 +394,13 @@ the cost gate.
   `/api/plans/{plan}/stories/{key}/journal` and renders the
   `<plan>.<story>.journal.json` entries as a vertical timeline, so you
   can see what progress has been recorded and when.
+- **Tech-lead checklist + scratchpad (Tier 0 progress).** For a story run
+  under guided decomposition, the modal fetches
+  `/api/plans/{plan}/stories/{key}/checklist` and renders the worktree's
+  `.agent_plan.md` (the tech-lead's ordered checklist) and
+  `.agent_scratchpad.md` (the executor's running state) read-only, so you
+  can watch how far through the plan the local agent has worked. A story not
+  run with guided decomposition gets an empty state.
 - **Backend and escalated badges + filters.** Cards carry a `claude`
   backend badge when the story's `backend` is non-local and an `escalated`
   badge when it was escalated. The board exposes matching multi-select
@@ -503,6 +548,51 @@ running that plan.
 
 ---
 
+## Guided decomposition (the tech-lead planner)
+
+A constrained local implementer ("junior" level — gpt-oss, qwen3-coder)
+succeeds more often when a stronger "tech-lead" planner first breaks a coarse
+story into an ordered sub-step checklist that the local model executes **inside
+one worktree/transcript**. This is deliberately *not* story-splitting:
+fragmenting a story into multiple pipeline stories throws away the shared
+transcript and was measured to *hurt* (see `GUIDED_DECOMPOSITION_PLAN.md` — the
+Condition D/M validation: 33% vs 100%). Guided decomposition keeps the full
+context and adds cross-*sub-step* structure instead.
+
+It is **opt-in and off by default** (`PIPELINE_DECOMPOSE=off`, per Secure
+Defaults) and only ever runs for a **local-family** dispatch backend — Claude
+doesn't need the crutch. Set `PIPELINE_DECOMPOSE=cloud` to author the checklist
+with Claude (`PIPELINE_DECOMPOSE_CLOUD_MODEL`) or `=local` to author it on the
+same local provider the story dispatches to (`PIPELINE_BACKEND_PLANNER` pins the
+planner to a different provider than dispatch if you want, e.g. dispatch on
+`ollama`, plan on `mlx`).
+
+- **Initial checklist (`_run_planner`).** On a story's *first* dispatch (never
+  on a resume — the checklist is planned once), the planner turns
+  `agent_instructions` into an ordered checklist and writes it to
+  `.agent_plan.md` in the worktree; the dispatch prompt appends it under
+  "Implementation checklist from your tech lead." The call is **best-effort and
+  fails open to `None`** — a broken, slow, or rate-limited planner never blocks
+  or corrupts dispatch; the story simply proceeds with no checklist, exactly
+  like `PIPELINE_DECOMPOSE=off`.
+- **Scratchpad (`PIPELINE_DECOMPOSE_SCRATCHPAD`, default `on`).** The executor
+  keeps a running `.agent_scratchpad.md` (what's done, what's next) as durable
+  cross-sub-step state. The planner folds "maintain the scratchpad" into the
+  checklist as a first-class step, and a trailing prompt reminder backstops it.
+  Set to `off` to run the H3 ablation (checklist alone, no cross-step memory).
+- **Rework checklist (`_run_rework_planner`).** The same decomposition logic
+  applied one step later: a reviewer's prose feedback is itself a coarse brief
+  for a weak executor, so on each rework cycle the planner turns the feedback
+  into an ordered fix-checklist before the executor sees it. Unlike the initial
+  checklist (planned once), this re-runs per cycle since each cycle's feedback
+  differs. Same best-effort, fail-open-to-raw-feedback contract.
+
+Both `.agent_plan.md` and `.agent_scratchpad.md` live in the worktree, are
+excluded from the per-story log tail, and are surfaced read-only in the
+dashboard's per-story modal (the Tier 0 progress view).
+
+---
+
 ## Configuration (environment variables)
 
 Set global vars in your shell profile; set per-project overrides in the project's
@@ -557,6 +647,8 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
 | `PIPELINE_BACKEND_PLANNER` | *(unset)* | Backend for the guided-decomposition planner (the in-story checklist + rework-feedback checklist role, `PIPELINE_DECOMPOSE`'s `mode="local"` path): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Unset means the planner mirrors whatever backend `dispatch` resolved to for that story (today's default) — set this to pin the planner to a specific provider independent of dispatch, e.g. dispatch on `ollama` with the planner on `mlx`. `mode="cloud"` is unaffected (always `claude`, see `PIPELINE_DECOMPOSE_CLOUD_MODEL`). |
 | `PIPELINE_BACKEND_DECOMPOSE` | `claude` | Backend for the `decompose_plan` tool (turns a raw request into epics/stories JSON via the product-analyst persona): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Independent of the interactive `product-analyst` subagent (invoked via the `Agent` tool), which is always Claude and unaffected by this setting. |
+| `PIPELINE_DECOMPOSE` | `off` | Guided decomposition (the tech-lead planner, see above): `off` \| `cloud` \| `local`. `cloud` authors the per-story checklist with Claude (`PIPELINE_DECOMPOSE_CLOUD_MODEL`); `local` authors it on the story's own local provider. Only ever runs for a local-family dispatch backend; best-effort (fails open to no checklist). Distinct from `PIPELINE_BACKEND_DECOMPOSE`, which is the `decompose_plan` *tool*, not the in-story planner. |
+| `PIPELINE_DECOMPOSE_SCRATCHPAD` | `on` | Whether guided decomposition maintains the `.agent_scratchpad.md` cross-sub-step memory (`on` \| `off`). `off` runs the checklist-only ablation. No effect when `PIPELINE_DECOMPOSE=off`. |
 | `PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV` | *(unset)* | Off by default: every `claude` subprocess call strips `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL`/`CLAUDE_CODE_USE_BEDROCK`/`CLAUDE_CODE_USE_VERTEX` from its environment so an interactive session's 3rd-party-provider redirect can't silently leak into dispatch/review/overlord. Set truthy only for a legitimate enterprise Bedrock/Vertex deployment that intentionally routes the CLI elsewhere — see "Claude backend provider isolation" below. |
 | `PIPELINE_LOCAL_PROVIDER` | `ollama` | Wire protocol the `local` alias's `complete()`/`resource_status()` speak when a role is set to the generic `local` name: `ollama` \| `mlx` \| `lmstudio`. Naming the provider directly in `PIPELINE_BACKEND_<ROLE>` (`ollama`/`lmstudio`/`mlx`, RELIABILITY_PLAN.md T16) pins that provider for that role regardless of this setting — `local` stays a permanent back-compat alias (existing manifests persist `"backend": "local"`) and is the only name this variable actually affects. All three providers are working, live-validated implementations (including real tool-calling round trips and, for `lmstudio`, a full multi-turn review-loop convergence to a verdict). Neither `mlx` (targets `mlx_lm.server`) nor `lmstudio` (targets LM Studio's local server) has a per-request context-window control like Ollama's `num_ctx` — both send that value as `max_tokens` instead. `lmstudio`'s loaded-model check uses its own `/api/v0/models` (`state: loaded/not-loaded`), not Ollama's `/api/ps`, and LM Studio JIT-loads a model on its first request (~30s for a small model) rather than expecting it pre-loaded. **Does not yet affect `dispatch()`** — the coding-agent subprocess always talks to Ollama's native API regardless of this setting (`MODEL_PROVIDER_ABSTRACTION_PLAN.md` S3, deferred). **MLX/LM Studio model names have no `:` like Ollama tags do** — `_resolve_local_model` treats any model string without a `:` as a tier name, so a Hugging Face repo id (e.g. `mlx-community/Qwen2.5-1.5B-Instruct-4bit`, `google/gemma-4-e4b`) must be set via `PIPELINE_LOCAL_MODEL_DEFAULT`/`_OPUS`/`_SONNET`/`_HAIKU`, not passed as a raw `model=` value. |
 | `PIPELINE_LOCAL_ENDPOINT` | `http://localhost:11434` | Ollama base URL for the `local` driver (it uses Ollama's native `/api/chat`, the only surface that accepts `num_ctx`). Point at a remote Ollama to use another box. |
@@ -595,6 +687,8 @@ time the active local model changes. Currently populated:
 | `PIPELINE_REVIEW_FALLBACK` | `off` | When Claude review hits repeated rate-limits, fall back to this backend inline: `local` \| `ollama` \| `lmstudio` \| `mlx` \| `off` (never fall back). Paired with `PIPELINE_REVIEW_FALLBACK_AFTER` (default `3`), the count of rate-limited attempts before falling back. |
 | `PIPELINE_REVIEW_MAX_TOKENS` | `4096` | Output cap (passed as `--max-tokens`) for any Claude `complete()` call originating from `_run_reviewer`. Bounds the runaway-output failure mode where Claude emits a long findings list / PR body before the `VERDICT:` line; the redispatched agent has the diff and the file paths and does not need prose to navigate. Ignored when the review backend is `local` (Ollama caps via `num_ctx`). |
 | `PIPELINE_SECURITY_REVIEW_MAX_TOKENS` | *fallback* | Same cap for the security-engineer pass on high-risk stories. Falls back to `PIPELINE_REVIEW_MAX_TOKENS` when unset, so the two can be tuned independently — the security pass typically produces shorter output (VERDICT only, no PR title/body), so a tighter cap is reasonable. |
+| `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL` | *(unset/off)* | When truthy (`1`), an acceptance-failing dispatch that still produced real work (new commits) is routed to the reviewer instead of straight to terminal `failed`, so the rework loop can re-dispatch it with feedback (bounded by `PIPELINE_REWORK_MAX_ATTEMPTS`). An empty-branch failure (no commits) stays `failed` — re-dispatching a stuck prompt won't help. The merge gate (`_reverify_acceptance`) still blocks any APPROVE'd-but-failing merge. |
+| `PIPELINE_REVERIFY_FULL_SUITE` | `1` | For a story **without** an `acceptance` block, whether the pre-merge re-verification (`_reverify_acceptance`) runs the full worktree suite (`1`) or skips it (`0`). Stories with an `acceptance` block always re-verify against the scoped oracle regardless. |
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` | `1` | Rework budget for a story carrying a non-empty `acceptance` block — lower than `PIPELINE_REWORK_MAX_ATTEMPTS` because an oracle-backed story already has an objective, pre-verified correctness signal (it only reaches review after tests, including the oracle, pass); a reviewer that keeps finding beyond-oracle issues mostly spends cycles rather than changing the outcome, so a lower cap parks it for human review faster. Falls back to `PIPELINE_REWORK_MAX_ATTEMPTS` for any story without a truthy `acceptance` list. Superseded by `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` once a story is escalated (see below). |
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` | `3` | Rework budget for a story that has already been escalated to Claude (`story["escalated"]`), taking priority over `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` regardless of whether the story also carries an acceptance oracle. `_ORACLE`'s tight cap exists to converge *local* review fast; once escalation has already paid its cost (real Claude usage, and per 2026-07-04's benchmark validation, sometimes real wall-clock time if the Claude reviewer gets rate-limited), reusing that same cap just throttles Claude's shot at the same feedback for no benefit — 6 of 11 escalated cells in that run parked after exactly one post-escalation cycle. |
 | `PIPELINE_LOCAL_MAX_RISK` | `low` | Highest story risk the `auto` router sends to the local agent: `low` \| `medium` \| `high`. Stories above this threshold go straight to Claude. Security-persona stories always go to Claude regardless of this setting. |

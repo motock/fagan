@@ -444,17 +444,32 @@ def _repair_triple_quoted_strings(candidate):
 
 
 def _loads_tolerant(candidate):
-    """json.loads, falling back to a triple-quote repair pass only when the
-    raw parse fails. Valid JSON is never transformed - the repair is a
-    last resort for known model malformations, not a general rewrite."""
+    """json.loads, tolerating raw control characters inside strings, with a
+    triple-quote repair pass as a further fallback. Valid JSON is never
+    transformed - both fallbacks only ever ACCEPT more inputs than a strict
+    parse would, never reinterpret one that already parses.
+
+    strict=False (observed live, 2026-07-17, Qwen2.5-Coder-14B-4bit on mlx,
+    interval_merge task): a distinct malformation from the triple-quote case
+    below - the model uses ordinary double-quoted JSON string syntax for a
+    multi-line create_file `content` argument, but embeds a RAW literal
+    newline instead of escaping it as `\\n`. A strict parse rejects this
+    ("Invalid control character"); the triple-quote repair does not apply
+    (no triple quotes present), so the tool call was silently dropped every
+    retry and the agent looped regenerating the same correct-but-unparseable
+    content until the wall-clock park, with the real fix never landing.
+    json.loads(strict=False) permits control characters (newlines, tabs,
+    etc.) inside strings without weakening validation of anything else -
+    it never accepts input a strict parse would reject, it only stops
+    rejecting on this one class of already-well-structured input."""
     try:
-        return json.loads(candidate)
+        return json.loads(candidate, strict=False)
     except Exception:
         pass
     repaired = _repair_triple_quoted_strings(candidate)
     if repaired != candidate:
         try:
-            return json.loads(repaired)
+            return json.loads(repaired, strict=False)
         except Exception:
             pass
     return None

@@ -564,6 +564,38 @@ def test_recover_tool_calls_repairs_python_triple_quoted_arguments():
     assert "def __init__(self, capacity):" in args["new_str"]
 
 
+def test_recover_tool_calls_tolerates_raw_newlines_in_json_string():
+    """A distinct malformation from the triple-quote case (observed live,
+    2026-07-17, Qwen2.5-Coder-14B-4bit on mlx, interval_merge task): the model
+    uses ordinary double-quoted JSON string syntax for a create_file's
+    multi-line `content` argument, but embeds RAW literal newline bytes
+    instead of escaping them as `\\n`. This is invalid per strict JSON (a
+    literal control character inside a string is illegal), so a raw
+    json.loads rejects it with "Invalid control character" - the
+    triple-quote repair does not apply (there are no triple quotes here) so
+    the tool call was silently dropped every retry, and the agent looped
+    regenerating the same correct-but-unparseable content until it hit the
+    wall-clock park with the real fix never landed on disk."""
+    content = (
+        '```json\n'
+        '{\n'
+        '  "name": "create_file",\n'
+        '  "arguments": {\n'
+        '    "path": "intervals.py",\n'
+        '    "content": "def merge(x):\n'
+        '    return x"\n'
+        '  }\n'
+        '}\n'
+        '```'
+    )
+    out = la.recover_tool_calls(content)
+    assert out and out[0]["function"]["name"] == "create_file"
+    args = out[0]["function"]["arguments"]
+    assert args["path"] == "intervals.py"
+    assert "def merge(x):" in args["content"]
+    assert "return x" in args["content"]
+
+
 def test_recover_tool_calls_returns_none_on_non_toolcall_prose():
     """A repair pass must not manufacture a tool call out of ordinary prose
     (no name/JSON object present) - failing closed keeps the step loop from

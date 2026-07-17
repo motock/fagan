@@ -609,6 +609,38 @@ inconsistency (missing on t1 the exact bug it caught on t0).
 both models reached `done` but gt=False — a likely third acceptance-vs-groundtruth oracle gap, like
 token_bucket's, worth a separate fix.)
 
+**Second tool-call malformation found and fixed, same day (2026-07-17), distinct from the
+triple-quote case above — the "1/4 truly correct" verdict above may itself be partly confounded.**
+Running the full 9-task matrix (`_runs/full_matrix_mlx_20260717_090023`) on the same 14B, cell 2
+(`interval_merge`) hit the wall-clock park (900s) with `intervals.py` still the original
+`NotImplementedError` stub, 0 review cycles ever reached. Reading `.agent_transcript.json` directly
+(same diagnostic technique as the triple-quote find, and as Mode 20 in the dispatch-failure-modes
+memory) showed the model's `create_file` payload was a **complete, correct** implementation of the
+merge logic on every one of 6 identical retries from step 8 onward — but with a **different**
+JSON malformation than the triple-quote case: an ordinary double-quoted `"content"` string value
+containing a **raw literal newline byte** instead of an escaped `\n`. `json.loads` (strict mode)
+rejects this as an "Invalid control character"; `_repair_triple_quoted_strings` doesn't fire (no
+triple quotes present), so `recover_tool_calls` returned `None` on every attempt, and the agent
+just regenerated the same correct-but-unparseable output until the park.
+
+**Fix shipped same day**: `_loads_tolerant` in both `scripts/local_agent.py` and
+`scripts/local_agent_oracle.py` now calls `json.loads(candidate, strict=False)` instead of a bare
+`json.loads(candidate)`, at both the raw-candidate and triple-quote-repaired parse attempts.
+`strict=False` only relaxes control-character handling inside already-well-formed JSON strings —
+it never accepts anything a strict parse would reject on structural grounds, so this is a pure
+widening, not a behavior change for any currently-passing case. 2 new tests (one per file,
+`test_recover_tool_calls_tolerates_raw_newlines_in_json_string`), TDD (observed failing on `None`
+first). **Verified against the actual real dropped message from the transcript**: replaying
+`.agent_transcript.json`'s message index 18 through the fixed `recover_tool_calls` now recovers the
+full, correct `merge()` implementation byte-for-byte. Full suite 1098 passed, ruff clean.
+
+**Open question, not yet re-validated**: since this malformation is a sibling of the one that
+confounded the 2026-07-14 ceiling map above, some of that map's "False" cells (particularly ones
+that parked/timed-out rather than cleanly failing review) may also have been silently dropping a
+correct implementation via this exact mechanism, not a genuine capability gap. Re-running any
+parked/timed-out cell from that map with this fix live is worth doing before trusting the ceiling
+numbers as a capability verdict rather than a harness-confounded one.
+
 **Strategic conclusion (2026-07-14): the MLX effort succeeded technically but gpt-oss:20b on Ollama
 is the better LOCAL driver on this host right now.** MLX-14B is stable (0 panics across 6 runs) and
 fast (~150-290s/cell) but capability-limited (1/4). gpt-oss:20b runs fully local on this same 24GB

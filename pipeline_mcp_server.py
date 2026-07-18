@@ -231,6 +231,16 @@ from pipeline_ci import (  # noqa: F401
     _ci_rerun,
 )
 
+# Overlord / decision helpers. _load_policy reads POLICY_PATH / REPO_ROOT via
+# lazy imports from this module (tests patch p.<name>; the lazy import sees
+# the patched value). _invoke_overlord is patched via p._invoke_overlord;
+# server call site (request_decision) uses the bare name -> re-export ->
+# patch lands.
+from pipeline_overlord import (  # noqa: F401
+    _load_policy,
+    _invoke_overlord,
+)
+
 
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
 
@@ -349,38 +359,6 @@ def _scoped_repo_root(plan_name: str):
 
 
 # ---------- Overlord / decision helpers ----------
-def _load_policy() -> str:
-    """Concatenate the global decision policy with any per-repo override."""
-    parts = []
-    if POLICY_PATH.exists():
-        parts.append(POLICY_PATH.read_text())
-    override = REPO_ROOT / ".overlord-policy.md"
-    if override.exists():
-        parts.append("\n\n## Per-repository override\n\n" + override.read_text())
-    return "\n".join(parts)
-
-
-def _invoke_overlord(prompt: str, plan_role_config: dict | None = None) -> str:
-    """Run the overlord persona headless and return its raw stdout.
-
-    External boundary: delegates to the configured Backend. Tests mock this
-    function. Provider/model fall through role_registry (PIPELINE_BACKEND_
-    OVERLORD / a plan's role_config / model_registry.json's "overlord"
-    entry), falling back to the persona's declared tier ("opus") when none
-    of those apply - so an unconfigured install resolves identically to
-    before role_registry existed. Passing name=resolution.provider
-    explicitly (rather than relying on get_backend's own internal env
-    lookup, as before) is required so a registry/plan-configured provider
-    actually takes effect.
-    """
-    system = _persona_body("overlord")
-    resolution = role_registry.resolve_role(
-        "overlord", plan_role_config=plan_role_config,
-        model_fallback=lambda: _persona_default_model("overlord") or "opus",
-    )
-    return backend.get_backend("overlord", name=resolution.provider).complete(
-        prompt, system=system, model=resolution.model, allowed_tools="Read",
-    )
 
 
 # GUIDED_DECOMPOSITION_PLAN.md: a "tech lead" planner call that turns a

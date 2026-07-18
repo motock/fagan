@@ -34,7 +34,6 @@ Per-project overrides (set in project .mcp.json env block):
 import json
 import logging
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -306,6 +305,13 @@ from pipeline_concurrency import (  # noqa: F401
     _heavy_lock,
     HEAVY_EXECUTABLES,
     _is_heavy,
+)
+
+# Checkpoint helpers. _checkpoint_impl reads PLAN_DIR via a lazy import from
+# the server.
+from pipeline_checkpoint import (  # noqa: F401
+    _terminate_and_checkpoint,
+    _checkpoint_impl,
 )
 
 
@@ -1465,34 +1471,6 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
-def _terminate_and_checkpoint(
-    manifest: dict[str, Any], manifest_path: Path, plan_name: str, story_key: str,
-    story: dict[str, Any], *, pid: int, step: str, summary: str,
-) -> str:
-    """SIGTERM the dispatched process, checkpoint its worktree, journal the
-    event, and mark the story interrupted (dispatch-eligible for resume).
-    Shared by interrupt_story (manual) and check_story_status's dispatch
-    watchdog (automatic, on a hung process past DISPATCH_WATCHDOG_SECONDS)."""
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-
-    sha = _commit_wip(story["worktree"], story_key, step)
-    interrupted_at = datetime.now(timezone.utc).isoformat()
-    _append_journal(plan_name, story_key, {
-        "step": step,
-        "summary": summary,
-        "next_hint": "",
-        "commit": sha,
-        "ts": interrupted_at,
-    })
-
-    story["status"] = "interrupted"
-    story["last_commit"] = sha
-    story["interrupted_at"] = interrupted_at
-    _atomic_write_json(manifest_path, manifest)
-    return sha
 
 
 @mcp.tool()
@@ -1555,30 +1533,6 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
     return {"ok": True}
 
 
-def _checkpoint_impl(
-    plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "",
-) -> dict[str, Any]:
-    """Checkpoint logic, factored out of the `checkpoint` tool so it can be
-    reused directly by the local dispatch agent loop (scripts/local_agent.py
-    calls this in-process for its `checkpoint` tool) without exposing this
-    whole server's orchestration toolset (dispatch_story, approve_merge,
-    advance_pipeline, ...) to a dispatched agent."""
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    story = manifest["stories"].get(story_key)
-    if not story:
-        return {"ok": False, "error": f"No such story {story_key}"}
-
-    sha = _commit_wip(story["worktree"], story_key, step)
-    record = {
-        "step": step,
-        "summary": summary,
-        "next_hint": next_hint,
-        "commit": sha,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-    _append_journal(plan_name, story_key, record)
-    return {"ok": True, **record}
 
 
 @mcp.tool()

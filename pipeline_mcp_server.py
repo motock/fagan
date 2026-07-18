@@ -171,6 +171,22 @@ from pipeline_ticketing import (  # noqa: F401
     _mark_plane_done,
 )
 
+# Persistence helpers. Tests patch pipeline_persistence directly for the
+# names whose moved code reads them as free vars (PLAN_DIR, _notify_user,
+# _plan_role_config, ...) - see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4. The
+# plan_dir fixture in the test suite patches both p.PLAN_DIR and
+# pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
+# reads both see the same temp dir.
+from pipeline_persistence import (  # noqa: F401
+    _notify_user,
+    _decisions_path,
+    _append_decision,
+    _journal_path,
+    _append_journal,
+    _read_journal,
+    _plan_role_config,
+)
+
 
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
 
@@ -1440,57 +1456,6 @@ def _auto_escalation_enabled() -> bool:
     return os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower() == "auto"
 
 
-def _notify_user(plan_name: str, message: str) -> None:
-    """Durably record a notice for the user. The orchestrating agent surfaces
-    these (e.g. via PushNotification) from advance_pipeline's summary."""
-    path = PLAN_DIR / f"{plan_name}.notifications.log"
-    with open(path, "a") as f:
-        f.write(f"{datetime.now(timezone.utc).isoformat()} {message}\n")
-
-
-def _decisions_path(plan_name: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.decisions.json"
-
-
-def _append_decision(plan_name: str, record: dict[str, Any]) -> None:
-    path = _decisions_path(plan_name)
-    log = json.loads(path.read_text()) if path.exists() else []
-    log.append(record)
-    _atomic_write_json(path, log)
-
-
-# ---------- Checkpoint journal ----------
-def _journal_path(plan_name: str, story_key: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
-
-
-def _append_journal(plan_name: str, story_key: str, record: dict[str, Any]) -> None:
-    path = _journal_path(plan_name, story_key)
-    log = json.loads(path.read_text()) if path.exists() else []
-    log.append(record)
-    _atomic_write_json(path, log)
-
-
-def _read_journal(plan_name: str, story_key: str) -> list[dict[str, Any]]:
-    path = _journal_path(plan_name, story_key)
-    return json.loads(path.read_text()) if path.exists() else []
-
-
-def _plan_role_config(plan_name: str) -> dict:
-    """A plan's role_config block (per-role provider/model overrides, set at
-    save_plan/ingest_plan time - see role_registry.py's resolve_role()),
-    or {} if the plan/manifest doesn't exist, doesn't set one, or the
-    manifest is unreadable. Read fresh each call, mirroring the codebase's
-    other small manifest readers (_read_journal above) - never a gate, so
-    any read failure degrades to "no override" rather than raising.
-    """
-    path = PLAN_DIR / f"{plan_name}.manifest.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text()).get("role_config", {})
-    except (json.JSONDecodeError, OSError):
-        return {}
 
 
 # ---------- Usage probe ----------

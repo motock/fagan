@@ -24,6 +24,7 @@ import pytest
 import backend
 import pipeline_mcp_server as p
 import pipeline_persistence as ppers
+import pipeline_persona as pper
 import pipeline_ticketing as pt
 import role_registry
 
@@ -74,6 +75,9 @@ def agents_dir(tmp_path, monkeypatch):
         '---\nname: "product-analyst"\nmodel: opus\n---\n\nAnalyst body.\n'
     )
     monkeypatch.setattr(p, "AGENTS_DIR", d)
+    # pipeline_persona imports AGENTS_DIR from pipeline_paths at module load
+    # and reads it as a free var, so patches must land on its own binding too.
+    monkeypatch.setattr(pper, "AGENTS_DIR", d)
     return d
 
 

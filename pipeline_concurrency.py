@@ -1,0 +1,256 @@
+"""Concurrency helpers for the pipeline MCP server.
+
+_count_in_progress_agents / _reap_zombie_in_progress_stories manage the
+MAX_CONCURRENT_AGENTS slot accounting across all plans. _plan_lock is the
+flock-based per-plan mutation lock. _heavy_lock serializes heavy build/test
+invocations. _is_heavy classifies a command as heavy.
+
+_count_in_progress_agents / _is_heavy are patched via p.<name> by tests;
+server call sites use bare names -> re-export -> patch lands. PLAN_DIR is
+read as a free var; the plan_dir fixture patches both p.PLAN_DIR and
+pipeline_concurrency.PLAN_DIR.
+"""
+
+import fcntl
+import json
+import os
+import threading
+from contextlib import contextmanager
+
+from pipeline_paths import PLAN_DIR
+from pipeline_parsers import _atomic_write_json
+
+
+def _count_in_progress_agents() -> int:
+    """Count *actually running* dispatched agents (status in_progress with a
+    live pid) across every plan's manifest, not just one plan — the usage
+    window MAX_CONCURRENT_AGENTS protects is shared across all plans running
+    in this session.
+
+    Checks each pid is still alive rather than trusting the status field: a
+    story can be stuck at in_progress with a pid whose process already
+    exited (e.g. a plan whose own advance_pipeline tick never ran again to
+    notice, or a zombie left by a crashed agent) - left uncorrected, that
+    permanently consumes a concurrency slot for every other plan forever.
+
+    Skips dead-pid stories rather than reaping them here so this function
+    remains a pure read for callers that size dispatch slots. The reap
+    itself runs separately in _reap_zombie_in_progress_stories (called from
+    advance_all_plans before any per-plan tick), so a dead-pid story in one
+    plan doesn't get clobbered before another plan's check_story_status
+    has a chance to grade it.
+    """
+    count = 0
+    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
+        manifest = json.loads(manifest_path.read_text())
+        for story in manifest.get("stories", {}).values():
+            if story.get("status") != "in_progress" or "pid" not in story:
+                continue
+            try:
+                os.kill(story["pid"], 0)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                pass
+            count += 1
+    return count
+
+
+def _reap_zombie_in_progress_stories() -> int:
+    """In-place reap of in_progress stories whose pid has exited, so they
+    stop consuming a MAX_CONCURRENT_AGENTS slot forever.
+
+    Sets status → todo and drops pid. Returns the number reaped. Idempotent:
+    a manifest already free of zombies is rewritten only if at least one
+    reap happened (avoids touching mtime on every tick).
+
+    Called from advance_all_plans before the per-plan advance_pipeline tick,
+    so a freshly crashed agent from plan X doesn't block dispatch sizing
+    for plan Y on the same scheduler tick. Per-plan advance_pipeline callers
+    (e.g. tests, MCP `advance` tool) don't go through here, so a zombie in
+    one plan doesn't get clobbered before another plan's check_story_status
+    has a chance to grade it on the same tick.
+
+    Without this, observed 2026-06-28: two audio-bugfixes stories with dead
+    pids held 2 of 3 concurrency slots for ~19h, blocking all e2e dispatch.
+    """
+    reaped = 0
+    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
+        manifest = json.loads(manifest_path.read_text())
+        changed = False
+        for story in manifest.get("stories", {}).values():
+            if story.get("status") != "in_progress" or "pid" not in story:
+                continue
+            try:
+                os.kill(story["pid"], 0)
+                # pid is alive — leave the story alone.
+                continue
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                # Process exists but we can't signal it (owned by another
+                # user). Trust that it's alive and don't reap.
+                continue
+            # Zombie: agent exited but no one updated the manifest. Reap
+            # so the slot frees up and the story becomes dispatchable on
+            # the next tick. Setting status back to todo is the correct
+            # recovery — the work is unfinished and needs another agent
+            # pass; we don't have signal that it was the model's fault
+            # vs a harness crash, so don't penalize it with 'failed'.
+            story["status"] = "todo"
+            story.pop("pid", None)
+            changed = True
+            reaped += 1
+        if changed:
+            _atomic_write_json(manifest_path, manifest)
+    return reaped
+
+
+@contextmanager
+def _plan_lock(plan_name: str):
+    """Exclusive, non-blocking lock scoped to one plan's mutations.
+
+    Used by every tool that mutates the manifest or the worktree
+    (advance_pipeline, _set_plan_paused, dispatch_story, interrupt_story).
+    The lock is `flock`-based, so it serializes across MCP server processes
+    too - two Claude sessions with two MCP server PIDs calling
+    dispatch_story on the same story in the same window both want to write
+    to the same manifest and create the same worktree, and without this
+    guard the second one treats the first's half-built worktree as
+    resumable and spawns a second agent into the same directory. Multiple
+    agents fighting over one worktree's git state is what produces the
+    repeated zero-output agent deaths, not per-story flakiness.
+
+    Reentrant within a single thread: advance_pipeline acquires this lock
+    for its whole tick and then calls dispatch_story / interrupt_story,
+    which each re-acquire it. flock locks are held per open-file-description
+    (a fresh os.open makes a new description), so a nested exclusive flock
+    on the same file fails with BlockingIOError *even within the same
+    process* — without reentrance the nested call would return
+    skipped:"locked" and advance_pipeline would falsely count it as
+    dispatched/interrupted while doing nothing. The per-thread held-set
+    lets the nested call proceed without re-flocking; cross-thread and
+    cross-process serialization is still enforced by flock itself.
+
+    Yields whether the lock was acquired; the caller must check it and skip
+    all work if not - this never blocks waiting for the lock.
+    """
+    held = _held_plan_locks()
+    if plan_name in held:
+        # Same thread already holds the flock for this plan (nested call
+        # from within an advance_pipeline tick). Don't re-flock — a second
+        # exclusive flock on a new fd would fail.
+        yield True
+        return
+    lock_path = PLAN_DIR / f"{plan_name}.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            acquired = False
+        if acquired:
+            held.add(plan_name)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                held.discard(plan_name)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+_plan_lock_state = threading.local()
+
+
+def _held_plan_locks() -> set[str]:
+    """Per-thread set of plan names whose flock this thread currently holds,
+    for _plan_lock reentrance. threading.local keeps each thread's view
+    independent, so thread A holding a plan does not let thread B bypass the
+    flock — B's set is empty, so it hits the real flock and serializes."""
+    held = getattr(_plan_lock_state, "held", None)
+    if held is None:
+        held = set()
+        _plan_lock_state.held = held
+    return held
+
+
+@contextmanager
+def _heavy_lock():
+    """Serializes heavy build/test invocations across all local-agent
+    dispatch paths.
+
+    Three concurrent cold builds can push a 24GB M4 to its knees (observed
+    in the post-PR #30 e2e rerun: 33GB total pressure, CPU saturated).
+    Each worktree has its own target/ (or build/), so concurrent
+    invocations don't share cache — they multiply memory pressure rather
+    than amortizing it.
+
+    Blocking acquire (LOCK_EX, not LOCK_EX | LOCK_NB) is the right call
+    here: callers are already prepared to wait minutes for a build, and
+    skipping entirely would just give the agent a false "build failed"
+    error and waste more time. The queueing cost is invisible when the
+    model is doing non-build work in the meantime.
+
+    Held by every site that runs a heavy build/test:
+      - check_story_status (orchestrator's post-dispatch grading)
+      - local_agent.py / local_agent_oracle.py `bash` tool (model-invoked)
+      - backend.py reviewer bash (reviewer-invoked)
+    Decide what counts as heavy with `_is_heavy()`.
+    """
+    lock_path = PLAN_DIR / "heavy.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+# Heavy build/test executables: these typically spend GB-seconds of memory
+# running (linkers, type checkers, full compilers). Lock them across
+# dispatchees so we never run more than one at a time, regardless of
+# language. `make` is gated on a build/test target because make is also
+# used for trivial scripts — we don't want to serialize `make clean`.
+HEAVY_EXECUTABLES = frozenset({
+    "cargo", "npm", "yarn", "pnpm", "npx",
+    "mvn", "gradle", "./gradlew",
+    "sbt", "bazel", "buck",
+    "go", "rustc", "swift", "swiftc",
+})
+
+
+def _is_heavy(cmd: list[str]) -> bool:
+    """True iff a subprocess command should acquire the heavy lock.
+
+    Matched by argv[0] against a static list of build/test executables.
+    No parsing of the command body — keep the check O(1) and language-
+    agnostic. `make` is special-cased to only the well-known heavy
+    targets (`test`/`build`/`check`/`all`/`ci`) because make is also
+    used for trivial scripts where the lock would just add latency.
+    """
+    if not cmd:
+        return False
+    exe = cmd[0]
+    if exe in HEAVY_EXECUTABLES:
+        return True
+    if exe == "make" and len(cmd) > 1 and cmd[1] in ("test", "build", "check", "all", "ci"):
+        return True
+    return False
+
+
+__all__ = [
+    "_count_in_progress_agents",
+    "_reap_zombie_in_progress_stories",
+    "_plan_lock",
+    "_plan_lock_state",
+    "_held_plan_locks",
+    "_heavy_lock",
+    "HEAVY_EXECUTABLES",
+    "_is_heavy",
+]

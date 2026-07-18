@@ -15,15 +15,23 @@
 		<key>PIPELINE_AUTONOMY</key>
 		<string>full</string>
 		<key>PIPELINE_BACKEND_DISPATCH</key>
-		<string>auto</string>
+		<string>local</string>
 		<key>PIPELINE_BACKEND_REVIEW</key>
-		<string>claude</string>
+		<string>local</string>
+		<key>PIPELINE_DECOMPOSE</key>
+		<string>cloud</string>
+		<key>PIPELINE_DECOMPOSE_SCRATCHPAD</key>
+		<string>on</string>
+		<key>PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS</key>
+		<string>5400</string>
 		<key>PIPELINE_LOCAL_MAX_STEPS</key>
 		<string>60</string>
 		<key>PIPELINE_LOCAL_MODEL_DEFAULT</key>
-		<string>glm-5.2:cloud</string>
+		<string>gpt-oss:20b</string>
 		<key>PIPELINE_LOCAL_NUM_CTX</key>
 		<string>32768</string>
+		<key>PIPELINE_LOCAL_REVIEW_MODEL</key>
+		<string>glm-5.2:cloud</string>
 		<key>PIPELINE_LOCAL_TEMPERATURE</key>
 		<string>0.3</string>
 		<key>PIPELINE_MAX_CONCURRENT_AGENTS</key>
@@ -34,9 +42,15 @@
 		<string>0</string>
 		<key>PIPELINE_REVIEW_MAX_TOKENS</key>
 		<string>4096</string>
+		<key>PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL</key>
+		<string>1</string>
+		<key>PIPELINE_REWORK_MAX_ATTEMPTS</key>
+		<string>3</string>
 		<key>PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED</key>
 		<string>3</string>
 		<key>PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE</key>
+		<string>3</string>
+		<key>PIPELINE_REWORK_ON_CI_FAIL</key>
 		<string>1</string>
 		<key>PIPELINE_WEEK_PAUSE_THRESHOLD</key>
 		<string>100</string>

@@ -151,3 +151,31 @@ def test_atomic_write_no_temp_file(tmp_path):
     # Ensure no temp files
     tmp_files = list(tmp_path.glob("*.tmp"))
     assert not tmp_files
+
+# Test persistence to a dotfile-named transcript. Production dispatch sets
+# LOCAL_AGENT_TRANSCRIPT_PATH = <worktree>/.agent_transcript.json (backend.py
+# OllamaDriver.dispatch), and local_agent.py's gitignore lists
+# .agent_transcript.json -- so the real transcript filename is a dotfile.
+# Existing tests only covered non-dotfile names (transcript.json / resume.json),
+# leaving the production path uncovered. This guards that the atomic write
+# (tmp file -> os.replace) works when the final filename itself starts with a
+# dot (the tmp path is built as f".{name}.tmp", which yields a double-dot
+# "..agent_transcript.json.tmp" -- a valid, if ugly, filename, and os.replace
+# still renames it onto the dotfile target correctly).
+
+def test_persistence_dotfile_transcript_name(tmp_path, capsys):
+    transcript_file = tmp_path / ".agent_transcript.json"
+    env = {"LOCAL_AGENT_TRANSCRIPT_PATH": str(transcript_file)}
+    la = load_module_with_env(env)
+    messages = la.PersistingList(transcript_path=str(transcript_file))
+    msg = {"role": "assistant", "content": "hi"}
+    messages.append(msg)
+    # The transcript file must actually be written.
+    assert transcript_file.exists()
+    with open(transcript_file, "r", encoding="utf-8") as f:
+        assert json.load(f) == [msg]
+    # No persistence error should be printed.
+    out, _ = capsys.readouterr()
+    assert "persistence error" not in out
+    # No stray tmp file left behind (the double-dot tmp is replaced away).
+    assert not list(tmp_path.glob("*.tmp"))

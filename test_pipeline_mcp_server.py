@@ -26,6 +26,7 @@ import pipeline_mcp_server as p
 import pipeline_persistence as ppers
 import pipeline_persona as pper
 import pipeline_ticketing as pt
+import pipeline_usage as pusage
 import role_registry
 
 
@@ -109,7 +110,7 @@ def _isolate_usage_state(tmp_path, monkeypatch):
     # on whether the live session/week usage happened to be over the pause
     # threshold when the suite ran. A missing file reads as "not paused".
     path = tmp_path / "usage_state.json"
-    monkeypatch.setattr(p, "USAGE_STATE_PATH", path)
+    monkeypatch.setattr(pusage, "USAGE_STATE_PATH", path)
     return path
 
 
@@ -2911,13 +2912,13 @@ def test_write_usage_state_uses_atomic_write(tmp_path, monkeypatch, usage_state_
     """_write_usage_state must not leave a partial file on rename failure."""
     calls = []
 
-    real_atomic = p._atomic_write_json
+    real_atomic = pusage._atomic_write_json
 
     def tracking_atomic(path, obj):
         calls.append(path)
         real_atomic(path, obj)
 
-    monkeypatch.setattr(p, "_atomic_write_json", tracking_atomic)
+    monkeypatch.setattr(pusage, "_atomic_write_json", tracking_atomic)
     p._write_usage_state({"session_pct": 5})
     assert any(str(usage_state_path) in str(c) for c in calls), "usage-state write did not go through _atomic_write_json"
 
@@ -2951,8 +2952,8 @@ SAMPLE_USAGE_TEXT_NEW = (
 
 def test_parse_usage_output_handles_new_request_count_format(monkeypatch):
     """New CLI format (request counts) is parsed into session_pct/week_pct."""
-    monkeypatch.setattr(p, "DAILY_REQUEST_THRESHOLD", 2000)
-    monkeypatch.setattr(p, "WEEKLY_REQUEST_THRESHOLD", 10000)
+    monkeypatch.setattr(pusage, "DAILY_REQUEST_THRESHOLD", 2000)
+    monkeypatch.setattr(pusage, "WEEKLY_REQUEST_THRESHOLD", 10000)
     result = p._parse_usage_output(SAMPLE_USAGE_TEXT_NEW)
     # 1127/2000 = 56%, 7062/10000 = 70%
     assert result["session_pct"] == 56
@@ -2961,8 +2962,8 @@ def test_parse_usage_output_handles_new_request_count_format(monkeypatch):
 
 def test_parse_usage_output_new_format_clamps_to_100(monkeypatch):
     """Request count exceeding the threshold clamps to 100%, not above."""
-    monkeypatch.setattr(p, "DAILY_REQUEST_THRESHOLD", 500)
-    monkeypatch.setattr(p, "WEEKLY_REQUEST_THRESHOLD", 1000)
+    monkeypatch.setattr(pusage, "DAILY_REQUEST_THRESHOLD", 500)
+    monkeypatch.setattr(pusage, "WEEKLY_REQUEST_THRESHOLD", 1000)
     result = p._parse_usage_output(SAMPLE_USAGE_TEXT_NEW)
     assert result["session_pct"] == 100
     assert result["week_pct"] == 100
@@ -2982,8 +2983,8 @@ def test_parse_usage_output_raises_on_completely_unrecognized_format():
 
 def test_run_usage_probe_handles_new_cli_format(monkeypatch):
     """Usage probe works end-to-end with the new /cost JSON output format."""
-    monkeypatch.setattr(p, "DAILY_REQUEST_THRESHOLD", 2000)
-    monkeypatch.setattr(p, "WEEKLY_REQUEST_THRESHOLD", 10000)
+    monkeypatch.setattr(pusage, "DAILY_REQUEST_THRESHOLD", 2000)
+    monkeypatch.setattr(pusage, "WEEKLY_REQUEST_THRESHOLD", 10000)
 
     def _fake_run(cmd, **kwargs):
         class Result:
@@ -3190,8 +3191,8 @@ def test_usage_gate(prev_paused, session_pct, week_pct, expected):
 
 
 def test_usage_gate_session_and_week_have_independent_pause_thresholds(monkeypatch):
-    monkeypatch.setattr(p, "SESSION_PAUSE_THRESHOLD", 80)
-    monkeypatch.setattr(p, "WEEK_PAUSE_THRESHOLD", 95)
+    monkeypatch.setattr(pusage, "SESSION_PAUSE_THRESHOLD", 80)
+    monkeypatch.setattr(pusage, "WEEK_PAUSE_THRESHOLD", 95)
 
     # Week at 85% would have tripped the old shared 80% threshold, but
     # week's own threshold (95) is not yet reached, and session is low.
@@ -3203,8 +3204,8 @@ def test_usage_gate_session_and_week_have_independent_pause_thresholds(monkeypat
 
 
 def test_usage_gate_session_and_week_have_independent_resume_thresholds(monkeypatch):
-    monkeypatch.setattr(p, "SESSION_RESUME_THRESHOLD", 60)
-    monkeypatch.setattr(p, "WEEK_RESUME_THRESHOLD", 75)
+    monkeypatch.setattr(pusage, "SESSION_RESUME_THRESHOLD", 60)
+    monkeypatch.setattr(pusage, "WEEK_RESUME_THRESHOLD", 75)
 
     # Already paused; week is still above its own resume threshold even
     # though it's below the (lower) session resume threshold - stays paused.

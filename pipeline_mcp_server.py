@@ -592,6 +592,196 @@ def _run_rework_planner(
     return text or None
 
 
+# ---------- TDD-split test-author role (TDD_SPLIT_PRODUCTION_PLAN.md) ----------
+# The exact "don't touch the tests" steering line already proven in
+# _REWORK_PLANNER_SYSTEM above, reused verbatim by the test-author executor's
+# prompt augmentation (see dispatch_story below) rather than re-derived.
+_NEVER_TOUCH_TESTS_STEERING = (
+    "fixes go in the implementation file named by the task; NEVER edit, "
+    "rename, weaken, or delete the test files (anything matching "
+    "test_*.py) to make a test pass - if a test fails, the bug is in the "
+    "implementation, so fix it there."
+)
+
+
+def _resolve_test_author_backend(
+    dispatch_backend: str, local_model: str,
+    plan_role_config: dict | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve (provider, model) for the "test_author" role - the tech lead
+    that writes the test suite before the (usually weaker) executor
+    implements against it. See TDD_SPLIT_PRODUCTION_PLAN.md §2.2.
+
+    Unlike _resolve_planner_backend, an unconfigured test_author role must
+    NOT fall back to mirroring dispatch_backend/local_model: the isolated
+    experiment this plan is based on (memory/project_tdd_split_experiment_
+    result.md) found a same-model split (gpt-oss authoring its own tests)
+    actively HARMS the implementer (read-loop park, no impl ever written)
+    versus not splitting at all. So both "unconfigured" and "resolves to
+    the same backend+model as dispatch" return (None, None) - callers MUST
+    treat that as "skip the split, dispatch monolithically", exactly as if
+    PIPELINE_TDD_SPLIT were off.
+    """
+    plan_cfg = (plan_role_config or {}).get("test_author", {})
+    registry = role_registry.load_registry()
+    provider_override = (
+        plan_cfg.get("provider")
+        or os.environ.get("PIPELINE_BACKEND_TEST_AUTHOR")
+        or registry.get("roles", {}).get("test_author", {}).get("provider")
+    )
+    if not provider_override:
+        return None, None
+    try:
+        resolution = role_registry.resolve_role(
+            "test_author", plan_role_config=plan_role_config, registry=registry,
+            model_fallback=lambda: None,
+        )
+    except role_registry.RoleRegistryError as e:
+        # Fail open: a misconfigured test_author role (typo'd model name,
+        # provider/model mismatch) must not crash dispatch_story - it
+        # degrades to no split, same as unconfigured (§2.5).
+        logging.getLogger("pipeline").warning(
+            f"test_author role misconfigured, skipping split: {e}"
+        )
+        return None, None
+    if (resolution.provider, resolution.model) == (dispatch_backend, local_model):
+        # Belt-and-suspenders (§2.2): compare RESOLVED values, not just the
+        # config source, so an operator pointing PIPELINE_BACKEND_TEST_AUTHOR
+        # at the same concrete model dispatch already uses (e.g. same Ollama
+        # endpoint/tag via a different env var) still refuses, rather than
+        # silently reproducing the harmful same-model variant.
+        return None, None
+    return resolution.provider, resolution.model
+
+
+_TEST_AUTHOR_SYSTEM = (
+    "You are a senior tech lead. Your ONLY job on this dispatch is to write "
+    "the test suite for the task below - never the implementation. A "
+    "separate, different (and likely less capable) engineer will implement "
+    "against your tests in a later dispatch on this same branch, so the "
+    "tests must be self-contained and must fail for the right reason "
+    "(an import/attribute error because the implementation doesn't exist "
+    "yet, not a bug in your own test logic) until that implementation "
+    "exists."
+)
+
+_TEST_AUTHOR_ALLOWED_TOOLS = "Read,Write,Edit,Bash"
+
+
+def _test_author_prompt(agent_instructions: str) -> str:
+    """Build the test-authoring dispatch's prompt from the story's own
+    agent_instructions (generalized from tests/benchmark/tdd_split_
+    experiment.py's hardcoded phase1_prompt(), which could name one task's
+    spec verbatim; production stories vary, so the scope suffix below is
+    task-agnostic)."""
+    return (
+        f"{agent_instructions}\n\n"
+        "--- Test-authoring scope for THIS dispatch ---\n"
+        "Write ONLY the test file(s) required to verify the task above - do "
+        "NOT create or edit the implementation file(s) it describes; a "
+        "separate, later dispatch (a different, weaker engineer) will "
+        "implement against your tests next, so they must stand alone and "
+        "be runnable against code that doesn't exist yet. Run the test "
+        "command to confirm the suite is currently RED (failing because "
+        "the implementation is missing) - that is the correct state to "
+        "leave it in, not an error to fix. Cover both the happy path and "
+        "negative/boundary cases: invalid or malformed inputs, missing "
+        "required fields, boundary values (zero, one, min, max, empty "
+        "collections), and expected exceptions (assert both type and "
+        "message where meaningful). When the test file is written and "
+        "confirmed red, say you are done - do not attempt the "
+        "implementation yourself."
+    )
+
+
+def _wait_for_agent_exit(pid: int, timeout: float, poll_interval: float = 1.0) -> bool:
+    """Block the calling thread until the agent process at `pid` exits, or
+    `timeout` seconds elapse (whichever first). Returns True iff the
+    process exited/was reaped on its own; False if the timeout fired and
+    the process had to be SIGTERM'd.
+
+    Used only by the test-author phase (§2.1): unlike the main executor
+    dispatch (always async - the MCP tool returns a pid immediately and
+    check_story_status polls it later), the test-author phase must finish
+    BEFORE the main executor starts, since the executor's prompt and
+    worktree depend on what the test-author produced. Mirrors
+    tests/benchmark/tdd_split_experiment.py's dispatch() poll loop:
+    os.waitpid(pid, os.WNOHANG) is the portable way to reap our own child
+    without a completion callback; ChildProcessError means the process is
+    already gone (already reaped, or was never a child of this process),
+    which counts as "exited".
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            reaped_pid, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            return True
+        if reaped_pid != 0:
+            return True
+        time.sleep(poll_interval)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+    return False
+
+
+def _run_test_author_phase(
+    story: dict, *, story_key: str, worktree_path: Path,
+    dispatch_backend: str, local_model: str,
+    plan_role_config: dict | None = None,
+    timeout: float | None = None,
+) -> bool:
+    """Run the test-authoring pre-executor dispatch in `worktree_path`,
+    BLOCKING until it exits, before the main executor dispatch starts. See
+    TDD_SPLIT_PRODUCTION_PLAN.md §2.1/§2.5.
+
+    Returns True iff the test-author produced a real commit on the story's
+    branch for the executor to build on. Returns False on ANY failure (role
+    unconfigured/refused, dispatch error, timeout, or no new commit) -
+    callers MUST treat False as "fall back to today's monolithic dispatch,
+    agent_instructions unmodified" per the fail-open contract that is this
+    feature's single most safety-critical property. Never raises.
+    """
+    test_author_backend, test_author_model = _resolve_test_author_backend(
+        dispatch_backend, local_model, plan_role_config=plan_role_config,
+    )
+    if not test_author_backend:
+        return False
+    log_path = worktree_path / "test_author.log"
+    try:
+        handle = backend.get_backend("dispatch", name=test_author_backend).dispatch(
+            prompt=_test_author_prompt(story.get("agent_instructions", "")),
+            system=_TEST_AUTHOR_SYSTEM, model=test_author_model,
+            allowed_tools=_TEST_AUTHOR_ALLOWED_TOOLS,
+            cwd=worktree_path, log_path=log_path, append=False,
+        )
+    except Exception:
+        logging.getLogger("pipeline").warning(
+            f"test-author dispatch failed to start for {story_key}; "
+            "falling back to monolithic dispatch"
+        )
+        return False
+    exited = _wait_for_agent_exit(
+        handle.pid,
+        timeout if timeout is not None else float(
+            os.environ.get("PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS", "5400")
+        ),
+    )
+    if not exited:
+        logging.getLogger("pipeline").warning(
+            f"test-author dispatch timed out for {story_key}; "
+            "falling back to monolithic dispatch"
+        )
+        return False
+    return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
+
+
 # ---------- Decompose (provider-configurable product-analyst) ----------
 
 
@@ -1582,7 +1772,7 @@ def list_plans() -> list[str]:
 # (T1, 2026-07-07 web-client-epic retro incident #2).
 _INGEST_AUTHORED_STORY_FIELDS = (
     "summary", "agent_instructions", "dependencies", "persona", "model",
-    "acceptance", "risk", "backend",
+    "acceptance", "risk", "backend", "tdd_split",
 )
 
 # Valid story["backend"] values at ingest time: every registered driver name
@@ -1699,6 +1889,12 @@ def ingest_plan(
                     "acceptance": story.get("acceptance", []),
                     "risk": story.get("risk", "low"),
                     "backend": story.get("backend"),
+                    # TDD_SPLIT_PRODUCTION_PLAN.md §2.4: explicit per-story
+                    # opt-in for the test-author pre-executor phase. Defaults
+                    # False - inferring eligibility from agent_instructions
+                    # prose is a worse failure mode than an operator
+                    # forgetting to opt in.
+                    "tdd_split": bool(story.get("tdd_split", False)),
                     "status": "todo",
                 }
 
@@ -1912,6 +2108,38 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(entry["source"])
 
+        # TDD_SPLIT_PRODUCTION_PLAN.md: PIPELINE_TDD_SPLIT=on runs a
+        # pre-executor test-authoring dispatch (a full agent-loop, BLOCKING
+        # until it exits - unlike the planner checklist above, this
+        # produces a real commit the executor's worktree must already have)
+        # in THIS worktree before the main executor starts. Gated on:
+        #   - the story explicitly opting in (story["tdd_split"] - §2.4:
+        #     inferring eligibility from prose is a worse failure mode than
+        #     an operator forgetting to opt in)
+        #   - not resuming (a rework redispatch acts on the SAME tests it
+        #     already has; it never gets a fresh test-authoring pass)
+        #   - no existing test-author marker in the worktree (belt-and-
+        #     suspenders with `resuming`, mirrors plan_path's own check
+        #     below)
+        # _run_test_author_phase never raises and a False return (role
+        # unconfigured/refused, dispatch failure, timeout, or no commit
+        # produced) falls open to today's unmodified monolithic dispatch -
+        # never a gate (§2.5).
+        tdd_split_mode = os.environ.get("PIPELINE_TDD_SPLIT", "off").strip().lower()
+        test_author_marker = worktree_path / ".tdd_split_test_author_done"
+        if (
+            tdd_split_mode == "on"
+            and story.get("tdd_split")
+            and not resuming
+            and not test_author_marker.exists()
+        ):
+            if _run_test_author_phase(
+                story, story_key=story_key, worktree_path=worktree_path,
+                dispatch_backend=dispatch_backend, local_model=spec["model"],
+                plan_role_config=_plan_role_config(plan_name),
+            ):
+                test_author_marker.write_text("ok\n")
+
         # GUIDED_DECOMPOSITION_PLAN.md: PIPELINE_DECOMPOSE=cloud|local turns
         # on a "tech lead" checklist for the weak local executor. Default
         # "off" - opt-in, per Secure Defaults. Gated on:
@@ -1973,6 +2201,21 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 "--- Implementation checklist from your tech lead ---\n"
                 f"{plan_path.read_text()}\n\n"
                 f"Work through these steps in order.{scratchpad_instruction}"
+            )
+
+        # Referencing the test-author marker is independent of the phase
+        # having run THIS dispatch (mirrors plan_path.exists() above): a
+        # resumed/rework redispatch that skipped re-running the phase must
+        # still get the "don't touch tests" steering, since the tests it
+        # must not touch are already committed on this branch.
+        if test_author_marker.exists():
+            spec["prompt"] = (
+                f"{spec['prompt']}\n\n"
+                "--- Tests already written by your tech lead ---\n"
+                "The test file(s) for this task have already been written "
+                "and committed to this branch by your tech lead. "
+                f"{_NEVER_TOUCH_TESTS_STEERING} Run them to see the current "
+                "failures, then implement until they pass."
             )
 
         dispatch_kwargs: dict[str, Any] = dict(
@@ -2527,7 +2770,7 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
 # authored, not for mechanically bypassing the review/merge gates.
 _PATCHABLE_STORY_FIELDS = frozenset((
     "agent_instructions", "model", "persona", "risk", "dependencies",
-    "acceptance", "pr_url", "summary",
+    "acceptance", "pr_url", "summary", "tdd_split",
 ))
 
 # Every status value the pipeline itself assigns to a story (see the

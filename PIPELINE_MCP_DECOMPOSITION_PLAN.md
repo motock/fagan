@@ -174,3 +174,41 @@ Step 17 adds:
 - [ ] 1,138 tests still green, unchanged.
 - [ ] One follow-up issue opened for the "Option B" call-site rewrite (§4) — optional, not blocking.
 - [ ] This plan doc updated with actual line counts after each PR lands, so progress is visible.
+
+---
+
+## 9. Progress log (executed 2026-07-18 on branch `refactor/decompose-pipeline-mcp-server`)
+
+| Step | Module | Status | Commit | Notes |
+|---|---|---|---|---|
+| 1 | `pipeline_config.py` (238 lines) | done | `2fa7c09` | Scalar env-var knobs. |
+| 2 | `pipeline_paths.py` (79 lines) | done | `99f734b` | Path constants + `_exclude_worktree_logs_from_tracking`. `REPO_ROOT` + the three functions that read it as a free var stay in the server (tests patch `p.REPO_ROOT`). |
+| 4 | `pipeline_build_detect.py` (222 lines) | done | `316f1a0` | Test/build command detection + acceptance scoping. Pure leaves. |
+| 9 | `pipeline_git_ops.py` (104 lines) | done | `a0b7830` | `_last_nonempty_line` / `_commit_wip` / `_worktree_has_new_commits`. Pure leaves. |
+| — | `pipeline_parsers.py` (298 lines) | done | `87a3441` | Consolidated pure string/data parsers from steps 6/12/14: `_extract_json_block`, `_parse_ruling`, `_parse_verdict`, `_has_review_findings`, `_is_rate_limited`, `_is_transient_backend_error`, conflict-block parsers, `_atomic_write_json`, `_validate_key`, `_completed_dep_ids`, `_is_give_up_summary`. |
+
+**`pipeline_mcp_server.py`:** 4,985 → 4,311 lines (−674, −13.5%). Five new modules, 941 lines extracted.
+
+### Why the remaining steps (3, 5, 7, 8, 10–17) are deferred
+
+The remaining planned extractions are blocked by a single pattern that the plan's §4 "Option B" follow-up was specifically written to defer: the functions in question read module-level globals (`PLAN_DIR`, `AGENTS_DIR`, `REPO_ROOT`, `DEFAULT_MODEL`, `PLANE_*`, `PIPELINE_AUTONOMY`, `PIPELINE_RISK_THRESHOLD`, `PIPELINE_MERGE_CI_GATE`, `USAGE_STATE_PATH`, `_RISK_ORDER`, etc.) as **free variables**, and the test suite patches those globals via `monkeypatch.setattr(p, "<global>", ...)`. Moving a function that reads `PLAN_DIR` as a free variable to a new module breaks the patch — the patch lands on `pipeline_mcp_server.PLAN_DIR` (the re-exported binding) while the moved function reads `pipeline_persistence.PLAN_DIR` (its own module's binding), and the two are no longer the same attribute.
+
+Concretely:
+- **Step 3 (ticketing):** `_plane_enabled`, `plane_request`, `_plane_set_state`, the provider classes, etc. all read `PLANE_API_KEY` / `PLANE_WORKSPACE` / `PLANE_PROJECT` / `PLANE_BASE` as free vars, and tests patch `p.PLANE_API_KEY` etc.
+- **Step 5 (persona):** `_persona_path` reads `AGENTS_DIR`; tests patch `p.AGENTS_DIR`. `_build_dispatch_command` reads `DEFAULT_MODEL`.
+- **Step 6 (persistence):** `_notify_user`, `_decisions_path`, `_journal_path`, `_plan_role_config` all read `PLAN_DIR` as a free var; tests patch `p.PLAN_DIR`.
+- **Step 7 (usage):** `_write_usage_state` / `_read_usage_state` read `USAGE_STATE_PATH`; `_parse_usage_output` reads `DAILY_REQUEST_THRESHOLD` / `WEEKLY_REQUEST_THRESHOLD`; `_usage_gate` reads `SESSION_PAUSE_THRESHOLD` etc.
+- **Step 10 (overlord):** `_load_policy` reads `POLICY_PATH` and `REPO_ROOT`.
+- **Step 12 (review):** `_run_reviewer` reads `PIPELINE_REVIEW_MAX_TOKENS`.
+- **Step 13 (pr):** `_merge_pr` reads `REPO_ROOT`.
+- **Step 14 (rebase):** `_rebase_onto_master` reads `REPO_ROOT` and calls `_default_branch()`.
+- **Step 15 (ci):** `_ci_status` reads `PIPELINE_MERGE_CI_GATE` / `PIPELINE_MERGE_CI_TIMEOUT`; tests patch `p.PIPELINE_MERGE_CI_GATE`.
+- **Step 17 (advance):** the orchestrator's heart, reads many globals.
+
+The §4 Option B fix — switching call sites to `pipeline_persistence.PLAN_DIR` and updating tests to patch `pipeline_persistence.PLAN_DIR` — is a cross-cutting test-suite rewrite that the plan deliberately kept out of scope for the no-behavior-change move. It is the right next step, but it should be its own focused PR series (one submodule per PR, with the test patches in the same PR so the intermediate state is internally consistent) rather than mixed into the mechanical-move PRs.
+
+### Recommended next work
+
+1. **Option B pilot:** pick one submodule where the gain is highest (recommend `pipeline_ticketing` — ~380 lines, the single biggest remaining concern, and `TICKETING_ABSTRACTION_PLAN.md` already scoped it). In one PR: move the helpers, switch their free-var reads to `pipeline_ticketing.<global>` reads, update the ~15 affected tests to patch `pipeline_ticketing.<global>` instead of `p.<global>`. Validate the pattern works end-to-end before repeating.
+2. If the pilot is clean, repeat for `pipeline_persistence`, `pipeline_persona`, `pipeline_usage`, `pipeline_ci`, then the larger orchestration modules.
+3. The mechanical moves already landed (steps 1, 2, 4, 9, and the consolidated `pipeline_parsers`) need no follow-up — they were pure leaves with no free-var coupling, and the re-export is the permanent interface.

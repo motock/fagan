@@ -1180,6 +1180,16 @@ def test_patch_story_updates_allowlisted_field_preserves_others(plan_dir, monkey
     assert manifest["stories"]["S1"]["model"] == "sonnet"
 
 
+def test_patch_story_can_update_tdd_split_opt_in(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "pstdd", {
+        "S1": {"summary": "s", "status": "todo", "tdd_split": False},
+    })
+    result = p.patch_story("pstdd", "S1", {"tdd_split": True})
+    assert result["ok"] is True
+    manifest = _read_manifest(plan_dir, "pstdd")
+    assert manifest["stories"]["S1"]["tdd_split"] is True
+
+
 def test_patch_story_can_update_pr_url(plan_dir, monkeypatch):
     _write_manifest(plan_dir, "ps2", {
         "S1": {"summary": "s", "status": "done"},
@@ -9232,6 +9242,46 @@ def test_ingest_plan_omits_acceptance_when_source_story_has_none(
     assert story["acceptance"] == []
 
 
+def test_ingest_plan_round_trips_tdd_split_opt_in(plan_dir, monkeypatch, tmp_path):
+    """§2.4's story-level eligibility gate: an explicit story["tdd_split"]
+    opt-in must survive ingest onto the manifest, since dispatch_story reads
+    it from there, not from the plan JSON."""
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
+    (plan_dir / "p.json").write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build.",
+             "tdd_split": True},
+        ]}],
+        "repo_root": str(tmp_path),
+    }))
+
+    p.ingest_plan("p")
+
+    story = json.loads((plan_dir / "p.manifest.json").read_text())["stories"]["S1"]
+    assert story["tdd_split"] is True
+
+
+def test_ingest_plan_defaults_tdd_split_to_false(plan_dir, monkeypatch, tmp_path):
+    """Absent opt-in must default False - Secure Defaults, and matches
+    dispatch_story's `story.get("tdd_split")` truthiness check."""
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
+    (plan_dir / "p.json").write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing"},
+        ]}],
+        "repo_root": str(tmp_path),
+    }))
+
+    p.ingest_plan("p")
+
+    story = json.loads((plan_dir / "p.manifest.json").read_text())["stories"]["S1"]
+    assert story["tdd_split"] is False
+
+
 def test_dispatch_story_writes_oracle_files_into_worktree(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
@@ -11389,6 +11439,229 @@ def test_resolve_planner_backend_cloud_mode_ignores_plan_role_config(monkeypatch
     assert backend_name == "claude"
 
 
+# ---------- test_author role resolution (TDD_SPLIT_PRODUCTION_PLAN.md §2.2) ----------
+def test_resolve_test_author_backend_unconfigured_returns_none_none(monkeypatch):
+    """Unlike the planner, an unconfigured test_author role must NOT mirror
+    dispatch_backend/local_model - that would reproduce the experiment's
+    harmful same-model variant A. (None, None) is the explicit "skip the
+    split" signal callers must fail open on."""
+    monkeypatch.delenv("PIPELINE_BACKEND_TEST_AUTHOR", raising=False)
+    result = p._resolve_test_author_backend("ollama", "gpt-oss:20b")
+    assert result == (None, None)
+
+
+def test_resolve_test_author_backend_honors_env_var(monkeypatch):
+    monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
+    backend_name, model = p._resolve_test_author_backend(
+        "ollama", "gpt-oss:20b",
+        plan_role_config={"test_author": {"model": "qwen"}},
+    )
+    assert backend_name == "mlx"
+    assert model == "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+
+
+def test_resolve_test_author_backend_honors_plan_role_config(monkeypatch):
+    monkeypatch.delenv("PIPELINE_BACKEND_TEST_AUTHOR", raising=False)
+    backend_name, model = p._resolve_test_author_backend(
+        "ollama", "gpt-oss:20b",
+        plan_role_config={"test_author": {"provider": "mlx", "model": "qwen"}},
+    )
+    assert backend_name == "mlx"
+    assert model == "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+
+
+def test_resolve_test_author_backend_refuses_same_model_as_dispatch(monkeypatch):
+    """Belt-and-suspenders (§2.2): even when a provider IS configured, if it
+    resolves to the exact same backend+model dispatch is already using,
+    refuse - comparing RESOLVED values catches an operator accidentally
+    pointing the test-author at the same concrete model dispatch uses
+    (e.g. same Ollama endpoint/tag via a different env var)."""
+    monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "ollama")
+    result = p._resolve_test_author_backend(
+        "ollama", "gpt-oss:20b",
+        plan_role_config={"test_author": {"model": "gpt-oss"}},
+    )
+    assert result == (None, None)
+
+
+def test_resolve_test_author_backend_fails_open_on_malformed_registry_model(monkeypatch):
+    """A typo'd model name for test_author must degrade to "no split", not
+    crash dispatch_story - this role is a bonus, never a gate (§2.5)."""
+    monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
+    result = p._resolve_test_author_backend(
+        "ollama", "gpt-oss:20b",
+        plan_role_config={"test_author": {"model": "no-such-model"}},
+    )
+    assert result == (None, None)
+
+
+# ---------- _wait_for_agent_exit (blocking poll used only by the test-author
+# phase - unlike the main executor dispatch, this must finish before the
+# executor starts, since the executor's prompt/worktree depend on it) ----------
+def test_wait_for_agent_exit_returns_true_when_already_reaped():
+    """A process that already exited (and was reaped) before the poll loop
+    even starts must be treated as "exited", not hang for the full timeout.
+    os.waitpid on an already-reaped pid raises ChildProcessError - that's
+    the signal, not a bug to guard against."""
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    result = p._wait_for_agent_exit(proc.pid, timeout=5, poll_interval=0.02)
+    assert result is True
+
+
+def test_wait_for_agent_exit_returns_false_and_kills_on_timeout():
+    proc = subprocess.Popen(["sleep", "5"])
+    start = time.monotonic()
+    result = p._wait_for_agent_exit(proc.pid, timeout=0.3, poll_interval=0.05)
+    elapsed = time.monotonic() - start
+    try:
+        assert result is False
+        assert elapsed < 2, "must not block for the full unkilled duration"
+    finally:
+        try:
+            proc.wait(timeout=2)
+        except (ChildProcessError, subprocess.TimeoutExpired):
+            pass
+
+
+# ---------- _run_test_author_phase (TDD_SPLIT_PRODUCTION_PLAN.md §2.1/§2.5) ----------
+class _FakeTestAuthorBackend:
+    def __init__(self, pid, raises=None):
+        self.pid = pid
+        self.raises = raises
+        self.calls = []
+
+    def dispatch(self, prompt, *, system, model, allowed_tools, cwd, log_path, append):
+        self.calls.append({
+            "prompt": prompt, "system": system, "model": model,
+            "allowed_tools": allowed_tools, "cwd": cwd, "log_path": log_path,
+            "append": append,
+        })
+        if self.raises:
+            raise self.raises
+        return backend.AgentHandle(pid=self.pid)
+
+
+def _already_reaped_pid():
+    """A pid that is guaranteed dead and already reaped, for tests that
+    don't care about real dispatch timing - _wait_for_agent_exit treats
+    this identically to "the agent exited"."""
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
+
+
+def _make_worktree_repo(tmp_path, branch):
+    """Real git repo + worktree on `branch` off base branch "main", no
+    commits yet on `branch` beyond the shared base - lets tests exercise
+    the real _worktree_has_new_commits check without mocking git."""
+    repo = tmp_path / "repo"
+    wt = tmp_path / "wt"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)],
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@e"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    (repo / "README.md").write_text("seed\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, text=True, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo,
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "worktree", "add", "-b", branch, str(wt)],
+                   cwd=repo, capture_output=True, text=True, check=True)
+    return repo, wt
+
+
+def test_run_test_author_phase_skips_when_role_unconfigured(monkeypatch, tmp_path):
+    monkeypatch.delenv("PIPELINE_BACKEND_TEST_AUTHOR", raising=False)
+
+    def _boom(*a, **k):
+        raise AssertionError("dispatch must not be reached when unconfigured")
+
+    monkeypatch.setattr(backend, "get_backend", _boom)
+    result = p._run_test_author_phase(
+        {"agent_instructions": "Build it."}, story_key="S1",
+        worktree_path=tmp_path, dispatch_backend="ollama", local_model="gpt-oss:20b",
+    )
+    assert result is False
+
+
+def test_run_test_author_phase_returns_true_on_successful_commit(monkeypatch, tmp_path):
+    """When the resolved role differs from dispatch, the dispatch succeeds,
+    and the agent branch has a new commit by the time it exits, the phase
+    reports success - the commit is what the executor will build on."""
+    monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
+    repo, wt = _make_worktree_repo(tmp_path, "agent/s1")
+    (wt / "test_foo.py").write_text("def test_x(): assert True\n")
+    subprocess.run(["git", "add", "-A"], cwd=wt, capture_output=True, text=True, check=True)
+    subprocess.run(["git", "commit", "-qm", "tests"], cwd=wt,
+                   capture_output=True, text=True, check=True)
+
+    fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p._run_test_author_phase(
+        {"agent_instructions": "Build it."}, story_key="S1",
+        worktree_path=wt, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_role_config={"test_author": {"model": "qwen"}},
+    )
+    assert result is True
+    assert fake.calls[0]["cwd"] == wt
+    assert "Build it." in fake.calls[0]["prompt"]
+
+
+def test_run_test_author_phase_returns_false_when_no_new_commit(monkeypatch, tmp_path):
+    """The agent exited cleanly but never committed anything (e.g. it wrote
+    no test file, or wrote one but didn't commit) - the executor has
+    nothing to build on, so this must fail open exactly like a timeout."""
+    monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
+    repo, wt = _make_worktree_repo(tmp_path, "agent/s1")
+
+    fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p._run_test_author_phase(
+        {"agent_instructions": "Build it."}, story_key="S1",
+        worktree_path=wt, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_role_config={"test_author": {"model": "qwen"}},
+    )
+    assert result is False
+
+
+def test_run_test_author_phase_returns_false_when_dispatch_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
+    fake = _FakeTestAuthorBackend(pid=0, raises=RuntimeError("endpoint unreachable"))
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    result = p._run_test_author_phase(
+        {"agent_instructions": "Build it."}, story_key="S1",
+        worktree_path=tmp_path, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_role_config={"test_author": {"model": "qwen"}},
+    )
+    assert result is False
+
+
+def test_run_test_author_phase_returns_false_on_timeout(monkeypatch, tmp_path):
+    monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
+    fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+    monkeypatch.setattr(p, "_wait_for_agent_exit", lambda *a, **k: False)
+
+    def _boom(*a, **k):
+        raise AssertionError("must not check for commits when the dispatch timed out")
+
+    monkeypatch.setattr(p, "_worktree_has_new_commits", _boom)
+
+    result = p._run_test_author_phase(
+        {"agent_instructions": "Build it."}, story_key="S1",
+        worktree_path=tmp_path, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_role_config={"test_author": {"model": "qwen"}},
+    )
+    assert result is False
+
+
 def test_run_rework_planner_cloud_mode_calls_claude_backend_with_review_feedback(
     agents_dir, monkeypatch,
 ):
@@ -12095,3 +12368,187 @@ def test_dispatch_story_excludes_decompose_artifacts_from_worktree_tracking(
                              cwd=worktree_path, capture_output=True, text=True, check=True)
     assert ".agent_plan.md" not in staged.stdout
     assert ".agent_scratchpad.md" not in staged.stdout
+
+
+# ---------- dispatch_story wiring for the TDD-split test-author phase
+# (TDD_SPLIT_PRODUCTION_PLAN.md §2.1/§2.4) ----------
+def test_dispatch_story_tdd_split_off_by_default_skips_test_author_phase(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_TDD_SPLIT unset must be a strict no-op, even for a story
+    that opted in - Secure Defaults: the split is opt-in per env AND per
+    story."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "tdoff", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "tdd_split": True},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("test-author phase must not run when PIPELINE_TDD_SPLIT is off")
+
+    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9101))
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("tdoff", "S1")
+
+    assert result["ok"] is True
+    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
+
+
+def test_dispatch_story_tdd_split_on_but_story_not_opted_in_skips(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_TDD_SPLIT=on alone must not run the phase - §2.4 requires
+    explicit per-story opt-in (story["tdd_split"]), not inference."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")
+    _write_manifest(plan_dir, "tdnoopt", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("test-author phase must not run without story opt-in")
+
+    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9102))
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("tdnoopt", "S1")
+
+    assert result["ok"] is True
+    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
+
+
+def test_dispatch_story_tdd_split_on_and_opted_in_runs_phase_and_augments_prompt(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")
+    _write_manifest(plan_dir, "tdon", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "tdd_split": True},
+    })
+
+    phase_calls = []
+
+    def _fake_phase(story, *, story_key, worktree_path, dispatch_backend,
+                    local_model, plan_role_config=None, **kwargs):
+        phase_calls.append({
+            "story_key": story_key, "worktree_path": worktree_path,
+            "dispatch_backend": dispatch_backend, "local_model": local_model,
+            "plan_role_config": plan_role_config,
+        })
+        return True
+
+    monkeypatch.setattr(p, "_run_test_author_phase", _fake_phase)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9103)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("tdon", "S1")
+
+    assert result["ok"] is True
+    assert len(phase_calls) == 1
+    assert phase_calls[0]["story_key"] == "S1"
+    assert phase_calls[0]["worktree_path"] == worktree_root / "S1"
+    assert phase_calls[0]["dispatch_backend"] == "local"
+
+    marker = worktree_root / "S1" / ".tdd_split_test_author_done"
+    assert marker.exists()
+
+    task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    assert p._NEVER_TOUCH_TESTS_STEERING in task
+
+
+def test_dispatch_story_tdd_split_phase_failure_falls_open_to_monolithic(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A test-author phase that fails (returns False - unresolved role,
+    dispatch error, timeout, or no commit) must leave no marker and must
+    NOT augment the executor prompt - the story proceeds exactly like
+    PIPELINE_TDD_SPLIT were off (§2.5's fail-open contract)."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")
+    _write_manifest(plan_dir, "tdfail", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "tdd_split": True},
+    })
+
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9104)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("tdfail", "S1")
+
+    assert result["ok"] is True
+    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
+    task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    assert p._NEVER_TOUCH_TESTS_STEERING not in task
+
+
+def test_dispatch_story_tdd_split_skips_rerun_when_marker_already_present(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A rework redispatch on a worktree that already has a test-author
+    commit must not run the phase again (§2.1: reworks act on the SAME
+    tests) - but the executor prompt must still reference them."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")
+    _write_manifest(plan_dir, "tdmarker", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "interrupted", "dependencies": [], "tdd_split": True},
+    })
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir(parents=True)
+    (worktree_path / ".tdd_split_test_author_done").write_text("ok\n")
+
+    def _boom(*a, **k):
+        raise AssertionError("must not re-run the test-author phase on a resumed worktree")
+
+    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9105)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("tdmarker", "S1")
+
+    assert result["ok"] is True
+    task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    assert p._NEVER_TOUCH_TESTS_STEERING in task

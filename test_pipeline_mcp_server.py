@@ -24,6 +24,7 @@ import pytest
 import backend
 import pipeline_ci as pci
 import pipeline_concurrency as pcon
+import pipeline_checkpoint as pcheckpoint
 import pipeline_mcp_server as p
 import pipeline_persistence as ppers
 import pipeline_persona as pper
@@ -4254,7 +4255,7 @@ def test_check_story_status_kills_hung_process_past_watchdog_timeout(
 
     result = p.check_story_status("wd1", "S1")
 
-    assert (4242, p.signal.SIGTERM) in killed
+    assert (4242, pcheckpoint.signal.SIGTERM) in killed
     assert result["status"] == "interrupted"
     assert result.get("watchdog_killed") is True
 
@@ -4291,7 +4292,7 @@ def test_check_story_status_running_within_watchdog_window_is_not_killed(
     result = p.check_story_status("wd2", "S1")
 
     assert result == {"status": "running", "pid": 4242}
-    assert p.signal.SIGTERM not in [sig for _, sig in killed]
+    assert pcheckpoint.signal.SIGTERM not in [sig for _, sig in killed]
     story = _read_manifest(plan_dir, "wd2")["stories"]["S1"]
     assert story["status"] == "in_progress"
 
@@ -9116,7 +9117,7 @@ def test_interrupt_story_sends_sigterm_and_checkpoints(plan_dir, tmp_path, monke
 
     result = p.interrupt_story("it", "S1")
 
-    assert killed == [(4242, p.signal.SIGTERM)]
+    assert killed == [(4242, pcheckpoint.signal.SIGTERM)]
     assert result["ok"] is True
     assert result["status"] == "interrupted"
     assert result["commit"] == "sha-int"

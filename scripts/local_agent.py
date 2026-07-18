@@ -126,6 +126,16 @@ PROVIDER = os.environ.get("LOCAL_AGENT_PROVIDER", "ollama").strip().lower()
 NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
 MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "40"))
+# L1 (REVIEWER_ESCALATION_PLAN.md): on a rework round triggered by a merge-gate
+# CI failure, the defect is the agent's OWN committed test, which the reviewer
+# (acceptance-scoped) never saw. Without a full-suite done-gate the agent can
+# call `done` without ever running its own tests and re-fail CI on the same
+# assertion every round. Set by dispatch_story when the rework was CI-triggered
+# (story["ci_rework"] -> backend.dispatch rework_full_suite -> this env). When
+# set, `done` is rejected unless the FULL worktree suite is green, with the
+# failing excerpt fed back. Non-rework dispatches never set this, so their
+# done behavior (commit-enforced, no suite gate) is unchanged.
+REWORK_FULL_SUITE = os.environ.get("LOCAL_AGENT_REWORK_FULL_SUITE") == "1"
 # Cap consecutive assistant turns that emit no tool call. A weak model stuck
 # on a self-inflicted phantom failure — its own test asserts non-standard
 # behavior the correct implementation can never satisfy — will narrate its
@@ -532,6 +542,45 @@ def auto_wip_commit(reason: str) -> None:
     git("commit", "-m", f"WIP ({reason})")
 
 
+def _full_suite_result() -> tuple[bool, str]:
+    """Run the FULL worktree suite (unscoped), for the L1 CI-fail-rework
+    done-gate. Mirrors the merge gate's _ci_status_stub runner
+    (tests/benchmark/harness.py:623) and the oracle variant's helper:
+    detect_test_command + the heavy lock, run the detected command verbatim
+    (no acceptance scoping - this agent has no acceptance oracle), return
+    (passed, tail[-500:]). No detectable test command -> (True, '') (nothing
+    to fail). Kept in sync with scripts/local_agent_oracle.py:_full_suite_result.
+    """
+    test_dir, test_cmd = p.detect_test_command(CWD)
+    if not test_cmd:
+        return True, ""
+    argv = test_cmd
+    needs_heavy = bool(argv) and p._is_heavy(argv)
+    if needs_heavy:
+        with p._heavy_lock():
+            r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
+    else:
+        r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
+    return r.returncode == 0, (r.stdout + r.stderr)[-500:]
+
+
+def _reject_done_for_suite(messages: list, step: int, suite_tail: str) -> None:
+    """L1: feed a full-suite failure back as a user turn and announce the
+    rejection. Used at both `done`-rejection sites (clean tree, and the
+    dirty-tree auto-accept escape) so the raised rework done-bar holds and
+    the agent can't dodge it by interleaving dirty/clean done calls. The
+    caller increments `suite_rejections` and `break`s out of the tool-call
+    loop so the next step re-enters with this fed-back excerpt."""
+    print(f"[step {step}] done rejected — full test suite still fails "
+          f"(rework done-bar); asking agent to fix its own test", flush=True)
+    messages.append({"role": "user", "content": (
+        "The full test suite still fails - your own committed "
+        "test has a wrong assertion. The merge-gate CI will reject "
+        f"this on the same failure:\n{suite_tail}\n\nRe-read the "
+        "file:line above, correct the expected value or the code so "
+        "the assertion holds, and do NOT call done until `pytest` "
+        "passes in full.")})
+
 
 # Consecutive syntax-rejection count per path, so a model that resubmits the
 # same broken content can be escalated instead of silently retrying forever
@@ -870,6 +919,12 @@ def main() -> int:
     recent_tools: deque[tuple[str, str]] = deque(maxlen=READ_HEAVY_WINDOW)
     distinct_windows = 0
     done_rejections = 0
+    # L1: separate counter for full-suite done-rejections on a CI-fail-rework
+    # round. Kept distinct from done_rejections so it cannot trip the dirty-
+    # tree auto-accept-at-2 logic (a failing suite must NEVER be auto-
+    # accepted). Bounded by MAX_STEPS: if the agent never fixes its own test,
+    # the step cap binds and the run ends in the WIP-commit terminal path.
+    suite_rejections = 0
     consecutive_no_tool = 0
     start_time = time.monotonic()
 
@@ -915,6 +970,24 @@ def main() -> int:
                 if worktree_dirty():
                     done_rejections += 1
                     if done_rejections >= 2:
+                        # L1: the dirty-tree auto-accept escape must not bypass
+                        # the raised rework done-bar. Without this gate an agent
+                        # could dodge it by interleaving dirty/clean done calls
+                        # (dirty->reject, commit, clean+failing-suite->reject,
+                        # dirty->reject->auto-accept with the suite never
+                        # checked). The merge-gate backstop would still catch a
+                        # broken merge (bounded by MERGE_MAX_ATTEMPTS), but the
+                        # bar should hold in the agent loop too. On a rework
+                        # round, check the suite first; a failure WIP-commits
+                        # (so the next attempt starts clean) and rejects instead
+                        # of auto-accepting. Bounded by MAX_STEPS.
+                        if REWORK_FULL_SUITE:
+                            suite_ok, suite_tail = _full_suite_result()
+                            if not suite_ok:
+                                suite_rejections += 1
+                                auto_wip_commit("commit enforcement")
+                                _reject_done_for_suite(messages, step, suite_tail)
+                                break
                         auto_wip_commit("commit enforcement")
                         print(f"[step {step}] DONE with auto-WIP-commit (agent left tree dirty): "
                               f"{args.get('summary', '')}", flush=True)
@@ -924,6 +997,18 @@ def main() -> int:
                         "You have uncommitted changes. Commit your work with git "
                         "(git add -A && git commit -m ...) before calling done.")})
                     break
+                # L1: on a CI-fail-rework round, the reviewer was acceptance-
+                # scoped and never saw the agent's own test - so a clean
+                # worktree + `done` is not sufficient. Require the FULL suite
+                # green; otherwise feed the failing excerpt back and reject
+                # done so the agent fixes its own broken assertion (or the step
+                # cap binds). Non-rework dispatches skip this gate entirely.
+                if REWORK_FULL_SUITE:
+                    suite_ok, suite_tail = _full_suite_result()
+                    if not suite_ok:
+                        suite_rejections += 1
+                        _reject_done_for_suite(messages, step, suite_tail)
+                        break
                 print(f"[step {step}] DONE: {args.get('summary', '')}", flush=True)
                 return 0
 

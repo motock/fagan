@@ -255,6 +255,18 @@ def destructive_git_op(cmd: str) -> str | None:
 # both harnesses or acceptance-bearing stories silently regress.
 PARK_ENABLED = os.environ.get("LOCAL_AGENT_PARK_ENABLED", "1") != "0"
 
+# L1 (REVIEWER_ESCALATION_PLAN.md): on a rework round triggered by a merge-gate
+# CI failure, the defect is the agent's OWN committed test, but the acceptance
+# oracle excludes that file - so oracle-green would let the loop terminate and
+# re-fail CI on the same assertion every round (observed 2026-07-17 on gpt-oss
+# token_bucket: 3.0 vs 9.0, three identical rounds). Set by dispatch_story when
+# the rework was CI-triggered (story["ci_rework"] -> backend.dispatch
+# rework_full_suite -> this env). When set, finish_if_green additionally
+# requires the FULL worktree suite green before terminating, feeding the
+# failing excerpt back so the agent must fix its own test. Cold-start dispatches
+# never set this, so their oracle-green done-bar is byte-for-byte unchanged.
+REWORK_FULL_SUITE = os.environ.get("LOCAL_AGENT_REWORK_FULL_SUITE") == "1"
+
 # Oracle paths: the harness owns these, the model cannot author or edit them.
 # Set by backend.OllamaDriver.dispatch as a JSON list when the story carries
 # an `acceptance` block; empty otherwise (in which case this variant should
@@ -552,6 +564,67 @@ def oracle_result() -> tuple[bool, str]:
     else:
         r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
     return r.returncode == 0, (r.stdout + r.stderr)[-800:]
+
+
+def _full_suite_result() -> tuple[bool, str]:
+    """Run the FULL worktree suite (unscoped), for the L1 CI-fail-rework
+    done-bar. Mirrors oracle_result's runner (detect_test_command + the heavy
+    lock) but does NOT scope to ACCEPTANCE_PATHS - it runs the detected test
+    command verbatim, exactly what the merge gate's _ci_status_stub runs
+    (tests/benchmark/harness.py:623) so the done-bar matches the gate that
+    tripped the rework. Returns (passed, tail[-500:]); the tail feeds back into
+    the agent loop on a failure so the model sees the broken assertion. No
+    detectable test command -> (True, '') (nothing to fail, mirrors the gate's
+    no-test-cmd -> pass).
+    """
+    test_dir, test_cmd = p.detect_test_command(CWD)
+    if not test_cmd:
+        return True, ""
+    argv = test_cmd
+    needs_heavy = bool(argv) and p._is_heavy(argv)
+    if needs_heavy:
+        with p._heavy_lock():
+            r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
+    else:
+        r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
+    return r.returncode == 0, (r.stdout + r.stderr)[-500:]
+
+
+def finish_if_green(step: int, messages: list | None = None) -> bool:
+    """If the oracle passes, auto-commit and return True to terminate the loop.
+
+    On a CI-fail-rework round (REWORK_FULL_SUITE), oracle-green is necessary
+    but no longer sufficient: the full worktree suite must ALSO be green before
+    the loop may terminate. The acceptance oracle excludes the agent's own
+    committed test file, so without this second gate a CI-fail rework would
+    stop and commit while that test still fails and re-fail the merge gate on
+    the same assertion every round. On a full-suite failure the failing
+    excerpt is fed back into `messages` (a user turn) and False is returned so
+    the loop keeps working the broken test until fixed or the step cap binds;
+    no commit happens on a failure. Cold-start dispatches never set
+    REWORK_FULL_SUITE, so their oracle-green done-bar is unchanged.
+    """
+    ok, _ = oracle_result()
+    if not ok:
+        return False
+    if REWORK_FULL_SUITE:
+        full_ok, full_tail = _full_suite_result()
+        if not full_ok:
+            if messages is not None:
+                messages.append({"role": "user", "content": (
+                    "The acceptance oracle passes but the FULL test suite still "
+                    "fails - your own committed test has a wrong assertion. The "
+                    f"merge-gate CI will reject this on the same failure:\n{full_tail}"
+                    "\n\nFix the failing test (re-read the file:line above, correct "
+                    "the expected value or the code so the assertion holds) and do "
+                    "NOT call done until `pytest` passes in full.")})
+            print(f"[step {step}] ORACLE GREEN but full suite still fails - "
+                  f"rework done-bar not met; continuing.", flush=True)
+            return False
+    if worktree_dirty():
+        auto_commit("feat: implement task (acceptance oracle green)")
+    print(f"[step {step}] ORACLE GREEN — acceptance tests pass; committed & done.", flush=True)
+    return True
 
 
 def is_oracle_path(path: str) -> bool:
@@ -879,17 +952,6 @@ def safe_run_tool(fn, args) -> str:
         return f"ERROR running {fn}: {type(e).__name__}: {e}"
 
 
-def finish_if_green(step: int) -> bool:
-    """If the oracle passes, auto-commit and return True to terminate the loop."""
-    ok, _ = oracle_result()
-    if ok:
-        if worktree_dirty():
-            auto_commit("feat: implement task (acceptance oracle green)")
-        print(f"[step {step}] ORACLE GREEN — acceptance tests pass; committed & done.", flush=True)
-        return True
-    return False
-
-
 def main() -> int:
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
@@ -974,6 +1036,29 @@ def main() -> int:
             if fn == "done":
                 ok, tail = oracle_result()
                 if ok:
+                    # L1: on a CI-fail-rework round the model can dodge the
+                    # raised done-bar that finish_if_green enforces by calling
+                    # `done` directly (observed 2026-07-18: gpt-oss called done
+                    # on round 3 with its own pasted pytest showing 3 failed,
+                    # oracle green, done accepted - bypassed the gate). Close
+                    # the bypass: require the full suite green here too, else
+                    # feed the failing excerpt back and reject. Cold-start
+                    # dispatchs skip this (REWORK_FULL_SUITE unset).
+                    if REWORK_FULL_SUITE:
+                        full_ok, full_tail = _full_suite_result()
+                        if not full_ok:
+                            print(f"[step {step}] done rejected — full test suite "
+                                  f"still fails (rework done-bar); asking agent to "
+                                  f"fix its own test", flush=True)
+                            messages.append({"role": "user", "content": (
+                                "The acceptance oracle passes but the FULL test suite "
+                                "still fails - your own committed test has a wrong "
+                                "assertion. The merge-gate CI will reject this on the "
+                                f"same failure:\n{full_tail}\n\nRe-read the file:line "
+                                "above, correct the expected value or the code so the "
+                                "assertion holds, and do NOT call done until `pytest` "
+                                "passes in full.")})
+                            break
                     if worktree_dirty():
                         auto_commit("feat: implement task (acceptance oracle green)")
                     print(f"[step {step}] DONE (oracle green): {args.get('summary', '')}", flush=True)
@@ -1123,7 +1208,7 @@ def main() -> int:
             # *during* the model's iteration so a correct first attempt
             # finishes in a single step.
             if ACCEPTANCE_PATHS and fn in ("create_file", "str_replace", "bash"):
-                if finish_if_green(step):
+                if finish_if_green(step, messages):
                     return 0
 
     print("[ended without oracle green — step cap reached]", flush=True)

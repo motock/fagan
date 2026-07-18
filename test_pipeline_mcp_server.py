@@ -5358,6 +5358,33 @@ def test_advance_pipeline_ci_fail_routes_to_rework_when_opted_in(plan_dir, monke
     assert result["failed"] == []
 
 
+def test_advance_pipeline_ci_fail_rework_sets_ci_rework_flag(plan_dir, monkeypatch):
+    # L1 (REVIEWER_ESCALATION_PLAN.md): when a definitive CI failure is routed
+    # to rework, the story must carry a `ci_rework` flag so dispatch_story can
+    # raise the agent's done-bar to full-suite-green on the redispatch. Without
+    # it the rework round keeps the oracle-green bar and re-fails CI on the same
+    # assertion (the gpt-oss token_bucket loop).
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cireworkflag", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "fail", "error": "test_x failed"})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+
+    p.advance_pipeline("cireworkflag")
+
+    story = _read_manifest(plan_dir, "cireworkflag")["stories"]["P1"]
+    assert story["status"] == "changes_requested"
+    assert story.get("ci_rework") is True
+
+
 def test_advance_pipeline_ci_fail_stays_terminal_without_opt_in(plan_dir, monkeypatch):
     # Without the flag, a definitive CI failure keeps today's exact behavior:
     # merge_attempts increments and the story terminal-fails at the cap - no
@@ -8167,6 +8194,70 @@ def test_dispatch_story_fresh_creates_worktree_and_dispatches(
     assert story["status"] == "in_progress"
     assert story["pid"] == 1234
     assert story["worktree"] == str(worktree_root / "S1")
+
+
+def test_dispatch_story_passes_rework_full_suite_when_ci_rework_set(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """L1 threading: a story carrying `ci_rework` (set by the merge-CI rework
+    router) must reach the agent subprocess as LOCAL_AGENT_REWORK_FULL_SUITE=1
+    so the harness raises the done-bar to full-suite-green on the redispatch."""
+    captured: dict = {}
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(
+        backend.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakeProc(4321),
+    )
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    _write_manifest(plan_dir, "cirs", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "ci_rework": True,
+               "acceptance": [{"path": "tests/test_a.py", "source": "def test_a(): pass"}]},
+    })
+
+    result = p.dispatch_story("cirs", "S1")
+    assert result["ok"] is True
+    assert captured["env"]["LOCAL_AGENT_REWORK_FULL_SUITE"] == "1"
+
+
+def test_dispatch_story_omits_rework_full_suite_without_ci_rework(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Regression guard: a fresh dispatch (no ci_rework) must NOT set
+    LOCAL_AGENT_REWORK_FULL_SUITE, or the full-suite done-bar would silently
+    apply to cold-start dispatches."""
+    captured: dict = {}
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(
+        backend.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakeProc(4322),
+    )
+    monkeypatch.setattr(
+        p, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    _write_manifest(plan_dir, "cirsnone", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [],
+               "acceptance": [{"path": "tests/test_a.py", "source": "def test_a(): pass"}]},
+    })
+
+    result = p.dispatch_story("cirsnone", "S1")
+    assert result["ok"] is True
+    assert "LOCAL_AGENT_REWORK_FULL_SUITE" not in captured["env"]
 
 
 def test_dispatch_story_excludes_review_and_agent_log_from_worktree_tracking(

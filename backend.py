@@ -74,6 +74,7 @@ class Backend(Protocol):
         acceptance: list[str] | None = None,
         resume_transcript_path: Path | None = None,
         resume_append_content: str | None = None,
+        rework_full_suite: bool = False,
     ) -> AgentHandle:
         """Spawn a non-blocking agentic run, streaming output to log_path."""
         ...
@@ -954,6 +955,7 @@ class OllamaDriver:
         acceptance: list[str] | None = None,
         resume_transcript_path: Path | None = None,
         resume_append_content: str | None = None,
+        rework_full_suite: bool = False,
     ) -> AgentHandle:
         if allowed_tools and not ({"Edit", "Write"} & set(allowed_tools.split(","))):
             raise NotImplementedError(
@@ -1015,6 +1017,12 @@ class OllamaDriver:
         if oracle_mode:
             env["LOCAL_AGENT_ACCEPTANCE"] = json.dumps(acceptance)
             env["LOCAL_AGENT_MODE"] = "oracle"
+        # L1 (REVIEWER_ESCALATION_PLAN.md): on a CI-fail-rework redispatch,
+        # raise the agent's done-bar to full-suite-green. Only set when the
+        # caller explicitly opts in (a CI-triggered rework); cold-start
+        # dispatchs leave it unset so the oracle-green bar is unchanged.
+        if rework_full_suite:
+            env["LOCAL_AGENT_REWORK_FULL_SUITE"] = "1"
         # Always persist the transcript so a later rework redispatch can
         # resume the prior message history instead of rebuilding a cold-start
         # prompt. The path is deterministic and lives inside the worktree (cwd)

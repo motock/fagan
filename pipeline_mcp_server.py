@@ -31,7 +31,6 @@ Per-project overrides (set in project .mcp.json env block):
     across all plans in this session (default: 3; <=0 disables the cap)
 """
 
-import difflib
 import fcntl
 import json
 import logging
@@ -116,6 +115,28 @@ from pipeline_git_ops import (
     _last_nonempty_line,
     _commit_wip,
     _worktree_has_new_commits,
+)
+
+from pipeline_parsers import (  # noqa: F401
+    _extract_json_block,
+    _parse_ruling,
+    _parse_verdict,
+    _has_review_findings,
+    _RATE_LIMIT_PATTERNS,
+    _is_rate_limited,
+    _TRANSIENT_BACKEND_PATTERNS,
+    _is_transient_backend_error,
+    _AUTO_RESOLVE_IMPORT_PATTERN,
+    _parse_conflict_blocks,
+    _resolve_conflict_blocks,
+    _git_show_stage,
+    _is_pure_additive_import_diff,
+    _atomic_write_json,
+    _KEY_RE,
+    _validate_key,
+    _completed_dep_ids,
+    _GIVE_UP_PHRASES,
+    _is_give_up_summary,
 )
 
 PLANE_BASE      = os.environ.get("PLANE_BASE", "http://localhost").rstrip("/")
@@ -915,15 +936,6 @@ def _run_rework_planner(
 
 
 # ---------- Decompose (provider-configurable product-analyst) ----------
-def _extract_json_block(text: str) -> str:
-    """Strip a ```json ... ``` / ``` ... ``` fence around a JSON payload, if
-    present, else return the text unchanged (trimmed). Models routinely wrap
-    JSON output in a markdown fence even when asked not to; callers
-    json.loads() the result themselves and handle a parse failure - this
-    only handles the fence, not validation."""
-    stripped = text.strip()
-    m = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
-    return m.group(1).strip() if m else stripped
 
 
 def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str | None:
@@ -954,20 +966,6 @@ def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str
     return text or None
 
 
-def _parse_ruling(text: str) -> dict[str, Any]:
-    """Parse the overlord's output contract into a structured ruling."""
-    fields: dict[str, str] = {}
-    for line in text.splitlines():
-        m = re.match(r"\s*(RULING|TIER|RISK|RATIONALE|NOTIFY_USER)\s*:\s*(.*)", line)
-        if m:
-            fields[m.group(1)] = m.group(2).strip()
-    return {
-        "ruling": fields.get("RULING", ""),
-        "tier": fields.get("TIER", "").lower(),
-        "risk": fields.get("RISK", "").lower(),
-        "rationale": fields.get("RATIONALE", ""),
-        "notify_user": fields.get("NOTIFY_USER", "no").lower() in ("yes", "true"),
-    }
 
 
 # ---------- Review / PR helpers ----------
@@ -1151,75 +1149,6 @@ def _run_security_reviewer(worktree: str, branch: str) -> str:
     )
 
 
-def _parse_verdict(text: str) -> str:
-    m = re.search(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", text, re.IGNORECASE)
-    return m.group(1).upper() if m else "UNKNOWN"
-
-
-# T11: a REQUEST_CHANGES response with no substantive findings text - just
-# the VERDICT line itself, or whitespace around it - gives a redispatched
-# agent nothing to act on. Checked only when _parse_verdict returns
-# REQUEST_CHANGES, mirroring how _is_rate_limited/_is_transient_backend_error
-# are checked only after UNKNOWN. Deliberately a bare emptiness check, not a
-# length floor: this codebase's own reviewer-stub convention (see
-# test_review_story_parks_after_rework_budget_exhausted and its siblings, all
-# using "still bad\nVERDICT: REQUEST_CHANGES") treats even a terse one-line
-# finding as genuine, so any non-whitespace content beyond the verdict line
-# must count.
-def _has_review_findings(text: str) -> bool:
-    """True when `text` contains findings beyond the bare VERDICT line."""
-    stripped = re.sub(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", "", text, flags=re.IGNORECASE)
-    return bool(stripped.strip())
-
-
-# Anchors that identify an infrastructure rate-limit response, not a genuine
-# review. Checked only when _parse_verdict returns UNKNOWN (i.e. no VERDICT
-# line) so that a review discussing rate-limiting code is never misclassified.
-# Deliberately specific to the backend's own rate-limit banner phrasing —
-# generic terms like "429" or "resets" are excluded because a review of
-# rate-limiter code (e.g. this repo's own token_bucket benchmark task) can
-# legitimately contain them, which would misfire this check on a truncated
-# but otherwise genuine review.
-_RATE_LIMIT_PATTERNS = [
-    r"hit your session limit",
-    r"usage limit reached",
-    r"out_of_credits",
-    r"overageDisabledReason",
-]
-
-
-
-
-def _is_rate_limited(text: str) -> bool:
-    """True when `text` looks like an infra rate-limit message, not a review.
-
-    Intentionally called only after _parse_verdict returns UNKNOWN, so a
-    reviewer discussing rate-limit handling in the diff (which ends with a real
-    VERDICT line) is never mistaken for a rate-limited call.
-    """
-    return any(re.search(pat, text, re.IGNORECASE) for pat in _RATE_LIMIT_PATTERNS)
-
-
-# Transient-backend-error signatures distinct from rate-limiting. Like
-# _RATE_LIMIT_PATTERNS, checked only when _parse_verdict returns UNKNOWN (no
-# VERDICT line) so a review discussing HTTP 500 handling is never misclassified.
-_TRANSIENT_BACKEND_PATTERNS = [
-    r"500\s+internal\s+server\s+error",
-    r"internal\s+server\s+error",
-    r"connection\s+reset",
-    r"connection\s+refused",
-]
-
-
-def _is_transient_backend_error(text: str) -> bool:
-    """True when `text` looks like a transient backend error (HTTP 500,
-    connection-reset/refused), not a rate-limit message or a genuine review.
-
-    Intentionally called only after _parse_verdict returns UNKNOWN, so a
-    reviewer discussing 500-handling code (which ends with a real VERDICT
-    line) is never mistaken for a transient backend failure.
-    """
-    return any(re.search(pat, text, re.IGNORECASE) for pat in _TRANSIENT_BACKEND_PATTERNS)
 
 
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
@@ -1333,87 +1262,6 @@ PIPELINE_MERGE_BUILD_GATE = os.environ.get("PIPELINE_MERGE_BUILD_GATE", "1") != 
 # additive-only rebase-conflict auto-resolver below. Intentionally not
 # exhaustive - unrecognized statement shapes simply don't qualify for
 # auto-resolution and fall through to the existing abort behavior.
-_AUTO_RESOLVE_IMPORT_PATTERN = re.compile(
-    r"^\s*(import\s|from\s.+\simport\s|use\s|#include\s|require\()"
-)
-
-
-def _parse_conflict_blocks(text: str) -> list[tuple[int, int, list[str], list[str]]] | None:
-    """Parse every ``<<<<<<<``/``=======``/``>>>>>>>`` block in `text`.
-
-    Returns a list of (start_line, end_line, ours_lines, theirs_lines) - line
-    indices into ``text.splitlines(keepends=True)`` spanning the whole marker
-    block (inclusive) - or None if the file has no conflict markers at all,
-    or has malformed/unterminated markers (never guess in that case; the
-    caller disqualifies the whole rebase step)."""
-    lines = text.splitlines(keepends=True)
-    blocks: list[tuple[int, int, list[str], list[str]]] = []
-    i = 0
-    n = len(lines)
-    found_any = False
-    while i < n:
-        if lines[i].startswith("<<<<<<<"):
-            found_any = True
-            start = i
-            ours: list[str] = []
-            i += 1
-            while i < n and not lines[i].startswith("======="):
-                ours.append(lines[i])
-                i += 1
-            if i >= n:
-                return None
-            i += 1  # skip the "=======" separator itself
-            theirs: list[str] = []
-            while i < n and not lines[i].startswith(">>>>>>>"):
-                theirs.append(lines[i])
-                i += 1
-            if i >= n:
-                return None
-            end = i
-            blocks.append((start, end, ours, theirs))
-            i += 1
-        else:
-            i += 1
-    return blocks if found_any else None
-
-
-def _resolve_conflict_blocks(text: str, blocks: list[tuple[int, int, list[str], list[str]]]) -> str:
-    """Replace each conflict-marker block with the union of both sides' added
-    lines: ours followed by theirs, verbatim, no reordering/dedup/editing."""
-    lines = text.splitlines(keepends=True)
-    for start, end, ours, theirs in reversed(blocks):  # back-to-front: indices stay valid
-        lines[start:end + 1] = ours + theirs
-    return "".join(lines)
-
-
-def _git_show_stage(worktree: str, stage: int, fname: str) -> str | None:
-    """Read a file's content at conflict stage 1 (merge base)/2 (ours)/3
-    (theirs) from the index. None on any failure (missing stage - e.g. a
-    rename/delete conflict has no stage-1 entry - or a git/OSError), which
-    the caller treats as "can't verify, disqualify"."""
-    try:
-        r = subprocess.run(["git", "show", f":{stage}:{fname}"], cwd=worktree,
-                           capture_output=True, text=True)
-    except OSError:
-        return None
-    return r.stdout if r.returncode == 0 else None
-
-
-def _is_pure_additive_import_diff(base: str, other: str) -> bool:
-    """True iff `other` differs from `base` by pure line insertions only (no
-    deletion or modification of any base line), and every non-blank inserted
-    line matches the conservative import/use pattern."""
-    base_lines = base.splitlines(keepends=True)
-    other_lines = other.splitlines(keepends=True)
-    matcher = difflib.SequenceMatcher(a=base_lines, b=other_lines, autojunk=False)
-    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
-        if tag in ("replace", "delete"):
-            return False
-        if tag == "insert":
-            for line in other_lines[j1:j2]:
-                if line.strip() and not _AUTO_RESOLVE_IMPORT_PATTERN.match(line):
-                    return False
-    return True
 
 
 def _try_auto_resolve_conflict(worktree: str) -> list[str]:
@@ -1865,36 +1713,6 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
 
 def _auto_escalation_enabled() -> bool:
     return os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower() == "auto"
-
-
-def _atomic_write_json(path: Path, obj: Any) -> None:
-    """Write *obj* as JSON to *path* atomically via a same-directory temp file.
-
-    Uses os.replace() (POSIX-atomic on the same filesystem) so a crash or
-    concurrent reader never observes a partial write. Raises on I/O error and
-    leaves *path* untouched.
-    """
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    try:
-        tmp.write_text(json.dumps(obj, indent=2))
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
-_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-
-
-def _validate_key(name: str) -> None:
-    """Raise ValueError if *name* could be used for path traversal.
-
-    plan_name and story_key flow into filesystem paths; this boundary check
-    rejects anything containing path separators, null bytes, or characters
-    outside the safe alphanumeric-plus-symbols set.
-    """
-    if not _KEY_RE.match(name):
-        raise ValueError(f"invalid plan/story key {name!r}: only [A-Za-z0-9._-] allowed")
 
 
 def _notify_user(plan_name: str, message: str) -> None:
@@ -2511,20 +2329,6 @@ def ingest_plan(
     return {"ok": True, "manifest_path": str(manifest_path), **final_manifest}
 
 
-def _completed_dep_ids(stories: dict[str, Any]) -> set[str]:
-    """Identifiers a dependency string may legitimately reference for a *done*
-    story, covering both forms a dependency can take.
-
-    Ingest only rewrites a summary-string dependency to a manifest key when the
-    source story carried a local `key` (see ingest_plan); plans whose stories
-    have no key — and which therefore express dependencies as the prerequisite's
-    exact summary string, per the documented save_plan schema — keep those
-    summary deps verbatim while the manifest itself is keyed by UUID. Matching a
-    dependency against both done keys and done summaries resolves it regardless
-    of which form it took, so a dependent story is never stranded as unready."""
-    done_keys = {k for k, v in stories.items() if v["status"] == "done"}
-    done_summaries = {v["summary"] for v in stories.values() if v["status"] == "done"}
-    return done_keys | done_summaries
 
 
 @mcp.tool()
@@ -2848,25 +2652,6 @@ def _last_done_summary(agent_log: Path) -> str:
     return last
 
 
-# Literal, narrow phrases only - broad keyword matching would false-positive
-# on legitimate completion summaries that happen to mention difficulty
-# encountered along the way.
-_GIVE_UP_PHRASES = (
-    "i can't complete this task",
-    "i cannot complete this task",
-    "i'm unable to complete this task",
-    "i am unable to complete this task",
-    "i give up",
-)
-
-
-def _is_give_up_summary(summary: str) -> bool:
-    """Whether a DONE summary reads as an explicit surrender rather than a
-    genuine completion claim (2026-07-07 web-client-epic retro §3.2: the
-    WASM story's second attempt called done with "I'm sorry, I can't
-    complete this task" after real research, zero commits)."""
-    lowered = summary.lower()
-    return any(phrase in lowered for phrase in _GIVE_UP_PHRASES)
 
 
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:

@@ -31,7 +31,6 @@ Per-project overrides (set in project .mcp.json env block):
     across all plans in this session (default: 3; <=0 disables the cap)
 """
 
-import difflib
 import fcntl
 import json
 import logging
@@ -57,216 +56,95 @@ import backend
 import role_registry
 
 # ---------- Config ----------
+# Path constants + the PLAN_DIR/WORKTREE_ROOT mkdir live in pipeline_paths.
+# PLANE_* constants live in pipeline_ticketing with the provider code.
+# Scalar env-var-driven knobs (rework budgets, dispatch/merge caps, step-cap
+# markers, risk orderings, local-backend name sets) live in pipeline_config.
+from pipeline_config import (
+    PIPELINE_AUTONOMY,
+    PIPELINE_RISK_THRESHOLD,
+    _RISK_ORDER,
+    DEFAULT_MODEL,
+    SESSION_PAUSE_THRESHOLD,
+    SESSION_RESUME_THRESHOLD,
+    WEEK_PAUSE_THRESHOLD,
+    WEEK_RESUME_THRESHOLD,
+    USAGE_STALE_AFTER_SECONDS,
+    DAILY_REQUEST_THRESHOLD,
+    WEEKLY_REQUEST_THRESHOLD,
+    USAGE_BLIND_PAUSE_AFTER_SECONDS,
+    USAGE_BLIND_LOG_INTERVAL,
+    MAX_CONCURRENT_AGENTS,
+    MERGE_MAX_ATTEMPTS,
+    DISPATCH_MAX_ATTEMPTS,
+    DISPATCH_STARTUP_GRACE_SECONDS,
+    DISPATCH_WATCHDOG_SECONDS,
+    STEP_CAP_MARKERS,
+    STEP_CAP_FALLBACK_THRESHOLD,
+    PIPELINE_LOCAL_MAX_RISK,
+    _LOCAL_SKIP_PERSONAS,
+    _LOCAL_BACKEND_NAMES,
+    REWORK_MAX_ATTEMPTS,
+    REWORK_MAX_ATTEMPTS_ORACLE,
+    REWORK_MAX_ATTEMPTS_ESCALATED,
+    REVIEW_INCONCLUSIVE_MAX,
+    PLANE_MAX_ATTEMPTS,
+)
+
+from pipeline_paths import (
+    PLAN_DIR,
+    WORKTREE_ROOT,
+    AGENTS_DIR,
+    POLICY_PATH,
+    USAGE_STATE_PATH,
+    _exclude_worktree_logs_from_tracking,
+)
+
+from pipeline_build_detect import (  # noqa: F401
+    _venv_python_for,
+    _test_command_for,
+    _build_command_for,
+    detect_build_command,
+    detect_test_command,
+    _acceptance_rel_paths,
+    _is_pytest_cmd,
+    _scope_test_cmd_to_acceptance,
+)
+
+from pipeline_git_ops import (
+    _last_nonempty_line,
+    _commit_wip,
+    _worktree_has_new_commits,
+)
+
+from pipeline_parsers import (  # noqa: F401
+    _extract_json_block,
+    _parse_ruling,
+    _parse_verdict,
+    _has_review_findings,
+    _RATE_LIMIT_PATTERNS,
+    _is_rate_limited,
+    _TRANSIENT_BACKEND_PATTERNS,
+    _is_transient_backend_error,
+    _AUTO_RESOLVE_IMPORT_PATTERN,
+    _parse_conflict_blocks,
+    _resolve_conflict_blocks,
+    _git_show_stage,
+    _is_pure_additive_import_diff,
+    _atomic_write_json,
+    _KEY_RE,
+    _validate_key,
+    _completed_dep_ids,
+    _GIVE_UP_PHRASES,
+    _is_give_up_summary,
+)
+
 PLANE_BASE      = os.environ.get("PLANE_BASE", "http://localhost").rstrip("/")
 PLANE_API_KEY   = os.environ.get("PLANE_API_KEY", "")
 PLANE_WORKSPACE = os.environ.get("PLANE_WORKSPACE", "")
 PLANE_PROJECT   = os.environ.get("PLANE_PROJECT", "")
 
-PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
-WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).expanduser()
-AGENTS_DIR = Path(os.environ.get("AGENTS_DIR", "~/.claude/agents")).expanduser()
-POLICY_PATH = Path(os.environ.get("OVERLORD_POLICY", "~/.claude/overlord-policy.md")).expanduser()
-USAGE_STATE_PATH = Path(os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_state.json")).expanduser()
-
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
-
-# Autonomy: dry-run (plan/log only) | gated (act up to threshold) | full.
-PIPELINE_AUTONOMY = os.environ.get("PIPELINE_AUTONOMY", "gated").lower()
-# Highest story risk the overlord may act on unattended.
-PIPELINE_RISK_THRESHOLD = os.environ.get("PIPELINE_RISK_THRESHOLD", "low").lower()
-_RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
-
-# Default model per persona when a story does not override it.
-DEFAULT_MODEL = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
-
-# Usage gate: pause new dispatch/review when either window reaches its own
-# PAUSE_THRESHOLD%; once paused, stay paused until both windows drop back
-# below their own RESUME_THRESHOLD% (hysteresis prevents flapping right at
-# the boundary). Session and week have independent thresholds because the
-# week window resets far less often, so a high weekly total shouldn't gate
-# session-level work as tightly as a high session total should.
-SESSION_PAUSE_THRESHOLD = int(os.environ.get("PIPELINE_PAUSE_THRESHOLD", "90"))
-SESSION_RESUME_THRESHOLD = int(os.environ.get("PIPELINE_RESUME_THRESHOLD", "70"))
-WEEK_PAUSE_THRESHOLD = int(os.environ.get("PIPELINE_WEEK_PAUSE_THRESHOLD", "90"))
-WEEK_RESUME_THRESHOLD = int(os.environ.get("PIPELINE_WEEK_RESUME_THRESHOLD", "70"))
-# How long a frozen (parse-failure) usage reading is trusted before the gate
-# fails open. Guards against a CLI output-format change turning a transient
-# blackout into a permanent pause.
-USAGE_STALE_AFTER_SECONDS = int(os.environ.get("PIPELINE_USAGE_STALE_AFTER_SECONDS", "1800"))
-# Request-count thresholds for the new CLI format (post percentage removal).
-# session_pct = min(100, daily_requests * 100 // DAILY_REQUEST_THRESHOLD)
-# week_pct   = min(100, weekly_requests * 100 // WEEKLY_REQUEST_THRESHOLD)
-DAILY_REQUEST_THRESHOLD = int(os.environ.get("PIPELINE_DAILY_REQUEST_THRESHOLD", "3000"))
-WEEKLY_REQUEST_THRESHOLD = int(os.environ.get("PIPELINE_WEEKLY_REQUEST_THRESHOLD", "15000"))
-# After the gate has been blind this long, flip to fail-closed (paused=True)
-# so a permanent CLI-format change doesn't leave spend unguarded indefinitely.
-USAGE_BLIND_PAUSE_AFTER_SECONDS = int(os.environ.get("USAGE_BLIND_PAUSE_AFTER_SECONDS", str(6 * 3600)))
-# Emit a blind-gate stderr log only on the first blind transition and every
-# Nth poll thereafter (default hourly at 60 s poll cadence = 60 polls).
-USAGE_BLIND_LOG_INTERVAL = int(os.environ.get("USAGE_BLIND_LOG_INTERVAL", "60"))
-
-# Cap on agents dispatched and running at once, across all plans in this
-# session. The usage gate above reacts to a polled /cost snapshot, which lags
-# real spend — dispatching every ready story in one tick can let that many
-# agents collectively burn through the window before the next poll trips the
-# pause. Capping concurrency bounds how much can be spent between polls.
-# <=0 disables the cap (dispatch every ready story each tick).
-MAX_CONCURRENT_AGENTS = int(os.environ.get("PIPELINE_MAX_CONCURRENT_AGENTS", "3"))
-
-# Error budget for the merge step. _merge_pr shells out to `gh`/`git push`,
-# any of which can fail transiently (network, a momentary GitHub 5xx). Rather
-# than crash the tick or burn the story on the first hiccup, a failed merge
-# leaves the story pr_open and bumps its attempt counter; once attempts reach
-# MERGE_MAX_ATTEMPTS the story is marked failed for human intervention.
-MERGE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_MERGE_MAX_ATTEMPTS", "3"))
-
-# Error budget for dispatch (per-story, across ticks). A dispatch can fail two
-# ways: dispatch_story raises (git pull/worktree/backend error), or the agent
-# launches but produces no output (empty agent.log - a failed launch). Either
-# bumps the story's dispatch_attempts; while under budget the story stays
-# dispatch-eligible (todo/interrupted) and the next tick retries it, but once
-# attempts reach DISPATCH_MAX_ATTEMPTS it is marked failed (terminal - failed
-# is not dispatch-eligible) so a story that can never launch stops looping.
-# Cleared once a launch actually produces output. Legitimate usage-gate
-# interrupts go through interrupt_story and never touch this counter.
-DISPATCH_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_DISPATCH_MAX_ATTEMPTS", "3"))
-
-# How long after Popen to trust that an empty agent.log means the agent is
-# still bootstrapping (alive but its first print() hasn't flushed) rather
-# than genuinely dead. 90s covers Ollama's `-np 1` queue waits for one
-# request against devstral:24b even when 2-3 dispatches collide, while still
-# flagging a script-crash-before-any-print within a couple of polls.
-# Defense-in-depth with local_agent.py's `[boot]` heartbeat - even older
-# agents without the heartbeat still benefit from this grace window.
-DISPATCH_STARTUP_GRACE_SECONDS = int(
-    os.environ.get("PIPELINE_DISPATCH_STARTUP_GRACE_SECONDS", "90")
-)
-
-# Absolute ceiling on how long a dispatched agent process may stay alive
-# before check_story_status treats it as hung rather than "running". The
-# step cap and per-call LLM timeout are supposed to bound a dispatch, but a
-# blocking, non-streaming provider call can stall indefinitely on a single
-# stuck request (observed directly during MLX provider validation: a
-# dispatch subprocess sat at 0% CPU with no error, past the outer harness's
-# own timeout, and was found still running minutes later — the harness never
-# killed it). Generous default so a legitimately slow local run isn't killed
-# mid-flight.
-DISPATCH_WATCHDOG_SECONDS = int(
-    os.environ.get("PIPELINE_DISPATCH_WATCHDOG_SECONDS", "3600")
-)
-
-# Terminal markers the headless agent prints on the LAST line of its
-# agent.log when it hits its step cap and exits with code 2. The agent
-# has already WIP-committed its in-progress work before printing these,
-# so the right thing for the orchestrator to do is mark the story
-# "interrupted" (dispatch-eligible, resumable from the existing worktree
-# and journal) — NOT run the test suite against the WIP commit and label
-# it tests_passed (which is merge-eligible and was how incomplete work
-# landed on master in PR #49 / commit 90a3cf1). Local-agent marker first,
-# oracle marker second; check_story_status matches the LAST non-empty line
-# of agent.log against this tuple.
-STEP_CAP_MARKERS = (
-    "[ended without done — step cap reached]",
-    "[ended without oracle green — step cap reached]",
-)
-
-# A story that keeps hitting the step cap is classified "interrupted" (see the
-# STEP_CAP_MARKERS branch below), never "failed" - so it never reaches the
-# "failed"-gated local_model_fallback check in advance_pipeline's polling loop
-# and can cycle on a struggling model forever. This threshold gates a SEPARATE
-# fallback: after this many consecutive step-cap interrupts on the same model,
-# switch story["model"] (never story["backend"] - stays local, never Claude)
-# for the next resume. Only takes effect when the plan has opted in via
-# manifest["local_model_fallback"] (see _escalate_to_local_fallback_model).
-#
-# When the plan has NOT opted into local_model_fallback, the same threshold
-# and the same streak fields instead gate escalation to Claude (see
-# _escalate_to_claude, called from check_story_status) once
-# PIPELINE_BACKEND_DISPATCH=auto - a repeated step-cap streak indicates a
-# local-model capability problem, not a review-convergence problem, so under
-# auto dispatch it is treated the same as a local test-failure escalation.
-# The two fallbacks are mutually exclusive (no chaining): a plan with
-# local_model_fallback configured always takes the local-fallback path.
-STEP_CAP_FALLBACK_THRESHOLD = int(
-    os.environ.get("PIPELINE_STEP_CAP_FALLBACK_THRESHOLD", "3"))
-
-# Layered local-first dispatch (PIPELINE_BACKEND_DISPATCH=auto):
-#   1. A-priori: stories with risk above PIPELINE_LOCAL_MAX_RISK (default "low")
-#      or a security persona go straight to Claude.
-#   2. A-posteriori: if the local agent fails (bad code / test failure), the
-#      orchestrator escalates that specific story to Claude and starts clean.
-# Explicit "local" or "claude" values bypass the risk-ceiling half of this
-# router, but NOT the security-persona half: dispatch_story applies the
-# persona override (see _persona_requires_claude) regardless of dispatch
-# mode, unless the story already has an explicit story["backend"] (e.g. from
-# a prior escalation), which always wins as-is.
-PIPELINE_LOCAL_MAX_RISK = os.environ.get("PIPELINE_LOCAL_MAX_RISK", "low").lower()
-_LOCAL_SKIP_PERSONAS = {"security-engineer"}
-
-# RELIABILITY_PLAN.md T16: "local" (env-resolved via PIPELINE_LOCAL_PROVIDER)
-# is a permanent back-compat alias; "ollama"/"lmstudio"/"mlx" let a role name
-# the actual local transport directly (backend._DRIVERS). A resolved backend
-# name that could be any of these four must be treated identically by any
-# gate keyed on "is this dispatch local-family" - NOT the two-value
-# {"local","claude"} space _route_dispatch_backend()'s auto router returns,
-# which is intentionally left alone (auto-mode doesn't route to a specific
-# provider, only local-vs-claude).
-_LOCAL_BACKEND_NAMES = frozenset({"local", "ollama", "lmstudio", "mlx"})
-
-# Rework budget. When the reviewer returns REQUEST_CHANGES the story is sent
-# back for rework (redispatched with the reviewer's feedback). To stop a story
-# the reviewer keeps rejecting from looping through review/rework forever, cap
-# the cycles: once rework_attempts reaches REWORK_MAX_ATTEMPTS the story parks
-# for human review instead of redispatching again. Cleared on APPROVE.
-REWORK_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS", "3"))
-
-# Oracle-aware rework budget: a story carrying a non-empty `acceptance`
-# block already has an objective, pre-verified correctness signal (it only
-# reaches review after tests - including the oracle - pass), so a reviewer
-# that keeps finding beyond-oracle issues on 3 full cycles is mostly
-# spending time, not changing the outcome (2026-07-03 replication run: 5 of
-# 12 non-successes were ground-truth-correct code that still burned the
-# full budget before parking). A lower cap converges to the same "parked
-# for human review" endpoint faster. Falls back to REWORK_MAX_ATTEMPTS for
-# any story without a truthy `acceptance` list (ordinary TDD, where the
-# reviewer's judgment is the primary correctness signal and deserves the
-# full budget).
-REWORK_MAX_ATTEMPTS_ORACLE = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE", "1"))
-
-# Rework budget for a story that has already been escalated to Claude (see
-# _escalate_review_to_claude). REWORK_MAX_ATTEMPTS_ORACLE exists to converge
-# LOCAL review fast; once escalation has already paid its cost (real Claude
-# usage, and often real wall-clock time - see 2026-07-04's benchmark
-# validation, where a story that escalated could take hours if the Claude
-# reviewer got rate-limited), reusing that same tight 1-attempt cap just
-# throttles Claude's shot at the SAME feedback for no benefit - 6 of 11
-# escalated cells in that validation run parked after exactly 1 post-
-# escalation cycle. Takes priority over REWORK_MAX_ATTEMPTS_ORACLE
-# regardless of whether the story has an acceptance oracle, since once
-# escalated the story is on the "give it a real shot" track, not the
-# "converge fast" track.
-REWORK_MAX_ATTEMPTS_ESCALATED = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED", "3"))
-
-# Inconclusive-review budget. A non-rate-limited UNKNOWN verdict (a reviewer
-# response with no parseable VERDICT line, or the fail-safe path for a
-# reviewer backend's own internal error) is not evidence the story needs
-# rework - it's an infrastructure hiccup. Counting it against
-# REWORK_MAX_ATTEMPTS would let a flaky reviewer silently exhaust the rework
-# budget and park a correct implementation, and redispatching the agent with
-# the (empty) reviewer output would make it rework blind. So leave the
-# story's status untouched and let the next advance_pipeline tick retry
-# review instead - but cap the retries too, since an inconclusive reviewer
-# that never recovers would otherwise loop forever just like an unbounded
-# rework cycle would. Cleared on any conclusive verdict (APPROVE or
-# REQUEST_CHANGES).
-REVIEW_INCONCLUSIVE_MAX = int(os.environ.get("PIPELINE_REVIEW_INCONCLUSIVE_MAX", "2"))
-
-# Error budget for Plane state transitions. Plane sync is a best-effort side
-# effect of an action that already succeeded in git, so its budget is an inline
-# retry (not an across-ticks retry like merge/dispatch): _plane_set_state
-# retries a transient failure up to PLANE_MAX_ATTEMPTS, then records the drop
-# durably (notify, not a silent print) rather than raising.
-PLANE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_PLANE_MAX_ATTEMPTS", "3"))
 
 PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -681,121 +559,6 @@ def get_ticket_provider() -> TicketProvider:
     return provider_cls()
 
 
-def _venv_python_for(cwd: Path) -> Path | None:
-    """Locate a project venv interpreter for running pytest, or None.
-
-    A git worktree does not contain ``.venv`` (it is gitignored), so a bare
-    ``pytest`` run from a worktree resolves to whatever interpreter is on PATH
-    — which may be a different Python than the project venv and lack its deps
-    (e.g. fastapi). That makes the test gate false-fail on otherwise-green
-    work (collection error / import errors), blocking every Python story.
-
-    Resolve the venv via the worktree's git link: ``git rev-parse
-    --git-common-dir`` points at the main repo's ``.git``, whose parent holds
-    ``.venv``. Also check ``cwd/.venv`` directly for a non-worktree checkout.
-    Returns None when no venv is found so the caller falls back to bare
-    ``pytest`` (preserving the existing contract for repos without a venv).
-    """
-    candidates = [cwd / ".venv" / "bin" / "python"]
-    try:
-        common = subprocess.run(
-            ["git", "-C", str(cwd), "rev-parse", "--git-common-dir"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        if common:
-            common_path = Path(common)
-            if not common_path.is_absolute():
-                common_path = (cwd / common_path).resolve()
-            candidates.append(common_path.parent / ".venv" / "bin" / "python")
-    except Exception:
-        pass
-    for cand in candidates:
-        if cand.exists():
-            return cand
-    return None
-
-
-def _test_command_for(cwd: Path) -> list[str] | None:
-    """Return the test command for cwd if a recognized build marker is present."""
-    if (cwd / "pom.xml").exists():
-        return ["mvn", "test"]
-    if (cwd / "build.gradle").exists() or (cwd / "build.gradle.kts").exists():
-        return ["./gradlew", "test"]
-    if (cwd / "package.json").exists():
-        if (cwd / "yarn.lock").exists():
-            return ["yarn", "test"]
-        return ["npm", "test"]
-    if (cwd / "Makefile").exists():
-        result = subprocess.run(
-            ["grep", "-q", "^test:", "Makefile"], cwd=cwd, capture_output=True
-        )
-        if result.returncode == 0:
-            return ["make", "test"]
-    if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists():
-        venv_python = _venv_python_for(cwd)
-        if venv_python is not None:
-            return [str(venv_python), "-m", "pytest"]
-        return ["pytest"]
-    if (cwd / "Cargo.toml").exists():
-        return ["cargo", "test"]
-    return None
-
-
-def _build_command_for(cwd: Path) -> list[str] | None:
-    """Return the build command for cwd if a recognized build marker
-    declares one, or None if this project has no detectable build step (a
-    library with no bundling step, a package.json with no "build" script,
-    etc). Deliberately conservative/allow-listed - only ecosystems where a
-    build step is unambiguous."""
-    pkg = cwd / "package.json"
-    if pkg.exists():
-        try:
-            data = json.loads(pkg.read_text())
-        except ValueError:
-            data = {}
-        if isinstance(data.get("scripts"), dict) and "build" in data["scripts"]:
-            if (cwd / "yarn.lock").exists():
-                return ["yarn", "build"]
-            return ["npm", "run", "build"]
-    if (cwd / "Cargo.toml").exists():
-        return ["cargo", "build"]
-    return None
-
-
-def detect_build_command(cwd: Path) -> tuple[Path, list[str]] | None:
-    """Detect the build command and directory to run it in, mirroring
-    detect_test_command's cwd-then-immediate-subdirectory search. Returns
-    None if no recognized build marker declares a build step anywhere - a
-    repo without a build step must not be blocked by the build gate (unlike
-    detect_test_command, there is no reasonable universal fallback for
-    "build")."""
-    cmd = _build_command_for(cwd)
-    if cmd is not None:
-        return cwd, cmd
-    for child in sorted(p for p in cwd.iterdir() if p.is_dir() and not p.name.startswith(".")):
-        cmd = _build_command_for(child)
-        if cmd is not None:
-            return child, cmd
-    return None
-
-
-def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
-    """Detect the appropriate test command and the directory to run it in.
-
-    Checks cwd first, then falls back to an immediate subdirectory (e.g.
-    engine/) for projects where the buildable project does not live at the
-    repo root.
-    """
-    cmd = _test_command_for(cwd)
-    if cmd is not None:
-        return cwd, cmd
-
-    for child in sorted(p for p in cwd.iterdir() if p.is_dir() and not p.name.startswith(".")):
-        cmd = _test_command_for(child)
-        if cmd is not None:
-            return child, cmd
-
-    return cwd, ["npm", "test"]  # fallback
 
 
 # ---------- Persona helpers ----------
@@ -1173,15 +936,6 @@ def _run_rework_planner(
 
 
 # ---------- Decompose (provider-configurable product-analyst) ----------
-def _extract_json_block(text: str) -> str:
-    """Strip a ```json ... ``` / ``` ... ``` fence around a JSON payload, if
-    present, else return the text unchanged (trimmed). Models routinely wrap
-    JSON output in a markdown fence even when asked not to; callers
-    json.loads() the result themselves and handle a parse failure - this
-    only handles the fence, not validation."""
-    stripped = text.strip()
-    m = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
-    return m.group(1).strip() if m else stripped
 
 
 def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str | None:
@@ -1212,20 +966,6 @@ def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str
     return text or None
 
 
-def _parse_ruling(text: str) -> dict[str, Any]:
-    """Parse the overlord's output contract into a structured ruling."""
-    fields: dict[str, str] = {}
-    for line in text.splitlines():
-        m = re.match(r"\s*(RULING|TIER|RISK|RATIONALE|NOTIFY_USER)\s*:\s*(.*)", line)
-        if m:
-            fields[m.group(1)] = m.group(2).strip()
-    return {
-        "ruling": fields.get("RULING", ""),
-        "tier": fields.get("TIER", "").lower(),
-        "risk": fields.get("RISK", "").lower(),
-        "rationale": fields.get("RATIONALE", ""),
-        "notify_user": fields.get("NOTIFY_USER", "no").lower() in ("yes", "true"),
-    }
 
 
 # ---------- Review / PR helpers ----------
@@ -1409,154 +1149,6 @@ def _run_security_reviewer(worktree: str, branch: str) -> str:
     )
 
 
-def _parse_verdict(text: str) -> str:
-    m = re.search(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", text, re.IGNORECASE)
-    return m.group(1).upper() if m else "UNKNOWN"
-
-
-# T11: a REQUEST_CHANGES response with no substantive findings text - just
-# the VERDICT line itself, or whitespace around it - gives a redispatched
-# agent nothing to act on. Checked only when _parse_verdict returns
-# REQUEST_CHANGES, mirroring how _is_rate_limited/_is_transient_backend_error
-# are checked only after UNKNOWN. Deliberately a bare emptiness check, not a
-# length floor: this codebase's own reviewer-stub convention (see
-# test_review_story_parks_after_rework_budget_exhausted and its siblings, all
-# using "still bad\nVERDICT: REQUEST_CHANGES") treats even a terse one-line
-# finding as genuine, so any non-whitespace content beyond the verdict line
-# must count.
-def _has_review_findings(text: str) -> bool:
-    """True when `text` contains findings beyond the bare VERDICT line."""
-    stripped = re.sub(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", "", text, flags=re.IGNORECASE)
-    return bool(stripped.strip())
-
-
-# Anchors that identify an infrastructure rate-limit response, not a genuine
-# review. Checked only when _parse_verdict returns UNKNOWN (i.e. no VERDICT
-# line) so that a review discussing rate-limiting code is never misclassified.
-# Deliberately specific to the backend's own rate-limit banner phrasing —
-# generic terms like "429" or "resets" are excluded because a review of
-# rate-limiter code (e.g. this repo's own token_bucket benchmark task) can
-# legitimately contain them, which would misfire this check on a truncated
-# but otherwise genuine review.
-_RATE_LIMIT_PATTERNS = [
-    r"hit your session limit",
-    r"usage limit reached",
-    r"out_of_credits",
-    r"overageDisabledReason",
-]
-
-
-def _acceptance_rel_paths(story: dict[str, Any]) -> list[str]:
-    """Return the worktree-root-relative paths of a story's acceptance fixtures."""
-    return [entry["path"] for entry in (story.get("acceptance") or [])]
-
-
-def _is_pytest_cmd(cmd: list[str]) -> bool:
-    """True when `cmd` invokes pytest and can accept path arguments for scoping.
-
-    Matches both `["pytest", ...]` and `[python, "-m", "pytest", ...]` forms
-    produced by detect_test_command's venv-aware path (pipeline_mcp_server.py
-    lines 392-393). Other runners (cargo, npm, mvn, ...) return False.
-    """
-    if not cmd:
-        return False
-    last = cmd[-1]
-    return last == "pytest" or last.endswith("/pytest")
-
-
-def _scope_test_cmd_to_acceptance(
-    test_cmd: list[str], acceptance_paths: list[str], test_dir: Path
-) -> list[str] | None:
-    """Return ``test_cmd`` scoped to run ONLY the acceptance fixtures, or
-    ``None`` when the runner can't be safely scoped to specific files (caller
-    falls back to the full suite — the MBW safety net).
-
-    This closes the FM-A family for non-pytest runners. A story carrying a
-    harness-owned ``acceptance`` block must be graded on those oracle files
-    alone, not on the implementer's own test file, whose assertions may be
-    wrong (observed live: interval_merge_js wrote a correct src/merge.js —
-    gt=True — but a buggy merge.test.js; unscoped ``npm test`` ran both and
-    rejected correct work). Previously only pytest was scoped (``pytest
-    <files>`` accepts path args); cargo/npm fell back to the full suite, so
-    every non-pytest benchmark cell was graded on the implementer's own tests.
-
-    Scoping is applied only where it is well-defined and safe; anything we
-    can't scope correctly falls back to the full suite (no regression vs. the
-    prior behavior for real-project stories using jest/mocha/etc.):
-
-      - pytest: ``[pytest, *paths]`` (path args; unchanged).
-      - cargo:  ``cargo test --test <stem>`` per acceptance fixture under
-        ``tests/``. cargo names integration tests by file stem
-        (``tests/test_acceptance.rs`` -> ``--test test_acceptance``), so this
-        runs ONLY the oracle, excluding the implementer's own
-        ``tests/test_<name>.rs``. Only applied when every acceptance path is
-        a ``tests/*.rs`` integration test.
-      - npm/yarn whose package.json ``test`` script IS ``node --test``:
-        ``node --test <paths>``. Node's test runner accepts explicit paths.
-        Only applied when the script starts with ``node --test`` (jest/mocha
-        can't be safely scoped without knowing their filter flags).
-    """
-    if not test_cmd or not acceptance_paths:
-        return None
-    if _is_pytest_cmd(test_cmd):
-        return [*test_cmd, *acceptance_paths]
-    # cargo test --test <stem> ...
-    if test_cmd[:2] == ["cargo", "test"]:
-        stems: list[str] = []
-        for p in acceptance_paths:
-            pp = Path(p)
-            if pp.suffix == ".rs" and pp.parent.name == "tests":
-                stems.append(pp.stem)
-            else:
-                return None
-        args: list[str] = []
-        for s in stems:
-            args += ["--test", s]
-        return ["cargo", "test", *args]
-    # npm test / yarn test whose script is `node --test ...`
-    if test_cmd[:2] in (["npm", "test"], ["yarn", "test"]):
-        pkg = Path(test_dir) / "package.json"
-        try:
-            scripts = json.loads(pkg.read_text()).get("scripts", {})
-            test_script = str(scripts.get("test") or "").strip()
-        except Exception:
-            return None
-        if test_script.startswith("node --test"):
-            return ["node", "--test", *acceptance_paths]
-        return None
-    return None
-
-
-def _is_rate_limited(text: str) -> bool:
-    """True when `text` looks like an infra rate-limit message, not a review.
-
-    Intentionally called only after _parse_verdict returns UNKNOWN, so a
-    reviewer discussing rate-limit handling in the diff (which ends with a real
-    VERDICT line) is never mistaken for a rate-limited call.
-    """
-    return any(re.search(pat, text, re.IGNORECASE) for pat in _RATE_LIMIT_PATTERNS)
-
-
-# Transient-backend-error signatures distinct from rate-limiting. Like
-# _RATE_LIMIT_PATTERNS, checked only when _parse_verdict returns UNKNOWN (no
-# VERDICT line) so a review discussing HTTP 500 handling is never misclassified.
-_TRANSIENT_BACKEND_PATTERNS = [
-    r"500\s+internal\s+server\s+error",
-    r"internal\s+server\s+error",
-    r"connection\s+reset",
-    r"connection\s+refused",
-]
-
-
-def _is_transient_backend_error(text: str) -> bool:
-    """True when `text` looks like a transient backend error (HTTP 500,
-    connection-reset/refused), not a rate-limit message or a genuine review.
-
-    Intentionally called only after _parse_verdict returns UNKNOWN, so a
-    reviewer discussing 500-handling code (which ends with a real VERDICT
-    line) is never mistaken for a transient backend failure.
-    """
-    return any(re.search(pat, text, re.IGNORECASE) for pat in _TRANSIENT_BACKEND_PATTERNS)
 
 
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
@@ -1670,87 +1262,6 @@ PIPELINE_MERGE_BUILD_GATE = os.environ.get("PIPELINE_MERGE_BUILD_GATE", "1") != 
 # additive-only rebase-conflict auto-resolver below. Intentionally not
 # exhaustive - unrecognized statement shapes simply don't qualify for
 # auto-resolution and fall through to the existing abort behavior.
-_AUTO_RESOLVE_IMPORT_PATTERN = re.compile(
-    r"^\s*(import\s|from\s.+\simport\s|use\s|#include\s|require\()"
-)
-
-
-def _parse_conflict_blocks(text: str) -> list[tuple[int, int, list[str], list[str]]] | None:
-    """Parse every ``<<<<<<<``/``=======``/``>>>>>>>`` block in `text`.
-
-    Returns a list of (start_line, end_line, ours_lines, theirs_lines) - line
-    indices into ``text.splitlines(keepends=True)`` spanning the whole marker
-    block (inclusive) - or None if the file has no conflict markers at all,
-    or has malformed/unterminated markers (never guess in that case; the
-    caller disqualifies the whole rebase step)."""
-    lines = text.splitlines(keepends=True)
-    blocks: list[tuple[int, int, list[str], list[str]]] = []
-    i = 0
-    n = len(lines)
-    found_any = False
-    while i < n:
-        if lines[i].startswith("<<<<<<<"):
-            found_any = True
-            start = i
-            ours: list[str] = []
-            i += 1
-            while i < n and not lines[i].startswith("======="):
-                ours.append(lines[i])
-                i += 1
-            if i >= n:
-                return None
-            i += 1  # skip the "=======" separator itself
-            theirs: list[str] = []
-            while i < n and not lines[i].startswith(">>>>>>>"):
-                theirs.append(lines[i])
-                i += 1
-            if i >= n:
-                return None
-            end = i
-            blocks.append((start, end, ours, theirs))
-            i += 1
-        else:
-            i += 1
-    return blocks if found_any else None
-
-
-def _resolve_conflict_blocks(text: str, blocks: list[tuple[int, int, list[str], list[str]]]) -> str:
-    """Replace each conflict-marker block with the union of both sides' added
-    lines: ours followed by theirs, verbatim, no reordering/dedup/editing."""
-    lines = text.splitlines(keepends=True)
-    for start, end, ours, theirs in reversed(blocks):  # back-to-front: indices stay valid
-        lines[start:end + 1] = ours + theirs
-    return "".join(lines)
-
-
-def _git_show_stage(worktree: str, stage: int, fname: str) -> str | None:
-    """Read a file's content at conflict stage 1 (merge base)/2 (ours)/3
-    (theirs) from the index. None on any failure (missing stage - e.g. a
-    rename/delete conflict has no stage-1 entry - or a git/OSError), which
-    the caller treats as "can't verify, disqualify"."""
-    try:
-        r = subprocess.run(["git", "show", f":{stage}:{fname}"], cwd=worktree,
-                           capture_output=True, text=True)
-    except OSError:
-        return None
-    return r.stdout if r.returncode == 0 else None
-
-
-def _is_pure_additive_import_diff(base: str, other: str) -> bool:
-    """True iff `other` differs from `base` by pure line insertions only (no
-    deletion or modification of any base line), and every non-blank inserted
-    line matches the conservative import/use pattern."""
-    base_lines = base.splitlines(keepends=True)
-    other_lines = other.splitlines(keepends=True)
-    matcher = difflib.SequenceMatcher(a=base_lines, b=other_lines, autojunk=False)
-    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
-        if tag in ("replace", "delete"):
-            return False
-        if tag == "insert":
-            for line in other_lines[j1:j2]:
-                if line.strip() and not _AUTO_RESOLVE_IMPORT_PATTERN.match(line):
-                    return False
-    return True
 
 
 def _try_auto_resolve_conflict(worktree: str) -> list[str]:
@@ -2204,36 +1715,6 @@ def _auto_escalation_enabled() -> bool:
     return os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower() == "auto"
 
 
-def _atomic_write_json(path: Path, obj: Any) -> None:
-    """Write *obj* as JSON to *path* atomically via a same-directory temp file.
-
-    Uses os.replace() (POSIX-atomic on the same filesystem) so a crash or
-    concurrent reader never observes a partial write. Raises on I/O error and
-    leaves *path* untouched.
-    """
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    try:
-        tmp.write_text(json.dumps(obj, indent=2))
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
-_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-
-
-def _validate_key(name: str) -> None:
-    """Raise ValueError if *name* could be used for path traversal.
-
-    plan_name and story_key flow into filesystem paths; this boundary check
-    rejects anything containing path separators, null bytes, or characters
-    outside the safe alphanumeric-plus-symbols set.
-    """
-    if not _KEY_RE.match(name):
-        raise ValueError(f"invalid plan/story key {name!r}: only [A-Za-z0-9._-] allowed")
-
-
 def _notify_user(plan_name: str, message: str) -> None:
     """Durably record a notice for the user. The orchestrating agent surfaces
     these (e.g. via PushNotification) from advance_pipeline's summary."""
@@ -2570,86 +2051,6 @@ def _mark_plane_done(story_key: str, plan_name: str | None = None) -> None:
     get_ticket_provider().set_state(story_key, LogicalState.DONE, plan_name)
 
 
-def _last_nonempty_line(path: Path) -> str:
-    """Return the last stripped-non-empty line of `path`, or "" if the file
-    has no non-empty lines (or doesn't exist — caller should check).
-
-    Used by check_story_status to classify the agent's terminal exit by the
-    tail of agent.log. We must NOT substring-match the whole file: a resumed
-    agent appends to the log, so an earlier step-cap marker from a prior
-    tick may still be present when the resumed run completes successfully.
-    Only the final terminal line classifies the current run.
-
-    Iterates line by line so we don't materialize a multi-MB log into memory
-    just to grab the last line; the file is read in binary mode and decoded
-    per-line so a partial trailing line (no newline) is still considered."""
-    last = ""
-    with open(path, "rb") as fh:
-        for raw in fh:
-            line = raw.decode("utf-8", errors="replace").strip()
-            if line:
-                last = line
-    return last
-
-
-def _commit_wip(worktree: str, story_key: str, step: str) -> str:
-    """Commit any uncommitted work in the worktree as a WIP checkpoint.
-
-    External boundary: spawns `git`. Tests mock subprocess.run. If there is
-    nothing to commit (the agent already committed its own work), this is
-    not an error — the existing HEAD sha is returned so the journal still
-    records a checkpoint marker.
-
-    Excludes agent.log: it's the dispatcher's own session-narration file
-    written into the worktree root, not project code, and must never be
-    swept into a commit. We stage everything, then unstage agent.log, rather
-    than naming it in an exclude pathspec (`:!agent.log`): if the worktree has
-    agent.log locally git-ignored (.git/info/exclude or .gitignore, e.g. a
-    reviewer keeping it out of diffs), naming it in the pathspec makes `git
-    add` reject the whole add ("paths are ignored... use -f", exit 1), which
-    would lose the checkpoint. `git add -A` with no pathspec silently skips
-    ignored files, and the unstage is a no-op when agent.log is absent or
-    ignored.
-    """
-    subprocess.run(["git", "add", "-A"], cwd=worktree,
-                    check=True, capture_output=True, text=True)
-    subprocess.run(["git", "reset", "-q", "--", "agent.log"], cwd=worktree,
-                    check=False, capture_output=True, text=True)
-    commit = subprocess.run(
-        ["git", "commit", "-m", f"wip({story_key}): {step}"],
-        cwd=worktree, capture_output=True, text=True,
-    )
-    output = commit.stdout + commit.stderr
-    nothing_to_commit = "nothing to commit" in output or "nothing added to commit" in output
-    if commit.returncode != 0 and not nothing_to_commit:
-        raise RuntimeError(f"git commit failed: {commit.stderr}")
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
-        capture_output=True, text=True,
-    ).stdout.strip()
-
-
-def _worktree_has_new_commits(worktree: Path, story_key: str, base_branch: str) -> bool:
-    """True iff the agent branch has any commits not on base_branch.
-
-    `git log <base>..HEAD --oneline` lists commits reachable from HEAD
-    that aren't reachable from <base>. For an empty branch (agent
-    parked without writing code), this list is empty even though the
-    test command would pass against main's untouched suite. That's the
-    false-positive trap this guards against in check_story_status.
-
-    Returns False on any git error — a broken worktree is the
-    orchestrator's problem to surface elsewhere; we'd rather mark a
-    real attempt failed than let a transient git hiccup silently
-    re-dispatch. The branch name follows the same convention as the
-    rest of the orchestrator (line 521 et seq.).
-    """
-    branch = f"agent/{story_key.lower()}"
-    r = subprocess.run(
-        ["git", "log", f"{base_branch}..{branch}", "--oneline"],
-        cwd=str(worktree), capture_output=True, text=True,
-    )
-    return r.returncode == 0 and bool(r.stdout.strip())
 
 
 # ---------- Tools ----------
@@ -2928,20 +2329,6 @@ def ingest_plan(
     return {"ok": True, "manifest_path": str(manifest_path), **final_manifest}
 
 
-def _completed_dep_ids(stories: dict[str, Any]) -> set[str]:
-    """Identifiers a dependency string may legitimately reference for a *done*
-    story, covering both forms a dependency can take.
-
-    Ingest only rewrites a summary-string dependency to a manifest key when the
-    source story carried a local `key` (see ingest_plan); plans whose stories
-    have no key — and which therefore express dependencies as the prerequisite's
-    exact summary string, per the documented save_plan schema — keep those
-    summary deps verbatim while the manifest itself is keyed by UUID. Matching a
-    dependency against both done keys and done summaries resolves it regardless
-    of which form it took, so a dependent story is never stranded as unready."""
-    done_keys = {k for k, v in stories.items() if v["status"] == "done"}
-    done_summaries = {v["summary"] for v in stories.values() if v["status"] == "done"}
-    return done_keys | done_summaries
 
 
 @mcp.tool()
@@ -2967,48 +2354,6 @@ def list_ready_stories(plan_name: str) -> list[dict]:
         if deps_met:
             ready.append({"key": key, "summary": story["summary"]})
     return ready
-
-
-# Observability artifacts a dispatched/reviewed agent writes into its own
-# worktree (agent.log, review.log) but must NEVER be trackable by git. Mode
-# 17: review.log starts untracked (harmless), but a rework cycle's auto
-# WIP-commit (`git add -A`) tracks it if the story gets REQUEST_CHANGES;
-# the next review cycle's append then makes it a modified tracked file, and
-# the pre-merge rebase (Mode 9's gate) refuses on "unstaged changes" -
-# failing an already-APPROVED, ground-truth-correct story 3 retries running.
-# .git/info/exclude is shared across every worktree of a repo (verified:
-# `git rev-parse --git-path info/exclude` from inside a worktree resolves to
-# the MAIN repo's .git/info/exclude, not a per-worktree file), so writing it
-# once per repo, idempotently, covers every past and future worktree.
-#
-# .agent_plan.md/.agent_scratchpad.md (GUIDED_DECOMPOSITION_PLAN.md) are the
-# same kind of untracked runtime artifact as agent.log/review.log - written
-# into the worktree outside of any commit, and vulnerable to the identical
-# Mode 17 failure (a rework's `git add -A` WIP-commit would track them,
-# dirtying the tree ahead of the pre-merge rebase) if not excluded up front.
-_WORKTREE_LOG_EXCLUDES = ("agent.log", "review.log", ".agent_plan.md", ".agent_scratchpad.md")
-
-
-def _exclude_worktree_logs_from_tracking(repo_root: Path) -> None:
-    """Best-effort: append _WORKTREE_LOG_EXCLUDES to repo_root/.git/info/exclude
-    if not already present. Never raises - this is a hygiene fix, not a
-    correctness requirement, and must not break dispatch if the repo's .git
-    layout is unexpected (e.g. a submodule, or repo_root not actually a git
-    repo yet in some caller)."""
-    try:
-        info_dir = repo_root / ".git" / "info"
-        info_dir.mkdir(parents=True, exist_ok=True)
-        exclude_path = info_dir / "exclude"
-        existing = exclude_path.read_text() if exclude_path.exists() else ""
-        missing = [name for name in _WORKTREE_LOG_EXCLUDES if name not in existing]
-        if missing:
-            with exclude_path.open("a") as f:
-                if existing and not existing.endswith("\n"):
-                    f.write("\n")
-                for name in missing:
-                    f.write(f"{name}\n")
-    except OSError:
-        pass
 
 
 @mcp.tool()
@@ -3307,25 +2652,6 @@ def _last_done_summary(agent_log: Path) -> str:
     return last
 
 
-# Literal, narrow phrases only - broad keyword matching would false-positive
-# on legitimate completion summaries that happen to mention difficulty
-# encountered along the way.
-_GIVE_UP_PHRASES = (
-    "i can't complete this task",
-    "i cannot complete this task",
-    "i'm unable to complete this task",
-    "i am unable to complete this task",
-    "i give up",
-)
-
-
-def _is_give_up_summary(summary: str) -> bool:
-    """Whether a DONE summary reads as an explicit surrender rather than a
-    genuine completion claim (2026-07-07 web-client-epic retro §3.2: the
-    WASM story's second attempt called done with "I'm sorry, I can't
-    complete this task" after real research, zero commits)."""
-    lowered = summary.lower()
-    return any(phrase in lowered for phrase in _GIVE_UP_PHRASES)
 
 
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:

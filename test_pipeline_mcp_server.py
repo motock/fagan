@@ -23,6 +23,7 @@ import pytest
 
 import backend
 import pipeline_mcp_server as p
+import pipeline_persistence as ppers
 import pipeline_ticketing as pt
 import role_registry
 
@@ -81,6 +82,9 @@ def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
+    # pipeline_persistence imports PLAN_DIR from pipeline_paths at module load
+    # and reads it as a free var, so patches must land on its own binding too.
+    monkeypatch.setattr(ppers, "PLAN_DIR", d)
     return d
 
 
@@ -2917,13 +2921,13 @@ def test_write_usage_state_uses_atomic_write(tmp_path, monkeypatch, usage_state_
 def test_append_journal_uses_atomic_write(tmp_path, plan_dir, monkeypatch):
     """_append_journal must route through _atomic_write_json."""
     calls = []
-    real_atomic = p._atomic_write_json
+    real_atomic = ppers._atomic_write_json
 
     def tracking_atomic(path, obj):
         calls.append(path)
         real_atomic(path, obj)
 
-    monkeypatch.setattr(p, "_atomic_write_json", tracking_atomic)
+    monkeypatch.setattr(ppers, "_atomic_write_json", tracking_atomic)
     p._append_journal("myplan", "story-1", {"event": "checkpoint"})
     assert any(".journal.json" in str(c) for c in calls), "journal write did not go through _atomic_write_json"
 

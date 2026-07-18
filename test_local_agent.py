@@ -1679,3 +1679,113 @@ def test_exclude_runtime_artifacts_hides_transcript_file_from_git_status(tmp_pat
         ["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True
     ).stdout
     assert ".agent_transcript.json" not in status
+
+
+# ---------------------------------------------------------------------------
+# L1 production side (REVIEWER_ESCALATION_PLAN.md Layer 1): on a CI-fail-rework
+# round, reject `done` when the full worktree suite isn't green, feeding the
+# failing excerpt back - parallel to the dirty-worktree rejection. Non-rework
+# dispatches keep today's behavior (commit-enforced, no suite gate).
+# ---------------------------------------------------------------------------
+
+def test_done_rejected_on_rework_round_when_full_suite_fails(tmp_path, monkeypatch, capsys):
+    """CI-fail-rework round, clean worktree, but the agent's own test still
+    fails: `done` must be rejected, the failing excerpt fed back into the
+    conversation, and the loop must NOT exit 0. Bounded by the step cap."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(la, "MAX_STEPS", 3)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+    excerpt = "FAILED test_rate_limiter.py::test_time_backwards_no_refill - assert 9.0 == 3.0"
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt))
+
+    fake, calls = _sequence_chat([("done", {"summary": "first attempt"})])
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    # Not accepted: the suite gate blocked done every step until the cap bound.
+    assert rc != 0, f"done must not be accepted while the suite fails; rc={rc}\n{out!r}"
+    assert "done rejected — full test suite still fails" in out, out
+    # The excerpt was fed back: the second chat() call received it as a user
+    # turn (calls[1] is the messages list as seen on the 2nd turn).
+    assert len(calls) >= 2
+    last_user = [m for m in calls[1] if m["role"] == "user"][-1]
+    assert excerpt in last_user["content"], last_user["content"]
+
+
+def test_done_accepted_on_non_rework_round_without_consulting_suite(tmp_path, monkeypatch, capsys):
+    """Non-rework round, clean worktree: `done` is accepted as today (rc=0)
+    and the full suite is NEVER consulted - proves the rework gate is scoped,
+    not global."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "REWORK_FULL_SUITE", False)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+
+    suite_calls: list = []
+
+    def _suite_spy():
+        suite_calls.append(True)
+        return (False, "would-fail-but-uncalled")
+
+    monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
+
+    fake, _ = _sequence_chat([("done", {"summary": "done"})])
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    assert rc == 0  # accepted, as today
+    assert suite_calls == []  # suite never consulted on a non-rework round
+
+
+def test_done_accepted_on_rework_round_when_full_suite_green(tmp_path, monkeypatch):
+    """CI-fail-rework round, clean worktree, agent fixed its own test: full
+    suite green -> `done` accepted (rc=0). This is the convergence case."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (True, ""))
+
+    fake, _ = _sequence_chat([("done", {"summary": "fixed"})])
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    assert rc == 0
+
+
+def test_dirty_tree_auto_accept_does_not_bypass_suite_gate(tmp_path, monkeypatch, capsys):
+    """Regression guard for a bypass the code review surfaced: the dirty-tree
+    auto-accept-at-2 escape must NOT fire on a rework round when the full suite
+    still fails. Without the gate at the auto-accept site, an agent could dodge
+    the raised done-bar by calling done dirty (reject), done clean+failing-suite
+    (reject), done dirty again (done_rejections>=2 -> auto-accept, return 0,
+    suite never checked). On a rework round the suite must be checked before
+    that escape too; a failing suite rejects instead of auto-accepting, bounded
+    by the step cap."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(la, "MAX_STEPS", 4)
+    # Always dirty: forces every done through the dirty-tree branch, so the
+    # auto-accept-at-2 escape is the path under test (the clean-tree suite
+    # gate is never reached).
+    monkeypatch.setattr(la, "worktree_dirty", lambda: True)
+    monkeypatch.setattr(la, "auto_wip_commit", lambda reason: None)
+    monkeypatch.setattr(la, "_full_suite_result",
+                        lambda: (False, "assert 9.0 == 3.0 - test_rate_limiter.py:62"))
+
+    fake, _ = _sequence_chat([("done", {"summary": "bypass attempt"})])
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    # The bypass must NOT auto-accept a failing suite.
+    assert rc != 0, f"auto-accept-at-2 bypassed the suite gate; rc={rc}\n{out!r}"
+    assert "DONE with auto-WIP-commit" not in out, out
+    # The suite was checked at the would-be-auto-accept site and rejected.
+    assert "done rejected — full test suite still fails" in out, out

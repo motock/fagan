@@ -1,6 +1,10 @@
 # Plan: Escalating, enforceable rework feedback
 
-**Status:** NOT YET IMPLEMENTED. Plan only, 2026-07-17. Awaiting user review.
+**Status:** Layer 1 IMPLEMENTED 2026-07-17 (signal threading + benchmark &
+production full-suite done-bars; TDD tests in test_local_agent_oracle.py,
+test_local_agent.py, test_backend.py, test_pipeline_mcp_server.py — all
+green). Layers 2-3 NOT yet started. Live convergence validation (token_bucket
+re-run with L1 on) PENDING.
 **Origin:** 2026-07-17 gpt-oss `token_bucket` live validation of
 `PIPELINE_REWORK_ON_CI_FAIL` (commit 159f4d0). The merge-CI→rework loop is now
 *bounded* (advances 1/3→2/3→3/3→terminal-fail) and the CI detail (file:line,

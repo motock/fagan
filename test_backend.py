@@ -1722,6 +1722,50 @@ def test_dispatch_uses_base_harness_when_no_acceptance(tmp_path, monkeypatch):
     assert "LOCAL_AGENT_MODE" not in captured["env"]
 
 
+def test_dispatch_passes_rework_full_suite_env(tmp_path, monkeypatch):
+    """L1 (REVIEWER_ESCALATION_PLAN.md): rework_full_suite=True must reach the
+    agent subprocess as LOCAL_AGENT_REWORK_FULL_SUITE=1 so the harness raises
+    the done-bar to full-suite-green on a CI-fail rework round. Absent by
+    default so cold-start dispatches keep the oracle-green bar."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(52),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+
+    b.OllamaDriver().dispatch(
+        "fix the test", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+        acceptance=["tests/test_x.py"],
+        rework_full_suite=True,
+    )
+    assert captured["env"]["LOCAL_AGENT_REWORK_FULL_SUITE"] == "1"
+
+
+def test_dispatch_omits_rework_full_suite_env_by_default(tmp_path, monkeypatch):
+    """Regression guard: a cold-start dispatch (rework_full_suite unset) must
+    NOT set LOCAL_AGENT_REWORK_FULL_SUITE, or the full-suite done-bar would
+    silently apply to fresh dispatches and change cold-start behavior."""
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(53),
+    )
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+        acceptance=["tests/test_x.py"],
+    )
+    assert "LOCAL_AGENT_REWORK_FULL_SUITE" not in captured["env"]
+
+
 # ---------- OllamaDriver.dispatch() step-cap plumbing (issue 7f1e9923) ----------
 #
 # Bug: OllamaDriver.__init__ read PIPELINE_LOCAL_MAX_STEPS once at singleton

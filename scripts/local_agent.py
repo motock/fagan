@@ -858,6 +858,9 @@ def run_tool(fn, args) -> str:
     return f"unknown tool {fn}"
 
 
+_TOOL_SCHEMAS = {t["function"]["name"]: t["function"]["parameters"] for t in TOOLS}
+
+
 def safe_run_tool(fn, args) -> str:
     """Run a tool, turning any exception into a recoverable error message.
 
@@ -866,11 +869,31 @@ def safe_run_tool(fn, args) -> str:
     KeyError and crash the whole unattended agent. Feeding the error back as a
     tool result lets the model correct itself, bounded by the loop guard / step
     cap, instead of taking the run down.
+
+    When the exception coincides with a missing declared-required argument,
+    append what the tool actually requires and what was passed instead
+    (TDD_SPLIT_PRODUCTION_PLAN.md Phase 5 live validation, 2026-07-18:
+    gpt-oss:20b called view_file with hallucinated {"line_start", "line_end"}
+    in place of the declared {"path"}; the bare "ERROR running view_file:
+    KeyError: 'path'" this used to return names what's missing but not the
+    tool's actual shape, and the model needed several malformed retries to
+    self-correct, tripping the per-target repetition guard into a park). This
+    only ever appends to the existing message - the base "ERROR running
+    {fn}: ..." text is unchanged, so it stays a strict superset.
     """
     try:
         return run_tool(fn, args)
     except Exception as e:
-        return f"ERROR running {fn}: {type(e).__name__}: {e}"
+        msg = f"ERROR running {fn}: {type(e).__name__}: {e}"
+        required = _TOOL_SCHEMAS.get(fn, {}).get("required", [])
+        missing = [r for r in required if r not in args]
+        if missing:
+            msg += (
+                f" -- {fn} requires {required}; you passed "
+                f"{sorted(args.keys())}, missing {missing}. Call {fn} again "
+                f"with all required keys."
+            )
+        return msg
 
 
 def main() -> int:

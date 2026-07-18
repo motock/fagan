@@ -23,14 +23,15 @@ import pytest
 
 import backend
 import pipeline_mcp_server as p
+import pipeline_ticketing as pt
 import role_registry
 
 
 # ---------- Fixtures ----------
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    p._state_cache.clear()
-    p._label_cache.clear()
+    pt._state_cache.clear()
+    pt._label_cache.clear()
     yield
 
 
@@ -40,18 +41,18 @@ def _plane_configured(monkeypatch):
     existing tests assume (they mock plane_request and expect calls to
     happen). The Plane-optional path is exercised by the handful of tests
     that explicitly clear these to "" via _plane_disabled."""
-    monkeypatch.setattr(p, "PLANE_API_KEY", "test-key")
-    monkeypatch.setattr(p, "PLANE_WORKSPACE", "test-ws")
-    monkeypatch.setattr(p, "PLANE_PROJECT", "test-proj")
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "test-key")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "test-ws")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "test-proj")
 
 
 @pytest.fixture
 def _plane_disabled(monkeypatch):
     """Simulate an unconfigured Plane (no API key / workspace / project), so
     Plane calls must be skipped rather than fired at a dead endpoint."""
-    monkeypatch.setattr(p, "PLANE_API_KEY", "")
-    monkeypatch.setattr(p, "PLANE_WORKSPACE", "")
-    monkeypatch.setattr(p, "PLANE_PROJECT", "")
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
 
 
 @pytest.fixture
@@ -697,7 +698,7 @@ def _fake_plane(method, path, **kwargs):
 
 
 def test_ingest_plan_carries_persona_model_risk_into_manifest(plan_dir, monkeypatch, tmp_path):
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{
@@ -719,7 +720,7 @@ def test_ingest_plan_carries_backend_into_manifest(plan_dir, monkeypatch, tmp_pa
     """A plan can pin a story's dispatch provider upfront (e.g. "mlx"), not
     just via a runtime escalation flip - _LOCAL_BACKEND_NAMES already
     includes ollama/lmstudio/mlx, so this is purely a plan-authoring gap."""
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E1", "stories": [_story(backend="mlx")]}],
@@ -732,7 +733,7 @@ def test_ingest_plan_carries_backend_into_manifest(plan_dir, monkeypatch, tmp_pa
 
 
 def test_ingest_plan_backend_defaults_to_none_when_omitted(plan_dir, monkeypatch, tmp_path):
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E1", "stories": [_story()]}],
@@ -748,7 +749,7 @@ def test_ingest_plan_rejects_unknown_backend_value(plan_dir, monkeypatch, tmp_pa
     """Fail closed on a typo'd backend name at ingest time rather than
     letting it reach dispatch_story and raise NotImplementedError deep
     inside get_backend."""
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E1", "stories": [_story(backend="some-typo")]}],
@@ -764,7 +765,7 @@ def test_ingest_plan_accepts_auto_backend_value(plan_dir, monkeypatch, tmp_path)
     """"auto" is a valid story["backend"] value (resolved by
     _route_dispatch_backend before reaching get_backend), even though it's
     not a registered driver in backend._DRIVERS."""
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E1", "stories": [_story(backend="auto")]}],
@@ -779,7 +780,7 @@ def test_ingest_plan_accepts_auto_backend_value(plan_dir, monkeypatch, tmp_path)
 def test_ingest_plan_reingest_refreshes_backend_field(plan_dir, monkeypatch, tmp_path):
     """"backend" must be included in _INGEST_AUTHORED_STORY_FIELDS so a
     re-ingest updates it, like persona/model/risk already do."""
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E1", "stories": [_story(key="S1", backend="ollama")]}],
@@ -798,8 +799,7 @@ def test_ingest_plan_reingest_refreshes_backend_field(plan_dir, monkeypatch, tmp
 
 def test_ingest_plan_remaps_local_keys_to_issue_ids_in_dependencies(plan_dir, monkeypatch, tmp_path):
     issue_ids = iter(["issue-1", "issue-2", "issue-3"])
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda method, path, **kw: (
             _fake_plane(method, path, **kw) if not path.endswith("/work-items/")
             else {"id": next(issue_ids)}
@@ -827,7 +827,7 @@ def test_ingest_plan_remaps_local_keys_to_issue_ids_in_dependencies(plan_dir, mo
 
 
 def test_ingest_plan_leaves_unresolvable_dependency_keys_unchanged(plan_dir, monkeypatch, tmp_path):
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{
@@ -854,7 +854,7 @@ def test_http_loggers_are_quieted():
 # ---------- Plane optional (unconfigured) ----------
 def test_plane_enabled_reflects_config(monkeypatch):
     assert p._plane_enabled() is True  # set by _plane_configured fixture
-    monkeypatch.setattr(p, "PLANE_PROJECT", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
     assert p._plane_enabled() is False
 
 
@@ -865,7 +865,7 @@ def _explode_plane(*a, **kw):
 def test_ingest_plan_without_plane_skips_calls_and_keys_by_story_key(
     _plane_disabled, plan_dir, monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{
@@ -889,7 +889,7 @@ def test_ingest_plan_without_plane_skips_calls_and_keys_by_story_key(
 def test_ingest_plan_without_plane_synthesizes_keys_when_absent(
     _plane_disabled, plan_dir, monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E1", "stories": [_story(), _story()]}],
@@ -910,8 +910,7 @@ def test_ingest_plan_survives_plane_configured_but_unreachable(
     # must still succeed by falling back to synthesized/local story keys,
     # exactly like the "Plane unconfigured" path does.
     monkeypatch.delenv("PIPELINE_TICKET_PROVIDER", raising=False)
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
     )
     plan = {
@@ -934,12 +933,12 @@ def test_ingest_plan_survives_plane_configured_but_unreachable(
 
 
 def test_plane_set_state_noop_when_plane_disabled(_plane_disabled, monkeypatch):
-    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
     assert p._plane_set_state("S1", "started") is True
 
 
 def test_mark_story_done_without_plane_skips_patch(_plane_disabled, plan_dir, monkeypatch):
-    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
     (plan_dir / "md.manifest.json").write_text(json.dumps(
         {"stories": {"S1": {"status": "pr_open"}}}))
     result = p.mark_story_done("md", "S1")
@@ -949,7 +948,7 @@ def test_mark_story_done_without_plane_skips_patch(_plane_disabled, plan_dir, mo
 
 
 def test_mark_story_in_progress_without_plane_skips_patch(_plane_disabled, plan_dir, monkeypatch):
-    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
     (plan_dir / "mip.manifest.json").write_text(json.dumps(
         {"stories": {"S1": {"status": "todo"}}}))
     result = p.mark_story_in_progress("mip", "S1")
@@ -1016,7 +1015,7 @@ def test_null_ticket_provider_every_op_is_a_noop():
 def test_plane_ticket_provider_create_epic_and_story_delegate_to_plane_request(
     monkeypatch,
 ):
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     provider = p.PlaneTicketProvider()
     assert provider.enabled is True
     epic_id = provider.create_epic("E1")
@@ -1029,8 +1028,7 @@ def test_plane_ticket_provider_create_epic_falls_back_to_none_on_api_error(
     monkeypatch,
 ):
     # Epics are an optional Plane module; some instances don't expose it.
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("404")),
     )
     provider = p.PlaneTicketProvider()
@@ -1043,8 +1041,7 @@ def test_plane_ticket_provider_create_epic_falls_back_to_none_on_connection_erro
     # A connection failure (Plane host unreachable, timeout, ...) is not a
     # RuntimeError like a non-2xx response - it must be caught too, not just
     # the "epics module unsupported" 404 case.
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
     )
     provider = p.PlaneTicketProvider()
@@ -1054,8 +1051,7 @@ def test_plane_ticket_provider_create_epic_falls_back_to_none_on_connection_erro
 def test_plane_ticket_provider_create_story_falls_back_to_none_on_connection_error(
     monkeypatch,
 ):
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
     )
     provider = p.PlaneTicketProvider()
@@ -1067,8 +1063,7 @@ def test_plane_ticket_provider_create_story_falls_back_to_none_on_api_error(
 ):
     # create_story must tolerate a non-2xx RuntimeError the same way
     # create_epic already does, not just connection-level failures.
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("500")),
     )
     provider = p.PlaneTicketProvider()
@@ -1089,7 +1084,7 @@ def test_plane_ticket_provider_create_story_returns_issue_id_when_epic_link_fail
             raise httpx.ConnectError("connection refused")
         return _fake_plane(method, path, **kwargs)
 
-    monkeypatch.setattr(p, "plane_request", flaky_plane)
+    monkeypatch.setattr(pt, "plane_request", flaky_plane)
     provider = p.PlaneTicketProvider()
     issue_id = provider.create_story("S1", "desc", "epic-1", "agent-pipeline")
     assert issue_id == "issue-1"
@@ -1099,7 +1094,7 @@ def test_plane_ticket_provider_create_story_returns_issue_id_when_epic_link_fail
 def test_plane_ticket_provider_set_state_delegates_to_plane_set_state(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        p, "_plane_set_state",
+        pt, "_plane_set_state",
         lambda key, group, plan_name=None: calls.append((key, group, plan_name)) or True,
     )
     provider = p.PlaneTicketProvider()
@@ -1108,7 +1103,7 @@ def test_plane_ticket_provider_set_state_delegates_to_plane_set_state(monkeypatc
 
 
 def test_plane_ticket_provider_resolve_key_delegates_to_resolve_issue_uuid(monkeypatch):
-    monkeypatch.setattr(p, "_resolve_issue_uuid", lambda key: f"resolved-{key}")
+    monkeypatch.setattr(pt, "_resolve_issue_uuid", lambda key: f"resolved-{key}")
     provider = p.PlaneTicketProvider()
     assert provider.resolve_key("PIPE-7") == "resolved-PIPE-7"
 
@@ -1275,7 +1270,7 @@ def test_ingest_plan_rejects_missing_repo_root(plan_dir, monkeypatch):
     than silently operate on the wrong repo). Catch it at ingest, not three
     silent merge-attempt failures later."""
     called = []
-    monkeypatch.setattr(p, "plane_request", lambda *a, **kw: called.append(1) or _fake_plane(*a, **kw))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **kw: called.append(1) or _fake_plane(*a, **kw))
     plan = {"epics": [{"summary": "E1", "stories": [_story()]}]}
     (plan_dir / "norepo.json").write_text(json.dumps(plan))
 
@@ -1288,7 +1283,7 @@ def test_ingest_plan_rejects_missing_repo_root(plan_dir, monkeypatch):
 
 
 def test_ingest_plan_rejects_nonexistent_repo_root_directory(plan_dir, monkeypatch):
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": "/nonexistent-repo-root-set-per-plan-only",
         "epics": [{"summary": "E1", "stories": [_story()]}],
@@ -1311,7 +1306,7 @@ def test_ingest_plan_rejects_nonexistent_repo_root_directory(plan_dir, monkeypat
 def test_ingest_plan_reingest_preserves_stories_from_untouched_epics(
     _plane_disabled, plan_dir, monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [
@@ -1341,7 +1336,7 @@ def test_ingest_plan_reingest_preserves_stories_from_untouched_epics(
 def test_ingest_plan_reingest_refreshes_authored_fields_preserves_runtime_status(
     _plane_disabled, plan_dir, monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E1", "stories": [
@@ -1369,7 +1364,7 @@ def test_ingest_plan_reingest_refreshes_authored_fields_preserves_runtime_status
 def test_ingest_plan_overwrite_true_drops_untouched_epics(
     _plane_disabled, plan_dir, monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(p, "plane_request", _explode_plane)
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [
@@ -1391,7 +1386,7 @@ def test_ingest_plan_overwrite_true_drops_untouched_epics(
 def test_ingest_plan_reingest_preserves_top_level_paused_and_fallback_fields(
     plan_dir, monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
         "epics": [{"summary": "E1", "stories": [_story(key="S1")]}],
@@ -1420,7 +1415,7 @@ def test_ingest_plan_skips_when_lock_held(plan_dir, monkeypatch, tmp_path):
 
     def _boom(*a, **kw):
         raise AssertionError("a locked-out ingest_plan must not touch Plane or the manifest")
-    monkeypatch.setattr(p, "plane_request", _boom)
+    monkeypatch.setattr(pt, "plane_request", _boom)
 
     lock_path = plan_dir / "ilk2.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
@@ -2604,7 +2599,7 @@ def test_default_branch_does_not_leak_cache_across_repos(monkeypatch, tmp_path):
 
 
 def test_ingest_plan_carries_repo_root_into_manifest(plan_dir, monkeypatch, tmp_path):
-    monkeypatch.setattr(p, "plane_request", _fake_plane)
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "epics": [{"summary": "E1", "stories": [_story()]}],
         "repo_root": str(tmp_path),
@@ -2643,8 +2638,7 @@ def test_dispatch_story_uses_manifest_repo_root_for_git_commands(
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(123))
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
 
@@ -2682,8 +2676,7 @@ def test_dispatch_story_records_resolved_model_on_manifest(
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "minimax-m3:cloud")
     monkeypatch.delenv("PIPELINE_LOCAL_MODEL_SONNET", raising=False)
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
 
@@ -2716,8 +2709,7 @@ def test_dispatch_story_records_dispatched_at_timestamp(
         stderr = ""
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, cwd=None, **kw: _R())
     monkeypatch.setattr(backend.subprocess, "Popen", lambda argv, **kw: _FakeProc(123))
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
 
@@ -3701,7 +3693,7 @@ def test_dispatch_story_skips_when_lock_held(plan_dir, monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("a locked-out dispatch_story must not touch the worktree or manifest")
     monkeypatch.setattr(p.subprocess, "run", _boom)
-    monkeypatch.setattr(p, "plane_request", _boom)
+    monkeypatch.setattr(pt, "plane_request", _boom)
 
     lock_path = plan_dir / "dlk.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
@@ -3772,8 +3764,7 @@ def test_advance_pipeline_actually_dispatches_ready_story_not_just_reports_it(
     monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
@@ -3869,8 +3860,7 @@ def test_dispatch_story_proceeds_when_lock_free(plan_dir, worktree_root, agents_
     })
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1357))
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
@@ -4376,17 +4366,16 @@ def test_advance_pipeline_merge_transitions_plane_issue_to_done(plan_dir, monkey
                      "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
-    monkeypatch.setattr(p, "_get_state", lambda group: f"state-{group}")
+    monkeypatch.setattr(pt, "_get_state", lambda group: f"state-{group}")
 
     patches = []
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda method, path, **kw: patches.append((method, path, kw)),
     )
 
     p.advance_pipeline("planedone")
 
-    assert ("PATCH", f"/projects/{p.PLANE_PROJECT}/work-items/{story_key}/",
+    assert ("PATCH", f"/projects/{pt.PLANE_PROJECT}/work-items/{story_key}/",
             {"json": {"state": "state-completed"}}) in patches
 
 
@@ -4400,8 +4389,7 @@ def test_advance_pipeline_merge_tolerates_plane_failure(plan_dir, monkeypatch):
                "review_verdict": "APPROVE", "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
 
@@ -6339,9 +6327,9 @@ def test_check_story_status_successful_run_clears_dispatch_attempts(plan_dir, tm
 
 def test_plane_set_state_retries_then_succeeds(monkeypatch):
     # A transient Plane failure is retried within budget rather than dropped.
-    monkeypatch.setattr(p, "PLANE_MAX_ATTEMPTS", 3)
-    monkeypatch.setattr(p, "_resolve_issue_uuid", lambda key: "uuid-1")
-    monkeypatch.setattr(p, "_get_state", lambda group: f"state-{group}")
+    monkeypatch.setattr(pt, "PLANE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(pt, "_resolve_issue_uuid", lambda key: "uuid-1")
+    monkeypatch.setattr(pt, "_get_state", lambda group: f"state-{group}")
     calls = []
 
     def _flaky(method, path, **kw):
@@ -6349,7 +6337,7 @@ def test_plane_set_state_retries_then_succeeds(monkeypatch):
         if len(calls) < 2:
             raise RuntimeError("502")
         return {}
-    monkeypatch.setattr(p, "plane_request", _flaky)
+    monkeypatch.setattr(pt, "plane_request", _flaky)
 
     assert p._plane_set_state("S1", "started") is True
     assert len(calls) == 2
@@ -6358,10 +6346,10 @@ def test_plane_set_state_retries_then_succeeds(monkeypatch):
 def test_plane_set_state_gives_up_after_budget_and_notifies(plan_dir, monkeypatch):
     # A persistent Plane outage gives up after the budget WITHOUT raising (Plane
     # is best-effort) and records the drop durably instead of a silent print.
-    monkeypatch.setattr(p, "PLANE_MAX_ATTEMPTS", 3)
-    monkeypatch.setattr(p, "_resolve_issue_uuid", lambda key: "uuid-1")
-    monkeypatch.setattr(p, "_get_state", lambda group: f"state-{group}")
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "PLANE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(pt, "_resolve_issue_uuid", lambda key: "uuid-1")
+    monkeypatch.setattr(pt, "_get_state", lambda group: f"state-{group}")
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("plane down")))
     notes = []
     monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
@@ -8175,8 +8163,7 @@ def test_dispatch_story_fresh_creates_worktree_and_dispatches(
     run_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: run_calls.append(cmd))
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
@@ -8211,8 +8198,7 @@ def test_dispatch_story_passes_rework_full_suite_when_ci_rework_set(
         lambda argv, cwd, env, stdout, stderr:
             captured.update(env=env) or _FakeProc(4321),
     )
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
@@ -8243,8 +8229,7 @@ def test_dispatch_story_omits_rework_full_suite_without_ci_rework(
         lambda argv, cwd, env, stdout, stderr:
             captured.update(env=env) or _FakeProc(4322),
     )
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
@@ -8306,8 +8291,7 @@ def test_dispatch_story_excludes_review_and_agent_log_from_worktree_tracking(
         return real_popen(cmd, **kw)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _discriminating_popen)
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "master")
@@ -8348,8 +8332,7 @@ def test_dispatch_story_fresh_seeds_checkpoint_instruction_with_plan_name(
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
@@ -8386,8 +8369,7 @@ def test_dispatch_story_resume_reuses_worktree_and_seeds_journal(
         return _FakeProc(5555)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
@@ -8428,7 +8410,7 @@ def test_dispatch_story_changes_requested_seeds_review_feedback(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: popen_calls.append(cmd) or _FakeProc(5556))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -8456,8 +8438,7 @@ def test_dispatch_story_resumes_when_worktree_exists_even_without_interrupted_st
     run_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: run_calls.append(cmd))
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(7777))
-    monkeypatch.setattr(
-        p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
@@ -8519,7 +8500,7 @@ def test_dispatch_story_auto_routes_low_risk_local(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(11))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     result = p.dispatch_story("auto1", "S1")
@@ -8544,7 +8525,7 @@ def test_dispatch_story_auto_routes_high_risk_claude(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(22))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("auto2", "S1")
@@ -8565,7 +8546,7 @@ def test_dispatch_story_persists_backend_to_manifest(
     })
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(33))
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("pb1", "S1")
@@ -8585,7 +8566,7 @@ def test_dispatch_story_honors_stored_backend_override(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(44))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("pb2", "S1")
@@ -8610,7 +8591,7 @@ def test_dispatch_story_explicit_local_security_persona_routes_to_claude(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(55))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("sec1", "S1")
@@ -8632,7 +8613,7 @@ def test_dispatch_story_explicit_local_non_security_persona_stays_local(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(56))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("sec2", "S1")
@@ -8654,7 +8635,7 @@ def test_dispatch_story_explicit_local_missing_persona_stays_local(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(57))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("sec3", "S1")
@@ -8679,7 +8660,7 @@ def test_dispatch_story_explicit_local_security_persona_case_insensitive(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(58))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("sec4", "S1")
@@ -8705,7 +8686,7 @@ def test_dispatch_story_stored_backend_wins_over_security_persona(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(59))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("sec5", "S1")
@@ -8732,7 +8713,7 @@ def test_dispatch_story_explicit_claude_security_persona_stays_claude(
     popen_calls = []
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(60))[1])
-    monkeypatch.setattr(p, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
     p.dispatch_story("sec6", "S1")
@@ -9198,9 +9179,9 @@ def test_ingest_plan_round_trips_acceptance_field(
     """`acceptance` is optional; when present on a source story it must be
     carried verbatim onto the manifest entry so dispatch_story can later
     forward it to the local driver."""
-    monkeypatch.setattr(p, "PLANE_API_KEY", "")
-    monkeypatch.setattr(p, "PLANE_WORKSPACE", "")
-    monkeypatch.setattr(p, "PLANE_PROJECT", "")
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
     (plan_dir / "p.json").write_text(json.dumps({
         "epics": [{"summary": "Epic", "stories": [
             {"key": "S1", "summary": "Do thing",
@@ -9226,9 +9207,9 @@ def test_ingest_plan_omits_acceptance_when_source_story_has_none(
 ):
     """Backwards compat: stories without an acceptance block still work and
     end up with an empty acceptance list on the manifest."""
-    monkeypatch.setattr(p, "PLANE_API_KEY", "")
-    monkeypatch.setattr(p, "PLANE_WORKSPACE", "")
-    monkeypatch.setattr(p, "PLANE_PROJECT", "")
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
     (plan_dir / "p.json").write_text(json.dumps({
         "epics": [{"summary": "Epic", "stories": [
             {"key": "S1", "summary": "Do thing"},
@@ -9258,7 +9239,7 @@ def test_dispatch_story_writes_oracle_files_into_worktree(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(4242))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9292,7 +9273,7 @@ def test_dispatch_story_forwards_acceptance_paths_to_local_driver(
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9329,7 +9310,7 @@ def test_dispatch_story_forwards_acceptance_paths_under_explicit_provider_name(
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9362,7 +9343,7 @@ def test_dispatch_story_omits_oracle_env_when_no_acceptance(
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9397,7 +9378,7 @@ def test_dispatch_story_skips_oracle_write_when_resumed(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1234))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9434,7 +9415,7 @@ def test_dispatch_story_local_rework_resumes_transcript_when_present(
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9481,7 +9462,7 @@ def test_dispatch_story_explicit_provider_rework_resumes_transcript_when_present
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9516,7 +9497,7 @@ def test_dispatch_story_local_rework_falls_back_when_transcript_missing(
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9555,7 +9536,7 @@ def test_dispatch_story_local_rework_empty_review_feedback_skips_resume_path(
 
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9589,7 +9570,7 @@ def test_dispatch_story_claude_rework_unaffected_by_transcript_resume(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: popen_calls.append(cmd) or _FakeProc(6004))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -9626,7 +9607,7 @@ def test_dispatch_warns_on_loaded_model_mismatch(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1234))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
@@ -9662,7 +9643,7 @@ def test_dispatch_warns_on_loaded_model_mismatch_under_explicit_provider_name(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1235))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
@@ -9692,7 +9673,7 @@ def test_dispatch_no_warn_when_same_model_loaded(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1234))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
@@ -9726,7 +9707,7 @@ def test_dispatch_no_warn_when_no_agents_in_progress(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1234))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
@@ -9758,7 +9739,7 @@ def test_dispatch_no_warn_when_max_concurrent_agents_is_one(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1234))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
@@ -9789,7 +9770,7 @@ def test_dispatch_no_warn_for_claude_backend(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1234))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
@@ -9826,7 +9807,7 @@ def test_dispatch_no_warn_when_resolved_tier_matches_loaded(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1236))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
@@ -9860,7 +9841,7 @@ def test_dispatch_warns_with_resolved_tag_when_tier_mismatches_loaded(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, **kw: _FakeProc(1237))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
@@ -11607,7 +11588,7 @@ def test_dispatch_story_decompose_rework_translates_feedback_into_fix_checklist(
         return _FakeProc(9010)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11654,7 +11635,7 @@ def test_dispatch_story_decompose_off_rework_uses_raw_feedback_unchanged(
         return _FakeProc(9011)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11695,7 +11676,7 @@ def test_dispatch_story_decompose_rework_fails_open_when_fix_planner_returns_non
         return _FakeProc(9012)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11725,7 +11706,7 @@ def test_dispatch_story_decompose_off_by_default_skips_planner(
     monkeypatch.setattr(p, "_run_planner", _boom)
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9001))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11765,7 +11746,7 @@ def test_dispatch_story_decompose_cloud_writes_plan_and_augments_local_prompt(
         return _FakeProc(9002)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11810,7 +11791,7 @@ def test_dispatch_story_decompose_scratchpad_off_omits_scratchpad_instruction(
         return _FakeProc(9007)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11843,7 +11824,7 @@ def test_dispatch_story_decompose_scratchpad_defaults_on(
         return _FakeProc(9008)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11887,7 +11868,7 @@ def test_dispatch_story_decompose_passes_include_scratchpad_flag_to_planner(
         monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
         monkeypatch.setattr(backend.subprocess, "Popen",
                             lambda cmd, env, **kw: _FakeProc(9009))
-        monkeypatch.setattr(p, "plane_request",
+        monkeypatch.setattr(pt, "plane_request",
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
         monkeypatch.setattr(p, "_default_branch", lambda: "main")
         assert p.dispatch_story(plan_name, story_key)["ok"] is True
@@ -11928,7 +11909,7 @@ def test_dispatch_story_passes_plan_role_config_from_manifest_to_planner(
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen",
                         lambda cmd, env, **kw: _FakeProc(9009))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11954,7 +11935,7 @@ def test_dispatch_story_decompose_skips_for_claude_backend(
     monkeypatch.setattr(p, "_run_planner", _boom)
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9003))
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -11986,7 +11967,7 @@ def test_dispatch_story_decompose_fails_open_when_planner_returns_none(
         return _FakeProc(9004)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -12032,7 +12013,7 @@ def test_dispatch_story_decompose_skips_replanning_on_resume_but_keeps_referenci
         return _FakeProc(9005)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
@@ -12086,7 +12067,7 @@ def test_dispatch_story_excludes_decompose_artifacts_from_worktree_tracking(
         return real_popen(cmd, **kw)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _discriminating_popen)
-    monkeypatch.setattr(p, "plane_request",
+    monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "master")
 

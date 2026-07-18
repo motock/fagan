@@ -2439,10 +2439,13 @@ def test_claude_reviewer_prompt_mentions_diff_stat():
     to silently-truncated diffs on Tier-2 multi-file stories."""
     import importlib
     p = importlib.import_module("pipeline_mcp_server")
-    src = open(p.__file__).read()
-    assert "git diff --stat" in src
+    server_src = open(p.__file__).read()
+    # The reviewer prompt now lives in pipeline_review.py; check both.
+    review_src = open(p.__file__.replace("pipeline_mcp_server", "pipeline_review")).read()
+    combined = server_src + review_src
+    assert "git diff --stat" in combined
     # And it should explicitly warn about the truncation.
-    assert "3000 chars" in src or "truncat" in src.lower()
+    assert "3000 chars" in combined or "truncat" in combined.lower()
 
 
 def test_run_readonly_tool_truncates_bash_output_at_3000_chars(tmp_path, monkeypatch):

@@ -26,6 +26,7 @@ import pipeline_ci as pci
 import pipeline_mcp_server as p
 import pipeline_persistence as ppers
 import pipeline_persona as pper
+import pipeline_review as prev
 import pipeline_ticketing as pt
 import pipeline_usage as pusage
 import role_registry
@@ -1847,7 +1848,7 @@ def test_run_reviewer_prompt_includes_resolved_venv_pytest_command(agents_dir, m
         assert cwd == Path("/tmp/some-worktree")
         return resolved_dir, [str(resolved_python), "-m", "pytest"]
 
-    monkeypatch.setattr(p, "detect_test_command", _fake_detect)
+    monkeypatch.setattr(prev, "detect_test_command", _fake_detect)
 
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
 
@@ -1874,7 +1875,7 @@ def test_run_reviewer_prompt_reflects_non_python_fallback_command(agents_dir, mo
 
     monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
     resolved_dir = tmp_path / "worktree"
-    monkeypatch.setattr(p, "detect_test_command", lambda cwd: (resolved_dir, ["npm", "test"]))
+    monkeypatch.setattr(prev, "detect_test_command", lambda cwd: (resolved_dir, ["npm", "test"]))
 
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
 
@@ -1904,7 +1905,7 @@ def test_run_reviewer_falls_back_to_generic_instruction_when_detection_raises(
     def _boom(cwd):
         raise OSError("boom")
 
-    monkeypatch.setattr(p, "detect_test_command", _boom)
+    monkeypatch.setattr(prev, "detect_test_command", _boom)
 
     output = p._run_reviewer("/tmp/does-not-exist", "agent/some-branch")
 

@@ -23,6 +23,7 @@ import pytest
 
 import backend
 import pipeline_ci as pci
+import pipeline_concurrency as pcon
 import pipeline_mcp_server as p
 import pipeline_persistence as ppers
 import pipeline_persona as pper
@@ -89,9 +90,11 @@ def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
-    # pipeline_persistence imports PLAN_DIR from pipeline_paths at module load
-    # and reads it as a free var, so patches must land on its own binding too.
+    # pipeline_persistence and pipeline_concurrency import PLAN_DIR from
+    # pipeline_paths at module load and read it as a free var, so patches
+    # must land on their own bindings too.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
+    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 
@@ -4051,7 +4054,7 @@ def test_check_story_status_acquires_heavy_lock_for_cargo(
             except OSError:
                 pass
 
-    monkeypatch.setattr(p.fcntl, "flock", _counting_flock)
+    monkeypatch.setattr(pcon.fcntl, "flock", _counting_flock)
 
     # Stub cargo so the test doesn't actually compile.
     monkeypatch.setattr(p.subprocess, "run",

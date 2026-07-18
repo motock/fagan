@@ -1,7 +1,12 @@
 # Plan — Production TDD-Split (tech-lead writes tests, weak local model implements)
 
-**Status:** Scoped, not started. Written 2026-07-18, following the isolated-cell
-experiment in `tests/benchmark/tdd_split_experiment.py` (see
+**Status:** Phases 1-4 implemented and merged 2026-07-18 (PR #125). Phase 5
+(live validation) run the same day against one story in a disposable sandbox
+repo — see Results below: SUCCESS after fixing two bugs the run surfaced (PR
+#126, PR #127). Phase 6 (ship-or-kill) is not yet decided — n=1, happy-path
+only, no forced rework cycle observed; see Results for the open gaps. Written
+2026-07-18, following the isolated-cell experiment in
+`tests/benchmark/tdd_split_experiment.py` (see
 `memory/project_tdd_split_experiment_result.md` for the raw result this plan is
 based on).
 
@@ -354,4 +359,81 @@ ingest-ready story definitions (`ingest_plan`'s actual schema — `summary` +
 
 ## Results
 
-*(Not yet run — this section is filled in during phase 5.)*
+### Phase 5 — live validation run (2026-07-18)
+
+**Setup:** One story (`ratelimiter_inspect`'s same token-bucket spec, reused
+verbatim from the §1.1 experiment for a like-for-like comparison), run through
+the real `dispatch_story` → `review_story` → `advance_pipeline` merge-gate
+path — not the isolated harness. Disposable sandbox repo (real GitHub repo,
+real CI workflow mirroring this repo's own `ci.yml`), driven by a standalone
+script (`advance_pipeline` polled directly, same primitive the production
+scheduler uses) so as not to touch the live MCP server process or any real
+plan. `test_author` = Claude Sonnet (`role_config`), reviewer = Claude Sonnet
+(the persona's declared default), implementer/dispatch = `gpt-oss:20b` local
+via Ollama. `PIPELINE_TDD_SPLIT=on`, story `tdd_split=true`.
+
+**Attempt 1 — FAILED**, and revealed a real bug: the test-author dispatch
+(Claude Sonnet) wrote a correct, self-validated 35-test suite and confirmed it
+RED, but never ran `git commit` — `_test_author_prompt` never instructed it to
+(only the main executor's prompt had a "commit your work" line).
+`_worktree_has_new_commits` saw no commit, `_run_test_author_phase` reported
+failure despite the test-authoring succeeding, and the uncommitted test file
+left in the worktree confused the `gpt-oss` implementer into a repetition-guard
+park after 6 steps. **Fixed and merged as PR #126.**
+
+**Attempt 2 — FAILED again**, on an unrelated, pre-existing issue: with the
+commit fix in place, the test-author phase now worked end-to-end (clean
+commit, marker written, executor correctly received the "tests already
+written, don't touch them" steering). But `gpt-oss:20b` called `view_file`
+with hallucinated arguments (`{line_start, line_end}` in place of the tool's
+declared `{path}`), got back a bare `"ERROR running view_file: KeyError:
+'path'"`, needed several malformed retries to self-correct, and tripped the
+per-target repetition guard into a park before ever writing the
+implementation. Not a TDD-split defect — this is a general local-dispatch
+tool-calling robustness gap (`scripts/local_agent.py`). **Fixed and merged as
+PR #127** (`safe_run_tool` now appends the tool's actual required
+keys + what was passed, as a strict superset of the existing error text).
+
+**Attempt 3 — SUCCESS.** Full path: test-author commit
+(`"Add TDD test suite for TokenBucket rate limiter"`, 272 lines) → `gpt-oss`
+implementer commit (`"wip(S1): final-commit"`, 125 lines, **zero deletions to
+`test_rate_limiter.py`** — direct evidence the implementer never touched the
+tests) → Claude Sonnet reviewer `APPROVE` → real rebase/CI (`Test: SUCCESS`)
+→ real squash-merge ([PR #1](https://github.com/fico-jessecarroll/tdd-split-validation/pull/1)
+on the sandbox repo) → story status `done`. Notably, `gpt-oss` hit the *same*
+argument-hallucination pattern again on this run, but the improved error from
+PR #127 let it self-correct via a "read-heavy nudge" (switched to `sed` to
+read the file) instead of parking — direct evidence the fix works, not just a
+lucky retry. Total cost: ~$1.82 across all three attempts (test-author
+dispatches only; reviewer/CI cost not separately metered).
+
+**What this confirms, from §3's "NOT proven" list:**
+- The test-author phase's commit lands as a distinct commit from the
+  implementer's, and the merge-gate/rebase/CI path handles the two-commit
+  shape correctly (§3, third bullet) — CONFIRMED.
+- The implementer respects "don't touch the tests" under real production
+  wiring (§3, first bullet, partial) — CONFIRMED for a clean single-pass run;
+  **NOT yet confirmed under actual rework pressure** — this run's reviewer
+  APPROVEd on the first pass, so no `REQUEST_CHANGES` → redispatch cycle was
+  exercised. The `GUIDED_DECOMPOSITION_PLAN.md` lru_cache t8 precedent (a
+  stressed executor edited a forbidden test file when stuck) remains the
+  standing risk this specific path has not stress-tested.
+- The reviewer produces a sane verdict against tests it didn't author (§3,
+  second bullet) — CONFIRMED for an APPROVE; not tested against a case
+  where the reviewer should catch something wrong.
+
+**What's still NOT proven:**
+- n=1, one task, happy path only (no rework cycle, no CI failure, no
+  reviewer REQUEST_CHANGES) — same breadth caveat §3 already called out.
+- A real `ingest_plan` gap found and worked around (not fixed) during this
+  run: `ingest_plan` does not copy a plan's top-level `role_config` into the
+  manifest — `_plan_role_config` reads it from the MANIFEST, not the source
+  plan JSON, so `save_plan` + `ingest_plan` alone cannot configure the
+  `test_author` role; the validation script patched the manifest directly to
+  work around it (mirroring how `test_pipeline_mcp_server.py`'s own
+  `role_config` tests already do). Not yet filed as its own fix.
+
+**Phase 6 (ship-or-kill): not yet decided.** The mechanism works and is
+production-wired, but the n=1/happy-path-only evidence above is not enough to
+recommend a default-on rollout; treat this as "ready for a broader validation
+pass" rather than "validated for general use."

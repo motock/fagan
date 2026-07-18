@@ -689,8 +689,11 @@ def _test_author_prompt(agent_instructions: str) -> str:
         "required fields, boundary values (zero, one, min, max, empty "
         "collections), and expected exceptions (assert both type and "
         "message where meaningful). When the test file is written and "
-        "confirmed red, say you are done - do not attempt the "
-        "implementation yourself."
+        "confirmed red, commit it (`git add` the test file(s), then `git "
+        "commit`) - the next dispatch builds on this same branch and needs "
+        "your work committed to see it, exactly like it would need any "
+        "other finished step committed. Do not push. Then say you are done "
+        "- do not attempt the implementation yourself."
     )
 
 

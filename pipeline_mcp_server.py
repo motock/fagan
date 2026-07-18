@@ -269,6 +269,15 @@ from pipeline_review import (  # noqa: F401
     _run_security_reviewer,
 )
 
+# PR open / merge helpers. _merge_decision stays in the server (reads
+# PIPELINE_AUTONOMY / PIPELINE_RISK_THRESHOLD / _RISK_ORDER, patched across
+# many functions). _merge_pr reads REPO_ROOT via a lazy import from the
+# server.
+from pipeline_pr import (  # noqa: F401
+    _open_pr,
+    _merge_pr,
+)
+
 
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
 
@@ -404,39 +413,6 @@ def _scoped_repo_root(plan_name: str):
 
 
 
-def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
-    """Push the story's branch and open a PR for it via the gh CLI.
-
-    External boundary: spawns `git`/`gh`. Tests mock this function (or
-    subprocess.run) rather than hitting a real remote.
-    """
-    branch = f"agent/{story_key.lower()}"
-    title = f"{story_key}: {story['summary']}"
-    body = story.get("pr_body") or (
-        f"Automated PR for {story_key} produced by the agent pipeline."
-    )
-
-    subprocess.run(
-        ["git", "push", "-u", "origin", branch],
-        cwd=worktree, check=True, capture_output=True, text=True,
-    )
-    try:
-        proc = subprocess.run(
-            ["gh", "pr", "create", "--title", title, "--body", body, "--head", branch],
-            cwd=worktree, check=True, capture_output=True, text=True,
-        )
-        return proc.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        # A dispatched agent's own Bash access can include `gh pr create`,
-        # so a PR may already exist by the time review_story gets here.
-        # Recover its URL instead of failing the whole pipeline tick.
-        if "already exists" not in (e.stderr or ""):
-            raise
-        proc = subprocess.run(
-            ["gh", "pr", "view", branch, "--json", "url", "-q", ".url"],
-            cwd=worktree, check=True, capture_output=True, text=True,
-        )
-        return proc.stdout.strip()
 
 
 # ---------- Merge adjudication / notifications ----------
@@ -463,34 +439,6 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
     return {"action": "park", "reason": f"risk above threshold {PIPELINE_RISK_THRESHOLD}"}
 
 
-def _merge_pr(worktree: str, story_key: str) -> str:
-    """Squash-merge the story's PR, then remove its worktree and branches.
-
-    External boundary: spawns `git`/`gh`. Tests mock this function (or
-    subprocess.run) rather than hitting a real remote.
-
-    Deliberately does not pass --delete-branch to `gh pr merge`: that asks
-    gh to switch the local checkout away from the branch being deleted,
-    which fails here because the branch is checked out in its own worktree
-    while REPO_ROOT has another branch checked out (the normal state for
-    this pipeline's one-worktree-per-story model). Branch/worktree cleanup
-    is done explicitly below, from REPO_ROOT, after the merge succeeds.
-    """
-    branch = f"agent/{story_key.lower()}"
-    proc = subprocess.run(
-        ["gh", "pr", "merge", branch, "--squash"],
-        cwd=worktree, check=True, capture_output=True, text=True,
-    )
-    result = proc.stdout.strip()
-
-    subprocess.run(["git", "worktree", "remove", "--force", worktree],
-                    cwd=REPO_ROOT, capture_output=True, text=True)
-    subprocess.run(["git", "branch", "-D", branch],
-                    cwd=REPO_ROOT, capture_output=True, text=True)
-    subprocess.run(["git", "push", "origin", "--delete", branch],
-                    cwd=REPO_ROOT, capture_output=True, text=True)
-
-    return result
 
 
 # ---------- Rebase-before-merge + CI gate (Mode 9) ----------

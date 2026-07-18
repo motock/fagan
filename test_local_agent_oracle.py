@@ -1748,3 +1748,232 @@ def test_recover_tool_calls_tolerates_raw_newlines_in_json_string():
 def test_recover_tool_calls_returns_none_on_non_toolcall_prose():
     """The repair pass must fail closed on ordinary prose - no phantom call."""
     assert lao.recover_tool_calls("Looks good, nothing left to change.") is None
+
+
+# ---------------------------------------------------------------------------
+# L1: harness-enforced full-suite done-bar on CI-fail rework rounds.
+# (REVIEWER_ESCALATION_PLAN.md Layer 1.) On a rework round triggered by a
+# merge-gate CI failure, the agent's own broken test is the defect, but the
+# acceptance oracle excludes that test file - so oracle-green must NOT be
+# allowed to terminate the loop. finish_if_green must additionally require the
+# full worktree suite green, feeding the failing excerpt back. Cold-start
+# behavior stays byte-for-byte identical (oracle-green remains the bar).
+# ---------------------------------------------------------------------------
+
+def _finish_if_green_spy(monkeypatch, *, oracle_ok, full_ok, full_tail=""):
+    """Wire oracle_result / _full_suite_result / auto_commit / worktree_dirty
+    to deterministic fakes and return (messages, commits, full_calls) so a test
+    can assert on termination + fed-back excerpt + commit side effects."""
+    messages: list = []
+    commits: list = []
+    full_calls: list = []
+
+    def _oracle():
+        return (oracle_ok, "(oracle stub)")
+
+    def _full():
+        full_calls.append(True)
+        return (full_ok, full_tail)
+
+    monkeypatch.setattr(lao, "oracle_result", _oracle)
+    monkeypatch.setattr(lao, "_full_suite_result", _full)
+    monkeypatch.setattr(lao, "auto_commit", lambda reason: commits.append(reason))
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: True)
+    return messages, commits, full_calls
+
+
+def test_finish_if_green_cold_start_terminates_on_oracle_green_only(monkeypatch):
+    """Cold start (REWORK_FULL_SUITE unset): oracle green is the done-bar and
+    the full suite is NEVER consulted - even when it would fail. Proves the
+    rework gate is scoped, not global, so a fresh dispatch's behavior is
+    unchanged."""
+    messages, commits, full_calls = _finish_if_green_spy(
+        monkeypatch, oracle_ok=True, full_ok=False, full_tail="would-fail-but-uncalled"
+    )
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", False)
+    assert lao.finish_if_green(3, messages=messages) is True
+    assert commits == ["feat: implement task (acceptance oracle green)"]
+    assert full_calls == []  # the full suite was not run on a cold start
+
+
+def test_finish_if_green_rework_round_blocks_done_when_full_suite_fails(monkeypatch):
+    """CI-fail rework round: oracle green but the agent's own test still fails.
+    finish_if_green must NOT terminate, must NOT commit, and must feed the
+    failing-test excerpt back into messages so the agent works the broken
+    assertion on the next loop iteration instead of declaring done."""
+    excerpt = "AssertionError: assert 9.0 == 3.0  - test_rate_limiter.py:62"
+    messages, commits, full_calls = _finish_if_green_spy(
+        monkeypatch, oracle_ok=True, full_ok=False, full_tail=excerpt
+    )
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    assert lao.finish_if_green(7, messages=messages) is False
+    assert commits == []  # no auto-commit while the agent's own test still fails
+    assert full_calls == [True]
+    # The failing excerpt was fed back as a user turn so the model sees it.
+    assert any(m["role"] == "user" and excerpt in m["content"] for m in messages), messages
+
+
+def test_finish_if_green_rework_round_terminates_when_full_suite_green(monkeypatch):
+    """CI-fail rework round: agent fixed its own test, full suite now green
+    alongside the oracle. finish_if_green must terminate and commit - the
+    raised done-bar is satisfied. This is the convergence case."""
+    messages, commits, full_calls = _finish_if_green_spy(
+        monkeypatch, oracle_ok=True, full_ok=True, full_tail=""
+    )
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    assert lao.finish_if_green(9, messages=messages) is True
+    assert commits == ["feat: implement task (acceptance oracle green)"]
+    assert full_calls == [True]
+
+
+def test_finish_if_green_rework_oracle_not_green_returns_false(monkeypatch):
+    """Oracle not green: no termination regardless of rework flag - the oracle
+    is still the primary bar; the full suite is an additional gate on top."""
+    messages, commits, full_calls = _finish_if_green_spy(
+        monkeypatch, oracle_ok=False, full_ok=True, full_tail=""
+    )
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    assert lao.finish_if_green(2, messages=messages) is False
+    assert commits == []
+    assert full_calls == []  # short-circuited: oracle not green, suite not run
+
+
+def test_full_suite_result_runs_unscoped_test_cmd_and_captures_tail(monkeypatch, tmp_path):
+    """_full_suite_result runs the detected test_cmd UNscoped - the full
+    worktree suite, NOT acceptance-scoped like oracle_result. It must reuse
+    detect_test_command + the heavy lock and return (rc==0, tail[-500:]),
+    mirroring the merge gate's _ci_status_stub (tests/benchmark/harness.py)."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_oracle.py"])
+
+    recorded: dict = {}
+
+    def _detect(cwd):
+        recorded["cwd"] = cwd
+        return (tmp_path, ["pytest", "-q"])
+
+    class _R:
+        returncode = 1
+        stdout = ""
+        stderr = "FAILED test_rate_limiter.py::test_time_backwards_no_refill - assert 9.0 == 3.0"
+
+    def _run(argv, cwd, capture_output, text):
+        recorded["argv"] = argv
+        return _R()
+
+    monkeypatch.setattr(lao.p, "detect_test_command", _detect)
+    monkeypatch.setattr(lao.p, "_is_heavy", lambda argv: False)
+    monkeypatch.setattr(lao.subprocess, "run", _run)
+
+    ok, tail = lao._full_suite_result()
+    assert ok is False
+    # Unscoped: the acceptance paths were NOT appended (contrast oracle_result,
+    # which appends ACCEPTANCE_PATHS to the pytest argv).
+    assert recorded["argv"] == ["pytest", "-q"]
+    assert "assert 9.0 == 3.0" in tail
+    assert len(tail) <= 500
+
+
+def test_full_suite_result_no_test_cmd_returns_pass(monkeypatch, tmp_path):
+    """No detectable test command -> nothing to fail. Return (True, '') so the
+    rework done-bar is satisfied (mirrors _ci_status_stub's 'no test_cmd ->
+    pass' and oracle_result's 'no acceptance -> pass')."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_oracle.py"])
+    monkeypatch.setattr(lao.p, "detect_test_command", lambda cwd: (tmp_path, None))
+    ok, tail = lao._full_suite_result()
+    assert ok is True
+    assert tail == ""
+
+
+# ---------------------------------------------------------------------------
+# L1 done-bypass gap (found in live validation 2026-07-18): the oracle agent
+# has TWO termination paths - the auto finish_if_green (gated above) AND a
+# model-called `done` tool. The `done` handler must ALSO require the full
+# suite green on a rework round, or the model can dodge the raised done-bar by
+# calling `done` (observed: gpt-oss called done on round 3 with its own pasted
+# pytest showing "3 failed, 19 passed" - oracle green, done accepted, bypassed
+# the gate finish_if_green enforces).
+# ---------------------------------------------------------------------------
+
+def test_oracle_done_rejected_on_rework_round_when_full_suite_fails(
+    tmp_path, monkeypatch, capsys
+):
+    """CI-fail-rework round: model calls `done`, oracle green, but the agent's
+    own test still fails. The `done` handler must NOT terminate - it must feed
+    the failing excerpt back and reject, mirroring finish_if_green's gate, so
+    the model can't dodge the raised done-bar by calling done instead of
+    letting the auto-check fire. Bounded by MAX_STEPS."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(lao, "MAX_STEPS", 3)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
+    excerpt = "FAILED test_rate_limiter.py::test_time_moves_backward - assert True is False"
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (False, excerpt))
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
+
+    fake, calls = _sequence_chat([("done", {"summary": "all done"})])
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc != 0, f"done bypassed the rework full-suite gate; rc={rc}\n{out!r}"
+    assert "DONE (oracle green)" not in out, out
+    assert "done rejected — full test suite still fails" in out, out
+    # The excerpt was fed back to the next turn.
+    assert len(calls) >= 2
+    last_user = [m for m in calls[1] if m["role"] == "user"][-1]
+    assert excerpt in last_user["content"], last_user["content"]
+
+
+def test_oracle_done_accepted_on_cold_start_without_consulting_suite(
+    tmp_path, monkeypatch, capsys
+):
+    """Cold start (REWORK_FULL_SUITE unset): `done` with oracle green is
+    accepted as today (rc=0) and the full suite is NEVER consulted - proves
+    the done-handler gate is scoped to rework rounds, not global."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", False)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
+    suite_calls: list = []
+    monkeypatch.setattr(
+        lao, "_full_suite_result",
+        lambda: suite_calls.append(True) or (False, "would-fail-but-uncalled"),
+    )
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
+
+    fake, _ = _sequence_chat([("done", {"summary": "done"})])
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    assert rc == 0  # accepted, as today
+    assert suite_calls == []  # suite never consulted on a cold start
+
+
+def test_oracle_done_accepted_on_rework_round_when_full_suite_green(
+    tmp_path, monkeypatch
+):
+    """CI-fail-rework round, agent fixed its own test: oracle green AND full
+    suite green -> `done` accepted (rc=0). The convergence case through the
+    done path."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (True, ""))
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
+
+    fake, _ = _sequence_chat([("done", {"summary": "fixed"})])
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    assert rc == 0

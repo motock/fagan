@@ -414,6 +414,14 @@ def main() -> int:
 
     ts = time.strftime("%Y%m%d_%H%M%S")
     outdir = Path(args.outdir) if args.outdir else BENCH / "_runs" / f"tdd_split_{ts}"
+    # Resolve to an absolute path: OllamaDriver.dispatch builds
+    # LOCAL_AGENT_TRANSCRIPT_PATH = Path(cwd) / ".agent_transcript.json" and
+    # spawns local_agent.py with cwd=<worktree>. With a relative outdir, cwd is
+    # relative, the transcript path is relative, and local_agent's own cwd
+    # (the worktree) doesn't contain that relative path -> every persist fails
+    # with "[local_agent] persistence error: [Errno 2] No such file ... repo/..agent_transcript.json.tmp".
+    # Production always passes an absolute worktree path, so resolve here to match.
+    outdir = outdir.resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     print(f"TDD-split experiment -> {outdir}", flush=True)
 

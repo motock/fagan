@@ -11572,6 +11572,21 @@ def _make_worktree_repo(tmp_path, branch):
     return repo, wt
 
 
+def test_test_author_prompt_instructs_committing_the_test_file():
+    """Live validation run (2026-07-18, disposable sandbox repo): Claude
+    Sonnet wrote a genuinely correct 35-test suite, confirmed it RED, and
+    said 'Done' - but never ran `git commit`, because this prompt never
+    told it to. _worktree_has_new_commits then saw zero commits and
+    _run_test_author_phase reported failure even though the test-authoring
+    itself succeeded, leaving an uncommitted test file in the worktree that
+    then confused the executor into a repetition-guard park. The executor's
+    own prompt (_build_dispatch_command) already ends with "commit your
+    work, push the branch, and exit" - the test-author prompt needs the
+    equivalent instruction."""
+    prompt = p._test_author_prompt("Build a widget.")
+    assert "commit" in prompt.lower()
+
+
 def test_run_test_author_phase_skips_when_role_unconfigured(monkeypatch, tmp_path):
     monkeypatch.delenv("PIPELINE_BACKEND_TEST_AUTHOR", raising=False)
 

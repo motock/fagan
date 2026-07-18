@@ -33,6 +33,25 @@ def test_safe_run_tool_recovers_missing_required_arg(tmp_path, monkeypatch):
     assert "KeyError" in result
 
 
+def test_safe_run_tool_appends_required_args_hint_on_missing_key(tmp_path, monkeypatch):
+    """Live validation run (2026-07-18, TDD_SPLIT_PRODUCTION_PLAN.md Phase 5):
+    gpt-oss:20b called view_file with hallucinated {"line_start", "line_end"}
+    keys instead of the declared {"path"}, got back a bare "ERROR running
+    view_file: KeyError: 'path'", and needed 2-3 more malformed retries
+    before self-correcting - tripping the per-target repetition guard into a
+    park. The bare KeyError names what's missing but not the tool's actual
+    required shape. Augment (not replace - test_safe_run_tool_recovers_
+    missing_required_arg above must keep passing unchanged) the existing
+    error with the schema's required keys and what was actually passed, so
+    a weak model has enough information to correct itself in one retry."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "f.txt").write_text("some content")
+    result = la.safe_run_tool("str_replace", {"path": "f.txt"})
+    assert "requires" in result
+    assert "old_str" in result
+    assert "new_str" in result
+
+
 def test_safe_run_tool_passes_through_normal_results(tmp_path, monkeypatch):
     monkeypatch.setattr(la, "CWD", tmp_path)
     result = la.safe_run_tool("create_file", {"path": "new.txt", "content": "hi"})

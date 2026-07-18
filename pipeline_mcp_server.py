@@ -3225,6 +3225,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # we're actually invoking that driver so Claude's signature stays clean.
         if dispatch_backend in _LOCAL_BACKEND_NAMES and acceptance_paths:
             dispatch_kwargs["acceptance"] = acceptance_paths
+        # L1 (REVIEWER_ESCALATION_PLAN.md): a CI-triggered rework
+        # (story["ci_rework"], set by the merge-CI rework router) raises the
+        # agent's done-bar to full-suite-green so it cannot declare done while
+        # its own broken test still fails. Local-only: the env reaches the
+        # local agent subprocess; Claude's dispatch signature stays clean.
+        if dispatch_backend in _LOCAL_BACKEND_NAMES and story.get("ci_rework"):
+            dispatch_kwargs["rework_full_suite"] = True
 
         if resume_via_transcript:
             dispatch_kwargs["resume_transcript_path"] = transcript_path
@@ -4746,6 +4753,14 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 if rework_ok:
                     attempts = story.get("merge_attempts", 0) + 1
                     story["merge_attempts"] = attempts
+                    # L1 (REVIEWER_ESCALATION_PLAN.md): flag this rework as
+                    # CI-triggered so the next dispatch_story raises the
+                    # agent's done-bar to full-suite-green (env
+                    # LOCAL_AGENT_REWORK_FULL_SUITE). Without it the rework
+                    # keeps the oracle-green bar and re-fails CI on the same
+                    # assertion every round (the agent's own broken test is
+                    # invisible to the acceptance-scoped oracle/reviewer).
+                    story["ci_rework"] = True
                     story["review_feedback"] = (
                         "The merge-gate CI check failed on your submitted branch "
                         f"(reviewer already APPROVEd this work):\n{gate_error}\n\n"
@@ -4797,6 +4812,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             story.pop("merge_attempts", None)
             story.pop("parked_reason", None)
             story.pop("ci_rerun_attempted", None)
+            story.pop("ci_rework", None)  # L1: clear the rework flag on done
             _mark_plane_done(key, plan_name)
             summary["merged"].append(key)
         _atomic_write_json(manifest_path, manifest)

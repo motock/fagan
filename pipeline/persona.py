@@ -12,8 +12,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from pipeline_paths import AGENTS_DIR
-from pipeline_config import DEFAULT_MODEL, _LOCAL_SKIP_PERSONAS
+from .paths import AGENTS_DIR
+from .config import DEFAULT_MODEL, _LOCAL_SKIP_PERSONAS
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)

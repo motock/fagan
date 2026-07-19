@@ -17,8 +17,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from pipeline_parsers import _atomic_write_json
-from pipeline_persistence import _notify_user
+from .parsers import _atomic_write_json
+from .persistence import _notify_user
 
 
 def _escalate_to_claude(
@@ -36,7 +36,7 @@ def _escalate_to_claude(
     clean-slate teardown applies since a repeated step-cap streak isn't a
     trustworthy foundation for Claude to build on either.
     """
-    from pipeline_mcp_server import REPO_ROOT, PLAN_DIR
+    from .server import REPO_ROOT, PLAN_DIR
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
@@ -77,7 +77,7 @@ def _escalate_to_local_fallback_model(
     since the prior run may have left broken/half-written state a different
     model shouldn't inherit.
     """
-    from pipeline_mcp_server import REPO_ROOT, PLAN_DIR
+    from .server import REPO_ROOT, PLAN_DIR
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"

@@ -14,7 +14,7 @@ through the re-export to the patched binding.
 
 import backend
 import role_registry
-from pipeline_persona import _persona_body, _persona_default_model
+from .persona import _persona_body, _persona_default_model
 
 
 def _load_policy() -> str:
@@ -23,7 +23,7 @@ def _load_policy() -> str:
     # patched by tests via p.<name>; reading them here at call time sees the
     # patched value. The server imports this module at top level, so a
     # module-load import would cycle.
-    from pipeline_mcp_server import POLICY_PATH, REPO_ROOT
+    from .server import POLICY_PATH, REPO_ROOT
     parts = []
     if POLICY_PATH.exists():
         parts.append(POLICY_PATH.read_text())

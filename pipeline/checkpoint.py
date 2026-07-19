@@ -17,9 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pipeline_git_ops import _commit_wip
-from pipeline_persistence import _append_journal
-from pipeline_parsers import _atomic_write_json
+from .git_ops import _commit_wip
+from .persistence import _append_journal
+from .parsers import _atomic_write_json
 
 
 def _terminate_and_checkpoint(
@@ -60,7 +60,7 @@ def _checkpoint_impl(
     calls this in-process for its `checkpoint` tool) without exposing this
     whole server's orchestration toolset (dispatch_story, approve_merge,
     advance_pipeline, ...) to a dispatched agent."""
-    from pipeline_mcp_server import PLAN_DIR
+    from .server import PLAN_DIR
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)

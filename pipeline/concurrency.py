@@ -17,8 +17,8 @@ import os
 import threading
 from contextlib import contextmanager
 
-from pipeline_paths import PLAN_DIR
-from pipeline_parsers import _atomic_write_json
+from .paths import PLAN_DIR
+from .parsers import _atomic_write_json
 
 
 def _count_in_progress_agents() -> int:

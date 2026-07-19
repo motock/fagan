@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import backend
-from pipeline_config import (
+from .config import (
     DAILY_REQUEST_THRESHOLD,
     WEEKLY_REQUEST_THRESHOLD,
     SESSION_PAUSE_THRESHOLD,
@@ -33,9 +33,9 @@ from pipeline_config import (
     PIPELINE_LOCAL_MAX_RISK,
     _RISK_ORDER,
 )
-from pipeline_paths import USAGE_STATE_PATH
-from pipeline_parsers import _atomic_write_json
-from pipeline_persona import _persona_requires_claude
+from .paths import USAGE_STATE_PATH
+from .parsers import _atomic_write_json
+from .persona import _persona_requires_claude
 
 
 # ---------- Usage probe ----------

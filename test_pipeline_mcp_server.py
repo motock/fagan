@@ -22,15 +22,16 @@ import httpx
 import pytest
 
 import backend
-import pipeline_ci as pci
-import pipeline_concurrency as pcon
-import pipeline_checkpoint as pcheckpoint
-import pipeline_mcp_server as p
-import pipeline_persistence as ppers
-import pipeline_persona as pper
-import pipeline_review as prev
-import pipeline_ticketing as pt
-import pipeline_usage as pusage
+from pipeline import ci as pci
+from pipeline import concurrency as pcon
+from pipeline import checkpoint as pcheckpoint  # noqa: E402,F401
+from pipeline import server as p
+import pipeline_mcp_server  # noqa: F401  backward compat
+from pipeline import persistence as ppers
+from pipeline import persona as pper
+from pipeline import review as prev
+from pipeline import ticketing as pt
+from pipeline import usage as pusage
 import role_registry
 
 

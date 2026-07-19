@@ -40,6 +40,13 @@ Reference comparables:
 
 ### A1. Land the half-validated work (highest priority — biggest maturity tax)
 
+- [x] **Finish the `pipeline_mcp_server.py` decomposition** (2026-07-19,
+      `PIPELINE_MCP_DECOMPOSITION_PLAN.md`, PR #133). All extracted modules
+      consolidated into a `pipeline/` package; `pipeline_mcp_server.py` is now
+      a thin backward-compat shim. Also fixed a real bug found in the process:
+      `ingest_plan` silently dropped a plan's `role_config` onto the manifest
+      (PR #132), plus a `pipeline/__init__.py` name collision shadowing the
+      `pipeline.checkpoint` submodule.
 - [ ] **Ship or kill guided decomposition.** Untested; Tier-1 dashboard is
       hard-blocked on this decision. Run the validation matrix, then commit +
       document or delete `GUIDED_DECOMPOSITION_PLAN.md` and its plumbing.
@@ -76,8 +83,10 @@ Reference comparables:
 - [ ] **Bound the failure-mode discovery rate.** 19 modes logged; Modes 18–20
       found July 2026 — the system still surfaces new dispatch pathologies.
       Add a "no new modes for N benchmark runs" gate as a stability signal.
-- [ ] **Fix the test-isolation leak** (`load_oracle_module_with_env` mutating
-      `os.environ` without cleanup) — known, cheap, pure hygiene.
+- [x] **Fix the test-isolation leak** (2026-07-18, PR #131) —
+      `load_oracle_module_with_env`/`load_module_with_env` mutating
+      `os.environ` without cleanup; fixed with an `autouse` environ-snapshot
+      fixture in both test files, plus a regression test pair.
 - [ ] **Get CI to an enforced green baseline and tag a real release.** 263
       commits, no release tags — adoption starts with "what version."
 

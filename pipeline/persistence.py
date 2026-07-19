@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pipeline_paths import PLAN_DIR
-from pipeline_parsers import _atomic_write_json
+from .paths import PLAN_DIR
+from .parsers import _atomic_write_json
 
 
 def _notify_user(plan_name: str, message: str) -> None:

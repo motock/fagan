@@ -1,5 +1,15 @@
 # `pipeline_mcp_server.py` Decomposition Plan
 
+**Status (2026-07-19): shipped**, consolidated one step further than this
+plan's original constraint #2 — instead of the tool-decorated functions
+staying in `pipeline_mcp_server.py` at the top level, all extracted modules
+(including the server module itself, tools and all) now live in a single
+`pipeline/` package (`pipeline.server`, `pipeline.ci`, etc.).
+`pipeline_mcp_server.py` is a thin backward-compatibility shim re-exporting
+`pipeline.server`'s full surface, so `import pipeline_mcp_server as p` and
+`python pipeline_mcp_server.py` both still work unchanged, per this plan's
+own constraint #1. Full suite green (1,168 tests) at completion.
+
 **Origin:** 2026-07-18 review. `pipeline_mcp_server.py` is 4,985 lines in one file with ~143 top-level defs/classes and a module-level `FastMCP` instance plus ~30 env-var-driven config constants. The test suite (`test_pipeline_mcp_server.py`, 12,107 lines, 1,138 tests) imports the whole module as `p` and patches attributes on it directly, so any split must preserve `pipeline_mcp_server` as the public surface the tests already see.
 
 **Goal:** break the monolith into cohesive submodules without changing the public API the MCP tools expose or the shape the test suite imports. Keep all 1,138 tests green at every step.

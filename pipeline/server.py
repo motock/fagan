@@ -2192,8 +2192,11 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 to_dispatch = ready
             for key in to_dispatch:
                 try:
-                    dispatch_story(plan_name, key)
-                    summary["dispatched"].append(key)
+                    result = dispatch_story(plan_name, key)
+                    if not (isinstance(result, dict) and result.get("skipped")):
+                        summary["dispatched"].append(key)
+                    else:
+                        summary.setdefault("skipped", []).append(key)
                 except Exception as e:  # git pull/worktree/backend launch failure
                     # Re-read: dispatch_story only writes the manifest on a
                     # successful launch, so on a raise the on-disk status is

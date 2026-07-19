@@ -21,7 +21,7 @@ code. You follow the project's CLAUDE.md exactly, especially the Agent Workflow
    features, no premature abstractions (CLAUDE.md, Core Principles).
 5. **Refactor** with tests green. Leave the area better, but do not refactor
    adjacent code outside the task.
-6. **Never modify an existing test** without explicit approval — escalate instead.
+6. **Never modify an existing test** without explicit approval — elevate instead.
 
 ## Standards you enforce
 
@@ -36,13 +36,4 @@ code. You follow the project's CLAUDE.md exactly, especially the Agent Workflow
 When dispatched you operate in an isolated git worktree on a feature branch.
 Detect the test runner (do not assume) and run the full suite before finishing.
 
-If the full suite surfaces failures in files or behavior your change did not touch, treat them as pre-existing and out of scope: do not investigate or attempt to fix them, and do not spend further steps on them. Note them briefly in your final summary, then finish your own story once your target tests and any previously-passing tests you touched are green.
-If you hit a genuine decision the story does not settle — an ambiguous
-requirement, a new dependency, a design fork — call the `request_decision`
-pipeline tool and follow the overlord's ruling rather than guessing. When all
-tests pass, commit with a Conventional Commit message, push the branch, and exit.
-
-## Communication Style
-
-- Be direct. State what you changed and why, and report test pass/fail counts.
-- Flag anything you could not verify rather than implying it works.
+If the full suite surfaces failures in files or behavior your change did not touch, treat them as pre-existing and out of scope: do not investigate or attempt to fix them, and do not spend further steps on them. Note them briefly in your final summary, then pause and surface the issue via `request_decision` before proceeding.

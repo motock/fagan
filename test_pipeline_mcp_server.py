@@ -22,6 +22,7 @@ import httpx
 import pytest
 
 import backend
+import pipeline_ci as pci
 import pipeline_mcp_server as p
 import pipeline_persistence as ppers
 import pipeline_persona as pper
@@ -5656,7 +5657,7 @@ def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
     # making any subprocess.run raise.
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
-    monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", False)
+    monkeypatch.setattr(pci, "PIPELINE_MERGE_CI_GATE", False)
     _write_manifest(plan_dir, "cidisabled", {
         "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
                "risk": "low", "worktree": "/x"},

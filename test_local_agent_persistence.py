@@ -3,6 +3,22 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_environ():
+    """load_module_with_env below mutates os.environ directly (no
+    monkeypatch) so a freshly-imported module reads the intended values at
+    import time. Restore the snapshot after every test so those mutations
+    never leak into a later test in the same pytest process (see the
+    sibling fixture in test_local_agent_oracle.py)."""
+    snapshot = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(snapshot)
+
+
 # Helper to load module fresh with given env vars
 
 def load_module_with_env(env_vars):

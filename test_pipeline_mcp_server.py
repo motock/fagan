@@ -4338,6 +4338,13 @@ def test_check_story_status_running_without_dispatched_at_skips_watchdog(
 
 
 # ---------- advance_pipeline orchestration ----------
+
+def test_advance_pipeline_does_not_report_skipped_locked_as_dispatched(plan_dir, monkeypatch):
+    _write_manifest(plan_dir, "skipplan", {"PIPE-9": {"status":"todo"}})
+    monkeypatch.setattr(p, "dispatch_story", lambda plan, key: {"ok": True, "skipped": "locked"})
+    result = p.advance_pipeline("skipplan")
+    assert "PIPE-9" not in result.get("dispatched", [])
+
 # advance_pipeline is a coordinator; the per-story operations (dispatch_story,
 # check_story_status, review_story, gh merge) are exercised by their own tests
 # above, so here we substitute test doubles to verify routing and gating.

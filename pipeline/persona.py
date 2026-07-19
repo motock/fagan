@@ -97,7 +97,7 @@ def _build_dispatch_command(
         completed = "\n".join(
             f"  - [{e['step']}] {e['summary']}" for e in resume_journal
         )
-        next_hint = resume_journal[-1].get("next_hint") or "Review the worktree state and continue."
+        next_hint = resume_journal[-1].get("next_hint") or "Your WIP is committed — see the completed steps above and git log/git diff, do not re-read the worktree. Run the test suite to see current state, then continue with the next concrete step toward the story goal."
         prompt = (
             f"You are RESUMING issue {story_key}: {story['summary']}\n\n"
             f"{story.get('agent_instructions', '')}\n\n"

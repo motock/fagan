@@ -632,6 +632,17 @@ def test_dispatch_command_resume_includes_completed_steps_and_hint(agents_dir):
     assert "do not redo" in prompt.lower()
 
 
+def test_dispatch_command_resume_falls_back_to_test_run_directive_when_no_hint(agents_dir):
+    journal = [
+        {"step": "s", "summary": "did stuff",
+         "next_hint": "", "commit": "sha", "ts": "x"},
+    ]
+    spec = p._build_dispatch_command(_story(), "PIPE-1", resume_journal=journal)
+    prompt = spec["prompt"]
+    assert "Review the worktree state and continue." not in prompt
+    assert ("pytest" in prompt.lower() or "test suite" in prompt.lower())
+
+
 def test_dispatch_command_no_resume_journal_uses_original_prompt(agents_dir):
     spec = p._build_dispatch_command(_story(), "PIPE-1")
     prompt = spec["prompt"]

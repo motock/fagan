@@ -9289,6 +9289,163 @@ def test_ingest_plan_defaults_tdd_split_to_false(plan_dir, monkeypatch, tmp_path
     assert story["tdd_split"] is False
 
 
+# ---------- role_config propagation bug: ingest_plan silently drops it ----------
+
+def test_ingest_plan_writes_role_config_into_manifest(plan_dir, monkeypatch, tmp_path):
+    """A plan-level role_config block (documented alongside epics/stories -
+    see save_plan's docstring and the README's "Per-role provider/model
+    configuration" section) must land on the manifest, since
+    _plan_role_config() only ever reads it from there, never from the plan
+    JSON."""
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
+    (plan_dir / "p.json").write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build."},
+        ]}],
+        "repo_root": str(tmp_path),
+        "role_config": {"review": {"provider": "claude", "model": "sonnet"}},
+    }))
+
+    p.ingest_plan("p")
+
+    manifest = json.loads((plan_dir / "p.manifest.json").read_text())
+    assert manifest["role_config"] == {
+        "review": {"provider": "claude", "model": "sonnet"},
+    }
+
+
+def test_ingest_plan_updates_role_config_on_reingest(plan_dir, monkeypatch, tmp_path):
+    """Re-ingesting (merge mode, default overwrite=False) with a DIFFERENT
+    role_config must fully replace the old one - role_config is an authored
+    field refreshed on ingest, same as epics/stories, not deep-merged."""
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
+    plan_path = plan_dir / "p.json"
+    plan_path.write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build."},
+        ]}],
+        "repo_root": str(tmp_path),
+        "role_config": {"review": {"provider": "claude", "model": "sonnet"}},
+    }))
+    p.ingest_plan("p")
+
+    plan_path.write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build."},
+        ]}],
+        "repo_root": str(tmp_path),
+        "role_config": {"overlord": {"provider": "ollama", "model": "devstral"}},
+    }))
+    p.ingest_plan("p")
+
+    manifest = json.loads((plan_dir / "p.manifest.json").read_text())
+    assert manifest["role_config"] == {
+        "overlord": {"provider": "ollama", "model": "devstral"},
+    }
+
+
+def test_ingest_plan_preserves_role_config_when_absent_on_reingest(
+    plan_dir, monkeypatch, tmp_path,
+):
+    """A re-ingest whose plan JSON has NO role_config key at all (e.g. a
+    caller that only re-authors epics/stories) must leave the manifest's
+    existing role_config untouched, not wipe it to {} - matching the
+    documented contract that "top-level manifest keys outside
+    epics/stories/repo_root ... carry over untouched"."""
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
+    plan_path = plan_dir / "p.json"
+    plan_path.write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build."},
+        ]}],
+        "repo_root": str(tmp_path),
+        "role_config": {"review": {"provider": "claude", "model": "sonnet"}},
+    }))
+    p.ingest_plan("p")
+
+    plan_path.write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build. v2"},
+        ]}],
+        "repo_root": str(tmp_path),
+    }))
+    p.ingest_plan("p")
+
+    manifest = json.loads((plan_dir / "p.manifest.json").read_text())
+    assert manifest["role_config"] == {
+        "review": {"provider": "claude", "model": "sonnet"},
+    }
+
+
+def test_ingest_plan_overwrite_true_drops_role_config_when_absent(
+    plan_dir, monkeypatch, tmp_path,
+):
+    """overwrite=True restores the old wholesale-replace behavior (drops
+    anything not produced by this call) - so a re-ingest with overwrite=True
+    and no role_config key must reset the manifest's role_config to {},
+    matching how it already drops un-repeated stories/epics."""
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
+    plan_path = plan_dir / "p.json"
+    plan_path.write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build."},
+        ]}],
+        "repo_root": str(tmp_path),
+        "role_config": {"review": {"provider": "claude", "model": "sonnet"}},
+    }))
+    p.ingest_plan("p")
+
+    plan_path.write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build."},
+        ]}],
+        "repo_root": str(tmp_path),
+    }))
+    p.ingest_plan("p", overwrite=True)
+
+    manifest = json.loads((plan_dir / "p.manifest.json").read_text())
+    assert manifest["role_config"] == {}
+
+
+def test_get_role_config_reports_ingested_role_config_override(
+    plan_dir, agents_dir, monkeypatch, tmp_path,
+):
+    """The actual user-visible symptom: get_role_config(plan_name=...) must
+    report the role_config authored in the plan and carried onto the
+    manifest by ingest_plan, not the env/registry/persona default - verified
+    via the tool function directly, not just the raw manifest dict.
+
+    The plan pins review's model to "opus", deliberately different from the
+    agents_dir fixture's code-reviewer.md ("sonnet", the fallback that wins
+    when no role_config reaches the manifest), so a pre-fix run reports the
+    fallback and mismatches this assertion instead of passing by
+    coincidence."""
+    monkeypatch.setattr(pt, "PLANE_API_KEY", "")
+    monkeypatch.setattr(pt, "PLANE_WORKSPACE", "")
+    monkeypatch.setattr(pt, "PLANE_PROJECT", "")
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    (plan_dir / "p.json").write_text(json.dumps({
+        "epics": [{"summary": "Epic", "stories": [
+            {"key": "S1", "summary": "Do thing", "agent_instructions": "Build."},
+        ]}],
+        "repo_root": str(tmp_path),
+        "role_config": {"review": {"provider": "claude", "model": "opus"}},
+    }))
+
+    p.ingest_plan("p")
+
+    result = p.get_role_config(plan_name="p")
+    assert result["roles"]["review"] == {"provider": "claude", "model": "opus"}
+
+
 def test_dispatch_story_writes_oracle_files_into_worktree(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):

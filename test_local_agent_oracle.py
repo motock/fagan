@@ -16,6 +16,19 @@ from pathlib import Path
 import httpx
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _isolate_environ():
+    """load_oracle_module_with_env below mutates os.environ directly (no
+    monkeypatch) so a freshly-imported module reads the intended values at
+    import time. Restore the snapshot after every test so those mutations
+    never leak into a later test in the same pytest process."""
+    snapshot = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(snapshot)
+
+
 os.environ.setdefault("LOCAL_AGENT_MODEL", "test-model")
 _spec = importlib.util.spec_from_file_location(
     "local_agent_oracle", str(Path(__file__).parent / "scripts" / "local_agent_oracle.py")
@@ -1540,6 +1553,30 @@ def test_oracle_no_persistence_when_path_unset(tmp_path):
     messages = mod.PersistingList()
     messages.append({"role": "assistant", "content": "hi"})
     assert not list(tmp_path.glob("*.json"))
+
+
+def test_resume_env_helper_sets_var_for_isolation_regression(tmp_path):
+    """Companion to test_resume_env_does_not_leak_into_next_test below: sets
+    LOCAL_AGENT_RESUME_TRANSCRIPT_PATH via the helper so the next test (which
+    must run immediately after this one - see its docstring) can assert it
+    doesn't survive into a fresh test's os.environ."""
+    dummy = tmp_path / "resume.json"
+    load_oracle_module_with_env({"LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(dummy)})
+    assert os.environ["LOCAL_AGENT_RESUME_TRANSCRIPT_PATH"] == str(dummy)
+
+
+def test_resume_env_does_not_leak_into_next_test():
+    """Regression for the test-isolation leak: load_oracle_module_with_env
+    mutates os.environ directly with no teardown, so a var set by the
+    previous test (see above) silently survives into this one and into any
+    dispatch test that happens to run afterward in the same pytest process
+    (e.g. test_dispatch_omits_resume_transcript_path_when_unset in
+    test_backend.py, which builds its subprocess env from os.environ).
+    This test is order-dependent by design: it must run directly after
+    test_resume_env_helper_sets_var_for_isolation_regression (this repo's
+    pyproject.toml configures no test-randomization plugin, so pytest's
+    default in-file execution order is deterministic)."""
+    assert "LOCAL_AGENT_RESUME_TRANSCRIPT_PATH" not in os.environ
 
 
 def test_oracle_atomic_write_no_temp_file(tmp_path):

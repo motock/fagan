@@ -2440,8 +2440,9 @@ def test_claude_reviewer_prompt_mentions_diff_stat():
     import importlib
     p = importlib.import_module("pipeline_mcp_server")
     server_src = open(p.__file__).read()
-    # The reviewer prompt now lives in pipeline_review.py; check both.
-    review_src = open(p.__file__.replace("pipeline_mcp_server", "pipeline_review")).read()
+    # The reviewer prompt now lives in pipeline/review.py; check both.
+    review = importlib.import_module("pipeline.review")
+    review_src = open(review.__file__).read()
     combined = server_src + review_src
     assert "git diff --stat" in combined
     # And it should explicitly warn about the truncation.

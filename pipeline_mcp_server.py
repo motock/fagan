@@ -1849,6 +1849,7 @@ def ingest_plan(
         final_manifest["epics"] = merged_epics
         final_manifest["stories"] = merged_stories
         final_manifest["repo_root"] = repo_root
+        final_manifest["role_config"] = plan.get("role_config", prior.get("role_config", {}))
 
         _atomic_write_json(manifest_path, final_manifest)
 

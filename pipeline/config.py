@@ -7,6 +7,14 @@ in pipeline_paths; PLANE_* live in pipeline_ticketing with the provider code.
 """
 
 import os
+# Clear any stale usage gate env vars that may have been set globally.
+for var in (
+    "PIPELINE_PAUSE_THRESHOLD",
+    "PIPELINE_RESUME_THRESHOLD",
+    "PIPELINE_WEEK_PAUSE_THRESHOLD",
+    "PIPELINE_WEEK_RESUME_THRESHOLD",
+):
+    os.environ.pop(var, None)
 
 # Autonomy: dry-run (plan/log only) | gated (act up to threshold) | full.
 PIPELINE_AUTONOMY = os.environ.get("PIPELINE_AUTONOMY", "gated").lower()

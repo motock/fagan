@@ -28,6 +28,13 @@ from typing import Callable, Protocol
 import httpx
 
 import inference_providers
+# Clear any stale PIPELINE_BACKEND_* and local model default env vars that may have been set globally.
+for role in ("DISPATCH", "REVIEW", "OVERLORD"):
+    os.environ.pop(f"PIPELINE_BACKEND_{role}", None)
+os.environ.pop("PIPELINE_LOCAL_MODEL_DEFAULT", None)
+# Clear any stale PIPELINE_BACKEND_* env vars that may have been set globally.
+for role in ("DISPATCH", "REVIEW", "OVERLORD"):
+    os.environ.pop(f"PIPELINE_BACKEND_{role}", None)
 from inference_providers import RateLimitedError  # noqa: F401 (re-exported: backend.RateLimitedError)
 
 

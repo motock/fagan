@@ -624,10 +624,6 @@ def test_software_engineer_preexisting_failure_guidance():
     assert "pre-existing" in content
     assert "out of scope" in content
 
-def test_software_engineer_preexisting_failure_guidance():
-    content = (Path(__file__).parent / "agents" / "software-engineer.md").read_text()
-    assert "pre-existing" in content
-    assert "out of scope" in content
 
 def test_dispatch_command_resume_includes_completed_steps_and_hint(agents_dir):
     journal = [

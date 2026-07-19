@@ -33,7 +33,7 @@ from typing import Protocol
 
 import httpx
 
-from pipeline_config import PLANE_MAX_ATTEMPTS
+from .config import PLANE_MAX_ATTEMPTS
 
 
 # ---------- Plane config (env vars) ----------
@@ -364,7 +364,7 @@ def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = N
         # here would cycle. _notify_user lives in the server module because
         # it reads PLAN_DIR (a pipeline_paths constant re-exported by the
         # server, patched by tests via p.PLAN_DIR).
-        from pipeline_mcp_server import _notify_user
+        from .server import _notify_user
         _notify_user(plan_name, msg)
     else:
         print(f"Warning: {msg}")

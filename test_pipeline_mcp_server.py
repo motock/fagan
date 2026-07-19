@@ -22,12 +22,16 @@ import httpx
 import pytest
 
 import backend
-import pipeline_ci as pci
-import pipeline_mcp_server as p
-import pipeline_persistence as ppers
-import pipeline_persona as pper
-import pipeline_ticketing as pt
-import pipeline_usage as pusage
+from pipeline import ci as pci
+from pipeline import concurrency as pcon
+from pipeline import checkpoint as pcheckpoint  # noqa: E402,F401
+from pipeline import server as p
+import pipeline_mcp_server  # noqa: F401  backward compat
+from pipeline import persistence as ppers
+from pipeline import persona as pper
+from pipeline import review as prev
+from pipeline import ticketing as pt
+from pipeline import usage as pusage
 import role_registry
 
 
@@ -88,9 +92,11 @@ def plan_dir(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
-    # pipeline_persistence imports PLAN_DIR from pipeline_paths at module load
-    # and reads it as a free var, so patches must land on its own binding too.
+    # pipeline_persistence and pipeline_concurrency import PLAN_DIR from
+    # pipeline_paths at module load and read it as a free var, so patches
+    # must land on their own bindings too.
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
+    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 
@@ -1847,7 +1853,7 @@ def test_run_reviewer_prompt_includes_resolved_venv_pytest_command(agents_dir, m
         assert cwd == Path("/tmp/some-worktree")
         return resolved_dir, [str(resolved_python), "-m", "pytest"]
 
-    monkeypatch.setattr(p, "detect_test_command", _fake_detect)
+    monkeypatch.setattr(prev, "detect_test_command", _fake_detect)
 
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
 
@@ -1874,7 +1880,7 @@ def test_run_reviewer_prompt_reflects_non_python_fallback_command(agents_dir, mo
 
     monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
     resolved_dir = tmp_path / "worktree"
-    monkeypatch.setattr(p, "detect_test_command", lambda cwd: (resolved_dir, ["npm", "test"]))
+    monkeypatch.setattr(prev, "detect_test_command", lambda cwd: (resolved_dir, ["npm", "test"]))
 
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
 
@@ -1904,7 +1910,7 @@ def test_run_reviewer_falls_back_to_generic_instruction_when_detection_raises(
     def _boom(cwd):
         raise OSError("boom")
 
-    monkeypatch.setattr(p, "detect_test_command", _boom)
+    monkeypatch.setattr(prev, "detect_test_command", _boom)
 
     output = p._run_reviewer("/tmp/does-not-exist", "agent/some-branch")
 
@@ -4050,7 +4056,7 @@ def test_check_story_status_acquires_heavy_lock_for_cargo(
             except OSError:
                 pass
 
-    monkeypatch.setattr(p.fcntl, "flock", _counting_flock)
+    monkeypatch.setattr(pcon.fcntl, "flock", _counting_flock)
 
     # Stub cargo so the test doesn't actually compile.
     monkeypatch.setattr(p.subprocess, "run",
@@ -4250,7 +4256,7 @@ def test_check_story_status_kills_hung_process_past_watchdog_timeout(
 
     result = p.check_story_status("wd1", "S1")
 
-    assert (4242, p.signal.SIGTERM) in killed
+    assert (4242, pcheckpoint.signal.SIGTERM) in killed
     assert result["status"] == "interrupted"
     assert result.get("watchdog_killed") is True
 
@@ -4287,7 +4293,7 @@ def test_check_story_status_running_within_watchdog_window_is_not_killed(
     result = p.check_story_status("wd2", "S1")
 
     assert result == {"status": "running", "pid": 4242}
-    assert p.signal.SIGTERM not in [sig for _, sig in killed]
+    assert pcheckpoint.signal.SIGTERM not in [sig for _, sig in killed]
     story = _read_manifest(plan_dir, "wd2")["stories"]["S1"]
     assert story["status"] == "in_progress"
 
@@ -5788,7 +5794,7 @@ def test_reverify_acceptance_reruns_full_suite_without_acceptance_block(monkeypa
         seen_cmd["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 1, stdout="1 failed", stderr="")
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
 
     result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
 
@@ -5808,7 +5814,7 @@ def test_reverify_acceptance_passes_when_full_suite_green(monkeypatch, tmp_path)
         seen_cmd["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
 
     result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
 
@@ -5824,7 +5830,7 @@ def test_reverify_acceptance_full_suite_opt_out_restores_none(monkeypatch, tmp_p
     def _boom_run(*a, **k):
         raise AssertionError("must not run tests when opted out")
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
-    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
     monkeypatch.setenv("PIPELINE_REVERIFY_FULL_SUITE", "0")
 
     result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
@@ -5844,7 +5850,7 @@ def test_reverify_acceptance_scopes_cargo_to_acceptance_test_stem(monkeypatch, t
         seen_cmd["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["cargo", "test"]))
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["cargo", "test"]))
 
     result = p._reverify_acceptance(
         {"summary": "x", "acceptance": [{"path": "tests/acc.rs", "source": "// x"}]},
@@ -5864,7 +5870,7 @@ def test_reverify_acceptance_reruns_full_suite_for_unscopeable_runner(monkeypatc
         seen_cmd["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["mvn", "test"]))
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["mvn", "test"]))
 
     result = p._reverify_acceptance(
         {"summary": "x", "acceptance": [{"path": "tests/acc.rs", "source": "// x"}]},
@@ -5891,7 +5897,7 @@ def test_reverify_acceptance_returns_none_for_missing_worktree(monkeypatch):
 def test_reverify_acceptance_fails_when_oracle_red(monkeypatch, tmp_path):
     # The exact case the RLI-3 merged-but-wrong incident needed caught: the
     # acceptance test references behavior the branch never implemented.
-    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
     seen_cmd = {}
 
     def _fake_run(cmd, **kwargs):
@@ -5909,7 +5915,7 @@ def test_reverify_acceptance_fails_when_oracle_red(monkeypatch, tmp_path):
 
 
 def test_reverify_acceptance_passes_when_oracle_green(monkeypatch, tmp_path):
-    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
     monkeypatch.setattr(p.subprocess, "run",
                         lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""))
     story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
@@ -5927,7 +5933,7 @@ def test_reverify_acceptance_passes_when_oracle_green(monkeypatch, tmp_path):
 # web-client-epic retro §3.1).
 
 def test_reverify_build_fails_when_build_command_exits_nonzero(monkeypatch, tmp_path):
-    monkeypatch.setattr(p, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
+    monkeypatch.setattr(pci, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
     monkeypatch.setattr(
         p.subprocess, "run",
         lambda cmd, **k: subprocess.CompletedProcess(
@@ -5941,7 +5947,7 @@ def test_reverify_build_fails_when_build_command_exits_nonzero(monkeypatch, tmp_
 
 
 def test_reverify_build_passes_when_build_command_exits_zero(monkeypatch, tmp_path):
-    monkeypatch.setattr(p, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
+    monkeypatch.setattr(pci, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
     monkeypatch.setattr(
         p.subprocess, "run",
         lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
@@ -5957,7 +5963,7 @@ def test_reverify_build_skips_when_no_build_command_detected(monkeypatch, tmp_pa
     # freely - "none" is a skip, not a block.
     def _boom_run(*a, **k):
         raise AssertionError("must not run anything when no build command is detected")
-    monkeypatch.setattr(p, "detect_build_command", lambda wt: None)
+    monkeypatch.setattr(pci, "detect_build_command", lambda wt: None)
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
 
     result = p._reverify_build(str(tmp_path))
@@ -5982,9 +5988,9 @@ def test_reverify_build_opt_out_restores_none(monkeypatch, tmp_path):
     # PIPELINE_REVERIFY_FULL_SUITE.
     def _boom_run(*a, **k):
         raise AssertionError("must not build when opted out")
-    monkeypatch.setattr(p, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
+    monkeypatch.setattr(pci, "detect_build_command", lambda wt: (wt, ["npm", "run", "build"]))
     monkeypatch.setattr(p.subprocess, "run", _boom_run)
-    monkeypatch.setattr(p, "PIPELINE_MERGE_BUILD_GATE", False)
+    monkeypatch.setattr(pci, "PIPELINE_MERGE_BUILD_GATE", False)
 
     result = p._reverify_build(str(tmp_path))
 
@@ -9112,7 +9118,7 @@ def test_interrupt_story_sends_sigterm_and_checkpoints(plan_dir, tmp_path, monke
 
     result = p.interrupt_story("it", "S1")
 
-    assert killed == [(4242, p.signal.SIGTERM)]
+    assert killed == [(4242, pcheckpoint.signal.SIGTERM)]
     assert result["ok"] is True
     assert result["status"] == "interrupted"
     assert result["commit"] == "sha-int"

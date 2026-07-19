@@ -1,0 +1,143 @@
+"""Escalation helpers for the pipeline MCP server.
+
+_escalate_to_claude flips a failed local story to Claude and starts clean
+(fresh worktree/branch/journal). _escalate_to_local_fallback_model does the
+same but stays on the local backend with a different model (plan-scoped
+opt-in). _escalate_review_to_claude escalates a local-review-convergence
+failure to Claude without wiping the worktree (the code is often already
+correct). _auto_escalation_enabled reports whether PIPELINE_BACKEND_DISPATCH=auto.
+
+All read REPO_ROOT / PLAN_DIR via lazy imports from the server (tests patch
+p.<name>; circular-avoidance). _atomic_write_json comes from pipeline_parsers,
+_notify_user from pipeline_persistence.
+"""
+
+import os
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from .parsers import _atomic_write_json
+from .persistence import _notify_user
+
+
+def _escalate_to_claude(
+    manifest: dict, plan_name: str, story_key: str, manifest_path: Path
+) -> None:
+    """Flip a failed local story to Claude and start clean.
+
+    Tears down the local worktree+branch (the local agent left it dirty/broken;
+    Claude gets a fresh branch from main so it doesn't inherit that state), clears
+    the dispatch counters, and resets status to 'todo' so the next tick
+    re-dispatches on Claude. The journal is also cleared: there's nothing useful
+    to resume from a failed local run when Claude is starting over. Also invoked
+    from check_story_status's step-cap streak path (see
+    STEP_CAP_FALLBACK_THRESHOLD), not just the test-failure caller - the same
+    clean-slate teardown applies since a repeated step-cap streak isn't a
+    trustworthy foundation for Claude to build on either.
+    """
+    from .server import REPO_ROOT, PLAN_DIR
+    story = manifest["stories"][story_key]
+    worktree = story.get("worktree", "")
+    branch = f"agent/{story_key.lower()}"
+    # Remove worktree and branch — best-effort (may already be gone).
+    if worktree:
+        subprocess.run(["git", "worktree", "remove", "--force", worktree],
+                        cwd=REPO_ROOT, capture_output=True, text=True)
+    subprocess.run(["git", "branch", "-D", branch],
+                    cwd=REPO_ROOT, capture_output=True, text=True)
+    # Clear journal so Claude starts fresh (not from a broken local checkpoint).
+    journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+    if journal_path.exists():
+        journal_path.unlink()
+    # Reset the story: Claude dispatch on next tick.
+    story["backend"] = "claude"
+    story["escalated"] = True
+    story["status"] = "todo"
+    for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error",
+                "step_cap_streak", "step_cap_streak_model"):
+        story.pop(key, None)
+    _atomic_write_json(manifest_path, manifest)
+
+
+def _escalate_to_local_fallback_model(
+    manifest: dict, plan_name: str, story_key: str, manifest_path: Path,
+    fallback_model: str,
+) -> None:
+    """Flip a failed local story to a different local model and start clean.
+
+    Plan-scoped opt-in (see manifest["local_model_fallback"]): when a plan
+    designates a fallback model, a story whose primary local model failed
+    gets one retry on that fallback before falling through to the terminal
+    park/fail path, instead of parking immediately. Stays on the "local"
+    backend throughout - unlike _escalate_to_claude, this never spends Claude;
+    it exists for plans that want a second local opinion (e.g. a larger/
+    different Ollama model) without escalating to Claude at all. Mirrors
+    _escalate_to_claude's clean-slate teardown (fresh worktree/branch/journal)
+    since the prior run may have left broken/half-written state a different
+    model shouldn't inherit.
+    """
+    from .server import REPO_ROOT, PLAN_DIR
+    story = manifest["stories"][story_key]
+    worktree = story.get("worktree", "")
+    branch = f"agent/{story_key.lower()}"
+    # Remove worktree and branch — best-effort (may already be gone).
+    if worktree:
+        subprocess.run(["git", "worktree", "remove", "--force", worktree],
+                        cwd=REPO_ROOT, capture_output=True, text=True)
+    subprocess.run(["git", "branch", "-D", branch],
+                    cwd=REPO_ROOT, capture_output=True, text=True)
+    # Clear journal so the fallback model starts fresh, not from a broken
+    # checkpoint left by the model that just failed.
+    journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+    if journal_path.exists():
+        journal_path.unlink()
+    # Reset the story: fallback-model dispatch on next tick. backend is left
+    # untouched (stays "local") - only the model changes.
+    story["model"] = fallback_model
+    story["tried_fallback_model"] = True
+    story["status"] = "todo"
+    for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error",
+                "dispatched_model"):
+        story.pop(key, None)
+    _atomic_write_json(manifest_path, manifest)
+
+
+def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name: str, reason: str) -> None:
+    """Under PIPELINE_BACKEND_DISPATCH=auto, when local review can't converge
+    (rework budget or inconclusive-review budget exhausted), give the story
+    to Claude instead of parking for a human - for both review and any
+    further rework, going forward.
+
+    Unlike _escalate_to_claude (the dispatch-failure path), this does NOT
+    wipe the worktree/branch: the existing code is very often already
+    correct (2026-07-03's benchmark validation showed most of these parks
+    hold ground-truth-correct implementations a local reviewer just
+    couldn't cleanly resolve), so Claude reviewing/reworking the SAME
+    worktree in place is cheaper and more likely to succeed than discarding
+    it and starting over. Sets story["backend"] = "claude" so a subsequent
+    redispatch (rework case) also runs on Claude - dispatch_story's own
+    priority order already honors story["backend"] first, so no dispatch
+    changes are needed. Resets the local rework/inconclusive counters as a
+    fresh budget for Claude; a second exhaustion after escalation (checked
+    by the caller via story.get("escalated")) is terminal - there is no
+    further fallback past Claude, so it must park rather than escalate
+    again or loop forever."""
+    story["backend"] = "claude"
+    story["escalated"] = True
+    story.pop("rework_attempts", None)
+    story.pop("review_inconclusive_count", None)
+    _notify_user(plan_name, f"{story_key} escalating to Claude ({reason}); "
+                            f"retrying the same worktree with a fresh budget.")
+
+
+def _auto_escalation_enabled() -> bool:
+    return os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower() == "auto"
+
+
+__all__ = [
+    "_escalate_to_claude",
+    "_escalate_to_local_fallback_model",
+    "_escalate_review_to_claude",
+    "_auto_escalation_enabled",
+]

@@ -266,8 +266,11 @@ log as an audit record.
   do not count against this budget. Plane state transitions are best-effort
   with their own inline retry (`PIPELINE_PLANE_MAX_ATTEMPTS`) and never block
   git work. Returns a summary with `dispatched`,
-  `advanced`, `merged`, `parked`, `failed`, `interrupted`, `paused`, and
-  `notify`. The orchestrating agent surfaces `notify` items (e.g. via
+  `advanced`, `merged`, `parked`, `failed`, `interrupted`, `paused`, `skipped`,
+  and `notify`. `skipped` holds story keys where dispatch was deferred due to
+  lock contention (another tick already running for the plan) — distinct from
+  `failed`, since the story remains dispatch-eligible and is simply retried
+  next tick. The orchestrating agent surfaces `notify` items (e.g. via
   PushNotification).
 - `advance_all_plans()` — runs `advance_pipeline` on every plan that has a
   manifest (i.e. has been ingested), keyed by plan name. Plans saved but not

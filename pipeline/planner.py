@@ -23,8 +23,8 @@ from pathlib import Path
 
 import backend
 import role_registry
-from pipeline_persona import _persona_body, _persona_default_model
-from pipeline_git_ops import _worktree_has_new_commits
+from .persona import _persona_body, _persona_default_model
+from .git_ops import _worktree_has_new_commits
 
 
 # ---------- Guided-decomposition planner ----------
@@ -425,7 +425,7 @@ def _run_test_author_phase(
     # Lazy import: _default_branch lives in the server module (reads
     # REPO_ROOT, patched by tests via p.REPO_ROOT); the server imports this
     # module at top level, so a module-load import would cycle.
-    from pipeline_mcp_server import _default_branch
+    from .server import _default_branch
     return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
 
 

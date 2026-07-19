@@ -12,9 +12,9 @@ from pathlib import Path
 
 import backend
 import role_registry
-from pipeline_config import DEFAULT_MODEL, _LOCAL_BACKEND_NAMES
-from pipeline_persona import _persona_body, _persona_default_model
-from pipeline_build_detect import detect_test_command, _scope_test_cmd_to_acceptance
+from .config import DEFAULT_MODEL, _LOCAL_BACKEND_NAMES
+from .persona import _persona_body, _persona_default_model
+from .build_detect import detect_test_command, _scope_test_cmd_to_acceptance
 
 
 def _run_reviewer(

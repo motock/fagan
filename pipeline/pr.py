@@ -65,7 +65,7 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     """
     # Lazy import: REPO_ROOT is a server module-level global patched by tests
     # via p.REPO_ROOT; the lazy import at call time sees the patched value.
-    from pipeline_mcp_server import REPO_ROOT
+    from .server import REPO_ROOT
     branch = f"agent/{story_key.lower()}"
     proc = subprocess.run(
         ["gh", "pr", "merge", branch, "--squash"],

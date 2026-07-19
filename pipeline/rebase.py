@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from pipeline_parsers import (
+from .parsers import (
     _parse_conflict_blocks,
     _resolve_conflict_blocks,
     _git_show_stage,
@@ -129,7 +129,7 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
     # globals patched by tests via p.<name>; reading them here at call time
     # sees the patched value. The server imports this module at top level, so
     # a module-load import would cycle.
-    from pipeline_mcp_server import REPO_ROOT, _default_branch
+    from .server import REPO_ROOT, _default_branch
     # Full `git fetch origin` (not `fetch origin <branch>`) so every
     # remote-tracking ref is updated on configs with a narrow/custom refspec,
     # keeping the rebase target current. The rebase target itself must follow

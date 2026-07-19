@@ -22,13 +22,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pipeline_build_detect import (
+from .build_detect import (
     detect_test_command,
     detect_build_command,
     _acceptance_rel_paths,
     _scope_test_cmd_to_acceptance,
 )
-from pipeline_concurrency import _is_heavy, _heavy_lock
+from .concurrency import _is_heavy, _heavy_lock
 
 
 # ---------- CI env-var gates ----------
@@ -51,7 +51,7 @@ def _repo_has_ci_configured() -> bool:
     # importing the server at module load here would cycle. REPO_ROOT is the
     # server's module-level global, patched by tests via p.REPO_ROOT and
     # scoped by _scoped_repo_root for each plan's merge gate.
-    from pipeline_mcp_server import REPO_ROOT
+    from .server import REPO_ROOT
     return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
 
 

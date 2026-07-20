@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 def _last_nonempty_line(path: Path) -> str:
-    """Return the last stripped-non-empty line of `path`, or "" if the file
+    """Return the last stripped-non-empty line of `path`, or ``""`` if the file
     has no non-empty lines (or doesn't exist — caller should check).
 
     Used by check_story_status to classify the agent's terminal exit by the
@@ -38,29 +38,53 @@ def _last_nonempty_line(path: Path) -> str:
     return last
 
 
-def _commit_wip(worktree: str, story_key: str, step: str) -> str:
+def _commit_wip(worktree: str, story_key: str, step: str,
+                 guard_against_deletion: bool = False) -> str:
     """Commit any uncommitted work in the worktree as a WIP checkpoint.
 
-    External boundary: spawns `git`. Tests mock subprocess.run. If there is
+    External boundary: spawns ``git``. Tests mock subprocess.run. If there is
     nothing to commit (the agent already committed its own work), this is
     not an error — the existing HEAD sha is returned so the journal still
     records a checkpoint marker.
 
-    Excludes agent.log: it's the dispatcher's own session-narration file
+    Excludes ``agent.log``: it's the dispatcher's own session-narration file
     written into the worktree root, not project code, and must never be
-    swept into a commit. We stage everything, then unstage agent.log, rather
-    than naming it in an exclude pathspec (`:!agent.log`): if the worktree has
-    agent.log locally git-ignored (.git/info/exclude or .gitignore, e.g. a
-    reviewer keeping it out of diffs), naming it in the pathspec makes `git
-    add` reject the whole add ("paths are ignored... use -f", exit 1), which
-    would lose the checkpoint. `git add -A` with no pathspec silently skips
-    ignored files, and the unstage is a no-op when agent.log is absent or
-    ignored.
+    swept into a commit. We stage everything, then unstage agent.log,
+    regardless of whether ``guard_against_deletion`` is set.
+
+    When ``guard_against_deletion=True`` (used by the dispatch watchdog
+    timeout and manual interrupt paths), any staged file that has been fully
+    deleted will be restored from HEAD before committing. This prevents a
+    killed‑mid‑write deletion from being recorded as legitimate work.
+
+    Parameters
+    ----------
+    guard_against_deletion:
+        If ``True``, restore staged deletions from the previous commit
+        before creating the checkpoint. Defaults to ``False`` for normal
+        checkpoint calls.
     """
+    # Stage all changes, including deletions.
     subprocess.run(["git", "add", "-A"], cwd=worktree,
                     check=True, capture_output=True, text=True)
+
+    # Unstage agent.log unconditionally.
     subprocess.run(["git", "reset", "-q", "--", "agent.log"], cwd=worktree,
-                    check=False, capture_output=True, text=True)
+                    capture_output=True, text=True)
+
+    if guard_against_deletion:
+        # Detect staged deletions and restore them from HEAD before committing.
+        diff_res = subprocess.run(
+            ["git", "diff", "--cached", "--diff-filter=D", "--name-only"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        for path in diff_res.stdout.splitlines():
+            if path.strip():
+                subprocess.run(["git", "checkout", "HEAD", "--", path], cwd=worktree, check=True)
+                subprocess.run(["git", "add", "--", path], cwd=worktree, check=True)
+
     commit = subprocess.run(
         ["git", "commit", "-m", f"wip({story_key}): {step}"],
         cwd=worktree, capture_output=True, text=True,
@@ -78,28 +102,20 @@ def _commit_wip(worktree: str, story_key: str, step: str) -> str:
 def _worktree_has_new_commits(worktree: Path, story_key: str, base_branch: str) -> bool:
     """True iff the agent branch has any commits not on base_branch.
 
-    `git log <base>..HEAD --oneline` lists commits reachable from HEAD
+    ``git log <base>..HEAD --oneline`` lists commits reachable from HEAD
     that aren't reachable from <base>. For an empty branch (agent
-    parked without writing code), this list is empty even though the
-    test command would pass against main's untouched suite. That's the
+    parked without writing code), this list is empty even though the test
+    command would pass against main's untouched suite. That's the
     false-positive trap this guards against in check_story_status.
 
     Returns False on any git error — a broken worktree is the
     orchestrator's problem to surface elsewhere; we'd rather mark a
     real attempt failed than let a transient git hiccup silently
     re-dispatch. The branch name follows the same convention as the
-    rest of the orchestrator (line 521 et seq.).
-    """
+    rest of the orchestrator (line 521 et seq.)."""
     branch = f"agent/{story_key.lower()}"
     r = subprocess.run(
         ["git", "log", f"{base_branch}..{branch}", "--oneline"],
         cwd=str(worktree), capture_output=True, text=True,
     )
     return r.returncode == 0 and bool(r.stdout.strip())
-
-
-__all__ = [
-    "_last_nonempty_line",
-    "_commit_wip",
-    "_worktree_has_new_commits",
-]

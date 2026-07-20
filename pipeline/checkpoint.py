@@ -35,7 +35,7 @@ def _terminate_and_checkpoint(
     except ProcessLookupError:
         pass
 
-    sha = _commit_wip(story["worktree"], story_key, step)
+    sha = _commit_wip(story["worktree"], story_key, step, guard_against_deletion=True)
     interrupted_at = datetime.now(timezone.utc).isoformat()
     _append_journal(plan_name, story_key, {
         "step": step,

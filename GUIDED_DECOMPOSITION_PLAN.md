@@ -2,7 +2,9 @@
 
 **Status:** Implemented (phases 1-3; production code + harness plumbing, both TDD'd,
 955 unit tests + benchmark self-tests green) 2026-07-15. First live experiment run
-same day — see Results below. Written 2026-07-15.
+same day — see Results below. Written 2026-07-15. **2026-07-19: first real
+pipeline story (not just benchmark trials) reached done+merged with decompose +
+TDD-split active (PR #132) — "ship narrow" call, see the final Results section.**
 
 **One-line thesis:** A weak local implementer (gpt-oss / qwen3-coder — "jr level")
 succeeds more often when a strong "tech-lead" planner first breaks a coarse story
@@ -1670,3 +1672,54 @@ for the t13 narration variant; the in-vivo fire remains to be observed.
 (c) repeated re-creation of the impl file [caught by the existing per-target
 repetition guard]. The narration cap does not address (b) or (c); those
 remain open if they recur at frequency.
+
+## First real-production confirmation (2026-07-19, plan `ingest-plan-role-config-bug`)
+
+Everything above ran through the benchmark harness on synthetic tasks. This is
+the first time the combination reached `done`+merged on an **actual pipeline
+story**, dispatched the normal way (`ingest_plan` → `dispatch_story` →
+`review_story` → `approve_merge`), not a harness trial.
+
+- **Story:** "Fix `ingest_plan` silently dropping plan-level `role_config` from
+  the manifest" (manifest key `33b3d01a-ca22-4b87-b42e-b978a3d54431`, merged as
+  PR #132).
+- **Config:** `backend=local`, `dispatched_model=gpt-oss:20b` (via Ollama),
+  `tdd_split=True` (TDD-split test-author phase active — worktree had
+  `.tdd_split_test_author_done`), guided decomposition's scratchpad mechanism
+  active (journal shows explicit `create-scratchpad` / `scratchpad updated`
+  steps from `pipeline/planner.py`).
+- **Outcome:** `review_verdict=APPROVE`, merged. Real PR on GitHub, not a
+  worktree-only or benchmark-graded result.
+
+**Not a clean one-shot — read it as "reaches done+merged via resume," not
+"reliably one-shots."** The journal shows 2 `step_cap_reached` checkpoints and
+1 `interrupted` event before convergence; the story was picked back up across
+multiple dispatch sessions (an earlier checkpoint at 04:43 UTC, final dispatch
+recorded at 05:14 UTC) rather than finishing in a single continuous run. The
+step-cap/resume machinery ([[project_rework_resume_validation]] territory) is
+what let a weak model's fragmented, interrupted attempts still land correctly
+— itself a meaningful production validation, just of a different mechanism
+than guided decomposition alone.
+
+**What this does and doesn't establish:**
+- **Does:** proves the three-way combination (decompose × TDD-split × a real
+  pipeline story, as opposed to isolated benchmark tasks with hand-tuned
+  harness config) can reach a genuine merged PR on a weak local model. This is
+  new — nothing above tested decompose and TDD-split together, and nothing
+  above ran outside the benchmark harness.
+- **Doesn't:** establish a rate (n=1), touch the breadth-heavy task §4.2's own
+  kill/ship criteria (§4.5) are keyed to, or resolve H2/H3/H4 (still open per
+  the sections above). The story itself was also small/mechanical (a one-line
+  propagation fix plus test), not representative of the harder reasoning-dense
+  tasks (`ratelimiter_inspect`, `lru_cache`) that motivated this plan.
+
+**Reading against §4.5's kill/ship criteria:** no kill trigger has ever fired
+across ~18 benchmark trials plus this production trial. The formal ship
+criteria (breadth-heavy task, ≥5 trials) were never fully satisfied, but at
+this point the accumulated evidence (consistent H1 signal + zero
+merged-but-wrong outcomes + now one real production merge) supports a
+pragmatic **"ship narrow"** call: keep `PIPELINE_DECOMPOSE=cloud` +
+`PIPELINE_TDD_SPLIT` available and recommended for local/gpt-oss dispatch,
+without flipping either to a hard global default, and treat H2/H3/H4 as
+open refinements rather than blockers. See [[project_maturity_plan]] for how
+this affects the maturity-plan checklist.

@@ -1,9 +1,26 @@
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock
 import pytest
 
 import pipeline.server as p
+from pipeline import concurrency as pcon
+from pipeline import persistence as ppers
+
+
+@pytest.fixture
+def plan_dir(tmp_path, monkeypatch):
+    d = tmp_path / "plans"
+    d.mkdir()
+    monkeypatch.setattr(p, "PLAN_DIR", d)
+    # pipeline_persistence and pipeline_concurrency import PLAN_DIR from
+    # pipeline_paths at module load and read it as a free var, so patches
+    # must land on their own bindings too (mirrors test_pipeline_mcp_server.py's
+    # plan_dir fixture).
+    monkeypatch.setattr(ppers, "PLAN_DIR", d)
+    monkeypatch.setattr(pcon, "PLAN_DIR", d)
+    return d
 
 # Helper to init a git repo with one commit
 
@@ -62,7 +79,7 @@ def test_review_story_records_last_reviewed_sha_on_request_changes(setup_story, 
 
 def test_review_story_skips_reviewer_when_head_unchanged_since_last_review(setup_story, monkeypatch):
     plan_name, story_key, worktree = setup_story
-    mock_rev = pytest.Mock(return_value="VERDICT: REQUEST_CHANGES\nsome finding")
+    mock_rev = Mock(return_value="VERDICT: REQUEST_CHANGES\nsome finding")
     monkeypatch.setattr(p, "_run_reviewer", mock_rev)
     p.review_story(plan_name, story_key)  # first call sets SHA
     result2 = p.review_story(plan_name, story_key)  # second call should skip
@@ -73,7 +90,7 @@ def test_review_story_skips_reviewer_when_head_unchanged_since_last_review(setup
 
 def test_review_story_reviews_again_after_new_commit_lands(setup_story, monkeypatch):
     plan_name, story_key, worktree = setup_story
-    mock_rev = pytest.Mock(return_value="VERDICT: REQUEST_CHANGES\nsome finding")
+    mock_rev = Mock(return_value="VERDICT: REQUEST_CHANGES\nsome finding")
     monkeypatch.setattr(p, "_run_reviewer", mock_rev)
     p.review_story(plan_name, story_key)  # first call sets SHA
     # make a new commit
@@ -91,8 +108,16 @@ def test_review_story_approve_clears_last_reviewed_sha(setup_story, monkeypatch)
     # first REQUEST_CHANGES to set SHA
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: REQUEST_CHANGES\nsome finding")
     p.review_story(plan_name, story_key)
-    # second APPROVE
+    # a new commit is required for the second call to actually reach the
+    # reviewer again - otherwise the same-SHA skip guard under test here
+    # would short-circuit before ever invoking it, and there'd be no verdict
+    # to assert on (mirrors test 3's pattern).
+    (worktree / "file.txt").write_text("changed")
+    subprocess.run(["git", "add", "."], cwd=worktree, check=True)
+    subprocess.run(["git", "commit", "-m", "change"], cwd=worktree, check=True)
+    # second call: APPROVE
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
     result = p.review_story(plan_name, story_key)
     assert result["verdict"] == "APPROVE"
     manifest_path = Path(p.PLAN_DIR) / f"{plan_name}.manifest.json"

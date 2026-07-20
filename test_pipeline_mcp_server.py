@@ -619,6 +619,12 @@ def test_dispatch_command_reviewer_tools_are_read_only(agents_dir):
     assert spec["allowed_tools"] == "Bash,Read"
 
 
+def test_software_engineer_preexisting_failure_guidance():
+    content = (Path(__file__).parent / "agents" / "software-engineer.md").read_text()
+    assert "pre-existing" in content
+    assert "out of scope" in content
+
+
 def test_dispatch_command_resume_includes_completed_steps_and_hint(agents_dir):
     journal = [
         {"step": "step-1", "summary": "Wrote the parser",

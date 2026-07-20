@@ -11519,6 +11519,15 @@ def test_planner_system_exception_for_small_edits():
     assert "preserve" in p._PLANNER_SYSTEM
     assert "NotImplementedError" in p._PLANNER_SYSTEM
 
+def test_planner_system_exception_for_small_edits_present():
+    assert "str_replace" in p._PLANNER_SYSTEM
+    assert "preserve" in p._PLANNER_SYSTEM
+
+
+def test_rework_planner_system_exception_for_small_edits_present():
+    assert "str_replace" in p._REWORK_PLANNER_SYSTEM
+    assert "preserve" in p._REWORK_PLANNER_SYSTEM
+
 
 def test_planner_system_worked_examples_must_verify_persisted_state():
     """Live-discovered bug (2026-07-16, production-config benchmark run,

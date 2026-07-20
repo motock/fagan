@@ -914,6 +914,8 @@ def run_tool(fn, args) -> str:
         if line_start is not None or line_end is not None:
             start = line_start if line_start is not None else 1
             end = line_end if line_end is not None else len(lines)
+            if start < 1:
+                return f"ERROR: line_start {start} must be >= 1 (1-indexed)."
             if start > len(lines):
                 return f"ERROR: line_start {start} is beyond {args['path']}'s {len(lines)} lines."
             if end < start:

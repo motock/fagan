@@ -146,6 +146,27 @@ def test_view_file_line_end_less_than_line_start(tmp_path, monkeypatch):
     assert result.startswith("ERROR")
 
 
+def test_view_file_line_start_zero_is_rejected(tmp_path, monkeypatch):
+    """line_start is 1-indexed; 0 is a plausible 0-indexed-thinking model
+    error and must not silently slice to an empty result (negative-index
+    slicing bug caught in review — the whole point of this fix is replacing
+    silent truncation with an actionable error, not swapping one silent
+    failure for another)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("a\nb\nc\nd\ne\n")
+    result = la.run_tool("view_file", {"path": "small.py", "line_start": 0, "line_end": 2})
+    assert result.startswith("ERROR")
+
+
+def test_view_file_line_start_negative_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("a\nb\nc\nd\ne\n")
+    result = la.run_tool("view_file", {"path": "small.py", "line_start": -1, "line_end": 2})
+    assert result.startswith("ERROR")
+
+
 def test_view_file_missing_path_still_required():
     """path must stay the only required key — omitting it (even while
     passing line_start/line_end) must still hit the existing missing-

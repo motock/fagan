@@ -17,11 +17,13 @@
 		<key>PIPELINE_BACKEND_DISPATCH</key>
 		<string>local</string>
 		<key>PIPELINE_BACKEND_REVIEW</key>
-		<string>local</string>
+		<string>claude</string>
 		<key>PIPELINE_DECOMPOSE</key>
 		<string>cloud</string>
 		<key>PIPELINE_DECOMPOSE_SCRATCHPAD</key>
 		<string>on</string>
+		<key>PIPELINE_DECOMPOSE_CLOUD_MODEL</key>
+		<string>sonnet</string>
 		<key>PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS</key>
 		<string>5400</string>
 		<key>PIPELINE_LOCAL_MAX_STEPS</key>
@@ -35,7 +37,7 @@
 		<key>PIPELINE_LOCAL_TEMPERATURE</key>
 		<string>0.3</string>
 		<key>PIPELINE_MAX_CONCURRENT_AGENTS</key>
-		<string>2</string>
+		<string>1</string>
 		<key>PIPELINE_PAUSE_THRESHOLD</key>
 		<string>101</string>
 		<key>PIPELINE_RESUME_THRESHOLD</key>

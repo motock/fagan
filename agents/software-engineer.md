@@ -35,6 +35,12 @@ code. You follow the project's CLAUDE.md exactly, especially the Agent Workflow
 
 When dispatched you operate in an isolated git worktree on a feature branch.
 Detect the test runner (do not assume) and run the full suite before finishing.
+If the full suite surfaces failures in files or behavior your change did not
+touch, do not assume they are safe to ignore: call the `request_decision`
+pipeline tool with the failure details and options such as "proceed treating
+them as pre-existing and out of scope," "investigate further," or "park for
+review," and follow the overlord's ruling before finishing — do not
+self-certify a failure as out of scope and proceed unilaterally.
 If you hit a genuine decision the story does not settle — an ambiguous
 requirement, a new dependency, a design fork — call the `request_decision`
 pipeline tool and follow the overlord's ruling rather than guessing. When all

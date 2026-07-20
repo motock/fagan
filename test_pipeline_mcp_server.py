@@ -11519,15 +11519,6 @@ def test_planner_system_exception_for_small_edits():
     assert "preserve" in p._PLANNER_SYSTEM
     assert "NotImplementedError" in p._PLANNER_SYSTEM
 
-def test_planner_system_exception_for_small_edits_present():
-    assert "str_replace" in p._PLANNER_SYSTEM
-    assert "preserve" in p._PLANNER_SYSTEM
-
-
-def test_rework_planner_system_exception_for_small_edits_present():
-    assert "str_replace" in p._REWORK_PLANNER_SYSTEM
-    assert "preserve" in p._REWORK_PLANNER_SYSTEM
-
 
 def test_planner_system_worked_examples_must_verify_persisted_state():
     """Live-discovered bug (2026-07-16, production-config benchmark run,
@@ -11904,6 +11895,7 @@ def test_run_rework_planner_cloud_mode_calls_claude_backend_with_review_feedback
     assert calls == [{"role": "planner", "name": "claude"}]
     assert fake.calls[0]["prompt"] == "allow() double-counts refill on every call."
     assert fake.calls[0]["system"] == p._REWORK_PLANNER_SYSTEM
+    assert fake.calls[0]["system"] != p._PLANNER_SYSTEM
 
 def test_rework_planner_exception_for_small_edits():
     """The rework planner should allow str_replace for small targeted edits."""

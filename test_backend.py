@@ -1182,6 +1182,52 @@ def test_complete_skips_identity_check_when_cell_dir_none(monkeypatch):
     assert result == "plain text reply, not JSON"
 
 
+def test_complete_cell_dir_none_raises_on_api_error_stdout(monkeypatch):
+    """Mode 25: on the cell_dir=None path a CLI transport error returned as
+    stdout (e.g. 'API Error: Connection closed mid-response...', returncode
+    0) must raise, not pass through as if it were valid output - otherwise
+    the planner feeds the error string to the executor as its tech-lead
+    checklist. _run_planner's fails-open-to-None guard catches the raised
+    exception."""
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout="API Error: Connection closed mid-response. Last token:"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="API Error"):
+        b.ClaudeCliDriver().complete("hi", model="sonnet")
+
+
+def test_complete_cell_dir_none_raises_on_nonzero_returncode(monkeypatch):
+    """Mode 25: a non-zero returncode on the cell_dir=None path must raise
+    even when stdout is empty (the error detail lives in stderr), so a
+    failed CLI invocation can never be mistaken for a successful empty
+    reply."""
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout="", returncode=1,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="returncode=1"):
+        b.ClaudeCliDriver().complete("hi", model="sonnet")
+
+
+def test_complete_cell_dir_none_passes_clean_text(monkeypatch):
+    """Mode 25 regression guard: a normal non-JSON reply with returncode 0
+    and no 'API Error:' marker still passes through unchanged - the new
+    fail-closed check must not fire on legitimate output."""
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout="the overlord's policy decision text",
+        ),
+    )
+    result = b.ClaudeCliDriver().complete("hi", model="sonnet")
+    assert result == "the overlord's policy decision text"
+
+
 def test_complete_skips_identity_check_for_unrecognized_tier(tmp_path, monkeypatch):
     """A model string outside the known opus/sonnet/haiku tiers has no
     expected prefix to check against - fail open (no crash) rather than

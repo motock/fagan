@@ -17,4 +17,5 @@ testpaths = [
     "test_dashboard_script.py",
     "test_mlx_server_supervisor.py",
     "test_review_story_same_sha.py",
+    "test_ci_sha_scoping.py",
 ]

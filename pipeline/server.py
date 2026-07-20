@@ -2356,21 +2356,30 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 # network/auth) MUST block: otherwise the remote HEAD stays at
                 # the pre-rebase commit and the CI gate + squash merge operate
                 # on stale code — the exact cross-story breakage Mode 9 closes.
+                pushed_sha = ""
                 if Path(worktree).is_dir():
                     push = subprocess.run(["git", "push", "--force-with-lease", "origin",
                                            branch], cwd=REPO_ROOT,
                                           capture_output=True, text=True)
                     if push.returncode != 0:
                         gate_error = f"push: {(push.stderr or push.stdout).strip()[:200]}"
+                    else:
+                        # Mode 26: _ci_status/_ci_rerun must be pinned to the
+                        # exact commit that was just pushed, not the branch
+                        # name - a branch-name query can read a stale result
+                        # from an older, already-superseded run.
+                        rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=worktree,
+                                             capture_output=True, text=True)
+                        pushed_sha = rev.stdout.strip()
                 if not gate_error:
-                    ci = _ci_status(branch)
+                    ci = _ci_status(branch, sha=pushed_sha)
                     if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
                         # Worth exactly one automatic rerun before treating it
                         # as a failure - an abnormal queue delay can cancel
                         # jobs with no code-quality signal at all.
                         story["ci_rerun_attempted"] = True
-                        _ci_rerun(branch)
-                        ci = _ci_status(branch)
+                        _ci_rerun(pushed_sha)
+                        ci = _ci_status(branch, sha=pushed_sha)
                     if ci["state"] == "fail":
                         gate_error = f"ci fail: {ci['error']}"
                         # Only a genuine test-failure verdict is "definitive" -
@@ -2554,6 +2563,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                 if not rb["ok"]:
                     return {"ok": False, "error": f"rebase failed: {rb['error']}",
                             "story_key": story_key}
+                pushed_sha = ""
                 if Path(worktree).is_dir():
                     push = subprocess.run(["git", "push", "--force-with-lease", "origin",
                                            branch], cwd=REPO_ROOT,
@@ -2562,14 +2572,20 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                         return {"ok": False,
                                 "error": f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
                                 "story_key": story_key}
-                ci = _ci_status(branch)
+                    # Mode 26: pin to the exact commit that was just pushed,
+                    # not the branch name - see the matching comment in
+                    # advance_pipeline's own merge adjudication above.
+                    rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=worktree,
+                                         capture_output=True, text=True)
+                    pushed_sha = rev.stdout.strip()
+                ci = _ci_status(branch, sha=pushed_sha)
                 if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
                     # Same one-shot auto-rerun as the scheduler's merge gate:
                     # a queue-delay cancellation carries no code-quality
                     # signal, so give it one automatic retry before failing.
                     story["ci_rerun_attempted"] = True
-                    _ci_rerun(branch)
-                    ci = _ci_status(branch)
+                    _ci_rerun(pushed_sha)
+                    ci = _ci_status(branch, sha=pushed_sha)
                 if ci["state"] in ("fail", "cancelled"):
                     return {"ok": False, "error": f"CI failing: {ci['error']}",
                             "story_key": story_key}

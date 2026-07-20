@@ -5026,7 +5026,7 @@ def test_ci_status_none_when_gh_unavailable(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    ci = p._ci_status("agent/x")
+    ci = p._ci_status("agent/x", sha="")
     assert ci["state"] == "none"
 
 
@@ -5039,7 +5039,7 @@ def test_ci_status_fail_on_fail_bucket(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_status("agent/x")["state"] == "fail"
+    assert p._ci_status("agent/x", sha="")["state"] == "fail"
 
 
 def test_ci_status_pass_when_all_pass(monkeypatch):
@@ -5051,7 +5051,7 @@ def test_ci_status_pass_when_all_pass(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_status("agent/x")["state"] == "pass"
+    assert p._ci_status("agent/x", sha="")["state"] == "pass"
 
 
 def test_ci_status_pending_times_out(monkeypatch):
@@ -5066,7 +5066,7 @@ def test_ci_status_pending_times_out(monkeypatch):
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     monkeypatch.setattr(p.time, "sleep", lambda _s: None)
-    ci = p._ci_status("agent/x", timeout_s=0)
+    ci = p._ci_status("agent/x", sha="", timeout_s=0)
     assert ci["state"] == "pending"
 
 
@@ -5078,7 +5078,7 @@ def test_ci_status_returns_none_when_gh_missing(monkeypatch):
         raise FileNotFoundError("[Errno 2] No such file or directory: 'gh'")
 
     monkeypatch.setattr(p.subprocess, "run", _raise_run)
-    ci = p._ci_status("agent/x")
+    ci = p._ci_status("agent/x", sha="")
     assert ci["state"] == "none"
     assert "gh unavailable" in ci["error"]
 
@@ -5099,7 +5099,7 @@ def test_ci_status_none_when_no_workflows_dir_and_no_checks_reported(
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    ci = p._ci_status("agent/x")
+    ci = p._ci_status("agent/x", sha="")
     assert ci["state"] == "none"
 
 
@@ -5128,7 +5128,7 @@ def test_ci_status_pending_not_none_when_workflows_dir_present_but_checks_not_ye
     # already be past on the first condition check, skipping the loop body
     # (and thus the gh call under test) entirely and falling through to
     # "pending" for free - passing even with the pre-fix "none" bug.
-    ci = p._ci_status("agent/x", timeout_s=0.05)
+    ci = p._ci_status("agent/x", sha="", timeout_s=0.05)
     assert ci["state"] == "pending"
 
 
@@ -5144,7 +5144,7 @@ def test_ci_status_cancelled_when_only_cancelled_bucket(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_status("agent/x")["state"] == "cancelled"
+    assert p._ci_status("agent/x", sha="")["state"] == "cancelled"
 
 
 def test_ci_status_fail_wins_over_cancelled_when_both_present(monkeypatch):
@@ -5159,23 +5159,25 @@ def test_ci_status_fail_wins_over_cancelled_when_both_present(monkeypatch):
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_status("agent/x")["state"] == "fail"
+    assert p._ci_status("agent/x", sha="")["state"] == "fail"
 
 
 def test_ci_rerun_issues_gh_run_rerun_on_success(monkeypatch):
+    # SHA-scoped (Mode 26): the run to rerun is looked up by the exact commit
+    # SHA via `gh api .../actions/runs?head_sha=`, not by branch name.
     calls = []
 
     def _fake_run(argv, **_):
         calls.append(argv)
         class R:
             returncode = 0
-            stdout = json.dumps([{"databaseId": 12345}]) if "list" in argv else ""
+            stdout = "12345" if argv[:2] == ["gh", "api"] else ""
             stderr = ""
         return R()
 
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
-    assert p._ci_rerun("agent/x") is True
-    assert any(a[:3] == ["gh", "run", "list"] for a in calls)
+    assert p._ci_rerun("deadbeef") is True
+    assert any(a[:2] == ["gh", "api"] and "head_sha=deadbeef" in a[2] for a in calls)
     assert any(a[:3] == ["gh", "run", "rerun"] and "12345" in a for a in calls)
     assert any("--failed" in a for a in calls)
 
@@ -11119,7 +11121,7 @@ def test_approve_merge_rereads_manifest_inside_lock(plan_dir, monkeypatch):
     seen_worktrees = []
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br: {"state": "pass"})
+    monkeypatch.setattr(p, "_ci_status", lambda br, sha: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
@@ -11245,7 +11247,7 @@ def test_scheduler_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br: {"state": "pass"})
+    monkeypatch.setattr(p, "_ci_status", lambda br, sha: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})

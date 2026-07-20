@@ -429,6 +429,24 @@ def test_oracle_view_file_line_end_less_than_line_start(tmp_path, monkeypatch):
     assert result.startswith("ERROR")
 
 
+def test_oracle_view_file_line_start_zero_is_rejected(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_view_file_line_start_zero_is_rejected."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("a\nb\nc\nd\ne\n")
+    result = lao.run_tool("view_file", {"path": "small.py", "line_start": 0, "line_end": 2})
+    assert result.startswith("ERROR")
+
+
+def test_oracle_view_file_line_start_negative_is_rejected(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_view_file_line_start_negative_is_rejected."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("a\nb\nc\nd\ne\n")
+    result = lao.run_tool("view_file", {"path": "small.py", "line_start": -1, "line_end": 2})
+    assert result.startswith("ERROR")
+
+
 def test_oracle_view_file_missing_path_still_required():
     """Mirrors test_local_agent.test_view_file_missing_path_still_required.
     local_agent_oracle's safe_run_tool doesn't have local_agent's required-

@@ -55,10 +55,10 @@ def _repo_has_ci_configured() -> bool:
     return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
 
 
-def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
-    """Poll ``gh pr checks <branch>`` until all checks reach a terminal bucket
-    or the timeout elapses. Returns ``{"state": "pass"|"fail"|"cancelled"|
-    "pending"|"none", "error": str}``.
+def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[str, str]:
+    """Poll GitHub's check-runs for the specific commit `sha` until all checks
+    reach a terminal bucket or the timeout elapses. Returns ``{"state":
+    "pass"|"fail"|"cancelled"|"pending"|"none", "error": str}``.
 
       - ``pass``   every check passed -> safe to merge.
       - ``fail``   at least one check failed/errored/needs-action -> do not
@@ -72,6 +72,22 @@ def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
       - ``none``   no PR / unparseable output / a repo with no
         .github/workflows at all -> treat as pass (a repo without CI must
         not be blocked by this gate).
+
+    SHA-scoped, not branch-scoped (Mode 26, project_dispatch_failure_modes.md):
+    querying by branch name alone (`gh pr checks <branch>`) can read a stale
+    result belonging to an OLDER, already-superseded run on the same branch -
+    GitHub's check/run indexing has a brief eventual-consistency lag right
+    after a force-push, and a branch-name query has no way to tell "the run
+    for the commit I actually just pushed" apart from "whatever run this
+    branch name currently happens to be associated with". Querying the exact
+    commit SHA via the REST commits/check-runs endpoint closes that gap:
+    results returned for a specific SHA can only ever belong to that commit.
+
+    `sha` is empty/falsy only when a caller had no local worktree to read a
+    fresh commit from (nothing was just pushed, so there's no fresher SHA to
+    race against) - falls back to the pre-Mode-26 branch-scoped `gh pr
+    checks` query in that case, since the race this fix closes cannot occur
+    without a just-completed push.
     Never raises; the merge adjudication loop decides what to do with the result.
     """
     if not PIPELINE_MERGE_CI_GATE:
@@ -81,61 +97,94 @@ def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
         # `gh` may be absent or non-executable; treat that as "no CI" (none)
         # rather than letting OSError escape and crash the scheduler tick.
         try:
-            r = subprocess.run(["gh", "pr", "checks", branch, "--json", "bucket"],
-                               capture_output=True, text=True)
+            if sha:
+                r = subprocess.run(
+                    ["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+                     "--jq", ".check_runs[] | {name, status, conclusion}"],
+                    capture_output=True, text=True,
+                )
+            else:
+                r = subprocess.run(["gh", "pr", "checks", branch, "--json", "bucket"],
+                                   capture_output=True, text=True)
         except OSError as e:
             return {"state": "none", "error": f"gh unavailable: {e}"}
         if r.returncode != 0:
             return {"state": "none", "error": r.stderr.strip()[:200]}
-        try:
-            buckets = {c.get("bucket") for c in json.loads(r.stdout or "[]")}
-        except ValueError:
-            return {"state": "none", "error": "unparseable gh pr checks output"}
-        if not buckets:
-            if not _repo_has_ci_configured():
-                return {"state": "none", "error": ""}
-            # Checks are configured but haven't registered for this branch
-            # yet - keep polling within the deadline rather than fast-pathing
-            # to pass; falls through to "pending" below if they never do.
-            time.sleep(10)
-            continue
-        if buckets & {"fail", "error", "action_required"}:
-            return {"state": "fail", "error": ""}
-        if "cancelled" in buckets:
-            return {"state": "cancelled", "error": ""}
-        if buckets <= {"pass"}:
-            return {"state": "pass", "error": ""}
-        time.sleep(10)  # still pending — keep polling
+        if sha:
+            try:
+                runs = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
+            except ValueError:
+                return {"state": "none", "error": "unparseable gh api check-runs output"}
+            if not runs:
+                if not _repo_has_ci_configured():
+                    return {"state": "none", "error": ""}
+                # Checks are configured but haven't registered for this SHA
+                # yet - keep polling within the deadline rather than
+                # fast-pathing to pass; falls through to "pending" below if
+                # they never do.
+                time.sleep(10)
+                continue
+            conclusions = {c.get("conclusion") for c in runs}
+            if conclusions & {"failure", "timed_out", "action_required"}:
+                return {"state": "fail", "error": ""}
+            if "cancelled" in conclusions:
+                return {"state": "cancelled", "error": ""}
+            if any(c.get("status") != "completed" for c in runs):
+                time.sleep(10)  # still pending — keep polling
+                continue
+            if conclusions <= {"success", "neutral", "skipped"}:
+                return {"state": "pass", "error": ""}
+            time.sleep(10)  # still pending — keep polling
+        else:
+            # No local worktree to read a fresher commit from - fall back to
+            # the pre-Mode-26 branch-scoped query (see the docstring).
+            try:
+                buckets = {c.get("bucket") for c in json.loads(r.stdout or "[]")}
+            except ValueError:
+                return {"state": "none", "error": "unparseable gh pr checks output"}
+            if not buckets:
+                if not _repo_has_ci_configured():
+                    return {"state": "none", "error": ""}
+                time.sleep(10)
+                continue
+            if buckets & {"fail", "error", "action_required"}:
+                return {"state": "fail", "error": ""}
+            if "cancelled" in buckets:
+                return {"state": "cancelled", "error": ""}
+            if buckets <= {"pass"}:
+                return {"state": "pass", "error": ""}
+            time.sleep(10)  # still pending — keep polling
     return {"state": "pending", "error": "CI did not complete within timeout"}
 
 
-def _ci_rerun(branch: str) -> bool:
-    """Rerun the most recent CI run's failed/cancelled jobs for `branch` via
-    `gh run rerun --failed`, for the one-shot auto-retry on a `cancelled`
-    `_ci_status` result. Never raises - `gh`/network failures return False so
-    the caller falls through to the ordinary fail/retry path rather than
-    crashing the scheduler tick."""
+def _ci_rerun(sha: str) -> bool:
+    """Rerun the failed/cancelled jobs of the workflow run for the specific
+    commit `sha` via `gh run rerun --failed`, for the one-shot auto-retry on
+    a `cancelled` `_ci_status` result. Never raises - `gh`/network failures
+    return False so the caller falls through to the ordinary fail/retry path
+    rather than crashing the scheduler tick.
+
+    SHA-scoped for the same reason `_ci_status` is (Mode 26): `gh run list
+    --branch <branch>` can resolve to an older, already-superseded run right
+    after a force-push. `head_sha` on the actions/runs list endpoint pins to
+    the exact commit instead.
+    """
     try:
         r = subprocess.run(
-            ["gh", "run", "list", "--branch", branch, "--limit", "1", "--json", "databaseId"],
+            ["gh", "api", f"repos/{{owner}}/{{repo}}/actions/runs?head_sha={sha}",
+             "--jq", ".workflow_runs[0].id"],
             capture_output=True, text=True,
         )
     except OSError:
         return False
     if r.returncode != 0:
         return False
-    try:
-        runs = json.loads(r.stdout or "[]")
-    except ValueError:
-        return False
-    if not runs:
-        return False
-    run_id = runs[0].get("databaseId")
+    run_id = r.stdout.strip()
     if not run_id:
         return False
     try:
         rerun = subprocess.run(
-            ["gh", "run", "rerun", str(run_id), "--failed"],
+            ["gh", "run", "rerun", run_id, "--failed"],
             capture_output=True, text=True,
         )
     except OSError:

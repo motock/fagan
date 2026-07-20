@@ -359,6 +359,86 @@ def test_oracle_create_file_overwrites_a_pre_existing_file_after_view_file(tmp_p
     assert (tmp_path / "mod.py").read_text() == "def merge():\n    return []\n"
 
 
+def test_oracle_search_tool_returns_actionable_steering_message(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_search_tool_returns_actionable_steering_message.
+    There is no 'search' tool; steer toward bash + grep/rg instead of the
+    bare generic 'unknown tool search'."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    result = lao.run_tool("search", {"query": "def foo"})
+    assert result != "unknown tool search"
+    assert "bash" in result
+    assert "grep" in result or "rg" in result
+
+
+def test_oracle_unknown_tool_other_than_search_unchanged(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_unknown_tool_other_than_search_unchanged."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    assert lao.run_tool("nonexistent_tool_xyz", {}) == "unknown tool nonexistent_tool_xyz"
+
+
+def test_oracle_view_file_returns_requested_line_range(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_view_file_returns_requested_line_range."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    lines = [f"line {i} content padding padding padding\n" for i in range(1, 301)]
+    (tmp_path / "big.py").write_text("".join(lines))
+    result = lao.run_tool("view_file", {"path": "big.py", "line_start": 200, "line_end": 205})
+    assert " 200| line 200 content padding padding padding\n" in result
+    assert " 205| line 205 content padding padding padding\n" in result
+    assert "line 1 content" not in result
+    assert "line 300 content" not in result
+
+
+def test_oracle_view_file_without_range_on_small_file_is_unchanged(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_view_file_without_range_on_small_file_is_unchanged."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("x = 1\ny = 2\n")
+    result = lao.run_tool("view_file", {"path": "small.py"})
+    assert result == "   1| x = 1\n   2| y = 2\n"
+
+
+def test_oracle_view_file_without_range_on_large_file_includes_continuation_hint(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_view_file_without_range_on_large_file_includes_continuation_hint."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    lines = [f"line {i} content padding padding padding\n" for i in range(1, 301)]
+    (tmp_path / "big.py").write_text("".join(lines))
+    result = lao.run_tool("view_file", {"path": "big.py"})
+    assert result.startswith("   1| line 1 content")
+    assert "line_start" in result
+    assert "line_end" in result
+    assert "300" in result
+
+
+def test_oracle_view_file_line_start_beyond_file_length(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_view_file_line_start_beyond_file_length."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("x = 1\ny = 2\n")
+    result = lao.run_tool("view_file", {"path": "small.py", "line_start": 50, "line_end": 60})
+    assert result.startswith("ERROR")
+
+
+def test_oracle_view_file_line_end_less_than_line_start(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_view_file_line_end_less_than_line_start."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("x = 1\ny = 2\ny = 3\n")
+    result = lao.run_tool("view_file", {"path": "small.py", "line_start": 3, "line_end": 1})
+    assert result.startswith("ERROR")
+
+
+def test_oracle_view_file_missing_path_still_required():
+    """Mirrors test_local_agent.test_view_file_missing_path_still_required.
+    local_agent_oracle's safe_run_tool doesn't have local_agent's required-
+    args hint enrichment (no _TOOL_SCHEMAS lookup) — path staying required
+    still surfaces as a KeyError via the plain ERROR-prefixed wrapper."""
+    result = lao.safe_run_tool("view_file", {"line_start": 1, "line_end": 2})
+    assert result.startswith("ERROR running view_file")
+    assert "path" in result
+
+
 def test_oracle_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monkeypatch):
     """SYNTAX-NUDGE: mirrors test_local_agent's version — the rejection must
     name the exact line and quote the offending line plus up to 2 lines of

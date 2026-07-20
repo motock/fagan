@@ -63,6 +63,98 @@ def test_safe_run_tool_handles_unknown_tool():
     assert la.safe_run_tool("bogus", {}) == "unknown tool bogus"
 
 
+def test_search_tool_returns_actionable_steering_message(tmp_path, monkeypatch):
+    """The model has no 'search' tool (live incident 2026-07-20, story
+    93fdc371): gpt-oss:20b called a nonexistent 'search' tool 7 times while
+    trying to locate a function definition, each time getting the bare
+    generic 'unknown tool search' with no steering toward what actually
+    exists (bash + grep/rg). Give this one specific case an actionable
+    message instead of the generic fallback."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    result = la.run_tool("search", {"query": "def foo"})
+    assert result != "unknown tool search"
+    assert "bash" in result
+    assert "grep" in result or "rg" in result
+
+
+def test_unknown_tool_other_than_search_unchanged(tmp_path, monkeypatch):
+    """Regression guard: the search-specific steering message must not
+    swallow the generic unknown-tool fallback for any other invalid name."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    assert la.run_tool("nonexistent_tool_xyz", {}) == "unknown tool nonexistent_tool_xyz"
+
+
+def test_view_file_returns_requested_line_range(tmp_path, monkeypatch):
+    """view_file with line_start/line_end on a file whose full content
+    exceeds the 3000-char truncation must return the requested range, not
+    just the head. Live incident 2026-07-20 (story 93fdc371): a 222-line
+    file's target function was defined at line 114 but view_file's flat
+    [:3000] truncation only ever showed roughly the first 63 lines — the
+    function was architecturally unreachable no matter how many times
+    view_file was called, because there was no way to ask for a later
+    range."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    lines = [f"line {i} content padding padding padding\n" for i in range(1, 301)]
+    (tmp_path / "big.py").write_text("".join(lines))
+    result = la.run_tool("view_file", {"path": "big.py", "line_start": 200, "line_end": 205})
+    assert " 200| line 200 content padding padding padding\n" in result
+    assert " 205| line 205 content padding padding padding\n" in result
+    assert "line 1 content" not in result
+    assert "line 300 content" not in result
+
+
+def test_view_file_without_range_on_small_file_is_unchanged(tmp_path, monkeypatch):
+    """Regression guard: a file well under the truncation limit must return
+    byte-for-byte the same string with or without this change — the
+    continuation hint must not leak into the untruncated case."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("x = 1\ny = 2\n")
+    result = la.run_tool("view_file", {"path": "small.py"})
+    assert result == "   1| x = 1\n   2| y = 2\n"
+
+
+def test_view_file_without_range_on_large_file_includes_continuation_hint(tmp_path, monkeypatch):
+    """A large file with no range still returns the truncated head (existing
+    behavior preserved) but now also tells the model it can ask for more via
+    line_start/line_end and how many lines the file actually has."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    lines = [f"line {i} content padding padding padding\n" for i in range(1, 301)]
+    (tmp_path / "big.py").write_text("".join(lines))
+    result = la.run_tool("view_file", {"path": "big.py"})
+    assert result.startswith("   1| line 1 content")
+    assert "line_start" in result
+    assert "line_end" in result
+    assert "300" in result
+
+
+def test_view_file_line_start_beyond_file_length(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("x = 1\ny = 2\n")
+    result = la.run_tool("view_file", {"path": "small.py", "line_start": 50, "line_end": 60})
+    assert result.startswith("ERROR")
+
+
+def test_view_file_line_end_less_than_line_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    (tmp_path / "small.py").write_text("x = 1\ny = 2\ny = 3\n")
+    result = la.run_tool("view_file", {"path": "small.py", "line_start": 3, "line_end": 1})
+    assert result.startswith("ERROR")
+
+
+def test_view_file_missing_path_still_required():
+    """path must stay the only required key — omitting it (even while
+    passing line_start/line_end) must still hit the existing missing-
+    required-arg recovery path in safe_run_tool, not a new failure mode."""
+    result = la.safe_run_tool("view_file", {"line_start": 1, "line_end": 2})
+    assert result.startswith("ERROR running view_file")
+    assert "path" in result
+
+
 def test_create_file_rejects_invalid_python_syntax_diff_artifact(tmp_path, monkeypatch):
     """A stray unified-diff leading '+' pasted into content must be rejected
     before it lands on disk — this is a defense-in-depth guard against a

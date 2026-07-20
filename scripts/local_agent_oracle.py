@@ -299,8 +299,18 @@ TOOLS = [
             "path": {"type": "string"}, "old_str": {"type": "string"}, "new_str": {"type": "string"}},
             "required": ["path", "old_str", "new_str"]}}},
     {"type": "function", "function": {
-        "name": "view_file", "description": "Show a file's contents with line numbers.",
-        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+        "name": "view_file",
+        "description": (
+            "Show a file's contents with line numbers. Large files are "
+            "truncated; pass optional 1-indexed inclusive line_start/"
+            "line_end to view a specific range instead (e.g. after grep "
+            "gives you a line number)."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "line_start": {"type": "integer"},
+            "line_end": {"type": "integer"}},
+            "required": ["path"]}}},
     {"type": "function", "function": {
         "name": "bash", "description": "Run a bash command (run tests, git, etc.). Do NOT use to create or edit files.",
         "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
@@ -900,7 +910,24 @@ def run_tool(fn, args) -> str:
             return f"ERROR: {args['path']} does not exist."
         _VIEWED_THIS_RUN.add(args["path"])
         lines = path.read_text().splitlines(keepends=True)
-        return "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))[:3000]
+        line_start, line_end = args.get("line_start"), args.get("line_end")
+        if line_start is not None or line_end is not None:
+            start = line_start if line_start is not None else 1
+            end = line_end if line_end is not None else len(lines)
+            if start > len(lines):
+                return f"ERROR: line_start {start} is beyond {args['path']}'s {len(lines)} lines."
+            if end < start:
+                return f"ERROR: line_end {end} is less than line_start {start}."
+            selected = lines[start - 1:end]
+            return "".join(f"{start + i:4d}| {ln}" for i, ln in enumerate(selected))
+        formatted = "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))
+        if len(formatted) <= 3000:
+            return formatted
+        return (
+            formatted[:3000]
+            + f"\n... [truncated; {args['path']} has {len(lines)} lines total — "
+              f"call view_file again with line_start/line_end to see more]"
+        )
     if fn == "bash":
         cmd = args.get("command", "")
         # Refuse destructive git ops before they reach the shell — they discard
@@ -934,6 +961,12 @@ def run_tool(fn, args) -> str:
         if ACCEPTANCE_PATHS:
             result += _restore_tampered_oracle_files()
         return result
+    if fn == "search":
+        return (
+            "unknown tool search — there is no search tool. Use bash with "
+            "grep or rg to find code (e.g. `grep -n \"def foo\" -R .`), then "
+            "view_file with line_start/line_end on the line number it reports."
+        )
     return f"unknown tool {fn}"
 
 

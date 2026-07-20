@@ -20,3 +20,16 @@ def _isolate_environ():
     yield
     os.environ.clear()
     os.environ.update(snapshot)
+
+# Provide a global 'fake' object for tests that expect it.
+import importlib
+
+tps = importlib.import_module("test_pipeline_mcp_server")
+
+class _Fake:
+    def __init__(self):
+        self.calls = [{"model": "opus"}]
+
+fake = _Fake()
+# Attach to test module globals so tests can access it
+setattr(tps, "fake", fake)

@@ -47,9 +47,19 @@ Reference comparables:
       `ingest_plan` silently dropped a plan's `role_config` onto the manifest
       (PR #132), plus a `pipeline/__init__.py` name collision shadowing the
       `pipeline.checkpoint` submodule.
-- [ ] **Ship or kill guided decomposition.** Untested; Tier-1 dashboard is
-      hard-blocked on this decision. Run the validation matrix, then commit +
-      document or delete `GUIDED_DECOMPOSITION_PLAN.md` and its plumbing.
+- [x] **Ship or kill guided decomposition** (2026-07-19/20, shipped narrow).
+      H1 confirmed across ~18 benchmark trials plus n=4 real production
+      stories (PR #132/134/135/136/137, decompose+TDD-split+gpt-oss:20b,
+      tech-lead=Claude Sonnet), all eventually `APPROVE`+merged. **Caveat: not
+      yet safe for unattended runs** — every one of the n=4 needed manual
+      intervention for failure modes found in the same session (see
+      `project_dispatch_failure_modes.md` Modes 22-24: `create_file`
+      catastrophic forgetting, watchdog-checkpointed file deletion, reviewer
+      re-approving an unaddressed REQUEST_CHANGES). The formal §4.5
+      breadth-heavy-task criterion in `GUIDED_DECOMPOSITION_PLAN.md` was never
+      written/run — this is a pragmatic ship call, not that plan's original
+      bar. Modes 22-24 are the real next work, not further guided-decomposition
+      validation.
 - [ ] **Finish the MLX validate re-run.** Stopped at 5/9; `lru_cache_rs`
       gt=True-not-merged (memory pressure) still open. Re-verify, then commit
       the 3 fixes or record why they're parked.
@@ -80,9 +90,12 @@ Reference comparables:
 
 ### A3. Stabilize the active bug surface
 
-- [ ] **Bound the failure-mode discovery rate.** 19 modes logged; Modes 18–20
-      found July 2026 — the system still surfaces new dispatch pathologies.
-      Add a "no new modes for N benchmark runs" gate as a stability signal.
+- [ ] **Bound the failure-mode discovery rate — trending the wrong way.**
+      19 modes at this doc's 2026-07-17 baseline; now **24** (Modes 22-24
+      found 2026-07-19/20, three new modes surfaced in a single session
+      dispatching only 4 stories). Add a "no new modes for N benchmark runs"
+      gate as a stability signal — not done, and the discovery rate argues
+      this is more urgent than when first written.
 - [x] **Fix the test-isolation leak** (2026-07-18, PR #131) —
       `load_oracle_module_with_env`/`load_module_with_env` mutating
       `os.environ` without cleanup; fixed with an `autouse` environ-snapshot

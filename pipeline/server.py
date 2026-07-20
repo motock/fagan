@@ -1813,14 +1813,20 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     worktree = story.get("worktree", "")
         # Guard: skip if HEAD unchanged since last REQUEST_CHANGES
     if story.get("last_reviewed_sha"):
-            current_sha = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
-                capture_output=True, text=True).stdout.strip()
-            if current_sha == story["last_reviewed_sha"]:
-                _notify_user(plan_name,
-                             f"{story_key} review skipped: HEAD unchanged since the last REQUEST_CHANGES ({current_sha[:9]}) - a redispatch/rework must land a new commit before re-review.")
-                _atomic_write_json(manifest_path, manifest)
-                return {"ok": True, "status": story["status"], "skipped": "unchanged_since_last_review"}
+        if not worktree or not os.path.isdir(worktree):
+            pass
+        else:
+            try:
+                current_sha = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+                    capture_output=True, text=True).stdout.strip()
+                if current_sha == story["last_reviewed_sha"]:
+                    _notify_user(plan_name,
+                                 f"{story_key} review skipped: HEAD unchanged since the last REQUEST_CHANGES ({current_sha[:9]}) - a redispatch/rework must land a new commit before re-review.")
+                    _atomic_write_json(manifest_path, manifest)
+                    return {"ok": True, "status": story["status"], "skipped": "unchanged_since_last_review"}
+            except (subprocess.CalledProcessError, OSError):
+                pass
         
     plan_role_config = _plan_role_config(plan_name)
     try:
@@ -2028,9 +2034,13 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
         story["review_feedback"] = feedback
         # Record the HEAD SHA for this REQUEST_CHANGES review
-        story["last_reviewed_sha"] = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
-            capture_output=True, text=True).stdout.strip()
+        if worktree and os.path.isdir(worktree):
+            try:
+                story["last_reviewed_sha"] = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+                    capture_output=True, text=True).stdout.strip()
+            except (subprocess.CalledProcessError, OSError):
+                pass
         attempts = story.get("rework_attempts", 0) + 1
         story["rework_attempts"] = attempts
         if story.get("escalated"):

@@ -240,6 +240,19 @@ log as an audit record.
   feedback. This is bounded by its own budget, `PIPELINE_REVIEW_INCONCLUSIVE_MAX`
   — after that many consecutive inconclusive verdicts the story is **parked**
   for human review instead of retrying forever.
+  On `REQUEST_CHANGES`, the worktree's current HEAD commit SHA is recorded on
+  the story as `last_reviewed_sha`. If `review_story` is called again while
+  HEAD is still that same SHA — i.e. no redispatch/rework has landed a new
+  commit since the rejection — the reviewer is not invoked a second time;
+  the call returns `{"ok": True, "status": <unchanged>, "skipped":
+  "unchanged_since_last_review"}` instead. This closes a real gate-integrity
+  gap: because LLM review is not fully deterministic, a second call on an
+  unchanged diff could otherwise land on a different verdict than the first
+  and silently override a real, unaddressed finding. The story remains
+  dispatch-eligible at `changes_requested` throughout — a genuine rework that
+  lands a new commit naturally clears the guard on its next review call, so
+  this only blocks re-reviewing the exact same unchanged commit, never the
+  story's forward progress. `last_reviewed_sha` is cleared on `APPROVE`.
 
 ### Usage gate
 - `check_usage()` — probes current subscription usage via a headless

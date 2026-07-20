@@ -6984,6 +6984,103 @@ def test_check_story_status_handles_git_error_safely(plan_dir, monkeypatch):
     assert result["reason"] == "empty_agent_branch"
 
 
+def _css_setup(plan_dir, monkeypatch, *, last_reviewed_sha=None,
+               head_sha=None, rework_attempts=0, acceptance=False):
+    """Shared scaffolding for the Mode 27 no-new-commit guard tests.
+
+    Builds a worktree + manifest, mocks the pid dead (so check_story_status
+    runs the tests), mocks test detection + new-commits guard, and routes
+    subprocess.run so `git rev-parse HEAD` returns `head_sha` while every
+    other call (the test command) succeeds with returncode 0.
+    """
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("ok\n")
+    story = {"summary": "thing", "status": "in_progress", "pid": 4242,
+            "worktree": str(worktree), "rework_attempts": rework_attempts}
+    if acceptance:
+        story["acceptance"] = [{"path": "t.py", "source": ""}]
+    if last_reviewed_sha is not None:
+        story["last_reviewed_sha"] = last_reviewed_sha
+    _write_manifest(plan_dir, "plan", {"S1": story})
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class Result:
+        def __init__(self, stdout="", returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def run_mock(*args, **kwargs):
+        if "rev-parse" in args[0]:
+            return Result(stdout=(head_sha or "") + "\n")
+        return Result(returncode=0)
+
+    monkeypatch.setattr(p.subprocess, "run", run_mock)
+
+
+def test_check_story_status_no_new_commit_since_last_review_routes_to_changes_requested(
+    plan_dir, monkeypatch,
+):
+    """Mode 27: tests pass but HEAD is unchanged since the last
+    REQUEST_CHANGES — route to changes_requested (dispatch-eligible) so the
+    scheduler redispatches, instead of stalling at tests_passed where Mode
+    24's same-SHA skip guard would loop forever. The no-progress retry
+    counts against the rework cap."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="abc123", rework_attempts=0)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "changes_requested"
+    assert result["reason"] == "no_new_commit_since_last_review"
+    manifest = _read_manifest(plan_dir, "plan")["stories"]["S1"]
+    assert manifest["status"] == "changes_requested"
+    assert manifest["rework_attempts"] == 1
+
+
+def test_check_story_status_new_commit_after_last_review_passes(plan_dir, monkeypatch):
+    """Mode 27: when the rework DID produce a new commit (HEAD advanced past
+    last_reviewed_sha), fall through to tests_passed so review_story runs on
+    the new SHA — the guard must not fire on legitimate progress."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="def456", rework_attempts=1)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "tests_passed"
+    manifest = _read_manifest(plan_dir, "plan")["stories"]["S1"]
+    assert manifest["status"] == "tests_passed"
+    # rework_attempts untouched on the progress path.
+    assert manifest["rework_attempts"] == 1
+
+
+def test_check_story_status_no_last_reviewed_sha_passes(plan_dir, monkeypatch):
+    """Mode 27: the guard only applies when a prior REQUEST_CHANGES recorded
+    a last_reviewed_sha. A first-run story with no prior review falls
+    through to tests_passed unchanged."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha=None, head_sha="any")
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "tests_passed"
+    manifest = _read_manifest(plan_dir, "plan")["stories"]["S1"]
+    assert manifest["status"] == "tests_passed"
+
+
+def test_check_story_status_no_progress_exhausts_rework_cap_parks(plan_dir, monkeypatch):
+    """Mode 27: a stuck agent that keeps producing no new commit must park
+    once rework_attempts reaches the cap, rather than redispatching forever.
+    rework_attempts starts at 2 (cap 3): one no-progress retry hits the cap
+    and parks."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="abc123", rework_attempts=2)
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "parked"
+    assert result["reason"] == "no_new_commit_rework_budget_exhausted"
+    manifest = _read_manifest(plan_dir, "plan")["stories"]["S1"]
+    assert manifest["status"] == "parked"
+    assert manifest["rework_attempts"] == 3
+    assert "no new commit after 3" in manifest["parked_reason"]
+
+
 def test_check_story_status_routes_acceptance_fail_to_review_when_opted_in(
     plan_dir, monkeypatch,
 ):

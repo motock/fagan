@@ -1423,6 +1423,50 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         _atomic_write_json(manifest_path, manifest)
         return {"status": "failed", "reason": "empty_agent_branch"}
 
+    # Mode 27 guard: tests pass but HEAD is unchanged since the last
+    # REQUEST_CHANGES recorded last_reviewed_sha — the rework redispatch
+    # produced no new commit (e.g. it parked in a read loop or crashed
+    # without committing). Routing straight to tests_passed would hand
+    # review_story the same SHA, where Mode 24's same-SHA skip guard
+    # loops forever (tests_passed is not dispatch-eligible, so the story
+    # would stall invisibly). Route to changes_requested so the scheduler
+    # redispatches, and count this no-progress retry against the rework
+    # cap so a stuck agent parks rather than looping forever.
+    if passed and story.get("last_reviewed_sha"):
+        head_res = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=worktree, capture_output=True, text=True
+        )
+        if head_res.stdout.strip() == story["last_reviewed_sha"]:
+            attempts = story.get("rework_attempts", 0) + 1
+            story["rework_attempts"] = attempts
+            if story.get("escalated"):
+                rework_cap = REWORK_MAX_ATTEMPTS_ESCALATED
+            elif story.get("acceptance"):
+                rework_cap = REWORK_MAX_ATTEMPTS_ORACLE
+            else:
+                rework_cap = REWORK_MAX_ATTEMPTS
+            if attempts >= rework_cap:
+                story["status"] = "parked"
+                story["parked_reason"] = (
+                    f"no new commit after {attempts} rework redispatches - "
+                    "agent keeps parking/crashing without writing code."
+                )
+                _atomic_write_json(manifest_path, manifest)
+                _notify_user(
+                    plan_name,
+                    f"{story_key} parked: no new commit after {attempts} rework "
+                    f"redispatches - needs human review.",
+                )
+                return {
+                    "status": "parked",
+                    "reason": "no_new_commit_rework_budget_exhausted",
+                }
+            story["status"] = "changes_requested"
+            _atomic_write_json(manifest_path, manifest)
+            return {
+                "status": "changes_requested",
+                "reason": "no_new_commit_since_last_review",
+            }
     story["status"] = "tests_passed" if passed else "failed"
 
     # Opt-in review-on-acceptance-fail (PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1):

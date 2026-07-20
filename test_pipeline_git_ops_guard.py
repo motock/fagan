@@ -1,6 +1,4 @@
-import os
 import subprocess
-import tempfile
 from pathlib import Path
 
 from pipeline.git_ops import _commit_wip

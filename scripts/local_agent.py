@@ -84,6 +84,88 @@ def _load_resume_transcript() -> list | None:
         print(f"[local_agent] RESUME FAILED: {e}", flush=True)
         return None
 
+# Rough chars-per-token estimate (no tokenizer available here). Observed live
+# 2026-07-20: a resumed transcript sat at ~129544 chars / ~32386 tokens
+# (~4.0 chars/token) right before hitting NUM_CTX=32768 and truncating -
+# llama.cpp then returned a 500 on every retry (the truncated request is
+# identical each time, so CHAT_MAX_ATTEMPTS's retry can never help). A rework
+# resume reuses the ENTIRE prior transcript and appends more (reviewer
+# feedback, a tech-lead fix checklist) with no bound, so repeated rework
+# cycles on the same story compound: story 93fdc371 died this way on its
+# 2nd AND 3rd rework attempts, both times on the model's very first turn.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
+
+def _message_char_len(m: dict) -> int:
+    n = len(str(m.get("content") or ""))
+    tool_calls = m.get("tool_calls")
+    if tool_calls:
+        n += len(json.dumps(tool_calls))
+    return n
+
+
+def _trim_resumed_transcript(messages: list, max_chars: int) -> list:
+    """Bound a resumed transcript to max_chars, dropping the oldest middle
+    content when it would otherwise overflow the model's context window.
+
+    Always preserves the original system+task head (messages[:2] - the
+    resumed transcript's first two entries) and works backward from the end
+    to keep as much recent activity as fits, so the model still has its most
+    recent progress to continue from. Content is dropped in whole blocks (an
+    assistant message plus any tool-role messages immediately following it,
+    which are that call's results) so a tool_calls message is never split
+    from its own tool response - either both survive or both are dropped.
+    When anything is dropped, a synthetic user note is inserted between the
+    head and the surviving tail explaining what happened, so the model isn't
+    confused by a discontinuity in its own history.
+    """
+    total = sum(_message_char_len(m) for m in messages)
+    if total <= max_chars:
+        return messages
+
+    head_len = min(2, len(messages))
+    head = messages[:head_len]
+    head_chars = sum(_message_char_len(m) for m in head)
+
+    blocks: list[list[dict]] = []
+    i = head_len
+    while i < len(messages):
+        block = [messages[i]]
+        i += 1
+        while i < len(messages) and messages[i].get("role") == "tool":
+            block.append(messages[i])
+            i += 1
+        blocks.append(block)
+
+    budget = max_chars - head_chars
+    kept: list[list[dict]] = []
+    kept_chars = 0
+    for block in reversed(blocks):
+        block_chars = sum(_message_char_len(m) for m in block)
+        if kept and kept_chars + block_chars > budget:
+            break
+        kept.append(block)
+        kept_chars += block_chars
+    kept.reverse()
+
+    dropped = len(blocks) - len(kept)
+    if dropped == 0:
+        return messages
+
+    note = {
+        "role": "user",
+        "content": (
+            f"[{dropped} earlier turn(s) were dropped from this transcript to "
+            "fit the model's context window. Continue the task using only "
+            "the history below - do not assume anything happened that isn't "
+            "shown here.]"
+        ),
+    }
+    print(f"[local_agent] RESUME TRIMMED: dropped {dropped} block(s) "
+          f"({total} -> {head_chars + kept_chars + len(note['content'])} chars) "
+          "to fit the context budget", flush=True)
+    return head + [note] + [m for block in kept for m in block]
+
 def _persist_messages(messages, path):
     if not path:
         return
@@ -957,6 +1039,12 @@ def main() -> int:
     transcript_path = os.environ.get("LOCAL_AGENT_TRANSCRIPT_PATH")
     messages = PersistingList(transcript_path=transcript_path)
     if resume := _load_resume_transcript():
+        # Reserve headroom below NUM_CTX for the resume-append content (e.g.
+        # reviewer feedback), the model's own generation, and the rough
+        # imprecision of the chars/token estimate - trimming to the exact
+        # limit would still overflow once more content is added below.
+        budget_chars = int(NUM_CTX * _CHARS_PER_TOKEN_ESTIMATE * 0.75)
+        resume = _trim_resumed_transcript(resume, budget_chars)
         messages.extend(resume)
     else:
         system_content = HARNESS_RULES + ("\n\n" + system if system else "")

@@ -7190,6 +7190,105 @@ def test_check_story_status_acceptance_fail_stays_failed_for_empty_branch(
     assert "acceptance_failed_review" not in story
 
 
+def test_check_story_status_acceptance_fail_review_no_new_commit_routes_to_changes_requested(
+    plan_dir, monkeypatch,
+):
+    """Mode 27 twin: the acceptance-fail-review opt-in (PIPELINE_REVIEW_ON_
+    ACCEPTANCE_FAIL=1) routes a failing-tests-but-real-work dispatch to
+    tests_passed/acceptance_failed_review — but if HEAD is unchanged since
+    the last REQUEST_CHANGES (the rework redispatch crashed, e.g. on an LLM
+    transport error, before writing any fix), review_story's same-SHA skip
+    guard would silently decline to re-review forever, stranding the story
+    at tests_passed (not dispatch-eligible). Observed live 2026-07-20: 14+
+    consecutive silent skip-notifications on one story. The original Mode 27
+    guard only checked `passed` (True) before this opt-in branch existed as
+    a second way to reach tests_passed; it must also cover this path."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("the agent did real work but crashed\n")
+    _write_manifest(plan_dir, "revfail_stuck", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "rework_attempts": 1,
+               "last_reviewed_sha": "34a3f38"},
+    })
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class _Fail:
+        returncode = 1
+        stdout = "1 failed"
+
+    class _RevParse:
+        returncode = 0
+        stdout = "34a3f38\n"
+
+    def run_mock(*args, **kwargs):
+        if "rev-parse" in args[0]:
+            return _RevParse()
+        return _Fail()
+    monkeypatch.setattr(p.subprocess, "run", run_mock)
+
+    monkeypatch.setenv("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "1")
+
+    result = p.check_story_status("revfail_stuck", "S1")
+
+    assert result["status"] == "changes_requested"
+    assert result["reason"] == "no_new_commit_since_last_review"
+    story = _read_manifest(plan_dir, "revfail_stuck")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
+    assert story["rework_attempts"] == 2
+
+
+def test_check_story_status_acceptance_fail_review_new_commit_still_passes(
+    plan_dir, monkeypatch,
+):
+    """Sibling regression guard: when the acceptance-fail-review opt-in
+    fires AND HEAD legitimately advanced past last_reviewed_sha, the guard
+    above must not fire — the story reaches tests_passed/
+    acceptance_failed_review as before so review_story evaluates the new
+    commit."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("the agent did real work\n")
+    _write_manifest(plan_dir, "revfail_progress", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "rework_attempts": 1,
+               "last_reviewed_sha": "34a3f38"},
+    })
+    monkeypatch.setattr(p.os, "kill",
+                        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class _Fail:
+        returncode = 1
+        stdout = "1 failed"
+
+    class _RevParse:
+        returncode = 0
+        stdout = "def456\n"
+
+    def run_mock(*args, **kwargs):
+        if "rev-parse" in args[0]:
+            return _RevParse()
+        return _Fail()
+    monkeypatch.setattr(p.subprocess, "run", run_mock)
+
+    monkeypatch.setenv("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "1")
+
+    result = p.check_story_status("revfail_progress", "S1")
+
+    assert result["status"] == "tests_passed"
+    story = _read_manifest(plan_dir, "revfail_progress")["stories"]["S1"]
+    assert story["status"] == "tests_passed"
+    assert story["acceptance_failed_review"] is True
+    assert story["rework_attempts"] == 1
+
+
 # ---------- reset_false_positive_tests_passed.py unit tests ----------
 
 _RESET_SCRIPT_PATH = Path(__file__).resolve().parent / "scripts" / "reset_false_positive_tests_passed.py"

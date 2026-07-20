@@ -38,7 +38,7 @@ def _last_nonempty_line(path: Path) -> str:
     return last
 
 
-def _commit_wip(worktree: str, story_key: str, step: str) -> str:
+def _commit_wip(worktree: str, story_key: str, step: str, guard_against_deletion: bool = False) -> str:
     """Commit any uncommitted work in the worktree as a WIP checkpoint.
 
     External boundary: spawns `git`. Tests mock subprocess.run. If there is
@@ -59,8 +59,19 @@ def _commit_wip(worktree: str, story_key: str, step: str) -> str:
     """
     subprocess.run(["git", "add", "-A"], cwd=worktree,
                     check=True, capture_output=True, text=True)
-    subprocess.run(["git", "reset", "-q", "--", "agent.log"], cwd=worktree,
-                    check=False, capture_output=True, text=True)
+    if guard_against_deletion:
+        # Detect staged deletions and restore them from HEAD before committing
+        diff_res = subprocess.run(
+            ["git", "diff", "--cached", "--diff-filter=D", "--name-only"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        for path in diff_res.stdout.splitlines():
+            if path.strip():
+                subprocess.run(["git", "checkout", "HEAD", "--", path], cwd=worktree, check=True)
+                subprocess.run(["git", "add", "--", path], cwd=worktree, check=True)
+    
     commit = subprocess.run(
         ["git", "commit", "-m", f"wip({story_key}): {step}"],
         cwd=worktree, capture_output=True, text=True,

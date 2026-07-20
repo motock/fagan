@@ -195,3 +195,158 @@ def test_persistence_dotfile_transcript_name(tmp_path, capsys):
     assert "persistence error" not in out
     # No stray tmp file left behind (the double-dot tmp is replaced away).
     assert not list(tmp_path.glob("*.tmp"))
+
+
+# ---------- resumed-transcript context-window trimming ----------
+#
+# Live incident 2026-07-20 (story 93fdc371): a rework resume reuses the
+# ENTIRE prior transcript and appends more content (reviewer feedback, a
+# tech-lead fix checklist) with no bound. Across repeated rework cycles the
+# transcript grew to ~32386 tokens against PIPELINE_LOCAL_NUM_CTX=32768,
+# llama.cpp truncated the request, and every retry got an identical 500 (the
+# truncated request never changes). _trim_resumed_transcript bounds a
+# resumed transcript before it's used, dropping the oldest middle content
+# while preserving the original system+task head and the most recent turns.
+
+def _tool_call_message(name, path):
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"function": {"name": name, "arguments": {"path": path}}}]}
+
+
+def test_trim_resumed_transcript_noop_when_under_budget(tmp_path):
+    la = load_module_with_env({})
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "hi"},
+    ]
+    result = la._trim_resumed_transcript(messages, max_chars=10_000)
+    assert result == messages
+    assert result is messages
+
+
+def test_trim_resumed_transcript_preserves_system_and_task_head(tmp_path):
+    la = load_module_with_env({})
+    messages = [
+        {"role": "system", "content": "sys" * 50},
+        {"role": "user", "content": "task" * 50},
+    ]
+    for i in range(20):
+        messages.append(_tool_call_message("view_file", f"file{i}.py"))
+        messages.append({"role": "tool", "content": "x" * 500})
+    result = la._trim_resumed_transcript(messages, max_chars=2000)
+    assert result[0] == messages[0]
+    assert result[1] == messages[1]
+
+
+def test_trim_resumed_transcript_keeps_most_recent_blocks(tmp_path):
+    la = load_module_with_env({})
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+    ]
+    for i in range(20):
+        messages.append(_tool_call_message("view_file", f"file{i}.py"))
+        messages.append({"role": "tool", "content": "x" * 500})
+    result = la._trim_resumed_transcript(messages, max_chars=3000)
+    # The last block (file19.py) must survive; the first (file0.py) must not.
+    result_json = json.dumps(result)
+    assert "file19.py" in result_json
+    assert "file0.py" not in result_json
+
+
+def test_trim_resumed_transcript_never_splits_a_tool_call_from_its_result(tmp_path):
+    """An assistant message with tool_calls and the tool-role message(s)
+    immediately following it are one block - either both survive or both
+    are dropped, never one without the other (a lone tool-role message with
+    no preceding tool_calls is an invalid transcript shape some backends
+    reject)."""
+    la = load_module_with_env({})
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+    ]
+    for i in range(20):
+        messages.append(_tool_call_message("view_file", f"file{i}.py"))
+        messages.append({"role": "tool", "content": "x" * 500})
+    result = la._trim_resumed_transcript(messages, max_chars=3000)
+    for i, m in enumerate(result):
+        if m.get("role") == "tool":
+            assert result[i - 1].get("tool_calls"), (
+                f"tool message at index {i} has no preceding assistant "
+                "tool_calls message"
+            )
+
+
+def test_trim_resumed_transcript_inserts_note_when_dropping(tmp_path):
+    la = load_module_with_env({})
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+    ]
+    for i in range(20):
+        messages.append(_tool_call_message("view_file", f"file{i}.py"))
+        messages.append({"role": "tool", "content": "x" * 500})
+    result = la._trim_resumed_transcript(messages, max_chars=3000)
+    note = result[2]
+    assert note["role"] == "user"
+    assert "dropped" in note["content"]
+    assert "context window" in note["content"]
+
+
+def test_trim_resumed_transcript_prints_diagnostic_on_drop(tmp_path, capsys):
+    la = load_module_with_env({})
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+    ]
+    for i in range(20):
+        messages.append(_tool_call_message("view_file", f"file{i}.py"))
+        messages.append({"role": "tool", "content": "x" * 500})
+    la._trim_resumed_transcript(messages, max_chars=3000)
+    out, _ = capsys.readouterr()
+    assert "RESUME TRIMMED" in out
+
+
+def test_main_trims_oversized_resumed_transcript_before_first_chat(monkeypatch, tmp_path):
+    """End-to-end: main() must apply the trim to a resumed transcript before
+    handing it to chat(), using a budget derived from NUM_CTX - not just
+    have the helper function exist unused."""
+    transcript_file = tmp_path / "resume.json"
+    resumed = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+    ]
+    for i in range(20):
+        resumed.append(_tool_call_message("view_file", f"file{i}.py"))
+        resumed.append({"role": "tool", "content": "x" * 500})
+    transcript_file.write_text(json.dumps(resumed), encoding="utf-8")
+    env = {
+        "LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(transcript_file),
+        "LOCAL_AGENT_NUM_CTX": "256",  # tiny budget forces a real trim
+        "LOCAL_AGENT_MAX_STEPS": "1",
+    }
+    la = load_module_with_env(env)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(la, "MAX_STEPS", 1)
+
+    captured = {}
+
+    def _fake_chat(messages):
+        captured["messages"] = list(messages)
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(la, "exclude_runtime_artifacts", lambda: None)
+
+    la.main()
+
+    sent = captured["messages"]
+    sent_json = json.dumps(sent)
+    assert "file19.py" in sent_json
+    assert "file0.py" not in sent_json
+    assert sent[0] == resumed[0]
+    assert sent[1] == resumed[1]

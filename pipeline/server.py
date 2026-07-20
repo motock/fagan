@@ -1423,16 +1423,47 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         _atomic_write_json(manifest_path, manifest)
         return {"status": "failed", "reason": "empty_agent_branch"}
 
-    # Mode 27 guard: tests pass but HEAD is unchanged since the last
-    # REQUEST_CHANGES recorded last_reviewed_sha — the rework redispatch
-    # produced no new commit (e.g. it parked in a read loop or crashed
-    # without committing). Routing straight to tests_passed would hand
-    # review_story the same SHA, where Mode 24's same-SHA skip guard
-    # loops forever (tests_passed is not dispatch-eligible, so the story
-    # would stall invisibly). Route to changes_requested so the scheduler
-    # redispatches, and count this no-progress retry against the rework
-    # cap so a stuck agent parks rather than looping forever.
-    if passed and story.get("last_reviewed_sha"):
+    story["status"] = "tests_passed" if passed else "failed"
+
+    # Opt-in review-on-acceptance-fail (PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1):
+    # route a dispatch whose acceptance oracle FAILED — but which produced real
+    # work (new commits on the agent branch) — to review instead of straight to
+    # "failed", so the reviewer evaluates the failing submission and the rework
+    # loop re-dispatches the model up to REWORK_MAX_ATTEMPTS with the reviewer's
+    # feedback. This engages the reviewer (previously unreachable for any
+    # acceptance-failing cell: every such cell parked at "failed" with
+    # rework_attempts=0, review_verdict=None, so the configured rework budget
+    # and reviewer never ran — observed live, 2026-07-17, 0/9 mlx cells reached
+    # review, zero GLM reviewer usage). Production-aligned: a reviewer sees
+    # failing CI and REQUEST_CHANGES; the merge gate (_reverify_acceptance)
+    # still blocks any APPROVEd-but-failing merge, so this never lands wrong
+    # code. An empty-branch park (no real work) stays "failed" — re-dispatching
+    # the same stuck prompt to the same model won't help. Opt-in so default
+    # production behavior is unchanged; review_story's existing rework cap
+    # (park/escalate after REWORK_MAX_ATTEMPTS) bounds the cycles.
+    if (not passed
+            and story["status"] == "failed"
+            and os.environ.get("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "0") == "1"
+            and _worktree_has_new_commits(
+                worktree, story_key, base_branch=_default_branch())):
+        story["status"] = "tests_passed"  # reviewable; reviewer sees the failure
+        story["acceptance_failed_review"] = True
+
+    # Mode 27 guard: the story is about to land on tests_passed (via either
+    # path above — a genuine pass, or the PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL
+    # opt-in surfacing a failing-but-reviewable submission) but HEAD is
+    # unchanged since the last REQUEST_CHANGES recorded last_reviewed_sha —
+    # the rework redispatch produced no new commit (e.g. it parked in a read
+    # loop or crashed without committing, including an LLM transport error
+    # mid-turn). Routing to tests_passed would hand review_story the same
+    # SHA, where Mode 24's same-SHA skip guard loops forever (tests_passed is
+    # not dispatch-eligible, so the story stalls invisibly — observed live
+    # 2026-07-20 on the acceptance-fail-review path: 14+ consecutive silent
+    # skip-notifications, the guard below originally covered only the
+    # `passed=True` branch and missed this one). Route to changes_requested
+    # so the scheduler redispatches, and count this no-progress retry against
+    # the rework cap so a stuck agent parks rather than looping forever.
+    if story["status"] == "tests_passed" and story.get("last_reviewed_sha"):
         head_res = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=worktree, capture_output=True, text=True
         )
@@ -1467,31 +1498,6 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 "status": "changes_requested",
                 "reason": "no_new_commit_since_last_review",
             }
-    story["status"] = "tests_passed" if passed else "failed"
-
-    # Opt-in review-on-acceptance-fail (PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1):
-    # route a dispatch whose acceptance oracle FAILED — but which produced real
-    # work (new commits on the agent branch) — to review instead of straight to
-    # "failed", so the reviewer evaluates the failing submission and the rework
-    # loop re-dispatches the model up to REWORK_MAX_ATTEMPTS with the reviewer's
-    # feedback. This engages the reviewer (previously unreachable for any
-    # acceptance-failing cell: every such cell parked at "failed" with
-    # rework_attempts=0, review_verdict=None, so the configured rework budget
-    # and reviewer never ran — observed live, 2026-07-17, 0/9 mlx cells reached
-    # review, zero GLM reviewer usage). Production-aligned: a reviewer sees
-    # failing CI and REQUEST_CHANGES; the merge gate (_reverify_acceptance)
-    # still blocks any APPROVEd-but-failing merge, so this never lands wrong
-    # code. An empty-branch park (no real work) stays "failed" — re-dispatching
-    # the same stuck prompt to the same model won't help. Opt-in so default
-    # production behavior is unchanged; review_story's existing rework cap
-    # (park/escalate after REWORK_MAX_ATTEMPTS) bounds the cycles.
-    if (not passed
-            and story["status"] == "failed"
-            and os.environ.get("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "0") == "1"
-            and _worktree_has_new_commits(
-                worktree, story_key, base_branch=_default_branch())):
-        story["status"] = "tests_passed"  # reviewable; reviewer sees the failure
-        story["acceptance_failed_review"] = True
 
     # T6: distinguish an explicit agent surrender from an ordinary red test
     # run. A missing/wrong API is a story-scoping bug, not a model-capability

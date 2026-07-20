@@ -11514,14 +11514,6 @@ def test_planner_system_steers_away_from_editing_test_files():
     assert "create_file" in p._PLANNER_SYSTEM
 
 def test_planner_system_exception_for_small_edits():
-    assert "str_replace" in p._PLANNER_SYSTEM
-    assert "preserve" in p._PLANNER_SYSTEM
-
-def test_rework_planner_system_exception_for_small_edits():
-    assert "str_replace" in p._REWORK_PLANNER_SYSTEM
-    assert "preserve" in p._REWORK_PLANNER_SYSTEM
-
-def test_planner_system_exception_for_small_edits():
     """The planner should allow str_replace for small targeted edits."""
     assert "str_replace" in p._PLANNER_SYSTEM
     assert "preserve" in p._PLANNER_SYSTEM
@@ -11909,7 +11901,6 @@ def test_rework_planner_exception_for_small_edits():
     assert "str_replace" in p._REWORK_PLANNER_SYSTEM
     assert "preserve" in p._REWORK_PLANNER_SYSTEM
     assert p._REWORK_PLANNER_SYSTEM != p._PLANNER_SYSTEM
-    assert fake.calls[0]["model"] == "opus"
 
 
 def test_run_rework_planner_local_mode_calls_dispatch_backend(agents_dir, monkeypatch):

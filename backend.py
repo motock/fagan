@@ -198,6 +198,22 @@ class ClaudeCliDriver:
             env=_first_party_claude_env(),
         )
         if cell_dir is None:
+            # Fail closed on CLI transport errors. A non-zero returncode or
+            # an "API Error:" body (e.g. "API Error: Connection closed
+            # mid-response...") is not valid output - returning it as-is
+            # would feed garbage to callers (the planner would hand the
+            # executor an error string as its tech-lead checklist, observed
+            # live 2026-07-20). Raise so _run_planner's fails-open-to-None
+            # guard catches it instead. _invoke_overlord has no such guard,
+            # so the overlord path will now raise on a transport error - an
+            # acceptable, surfacing behavior change (a dead CLI call should
+            # not silently produce a decision).
+            if proc.returncode != 0 or "API Error:" in (proc.stdout or ""):
+                detail = (proc.stdout or getattr(proc, "stderr", "") or "").strip()
+                raise RuntimeError(
+                    f"claude CLI call failed (returncode={proc.returncode}): "
+                    f"{detail[:500]}"
+                )
             return proc.stdout
         # Structured path: parse the JSON envelope, record usage, return
         # just the `result` field so callers (and _parse_verdict) see the

@@ -11514,6 +11514,14 @@ def test_planner_system_steers_away_from_editing_test_files():
     assert "create_file" in p._PLANNER_SYSTEM
 
 def test_planner_system_exception_for_small_edits():
+    assert "str_replace" in p._PLANNER_SYSTEM
+    assert "preserve" in p._PLANNER_SYSTEM
+
+def test_rework_planner_system_exception_for_small_edits():
+    assert "str_replace" in p._REWORK_PLANNER_SYSTEM
+    assert "preserve" in p._REWORK_PLANNER_SYSTEM
+
+def test_planner_system_exception_for_small_edits():
     """The planner should allow str_replace for small targeted edits."""
     assert "str_replace" in p._PLANNER_SYSTEM
     assert "preserve" in p._PLANNER_SYSTEM

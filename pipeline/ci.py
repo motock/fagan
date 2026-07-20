@@ -55,7 +55,7 @@ def _repo_has_ci_configured() -> bool:
     return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
 
 
-def _ci_status(branch: str, *, timeout_s: int | None = None) -> dict[str, str]:
+def _ci_status(branch: str, *, sha: str | None = None, timeout_s: int | None = None) -> dict[str, str]:
     """Poll ``gh pr checks <branch>`` until all checks reach a terminal bucket
     or the timeout elapses. Returns ``{"state": "pass"|"fail"|"cancelled"|
     "pending"|"none", "error": str}``.

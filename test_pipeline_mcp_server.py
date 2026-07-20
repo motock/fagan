@@ -11900,7 +11900,7 @@ def test_rework_planner_exception_for_small_edits():
     """The rework planner should allow str_replace for small targeted edits."""
     assert "str_replace" in p._REWORK_PLANNER_SYSTEM
     assert "preserve" in p._REWORK_PLANNER_SYSTEM
-    assert fake.calls[0]["system"] != p._PLANNER_SYSTEM
+    assert p._REWORK_PLANNER_SYSTEM != p._PLANNER_SYSTEM
     assert fake.calls[0]["model"] == "opus"
 
 

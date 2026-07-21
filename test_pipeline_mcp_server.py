@@ -179,7 +179,10 @@ def test_detect_test_command_pyproject_uses_venv_python_when_present(tmp_path):
     (venv_bin / "python").write_text("#!/bin/sh\nexit 0\n")
     test_dir, cmd = p.detect_test_command(tmp_path)
     assert test_dir == tmp_path
-    assert cmd == [str(tmp_path / ".venv" / "bin" / "python"), "-m", "pytest"]
+    assert cmd == [
+        str(tmp_path / ".venv" / "bin" / "python"), "-m", "pytest",
+        "--override-ini=testpaths=.", "--ignore=tests",
+    ]
 
 
 def test_detect_test_command_pyproject_falls_back_to_bare_pytest_without_venv(tmp_path):
@@ -187,7 +190,9 @@ def test_detect_test_command_pyproject_falls_back_to_bare_pytest_without_venv(tm
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     test_dir, cmd = p.detect_test_command(tmp_path)
     assert test_dir == tmp_path
-    assert cmd == ["pytest"]
+    assert cmd == [
+        "pytest", "--override-ini=testpaths=.", "--ignore=tests",
+    ]
 
 
 def test_detect_test_command_worktree_uses_main_repo_venv_via_git_common_dir(tmp_path):
@@ -222,7 +227,10 @@ def test_detect_test_command_worktree_uses_main_repo_venv_via_git_common_dir(tmp
     assert not (worktree / ".venv").exists()
     test_dir, cmd = p.detect_test_command(worktree)
     assert test_dir == worktree
-    assert cmd == [str(repo / ".venv" / "bin" / "python"), "-m", "pytest"]
+    assert cmd == [
+        str(repo / ".venv" / "bin" / "python"), "-m", "pytest",
+        "--override-ini=testpaths=.", "--ignore=tests",
+    ]
 
 
 # ---------- _scope_test_cmd_to_acceptance (FM-A non-pytest scoping) ----------
@@ -1645,7 +1653,10 @@ def test_run_reviewer_scopes_test_command_to_acceptance_paths(
     )
 
     prompt = captured["prompt"]
-    assert f"pytest {tmp_path / 'test_acceptance.py'}" in prompt
+    assert (
+        f"pytest --override-ini=testpaths=. --ignore=tests "
+        f"{tmp_path / 'test_acceptance.py'}"
+    ) in prompt
     assert "acceptance oracle" in prompt.lower()
     assert "not sufficient grounds" in prompt.lower()
 
@@ -11835,8 +11846,12 @@ def test_resolve_test_author_backend_unconfigured_returns_none_none(monkeypatch)
     """Unlike the planner, an unconfigured test_author role must NOT mirror
     dispatch_backend/local_model - that would reproduce the experiment's
     harmful same-model variant A. (None, None) is the explicit "skip the
-    split" signal callers must fail open on."""
+    split" signal callers must fail open on. Registry mocked to {} so this
+    genuinely tests the unconfigured case regardless of model_registry.json's
+    real on-disk contents (which now configures test_author=ollama/glm in
+    production, per the validated stronger-author-split experiment)."""
     monkeypatch.delenv("PIPELINE_BACKEND_TEST_AUTHOR", raising=False)
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
     result = p._resolve_test_author_backend("ollama", "gpt-oss:20b")
     assert result == (None, None)
 

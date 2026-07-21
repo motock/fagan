@@ -120,14 +120,44 @@ def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
     """
     cmd = _test_command_for(cwd)
     if cmd is not None:
-        return cwd, cmd
+        return cwd, _apply_pytest_collection_overrides(cmd)
 
     for child in sorted(p for p in cwd.iterdir() if p.is_dir() and not p.name.startswith(".")):
         cmd = _test_command_for(child)
         if cmd is not None:
-            return child, cmd
+            return child, _apply_pytest_collection_overrides(cmd)
 
     return cwd, ["npm", "test"]  # fallback
+
+
+def _apply_pytest_collection_overrides(cmd: list[str]) -> list[str]:
+    """When cmd invokes pytest, override an explicit `testpaths` allowlist
+    (e.g. pyproject.toml's `[tool.pytest.ini_options] testpaths = [...]`) so
+    the gate collects every real root test_*.py, while excluding tests/ - the
+    separate benchmark/experiment harness that was never part of the graded
+    CI suite (its own test_harness_*.py files are red by design/require
+    fixtures CI doesn't set up, and tests/benchmark/_runs, _matrixtest,
+    _realtest, _repro etc. hold per-run experiment artifacts pytest can't
+    even import). This mirrors the allowlist's actual scope: every currently
+    allowlisted file lives at the repo root, none under tests/.
+
+    Without this, a pinned testpaths allowlist silently drops any NEW
+    standalone root test_*.py an agent creates - the gate then runs only the
+    allowlisted tests, they pass, and the story is marked tests_passed even
+    though the agent's own new test file is broken or empty (a false
+    positive observed live, story 93fdc371, 2026-07-20).
+
+    `--override-ini` is a CLI flag pytest applies regardless of which
+    directory it's invoked from or what config file is present, unlike a
+    sibling pytest.ini/.pytest.ini (which only takes effect for pytest runs
+    rooted at that exact directory and would do nothing for, e.g., a nested
+    temp worktree with its own pyproject.toml). `--ignore` on a
+    non-existent path is a no-op, not an error, so this is safe to apply
+    unconditionally even when tests/ doesn't exist.
+    """
+    if not _is_pytest_cmd(cmd):
+        return cmd
+    return [*cmd, "--override-ini=testpaths=.", "--ignore=tests"]
 
 
 def _acceptance_rel_paths(story: dict[str, Any]) -> list[str]:
@@ -141,11 +171,22 @@ def _is_pytest_cmd(cmd: list[str]) -> bool:
     Matches both `["pytest", ...]` and `[python, "-m", "pytest", ...]` forms
     produced by detect_test_command's venv-aware path (pipeline_mcp_server.py
     lines 392-393). Other runners (cargo, npm, mvn, ...) return False.
+
+    Checks the last non-flag token rather than strictly cmd[-1]: detect_test_
+    command's own collection-override flags (--override-ini=testpaths=.,
+    --ignore=tests/benchmark/_runs, see _apply_pytest_collection_overrides)
+    are appended after "pytest", so a strict cmd[-1] check would return False
+    on its own output and silently break every downstream caller that scopes
+    or extends the command (e.g. _scope_test_cmd_to_acceptance appending
+    acceptance paths).
     """
     if not cmd:
         return False
-    last = cmd[-1]
-    return last == "pytest" or last.endswith("/pytest")
+    for token in reversed(cmd):
+        if token.startswith("-"):
+            continue
+        return token == "pytest" or token.endswith("/pytest")
+    return False
 
 
 def _scope_test_cmd_to_acceptance(

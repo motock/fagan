@@ -1193,6 +1193,76 @@ def test_mark_story_done_routes_through_ticket_provider(plan_dir, monkeypatch):
     assert calls == [("S1", p.LogicalState.DONE, "tpmd")]
 
 
+# ---------- mark_story_done plan-completion signal ----------
+# When the last remaining non-done story is marked done, mark_story_done must
+# signal that the whole plan is complete via a plan_completed key plus the full
+# list of story keys. When any story is still not 'done' (including 'parked' or
+# any other non-'done' terminal-looking state), the return dict must keep
+# today's exact {'ok': True} shape - no plan_completed key at all - so existing
+# equality assertions keep passing and callers can use .get('plan_completed')
+# truthiness or `'plan_completed' in result` either way.
+
+def test_mark_story_done_signals_plan_completed_when_all_done(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest(plan_dir, "pc1", {
+        "S1": {"status": "done"},
+        "S2": {"status": "todo"},
+    })
+    result = p.mark_story_done("pc1", "S2")
+    assert result["ok"] is True
+    assert result.get("plan_completed") is True
+    assert set(result["stories"]) == {"S1", "S2"}
+    manifest = _read_manifest(plan_dir, "pc1")
+    assert manifest["stories"]["S2"]["status"] == "done"
+
+
+def test_mark_story_done_omits_plan_completed_when_other_story_not_done(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest(plan_dir, "pc2", {
+        "S1": {"status": "todo"},
+        "S2": {"status": "in_progress"},
+    })
+    result = p.mark_story_done("pc2", "S1")
+    assert result["ok"] is True
+    # Exact today's shape: no plan_completed key at all.
+    assert "plan_completed" not in result
+    assert "stories" not in result
+    assert result == {"ok": True}
+    manifest = _read_manifest(plan_dir, "pc2")
+    assert manifest["stories"]["S1"]["status"] == "done"
+    assert manifest["stories"]["S2"]["status"] == "in_progress"
+
+
+def test_mark_story_done_single_story_plan_completed(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest(plan_dir, "pc3", {
+        "S1": {"status": "todo"},
+    })
+    result = p.mark_story_done("pc3", "S1")
+    assert result["ok"] is True
+    assert result.get("plan_completed") is True
+    assert result["stories"] == ["S1"]
+    manifest = _read_manifest(plan_dir, "pc3")
+    assert manifest["stories"]["S1"]["status"] == "done"
+
+
+def test_mark_story_done_parked_story_does_not_count_as_done(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest(plan_dir, "pc4", {
+        "S1": {"status": "todo"},
+        "S2": {"status": "parked", "parked_reason": "blocked"},
+    })
+    result = p.mark_story_done("pc4", "S1")
+    assert result["ok"] is True
+    # A 'parked' story is not 'done', so the plan is not complete.
+    assert "plan_completed" not in result
+    assert "stories" not in result
+    assert result == {"ok": True}
+    manifest = _read_manifest(plan_dir, "pc4")
+    assert manifest["stories"]["S1"]["status"] == "done"
+    assert manifest["stories"]["S2"]["status"] == "parked"
+
+
 # ---------- patch_story / set_story_status (T2) ----------
 # These give a caller a sanctioned, lock-serialized way to edit a story's
 # authored fields or transition its status, so nobody needs to hand-edit the
@@ -1483,6 +1553,18 @@ def test_ingest_plan_skips_when_lock_held(plan_dir, monkeypatch, tmp_path):
 
 
 # ---------- Review gate + auto-PR ----------
+class _NullSetStateProvider:
+    """A no-op TicketProvider for mark_story_done completion-signal tests.
+
+    Accepts set_state calls (so mark_story_done doesn't try to hit Plane) and
+    returns True, mirroring the _FakeProvider pattern used by the existing
+    ticket-provider routing tests.
+    """
+
+    def set_state(self, story_key, state, plan_name=None):
+        return True
+
+
 def _write_manifest(plan_dir, plan_name, stories):
     (plan_dir / f"{plan_name}.manifest.json").write_text(
         json.dumps({"epics": {}, "stories": stories}, indent=2)

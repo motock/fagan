@@ -448,8 +448,13 @@ def _run_test_author_phase(
     # REPO_ROOT, patched by tests via p.REPO_ROOT); the server imports this
     # module at top level, so a module-load import would cycle.
     from .server import _default_branch
-    return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
-
+    try:
+        return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
+    except Exception as exc:
+        logging.getLogger("pipeline").warning(
+            f"test-author dispatch failed to detect commits for {story_key}: {exc}"
+        )
+        return False
 
 # ---------- Decompose (provider-configurable product-analyst) ----------
 def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str | None:

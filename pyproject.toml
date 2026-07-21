@@ -20,4 +20,5 @@ testpaths = [
     "test_ci_sha_scoping.py",
     "test_test_collection_gate.py",
     "test_local_agent_steering_hardening.py",
+    "test_tdd_split_always_on.py",
 ]

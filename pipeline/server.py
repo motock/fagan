@@ -967,11 +967,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(entry["source"])
 
-        # TDD_SPLIT_PRODUCTION_PLAN.md: PIPELINE_TDD_SPLIT=on runs a
+        # TDD_SPLIT_PRODUCTION_PLAN.md: an ALWAYS-ON (for opted-in stories)
         # pre-executor test-authoring dispatch (a full agent-loop, BLOCKING
         # until it exits - unlike the planner checklist above, this
         # produces a real commit the executor's worktree must already have)
-        # in THIS worktree before the main executor starts. Gated on:
+        # in THIS worktree before the main executor starts. The global
+        # PIPELINE_TDD_SPLIT on/off toggle was removed; the per-story opt-in
+        # below is the sole gate. Gated on:
         #   - the story explicitly opting in (story["tdd_split"] - §2.4:
         #     inferring eligibility from prose is a worse failure mode than
         #     an operator forgetting to opt in)

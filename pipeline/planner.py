@@ -282,7 +282,7 @@ def _resolve_test_author_backend(
     versus not splitting at all. So both "unconfigured" and "resolves to
     the same backend+model as dispatch" return (None, None) - callers MUST
     treat that as "skip the split, dispatch monolithically", exactly as if
-    PIPELINE_TDD_SPLIT were off.
+    the split were not configured for this story.
     """
     plan_cfg = (plan_role_config or {}).get("test_author", {})
     registry = role_registry.load_registry()

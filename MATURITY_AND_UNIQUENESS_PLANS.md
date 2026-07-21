@@ -91,11 +91,30 @@ Reference comparables:
 ### A3. Stabilize the active bug surface
 
 - [ ] **Bound the failure-mode discovery rate — trending the wrong way.**
-      19 modes at this doc's 2026-07-17 baseline; now **24** (Modes 22-24
-      found 2026-07-19/20, three new modes surfaced in a single session
-      dispatching only 4 stories). Add a "no new modes for N benchmark runs"
-      gate as a stability signal — not done, and the discovery rate argues
-      this is more urgent than when first written.
+      19 modes at this doc's 2026-07-17 baseline; now **28** (Modes 22-24
+      found 2026-07-19/20; Mode 28 found 2026-07-21 shipping the always-on
+      TDD-split story — see `retros/tdd-split-always-on_2026-07-21.md`). Add a
+      "no new modes for N benchmark runs" gate as a stability signal — not
+      done, and the discovery rate argues this is more urgent than when first
+      written.
+- [ ] **P0 (from `retros/tdd-split-always-on_2026-07-21.md`) — track prior
+      findings' target paths; refuse silent re-approval.** Fixes Mode 28 and
+      Mode 24 with one mechanism: when a prior verdict was `REQUEST_CHANGES`,
+      the next review on a new SHA must check the new HEAD's changed-paths
+      intersect the prior Blocking findings' target files, or downgrade to
+      `REQUEST_CHANGES` instead of allowing APPROVE. Highest-leverage open
+      item — this is the gap that let an incomplete story merge.
+      `pipeline/ci.py` `review_story` + reviewer output parsing.
+- [ ] **P0 (same retro) — stabilize the flaky-under-load read-heavy/
+      repetition-guard tests.** 11 tests pass isolated but fail under
+      full-suite load, misleading local-model workers into chasing red
+      herrings and tripping the per-target repetition guard. Fix the
+      shared-state/order-dependence or mark them non-blocking.
+      `test_local_agent.py`, `test_pipeline_mcp_server.py`.
+- [ ] **P1 (same retro) — route rework to a stronger model when remaining
+      findings are polish-only** (doc/comment/test-coherence, no logic
+      failures) — gpt-oss:20b reliably stalls on this work shape. Depends on
+      the P0 finding-target storage above.
 - [x] **Fix the test-isolation leak** (2026-07-18, PR #131) —
       `load_oracle_module_with_env`/`load_module_with_env` mutating
       `os.environ` without cleanup; fixed with an `autouse` environ-snapshot

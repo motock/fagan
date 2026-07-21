@@ -19,4 +19,5 @@ testpaths = [
     "test_review_story_same_sha.py",
     "test_ci_sha_scoping.py",
     "test_test_collection_gate.py",
+    "test_local_agent_steering_hardening.py",
 ]

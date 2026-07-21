@@ -63,7 +63,7 @@ def test_oracle_constants_present():
     assert hasattr(lao, "READ_HEAVY_WINDOW")
     assert lao.READ_HEAVY_WINDOW == 6
     assert hasattr(lao, "MUTATING_TOOLS")
-    assert lao.MUTATING_TOOLS == frozenset({"create_file", "str_replace"})
+    assert lao.MUTATING_TOOLS == frozenset({"create_file", "str_replace", "replace_lines"})
 
 
 def test_oracle_create_file_rejects_invalid_python_syntax_diff_artifact(tmp_path, monkeypatch):

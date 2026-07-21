@@ -1615,6 +1615,17 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest["stories"][story_key]["status"] = "done"
     manifest["stories"][story_key].pop("parked_reason", None)
     _atomic_write_json(manifest_path, manifest)
+
+    # Check if all stories are now done
+    all_done = all(
+        s.get("status") == "done" for s in manifest["stories"].values()
+    )
+    if all_done:
+        return {
+            "ok": True,
+            "plan_completed": True,
+            "stories": list(manifest["stories"].keys()),
+        }
     return {"ok": True}
 
 

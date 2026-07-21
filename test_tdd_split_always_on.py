@@ -1,18 +1,23 @@
-"""TDD-split (test-author phase) is ALWAYS-ON for stories that opt in.
+"""TDD-split (test-author phase) is ALWAYS-ON for every local-family dispatch.
 
-These tests verify the removal of the global ``PIPELINE_TDD_SPLIT`` on/off
-toggle (TDD_SPLIT_PRODUCTION_PLAN.md §4): the test-author phase now runs for
-any story that opts in via the per-story ``tdd_split`` field, is not a
-resuming/rework redispatch, and has no pre-existing test-author marker in the
-worktree -- with NO global env-var gate. The safety nets (same-model
-refusal, per-story opt-in, not-resuming guard, marker check) all survive the
-flag removal.
+These tests verify the full removal of both TDD-split gates: the global
+``PIPELINE_TDD_SPLIT`` on/off toggle (removed in an earlier change) and the
+per-story ``tdd_split`` opt-in field (removed here). The test-author phase
+now runs unconditionally for local-family dispatch, mirroring exactly how the
+guided-decomposition planner became always-on: gated only on
 
-These tests are RED against the as-shipped code that still gates on
-``os.environ.get('PIPELINE_TDD_SPLIT', 'off') == 'on'``: with the env var
-UNSET the current gate short-circuits to "off" and skips the phase, so the
-"phase RUNS" assertions fail. They go GREEN once the ``tdd_split_mode``
-conjunct is deleted from ``pipeline/server.py``.
+  - a local-family backend (``dispatch_backend in _LOCAL_BACKEND_NAMES``),
+  - not a resuming/rework redispatch, and
+  - no pre-existing test-author marker in the worktree.
+
+The remaining safety nets (same-model refusal, not-resuming guard, marker
+check, fail-open on an unconfigured role) all survive both flag removals.
+
+These tests are RED against code that still gates on ``story["tdd_split"]``:
+with the field absent (or explicitly False) the old gate short-circuits and
+skips the phase, so the "phase RUNS regardless of the field" assertions
+fail. They go GREEN once the ``story.get("tdd_split")`` conjunct is replaced
+with ``dispatch_backend in _LOCAL_BACKEND_NAMES`` in ``pipeline/server.py``.
 
 Run with the project venv:
     cd ~/.claude/mcp-servers/pipeline && .venv/bin/python -m pytest -q test_tdd_split_always_on.py
@@ -45,9 +50,9 @@ def _plane_configured(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _tdd_split_env_unset(monkeypatch):
-    """The whole point of this feature change: PIPELINE_TDD_SPLIT is GONE.
-    Every test in this module runs with the var explicitly UNSET so we
-    exercise the always-on path, never the legacy on/off toggle."""
+    """PIPELINE_TDD_SPLIT is GONE. Every test in this module runs with the
+    var explicitly UNSET so we exercise the always-on path, never the
+    legacy on/off toggle."""
     monkeypatch.delenv("PIPELINE_TDD_SPLIT", raising=False)
 
 
@@ -137,18 +142,17 @@ def _wire_dispatch_no_plane(monkeypatch, pid=9201):
     return popen_calls
 
 
-# ---------- (a) UNSET + opted-in + non-resuming + distinct role => RUNS ----------
-def test_tdd_split_unset_opted_in_non_resuming_runs_phase(
+# ---------- (a) local dispatch, no tdd_split field at all => RUNS ----------
+def test_tdd_split_runs_for_local_dispatch_field_absent(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
-    """With PIPELINE_TDD_SPLIT UNSET, an opted-in (tdd_split=true),
-    non-resuming story with a distinct test_author role RUNS the
-    test-author phase. The global on/off toggle is gone; the per-story
-    tdd_split field is the only opt-in."""
+    """A non-resuming local-family dispatch runs the test-author phase even
+    though the story has no ``tdd_split`` field at all. The per-story
+    opt-in is gone; every story goes through the split now."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     _write_manifest(plan_dir, "tdrun", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": [], "tdd_split": True},
+               "status": "todo", "dependencies": []},  # no tdd_split key
     })
 
     phase_calls = []
@@ -168,7 +172,7 @@ def test_tdd_split_unset_opted_in_non_resuming_runs_phase(
     result = p.dispatch_story("tdrun", "S1")
 
     assert result["ok"] is True
-    assert len(phase_calls) == 1, "test-author phase MUST run with the var unset"
+    assert len(phase_calls) == 1, "test-author phase MUST run with no opt-in field"
     assert phase_calls[0]["story_key"] == "S1"
     assert phase_calls[0]["worktree_path"] == worktree_root / "S1"
     assert phase_calls[0]["dispatch_backend"] == "local"
@@ -180,19 +184,85 @@ def test_tdd_split_unset_opted_in_non_resuming_runs_phase(
     assert p._NEVER_TOUCH_TESTS_STEERING in task
 
 
-# ---------- (b) same-model refusal still skips with var unset ----------
-def test_tdd_split_unset_same_model_refusal_skips_phase(
+# ---------- (a2) explicit tdd_split=False no longer suppresses the phase ----------
+def test_tdd_split_runs_even_when_field_explicitly_false(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
-    """The same-model safety net (§2.2) survives the flag removal: even with
-    PIPELINE_TDD_SPLIT unset and the story opted in, if the test_author role
-    resolves to the SAME backend+model dispatch is already using,
-    _resolve_test_author_backend returns (None, None) and the phase skips
-    safely (fail-open, no marker, executor prompt un-augmented)."""
+    """Boundary: an explicit ``tdd_split: False`` on the story must NOT
+    suppress the phase either -- the field is fully inert now, not just
+    "defaults to on". There is no per-story escape hatch."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "tdfalse", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "tdd_split": False},
+    })
+
+    phase_calls = []
+
+    def _fake_phase(story, *, story_key, worktree_path, dispatch_backend,
+                    local_model, plan_role_config=None, **kwargs):
+        phase_calls.append({"story_key": story_key})
+        return True
+
+    monkeypatch.setattr(p, "_run_test_author_phase", _fake_phase)
+    _wire_dispatch_no_plane(monkeypatch, pid=9204)
+
+    result = p.dispatch_story("tdfalse", "S1")
+
+    assert result["ok"] is True
+    assert len(phase_calls) == 1, \
+        "tdd_split=False must no longer suppress the phase"
+    assert (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
+
+
+# ---------- (b) a Claude dispatch skips the phase regardless ----------
+def test_tdd_split_claude_backend_skips_phase(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The split is a crutch for the weak local executor only -- a Claude
+    dispatch must never trigger test-authoring even though the phase is now
+    always-on for local-family backends. Mirrors the planner's identical
+    Claude-skip behavior."""
+    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)  # default -> claude
+    _write_manifest(plan_dir, "tdclaude", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("phase must not run for a Claude dispatch")
+
+    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(
+        pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    def _fake_claude_popen(cmd, **kw):
+        return _FakeProc(9210)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_claude_popen)
+
+    result = p.dispatch_story("tdclaude", "S1")
+
+    assert result["ok"] is True
+    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
+
+
+# ---------- (c) same-model refusal still skips ----------
+def test_tdd_split_same_model_refusal_skips_phase(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The same-model safety net survives both flag removals: if the
+    test_author role resolves to the SAME backend+model dispatch is already
+    using, _resolve_test_author_backend returns (None, None) and the phase
+    skips safely (fail-open, no marker, executor prompt un-augmented)."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     _write_manifest(plan_dir, "tdsame", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": [], "tdd_split": True},
+               "status": "todo", "dependencies": []},
     })
 
     # Force the real _run_test_author_phase down the refusal path: the role
@@ -213,71 +283,18 @@ def test_tdd_split_unset_same_model_refusal_skips_phase(
         "a refused phase must not augment the executor prompt"
 
 
-# ---------- (c) tdd_split absent/false still skips ----------
-def test_tdd_split_unset_story_not_opted_in_skips_phase(
-    plan_dir, worktree_root, agents_dir, monkeypatch,
-):
-    """tdd_split absent (defaults to False) must skip the phase even with
-    everything else enabled and the var unset. The per-story opt-in is the
-    sole gate; the global toggle's removal does not make the split
-    unconditional for every story."""
-    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    _write_manifest(plan_dir, "tdnoopt", {
-        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": []},  # no tdd_split
-    })
-
-    def _boom(*a, **k):
-        raise AssertionError(
-            "phase must not run without the per-story tdd_split opt-in")
-
-    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
-    popen_calls = _wire_dispatch_no_plane(monkeypatch, pid=9203)
-
-    result = p.dispatch_story("tdnoopt", "S1")
-
-    assert result["ok"] is True
-    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
-    task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
-    assert p._NEVER_TOUCH_TESTS_STEERING not in task
-
-
-def test_tdd_split_unset_story_explicitly_false_skips_phase(
-    plan_dir, worktree_root, agents_dir, monkeypatch,
-):
-    """An explicit tdd_split=False must skip the phase too (boundary: the
-    falsy value, not just absence)."""
-    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    _write_manifest(plan_dir, "tdfalse", {
-        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": [], "tdd_split": False},
-    })
-
-    def _boom(*a, **k):
-        raise AssertionError(
-            "phase must not run when tdd_split is explicitly False")
-
-    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
-    _wire_dispatch_no_plane(monkeypatch, pid=9204)
-
-    result = p.dispatch_story("tdfalse", "S1")
-
-    assert result["ok"] is True
-    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
-
-
 # ---------- (d) a resuming dispatch still skips ----------
-def test_tdd_split_unset_resuming_dispatch_skips_phase(
+def test_tdd_split_resuming_dispatch_skips_phase(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
     """A rework/interrupted redispatch (status in interrupted/
     changes_requested) must NOT get a fresh test-authoring pass: reworks act
-    on the SAME committed tests. The not-resuming guard survives the flag
-    removal."""
+    on the SAME committed tests. The not-resuming guard survives both flag
+    removals."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     _write_manifest(plan_dir, "tdresume", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "interrupted", "dependencies": [], "tdd_split": True},
+               "status": "interrupted", "dependencies": []},
     })
 
     def _boom(*a, **k):
@@ -296,16 +313,16 @@ def test_tdd_split_unset_resuming_dispatch_skips_phase(
 
 
 # ---------- (e) test_author_marker.exists() still skips ----------
-def test_tdd_split_unset_marker_present_skips_phase(
+def test_tdd_split_marker_present_skips_phase(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
     """A worktree that already has a .tdd_split_test_author_done marker must
     not re-run the phase (belt-and-suspenders with `resuming`). The marker
-    check survives the flag removal."""
+    check survives both flag removals."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     _write_manifest(plan_dir, "tdmarker", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": [], "tdd_split": True},
+               "status": "todo", "dependencies": []},
     })
     worktree_path = worktree_root / "S1"
     worktree_path.mkdir(parents=True)
@@ -327,19 +344,19 @@ def test_tdd_split_unset_marker_present_skips_phase(
 
 
 # ---------- boundary: test_author role unconfigured => phase skips (None,None) ----------
-def test_tdd_split_unset_role_unconfigured_skips_phase(
+def test_tdd_split_role_unconfigured_skips_phase(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
     """If the test_author role is unconfigured (registry has no test_author
     entry and no env override), _resolve_test_author_backend returns
     (None, None) and the phase skips safely -- the split is a bonus, never a
-    gate (§2.5). Survives the flag removal."""
+    gate (§2.5). Survives both flag removals."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     monkeypatch.delenv("PIPELINE_BACKEND_TEST_AUTHOR", raising=False)
     monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
     _write_manifest(plan_dir, "tdunconf", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": [], "tdd_split": True},
+               "status": "todo", "dependencies": []},
     })
 
     popen_calls = _wire_dispatch_no_plane(monkeypatch, pid=9207)
@@ -359,15 +376,14 @@ def test_tdd_split_env_var_is_now_ignored_when_set_on(
 ):
     """Regression guard for the flag removal: even if a stale operator
     environment still exports PIPELINE_TDD_SPLIT=on, the behavior is
-    identical to it being unset -- the per-story opt-in alone decides. This
-    test documents that the env var is now a dead letter (harmless no-op),
-    not a re-introduced gate. An opted-in non-resuming story runs the phase
-    regardless of the var's value."""
+    identical to it being unset -- local-family dispatch alone decides. This
+    documents that the env var is a dead letter (harmless no-op), not a
+    re-introduced gate."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")  # stale; must be ignored
     _write_manifest(plan_dir, "tdstale", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": [], "tdd_split": True},
+               "status": "todo", "dependencies": []},
     })
 
     phase_calls = []
@@ -391,13 +407,13 @@ def test_tdd_split_env_var_is_now_ignored_when_set_off(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
     """Symmetric guard: PIPELINE_TDD_SPLIT=off (the old "disable" value) must
-    NOT suppress the phase for an opted-in non-resuming story. The var is
-    gone; 'off' is no longer a meaningful signal."""
+    NOT suppress the phase for a local-family dispatch. The var is gone;
+    'off' is no longer a meaningful signal."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     monkeypatch.setenv("PIPELINE_TDD_SPLIT", "off")  # stale; must be ignored
     _write_manifest(plan_dir, "tdstaleoff", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": [], "tdd_split": True},
+               "status": "todo", "dependencies": []},
     })
 
     phase_calls = []
@@ -414,5 +430,5 @@ def test_tdd_split_env_var_is_now_ignored_when_set_off(
 
     assert result["ok"] is True
     assert len(phase_calls) == 1, \
-        "PIPELINE_TDD_SPLIT=off must no longer suppress an opted-in phase"
+        "PIPELINE_TDD_SPLIT=off must no longer suppress the phase"
     assert (worktree_root / "S1" / ".tdd_split_test_author_done").exists()

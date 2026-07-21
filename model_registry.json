@@ -24,6 +24,7 @@
     }
   },
   "roles": {
-    "test_author": {"provider": "ollama", "model": "glm"}
+    "test_author": {"provider": "ollama", "model": "glm"},
+    "planner": {"provider": "ollama", "model": "glm"}
   }
 }

@@ -621,13 +621,15 @@ split — see `TDD_SPLIT_PRODUCTION_PLAN.md`), so the test-author role
 **must resolve to a different backend+model than dispatch** or the split is
 skipped entirely (fail-open to monolithic dispatch, never a gate).
 
-It is **always on for stories that opt in** via the per-story `tdd_split: true`
-field — there is no global on/off toggle (the legacy `PIPELINE_TDD_SPLIT` env
-var was removed and is now a harmless dead letter if a stale operator
-environment still exports it). Opt-in is solely the per-story field, never
-inferred from prose. The phase is gated on:
+It is **always on for local-family dispatch** — there is no global on/off
+toggle (the legacy `PIPELINE_TDD_SPLIT` env var was removed and is now a
+harmless dead letter if a stale operator environment still exports it) and no
+per-story opt-in field either; the phase mirrors the guided-decomposition
+planner's gate exactly. The phase is gated on:
 
-- the story explicitly opting in (`story["tdd_split"]`),
+- a local-family backend (`dispatch_backend in _LOCAL_BACKEND_NAMES` — same
+  rationale as the planner: it's a crutch for the weak local executor, Claude
+  doesn't need it),
 - not resuming (a rework redispatch acts on the *same* committed tests; it
   never gets a fresh test-authoring pass), and
 - no existing `.tdd_split_test_author_done` marker in the worktree

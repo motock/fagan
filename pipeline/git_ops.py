@@ -74,17 +74,25 @@ def _commit_wip(worktree: str, story_key: str, step: str,
 
     if guard_against_deletion:
         # Detect staged deletions and restore them from HEAD before committing.
-        diff_res = subprocess.run(
-            ["git", "diff", "--cached", "--diff-filter=D", "--name-only"],
+        # If there are any staged additions or modifications (e.g., rename-in-progress),
+        # skip restoration to preserve real WIP changes.
+        added_mods = subprocess.run(
+            ["git", "diff", "--cached", "--diff-filter=AM", "--name-only"],
             cwd=worktree,
             capture_output=True,
             text=True,
         )
-        for path in diff_res.stdout.splitlines():
-            if path.strip():
-                subprocess.run(["git", "checkout", "HEAD", "--", path], cwd=worktree, check=True)
-                subprocess.run(["git", "add", "--", path], cwd=worktree, check=True)
-
+        if not added_mods.stdout.strip():
+            diff_res = subprocess.run(
+                ["git", "diff", "--cached", "--diff-filter=D", "--name-only"],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
+            for path in diff_res.stdout.splitlines():
+                if path.strip():
+                    subprocess.run(["git", "checkout", "HEAD", "--", path], cwd=worktree, check=True)
+                    subprocess.run(["git", "add", "--", path], cwd=worktree, check=True)
     commit = subprocess.run(
         ["git", "commit", "-m", f"wip({story_key}): {step}"],
         cwd=worktree, capture_output=True, text=True,

@@ -12666,12 +12666,13 @@ def test_dispatch_story_excludes_decompose_artifacts_from_worktree_tracking(
 
 # ---------- dispatch_story wiring for the TDD-split test-author phase
 # (TDD_SPLIT_PRODUCTION_PLAN.md §2.1/§2.4) ----------
-def test_dispatch_story_tdd_split_off_by_default_skips_test_author_phase(
+def test_dispatch_story_tdd_split_unset_opted_in_runs_test_author_phase(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
-    """PIPELINE_TDD_SPLIT unset must be a strict no-op, even for a story
-    that opted in - Secure Defaults: the split is opt-in per env AND per
-    story."""
+    """With the global PIPELINE_TDD_SPLIT toggle removed, an opted-in
+    (tdd_split=true) non-resuming story RUNS the test-author phase even
+    with the env var unset - the per-story tdd_split field is the sole
+    opt-in (Secure Defaults: opt-in is per story, not per env)."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     _write_manifest(plan_dir, "tdoff", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
@@ -12697,11 +12698,14 @@ def test_dispatch_story_tdd_split_off_by_default_skips_test_author_phase(
     assert ran is True
     assert (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
 
-def test_dispatch_story_tdd_split_on_and_opted_in_runs_phase_and_augments_prompt(
+def test_dispatch_story_tdd_split_opted_in_runs_phase_and_augments_prompt(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
+    """An opted-in (tdd_split=true) non-resuming story runs the test-author
+    phase and the executor prompt is augmented with the NEVER-touch-tests
+    steering (the global PIPELINE_TDD_SPLIT toggle is gone; opt-in is solely
+    the per-story field)."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")
     _write_manifest(plan_dir, "tdon", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": [], "tdd_split": True},
@@ -12752,10 +12756,9 @@ def test_dispatch_story_tdd_split_phase_failure_falls_open_to_monolithic(
 ):
     """A test-author phase that fails (returns False - unresolved role,
     dispatch error, timeout, or no commit) must leave no marker and must
-    NOT augment the executor prompt - the story proceeds exactly like
-    PIPELINE_TDD_SPLIT were off (§2.5's fail-open contract)."""
+    NOT augment the executor prompt - the story proceeds exactly like a
+    story with no split configured (§2.5's fail-open contract)."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")
     _write_manifest(plan_dir, "tdfail", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": [], "tdd_split": True},
@@ -12790,7 +12793,6 @@ def test_dispatch_story_tdd_split_skips_rerun_when_marker_already_present(
     commit must not run the phase again (§2.1: reworks act on the SAME
     tests) - but the executor prompt must still reference them."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")
     _write_manifest(plan_dir, "tdmarker", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "interrupted", "dependencies": [], "tdd_split": True},
@@ -12821,3 +12823,32 @@ def test_dispatch_story_tdd_split_skips_rerun_when_marker_already_present(
     assert result["ok"] is True
     task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
     assert p._NEVER_TOUCH_TESTS_STEERING in task
+
+
+def test_dispatch_story_tdd_split_story_not_opted_in_skips_phase(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A story that does NOT opt in via story["tdd_split"] must not run the
+    test-author phase - §2.4 requires explicit per-story opt-in, not
+    inference. The global PIPELINE_TDD_SPLIT toggle is gone; opt-in is solely
+    the per-story field, so a story without it never gets a split."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "tdnoopt", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("test-author phase must not run without story opt-in")
+
+    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9102))
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("tdnoopt", "S1")
+
+    assert result["ok"] is True
+    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()

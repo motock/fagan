@@ -9863,6 +9863,12 @@ def test_dispatch_story_local_rework_resumes_transcript_when_present(
                "review_feedback": "The SQL is injectable; parameterize it."},
     })
 
+    # Always-on: the rework planner now runs for local-family dispatch. This
+    # test pins the transcript-resume path and the raw-feedback append format
+    # (the planner fail-open case), so stub the planner to None rather than
+    # reaching a live backend.
+    monkeypatch.setattr(p, "_run_rework_planner", lambda *a, **k: None)
+
     popen_calls = []
 
     def _fake_popen(cmd, env, **kw):
@@ -11609,9 +11615,15 @@ class _FakePlannerBackend:
         return self._response
 
 
-def test_run_planner_cloud_mode_calls_claude_backend_with_overlord_model(
+def test_run_planner_routes_to_claude_backend_and_passes_system_prompt(
     agents_dir, monkeypatch,
 ):
+    """_run_planner routes to the provider _resolve_planner_backend picks
+    (here claude, via PIPELINE_BACKEND_PLANNER) and passes the agent
+    instructions as the prompt with _PLANNER_SYSTEM as the system prompt.
+    The model is registry/env-driven (covered in test_always_on_planner.py);
+    this test pins the call shape, not the model tag."""
+    monkeypatch.setenv("PIPELINE_BACKEND_PLANNER", "claude")
     fake = _FakePlannerBackend(response="1. Write a failing test\n2. Implement it")
     calls = []
 
@@ -11622,7 +11634,7 @@ def test_run_planner_cloud_mode_calls_claude_backend_with_overlord_model(
     monkeypatch.setattr(backend, "get_backend", _fake_get_backend)
 
     result = p._run_planner(
-        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        "Add a rate limiter.", dispatch_backend="local",
         local_model="gpt-oss:20b",
     )
 
@@ -11630,53 +11642,6 @@ def test_run_planner_cloud_mode_calls_claude_backend_with_overlord_model(
     assert calls == [{"role": "planner", "name": "claude"}]
     assert fake.calls[0]["prompt"] == "Add a rate limiter."
     assert fake.calls[0]["system"] == p._PLANNER_SYSTEM
-    # agents_dir's overlord.md declares model: opus - cloud mode reuses the
-    # same "principal" tier _invoke_overlord already uses.
-    assert fake.calls[0]["model"] == "opus"
-
-
-def test_run_planner_cloud_mode_honors_model_override(agents_dir, monkeypatch):
-    """PIPELINE_DECOMPOSE_CLOUD_MODEL lets an operator pin the cloud planner
-    to a specific tier (e.g. "sonnet") instead of the overlord's default
-    "opus" - mirrors PIPELINE_LOCAL_REVIEW_MODEL's existing override pattern
-    for the local reviewer. Unset must preserve the current default (covered
-    by test_run_planner_cloud_mode_calls_claude_backend_with_overlord_model)."""
-    fake = _FakePlannerBackend(response="1. Step one")
-    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
-    monkeypatch.setenv("PIPELINE_DECOMPOSE_CLOUD_MODEL", "sonnet")
-
-    p._run_planner(
-        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
-        local_model="gpt-oss:20b",
-    )
-
-    assert fake.calls[0]["model"] == "sonnet"
-
-
-def test_run_planner_local_mode_calls_dispatch_backend_with_local_model(
-    agents_dir, monkeypatch,
-):
-    fake = _FakePlannerBackend(response="1. Do the thing")
-    calls = []
-
-    def _fake_get_backend(role, *, name=None):
-        calls.append({"role": role, "name": name})
-        return fake
-
-    monkeypatch.setattr(backend, "get_backend", _fake_get_backend)
-    # Isolate the unconfigured-planner fallback from the real registry (which
-    # pins a planner role in production) so this still asserts the
-    # mirror-dispatch model, not the registry's planner model.
-    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
-
-    result = p._run_planner(
-        "Add a rate limiter.", mode="local", dispatch_backend="ollama",
-        local_model="gpt-oss:20b",
-    )
-
-    assert result == "1. Do the thing"
-    assert calls == [{"role": "planner", "name": "ollama"}]
-    assert fake.calls[0]["model"] == "gpt-oss:20b"
 
 
 def test_run_planner_returns_none_on_backend_failure(agents_dir, monkeypatch):
@@ -11686,7 +11651,7 @@ def test_run_planner_returns_none_on_backend_failure(agents_dir, monkeypatch):
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
 
     result = p._run_planner(
-        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        "Add a rate limiter.", dispatch_backend="local",
         local_model="gpt-oss:20b",
     )
 
@@ -11698,7 +11663,7 @@ def test_run_planner_returns_none_on_empty_response(agents_dir, monkeypatch):
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
 
     result = p._run_planner(
-        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        "Add a rate limiter.", dispatch_backend="local",
         local_model="gpt-oss:20b",
     )
 
@@ -11763,7 +11728,7 @@ def test_run_planner_include_scratchpad_augments_system_prompt(agents_dir, monke
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
 
     p._run_planner(
-        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        "Add a rate limiter.", dispatch_backend="local",
         local_model="gpt-oss:20b", include_scratchpad=True,
     )
 
@@ -11785,7 +11750,7 @@ def test_run_planner_omits_scratchpad_by_default(agents_dir, monkeypatch):
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
 
     p._run_planner(
-        "Add a rate limiter.", mode="cloud", dispatch_backend="local",
+        "Add a rate limiter.", dispatch_backend="local",
         local_model="gpt-oss:20b",
     )
 
@@ -11793,35 +11758,16 @@ def test_run_planner_omits_scratchpad_by_default(agents_dir, monkeypatch):
     assert ".agent_scratchpad.md" not in fake.calls[0]["system"]
 
 
-# ---------- planner independently routable (not just mirroring dispatch) ----------
-def test_resolve_planner_backend_local_mode_mirrors_dispatch_when_unconfigured(
-    monkeypatch,
-):
-    """Zero-config regression guard: with no PIPELINE_BACKEND_PLANNER and no
-    registry/plan_role_config entry, mode='local' must still mirror
-    dispatch_backend/local_model exactly as before this change.
-
-    Isolated from the real model_registry.json via an empty registry so the
-    fallback path is exercised regardless of whether the repo's registry
-    pins a planner role (it does in production)."""
-    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
-    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
-    backend_name, model = p._resolve_planner_backend(
-        "local", "ollama", "gpt-oss:20b",
-    )
-    assert (backend_name, model) == ("ollama", "gpt-oss:20b")
-
-
+# ---------- planner independently routable (always-on; see test_always_on_planner.py) ----------
 def test_resolve_planner_backend_local_mode_honors_env_var_independent_of_dispatch(
     monkeypatch,
 ):
     """PIPELINE_BACKEND_PLANNER must route the planner to a provider
     independent of whatever dispatch_backend is - this is the gap fix:
-    previously mode='local' always mirrored dispatch_backend regardless of
-    this env var."""
+    the planner no longer mirrors dispatch_backend."""
     monkeypatch.setenv("PIPELINE_BACKEND_PLANNER", "mlx")
     backend_name, model = p._resolve_planner_backend(
-        "local", "ollama", "gpt-oss:20b",
+        "ollama", "gpt-oss:20b",
     )
     assert backend_name == "mlx"
 
@@ -11833,21 +11779,11 @@ def test_resolve_planner_backend_local_mode_honors_plan_role_config(monkeypatch)
     registry's declared mlx model."""
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
     backend_name, model = p._resolve_planner_backend(
-        "local", "ollama", "gpt-oss:20b",
+        "ollama", "gpt-oss:20b",
         plan_role_config={"planner": {"provider": "mlx", "model": "qwen"}},
     )
     assert backend_name == "mlx"
     assert model == "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
-
-
-def test_resolve_planner_backend_cloud_mode_ignores_plan_role_config(monkeypatch):
-    """mode='cloud' keeps its existing, simpler always-claude contract -
-    plan_role_config only affects mode='local' routing."""
-    backend_name, model = p._resolve_planner_backend(
-        "cloud", "ollama", "gpt-oss:20b",
-        plan_role_config={"planner": {"provider": "mlx"}},
-    )
-    assert backend_name == "claude"
 
 
 # ---------- test_author role resolution (TDD_SPLIT_PRODUCTION_PLAN.md §2.2) ----------
@@ -12092,13 +12028,14 @@ def test_run_test_author_phase_returns_false_on_timeout(monkeypatch, tmp_path):
     assert result is False
 
 
-def test_run_rework_planner_cloud_mode_calls_claude_backend_with_review_feedback(
+def test_run_rework_planner_routes_to_claude_and_passes_feedback_as_prompt(
     agents_dir, monkeypatch,
 ):
     """The rework planner translates review feedback into a fix checklist -
     same bounded-call/backend-resolution machinery as _run_planner, but a
     distinct system prompt and the review feedback (not agent_instructions)
     as the input."""
+    monkeypatch.setenv("PIPELINE_BACKEND_PLANNER", "claude")
     fake = _FakePlannerBackend(response="1. Fix the double-count bug\n2. Add a regression test")
     calls = []
 
@@ -12110,7 +12047,7 @@ def test_run_rework_planner_cloud_mode_calls_claude_backend_with_review_feedback
 
     result = p._run_rework_planner(
         "allow() double-counts refill on every call.",
-        mode="cloud", dispatch_backend="local", local_model="gpt-oss:20b",
+        dispatch_backend="local", local_model="gpt-oss:20b",
     )
 
     assert result == "1. Fix the double-count bug\n2. Add a regression test"
@@ -12118,7 +12055,6 @@ def test_run_rework_planner_cloud_mode_calls_claude_backend_with_review_feedback
     assert fake.calls[0]["prompt"] == "allow() double-counts refill on every call."
     assert fake.calls[0]["system"] == p._REWORK_PLANNER_SYSTEM
     assert fake.calls[0]["system"] != p._PLANNER_SYSTEM
-    assert fake.calls[0]["model"] == "opus"
 
 def test_rework_planner_exception_for_small_edits():
     """The rework planner should allow str_replace for small targeted edits."""
@@ -12127,29 +12063,12 @@ def test_rework_planner_exception_for_small_edits():
     assert p._REWORK_PLANNER_SYSTEM != p._PLANNER_SYSTEM
 
 
-def test_run_rework_planner_local_mode_calls_dispatch_backend(agents_dir, monkeypatch):
-    fake = _FakePlannerBackend(response="1. Fix it")
-    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
-    # Isolate the unconfigured-planner fallback from the real registry (which
-    # pins a planner role in production) so this asserts the mirror-dispatch
-    # model, not the registry's planner model.
-    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
-
-    result = p._run_rework_planner(
-        "bug description", mode="local", dispatch_backend="ollama",
-        local_model="gpt-oss:20b",
-    )
-
-    assert result == "1. Fix it"
-    assert fake.calls[0]["model"] == "gpt-oss:20b"
-
-
 def test_run_rework_planner_returns_none_on_backend_failure(agents_dir, monkeypatch):
     fake = _FakePlannerBackend(raises=RuntimeError("endpoint unreachable"))
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
 
     result = p._run_rework_planner(
-        "bug description", mode="cloud", dispatch_backend="local",
+        "bug description", dispatch_backend="local",
         local_model="gpt-oss:20b",
     )
 
@@ -12273,12 +12192,11 @@ def test_decompose_plan_fails_open_when_backend_returns_none(agents_dir, monkeyp
 def test_dispatch_story_decompose_rework_translates_feedback_into_fix_checklist(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
-    """When PIPELINE_DECOMPOSE is on and a rework redispatch resumes via
-    transcript, the raw review feedback must be translated into a tech-lead
-    fix checklist (via _run_rework_planner) before being appended - not
-    pasted verbatim, mirroring the initial-dispatch checklist treatment."""
+    """A rework redispatch that resumes via transcript (always-on for
+    local-family dispatch) must translate the raw review feedback into a
+    tech-lead fix checklist (via _run_rework_planner) before appending it -
+    not pasted verbatim, mirroring the initial-dispatch checklist treatment."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     worktree_path = worktree_root / "S1"
     worktree_path.mkdir()
     transcript_path = worktree_path / ".agent_transcript.json"
@@ -12293,9 +12211,9 @@ def test_dispatch_story_decompose_rework_translates_feedback_into_fix_checklist(
 
     rework_calls = []
 
-    def _fake_rework_planner(review_feedback, *, mode, dispatch_backend, local_model, **k):
+    def _fake_rework_planner(review_feedback, *, dispatch_backend, local_model, **k):
         rework_calls.append({
-            "review_feedback": review_feedback, "mode": mode,
+            "review_feedback": review_feedback,
             "dispatch_backend": dispatch_backend, "local_model": local_model,
         })
         return "1. Reproduce the double-count with a test.\n2. Fix allow()."
@@ -12319,7 +12237,6 @@ def test_dispatch_story_decompose_rework_translates_feedback_into_fix_checklist(
     assert result["ok"] is True
     assert len(rework_calls) == 1
     assert rework_calls[0]["review_feedback"] == "allow() double-counts refill on every call."
-    assert rework_calls[0]["mode"] == "cloud"
 
     append_content = popen_calls[0]["env"]["LOCAL_AGENT_RESUME_APPEND_CONTENT"]
     assert "1. Reproduce the double-count with a test." in append_content
@@ -12327,47 +12244,11 @@ def test_dispatch_story_decompose_rework_translates_feedback_into_fix_checklist(
     assert "allow() double-counts refill on every call." in append_content
 
 
-def test_dispatch_story_decompose_off_rework_uses_raw_feedback_unchanged(
-    plan_dir, worktree_root, agents_dir, monkeypatch,
-):
-    """PIPELINE_DECOMPOSE off (default) must leave the existing rework path
-    byte-for-byte unchanged - no rework planner call, raw feedback only."""
-    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    worktree_path = worktree_root / "S1"
-    worktree_path.mkdir()
-    (worktree_path / ".agent_transcript.json").write_text(json.dumps([
-        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
-    ]))
-    _write_manifest(plan_dir, "dcreworkoff", {
-        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "changes_requested", "worktree": str(worktree_path),
-               "review_feedback": "The SQL is injectable; parameterize it."},
-    })
-
-    def _boom(*a, **k):
-        raise AssertionError("rework planner must not run when PIPELINE_DECOMPOSE is off")
-
-    monkeypatch.setattr(p, "_run_rework_planner", _boom)
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
-
-    popen_calls = []
-
-    def _fake_popen(cmd, env, **kw):
-        popen_calls.append({"cmd": cmd, "env": env})
-        return _FakeProc(9011)
-
-    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(pt, "plane_request",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
-    monkeypatch.setattr(p, "_default_branch", lambda: "main")
-
-    result = p.dispatch_story("dcreworkoff", "S1")
-
-    assert result["ok"] is True
-    assert popen_calls[0]["env"]["LOCAL_AGENT_RESUME_APPEND_CONTENT"] == (
-        "The code reviewer REQUESTED CHANGES on your previous attempt. "
-        "Address this feedback:\nThe SQL is injectable; parameterize it."
-    )
+# Removed: test_dispatch_story_decompose_off_rework_uses_raw_feedback_unchanged
+# asserted the now-removed "PIPELINE_DECOMPOSE=off skips the rework planner"
+# behavior. Under always-on the rework planner runs for local-family dispatch;
+# the raw-feedback fallback now lives only in the fail-open case, covered by
+# test_dispatch_story_decompose_rework_fails_open_when_fix_planner_returns_none.
 
 
 def test_dispatch_story_decompose_rework_fails_open_when_fix_planner_returns_none(
@@ -12376,7 +12257,6 @@ def test_dispatch_story_decompose_rework_fails_open_when_fix_planner_returns_non
     """A failed rework-planner call must fall back to the raw-feedback
     format, never block or corrupt the rework redispatch."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     worktree_path = worktree_root / "S1"
     worktree_path.mkdir()
     (worktree_path / ".agent_transcript.json").write_text(json.dumps([
@@ -12411,38 +12291,21 @@ def test_dispatch_story_decompose_rework_fails_open_when_fix_planner_returns_non
     )
 
 
-def test_dispatch_story_decompose_off_by_default_skips_planner(
+# Removed: test_dispatch_story_decompose_off_by_default_skips_planner asserted
+# the now-removed "PIPELINE_DECOMPOSE unset = planner never invoked" behavior.
+# Under always-on the planner runs for local-family dispatch; the positive
+# case is covered by test_dispatch_story_planner_always_runs_for_local_when_
+# decompose_unset in test_always_on_planner.py, and the claude-backend skip by
+# test_dispatch_story_claude_backend_skips_planner there.
+
+
+def test_dispatch_story_writes_plan_and_augments_local_prompt(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
-    """PIPELINE_DECOMPOSE unset must be a strict no-op: the planner is never
-    invoked and no plan artifact appears in the worktree."""
+    """A local-family dispatch (always-on planner) must run the planner, write
+    the resulting checklist to .agent_plan.md, and augment the executor's
+    task prompt with it."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    _write_manifest(plan_dir, "dcoff", {
-        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": []},
-    })
-
-    def _boom(*a, **k):
-        raise AssertionError("planner must not run when PIPELINE_DECOMPOSE is off")
-
-    monkeypatch.setattr(p, "_run_planner", _boom)
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
-    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9001))
-    monkeypatch.setattr(pt, "plane_request",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
-    monkeypatch.setattr(p, "_default_branch", lambda: "main")
-
-    result = p.dispatch_story("dcoff", "S1")
-
-    assert result["ok"] is True
-    assert not (worktree_root / "S1" / ".agent_plan.md").exists()
-
-
-def test_dispatch_story_decompose_cloud_writes_plan_and_augments_local_prompt(
-    plan_dir, worktree_root, agents_dir, monkeypatch,
-):
-    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     _write_manifest(plan_dir, "dccloud", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
@@ -12450,10 +12313,10 @@ def test_dispatch_story_decompose_cloud_writes_plan_and_augments_local_prompt(
 
     planner_calls = []
 
-    def _fake_planner(agent_instructions, *, mode, dispatch_backend, local_model,
+    def _fake_planner(agent_instructions, *, dispatch_backend, local_model,
                       **kwargs):
         planner_calls.append({
-            "agent_instructions": agent_instructions, "mode": mode,
+            "agent_instructions": agent_instructions,
             "dispatch_backend": dispatch_backend, "local_model": local_model,
         })
         return "1. Write a failing test for the limiter.\n2. Implement it."
@@ -12476,7 +12339,6 @@ def test_dispatch_story_decompose_cloud_writes_plan_and_augments_local_prompt(
 
     assert result["ok"] is True
     assert len(planner_calls) == 1
-    assert planner_calls[0]["mode"] == "cloud"
     assert planner_calls[0]["dispatch_backend"] == "local"
     assert planner_calls[0]["agent_instructions"] == "Build it."
 
@@ -12496,7 +12358,6 @@ def test_dispatch_story_decompose_scratchpad_off_omits_scratchpad_instruction(
     only, no persistent scratchpad) - the checklist must still reach the
     executor, but the scratchpad instruction must not."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     monkeypatch.setenv("PIPELINE_DECOMPOSE_SCRATCHPAD", "off")
     _write_manifest(plan_dir, "dcnoscratch", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
@@ -12531,7 +12392,6 @@ def test_dispatch_story_decompose_scratchpad_defaults_on(
     """PIPELINE_DECOMPOSE_SCRATCHPAD unset must default to "on" - the
     scratchpad instruction ships by default whenever decompose is enabled."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     _write_manifest(plan_dir, "dcscratchdefault", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
@@ -12566,7 +12426,6 @@ def test_dispatch_story_decompose_passes_include_scratchpad_flag_to_planner(
     include_scratchpad=False. Regression guard for the 9%-consumption root
     cause (GUIDED_DECOMPOSITION_PLAN.md, 2026-07-16)."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
 
     def _run_dispatch(plan_name, story_key, scratchpad_env):
         if scratchpad_env is None:
@@ -12611,7 +12470,6 @@ def test_dispatch_story_passes_plan_role_config_from_manifest_to_planner(
     _run_planner's plan_role_config kwarg via dispatch_story - not just be
     tolerated by signature."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     (plan_dir / "dpcfg.manifest.json").write_text(json.dumps({
         "epics": {},
         "stories": {
@@ -12645,7 +12503,6 @@ def test_dispatch_story_decompose_skips_for_claude_backend(
 ):
     """The checklist crutch exists for the weak local executor only - a
     Claude dispatch must never trigger planning even with decompose enabled."""
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     _write_manifest(plan_dir, "dcclaude", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
@@ -12673,7 +12530,6 @@ def test_dispatch_story_decompose_fails_open_when_planner_returns_none(
     """A planner that fails (returns None) must not block or alter dispatch -
     the story proceeds exactly like PIPELINE_DECOMPOSE=off."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     _write_manifest(plan_dir, "dcnone", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
@@ -12708,7 +12564,6 @@ def test_dispatch_story_decompose_skips_replanning_on_resume_but_keeps_referenci
     second LLM call) but the rebuilt resume prompt must still reference the
     existing checklist, so the executor doesn't lose the guidance on resume."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     worktree_path = worktree_root / "S1"
     worktree_path.mkdir()
     (worktree_path / ".agent_plan.md").write_text("1. Existing checklist step.")
@@ -12769,7 +12624,6 @@ def test_dispatch_story_excludes_decompose_artifacts_from_worktree_tracking(
     subprocess.run(["git", "push", "-q", "-u", "origin", "master"], cwd=real_repo, check=True)
 
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_DECOMPOSE", "cloud")
     _write_manifest(plan_dir, "dcexcl", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},

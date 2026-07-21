@@ -94,44 +94,75 @@ def _planner_system(*, include_scratchpad: bool = False) -> str:
     return _PLANNER_SYSTEM + _PLANNER_SCRATCHPAD_CLAUSE
 
 
+def _default_planner_model_tag(registry: dict) -> str:
+    """Concrete ollama/glm tag for the planner's model_fallback.
+
+    resolve_role returns model_fallback verbatim (it does not resolve it
+    against providers.<p>.models), so it must already be a concrete tag, not
+    the friendly name 'glm'. Falls back to a module constant if the registry
+    has no ollama/glm entry.
+    """
+    try:
+        return registry["providers"]["ollama"]["models"]["glm"]["tag"]
+    except (KeyError, TypeError):
+        return "glm-5.2:cloud"
+
+
 def _resolve_planner_backend(
-    mode: str, dispatch_backend: str, local_model: str,
+    dispatch_backend: str,
+    local_model: str,
     plan_role_config: dict | None = None,
 ) -> tuple[str, str]:
-    """Shared backend/model resolution for both the initial-dispatch planner
-    and the rework-feedback planner (same mode semantics, same "principal
-    tech lead vs weak local model" choice - see _run_planner).
+    """Resolve (provider, model) for the planner role. Always-on; no mode.
 
-    mode="local" makes the planner independently routable
-    (PIPELINE_BACKEND_PLANNER, a plan's role_config, or model_registry.json's
-    "planner" entry) instead of always mirroring dispatch's own
-    backend/model - e.g. dispatch on ollama with planner pinned to mlx. When
-    none of those name a provider, it mirrors dispatch_backend/local_model
-    exactly as before this existed, so an unconfigured install is unchanged.
+    Provider priority: plan role_config.planner.provider ->
+    PIPELINE_BACKEND_PLANNER -> registry roles.planner.provider ->
+    default "ollama" (so a stock install resolves to ollama/glm-5.2:cloud
+    with no env vars set, via the registry pin from PR #151).
+    Model priority: plan role_config.planner.model -> registry
+    roles.planner.model -> the concrete ollama/glm tag (model_fallback).
+    PIPELINE_LOCAL_PLANNER_MODEL (mirroring review.py's
+    PIPELINE_LOCAL_REVIEW_MODEL) is the top-priority *model* override and
+    wins over both, but only when the resolved provider is local-family, so
+    a bare Ollama tag never leaks into a Claude planner.
+
+    A garbage/unknown provider fails closed here (RoleRegistryError) so
+    _run_planner's fail-open except catches it and dispatch proceeds with
+    no checklist rather than crashing on a bogus backend name.
     """
-    if mode == "cloud":
-        return "claude", (
-            os.environ.get("PIPELINE_DECOMPOSE_CLOUD_MODEL")
-            or _persona_default_model("overlord") or "opus"
-        )
-    plan_cfg = (plan_role_config or {}).get("planner", {})
+    from .config import _LOCAL_BACKEND_NAMES
+
     registry = role_registry.load_registry()
-    provider_override = (
-        plan_cfg.get("provider")
-        or os.environ.get("PIPELINE_BACKEND_PLANNER")
-        or registry.get("roles", {}).get("planner", {}).get("provider")
-    )
-    if not provider_override:
-        return dispatch_backend, local_model
     resolution = role_registry.resolve_role(
-        "planner", plan_role_config=plan_role_config, registry=registry,
-        model_fallback=lambda: local_model,
+        "planner",
+        plan_role_config=plan_role_config,
+        registry=registry,
+        default_provider="ollama",
+        model_fallback=lambda: _default_planner_model_tag(registry),
     )
-    return resolution.provider, resolution.model
+    provider, model = resolution.provider, resolution.model
+
+    # Fail closed on a garbage/unknown provider so _run_planner fails open.
+    known_providers = set(registry.get("providers", {})) | _LOCAL_BACKEND_NAMES
+    if provider not in known_providers:
+        raise role_registry.RoleRegistryError(
+            f"planner resolved to unknown provider {provider!r} "
+            f"(not one of {sorted(known_providers)})"
+        )
+
+    # Top-priority local-family model override (mirrors review.py:70-72).
+    if provider in _LOCAL_BACKEND_NAMES:
+        env_model = os.environ.get("PIPELINE_LOCAL_PLANNER_MODEL")
+        if env_model:
+            model = env_model
+    return provider, model
 
 
 def _run_planner(
-    agent_instructions: str, *, mode: str, dispatch_backend: str, local_model: str,
+    agent_instructions: str,
+    *,
+    dispatch_backend: str,
+    local_model: str,
     include_scratchpad: bool = False, plan_role_config: dict | None = None,
 ) -> str | None:
     """Call a bounded, single-turn LLM to produce an ordered sub-step
@@ -141,24 +172,16 @@ def _run_planner(
     relative to the story's own dispatch or the economics this feature
     exists for collapse (see GUIDED_DECOMPOSITION_PLAN.md §3.1/§4.5).
 
-    mode="cloud" routes the call to the Claude backend at the same
-    "principal" tier _invoke_overlord uses - the primary, expected
-    configuration (a strong tech lead planning for a weak jr executor).
-    mode="local" routes the call to the same backend/model the executor
-    itself will run on (the H2 ablation: is planner *strength* the active
-    ingredient, or does having any checklist help regardless of who wrote
-    it?).
-
     Returns the raw checklist text, or None on any failure. Callers MUST
     treat None as "no plan" and fall open to the existing no-plan dispatch
     path - a broken, slow, or rate-limited planner call must never block or
     corrupt a story's dispatch. External boundary: delegates to the
     configured Backend. Tests mock this function.
     """
-    backend_name, model = _resolve_planner_backend(
-        mode, dispatch_backend, local_model, plan_role_config=plan_role_config,
-    )
     try:
+        backend_name, model = _resolve_planner_backend(
+            dispatch_backend, local_model, plan_role_config=plan_role_config,
+        )
         text = backend.get_backend("planner", name=backend_name).complete(
             agent_instructions,
             system=_planner_system(include_scratchpad=include_scratchpad),
@@ -213,19 +236,18 @@ _REWORK_PLANNER_SYSTEM = (
 
 
 def _run_rework_planner(
-    review_feedback: str, *, mode: str, dispatch_backend: str, local_model: str,
+    review_feedback: str, *, dispatch_backend: str, local_model: str,
     plan_role_config: dict | None = None,
 ) -> str | None:
     """Like _run_planner, but translates code-review feedback into an
     ordered fix-checklist instead of translating a coarse task into an
     implementation checklist. Same bounded single-call contract, same
-    mode="cloud"/"local" backend resolution, same fail-open-to-None
-    contract - see _run_planner's docstring for the shared rationale.
+    backend resolution, same fail-open-to-None contract - see _run_planner's docstring for the shared rationale.
     """
-    backend_name, model = _resolve_planner_backend(
-        mode, dispatch_backend, local_model, plan_role_config=plan_role_config,
-    )
     try:
+        backend_name, model = _resolve_planner_backend(
+            dispatch_backend, local_model, plan_role_config=plan_role_config,
+        )
         text = backend.get_backend("planner", name=backend_name).complete(
             review_feedback, system=_REWORK_PLANNER_SYSTEM, model=model,
         )

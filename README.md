@@ -553,7 +553,7 @@ same for provider and model independently:
    applies to every tick.
 2. The existing `PIPELINE_BACKEND_<ROLE>` env var (and, for local models,
    the existing `PIPELINE_LOCAL_MODEL_*`/`PIPELINE_LOCAL_REVIEW_MODEL`/
-   `PIPELINE_DECOMPOSE_CLOUD_MODEL` vars) — unchanged, still the fastest way
+   `PIPELINE_LOCAL_PLANNER_MODEL` vars) — unchanged, still the fastest way
    to override ad hoc.
 3. `model_registry.json`'s `roles.<role>` entry.
 4. The role's existing hardcoded/persona-frontmatter default.
@@ -575,13 +575,14 @@ transcript and was measured to *hurt* (see `GUIDED_DECOMPOSITION_PLAN.md` — th
 Condition D/M validation: 33% vs 100%). Guided decomposition keeps the full
 context and adds cross-*sub-step* structure instead.
 
-It is **opt-in and off by default** (`PIPELINE_DECOMPOSE=off`, per Secure
-Defaults) and only ever runs for a **local-family** dispatch backend — Claude
-doesn't need the crutch. Set `PIPELINE_DECOMPOSE=cloud` to author the checklist
-with Claude (`PIPELINE_DECOMPOSE_CLOUD_MODEL`) or `=local` to author it on the
-same local provider the story dispatches to (`PIPELINE_BACKEND_PLANNER` pins the
-planner to a different provider than dispatch if you want, e.g. dispatch on
-`ollama`, plan on `mlx`).
+It is **always on** for any **local-family** dispatch backend — Claude doesn't
+need the crutch, so a `claude` dispatch skips it. There is no on/off toggle: the
+planner runs on every local-family story's first dispatch (never on a resume)
+and on every rework cycle. The planner is its own independently routable role
+(default `ollama`/`glm` via `model_registry.json`), so it can run on a different
+provider than dispatch — set `PIPELINE_BACKEND_PLANNER` to pin the provider
+(e.g. dispatch on `ollama`, plan on `mlx`) and `PIPELINE_LOCAL_PLANNER_MODEL` to
+pin the model tag.
 
 - **Initial checklist (`_run_planner`).** On a story's *first* dispatch (never
   on a resume — the checklist is planned once), the planner turns
@@ -589,8 +590,7 @@ planner to a different provider than dispatch if you want, e.g. dispatch on
   `.agent_plan.md` in the worktree; the dispatch prompt appends it under
   "Implementation checklist from your tech lead." The call is **best-effort and
   fails open to `None`** — a broken, slow, or rate-limited planner never blocks
-  or corrupts dispatch; the story simply proceeds with no checklist, exactly
-  like `PIPELINE_DECOMPOSE=off`.
+  or corrupts dispatch; the story simply proceeds with no checklist.
 - **Scratchpad (`PIPELINE_DECOMPOSE_SCRATCHPAD`, default `on`).** The executor
   keeps a running `.agent_scratchpad.md` (what's done, what's next) as durable
   cross-sub-step state. The planner folds "maintain the scratchpad" into the
@@ -661,10 +661,10 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` \| `auto` (layered local-first with Claude fallback — see below) |
 | `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
 | `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
-| `PIPELINE_BACKEND_PLANNER` | *(unset)* | Backend for the guided-decomposition planner (the in-story checklist + rework-feedback checklist role, `PIPELINE_DECOMPOSE`'s `mode="local"` path): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Unset means the planner mirrors whatever backend `dispatch` resolved to for that story (today's default) — set this to pin the planner to a specific provider independent of dispatch, e.g. dispatch on `ollama` with the planner on `mlx`. `mode="cloud"` is unaffected (always `claude`, see `PIPELINE_DECOMPOSE_CLOUD_MODEL`). |
+| `PIPELINE_BACKEND_PLANNER` | *(unset → registry `ollama`)* | Backend for the guided-decomposition planner (the always-on in-story checklist + rework-feedback checklist role): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Resolution priority: a plan's `role_config.planner` → this env var → `model_registry.json`'s `roles.planner` (pinned to `ollama` in production) → default `ollama`. Unset resolves to the registry's `ollama`, not a mirror of dispatch — set this to pin the planner to a different provider than dispatch, e.g. dispatch on `ollama` with the planner on `mlx`. Only local-family dispatch runs the planner; a `claude` dispatch skips it. |
+| `PIPELINE_LOCAL_PLANNER_MODEL` | *(unset)* | Top-priority *model* override for the planner, mirroring `PIPELINE_LOCAL_REVIEW_MODEL`: a concrete provider tag (e.g. `gpt-oss:20b`, `qwen3-coder:30b`) that wins over both `role_config` and the registry, but only when the resolved planner provider is local-family (`ollama`/`lmstudio`/`mlx`/`local`) — a bare Ollama tag never leaks into a Claude planner. Unset leaves the model to `role_config`/registry resolution. |
 | `PIPELINE_BACKEND_DECOMPOSE` | `claude` | Backend for the `decompose_plan` tool (turns a raw request into epics/stories JSON via the product-analyst persona): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Independent of the interactive `product-analyst` subagent (invoked via the `Agent` tool), which is always Claude and unaffected by this setting. |
-| `PIPELINE_DECOMPOSE` | `off` | Guided decomposition (the tech-lead planner, see above): `off` \| `cloud` \| `local`. `cloud` authors the per-story checklist with Claude (`PIPELINE_DECOMPOSE_CLOUD_MODEL`); `local` authors it on the story's own local provider. Only ever runs for a local-family dispatch backend; best-effort (fails open to no checklist). Distinct from `PIPELINE_BACKEND_DECOMPOSE`, which is the `decompose_plan` *tool*, not the in-story planner. |
-| `PIPELINE_DECOMPOSE_SCRATCHPAD` | `on` | Whether guided decomposition maintains the `.agent_scratchpad.md` cross-sub-step memory (`on` \| `off`). `off` runs the checklist-only ablation. No effect when `PIPELINE_DECOMPOSE=off`. |
+| `PIPELINE_DECOMPOSE_SCRATCHPAD` | `on` | Whether guided decomposition maintains the `.agent_scratchpad.md` cross-sub-step memory (`on` \| `off`). `off` runs the checklist-only ablation. |
 | `PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV` | *(unset)* | Off by default: every `claude` subprocess call strips `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL`/`CLAUDE_CODE_USE_BEDROCK`/`CLAUDE_CODE_USE_VERTEX` from its environment so an interactive session's 3rd-party-provider redirect can't silently leak into dispatch/review/overlord. Set truthy only for a legitimate enterprise Bedrock/Vertex deployment that intentionally routes the CLI elsewhere — see "Claude backend provider isolation" below. |
 | `PIPELINE_LOCAL_PROVIDER` | `ollama` | Wire protocol the `local` alias's `complete()`/`resource_status()` speak when a role is set to the generic `local` name: `ollama` \| `mlx` \| `lmstudio`. Naming the provider directly in `PIPELINE_BACKEND_<ROLE>` (`ollama`/`lmstudio`/`mlx`, RELIABILITY_PLAN.md T16) pins that provider for that role regardless of this setting — `local` stays a permanent back-compat alias (existing manifests persist `"backend": "local"`) and is the only name this variable actually affects. All three providers are working, live-validated implementations (including real tool-calling round trips and, for `lmstudio`, a full multi-turn review-loop convergence to a verdict). Neither `mlx` (targets `mlx_lm.server`) nor `lmstudio` (targets LM Studio's local server) has a per-request context-window control like Ollama's `num_ctx` — both send that value as `max_tokens` instead. `lmstudio`'s loaded-model check uses its own `/api/v0/models` (`state: loaded/not-loaded`), not Ollama's `/api/ps`, and LM Studio JIT-loads a model on its first request (~30s for a small model) rather than expecting it pre-loaded. **Does not yet affect `dispatch()`** — the coding-agent subprocess always talks to Ollama's native API regardless of this setting (`MODEL_PROVIDER_ABSTRACTION_PLAN.md` S3, deferred). **MLX/LM Studio model names have no `:` like Ollama tags do** — `_resolve_local_model` treats any model string without a `:` as a tier name, so a Hugging Face repo id (e.g. `mlx-community/Qwen2.5-1.5B-Instruct-4bit`, `google/gemma-4-e4b`) must be set via `PIPELINE_LOCAL_MODEL_DEFAULT`/`_OPUS`/`_SONNET`/`_HAIKU`, not passed as a raw `model=` value. |
 | `PIPELINE_LOCAL_ENDPOINT` | `http://localhost:11434` | Ollama base URL for the `local` driver (it uses Ollama's native `/api/chat`, the only surface that accepts `num_ctx`). Point at a remote Ollama to use another box. |

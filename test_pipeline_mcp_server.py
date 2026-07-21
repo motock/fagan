@@ -11664,6 +11664,10 @@ def test_run_planner_local_mode_calls_dispatch_backend_with_local_model(
         return fake
 
     monkeypatch.setattr(backend, "get_backend", _fake_get_backend)
+    # Isolate the unconfigured-planner fallback from the real registry (which
+    # pins a planner role in production) so this still asserts the
+    # mirror-dispatch model, not the registry's planner model.
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
 
     result = p._run_planner(
         "Add a rate limiter.", mode="local", dispatch_backend="ollama",
@@ -11795,8 +11799,13 @@ def test_resolve_planner_backend_local_mode_mirrors_dispatch_when_unconfigured(
 ):
     """Zero-config regression guard: with no PIPELINE_BACKEND_PLANNER and no
     registry/plan_role_config entry, mode='local' must still mirror
-    dispatch_backend/local_model exactly as before this change."""
+    dispatch_backend/local_model exactly as before this change.
+
+    Isolated from the real model_registry.json via an empty registry so the
+    fallback path is exercised regardless of whether the repo's registry
+    pins a planner role (it does in production)."""
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
     backend_name, model = p._resolve_planner_backend(
         "local", "ollama", "gpt-oss:20b",
     )
@@ -12121,6 +12130,10 @@ def test_rework_planner_exception_for_small_edits():
 def test_run_rework_planner_local_mode_calls_dispatch_backend(agents_dir, monkeypatch):
     fake = _FakePlannerBackend(response="1. Fix it")
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+    # Isolate the unconfigured-planner fallback from the real registry (which
+    # pins a planner role in production) so this asserts the mirror-dispatch
+    # model, not the registry's planner model.
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
 
     result = p._run_rework_planner(
         "bug description", mode="local", dispatch_backend="ollama",

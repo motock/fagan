@@ -967,16 +967,17 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(entry["source"])
 
-        # TDD_SPLIT_PRODUCTION_PLAN.md: an ALWAYS-ON (for opted-in stories)
-        # pre-executor test-authoring dispatch (a full agent-loop, BLOCKING
-        # until it exits - unlike the planner checklist above, this
-        # produces a real commit the executor's worktree must already have)
-        # in THIS worktree before the main executor starts. The global
-        # PIPELINE_TDD_SPLIT on/off toggle was removed; the per-story opt-in
-        # below is the sole gate. Gated on:
-        #   - the story explicitly opting in (story["tdd_split"] - §2.4:
-        #     inferring eligibility from prose is a worse failure mode than
-        #     an operator forgetting to opt in)
+        # TDD_SPLIT_PRODUCTION_PLAN.md: an ALWAYS-ON pre-executor
+        # test-authoring dispatch (a full agent-loop, BLOCKING until it
+        # exits - unlike the planner checklist above, this produces a real
+        # commit the executor's worktree must already have) in THIS
+        # worktree before the main executor starts. The global
+        # PIPELINE_TDD_SPLIT on/off toggle AND the per-story `tdd_split`
+        # opt-in are both removed; the phase now mirrors the planner's gate
+        # below exactly - unconditional for local-family dispatch. Gated on:
+        #   - a local-family backend (same rationale as the planner: the
+        #     crutch exists for the weak local executor; Claude doesn't
+        #     need it)
         #   - not resuming (a rework redispatch acts on the SAME tests it
         #     already has; it never gets a fresh test-authoring pass)
         #   - no existing test-author marker in the worktree (belt-and-
@@ -988,7 +989,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # never a gate (§2.5).
         test_author_marker = worktree_path / ".tdd_split_test_author_done"
         if (
-            story.get("tdd_split")
+            dispatch_backend in _LOCAL_BACKEND_NAMES
             and not resuming
             and not test_author_marker.exists()
         ):
@@ -1614,6 +1615,17 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest["stories"][story_key]["status"] = "done"
     manifest["stories"][story_key].pop("parked_reason", None)
     _atomic_write_json(manifest_path, manifest)
+
+    # Check if all stories are now done
+    all_done = all(
+        s.get("status") == "done" for s in manifest["stories"].values()
+    )
+    if all_done:
+        return {
+            "ok": True,
+            "plan_completed": True,
+            "stories": list(manifest["stories"].keys()),
+        }
     return {"ok": True}
 
 

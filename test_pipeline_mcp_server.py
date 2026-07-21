@@ -1193,6 +1193,76 @@ def test_mark_story_done_routes_through_ticket_provider(plan_dir, monkeypatch):
     assert calls == [("S1", p.LogicalState.DONE, "tpmd")]
 
 
+# ---------- mark_story_done plan-completion signal ----------
+# When the last remaining non-done story is marked done, mark_story_done must
+# signal that the whole plan is complete via a plan_completed key plus the full
+# list of story keys. When any story is still not 'done' (including 'parked' or
+# any other non-'done' terminal-looking state), the return dict must keep
+# today's exact {'ok': True} shape - no plan_completed key at all - so existing
+# equality assertions keep passing and callers can use .get('plan_completed')
+# truthiness or `'plan_completed' in result` either way.
+
+def test_mark_story_done_signals_plan_completed_when_all_done(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest(plan_dir, "pc1", {
+        "S1": {"status": "done"},
+        "S2": {"status": "todo"},
+    })
+    result = p.mark_story_done("pc1", "S2")
+    assert result["ok"] is True
+    assert result.get("plan_completed") is True
+    assert set(result["stories"]) == {"S1", "S2"}
+    manifest = _read_manifest(plan_dir, "pc1")
+    assert manifest["stories"]["S2"]["status"] == "done"
+
+
+def test_mark_story_done_omits_plan_completed_when_other_story_not_done(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest(plan_dir, "pc2", {
+        "S1": {"status": "todo"},
+        "S2": {"status": "in_progress"},
+    })
+    result = p.mark_story_done("pc2", "S1")
+    assert result["ok"] is True
+    # Exact today's shape: no plan_completed key at all.
+    assert "plan_completed" not in result
+    assert "stories" not in result
+    assert result == {"ok": True}
+    manifest = _read_manifest(plan_dir, "pc2")
+    assert manifest["stories"]["S1"]["status"] == "done"
+    assert manifest["stories"]["S2"]["status"] == "in_progress"
+
+
+def test_mark_story_done_single_story_plan_completed(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest(plan_dir, "pc3", {
+        "S1": {"status": "todo"},
+    })
+    result = p.mark_story_done("pc3", "S1")
+    assert result["ok"] is True
+    assert result.get("plan_completed") is True
+    assert result["stories"] == ["S1"]
+    manifest = _read_manifest(plan_dir, "pc3")
+    assert manifest["stories"]["S1"]["status"] == "done"
+
+
+def test_mark_story_done_parked_story_does_not_count_as_done(plan_dir, monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest(plan_dir, "pc4", {
+        "S1": {"status": "todo"},
+        "S2": {"status": "parked", "parked_reason": "blocked"},
+    })
+    result = p.mark_story_done("pc4", "S1")
+    assert result["ok"] is True
+    # A 'parked' story is not 'done', so the plan is not complete.
+    assert "plan_completed" not in result
+    assert "stories" not in result
+    assert result == {"ok": True}
+    manifest = _read_manifest(plan_dir, "pc4")
+    assert manifest["stories"]["S1"]["status"] == "done"
+    assert manifest["stories"]["S2"]["status"] == "parked"
+
+
 # ---------- patch_story / set_story_status (T2) ----------
 # These give a caller a sanctioned, lock-serialized way to edit a story's
 # authored fields or transition its status, so nobody needs to hand-edit the
@@ -1483,6 +1553,18 @@ def test_ingest_plan_skips_when_lock_held(plan_dir, monkeypatch, tmp_path):
 
 
 # ---------- Review gate + auto-PR ----------
+class _NullSetStateProvider:
+    """A no-op TicketProvider for mark_story_done completion-signal tests.
+
+    Accepts set_state calls (so mark_story_done doesn't try to hit Plane) and
+    returns True, mirroring the _FakeProvider pattern used by the existing
+    ticket-provider routing tests.
+    """
+
+    def set_state(self, story_key, state, plan_name=None):
+        return True
+
+
 def _write_manifest(plan_dir, plan_name, stories):
     (plan_dir / f"{plan_name}.manifest.json").write_text(
         json.dumps({"epics": {}, "stories": stories}, indent=2)
@@ -9720,6 +9802,10 @@ def test_dispatch_story_forwards_acceptance_paths_to_local_driver(
                    {"path": "tests/test_y.py", "source": "import pytest\n"},
                ]},
     })
+    # TDD-split is unconditional for local-family dispatch now; neutralize it
+    # here so this test's popen_calls captures only the main executor's
+    # dispatch, not an incidental test-author sub-dispatch.
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
 
     popen_calls = []
 
@@ -9757,6 +9843,10 @@ def test_dispatch_story_forwards_acceptance_paths_under_explicit_provider_name(
                    {"path": "tests/test_x.py", "source": "import pytest\n"},
                ]},
     })
+    # TDD-split is unconditional for local-family dispatch now; neutralize it
+    # here so this test's popen_calls captures only the main executor's
+    # dispatch, not an incidental test-author sub-dispatch.
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
 
     popen_calls = []
 
@@ -12310,6 +12400,10 @@ def test_dispatch_story_writes_plan_and_augments_local_prompt(
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
     })
+    # TDD-split is unconditional for local-family dispatch now; neutralize it
+    # here so this test's popen_calls captures only the main executor's
+    # dispatch, not an incidental test-author sub-dispatch.
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
 
     planner_calls = []
 
@@ -12363,6 +12457,10 @@ def test_dispatch_story_decompose_scratchpad_off_omits_scratchpad_instruction(
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
     })
+    # TDD-split is unconditional for local-family dispatch now; neutralize it
+    # here so this test's popen_calls captures only the main executor's
+    # dispatch, not an incidental test-author sub-dispatch.
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
     monkeypatch.setattr(p, "_run_planner",
                         lambda *a, **k: "1. Write a failing test.\n2. Implement it.")
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
@@ -12396,6 +12494,10 @@ def test_dispatch_story_decompose_scratchpad_defaults_on(
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
     })
+    # TDD-split is unconditional for local-family dispatch now; neutralize it
+    # here so this test's popen_calls captures only the main executor's
+    # dispatch, not an incidental test-author sub-dispatch.
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
     monkeypatch.setattr(p, "_run_planner", lambda *a, **k: "1. Step one.")
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
 
@@ -12825,23 +12927,30 @@ def test_dispatch_story_tdd_split_skips_rerun_when_marker_already_present(
     assert p._NEVER_TOUCH_TESTS_STEERING in task
 
 
-def test_dispatch_story_tdd_split_story_not_opted_in_skips_phase(
+def test_dispatch_story_tdd_split_story_without_opt_in_field_still_runs_phase(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
-    """A story that does NOT opt in via story["tdd_split"] must not run the
-    test-author phase - §2.4 requires explicit per-story opt-in, not
-    inference. The global PIPELINE_TDD_SPLIT toggle is gone; opt-in is solely
-    the per-story field, so a story without it never gets a split."""
+    """The per-story `tdd_split` opt-in field has been removed as a gate
+    (see PLAN_RETROSPECTIVE_PROCESS_PLAN.md / retros/tdd-split-always-on):
+    the split is now unconditional for local-family dispatch, mirroring the
+    guided-decomposition planner. A story with no `tdd_split` key at all
+    still runs the test-author phase - there is no per-story escape hatch
+    anymore, matching the operator's directive that removing the toggle
+    meant "always on for every story", not "opt-in per story"."""
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     _write_manifest(plan_dir, "tdnoopt", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
     })
 
-    def _boom(*a, **k):
-        raise AssertionError("test-author phase must not run without story opt-in")
+    ran = False
 
-    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
+    def _run(*a, **k):
+        nonlocal ran
+        ran = True
+        return True
+
+    monkeypatch.setattr(p, "_run_test_author_phase", _run)
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9102))
     monkeypatch.setattr(pt, "plane_request",
@@ -12851,4 +12960,5 @@ def test_dispatch_story_tdd_split_story_not_opted_in_skips_phase(
     result = p.dispatch_story("tdnoopt", "S1")
 
     assert result["ok"] is True
-    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
+    assert ran is True
+    assert (worktree_root / "S1" / ".tdd_split_test_author_done").exists()

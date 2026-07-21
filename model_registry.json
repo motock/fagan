@@ -10,7 +10,7 @@
     "ollama": {
       "models": {
         "gpt-oss": {"tag": "gpt-oss:20b"},
-        "glm": {"tag": "glm-4.7-flash:cloud"},
+        "glm": {"tag": "glm-5.2:cloud"},
         "devstral": {"tag": "devstral:24b"}
       }
     },
@@ -23,5 +23,7 @@
       "models": {}
     }
   },
-  "roles": {}
+  "roles": {
+    "test_author": {"provider": "ollama", "model": "glm"}
+  }
 }

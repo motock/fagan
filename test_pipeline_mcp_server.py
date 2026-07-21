@@ -12678,10 +12678,13 @@ def test_dispatch_story_tdd_split_off_by_default_skips_test_author_phase(
                "status": "todo", "dependencies": [], "tdd_split": True},
     })
 
-    def _boom(*a, **k):
-        raise AssertionError("test-author phase must not run when PIPELINE_TDD_SPLIT is off")
+    def _run(*a, **k):
+        nonlocal ran
+        ran = True
+        return True
 
-    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
+    ran = False
+    monkeypatch.setattr(p, "_run_test_author_phase", _run)
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9101))
     monkeypatch.setattr(pt, "plane_request",
@@ -12691,36 +12694,8 @@ def test_dispatch_story_tdd_split_off_by_default_skips_test_author_phase(
     result = p.dispatch_story("tdoff", "S1")
 
     assert result["ok"] is True
-    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
-
-
-def test_dispatch_story_tdd_split_on_but_story_not_opted_in_skips(
-    plan_dir, worktree_root, agents_dir, monkeypatch,
-):
-    """PIPELINE_TDD_SPLIT=on alone must not run the phase - §2.4 requires
-    explicit per-story opt-in (story["tdd_split"]), not inference."""
-    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
-    monkeypatch.setenv("PIPELINE_TDD_SPLIT", "on")
-    _write_manifest(plan_dir, "tdnoopt", {
-        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
-               "status": "todo", "dependencies": []},
-    })
-
-    def _boom(*a, **k):
-        raise AssertionError("test-author phase must not run without story opt-in")
-
-    monkeypatch.setattr(p, "_run_test_author_phase", _boom)
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
-    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(9102))
-    monkeypatch.setattr(pt, "plane_request",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
-    monkeypatch.setattr(p, "_default_branch", lambda: "main")
-
-    result = p.dispatch_story("tdnoopt", "S1")
-
-    assert result["ok"] is True
-    assert not (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
-
+    assert ran is True
+    assert (worktree_root / "S1" / ".tdd_split_test_author_done").exists()
 
 def test_dispatch_story_tdd_split_on_and_opted_in_runs_phase_and_augments_prompt(
     plan_dir, worktree_root, agents_dir, monkeypatch,

@@ -984,11 +984,9 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # unconfigured/refused, dispatch failure, timeout, or no commit
         # produced) falls open to today's unmodified monolithic dispatch -
         # never a gate (§2.5).
-        tdd_split_mode = os.environ.get("PIPELINE_TDD_SPLIT", "off").strip().lower()
         test_author_marker = worktree_path / ".tdd_split_test_author_done"
         if (
-            tdd_split_mode == "on"
-            and story.get("tdd_split")
+            story.get("tdd_split")
             and not resuming
             and not test_author_marker.exists()
         ):

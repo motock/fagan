@@ -999,9 +999,10 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             ):
                 test_author_marker.write_text("ok\n")
 
-        # GUIDED_DECOMPOSITION_PLAN.md: PIPELINE_DECOMPOSE=cloud|local turns
-        # on a "tech lead" checklist for the weak local executor. Default
-        # "off" - opt-in, per Secure Defaults. Gated on:
+        # GUIDED_DECOMPOSITION_PLAN.md: a "tech lead" checklist is always on
+        # for the weak local executor (the on/off toggle was removed; the
+        # planner is now unconditionally enabled for local-family dispatch).
+        # Gated on:
         #   - a local-family backend (the crutch exists for the weak local
         #     executor; Claude doesn't need it)
         #   - not resuming (plan once on the story's first dispatch; a
@@ -1010,8 +1011,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # The LLM call itself is best-effort (_run_planner fails open to
         # None) so a broken/slow/rate-limited planner never blocks or
         # corrupts dispatch - the story simply proceeds with no checklist,
-        # exactly like PIPELINE_DECOMPOSE=off.
-        decompose_mode = os.environ.get("PIPELINE_DECOMPOSE", "off").strip().lower()
+        # exactly like an unconfigured (fail-open) planner.
         # H3 ablation (GUIDED_DECOMPOSITION_PLAN.md §4.1's G-cloud-noscratch
         # condition): default "on" ships the persistent scratchpad; "off"
         # tests whether the checklist alone accounts for the benefit,
@@ -1023,13 +1023,12 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         )
         plan_path = worktree_path / ".agent_plan.md"
         if (
-            decompose_mode in ("cloud", "local")
-            and dispatch_backend in _LOCAL_BACKEND_NAMES
+            dispatch_backend in _LOCAL_BACKEND_NAMES
             and not resuming
             and not plan_path.exists()
         ):
             plan_text = _run_planner(
-                story.get("agent_instructions", ""), mode=decompose_mode,
+                story.get("agent_instructions", ""),
                 dispatch_backend=dispatch_backend, local_model=spec["model"],
                 include_scratchpad=scratchpad_on,
                 plan_role_config=_plan_role_config(plan_name),
@@ -1104,12 +1103,9 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # feedback format on any planner failure - identical contract
             # to the initial-dispatch checklist.
             fix_checklist = None
-            if (
-                decompose_mode in ("cloud", "local")
-                and dispatch_backend in _LOCAL_BACKEND_NAMES
-            ):
+            if dispatch_backend in _LOCAL_BACKEND_NAMES:
                 fix_checklist = _run_rework_planner(
-                    review_feedback, mode=decompose_mode,
+                    review_feedback,
                     dispatch_backend=dispatch_backend, local_model=spec["model"],
                     plan_role_config=_plan_role_config(plan_name),
                 )

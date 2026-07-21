@@ -18,12 +18,8 @@
 		<string>local</string>
 		<key>PIPELINE_BACKEND_REVIEW</key>
 		<string>claude</string>
-		<key>PIPELINE_DECOMPOSE</key>
-		<string>cloud</string>
 		<key>PIPELINE_DECOMPOSE_SCRATCHPAD</key>
 		<string>on</string>
-		<key>PIPELINE_DECOMPOSE_CLOUD_MODEL</key>
-		<string>sonnet</string>
 		<key>PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS</key>
 		<string>5400</string>
 		<key>PIPELINE_LOCAL_MAX_STEPS</key>

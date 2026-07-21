@@ -609,6 +609,42 @@ dashboard's per-story modal (the Tier 0 progress view).
 
 ---
 
+## TDD-split (test-author phase)
+
+A weak local implementer often implements *against its own buggy tests* — it
+writes the test and the impl in one pass, so a wrong test hides a wrong impl.
+TDD-split breaks that coupling: a **separate test-author pass** writes the red
+tests first (a real commit in the worktree), and only then does the executor
+start, implementing against tests it did not author. The same-model split was
+measured to *hurt* (a model authoring its own tests read-loop-parks vs. no
+split — see `TDD_SPLIT_PRODUCTION_PLAN.md`), so the test-author role
+**must resolve to a different backend+model than dispatch** or the split is
+skipped entirely (fail-open to monolithic dispatch, never a gate).
+
+It is **always on for stories that opt in** via the per-story `tdd_split: true`
+field — there is no global on/off toggle (the legacy `PIPELINE_TDD_SPLIT` env
+var was removed and is now a harmless dead letter if a stale operator
+environment still exports it). Opt-in is solely the per-story field, never
+inferred from prose. The phase is gated on:
+
+- the story explicitly opting in (`story["tdd_split"]`),
+- not resuming (a rework redispatch acts on the *same* committed tests; it
+  never gets a fresh test-authoring pass), and
+- no existing `.tdd_split_test_author_done` marker in the worktree
+  (belt-and-suspenders with `not resuming`).
+
+The test-author role is independently routable (set
+`PIPELINE_BACKEND_TEST_AUTHOR` to pin its provider; configure `test_author` in
+`model_registry.json`'s `roles` block or a plan's `role_config`). If the role
+is unconfigured, resolves to the same backend+model as dispatch, or the
+authoring dispatch fails/times out/produces no commit, the phase **fails open**
+— no marker is written, the executor prompt is not augmented, and the story
+proceeds as ordinary monolithic dispatch. On success the executor prompt is
+augmented with a never-touch-tests steering line so the executor implements
+against the committed tests rather than rewriting them.
+
+---
+
 ## Configuration (environment variables)
 
 Set global vars in your shell profile; set per-project overrides in the project's

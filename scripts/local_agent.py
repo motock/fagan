@@ -247,6 +247,67 @@ def _no_tool_nudge(consecutive: int) -> str:
         "fix or delete the failing test rather than the implementation, then call "
         "done. Otherwise call a tool now (do not write prose)."
     )
+
+
+def _repetition_nudge() -> str:
+    """Nudge for a read-only action repeated 3x. Steers the model AWAY from
+    reading, not back into it.
+
+    The old text said "Use view_file to read the actual current file contents
+    and re-read the error's file:line" — i.e. it told the model to repeat the
+    exact read that tripped the guard. With PARK_ENABLED=0 (the scheduler
+    plist) the per-target guard nudges but never parks, so gpt-oss:20b re-read
+    the same file for 31 of 60 steps on 2026-07-20, never editing. The guard
+    already intercepts the call (run_tool is never reached on the 3rd+ read),
+    so the only lever is what the nudge says — it must direct a concrete
+    non-reading action."""
+    return (
+        "You have repeated the same read-only action 3 times with no progress. "
+        "STOP reading — you already have this file's contents in context; "
+        "reading it again will not change them. Either:\n"
+        "1. str_replace or replace_lines to make the edit you keep reading for, or\n"
+        "2. run `pytest -q <test_file>` to get feedback on what actually needs fixing.\n"
+        "Do not view_file this path again. Fix the ROOT cause in the correct file."
+    )
+
+
+def _whitespace_visible(line: str) -> str:
+    """Make leading whitespace visible so the model can see why its str_replace
+    old_str did not match: middle-dot (·) for spaces, arrow (→) for tabs.
+    Interior whitespace is left intact so the line stays readable and copiable.
+    Leading whitespace is the usual mismatch cause (tabs vs spaces)."""
+    stripped = line.lstrip(" \t")
+    lead = line[: len(line) - len(stripped)]
+    lead = lead.replace(" ", "·").replace("\t", "→")
+    return lead + stripped
+
+
+def _str_replace_not_found_diag(path_str: str, text: str, old_str: str) -> str:
+    """Diagnostic for str_replace's 'old_str not found': show up to 3 nearby
+    lines (located by the first non-whitespace token of old_str) with line
+    numbers and visible whitespace, and steer to replace_lines so the model
+    can sidestep the byte-exact-match requirement it cannot meet.
+
+    Keeps the 'ERROR: old_str not found in <path>.' prefix so the main loop's
+    success-gating (result.startswith('ERROR')) still treats it as a failure."""
+    lines = text.splitlines(keepends=True)
+    tok = next((w for w in old_str.split() if w), None)
+    picks: list[tuple[int, str]] = []
+    if tok:
+        for i, ln in enumerate(lines, 1):
+            if tok in ln:
+                picks.append((i, ln))
+                if len(picks) >= 3:
+                    break
+    if not picks:
+        picks = list(enumerate(lines[:3], 1))
+    shown = "".join(f"{i:4d}| {_whitespace_visible(ln)}" for i, ln in picks)
+    return (
+        f"ERROR: old_str not found in {path_str}. Nearest lines "
+        f"(leading whitespace shown as · for space, → for tab):\n{shown}"
+        f"Use replace_lines(path, start, end, new_str) with those line numbers, "
+        f"or copy old_str exactly from the bytes above."
+    )
 # Qwen3 hybrid thinking control. Qwen3.6-27B (and other Qwen3 dense models)
 # emit a  Mattis... Mattis reasoning block by default; in this tool-calling
 # loop that breaks dispatch — the block lands in `content` with no native
@@ -306,7 +367,7 @@ READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINC
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior
 # edits is itself a sign of "spinning."
-MUTATING_TOOLS = frozenset({"create_file", "str_replace"})
+MUTATING_TOOLS = frozenset({"create_file", "str_replace", "replace_lines"})
 # Destructive git ops an agent must never run — they discard the branch's WIP
 # commits or working-tree changes. A blind-rework agent once ran
 # `git reset --hard <master>` mid-story and threw away its own tests-passed
@@ -352,17 +413,22 @@ PARK_ENABLED = os.environ.get("LOCAL_AGENT_PARK_ENABLED", "1") != "0"
 HARNESS_RULES = (
     "You are working inside a git repository (the current directory). Complete "
     "the task by calling tools — do NOT explain a plan in prose, call a tool. "
-    "Use create_file for NEW files and str_replace to edit EXISTING files; use "
-    "bash only to run commands like tests and git (never to create/edit files). "
-    "Use view_file to read a file's real contents before editing it, and read "
-    "the file:line in any error before changing code. Commit your work with git "
-    "before finishing. Call done only after your changes are committed and any "
-    "tests pass."
+    "Use create_file for NEW files and str_replace or replace_lines to edit "
+    "EXISTING files; use bash only to run commands like tests and git (never "
+    "to create/edit files). Read each file ONCE with view_file before your "
+    "first edit to it — do NOT view_file a path you have already read this "
+    "run; its contents are in your context and reading it again wastes your "
+    "step budget. Use `git diff` to see your own pending changes. Run "
+    "`pytest -q <test_file>` after your first edit to a file that has tests — "
+    "not at the end — so test feedback tells you which file actually needs "
+    "work. Read the file:line in any error before changing code. Commit your "
+    "work with git before finishing. Call done only after your changes are "
+    "committed and any tests pass."
 )
 
 TOOLS = [
     {"type": "function", "function": {
-        "name": "create_file", "description": "Create a new file, or overwrite one with its full corrected contents. To overwrite a file that already exists on disk, view_file it first, then create_file with the complete new contents (a whole-file rewrite is preferred over str_replace for the file you are implementing).",
+        "name": "create_file", "description": "Create a new file, or overwrite one with its full corrected contents. To overwrite a file that already exists on disk, view_file it first, then create_file with the complete new contents. Prefer str_replace or replace_lines for targeted edits to existing files; only use create_file for files under 200 lines or brand-new files — never create_file a file over 200 lines, a full rewrite drops unrelated content.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {
@@ -370,6 +436,12 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "old_str": {"type": "string"}, "new_str": {"type": "string"}},
             "required": ["path", "old_str", "new_str"]}}},
+    {"type": "function", "function": {
+        "name": "replace_lines", "description": "Replace lines start..end (1-indexed, inclusive) in an existing file with new_str. Use this when str_replace's old_str will not match (e.g. whitespace differences): give the exact line numbers from `nl -ba <file> | sed -n '<start>,<end>p'` and the new content; no byte-exact old_str is required.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "start": {"type": "integer"},
+            "end": {"type": "integer"}, "new_str": {"type": "string"}},
+            "required": ["path", "start", "end", "new_str"]}}},
     {"type": "function", "function": {
         "name": "view_file",
         "description": (
@@ -882,7 +954,7 @@ def run_tool(fn, args) -> str:
         text = path.read_text()
         n = text.count(args["old_str"])
         if n == 0:
-            return f"ERROR: old_str not found in {args['path']}."
+            return _str_replace_not_found_diag(args["path"], text, args["old_str"])
         if n > 1:
             return f"ERROR: old_str occurs {n} times in {args['path']}; include more context to make it unique."
         new_text = text.replace(args["old_str"], args["new_str"])
@@ -896,6 +968,37 @@ def run_tool(fn, args) -> str:
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         return f"edited {args['path']}" + (f" ({note})" if note else "")
+    if fn == "replace_lines":
+        path = CWD / args["path"]
+        if not path.exists():
+            return f"ERROR: {args['path']} does not exist (use create_file for new files)."
+        start = args.get("start")
+        end = args.get("end")
+        if not isinstance(start, int) or not isinstance(end, int):
+            return (f"ERROR: replace_lines requires integer start and end "
+                    f"(got start={start!r}, end={end!r}).")
+        if start < 1:
+            return f"ERROR: line_start {start} must be >= 1 (1-indexed)."
+        if end < start:
+            return f"ERROR: line_end {end} is less than line_start {start}."
+        lines = path.read_text().splitlines(keepends=True)
+        if start > len(lines):
+            return f"ERROR: line_start {start} is beyond {args['path']}'s {len(lines)} lines."
+        new_str = args.get("new_str", "")
+        # Keep the block newline-terminated so we don't fuse the next line on.
+        if new_str and not new_str.endswith("\n"):
+            new_str = new_str + "\n"
+        new_text = "".join(lines[:start - 1]) + new_str + "".join(lines[end:])
+        err = _python_syntax_error(args["path"], new_text)
+        note = None
+        if err:
+            repair = _try_repair_indentation(new_text)
+            if repair is None:
+                return _record_syntax_rejection(args["path"], err)
+            new_text, note = repair
+        path.write_text(new_text)
+        _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
+        return f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")
     if fn == "view_file":
         path = CWD / args["path"]
         if not path.exists():
@@ -1072,6 +1175,13 @@ def main() -> int:
     # the step cap binds and the run ends in the WIP-commit terminal path.
     suite_rejections = 0
     consecutive_no_tool = 0
+    # Failing-str_replace loop guard: str_replace is excluded from the
+    # per-target repetition guard (each old_str differs), so a no-match loop
+    # on one file runs uncaught. Track consecutive FAILED str_replace per
+    # path; after 2, steer to replace_lines. Reset on a successful str_replace
+    # to that path (and re-arm the nudge so a second stall is caught too).
+    failed_sr: dict[str, int] = {}
+    nudged_sr_fail: set[str] = set()
     start_time = time.monotonic()
 
     for step in range(MAX_STEPS):
@@ -1159,16 +1269,18 @@ def main() -> int:
                 return 0
 
             sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
-            # str_replace calls are excluded from the per-target repetition
-            # guard: each one produces a *different* file state (the
-            # `old_str` next time will differ, or `run_tool` will reject
-            # it as "not found"), so a sequence of edits to the same file
-            # is a legitimate fix-build cycle, not a repetition. The
-            # read-heavy guard (MUTATING_TOOLS) still catches a model stuck
-            # in a bad edit loop — str_replace calls reset that window.
+            # str_replace and replace_lines calls are excluded from the
+            # per-target repetition guard: each one produces a *different*
+            # file state (the `old_str`/line-range next time will differ, or
+            # `run_tool` will reject it as "not found"), so a sequence of
+            # edits to the same file is a legitimate fix-build cycle, not a
+            # repetition. The read-heavy guard (MUTATING_TOOLS) still catches
+            # a model stuck in a bad edit loop — mutating calls reset that
+            # window. The failing-str_replace guard below catches the no-match
+            # loop str_replace's exclusion would otherwise hide.
             #
             above_threshold = False
-            if fn != "str_replace":
+            if fn not in ("str_replace", "replace_lines"):
                 seen[sig] = seen.get(sig, 0) + 1
                 if seen[sig] >= 3:
                     above_threshold = True
@@ -1178,10 +1290,7 @@ def main() -> int:
                 if not nudged_repeat:
                     nudged_repeat = True
                     print("   [repetition nudge]", flush=True)
-                    messages.append({"role": "user", "content": (
-                        "You have repeated the same action 3 times with no progress. STOP. "
-                        "Use view_file to read the actual current file contents and re-read the "
-                        "error's file:line, then fix the ROOT cause in the correct file.")})
+                    messages.append({"role": "user", "content": _repetition_nudge()})
                     break
                 print("   [parking: repeated action after nudge]", flush=True)
                 if worktree_dirty():
@@ -1230,8 +1339,34 @@ def main() -> int:
                 if succeeded:
                     current = seen.get(sig, 0)
                     seen.clear()
-                    if fn != "str_replace":
+                    if fn not in ("str_replace", "replace_lines"):
                         seen[sig] = current
+
+            # Failing-str_replace loop guard. str_replace is excluded from the
+            # per-target repetition guard above, so a no-match loop on one file
+            # (the 2026-07-20 server.py wall: gpt-oss retried slightly-different
+            # old_str values that never matched the file's whitespace) runs
+            # uncaught. After 2 consecutive FAILED str_replace on the same path,
+            # steer to replace_lines (line numbers, no byte-exact match). A
+            # successful str_replace resets the counter and re-arms the nudge.
+            if fn == "str_replace":
+                sr_path = args.get("path", "")
+                if isinstance(tool_result, str) and tool_result.startswith("ERROR"):
+                    failed_sr[sr_path] = failed_sr.get(sr_path, 0) + 1
+                    if failed_sr[sr_path] >= 2 and sr_path not in nudged_sr_fail:
+                        nudged_sr_fail.add(sr_path)
+                        print(f"   [str_replace-fail nudge: {failed_sr[sr_path]} "
+                              f"failed matches on {sr_path}]", flush=True)
+                        messages.append({"role": "user", "content": (
+                            f"Your last {failed_sr[sr_path]} str_replace calls on {sr_path} "
+                            f"did not match — you cannot construct a matching old_str (likely "
+                            f"a whitespace difference). STOP retrying str_replace on this file. "
+                            f"Run `nl -ba {sr_path} | sed -n '<start>,<end>p'` to get exact line "
+                            f"numbers, then use replace_lines(path, start, end, new_str) which "
+                            f"needs no byte-exact old_str.")})
+                else:
+                    failed_sr[sr_path] = 0
+                    nudged_sr_fail.discard(sr_path)
 
             # Read-heavy-pattern guard. Tracked separately from the per-target
             # repetition guard: the per-target one misses this case because

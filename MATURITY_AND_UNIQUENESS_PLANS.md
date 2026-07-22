@@ -91,15 +91,40 @@ Reference comparables:
 ### A3. Stabilize the active bug surface
 
 - [ ] **Bound the failure-mode discovery rate — trending the wrong way.**
-      19 modes at this doc's 2026-07-17 baseline; now **30** (Modes 22-24
+      19 modes at this doc's 2026-07-17 baseline; now **32** (Modes 22-24
       found 2026-07-19/20; Mode 28 found 2026-07-21 shipping the always-on
       TDD-split story — see `retros/tdd-split-always-on_2026-07-21.md`; Modes
       29-30 found the same day fixing TDD-split's own opt-in gap — see
       `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`; Mode 30
       is a scheduler-vs-manual-git race that corrupted a source file on
-      disk, the most severe of the three). Add a "no new modes for N
-      benchmark runs" gate as a stability signal — not done, and the
-      discovery rate argues this is more urgent than when first written.
+      disk, the most severe of the three; Modes 31-32 found 2026-07-22
+      dispatching the Mode 24/28 fix itself — see `project_dispatch_failure_modes.md`
+      for full writeups). Add a "no new modes for N benchmark runs" gate as
+      a stability signal — not done, and the discovery rate argues this is
+      more urgent than when first written.
+- [ ] **Mode 31 (2026-07-22, NOT fixed) — confident off-task drift.** A
+      correctly-scoped, narrowly-instructed dispatch (verified via its own
+      transcript) abandoned the assigned task and invented an unrelated one
+      instead — 20+ steps of real, coherent-looking tool calls (greps, file
+      reads, a genuine `create_file`, a real `pytest` run) on a completely
+      different subject. Distinct from a read-loop park: it looks
+      productive to any "did it call tools / did it write files" health
+      check, so only a content/on-topic diff catches it. No guard exists
+      for this today.
+- [ ] **Mode 32 (2026-07-22, NOT fixed) — local-model content corruption +
+      stall past the configured timeout.** `gemma4:12b-mlx` (a custom
+      MLX-imported Ollama model) produced a truncated file ending in a
+      literal `# ... (rest of file remains same)` artifact and deleted
+      still-imported functions, then later hung 15+ minutes in a live
+      `sock_recv`/`poll` with zero progress — well past
+      `READ_SILENCE_SECONDS=180`'s supposed bound — while Ollama itself
+      stayed responsive to other requests. Suggests some LLM call path
+      isn't covered by the streaming/silence-timeout protection. Sanity-check
+      this model outside the harness (bare chat completion) before drawing
+      any capability conclusion — `/api/ps` shows no `family`/
+      `quantization_level`, consistent with a serving/plumbing gap rather
+      than a weights problem (same lesson as the earlier MLX tool-format
+      investigation).
 - [ ] **P0 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
       — Mode 29: guard `review_story`/the scheduler against dispatching a
       review pass on an already-`done`/merged story.** A redundant tick fired
@@ -128,14 +153,25 @@ Reference comparables:
       (isolate the scheduler's git bookkeeping from the main working tree,
       or require pausing it before manual git surgery). `advance-scheduler`
       job definition / its git invocation path.
-- [ ] **P0 (from `retros/tdd-split-always-on_2026-07-21.md`) — track prior
-      findings' target paths; refuse silent re-approval.** Fixes Mode 28 and
-      Mode 24 with one mechanism: when a prior verdict was `REQUEST_CHANGES`,
-      the next review on a new SHA must check the new HEAD's changed-paths
-      intersect the prior Blocking findings' target files, or downgrade to
-      `REQUEST_CHANGES` instead of allowing APPROVE. Highest-leverage open
-      item — this is the gap that let an incomplete story merge.
-      `pipeline/ci.py` `review_story` + reviewer output parsing.
+      **Re-confirmed live 2026-07-22** during the Mode 24/28 direct repair —
+      `pause_plan` (not merely moving a story's status off dispatch-eligible)
+      was the only thing that actually stopped the race; used reactively,
+      not proactively. **Also now higher-exposure**: PR #159 (same day) added
+      an opportunistic local-branch sync that runs `git fetch`/`merge --ff-only`
+      against `REPO_ROOT` on *every* tick for every unpaused plan, not just
+      on dispatch — raising how often this exact surface gets touched. Still
+      unfixed; `pause_plan` before any manual git surgery is now more
+      load-bearing advice than when this bullet was written, not less.
+- [x] **P0 (from `retros/tdd-split-always-on_2026-07-21.md`) — track prior
+      findings' target paths; refuse silent re-approval** (2026-07-22, PR
+      #158). Fixed Mode 28 and Mode 24 with one mechanism: `review_story`
+      (in `pipeline/server.py`, not `pipeline/ci.py` as originally noted
+      here — the A1 decomposition had already moved it) now records
+      `last_review_findings` on every `REQUEST_CHANGES` and downgrades a
+      later APPROVE back to `REQUEST_CHANGES` if a previously-flagged file
+      was never touched since. Took 5 dispatch attempts across gemma4:12b-mlx
+      and gpt-oss:20b to land (surfacing Modes 31-32 along the way) before
+      being implemented directly and merged through the normal review gate.
 - [ ] **P0 (same retro) — stabilize the flaky-under-load read-heavy/
       repetition-guard tests.** 11 tests pass isolated but fail under
       full-suite load, misleading local-model workers into chasing red

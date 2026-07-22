@@ -678,6 +678,122 @@ def test_oracle_bash_passes_non_destructive_commands_through(tmp_path, monkeypat
     assert result == "ok"
 
 
+# ---------- restore_file tool (ported from local_agent.py, 2026-07-22) ----------
+
+def test_oracle_restore_file_reverts_to_last_commit(tmp_path, monkeypatch):
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    f = tmp_path / "a.py"
+    f.write_text("original\n")
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    f.write_text("a mess\n")
+
+    result = lao.run_tool("restore_file", {"path": "a.py"})
+
+    assert not result.startswith("ERROR"), f"unexpected error: {result}"
+    assert f.read_text() == "original\n"
+
+
+def test_oracle_restore_file_requires_path():
+    result = lao.run_tool("restore_file", {})
+    assert result.startswith("ERROR")
+
+
+def test_oracle_destructive_git_op_error_points_to_restore_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    result = lao.run_tool("bash", {"command": "git reset --hard HEAD"})
+    assert "restore_file" in result
+
+
+# ---------- net-progress guard (ported from local_agent.py, 2026-07-22) ----------
+
+def test_oracle_net_progress_guard_parks_after_max_steps_with_no_mutation(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "NET_PROGRESS_MAX_STEPS", 3)
+    monkeypatch.setattr(lao, "READ_HEAVY_WINDOW", 1000)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(10)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 3, f"expected net-progress park, got rc={rc}\noutput: {out!r}"
+    assert "no successful edit in 3 steps" in out, f"output: {out!r}"
+    assert len(calls) == 3, f"expected 3 chat() calls before parking, got {len(calls)}"
+
+
+def test_oracle_net_progress_guard_resets_on_successful_mutation(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "NET_PROGRESS_MAX_STEPS", 3)
+    monkeypatch.setattr(lao, "READ_HEAVY_WINDOW", 1000)
+    responses = (
+        [("bash", {"command": "cat a"}), ("bash", {"command": "cat b"})]
+        + [("create_file", {"path": "new.py", "content": "# real code\n"})]
+        + [("bash", {"command": "cat c"})]
+        + [("done", {"summary": "wrote the module"})]
+    )
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, (
+        f"the mutation should reset the counter so the run reaches done, "
+        f"not park; got rc={rc}\noutput: {out!r}"
+    )
+
+
+# ---------- view_file range-aware repetition signature (ported, 2026-07-22) ----------
+
+def test_oracle_view_file_different_ranges_do_not_trip_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 1, "line_end": 50}),
+        ("view_file", {"path": "big.py", "line_start": 500, "line_end": 550}),
+        ("view_file", {"path": "big.py", "line_start": 1000, "line_end": 1050}),
+        ("view_file", {"path": "big.py", "line_start": 1500, "line_end": 1550}),
+        ("done", {"summary": "oriented"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected clean finish, got rc={rc}\noutput: {out!r}"
+    assert "[repetition nudge]" not in out, f"output: {out!r}"
+
+
+def test_oracle_view_file_same_range_three_times_still_trips_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 100, "line_end": 150})
+        for _ in range(4)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    lao.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, f"output: {out!r}"
+
+
 def test_oracle_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatch, capsys):
     """Strict/wedging path on the oracle harness: when devstral RE-READS an
     already-seen target without ever calling create_file/str_replace, the

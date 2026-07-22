@@ -798,6 +798,195 @@ def test_bash_passes_non_destructive_commands_through(tmp_path, monkeypatch, cmd
     assert result == "ok"              # ran and returned output
 
 
+# ---------- restore_file tool (2026-07-22 harness-improvement plan) ----------
+# The destructive-git-op guard correctly blocks `git reset --hard`/`git
+# checkout -- <path>`, but observed live: a model that WANTS exactly that (its
+# own edits to one file went wrong and it wants a clean slate) got blocked
+# three times with no alternative it could actually use, and spent the rest
+# of its step budget stuck. restore_file is the safe, scoped escape hatch:
+# git checkout HEAD -- <path>, one file only, reachable directly (not through
+# the blocked bash patterns).
+
+def test_restore_file_reverts_to_last_commit(tmp_path, monkeypatch):
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    f = tmp_path / "a.py"
+    f.write_text("original\n")
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    f.write_text("a mess the model made\n")
+
+    result = la.run_tool("restore_file", {"path": "a.py"})
+
+    assert not result.startswith("ERROR"), f"unexpected error: {result}"
+    assert f.read_text() == "original\n"
+
+
+def test_restore_file_leaves_other_files_untouched(tmp_path, monkeypatch):
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    a, b = tmp_path / "a.py", tmp_path / "b.py"
+    a.write_text("original a\n")
+    b.write_text("original b\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    a.write_text("messed up a\n")
+    b.write_text("a real in-progress edit to b\n")
+
+    la.run_tool("restore_file", {"path": "a.py"})
+
+    assert a.read_text() == "original a\n"
+    assert b.read_text() == "a real in-progress edit to b\n"
+
+
+def test_restore_file_requires_path():
+    result = la.run_tool("restore_file", {})
+    assert result.startswith("ERROR")
+
+
+def test_restore_file_reports_git_error(tmp_path, monkeypatch):
+    """A path git can't resolve (no repo, no such path in history) must
+    surface as a clear ERROR, not crash the loop."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    result = la.run_tool("restore_file", {"path": "nonexistent.py"})
+    assert result.startswith("ERROR")
+
+
+def test_destructive_git_op_error_points_to_restore_file(tmp_path, monkeypatch):
+    """The blocked-op message must name restore_file as the alternative for
+    exactly the intent it's blocking (discard my own edits to one file)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    result = la.run_tool("bash", {"command": "git reset --hard HEAD"})
+    assert "restore_file" in result
+
+
+# ---------- net-progress guard (2026-07-22) ----------
+# The per-target and read-heavy guards both reset on any successful mutation,
+# and the no-tool-call cap only counts CONSECUTIVE narration turns. A run
+# that alternates one edit with long stretches of distinct, non-repeating
+# inspection and isolated give-up narration evades both indefinitely -
+# observed live: 50 of 60 steps with zero further edits after an early one,
+# no guard ever fired. This guard tracks steps since the last successful
+# mutation directly.
+
+def test_net_progress_guard_parks_after_max_steps_with_no_mutation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 3)
+    # Large so the read-heavy guard doesn't also fire and confuse the signal.
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(10)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 3, f"expected net-progress park, got rc={rc}\noutput: {out!r}"
+    assert "no successful edit in 3 steps" in out, f"output: {out!r}"
+    assert len(calls) == 3, (  # steps 0,1,2 run; the check at step 3 parks before calling chat()
+        f"expected exactly 3 chat() calls before parking, got {len(calls)}\noutput: {out!r}"
+    )
+
+
+def test_net_progress_guard_resets_on_successful_mutation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 3)
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    responses = (
+        [("bash", {"command": "cat a"}), ("bash", {"command": "cat b"})]
+        + [("create_file", {"path": "new.py", "content": "# real code\n"})]
+        + [("bash", {"command": "cat c"})]
+        + [("done", {"summary": "wrote the module"})]
+    )
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, (
+        f"the mutation at call 3 should reset the counter so the run "
+        f"reaches done, not park; got rc={rc}\noutput: {out!r}"
+    )
+    assert "no successful edit" not in out, f"output: {out!r}"
+
+
+def test_net_progress_guard_park_disabled_renudges_instead_of_terminating(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 2)
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(8)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc != 3, f"PARK_ENABLED=False must not terminate; got rc={rc}\noutput: {out!r}"
+    assert out.count("no successful edit in") >= 2, (
+        f"expected the guard to re-fire (not just once), output: {out!r}"
+    )
+    assert len(calls) > 3, (
+        f"disabled parking should let the run continue past the first "
+        f"trip, got {len(calls)} chat calls"
+    )
+
+
+# ---------- view_file range-aware repetition signature (2026-07-22) ----------
+# Reading several DIFFERENT regions of one large file (routine when orienting
+# in a multi-hundred-line function) must not share a signature with
+# re-reading the SAME region 3x - the guard's per-path-only key made both
+# indistinguishable, so a story instructing the model to consult 6 different
+# locations in one 2500-line file tripped a false-positive lockout almost
+# immediately.
+
+def test_view_file_different_ranges_do_not_trip_repetition_guard(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 1, "line_end": 50}),
+        ("view_file", {"path": "big.py", "line_start": 500, "line_end": 550}),
+        ("view_file", {"path": "big.py", "line_start": 1000, "line_end": 1050}),
+        ("view_file", {"path": "big.py", "line_start": 1500, "line_end": 1550}),
+        ("done", {"summary": "oriented"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected clean finish, got rc={rc}\noutput: {out!r}"
+    assert "[repetition nudge]" not in out, (
+        f"4 different regions of one file must not look like repetition; output: {out!r}"
+    )
+
+
+def test_view_file_same_range_three_times_still_trips_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 100, "line_end": 150})
+        for _ in range(4)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, (
+        f"the SAME range 3x must still be caught as repetition; output: {out!r}"
+    )
+
+
 @pytest.mark.parametrize("content,expected_name", [
     ('```json\r\n{"name": "bash", "parameters": {"command": "ls"}}\r\n```', "bash"),
     ('{"name": "done", "arguments": {"summary": "ok"}}', "done"),

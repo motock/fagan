@@ -364,6 +364,25 @@ READ_HEAVY_WINDOW = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_WINDOW", "6"))
 # still parks at the strict 2 * READ_HEAVY_WINDOW (12) — only all-distinct
 # exploration gets the longer leash, and it is still bounded, not disabled.
 READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINCT_WINDOWS", "3"))
+# Net-progress guard (2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD): the
+# per-target and read-heavy guards above both reset on ANY successful
+# mutation, and the no-tool-call cap only counts CONSECUTIVE narration turns
+# - a run that alternates "one small edit" with long stretches of distinct,
+# non-repeating inspection (git status, git log, git diff, ...) and isolated
+# give-up narration (each followed by a real tool call, so the counter never
+# accumulates) evades every existing guard indefinitely. Observed live: 50 of
+# 60 steps spent this way with zero further successful edits after an early
+# one. This guard tracks steps since the last successful mutation directly -
+# immune to how those unproductive steps are distributed or how many
+# different-looking-but-equally-useless actions fill them.
+# Default (30) is deliberately ABOVE the read-heavy guard's own distinct-
+# exploration cap (READ_HEAVY_WINDOW + READ_HEAVY_DISTINCT_WINDOWS *
+# READ_HEAVY_WINDOW = 6 + 3*6 = 24 by default), so this coarser, later-firing
+# net doesn't preempt that guard's own already-tuned park message for the
+# pure-distinct-reads-forever case it already handles. It exists to catch
+# the pattern that guard CANNOT see: edits interleaved with unproductive
+# investigation, which resets that guard's window every time.
+NET_PROGRESS_MAX_STEPS = int(os.environ.get("LOCAL_AGENT_NET_PROGRESS_MAX_STEPS", "30"))
 # Mutating tools: any that produce new code in the worktree. Anything else
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior
@@ -456,6 +475,11 @@ TOOLS = [
             "line_start": {"type": "integer"},
             "line_end": {"type": "integer"}},
             "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "restore_file",
+        "description": "Discard your changes to ONE file and restore it to the last commit (git checkout HEAD -- <path>). Use this when your edits to a file have gone wrong and you want a clean slate for it specifically, instead of str_replace/replace_lines patches on top of a mess. Does not touch any other file.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {
         "name": "bash", "description": "Run a bash command (run tests, git, etc.). Do NOT use to create or edit files.",
         "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
@@ -1103,6 +1127,19 @@ def run_tool(fn, args) -> str:
             + f"\n... [truncated; {args['path']} has {len(lines)} lines total — "
               f"call view_file again with line_start/line_end to see more]"
         )
+    if fn == "restore_file":
+        path_str = args.get("path", "")
+        if not path_str:
+            return "ERROR: restore_file requires a path."
+        result = subprocess.run(
+            ["git", "checkout", "HEAD", "--", path_str],
+            cwd=CWD, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return (f"ERROR: could not restore {path_str} to HEAD: "
+                     f"{result.stderr.strip()[:300]}")
+        return (f"restored {path_str} to its last commit (HEAD) — any "
+                 f"uncommitted changes to this file are gone. Other files are untouched.")
     if fn == "bash":
         cmd = args.get("command", "")
         # Refuse destructive git ops before they reach the shell — they discard
@@ -1116,7 +1153,11 @@ def run_tool(fn, args) -> str:
                 f"commits or uncommitted changes). To change a file, use "
                 f"str_replace; to unstage, use `git reset HEAD <path>` (no "
                 f"--hard). To undo a recent commit but keep the changes, use "
-                f"`git reset HEAD~1` (default --mixed, keeps the working tree)."
+                f"`git reset HEAD~1` (default --mixed, keeps the working tree). "
+                f"To throw away your OWN uncommitted edits to one specific file "
+                f"and start it clean from the last commit, use the restore_file "
+                f"tool on that path — it does exactly this, safely, without "
+                f"touching any other file."
             )
         # Acquire the cross-dispatch heavy-build lock for any command whose
         # first token is a known build/test executable (cargo, npm, mvn,
@@ -1260,6 +1301,7 @@ def main() -> int:
     # to that path (and re-arm the nudge so a second stall is caught too).
     failed_sr: dict[str, int] = {}
     nudged_sr_fail: set[str] = set()
+    last_progress_step = 0
     start_time = time.monotonic()
 
     for step in range(MAX_STEPS):
@@ -1268,6 +1310,23 @@ def main() -> int:
             if worktree_dirty():
                 auto_wip_commit("wall-clock timeout")
             return 2
+        if step - last_progress_step >= NET_PROGRESS_MAX_STEPS:
+            print(f"[step {step}] no successful edit in {step - last_progress_step} steps "
+                  f"(last progress at step {last_progress_step}); parking", flush=True)
+            if worktree_dirty():
+                auto_wip_commit("no net progress")
+            if not PARK_ENABLED:
+                messages.append({"role": "user", "content": (
+                    f"You have made no successful file edit in the last "
+                    f"{step - last_progress_step} steps. Stop investigating "
+                    f"and make ONE concrete change now: str_replace/"
+                    f"replace_lines to fix something specific, restore_file "
+                    f"if a file's edits went wrong and you want to restart "
+                    f"it clean, or checkpoint if you need to save partial "
+                    f"progress before continuing.")})
+                last_progress_step = step
+            else:
+                return 3
         try:
             m = chat(messages)
         except httpx.HTTPStatusError as e:
@@ -1380,7 +1439,23 @@ def main() -> int:
                 print(f"[step {step}] DONE: {args.get('summary', '')}", flush=True)
                 return 0
 
-            sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
+            if fn == "view_file":
+                # Range-aware: reading several DIFFERENT regions of one large
+                # file (exactly what orienting in a multi-hundred-line
+                # function requires) is not repetition and must not share a
+                # signature with re-reading the SAME region. Bucket by 200-
+                # line window so near-identical ranges (e.g. an off-by-one
+                # retry) still count as the same target, but a genuinely
+                # different region does not. A bare call (no range - the
+                # file's head, truncated) keeps the old path-only signature,
+                # since re-issuing that exact call is always a true repeat.
+                ls, le = args.get("line_start"), args.get("line_end")
+                if isinstance(ls, int) and isinstance(le, int):
+                    sig = (fn, args.get("path"), ls // 200, le // 200)
+                else:
+                    sig = (fn, args.get("path"))
+            else:
+                sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
             # str_replace and replace_lines calls are excluded from the
             # per-target repetition guard: each one produces a *different*
             # file state (the `old_str`/line-range next time will differ, or
@@ -1463,6 +1538,7 @@ def main() -> int:
                     seen.clear()
                     if fn not in ("str_replace", "replace_lines"):
                         seen[sig] = current
+                    last_progress_step = step
 
             # Failing-str_replace loop guard. str_replace is excluded from the
             # per-target repetition guard above, so a no-match loop on one file

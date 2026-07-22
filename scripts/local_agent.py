@@ -45,6 +45,7 @@ made).
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -825,6 +826,64 @@ def _python_syntax_error(path_str: str, content: str) -> str | None:
     return None
 
 
+def _function_name_scopes(tree: ast.AST) -> dict[str, tuple[set[str], set[str]]]:
+    """Map each function's name to (assigned_names, loaded_names) within it.
+
+    Shallow and conservative on purpose: every Name node anywhere inside the
+    function body (including nested functions/comprehensions) is attributed
+    to the outer function rather than modeling real scope nesting, and two
+    functions sharing the same name (e.g. same-named methods on different
+    classes) collide in the returned dict - a false negative (the check
+    silently doesn't fire), never a false positive. Good enough for a
+    presence check ("was this name assigned/read anywhere near here"), not a
+    real data-flow analysis."""
+    scopes: dict[str, tuple[set[str], set[str]]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            assigned: set[str] = set()
+            loaded: set[str] = set()
+            for n in ast.walk(node):
+                if isinstance(n, ast.Name):
+                    if isinstance(n.ctx, ast.Store):
+                        assigned.add(n.id)
+                    elif isinstance(n.ctx, ast.Load):
+                        loaded.add(n.id)
+                elif isinstance(n, ast.arg):
+                    assigned.add(n.arg)
+            scopes[node.name] = (assigned, loaded)
+    return scopes
+
+
+def _newly_undefined_names(path_str: str, old_content: str, new_content: str) -> list[str]:
+    """Return "name (in function)" entries for every name whose only
+    assignment within a function existed in `old_content`, was read later in
+    that SAME function, and has been deleted by this edit while the read
+    survives in `new_content` - the exact shape of two separate live
+    incidents (gpt-oss:20b deleting `plan_role_config = _plan_role_config(...)`,
+    qwen3-coder:30b deleting `branch = ...`/`worktree = ...`), both of which
+    landed a NameError/UnboundLocalError that compile()-based syntax
+    checking cannot catch (an undefined name is a runtime error, not a
+    SyntaxError). Returns [] (never raises) on a non-.py path or when either
+    side fails to parse - a genuine syntax problem is `_python_syntax_error`'s
+    job, not this check's."""
+    if not path_str.endswith(".py"):
+        return []
+    try:
+        old_scopes = _function_name_scopes(ast.parse(old_content))
+        new_scopes = _function_name_scopes(ast.parse(new_content))
+    except SyntaxError:
+        return []
+    orphaned = []
+    for name, (old_assigned, old_loaded) in old_scopes.items():
+        if name not in new_scopes:
+            continue
+        new_assigned, new_loaded = new_scopes[name]
+        for var in sorted(old_assigned & old_loaded):
+            if var in new_loaded and var not in new_assigned:
+                orphaned.append(f"{var} (in {name})")
+    return orphaned
+
+
 def _try_repair_indentation(content: str) -> tuple[str, str] | None:
     """Attempt a deterministic, semantics-preserving indentation repair on
     `content` when compile() rejects it with an IndentationError (unexpected
@@ -965,6 +1024,15 @@ def run_tool(fn, args) -> str:
             if repair is None:
                 return _record_syntax_rejection(args["path"], err)
             new_text, note = repair
+        orphaned = _newly_undefined_names(args["path"], text, new_text)
+        if orphaned:
+            return (
+                f"ERROR: this edit to {args['path']} deletes the only assignment "
+                f"to {', '.join(orphaned)} while a use of it survives elsewhere - "
+                f"this will raise NameError/UnboundLocalError at runtime. Keep the "
+                f"assignment, remove the surviving use too, or replace it with an "
+                f"equivalent. The edit was NOT applied."
+            )
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         return f"edited {args['path']}" + (f" ({note})" if note else "")
@@ -981,7 +1049,8 @@ def run_tool(fn, args) -> str:
             return f"ERROR: line_start {start} must be >= 1 (1-indexed)."
         if end < start:
             return f"ERROR: line_end {end} is less than line_start {start}."
-        lines = path.read_text().splitlines(keepends=True)
+        old_text = path.read_text()
+        lines = old_text.splitlines(keepends=True)
         if start > len(lines):
             return f"ERROR: line_start {start} is beyond {args['path']}'s {len(lines)} lines."
         new_str = args.get("new_str", "")
@@ -996,6 +1065,15 @@ def run_tool(fn, args) -> str:
             if repair is None:
                 return _record_syntax_rejection(args["path"], err)
             new_text, note = repair
+        orphaned = _newly_undefined_names(args["path"], old_text, new_text)
+        if orphaned:
+            return (
+                f"ERROR: this edit to {args['path']} deletes the only assignment "
+                f"to {', '.join(orphaned)} while a use of it survives elsewhere - "
+                f"this will raise NameError/UnboundLocalError at runtime. Keep the "
+                f"assignment, remove the surviving use too, or replace it with an "
+                f"equivalent. The edit was NOT applied."
+            )
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         return f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")

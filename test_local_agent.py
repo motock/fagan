@@ -421,6 +421,116 @@ def test_create_file_accepts_valid_python_syntax(tmp_path, monkeypatch):
     assert (tmp_path / "mod.py").read_text() == "def foo():\n    return 1\n"
 
 
+def test_str_replace_rejects_edit_that_orphans_a_referenced_variable(tmp_path, monkeypatch):
+    """Reproduces the exact live failure mode from two separate local models
+    (gpt-oss:20b deleting `plan_role_config = _plan_role_config(plan_name)`,
+    qwen3-coder:30b deleting `branch = ...`/`worktree = ...`) while a
+    reference to the deleted name survived elsewhere in the same function -
+    both landed a NameError/UnboundLocalError in production code that
+    compile() alone cannot catch (undefined names are a runtime error, not a
+    SyntaxError). The edit must be rejected and the file left unchanged."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def review_story(x):\n"
+        "    worktree = x.get('worktree', '')\n"
+        "    if x.get('flag'):\n"
+        "        return worktree\n"
+        "    return None\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "    worktree = x.get('worktree', '')\n    if x.get('flag'):",
+        "new_str": "    if x.get('flag'):",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "worktree" in result
+    assert "review_story" in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
+def test_replace_lines_rejects_edit_that_orphans_a_referenced_variable(tmp_path, monkeypatch):
+    """Same failure mode as the str_replace case above, via replace_lines -
+    both mutating-edit tools must be covered since either can produce this
+    class of mistake."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def f(x):\n"
+        "    branch = f'agent/{x}'\n"
+        "    worktree = x\n"
+        "    return _run(worktree, branch)\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 3,
+        "new_str": "    # guard removed here\n",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "branch" in result
+    assert "worktree" in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
+def test_orphaned_variable_check_accepts_edit_that_removes_assignment_and_all_uses(
+    tmp_path, monkeypatch,
+):
+    """Boundary: a legitimate refactor that removes BOTH the assignment and
+    every reference to it together must NOT be falsely rejected - only a
+    deleted assignment with a SURVIVING reference is a bug."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text(
+        "def f(x):\n"
+        "    unused = x\n"
+        "    return unused\n"
+    )
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "    unused = x\n    return unused",
+        "new_str": "    return x",
+    })
+    assert result == "edited mod.py"
+    assert (tmp_path / "mod.py").read_text() == "def f(x):\n    return x\n"
+
+
+def test_orphaned_variable_check_ignores_names_already_broken_before_the_edit(
+    tmp_path, monkeypatch,
+):
+    """A name that was never assigned in the OLD content (already broken,
+    not this edit's fault) must not be flagged - the check only blames an
+    edit for a reference it orphaned, not for pre-existing breakage
+    elsewhere in the file."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text(
+        "def f(x):\n"
+        "    return already_undefined + x\n"
+    )
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "return already_undefined + x",
+        "new_str": "return already_undefined + x + 1",
+    })
+    assert result == "edited mod.py"
+
+
+def test_orphaned_variable_check_only_applies_to_py_paths(tmp_path, monkeypatch):
+    """A non-.py path must never be checked - mirrors the syntax check's own
+    .py-only scoping."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "notes.txt").write_text(
+        "worktree = get()\nif flag:\n    return worktree\n"
+    )
+    result = la.run_tool("str_replace", {
+        "path": "notes.txt",
+        "old_str": "worktree = get()\nif flag:",
+        "new_str": "if flag:",
+    })
+    assert result == "edited notes.txt"
+
+
 def test_str_replace_accepts_edit_that_keeps_valid_python_syntax(tmp_path, monkeypatch):
     """Regression: a valid edit must still apply exactly as before."""
     monkeypatch.setattr(la, "CWD", tmp_path)

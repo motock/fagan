@@ -272,6 +272,74 @@ def test_oracle_str_replace_rejects_edit_that_produces_invalid_python_syntax(tmp
     assert (tmp_path / "mod.py").read_text() == original
 
 
+def test_oracle_str_replace_rejects_edit_that_orphans_a_referenced_variable(tmp_path, monkeypatch):
+    """Ported verbatim from test_local_agent.py; keep both copies in sync.
+    Reproduces the exact live failure mode from two separate local models
+    (gpt-oss:20b deleting `plan_role_config = _plan_role_config(plan_name)`,
+    qwen3-coder:30b deleting `branch = ...`/`worktree = ...`) while a
+    reference to the deleted name survived elsewhere in the same function."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = (
+        "def review_story(x):\n"
+        "    worktree = x.get('worktree', '')\n"
+        "    if x.get('flag'):\n"
+        "        return worktree\n"
+        "    return None\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = lao.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "    worktree = x.get('worktree', '')\n    if x.get('flag'):",
+        "new_str": "    if x.get('flag'):",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "worktree" in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
+def test_oracle_replace_lines_rejects_edit_that_orphans_a_referenced_variable(tmp_path, monkeypatch):
+    """Ported verbatim from test_local_agent.py; keep both copies in sync."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = (
+        "def f(x):\n"
+        "    branch = f'agent/{x}'\n"
+        "    worktree = x\n"
+        "    return _run(worktree, branch)\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = lao.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 3,
+        "new_str": "    # guard removed here\n",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "branch" in result
+    assert "worktree" in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
+def test_oracle_orphaned_variable_check_accepts_edit_that_removes_assignment_and_all_uses(
+    tmp_path, monkeypatch,
+):
+    """Ported verbatim from test_local_agent.py; keep both copies in sync."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text(
+        "def f(x):\n"
+        "    unused = x\n"
+        "    return unused\n"
+    )
+    result = lao.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "    unused = x\n    return unused",
+        "new_str": "    return x",
+    })
+    assert result == "edited mod.py"
+    assert (tmp_path / "mod.py").read_text() == "def f(x):\n    return x\n"
+
+
 def test_oracle_create_file_accepts_valid_python_syntax(tmp_path, monkeypatch):
     """Regression: valid Python content must still write exactly as before."""
     monkeypatch.setattr(lao, "CWD", tmp_path)

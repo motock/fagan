@@ -1615,6 +1615,105 @@ def test_chat_does_not_retry_on_4xx(monkeypatch):
     assert calls["n"] == 1, "4xx must NOT be retried"
 
 
+# ---------- main() trims and retries once on a persistent 5xx (2026-07-22) ----------
+# Found live on MODE-29-REVIEW-STORY-LOCK-GUARD: chat()'s own CHAT_MAX_ATTEMPTS
+# retry sends the IDENTICAL payload every attempt, so a 5xx caused by an
+# oversized transcript (Ollama/llama.cpp returns 500 rather than a clean 4xx
+# for a context-window overflow) fails identically every time - confirmed via
+# the real failing transcript, ~190K chars / ~47.6K estimated tokens against a
+# 32768-token context window. Retrying alone can never help; main() must
+# shrink the request. These pin main()'s new recovery: on a 5xx that survives
+# chat()'s own retries, trim the transcript (reusing _trim_resumed_transcript)
+# and retry chat() exactly once more before giving up.
+
+def test_local_agent_trims_transcript_and_retries_once_on_persistent_5xx(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    # A tiny NUM_CTX means genuine post-head content (grown by the two
+    # successful reads below) already exceeds the trim budget, so trimming
+    # reliably triggers without needing to hand-construct a huge transcript.
+    # _trim_resumed_transcript always preserves messages[:2] (system+task) as
+    # the head and only ever drops content BEYOND it, so the failing call
+    # must not be the very first one - there must be real history to trim.
+    monkeypatch.setattr(la, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            raise _status_error(500)
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected the trim-and-retry to recover, got rc={rc}\noutput: {out!r}"
+    assert calls["n"] == 4, (
+        f"expected exactly 4 chat() calls (2 reads, fail once, succeed on "
+        f"the trim-retry), got {calls['n']}\noutput: {out!r}"
+    )
+    assert "trimming and retrying once" in out, f"expected the trim log line, output: {out!r}"
+
+
+def test_local_agent_gives_up_when_trim_retry_also_fails(tmp_path, monkeypatch, capsys):
+    """The trim-retry is exactly one extra attempt, not another open-ended
+    loop: if chat() still fails after the trim, main() must give up (return 1)
+    rather than retrying indefinitely."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(la, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        raise _status_error(500)
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, f"expected give-up after the trim-retry also fails, got rc={rc}\noutput: {out!r}"
+    assert calls["n"] == 4, (
+        f"expected exactly 4 chat() calls (2 reads + original failure + one "
+        f"trim-retry), got {calls['n']}\noutput: {out!r}"
+    )
+    assert "LLM call failed after trim-retry" in out, f"output: {out!r}"
+
+
+def test_local_agent_does_not_trim_on_4xx(tmp_path, monkeypatch, capsys):
+    """A 4xx is a bad request, not a context-overflow signature - trimming
+    and retrying would just mask a real bug in the request shape. Must fail
+    immediately, same as before this fix, with no trim attempt."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _bad_request(messages):
+        calls["n"] += 1
+        raise _status_error(400)
+
+    monkeypatch.setattr(la, "chat", _bad_request)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, f"expected immediate give-up on a 4xx, got rc={rc}\noutput: {out!r}"
+    assert calls["n"] == 1, f"a 4xx must not trigger a trim-retry, got {calls['n']} calls"
+    assert "trimming and retrying" not in out, f"output: {out!r}"
+
+
 # ---------- chat() provider routing (LOCAL_AGENT_PROVIDER, S3) ----------
 # Ollama (PROVIDER == "ollama", the default) keeps the streaming
 # _stream_one_turn path untouched. Any other provider (lmstudio, mlx) goes

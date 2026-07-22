@@ -1270,6 +1270,40 @@ def main() -> int:
             return 2
         try:
             m = chat(messages)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code < 500:
+                print(f"[step {step}] LLM call failed: {e}", flush=True)
+                if worktree_dirty():
+                    auto_wip_commit("llm error")
+                return 1
+            # A 5xx that survived chat()'s own CHAT_MAX_ATTEMPTS retries is
+            # not a transient fault - every retry sent the IDENTICAL payload,
+            # so an unchanged 5xx after 3 attempts is very likely a context-
+            # window overflow (Ollama/llama.cpp returns 500 rather than a
+            # clean 4xx for this), not a fluke. Retrying again would just
+            # repeat the same failure (confirmed live 2026-07-22: a ~190K
+            # char / ~47.6K estimated-token transcript against a 32768-token
+            # NUM_CTX). Trim once, reusing the same helper the resume path
+            # already uses, and retry exactly once with the smaller payload
+            # before giving up.
+            budget_chars = int(NUM_CTX * _CHARS_PER_TOKEN_ESTIMATE * 0.75)
+            trimmed = _trim_resumed_transcript(messages, budget_chars)
+            if len(trimmed) == len(messages):
+                print(f"[step {step}] LLM call failed: {e}", flush=True)
+                if worktree_dirty():
+                    auto_wip_commit("llm error")
+                return 1
+            print(f"[step {step}] 5xx after {CHAT_MAX_ATTEMPTS} attempts with an "
+                  f"oversized transcript; trimming and retrying once", flush=True)
+            messages[:] = trimmed
+            _persist_messages(messages, transcript_path)
+            try:
+                m = chat(messages)
+            except Exception as e2:
+                print(f"[step {step}] LLM call failed after trim-retry: {e2}", flush=True)
+                if worktree_dirty():
+                    auto_wip_commit("llm error")
+                return 1
         except Exception as e:
             print(f"[step {step}] LLM call failed: {e}", flush=True)
             if worktree_dirty():

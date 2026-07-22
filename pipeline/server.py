@@ -1462,6 +1462,23 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         )
     passed = test_result.returncode == 0
 
+    # Diagnostic gap found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD):
+    # this test-run result was only ever returned transiently from the tool
+    # call - nothing persisted it, so a status that later turned out to be
+    # wrong (tests_passed recorded when the same command deterministically
+    # fails on manual re-run) was impossible to diagnose after the fact.
+    # Persist it on the story every time, regardless of pass/fail, so a
+    # future occurrence leaves a paper trail. getattr() on stderr: some
+    # test doubles for subprocess.run's return value don't define it.
+    story["last_test_check"] = {
+        "cmd": test_cmd,
+        "cwd": str(test_dir),
+        "returncode": test_result.returncode,
+        "stdout_tail": (test_result.stdout or "")[-2000:],
+        "stderr_tail": (getattr(test_result, "stderr", "") or "")[-2000:],
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
     # The agent produced real output and the tests ran: the launch worked, so
     # clear any failed-launch attempts accumulated by earlier infra blips.
     story.pop("dispatch_attempts", None)

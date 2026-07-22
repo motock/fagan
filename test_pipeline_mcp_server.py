@@ -7052,6 +7052,78 @@ def test_check_story_status_passes_when_agent_committed_changes(
     assert "failure_reason" not in manifest["stories"]["S1"]
 
 
+def test_check_story_status_records_last_test_check_on_pass(plan_dir, monkeypatch):
+    """Diagnostic gap found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD):
+    check_story_status's test-run result (command, cwd, returncode, output)
+    was only ever returned transiently from the tool call - nothing persisted
+    it to the manifest, so a status that later turned out to be wrong
+    (tests_passed recorded when the same command deterministically fails when
+    re-run by hand) was impossible to diagnose after the fact. Persist it on
+    the story as `last_test_check` every time a test run determines status,
+    regardless of pass/fail, so a future occurrence has a paper trail."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("[step 0] bash: pwd\n")
+    _write_manifest(plan_dir, "diag1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest", "-q"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, stdout="3 passed", stderr="",
+        ),
+    )
+
+    result = p.check_story_status("diag1", "S1")
+    assert result["status"] == "tests_passed"
+
+    manifest = _read_manifest(plan_dir, "diag1")
+    check = manifest["stories"]["S1"]["last_test_check"]
+    assert check["cmd"] == ["pytest", "-q"]
+    assert check["cwd"] == str(worktree)
+    assert check["returncode"] == 0
+    assert "3 passed" in check["stdout_tail"]
+    assert "ts" in check
+
+
+def test_check_story_status_records_last_test_check_on_fail_without_stderr_attr(
+    plan_dir, monkeypatch,
+):
+    """Same as above, but on the failure path, and with a test double that
+    doesn't define .stderr at all (mirrors this file's own `Result` stub
+    class used elsewhere) - the diagnostic capture must not crash when the
+    subprocess result lacks a stderr attribute."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("[step 0] bash: pwd\n")
+    _write_manifest(plan_dir, "diag2", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class Result:
+        stdout = "1 failed"
+        returncode = 1
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    result = p.check_story_status("diag2", "S1")
+    assert result["status"] == "failed"
+
+    manifest = _read_manifest(plan_dir, "diag2")
+    check = manifest["stories"]["S1"]["last_test_check"]
+    assert check["returncode"] == 1
+    assert "1 failed" in check["stdout_tail"]
+    assert check["stderr_tail"] == ""
+
+
 def test_check_story_status_handles_git_error_safely(plan_dir, monkeypatch):
     """If `_worktree_has_new_commits` returns False (covers the
     `git log` failure case — broken worktree, missing branch, any git

@@ -42,7 +42,13 @@ def create_manifest(plan_dir, plan_name, story_key, worktree):
         "stories": {
             story_key: {
                 "worktree": str(worktree),
-                "status": "todo",
+                # Mode 29: review_story now gates on status == "tests_passed"
+                # (server.py's "Guard: skip if status not tests_passed"), so a
+                # story must start reviewable the same way a real dispatched
+                # story would be by the time advance_pipeline calls
+                # review_story - "todo" predates that guard and would make
+                # every call in this file skip immediately.
+                "status": "tests_passed",
                 "acceptance": [{"path": "tests/acceptance_foo.py", "source": "..."}],
             }
         },
@@ -51,6 +57,19 @@ def create_manifest(plan_dir, plan_name, story_key, worktree):
     manifest_path = plan_dir / f"{plan_name}.manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     return manifest_path
+
+
+def reset_to_tests_passed(plan_dir, plan_name, story_key):
+    """Simulate check_story_status's test-gate flipping a reworked story back
+    to "tests_passed" once its new commit's tests pass - the real precondition
+    advance_pipeline enforces before ever calling review_story() a second
+    time. This file calls review_story() directly, twice, to isolate the
+    SHA-guard behavior under test without exercising the full dispatch/poll
+    cycle, so it must simulate that reset itself."""
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["stories"][story_key]["status"] = "tests_passed"
+    manifest_path.write_text(json.dumps(manifest))
 
 @pytest.fixture
 def setup_story(plan_dir, monkeypatch):
@@ -82,6 +101,9 @@ def test_review_story_skips_reviewer_when_head_unchanged_since_last_review(setup
     mock_rev = Mock(return_value="VERDICT: REQUEST_CHANGES\nsome finding")
     monkeypatch.setattr(p, "_run_reviewer", mock_rev)
     p.review_story(plan_name, story_key)  # first call sets SHA
+    # Simulate a rework redispatch's tests passing again (real precondition
+    # for a second review_story call - see reset_to_tests_passed).
+    reset_to_tests_passed(p.PLAN_DIR, plan_name, story_key)
     result2 = p.review_story(plan_name, story_key)  # second call should skip
     assert mock_rev.call_count == 1
     assert result2.get("skipped") == "unchanged_since_last_review"
@@ -97,6 +119,9 @@ def test_review_story_reviews_again_after_new_commit_lands(setup_story, monkeypa
     (worktree / "file.txt").write_text("changed")
     subprocess.run(["git", "add", "."], cwd=worktree, check=True)
     subprocess.run(["git", "commit", "-m", "change"], cwd=worktree, check=True)
+    # Simulate the rework redispatch's tests passing again (real precondition
+    # for a second review_story call - see reset_to_tests_passed).
+    reset_to_tests_passed(p.PLAN_DIR, plan_name, story_key)
     result2 = p.review_story(plan_name, story_key)  # should invoke reviewer again
     assert mock_rev.call_count == 2
     assert "skipped" not in result2
@@ -115,6 +140,9 @@ def test_review_story_approve_clears_last_reviewed_sha(setup_story, monkeypatch)
     (worktree / "file.txt").write_text("changed")
     subprocess.run(["git", "add", "."], cwd=worktree, check=True)
     subprocess.run(["git", "commit", "-m", "change"], cwd=worktree, check=True)
+    # Simulate the rework redispatch's tests passing again (real precondition
+    # for a second review_story call - see reset_to_tests_passed).
+    reset_to_tests_passed(p.PLAN_DIR, plan_name, story_key)
     # second call: APPROVE
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")

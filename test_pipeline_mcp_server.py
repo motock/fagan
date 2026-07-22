@@ -2057,7 +2057,7 @@ def test_run_reviewer_handles_worktree_with_no_recognizable_build_marker(
 
 def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
     _write_manifest(plan_dir, "rv", {
-        "S1": {"summary": "Add thing", "status": "in_progress",
+        "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
@@ -2082,7 +2082,7 @@ def test_review_story_passes_plan_role_config_from_manifest_to_reviewer(
     (plan_dir / "rvcfg.manifest.json").write_text(json.dumps({
         "epics": {},
         "stories": {
-            "S1": {"summary": "Add thing", "status": "in_progress",
+            "S1": {"summary": "Add thing", "status": "tests_passed",
                    "worktree": str(plan_dir / "wt"), "risk": "low"},
         },
         "role_config": {"review": {"provider": "ollama"}},
@@ -2113,7 +2113,7 @@ def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypa
     # test_review_story_genuine_request_changes_still_increments_rework for
     # the regression guard confirming real findings text still counts.
     _write_manifest(plan_dir, "rv", {
-        "S1": {"summary": "Add thing", "status": "in_progress",
+        "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: REQUEST_CHANGES")
@@ -2125,7 +2125,7 @@ def test_review_story_request_changes_opens_no_pr(plan_dir, agents_dir, monkeypa
 
     result = p.review_story("rv", "S1")
     assert result["verdict"] == "REQUEST_CHANGES"
-    assert result["status"] == "in_progress"
+    assert result["status"] == "tests_passed"
     assert result.get("pr_url") is None
     story = _read_manifest(plan_dir, "rv")["stories"]["S1"]
     assert "pr_url" not in story
@@ -2138,7 +2138,7 @@ def test_review_story_persists_feedback_on_request_changes(plan_dir, agents_dir,
     # redispatched agent knows what to fix.
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "rvfb", {
-        "S1": {"summary": "Add thing", "status": "in_progress",
+        "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     reviewer_output = ("The error path is untested and the SQL is injectable.\n"
@@ -2215,7 +2215,7 @@ def test_review_story_request_changes_no_oracle_check_without_acceptance_block(
     fix."""
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "rvnoacc", {
-        "S1": {"summary": "Add thing", "status": "in_progress",
+        "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     reviewer_output = "Real bug found.\nVERDICT: REQUEST_CHANGES"
@@ -2235,7 +2235,7 @@ def test_review_story_clears_feedback_and_rework_on_approve(plan_dir, agents_dir
     # An approval after prior rework cycles must wipe the stale feedback/counter
     # so the story records a clean approval.
     _write_manifest(plan_dir, "rvclear", {
-        "S1": {"summary": "Add thing", "status": "in_progress",
+        "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low",
                "review_feedback": "old gripes", "rework_attempts": 2},
     })
@@ -2409,7 +2409,7 @@ def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_di
     REQUEST_CHANGES), and must notify the user for observability without
     leaking raw exception text."""
     _write_manifest(plan_dir, "rvcrash", {
-        "S1": {"summary": "Add thing", "status": "in_progress",
+        "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
 
@@ -2424,9 +2424,9 @@ def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_di
 
     assert result["ok"] is True
     assert result["verdict"] == "UNKNOWN"
-    assert result["status"] == "in_progress"
+    assert result["status"] == "tests_passed"
     story = _read_manifest(plan_dir, "rvcrash")["stories"]["S1"]
-    assert story["status"] == "in_progress"
+    assert story["status"] == "tests_passed"
     assert story["review_inconclusive_count"] == 1
     assert "rework_attempts" not in story
     assert "review_feedback" not in story
@@ -2530,7 +2530,7 @@ def test_commit_wip_checkpoints_when_agent_log_is_git_ignored(tmp_path):
 def test_review_story_high_risk_calls_security_reviewer(plan_dir, agents_dir, monkeypatch):
     """High-risk stories must invoke the security-engineer reviewer in addition to code-reviewer."""
     _write_manifest(plan_dir, "secgate", {
-        "S1": {"summary": "Add auth", "status": "in_progress",
+        "S1": {"summary": "Add auth", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
     security_calls = []
@@ -2545,7 +2545,7 @@ def test_review_story_high_risk_calls_security_reviewer(plan_dir, agents_dir, mo
 def test_review_story_high_risk_both_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
     """High-risk story approved by both reviewers proceeds to pr_open."""
     _write_manifest(plan_dir, "secboth", {
-        "S1": {"summary": "Crypto change", "status": "in_progress",
+        "S1": {"summary": "Crypto change", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
@@ -2560,7 +2560,7 @@ def test_review_story_high_risk_both_approve_opens_pr(plan_dir, agents_dir, monk
 def test_review_story_high_risk_security_request_changes_blocks_merge(plan_dir, agents_dir, monkeypatch):
     """If security-engineer requests changes, story must NOT go to pr_open even if code-reviewer approves."""
     _write_manifest(plan_dir, "secblock", {
-        "S1": {"summary": "Token store", "status": "in_progress",
+        "S1": {"summary": "Token store", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
@@ -2578,7 +2578,7 @@ def test_review_story_high_risk_security_request_changes_blocks_merge(plan_dir, 
 def test_review_story_high_risk_security_verdict_recorded(plan_dir, agents_dir, monkeypatch):
     """security_review_verdict is persisted in the manifest for audit purposes."""
     _write_manifest(plan_dir, "secrecord", {
-        "S1": {"summary": "RBAC impl", "status": "in_progress",
+        "S1": {"summary": "RBAC impl", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "high"},
     })
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
@@ -10505,7 +10505,7 @@ def test_review_story_genuine_request_changes_still_increments_rework(plan_dir, 
     # Regression: a real REQUEST_CHANGES must still count against the budget.
     monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
     _write_manifest(plan_dir, "rl_regression", {
-        "S1": {"summary": "Add thing", "status": "in_progress",
+        "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
     monkeypatch.setattr(p, "_run_reviewer",

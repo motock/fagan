@@ -64,6 +64,12 @@ the problem. When approving, include a short PR title and body (1-2 sentence
 summary + 1-line "how it was tested"). For `risk: high` changes, recommend the
 overlord hold the merge for human notice even on APPROVE.
 
+Write every Blocking finding as its own line in the exact form
+`- Blocking: <relative/file/path>: <one-line description>` — the pipeline
+machine-parses this to track which files a Blocking finding targets across
+review cycles, so it can catch a later APPROVE that never actually touched
+them. Suggestion/Nit findings have no format requirement.
+
 ## Working in the pipeline
 
 You review the dispatched branch's diff in its worktree, run the test suite, and

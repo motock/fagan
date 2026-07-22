@@ -115,6 +115,7 @@ from .parsers import (  # noqa: F401
     _parse_ruling,
     _parse_verdict,
     _has_review_findings,
+    _extract_blocking_finding_files,
     _RATE_LIMIT_PATTERNS,
     _is_rate_limited,
     _TRANSIENT_BACKEND_PATTERNS,
@@ -2061,6 +2062,41 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
     story["review_inconclusive_count"] = 0
 
+    # Mode 24/28 finding-target guard: the Mode 27 same-SHA guard only
+    # catches a review call where HEAD is byte-identical to the last
+    # reviewed commit. A dispatch watchdog checkpoint commit changes HEAD's
+    # SHA trivially (a WIP commit) without addressing the reviewer's own
+    # prior Blocking findings, slipping past that guard and letting the
+    # reviewer silently APPROVE a diff that never touched the flagged
+    # file(s) - "merged-but-incomplete". If every file recorded from the
+    # prior REQUEST_CHANGES cycle's Blocking findings wasn't touched by the
+    # diff since then, downgrade this APPROVE back to REQUEST_CHANGES
+    # instead of opening a PR.
+    if verdict == "APPROVE" and story.get("last_reviewed_sha") and story.get("last_review_findings"):
+        try:
+            diff_res = subprocess.run(
+                ["git", "diff", "--name-only", story["last_reviewed_sha"], "HEAD"],
+                cwd=worktree, check=True, capture_output=True, text=True,
+            )
+            changed_files = set(diff_res.stdout.splitlines())
+            untouched = [p for p in story["last_review_findings"] if p not in changed_files]
+            if untouched:
+                verdict = "REQUEST_CHANGES"
+                reviewer_output = (
+                    "Prior Blocking finding(s) were never addressed - the "
+                    "following file(s) flagged in an earlier review have not "
+                    "been touched since:\n"
+                    + "\n".join(
+                        f"- Blocking: {p}: not addressed since the last review"
+                        for p in untouched
+                    )
+                )
+        except (subprocess.CalledProcessError, OSError):
+            # Fail open - this is a workflow-correctness gate, not a
+            # security boundary, so an infra error must not block a
+            # genuine APPROVE.
+            pass
+
     if verdict == "APPROVE":
         pr_url = _open_pr(worktree, story_key, story)
         story["pr_url"] = pr_url
@@ -2070,6 +2106,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         story.pop("rework_attempts", None)
         # Clear any stored SHA when review is approved
         story.pop("last_reviewed_sha", None)
+        story.pop("last_review_findings", None)
     else:
         # Persist the reviewer's reasoning (not just the verdict) so the
         # redispatched agent knows what to fix, and count the cycle against
@@ -2100,6 +2137,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     "change to confirm they are still green.\n\n" + reviewer_output
                 )
         story["review_feedback"] = feedback
+        # Mode 24/28: track which files this cycle's Blocking findings
+        # target, so a later APPROVE can verify they were actually
+        # addressed. Store even when empty (a real "nothing to track"
+        # state, distinct from the key being absent entirely).
+        story["last_review_findings"] = _extract_blocking_finding_files(reviewer_output)
         # Record the HEAD SHA for this REQUEST_CHANGES review
         if worktree and os.path.isdir(worktree):
             try:

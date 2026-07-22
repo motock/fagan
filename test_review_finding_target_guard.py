@@ -118,7 +118,7 @@ def test_first_review_approve_proceeds_normally(plan_dir, tmp_path, monkeypatch)
 def test_approve_proceeds_when_tracked_file_was_touched(plan_dir, tmp_path, monkeypatch):
     plan_name, story_key = "P1", "S1"
     worktree = init_repo(tmp_path)
-    create_manifest(plan_dir, plan_name, story_key, worktree)
+    create_manifest(plan_dir, plan_name, story_key, worktree, acceptance=[])
     # First cycle: REQUEST_CHANGES with a Blocking finding on foo.py.
     monkeypatch.setattr(
         p, "_run_reviewer",
@@ -148,7 +148,7 @@ def test_approve_proceeds_when_tracked_file_was_touched(plan_dir, tmp_path, monk
 def test_approve_downgraded_when_tracked_file_not_touched(plan_dir, tmp_path, monkeypatch):
     plan_name, story_key = "P1", "S1"
     worktree = init_repo(tmp_path)
-    create_manifest(plan_dir, plan_name, story_key, worktree)
+    create_manifest(plan_dir, plan_name, story_key, worktree, acceptance=[])
     # First cycle: REQUEST_CHANGES with a Blocking finding on foo.py.
     monkeypatch.setattr(
         p, "_run_reviewer",

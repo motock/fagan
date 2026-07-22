@@ -74,6 +74,7 @@ from .config import (  # noqa: F401
     DISPATCH_STARTUP_GRACE_SECONDS,
     DISPATCH_WATCHDOG_SECONDS,
     STEP_CAP_MARKERS,
+    INFRA_FAILURE_LOG_SUBSTRING,
     STEP_CAP_FALLBACK_THRESHOLD,
     PIPELINE_LOCAL_MAX_RISK,
     _LOCAL_SKIP_PERSONAS,
@@ -1330,6 +1331,31 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # advance_pipeline tick resumes the agent in its existing worktree from
     # its WIP commit, seeded by the journal entry we write below.
     last_log_line = _last_nonempty_line(agent_log) if agent_log.exists() else ""
+
+    # Infra-failure exit routing: a dispatch that died on an LLM/Ollama
+    # transport error (after chat()'s own retries and the 5xx trim-retry are
+    # exhausted) is not a review/test-quality outcome and must not be graded
+    # or counted against rework_attempts - see INFRA_FAILURE_LOG_SUBSTRING's
+    # docstring for the live incident this fixes. Deliberately simpler than
+    # the STEP_CAP_MARKERS branch below: no model-fallback-switching logic,
+    # since an infra blip is not evidence the model itself is struggling.
+    if INFRA_FAILURE_LOG_SUBSTRING in last_log_line:
+        sha = _commit_wip(str(worktree), story_key, "infra_failure")
+        interrupted_at = datetime.now(timezone.utc).isoformat()
+        _append_journal(plan_name, story_key, {
+            "step": "infra_failure",
+            "summary": "Dispatch died on an infrastructure failure (LLM/Ollama "
+                       "transport error); checkpointed for resume.",
+            "next_hint": "",
+            "commit": sha,
+            "ts": interrupted_at,
+        })
+        story["status"] = "interrupted"
+        story["last_commit"] = sha
+        story["interrupted_at"] = interrupted_at
+        _atomic_write_json(manifest_path, manifest)
+        return {"status": "interrupted", "pid": pid, "reason": "infra_failure"}
+
     if last_log_line in STEP_CAP_MARKERS:
         sha = _commit_wip(str(worktree), story_key, "step_cap_reached")
         interrupted_at = datetime.now(timezone.utc).isoformat()

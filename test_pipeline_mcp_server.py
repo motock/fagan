@@ -7934,6 +7934,84 @@ def test_check_story_status_routes_step_cap_to_interrupted(
     assert any(e.get("step") == "step_cap_reached" for e in journal), journal
 
 
+def test_check_story_status_routes_infra_failure_to_interrupted_without_burning_rework(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD): a dispatch
+    that died on an Ollama 500 (or timeout) after chat()'s own retries and
+    the 5xx trim-retry are exhausted got treated exactly like a real review
+    cycle - the test suite ran against its incomplete WIP and, worse, the
+    infra death counted against rework_attempts, parking a story partly on
+    infrastructure flakiness the model had no way to avoid. The last line
+    must route to interrupted (no test run, dispatch-eligible for a clean
+    resume) with rework_attempts UNCHANGED - distinct from the STEP_CAP_MARKERS
+    routing, which shares the interrupted/no-test-run behavior but is a
+    capability signal, not an infra one, so it's allowed to feed the
+    model-fallback-switching logic that this path must NOT trigger."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[boot] pid=123 model=gpt-oss:20b endpoint=http://localhost:11434 provider=ollama steps=60 timeout=5400.0s\n"
+        "[step 17] LLM call failed: Server error '500 Internal Server Error' for url 'http://localhost:11434/api/chat'\n"
+    )
+    _write_manifest(plan_dir, "infra1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree), "rework_attempts": 1},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    def _fail_detect(*a, **k):
+        raise AssertionError("detect_test_command must not run on an infra-failure exit")
+    monkeypatch.setattr(p, "detect_test_command", _fail_detect)
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    result = p.check_story_status("infra1", "S1")
+
+    assert result["status"] == "interrupted"
+    assert result["reason"] == "infra_failure"
+    manifest = _read_manifest(plan_dir, "infra1")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "interrupted"
+    assert story["rework_attempts"] == 1, (
+        f"an infra death must not burn a rework attempt, got {story['rework_attempts']!r}"
+    )
+    journal = p._read_journal("infra1", "S1")
+    assert any(e.get("step") == "infra_failure" for e in journal), journal
+
+
+def test_check_story_status_infra_failure_does_not_trigger_model_fallback(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """An infra death is not evidence the MODEL is struggling - it must not
+    feed the STEP_CAP_MARKERS branch's consecutive-failure model-fallback
+    switch, even when the plan has opted in to local_model_fallback."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[step 5] LLM call failed after trim-retry: Server error '500'\n"
+    )
+    _write_manifest(plan_dir, "infra2", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "dispatched_model": "gpt-oss:20b", "step_cap_streak": 2,
+               "step_cap_streak_model": "gpt-oss:20b"},
+    })
+    manifest_path = plan_dir / "infra2.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "devstral:24b"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run tests")))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("infra2", "S1")
+
+    manifest = _read_manifest(plan_dir, "infra2")
+    story = manifest["stories"]["S1"]
+    assert story["model"] == "gpt-oss:20b", "infra death must not switch the model"
+
+
 def test_check_story_status_routes_oracle_step_cap_to_interrupted(
     plan_dir, tmp_path, monkeypatch,
 ):
@@ -11866,6 +11944,24 @@ def test_planner_system_exception_for_small_edits():
     assert "preserve" in p._PLANNER_SYSTEM
 
 
+def test_planner_system_prescribes_delegate_wrapper_for_large_function_edits():
+    """Root cause diagnosed live (2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD,
+    8 failed dispatch attempts): the story asked the executor to wrap a
+    ~300-line existing function's ENTIRE body in a new `with` block - an
+    in-place mass re-indent through a truncated view_file/create_file tool,
+    the mechanically hardest edit shape for this engine. The identical
+    pattern (guard + delegate to a renamed `_foo_impl`) already existed 350
+    lines away in the same file for exactly this situation, but nothing
+    steered the executor (or the story author) toward it - one attempt tried
+    it anyway and botched the split (duplicate defs, orphaned fragments) from
+    getting no guidance on the mechanics. Neither existing EDITING MECHANICS
+    branch (whole-file create_file rewrite, or str_replace for a small
+    preserve-most edit) fits a large-function in-place wrap; the checklist
+    must name the rename-and-delegate shape as the correct move for it."""
+    assert "_impl" in p._PLANNER_SYSTEM
+    assert "delegate" in p._PLANNER_SYSTEM.lower()
+
+
 def test_planner_system_worked_examples_must_verify_persisted_state():
     """Live-discovered bug (2026-07-16, production-config benchmark run,
     token_bucket via glm-5.2:cloud/Ollama planner + mlx implementer): the
@@ -12229,6 +12325,15 @@ def test_rework_planner_exception_for_small_edits():
     assert "str_replace" in p._REWORK_PLANNER_SYSTEM
     assert "preserve" in p._REWORK_PLANNER_SYSTEM
     assert p._REWORK_PLANNER_SYSTEM != p._PLANNER_SYSTEM
+
+
+def test_rework_planner_system_prescribes_delegate_wrapper_for_large_function_edits():
+    """Mirrors test_planner_system_prescribes_delegate_wrapper_for_large_function_edits
+    - a rework cycle's fix checklist needs the same edit-shape guidance as
+    the initial checklist, since a review's requested fix can land inside
+    the same kind of large existing function."""
+    assert "_impl" in p._REWORK_PLANNER_SYSTEM
+    assert "delegate" in p._REWORK_PLANNER_SYSTEM.lower()
 
 
 def test_run_rework_planner_returns_none_on_backend_failure(agents_dir, monkeypatch):

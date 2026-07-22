@@ -275,12 +275,24 @@ def _is_give_up_summary(summary: str) -> bool:
     lowered = summary.lower()
     return any(phrase in lowered for phrase in _GIVE_UP_PHRASES)
 
+def _extract_blocking_finding_files(text: str) -> list[str]:
+    """Extract file paths from Blocking findings in reviewer output."""
+    pattern = r'^\s*-?\s*Blocking:\s*(\S+):'
+    matches = re.findall(pattern, text, flags=re.MULTILINE | re.IGNORECASE)
+    seen = set()
+    result: list[str] = []
+    for path in matches:
+        if path not in seen:
+            seen.add(path)
+            result.append(path)
+    return result
 
 __all__ = [
     "_extract_json_block",
     "_parse_ruling",
     "_parse_verdict",
     "_has_review_findings",
+    "_extract_blocking_finding_files",
     "_RATE_LIMIT_PATTERNS",
     "_is_rate_limited",
     "_TRANSIENT_BACKEND_PATTERNS",

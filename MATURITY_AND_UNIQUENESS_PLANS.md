@@ -91,12 +91,43 @@ Reference comparables:
 ### A3. Stabilize the active bug surface
 
 - [ ] **Bound the failure-mode discovery rate — trending the wrong way.**
-      19 modes at this doc's 2026-07-17 baseline; now **28** (Modes 22-24
+      19 modes at this doc's 2026-07-17 baseline; now **30** (Modes 22-24
       found 2026-07-19/20; Mode 28 found 2026-07-21 shipping the always-on
-      TDD-split story — see `retros/tdd-split-always-on_2026-07-21.md`). Add a
-      "no new modes for N benchmark runs" gate as a stability signal — not
-      done, and the discovery rate argues this is more urgent than when first
-      written.
+      TDD-split story — see `retros/tdd-split-always-on_2026-07-21.md`; Modes
+      29-30 found the same day fixing TDD-split's own opt-in gap — see
+      `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`; Mode 30
+      is a scheduler-vs-manual-git race that corrupted a source file on
+      disk, the most severe of the three). Add a "no new modes for N
+      benchmark runs" gate as a stability signal — not done, and the
+      discovery rate argues this is more urgent than when first written.
+- [ ] **P0 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
+      — Mode 29: guard `review_story`/the scheduler against dispatching a
+      review pass on an already-`done`/merged story.** A redundant tick fired
+      after a story was already auto-reviewed, auto-merged, and had its
+      worktree cleaned up; it found the (correctly) nonexistent worktree and
+      reported `REQUEST_CHANGES`, flipping the manifest's status for a done,
+      merged story back to `changes_requested`. Nothing on GitHub was ever at
+      risk, but a subsequent `approve_merge` call failed on the stale
+      precondition and required manually cross-checking `gh pr view`/
+      `git log origin/master` to prove the manifest wrong. Fix: check
+      `status == "done"` (or PR-already-merged) before dispatching any review
+      pass. `pipeline/server.py` (`review_story`, `advance_pipeline`/
+      `advance_all_plans` scheduling).
+- [ ] **P0 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
+      — Mode 30: the scheduler mutates the main repo's shared working tree
+      in place, racing manual git operations and corrupting source files.**
+      `advance-scheduler`'s launchd job runs `git checkout`/fast-forward
+      directly against this repo's working directory every 60s with no
+      visible locking against external writers. A manual `git rebase` run
+      in-session raced one of these ticks and produced a corrupted,
+      duplicated function body in `pipeline/server.py` — caught only
+      because it happened to throw a `NameError`; syntactically-valid
+      corruption would have shipped silently. Highest-severity item in this
+      retro (actual source corruption, not just stale state) but scoped
+      below the Mode 29 status check since the fix is more invasive
+      (isolate the scheduler's git bookkeeping from the main working tree,
+      or require pausing it before manual git surgery). `advance-scheduler`
+      job definition / its git invocation path.
 - [ ] **P0 (from `retros/tdd-split-always-on_2026-07-21.md`) — track prior
       findings' target paths; refuse silent re-approval.** Fixes Mode 28 and
       Mode 24 with one mechanism: when a prior verdict was `REQUEST_CHANGES`,
@@ -115,6 +146,15 @@ Reference comparables:
       findings are polish-only** (doc/comment/test-coherence, no logic
       failures) — gpt-oss:20b reliably stalls on this work shape. Depends on
       the P0 finding-target storage above.
+- [ ] **P1 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
+      — when a story changes `pipeline/server.py` or `pipeline_mcp_server.py`
+      itself, make "restart + reconnect the MCP server" an explicit, checked
+      step.** The running MCP server is a long-lived stdio child of the
+      `claude` CLI (not launchd-supervised, unlike the scheduler/usage-poller
+      jobs which get a fresh process per tick) and keeps executing pre-merge
+      code until manually killed — and killing it does not auto-reconnect the
+      session's tools. Discovered by manually testing the new
+      `mark_story_done` behavior and getting the stale result.
 - [x] **Fix the test-isolation leak** (2026-07-18, PR #131) —
       `load_oracle_module_with_env`/`load_module_with_env` mutating
       `os.environ` without cleanup; fixed with an `autouse` environ-snapshot

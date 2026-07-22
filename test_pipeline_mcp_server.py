@@ -3904,6 +3904,9 @@ def test_advance_pipeline_actually_dispatches_ready_story_not_just_reports_it(
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    # Isolate the per-tick local-branch sync hygiene from this test's
+    # blanket subprocess.run stub (which returns None, not a CompletedProcess).
+    monkeypatch.setattr(p, "_sync_local_default_branch", lambda: {"ok": True, "synced": False})
     # check_story_status would try to run tests against an empty mock worktree;
     # the dispatch itself is what we're asserting, so keep the agent "running".
     monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
@@ -5789,6 +5792,9 @@ def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    # Isolate the per-tick local-branch sync hygiene - unrelated to the CI
+    # gate this test targets - from the blanket subprocess.run trap below.
+    monkeypatch.setattr(p, "_sync_local_default_branch", lambda: {"ok": True, "synced": False})
 
     def _boom_run(*a, **k):
         raise AssertionError("subprocess must not run when CI gate is disabled")

@@ -394,6 +394,70 @@ def _default_branch() -> str:
     return _default_branch_cache[key]
 
 
+def _sync_local_default_branch() -> dict[str, Any]:
+    """Fast-forward REPO_ROOT's local default branch to origin, if safe.
+
+    Best-effort hygiene so local master/main doesn't drift behind origin
+    after a merge lands (Mode 10: a stale local branch makes the next
+    worktree-creation dispatch fail its fast-forward). Only acts when it's
+    unambiguous: the default branch must be the one currently checked out
+    (a bare `git fetch` with a destination refspec refuses to touch the
+    checked-out branch anyway, so this checks explicitly rather than
+    relying on that), the working tree must be clean, and the local branch
+    must be strictly behind origin (0 commits ahead) - a fast-forward,
+    never a rebase/reset/force-anything. Any other state (diverged, dirty,
+    checked out elsewhere, network error) is a silent no-op - this is
+    opportunistic hygiene, not a required step, so it must never raise or
+    block the caller's tick.
+    """
+    try:
+        branch = _default_branch()
+        head = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if head.returncode != 0 or head.stdout.strip() != branch:
+            return {"ok": True, "synced": False, "reason": "not_on_default_branch"}
+
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if status.returncode != 0 or status.stdout.strip():
+            return {"ok": True, "synced": False, "reason": "dirty_worktree"}
+
+        fetch = subprocess.run(
+            ["git", "fetch", "origin", branch],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if fetch.returncode != 0:
+            return {"ok": True, "synced": False, "reason": "fetch_failed"}
+
+        counts = subprocess.run(
+            ["git", "rev-list", "--left-right", "--count", f"{branch}...origin/{branch}"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if counts.returncode != 0:
+            return {"ok": True, "synced": False, "reason": "rev_list_failed"}
+        ahead_str, behind_str = counts.stdout.split()
+        ahead, behind = int(ahead_str), int(behind_str)
+        if ahead != 0 or behind == 0:
+            return {
+                "ok": True, "synced": False, "reason": "up_to_date_or_diverged",
+                "ahead": ahead, "behind": behind,
+            }
+
+        merge = subprocess.run(
+            ["git", "merge", "--ff-only", f"origin/{branch}"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        if merge.returncode != 0:
+            return {"ok": True, "synced": False, "reason": "ff_merge_failed"}
+        return {"ok": True, "synced": True, "behind": behind}
+    except OSError:
+        return {"ok": True, "synced": False, "reason": "os_error"}
+
+
 def _repo_root_for(plan_name: str) -> Path:
     """Return the repo this plan operates on.
 
@@ -2291,6 +2355,11 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     # _default_branch read the plain REPO_ROOT global, so this plan's repo
     # must be active for the duration of every action below.
     with _scoped_repo_root(plan_name):
+        # Opportunistic hygiene, once per tick: keep local master/main from
+        # drifting behind origin after a merge lands (Mode 10). Best-effort
+        # and side-effect-only - never blocks or fails the tick.
+        _sync_local_default_branch()
+
         if not dispatch_ok:
             # The dispatch backend is gated: stop spending it, and free up
             # in-flight agents (they run on the dispatch backend and are

@@ -1,0 +1,289 @@
+"""Integration tests for the review_finding_target_guard in pipeline.server.review_story.
+
+Mode 28 (2026-07-21): the existing same-SHA guard only catches a review call
+where HEAD is byte-identical to the last reviewed commit. A dispatch
+watchdog checkpoint commit changes HEAD's SHA trivially (a WIP commit)
+without the underlying content changing in any way that addresses the
+reviewer's own prior Blocking findings, so the same-SHA guard is slipped,
+the reviewer re-runs, and APPROVEs a diff that still has its own previously
+flagged Blocking issues unaddressed -- 'merged-but-incomplete'.
+
+These tests verify the new guard that, on an APPROVE, checks that every
+file path recorded in the prior REQUEST_CHANGES cycle's Blocking findings
+was actually touched by the diff since last_reviewed_sha. If any tracked
+path was NOT touched, the APPROVE is downgraded to a REQUEST_CHANGES cycle.
+
+Uses real git subprocess calls against a tmp_path worktree (mirrors
+test_review_story_same_sha.py's init_repo helper), only mocking the
+reviewer backend call itself.
+"""
+import json
+import subprocess
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+
+import pipeline.server as p
+from pipeline import concurrency as pcon
+from pipeline import persistence as ppers
+from pipeline.config import REWORK_MAX_ATTEMPTS
+
+
+@pytest.fixture
+def plan_dir(tmp_path, monkeypatch):
+    d = tmp_path / "plans"
+    d.mkdir()
+    monkeypatch.setattr(p, "PLAN_DIR", d)
+    monkeypatch.setattr(ppers, "PLAN_DIR", d)
+    monkeypatch.setattr(pcon, "PLAN_DIR", d)
+    return d
+
+
+def init_repo(tmp_path):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    subprocess.run(["git", "init"], cwd=worktree, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=worktree, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=worktree, check=True)
+    (worktree / "file.txt").write_text("initial")
+    subprocess.run(["git", "add", "."], cwd=worktree, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=worktree, check=True)
+    return worktree
+
+
+def create_manifest(plan_dir, plan_name, story_key, worktree, **extra):
+    manifest = {
+        "stories": {
+            story_key: {
+                "worktree": str(worktree),
+                "status": "tests_passed",
+                "acceptance": [{"path": "tests/acceptance_foo.py", "source": "..."}],
+                **extra,
+            }
+        },
+        "plan": {"name": plan_name},
+    }
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    return manifest_path
+
+
+def load_story(plan_dir, plan_name, story_key):
+    manifest_path = Path(plan_dir) / f"{plan_name}.manifest.json"
+    return json.loads(manifest_path.read_text())["stories"][story_key]
+
+
+def reset_to_tests_passed(plan_dir, plan_name, story_key):
+    """Simulate check_story_status's test-gate flipping a reworked story back
+    to 'tests_passed' once its new commit's tests pass - the real precondition
+    advance_pipeline enforces before ever calling review_story() a second
+    time. Mirrors test_review_story_same_sha.py."""
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["stories"][story_key]["status"] = "tests_passed"
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def head_sha(worktree):
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+        capture_output=True, text=True).stdout.strip()
+
+
+def commit(worktree, filename, content, msg="change"):
+    (worktree / filename).write_text(content)
+    subprocess.run(["git", "add", "."], cwd=worktree, check=True)
+    subprocess.run(["git", "commit", "-m", msg], cwd=worktree, check=True)
+
+
+# (a) first-ever review (no last_reviewed_sha) with APPROVE proceeds normally
+
+def test_first_review_approve_proceeds_normally(plan_dir, tmp_path, monkeypatch):
+    plan_name, story_key = "P1", "S1"
+    worktree = init_repo(tmp_path)
+    create_manifest(plan_dir, plan_name, story_key, worktree)
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+    result = p.review_story(plan_name, story_key)
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story["status"] == "pr_open"
+    assert "last_reviewed_sha" not in story
+
+
+# (b) prior REQUEST_CHANGES tracked foo.py, new commit touched foo.py, APPROVE proceeds
+
+def test_approve_proceeds_when_tracked_file_was_touched(plan_dir, tmp_path, monkeypatch):
+    plan_name, story_key = "P1", "S1"
+    worktree = init_repo(tmp_path)
+    create_manifest(plan_dir, plan_name, story_key, worktree)
+    # First cycle: REQUEST_CHANGES with a Blocking finding on foo.py.
+    monkeypatch.setattr(
+        p, "_run_reviewer",
+        lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    p.review_story(plan_name, story_key)
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story["status"] == "changes_requested"
+    assert story.get("last_review_findings") == ["foo.py"]
+    # Rework: touch foo.py (the tracked file) and land a new commit.
+    commit(worktree, "foo.py", "fixed", msg="fix foo")
+    reset_to_tests_passed(plan_dir, plan_name, story_key)
+    # Second cycle: APPROVE.
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+    result = p.review_story(plan_name, story_key)
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story["status"] == "pr_open"
+    # last_review_findings cleared on a clean APPROVE.
+    assert story.get("last_review_findings", []) == []
+    assert "last_reviewed_sha" not in story
+
+
+# (c) tracked file NOT touched by the new commit -> APPROVE downgraded
+
+def test_approve_downgraded_when_tracked_file_not_touched(plan_dir, tmp_path, monkeypatch):
+    plan_name, story_key = "P1", "S1"
+    worktree = init_repo(tmp_path)
+    create_manifest(plan_dir, plan_name, story_key, worktree)
+    # First cycle: REQUEST_CHANGES with a Blocking finding on foo.py.
+    monkeypatch.setattr(
+        p, "_run_reviewer",
+        lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    p.review_story(plan_name, story_key)
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story.get("last_review_findings") == ["foo.py"]
+    prior_attempts = story.get("rework_attempts", 0)
+    # Rework: a WIP checkpoint commit touching an UNRELATED file only.
+    commit(worktree, "unrelated.txt", "wip", msg="wip checkpoint")
+    reset_to_tests_passed(plan_dir, plan_name, story_key)
+    # Second cycle: reviewer returns APPROVE anyway (the bug under test).
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    open_pr = Mock(return_value="https://gh/pr/1")
+    monkeypatch.setattr(p, "_open_pr", open_pr)
+    result = p.review_story(plan_name, story_key)
+    # Downgraded to REQUEST_CHANGES, not a PR open.
+    assert result["verdict"] == "REQUEST_CHANGES"
+    assert result["status"] == "changes_requested"
+    open_pr.assert_not_called()
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story["status"] == "changes_requested"
+    assert story["status"] != "pr_open"
+    # review_feedback names the untouched file.
+    assert "foo.py" in story.get("review_feedback", "")
+    # rework_attempts increments by exactly 1.
+    assert story["rework_attempts"] == prior_attempts + 1
+    # The untouched file is carried forward so the next cycle still requires it.
+    assert "foo.py" in story.get("last_review_findings", [])
+
+
+# (d) repeating (c) until the rework cap parks the story
+
+def test_repeated_downgrade_parks_at_rework_cap(plan_dir, tmp_path, monkeypatch):
+    plan_name, story_key = "P1", "S1"
+    worktree = init_repo(tmp_path)
+    create_manifest(plan_dir, plan_name, story_key, worktree)
+    # First cycle: REQUEST_CHANGES with a Blocking finding on foo.py.
+    monkeypatch.setattr(
+        p, "_run_reviewer",
+        lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    p.review_story(plan_name, story_key)
+    # Now drive repeated cycles where the reviewer keeps APPROVEing but the
+    # tracked file foo.py is never touched (only unrelated WIP commits land).
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    # The first REQUEST_CHANGES already consumed one rework attempt. Drive
+    # additional review cycles until the cap is reached and the story parks.
+    # REWORK_MAX_ATTEMPTS is the cap for a plain (non-escalated, non-oracle)
+    # story; this story carries acceptance, so its cap is REWORK_MAX_ATTEMPTS
+    # only when acceptance is absent. To exercise the plain-story cap we
+    # rebuild the manifest without acceptance.
+    create_manifest(plan_dir, plan_name, story_key, worktree, acceptance=[])
+    # Re-seed the first REQUEST_CHANGES cycle on the plain story.
+    monkeypatch.setattr(
+        p, "_run_reviewer",
+        lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    p.review_story(plan_name, story_key)
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story.get("last_review_findings") == ["foo.py"]
+    attempts = story.get("rework_attempts", 0)
+    # Each subsequent cycle: land an unrelated WIP commit, reset to
+    # tests_passed, then review with an APPROVE that must be downgraded.
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    while story.get("status") != "parked":
+        commit(worktree, f"unrelated_{attempts}.txt", "wip", msg="wip checkpoint")
+        reset_to_tests_passed(plan_dir, plan_name, story_key)
+        p.review_story(plan_name, story_key)
+        story = load_story(plan_dir, plan_name, story_key)
+        attempts = story.get("rework_attempts", 0)
+        # Safety valve: never loop forever.
+        if attempts > REWORK_MAX_ATTEMPTS + 2:
+            pytest.fail("rework_attempts exceeded cap without parking")
+    assert story["status"] == "parked"
+    assert "parked_reason" in story
+    assert "foo.py" in story.get("last_review_findings", [])
+
+
+# (e) prior REQUEST_CHANGES had no parseable Blocking targets -> APPROVE no-op
+
+def test_approve_proceeds_when_no_trackable_findings(plan_dir, tmp_path, monkeypatch):
+    plan_name, story_key = "P1", "S1"
+    worktree = init_repo(tmp_path)
+    create_manifest(plan_dir, plan_name, story_key, worktree)
+    # First cycle: REQUEST_CHANGES with prose findings that don't follow the
+    # new format -> no trackable targets.
+    monkeypatch.setattr(
+        p, "_run_reviewer",
+        lambda *a, **k: "VERDICT: REQUEST_CHANGES\nsome prose finding without a file path")
+    p.review_story(plan_name, story_key)
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story.get("last_review_findings") == []
+    # Land a new commit so the same-SHA guard doesn't short-circuit.
+    commit(worktree, "file.txt", "changed", msg="change")
+    reset_to_tests_passed(plan_dir, plan_name, story_key)
+    # Second cycle: APPROVE must proceed normally (nothing to verify).
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+    result = p.review_story(plan_name, story_key)
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story["status"] == "pr_open"
+
+
+# (f) git-diff subprocess failure does NOT block the APPROVE (fail-open)
+
+def test_approve_fail_open_on_git_diff_error(plan_dir, tmp_path, monkeypatch):
+    plan_name, story_key = "P1", "S1"
+    worktree = init_repo(tmp_path)
+    create_manifest(plan_dir, plan_name, story_key, worktree)
+    # First cycle: REQUEST_CHANGES tracking foo.py.
+    monkeypatch.setattr(
+        p, "_run_reviewer",
+        lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    p.review_story(plan_name, story_key)
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story.get("last_review_findings") == ["foo.py"]
+    # Land a new commit so the same-SHA guard doesn't short-circuit.
+    commit(worktree, "unrelated.txt", "wip", msg="wip checkpoint")
+    reset_to_tests_passed(plan_dir, plan_name, story_key)
+    # Point last_reviewed_sha at a SHA that does not exist in the repo so the
+    # real `git diff --name-only <sha> HEAD` exits non-zero -> fail-open.
+    story = load_story(plan_dir, plan_name, story_key)
+    story["last_reviewed_sha"] = "0" * 40
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["stories"][story_key]["last_reviewed_sha"] = "0" * 40
+    manifest_path.write_text(json.dumps(manifest))
+    # Second cycle: APPROVE must proceed despite the git-diff failure.
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+    result = p.review_story(plan_name, story_key)
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story["status"] == "pr_open"

@@ -1365,12 +1365,22 @@ def main() -> int:
             print(f"[step {step}] {fn}: {str(args.get('command') or args.get('path') or '')[:120]}", flush=True)
 
             if above_threshold:
-                if not nudged_repeat:
-                    nudged_repeat = True
-                    print("   [repetition nudge]", flush=True)
-                    messages.append({"role": "user", "content": _repetition_nudge()})
+                first_trip = not nudged_repeat
+                nudged_repeat = True
+                print("   [repetition nudge]" if first_trip
+                      else "   [parking: repeated action after nudge]", flush=True)
+                # Every trip answers the triggering tool_calls entry with a
+                # `tool`-role message, not just the first: leaving a later
+                # trip's call unanswered orphans it for the rest of the run
+                # (no tool_call ever goes without a reply), which live
+                # (Mode 33, 2026-07-22) correlated directly with gpt-oss:20b's
+                # Harmony-format output degrading into leaked special tokens
+                # a few turns after the first orphaned call. Re-delivering the
+                # guidance every time also gives the model a fresh chance to
+                # self-correct instead of going silent after one warning.
+                messages.append({"role": "tool", "content": _repetition_nudge()})
+                if first_trip:
                     break
-                print("   [parking: repeated action after nudge]", flush=True)
                 if worktree_dirty():
                     auto_wip_commit("parked on repetition")
                 if not PARK_ENABLED:
@@ -1484,6 +1494,14 @@ def main() -> int:
                     if worktree_dirty():
                         auto_wip_commit("read-heavy parking")
                     if not PARK_ENABLED:
+                        # Same class of bug as the per-target guard (Mode 33):
+                        # a silent break here means the model gets no renewed
+                        # feedback on any window after the first nudge.
+                        messages.append({"role": "user", "content": (
+                            "You're still re-reading targets you've already "
+                            "seen instead of acting. STOP READING and make an "
+                            "edit (create_file, str_replace, or checkpoint) "
+                            "now.")})
                         recent_tools.clear()
                         break
                     return 3
@@ -1504,6 +1522,11 @@ def main() -> int:
                         if worktree_dirty():
                             auto_wip_commit("read-heavy parking")
                         if not PARK_ENABLED:
+                            messages.append({"role": "user", "content": (
+                                "You've read many distinct files without "
+                                "making an edit. STOP READING and make an "
+                                "edit (create_file, str_replace, or "
+                                "checkpoint) now.")})
                             recent_tools.clear()
                             break
                         return 3

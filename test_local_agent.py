@@ -1081,6 +1081,104 @@ def test_local_agent_park_disabled_continues_past_per_target_park(tmp_path, monk
     )
 
 
+def test_local_agent_repeated_per_target_park_never_leaves_tool_call_unanswered(
+    tmp_path, monkeypatch, capsys,
+):
+    """Bug found live 2026-07-22 (Mode 33, MODE-29-REVIEW-STORY-LOCK-GUARD):
+    with PARK_ENABLED=False (the scheduler plist), only the FIRST trip of the
+    per-target repetition guard appended anything to the conversation (the
+    nudge, as a `user`-role message). Every trip after that for the rest of
+    the run silently dropped the tool call -- `break` with nothing appended
+    -- leaving the triggering assistant message's `tool_calls` entry with no
+    `tool`-role answer at all. Inspecting the live `.agent_transcript.json`
+    confirmed this directly: two consecutive `assistant` messages with no
+    intervening `tool` message, appearing immediately before gpt-oss:20b's
+    Harmony-format output started leaking raw special tokens
+    (`<|start|>assistant<|channel|>...`) and the run eventually collapsed
+    into narration-only turns and parked.
+
+    Fix: every trip of the guard, not just the first, must append a
+    `tool`-role response for the triggering call -- this keeps the
+    transcript well-formed (no orphaned tool_calls) AND re-delivers the
+    corrective guidance every time instead of going silent after one
+    warning."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    # Same script as test_local_agent_park_disabled_continues_past_per_target_park:
+    # 6 identical view_file calls -> seen=1,2 pass through normally, seen=3..6
+    # each trip the guard (first trip nudges, the other 3 previously parked
+    # silently).
+    responses = [("view_file", {"path": "static/style.css"}) for _ in range(6)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    capsys.readouterr()
+
+    messages = calls[-1]
+    for i, m in enumerate(messages[:-1]):
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            nxt = messages[i + 1]
+            assert nxt.get("role") == "tool", (
+                f"assistant tool_calls at index {i} has no tool-role answer "
+                f"(orphaned tool call); next message is {nxt!r}"
+            )
+
+    # 4 trips of the guard fire (seen reaches 3, 4, 5, 6) -- each must
+    # re-deliver the corrective guidance, not just the first.
+    nudge_msgs = [
+        m for m in messages
+        if m.get("role") == "tool" and "STOP reading" in (m.get("content") or "")
+    ]
+    assert len(nudge_msgs) == 4, (
+        f"expected the corrective guidance re-delivered on every one of the "
+        f"4 guard trips, got {len(nudge_msgs)}: {messages!r}"
+    )
+
+
+def test_local_agent_read_heavy_park_disabled_renudges_every_window(tmp_path, monkeypatch, capsys):
+    """Same bug class as test_local_agent_repeated_per_target_park_never_leaves_tool_call_unanswered
+    (Mode 33), applied to the read-heavy guard's `has_repetition` branch:
+    with PARK_ENABLED=False, only the first read-heavy window that trips
+    the guard got a corrective message; every later window that also showed
+    repetition went completely silent (a bare `break`). This guard doesn't
+    orphan a tool_calls entry (the real tool response for the triggering
+    call already landed before this check runs), but it shares the "nudge
+    once, then silence for the rest of the run" defect. Fix: append a fresh
+    corrective message on every window that trips, not just the first.
+
+    Three windows of 6 non-mutating calls: window 1 is all-distinct (fires
+    the initial nudge), windows 2 and 3 each repeat one target within the
+    window (wedging, not exploration) -> the has_repetition branch should
+    fire twice more, each time appending the renewed guidance."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    responses = (
+        [("bash", {"command": f"cat {c}"}) for c in "abcdef"]
+        + [("bash", {"command": "cat g"}), ("bash", {"command": "cat g"}),
+           ("bash", {"command": "cat h"}), ("bash", {"command": "cat i"}),
+           ("bash", {"command": "cat j"}), ("bash", {"command": "cat k"})]
+        + [("bash", {"command": "cat l"}), ("bash", {"command": "cat l"}),
+           ("bash", {"command": "cat m"}), ("bash", {"command": "cat n"}),
+           ("bash", {"command": "cat o"}), ("bash", {"command": "cat p"})]
+    )
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    capsys.readouterr()
+
+    messages = calls[-1]
+    renudge_msgs = [
+        m for m in messages
+        if m.get("role") == "user" and "still re-reading targets" in (m.get("content") or "")
+    ]
+    assert len(renudge_msgs) == 2, (
+        f"expected the read-heavy re-nudge on both post-initial-nudge "
+        f"windows that showed repetition, got {len(renudge_msgs)}: {messages!r}"
+    )
+
+
 def test_local_agent_read_heavy_distinct_exploration_reaches_an_edit(tmp_path, monkeypatch, capsys):
     """Lenient path: a multi-file bug fix legitimately reads many DISTINCT
     targets (each file once) before its first edit. The exploration-aware

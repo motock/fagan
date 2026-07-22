@@ -253,6 +253,18 @@ log as an audit record.
   lands a new commit naturally clears the guard on its next review call, so
   this only blocks re-reviewing the exact same unchanged commit, never the
   story's forward progress. `last_reviewed_sha` is cleared on `APPROVE`.
+  Separately, `review_story` only ever reviews a story whose status is
+  `tests_passed` — its sole legitimate entry state, matching the gate
+  `advance_pipeline` itself applies before ever calling it. A call on a story
+  in any other state (`done`, `pr_open`, `parked`, `changes_requested`,
+  `in_progress`, missing/`None`, ...) is a stale or duplicate call — most
+  commonly a second `advance_pipeline`/`advance_all_plans` tick racing an
+  already-completed review→merge→cleanup cycle for the same story — and is a
+  no-op: it returns `{"ok": True, "status": <unchanged>, "skipped":
+  "not_reviewable_state"}` immediately, without touching the worktree,
+  invoking the reviewer backend, or writing the manifest. This guard runs
+  before the `last_reviewed_sha` check above, so a stale call never reaches a
+  removed/cleaned-up worktree at all.
 
 ### Usage gate
 - `check_usage()` — probes current subscription usage via a headless

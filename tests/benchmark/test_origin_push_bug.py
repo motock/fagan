@@ -42,7 +42,7 @@ def _make_fixture_repo(tmp_path: Path) -> str:
     return first_sha
 
 
-@pytest.mark.parametrize("base_commit", ["first"])
+
 def test_origin_contains_base_commit_after_setup(tmp_path: Path, monkeypatch):
     # Create fixture repo and pin to its first commit
     sha = _make_fixture_repo(tmp_path)

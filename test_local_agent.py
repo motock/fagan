@@ -475,6 +475,46 @@ def test_replace_lines_rejects_edit_that_orphans_a_referenced_variable(tmp_path,
     assert (tmp_path / "mod.py").read_text() == original
 
 
+def test_replace_lines_rejects_edit_that_deletes_a_called_module_level_def(
+    tmp_path, monkeypatch,
+):
+    """Reproduces the live MODE-29-REVIEW-STORY-LOCK-GUARD incident
+    (2026-07-22): a replace_lines edit deleted only the
+    `def _review_story_impl(...):` line itself (replacing it with a blank
+    line) while its ~300-line body and its caller's
+    `return _review_story_impl(...)` both survived untouched. Because the
+    orphaned body stayed correctly indented as trailing (unreachable) code
+    inside the CALLER's function, the result is syntactically valid Python
+    - compile() accepts it - so only a NameError surfaces, at runtime, on
+    every call. The existing orphaned-variable check
+    (_newly_undefined_names) only tracks function-local Name-Store/Load
+    bindings and does not see a deleted module-level `def`; this is a
+    distinct check. The edit must be rejected and the file left unchanged."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def review_story(plan_name, story_key):\n"
+        "    with _plan_lock(plan_name) as acquired:\n"
+        "        if not acquired:\n"
+        "            return {\"ok\": True}\n"
+        "        return _review_story_impl(plan_name, story_key)\n"
+        "\n"
+        "\n"
+        "def _review_story_impl(plan_name, story_key):\n"
+        "    return {\"plan\": plan_name, \"story\": story_key}\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 8,
+        "end": 8,
+        "new_str": "",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "_review_story_impl" in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
 def test_orphaned_variable_check_accepts_edit_that_removes_assignment_and_all_uses(
     tmp_path, monkeypatch,
 ):

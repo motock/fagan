@@ -1705,6 +1705,34 @@ def test_run_reviewer_prompt_does_not_block_on_docs_for_brand_new_code(
     assert "brand-new" in prompt or "brand new" in prompt
 
 
+def test_run_reviewer_prompt_asks_for_every_blocking_finding_in_one_pass(
+    agents_dir, monkeypatch,
+):
+    """The reviewer rubric must ask for ALL Blocking findings in a single
+    review, not just the first one noticed - otherwise a weak local
+    implementer burns a full rework cycle per finding, and each cycle is a
+    fresh opportunity to regress already-correct code (observed live
+    2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD: review #1 flagged only the
+    missing docstring; review #2, on otherwise-correct code, surfaced a
+    SECOND pre-existing issue (validate-before-lock) that was visible in
+    review #1's diff but never raised there; the extra rework cycle this
+    forced is where the implementation broke)."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    prompt = captured["prompt"].lower()
+    assert "every" in prompt and "blocking" in prompt
+    assert "rework" in prompt
+
+
 def test_run_reviewer_scopes_test_command_to_acceptance_paths(
     agents_dir, tmp_path, monkeypatch,
 ):
@@ -8740,6 +8768,44 @@ def test_dispatch_story_omits_rework_full_suite_without_ci_rework(
     result = p.dispatch_story("cirsnone", "S1")
     assert result["ok"] is True
     assert "LOCAL_AGENT_REWORK_FULL_SUITE" not in captured["env"]
+
+
+def test_dispatch_story_passes_rework_full_suite_when_review_feedback_set(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """L1 gap: a story carrying reviewer `review_feedback` (a REQUEST_CHANGES
+    rework redispatch, not a CI-fail rework) must ALSO reach the agent
+    subprocess as LOCAL_AGENT_REWORK_FULL_SUITE=1. Without this, the
+    reviewer-rework path lets the agent call `done` on a dirty/broken tree
+    the reviewer never re-checked in full - the acceptance oracle stays
+    green even when the agent's own edit broke the rest of the suite
+    (observed live 2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD cycle 3: a
+    botched replace_lines orphaned a function definition, the agent called
+    done with 79 tests failing, and nothing rejected it)."""
+    captured: dict = {}
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(
+        backend.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakeProc(4323),
+    )
+    monkeypatch.setattr(pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    _write_manifest(plan_dir, "revfb", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "dependencies": [],
+               "review_feedback": "REQUEST_CHANGES: fix the docstring placement.",
+               "acceptance": [{"path": "tests/test_a.py", "source": "def test_a(): pass"}]},
+    })
+
+    result = p.dispatch_story("revfb", "S1")
+    assert result["ok"] is True
+    assert captured["env"]["LOCAL_AGENT_REWORK_FULL_SUITE"] == "1"
 
 
 def test_dispatch_story_excludes_review_and_agent_log_from_worktree_tracking(

@@ -929,6 +929,41 @@ def _function_name_scopes(tree: ast.AST) -> dict[str, tuple[set[str], set[str]]]
     return scopes
 
 
+def _newly_undefined_module_defs(old_content: str, new_content: str) -> list[str]:
+    """Return names of module-level `def`/`class` statements deleted by this
+    edit while a reference to that name survives. Ported verbatim from
+    local_agent.py; keep both copies in sync - see that file's docstring
+    for the live-incident rationale (MODE-29-REVIEW-STORY-LOCK-GUARD,
+    2026-07-22: a replace_lines edit deleted only the `def
+    _review_story_impl(...):` line, leaving its body as syntactically
+    valid trailing dead code in the caller and the caller's call site
+    intact - compile() accepts it, only a runtime NameError surfaces)."""
+    try:
+        old_tree = ast.parse(old_content)
+        new_tree = ast.parse(new_content)
+    except SyntaxError:
+        return []
+    old_top_defs = {
+        n.name for n in old_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    new_top_defs = {
+        n.name for n in new_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    removed = old_top_defs - new_top_defs
+    if not removed:
+        return []
+    new_loaded = {
+        n.id for n in ast.walk(new_tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    return [
+        f"{name} (module-level def deleted but still called)"
+        for name in sorted(removed & new_loaded)
+    ]
+
+
 def _newly_undefined_names(path_str: str, old_content: str, new_content: str) -> list[str]:
     """Return "name (in function)" entries for a name whose only assignment
     within a function existed in `old_content`, was read later in that SAME
@@ -954,6 +989,7 @@ def _newly_undefined_names(path_str: str, old_content: str, new_content: str) ->
         for var in sorted(old_assigned & old_loaded):
             if var in new_loaded and var not in new_assigned:
                 orphaned.append(f"{var} (in {name})")
+    orphaned.extend(_newly_undefined_module_defs(old_content, new_content))
     return orphaned
 
 

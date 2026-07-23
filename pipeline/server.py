@@ -1153,12 +1153,24 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # we're actually invoking that driver so Claude's signature stays clean.
         if dispatch_backend in _LOCAL_BACKEND_NAMES and acceptance_paths:
             dispatch_kwargs["acceptance"] = acceptance_paths
-        # L1 (REVIEWER_ESCALATION_PLAN.md): a CI-triggered rework
-        # (story["ci_rework"], set by the merge-CI rework router) raises the
-        # agent's done-bar to full-suite-green so it cannot declare done while
-        # its own broken test still fails. Local-only: the env reaches the
-        # local agent subprocess; Claude's dispatch signature stays clean.
-        if dispatch_backend in _LOCAL_BACKEND_NAMES and story.get("ci_rework"):
+        # L1 (REVIEWER_ESCALATION_PLAN.md): any rework redispatch - a
+        # CI-triggered rework (story["ci_rework"]) OR a reviewer
+        # REQUEST_CHANGES rework (story["review_feedback"]) - raises the
+        # agent's done-bar to full-suite-green so it cannot declare done
+        # while its own edit left the rest of the suite broken. The
+        # reviewer's own pass is acceptance-scoped (see
+        # _scope_test_cmd_to_acceptance in review.py), so a regression
+        # outside the acceptance paths is otherwise invisible until the
+        # merge gate - or, worse, never re-checked at all if `done` is
+        # accepted on a broken tree (observed live 2026-07-22,
+        # MODE-29-REVIEW-STORY-LOCK-GUARD: a rework redispatch's own edit
+        # orphaned a function definition, the agent called done with 79
+        # tests failing, and nothing rejected it because this gate was
+        # only armed for ci_rework). Local-only: the env reaches the local
+        # agent subprocess; Claude's dispatch signature stays clean.
+        if dispatch_backend in _LOCAL_BACKEND_NAMES and (
+            story.get("ci_rework") or story.get("review_feedback")
+        ):
             dispatch_kwargs["rework_full_suite"] = True
 
         if resume_via_transcript:

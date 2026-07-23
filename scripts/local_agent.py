@@ -878,6 +878,51 @@ def _function_name_scopes(tree: ast.AST) -> dict[str, tuple[set[str], set[str]]]
     return scopes
 
 
+def _newly_undefined_module_defs(old_content: str, new_content: str) -> list[str]:
+    """Return names of module-level `def`/`class` statements present in
+    `old_content` but deleted by this edit while a reference to that name
+    survives anywhere in `new_content` - the shape of the MODE-29 incident
+    (2026-07-22): a replace_lines edit deleted only the
+    `def _review_story_impl(...):` line itself, leaving its ~300-line body
+    correctly indented as trailing dead code inside the CALLER's function
+    and the caller's `return _review_story_impl(...)` untouched. That
+    result is syntactically valid Python (compile() accepts it - the body
+    is now just unreachable code after an earlier return), so only a
+    NameError surfaces, at runtime, on every call.
+
+    `_newly_undefined_names` above only tracks function-LOCAL Name-Store/
+    Load bindings via `_function_name_scopes` and cannot see this: a `def`
+    statement's name isn't an `ast.Name` node, and the deleted function's
+    own body being reachable syntax elsewhere is irrelevant to whether the
+    NAME `_review_story_impl` is still defined. This is deliberately a
+    separate, narrower check (top-level statements only, not nested defs)
+    rather than folding module scope into `_function_name_scopes`."""
+    try:
+        old_tree = ast.parse(old_content)
+        new_tree = ast.parse(new_content)
+    except SyntaxError:
+        return []
+    old_top_defs = {
+        n.name for n in old_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    new_top_defs = {
+        n.name for n in new_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    removed = old_top_defs - new_top_defs
+    if not removed:
+        return []
+    new_loaded = {
+        n.id for n in ast.walk(new_tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    return [
+        f"{name} (module-level def deleted but still called)"
+        for name in sorted(removed & new_loaded)
+    ]
+
+
 def _newly_undefined_names(path_str: str, old_content: str, new_content: str) -> list[str]:
     """Return "name (in function)" entries for every name whose only
     assignment within a function existed in `old_content`, was read later in
@@ -905,6 +950,7 @@ def _newly_undefined_names(path_str: str, old_content: str, new_content: str) ->
         for var in sorted(old_assigned & old_loaded):
             if var in new_loaded and var not in new_assigned:
                 orphaned.append(f"{var} (in {name})")
+    orphaned.extend(_newly_undefined_module_defs(old_content, new_content))
     return orphaned
 
 

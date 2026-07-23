@@ -12028,6 +12028,25 @@ def test_planner_system_prescribes_delegate_wrapper_for_large_function_edits():
     assert "delegate" in p._PLANNER_SYSTEM.lower()
 
 
+def test_planner_system_delegate_wrapper_specifies_what_to_preserve():
+    """Root cause diagnosed live (2026-07-22/23, MODE-29-REVIEW-STORY-LOCK-GUARD
+    redispatch): the rename-and-delegate recipe told the executor to rename
+    `foo` to `_foo_impl` and define a new short `foo` that delegates, but
+    never said what the new `foo` must carry over from the original. Every
+    Blocking finding across two full review cycles traced to this gap - the
+    `@mcp.tool()` decorator was left on the renamed `_foo_impl` (silently
+    deregistering the real MCP entrypoint even though tests calling the bare
+    module attribute passed), the docstring moved with it (emptying the
+    tool's client-facing description), and argument validation ended up
+    running inside `_foo_impl` - after the new wrapper's lock/guard setup
+    instead of before it, opening a path-traversal window. The recipe must
+    name all three explicitly."""
+    text = p._PLANNER_SYSTEM.lower()
+    assert "decorator" in text
+    assert "docstring" in text
+    assert "valid" in text and "before" in text
+
+
 def test_planner_system_worked_examples_must_verify_persisted_state():
     """Live-discovered bug (2026-07-16, production-config benchmark run,
     token_bucket via glm-5.2:cloud/Ollama planner + mlx implementer): the
@@ -12400,6 +12419,19 @@ def test_rework_planner_system_prescribes_delegate_wrapper_for_large_function_ed
     the same kind of large existing function."""
     assert "_impl" in p._REWORK_PLANNER_SYSTEM
     assert "delegate" in p._REWORK_PLANNER_SYSTEM.lower()
+
+
+def test_rework_planner_system_delegate_wrapper_specifies_what_to_preserve():
+    """Mirrors test_planner_system_delegate_wrapper_specifies_what_to_preserve
+    - a rework cycle's fix checklist needs the same completed rename-and-
+    delegate recipe as the initial checklist, since a reviewer's requested
+    fix can land inside the same large-function-wrap shape (this is exactly
+    where it recurred live: the story's own rework cycle re-applied the
+    same incomplete recipe and reproduced the same two Blocking findings)."""
+    text = p._REWORK_PLANNER_SYSTEM.lower()
+    assert "decorator" in text
+    assert "docstring" in text
+    assert "valid" in text and "before" in text
 
 
 def test_run_rework_planner_returns_none_on_backend_failure(agents_dir, monkeypatch):

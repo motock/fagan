@@ -2384,6 +2384,38 @@ def test_done_rejected_on_rework_round_when_full_suite_fails(tmp_path, monkeypat
     assert excerpt in last_user["content"], last_user["content"]
 
 
+def test_done_rejected_message_does_not_presume_the_test_is_wrong(tmp_path, monkeypatch, capsys):
+    """Root cause diagnosed live (2026-07-22/23, MODE-29-REVIEW-STORY-LOCK-GUARD):
+    this message originated for the CI-fail-rework case, where the failure IS
+    always the agent's own test (an oracle-scoped review never saw it). Once
+    Gap 1 armed this same gate for ordinary REVIEW rework too, the message's
+    flat assertion - "your own committed test has a wrong assertion" -
+    became false in that case: the failure can equally be a still-incomplete
+    IMPLEMENTATION. Observed consequence: immediately after this exact
+    rejection, the agent pivoted to obsessively rewriting its test file for
+    ~15 steps instead of fixing the implementation, because the message told
+    it the test was the problem. The fed-back content must not assert which
+    side is wrong; it must direct the agent to check both and make one
+    targeted fix."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(la, "MAX_STEPS", 3)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+    excerpt = "FAILED test_review_story_lock_guard.py::test_review_story_skips_when_lock_held"
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt))
+
+    fake, calls = _sequence_chat([("done", {"summary": "first attempt"})])
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    last_user = [m for m in calls[1] if m["role"] == "user"][-1]["content"]
+
+    assert "your own committed test has a wrong assertion" not in last_user
+    assert "implementation" in last_user.lower()
+    assert excerpt in last_user
+
+
 def test_done_accepted_on_non_rework_round_without_consulting_suite(tmp_path, monkeypatch, capsys):
     """Non-rework round, clean worktree: `done` is accepted as today (rc=0)
     and the full suite is NEVER consulted - proves the rework gate is scoped,

@@ -772,11 +772,13 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
             if messages is not None:
                 messages.append({"role": "user", "content": (
                     "The acceptance oracle passes but the FULL test suite still "
-                    "fails - your own committed test has a wrong assertion. The "
-                    f"merge-gate CI will reject this on the same failure:\n{full_tail}"
-                    "\n\nFix the failing test (re-read the file:line above, correct "
-                    "the expected value or the code so the assertion holds) and do "
-                    "NOT call done until `pytest` passes in full.")})
+                    f"fails. The merge-gate CI will reject this on the same "
+                    f"failure:\n{full_tail}\n\nThe bug could be in the "
+                    "implementation you just changed, or in a test file - do "
+                    "not assume either side is correct. Re-read the failing "
+                    "test and the code it exercises, identify which one is "
+                    "actually wrong, and make ONE targeted fix there. Do NOT "
+                    "call done until `pytest` passes in full.")})
             print(f"[step {step}] ORACLE GREEN but full suite still fails - "
                   f"rework done-bar not met; continuing.", flush=True)
             return False
@@ -1417,15 +1419,17 @@ def main() -> int:
                         if not full_ok:
                             print(f"[step {step}] done rejected — full test suite "
                                   f"still fails (rework done-bar); asking agent to "
-                                  f"fix its own test", flush=True)
+                                  f"fix the failure", flush=True)
                             messages.append({"role": "user", "content": (
                                 "The acceptance oracle passes but the FULL test suite "
-                                "still fails - your own committed test has a wrong "
-                                "assertion. The merge-gate CI will reject this on the "
-                                f"same failure:\n{full_tail}\n\nRe-read the file:line "
-                                "above, correct the expected value or the code so the "
-                                "assertion holds, and do NOT call done until `pytest` "
-                                "passes in full.")})
+                                f"still fails. The merge-gate CI will reject this on "
+                                f"the same failure:\n{full_tail}\n\nThe bug could be "
+                                "in the implementation you just changed, or in a test "
+                                "file - do not assume either side is correct. Re-read "
+                                "the failing test and the code it exercises, identify "
+                                "which one is actually wrong, and make ONE targeted "
+                                "fix there. Do NOT call done until `pytest` passes in "
+                                "full.")})
                             break
                     if worktree_dirty():
                         auto_commit("feat: implement task (acceptance oracle green)")

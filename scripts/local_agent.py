@@ -761,14 +761,15 @@ def _reject_done_for_suite(messages: list, step: int, suite_tail: str) -> None:
     caller increments `suite_rejections` and `break`s out of the tool-call
     loop so the next step re-enters with this fed-back excerpt."""
     print(f"[step {step}] done rejected — full test suite still fails "
-          f"(rework done-bar); asking agent to fix its own test", flush=True)
+          f"(rework done-bar); asking agent to fix the failure", flush=True)
     messages.append({"role": "user", "content": (
-        "The full test suite still fails - your own committed "
-        "test has a wrong assertion. The merge-gate CI will reject "
-        f"this on the same failure:\n{suite_tail}\n\nRe-read the "
-        "file:line above, correct the expected value or the code so "
-        "the assertion holds, and do NOT call done until `pytest` "
-        "passes in full.")})
+        "The full test suite still fails. The merge-gate CI will reject "
+        f"this on the same failure:\n{suite_tail}\n\nThe bug could be in "
+        "the implementation you just changed, or in a test file - do not "
+        "assume either side is correct. Re-read the failing test and the "
+        "code it exercises, identify which one is actually wrong, and make "
+        "ONE targeted fix there. Do NOT call done until `pytest` passes in "
+        "full.")})
 
 
 # Consecutive syntax-rejection count per path, so a model that resubmits the

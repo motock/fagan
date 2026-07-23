@@ -2278,6 +2278,36 @@ def test_oracle_done_rejected_on_rework_round_when_full_suite_fails(
     assert excerpt in last_user["content"], last_user["content"]
 
 
+def test_oracle_done_rejected_message_does_not_presume_the_test_is_wrong(
+    tmp_path, monkeypatch,
+):
+    """Ported alongside test_done_rejected_message_does_not_presume_the_test_is_wrong
+    (local_agent.py) - keep both copies in sync. Once Gap 1 armed this gate
+    for ordinary REVIEW rework (not just CI-fail rework), the flat assertion
+    that the agent's OWN test is wrong stopped being reliably true - the
+    failure can equally be a still-incomplete implementation."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(lao, "MAX_STEPS", 3)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
+    excerpt = "FAILED test_review_story_lock_guard.py::test_review_story_skips_when_lock_held"
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (False, excerpt))
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
+
+    fake, calls = _sequence_chat([("done", {"summary": "all done"})])
+    monkeypatch.setattr(lao, "chat", fake)
+
+    lao.main()
+    last_user = [m for m in calls[1] if m["role"] == "user"][-1]["content"]
+
+    assert "your own committed test has a wrong assertion" not in last_user
+    assert "implementation" in last_user.lower()
+    assert excerpt in last_user
+
+
 def test_oracle_done_accepted_on_cold_start_without_consulting_suite(
     tmp_path, monkeypatch, capsys
 ):

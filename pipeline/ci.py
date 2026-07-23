@@ -23,10 +23,10 @@ from pathlib import Path
 from typing import Any
 
 from .build_detect import (
-    detect_test_command,
+    detect_test_command,  # noqa: F401
     detect_build_command,
-    _acceptance_rel_paths,
-    _scope_test_cmd_to_acceptance,
+    _acceptance_rel_paths,  # noqa: F401
+    _scope_test_cmd_to_acceptance,  # noqa: F401
 )
 from .concurrency import _is_heavy, _heavy_lock
 
@@ -104,7 +104,7 @@ def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[s
                     capture_output=True, text=True,
                 )
             else:
-                r = subprocess.run(["gh", "pr", "checks", branch, "--json", "bucket"],
+                 r = subprocess.run(["gh", "pr", "checks", branch, "--json", "name,bucket"],
                                    capture_output=True, text=True)
         except OSError as e:
             return {"state": "none", "error": f"gh unavailable: {e}"}
@@ -126,9 +126,9 @@ def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[s
                 continue
             conclusions = {c.get("conclusion") for c in runs}
             if conclusions & {"failure", "timed_out", "action_required"}:
-                return {"state": "fail", "error": ""}
+                 return {"state": "fail", "error": "; ".join(f"{r.get('name')}: {r.get('conclusion')}" for r in runs if r.get('conclusion') in {"failure","timed_out","action_required"})[:300]}
             if "cancelled" in conclusions:
-                return {"state": "cancelled", "error": ""}
+                 return {"state": "cancelled", "error": "; ".join(f"{r.get('name')}: {r.get('conclusion')}" for r in runs if r.get('conclusion') == "cancelled")[:300]}
             if any(c.get("status") != "completed" for c in runs):
                 time.sleep(10)  # still pending — keep polling
                 continue
@@ -137,26 +137,25 @@ def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[s
             time.sleep(10)  # still pending — keep polling
         else:
             # No local worktree to read a fresher commit from - fall back to
-            # the pre-Mode-26 branch-scoped query (see the docstring).
-            try:
-                buckets = {c.get("bucket") for c in json.loads(r.stdout or "[]")}
-            except ValueError:
-                return {"state": "none", "error": "unparseable gh pr checks output"}
-            if not buckets:
-                if not _repo_has_ci_configured():
-                    return {"state": "none", "error": ""}
-                time.sleep(10)
-                continue
-            if buckets & {"fail", "error", "action_required"}:
-                return {"state": "fail", "error": ""}
-            if "cancelled" in buckets:
-                return {"state": "cancelled", "error": ""}
-            if buckets <= {"pass"}:
-                return {"state": "pass", "error": ""}
-            time.sleep(10)  # still pending — keep polling
-    return {"state": "pending", "error": "CI did not complete within timeout"}
-
-
+             try:
+                 entries = json.loads(r.stdout or "[]")
+                 buckets = {c.get("bucket") for c in entries}
+             except ValueError:
+                 return {"state": "none", "error": "unparseable gh pr checks output"}
+             if not buckets:
+                 if not _repo_has_ci_configured():
+                     return {"state": "none", "error": ""}
+                 time.sleep(10)
+                 continue
+             if buckets & {"fail", "error", "action_required"}:
+                 return {
+                     "state": "fail",
+                     "error": "; ".join(
+                         f"{e.get('name')}: {e.get('bucket')}"
+                         for e in entries
+                         if e.get("bucket") in {"fail", "error", "action_required"}
+                     )[:300],
+                 }
 def _ci_rerun(sha: str) -> bool:
     """Rerun the failed/cancelled jobs of the workflow run for the specific
     commit `sha` via `gh run rerun --failed`, for the one-shot auto-retry on
@@ -164,8 +163,8 @@ def _ci_rerun(sha: str) -> bool:
     return False so the caller falls through to the ordinary fail/retry path
     rather than crashing the scheduler tick.
 
-    SHA-scoped for the same reason `_ci_status` is (Mode 26): `gh run list
-    --branch <branch>` can resolve to an older, already-superseded run right
+    SHA-scoped for the same reason `_ci_status` is (Mode 26): `gh run list`
+    --branch <branch> can resolve to an older, already-superseded run right
     after a force-push. `head_sha` on the actions/runs list endpoint pins to
     the exact commit instead.
     """
@@ -190,24 +189,9 @@ def _ci_rerun(sha: str) -> bool:
     except OSError:
         return False
     return rerun.returncode == 0
-
-
 def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]:
     """Re-run a story's acceptance oracle against its (rebased) worktree right
-    before merge, as a second check independent of review and of whatever
-    `check_story_status` decided when it set `tests_passed`.
-
-    A repo's own CI (`_ci_status`) only exists if the repo has one configured;
-    a story graded against a harness-owned `acceptance` block deserves the
-    same re-verification regardless. Returns ``{"state": "pass"|"fail"|"none",
-    "error": str}`` — ``"none"`` only when there's no worktree to test
-    against. Stories with an `acceptance` block get the scoped oracle re-run;
-    stories WITHOUT one (ordinary TDD stories) and non-pytest runners fall
-    back to re-running the full suite, so a post-rebase break can't slip
-    through (this is the MBW safety net — see commit history). Operators
-    with slow suites can opt out via ``PIPELINE_REVERIFY_FULL_SUITE=0`` to
-    restore the old silent-pass behavior.
-    """
+    before merge; ..."""
     acceptance = story.get("acceptance") or []
     if not worktree or not Path(worktree).is_dir():
         return {"state": "none", "error": ""}
@@ -246,7 +230,6 @@ def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]
     if r.returncode == 0:
         return {"state": "pass", "error": ""}
     return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
-
 
 def _reverify_build(worktree: str) -> dict[str, str]:
     """Run the rebased worktree's build command (if one is detectable)

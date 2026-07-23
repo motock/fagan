@@ -526,3 +526,28 @@ def test_final_rework_escalation_survives_ingest_replan(
         f"final_rework_escalation must be preserved untouched across "
         f"re-ingest; got {merged.get('final_rework_escalation')!r}"
     )
+
+
+def test_final_rework_escalation_null_value(monkeypatch, plan_dir, agents_dir):
+    _disable_auto_escalation(monkeypatch)
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+
+    story = _make_story(
+        plan_dir, status="tests_passed",
+        backend="ollama", model="gpt-oss:20b",
+        rework_attempts=1,
+    )
+    _write_manifest_with_story(
+        plan_dir, "fre", "S1", story,
+        top_level={"final_rework_escalation": None},
+    )
+
+    _force_request_changes(monkeypatch)
+
+    result = p.review_story("fre", "S1")
+
+    assert result["ok"] is True
+    on_disk = _read_story(plan_dir, "fre", "S1")
+    # backend/model unchanged
+    assert on_disk["backend"] == "ollama"
+    assert on_disk["model"] == "gpt-oss:20b"

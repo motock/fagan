@@ -2291,8 +2291,8 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 _notify_user(plan_name, f"{story_key} parked: reviewer still requesting changes "
                                         f"after {attempts} cycles - needs human review.")
         else:
-            if attempts == rework_cap - 1 and manifest.get("final_rework_escalation", {}).get("enabled"):
-                fre = manifest.get("final_rework_escalation", {})
+            fre = manifest.get("final_rework_escalation") or {}
+            if attempts == rework_cap - 1 and fre.get("enabled"):
                 provider = fre.get("provider")
                 if provider in {"claude", "local", "ollama", "lmstudio", "mlx"}:
                     model = fre.get("model")

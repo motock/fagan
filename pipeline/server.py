@@ -2301,7 +2301,15 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         "status": story["status"],
         "pr_url": story.get("pr_url"),
     }
+# Preserve original review_story implementation
+_original_review_story = review_story
 
+def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {"ok": True, "skipped": "locked",
+                    "reason": "another dispatch/ingest/interrupt/review is in progress for this plan"}
+        return _original_review_story(plan_name, story_key)
 
 
 

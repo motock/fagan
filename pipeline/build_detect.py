@@ -8,6 +8,7 @@ re-export in pipeline_mcp_server.py.
 """
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -128,6 +129,94 @@ def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
             return child, _apply_pytest_collection_overrides(cmd)
 
     return cwd, ["npm", "test"]  # fallback
+
+
+def _ruff_config_present(cwd: Path) -> bool:
+    """True if an explicit ruff config file/section exists."""
+    if (cwd / "ruff.toml").exists() or (cwd / ".ruff.toml").exists():
+        return True
+    pyproject = cwd / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            if "[tool.ruff" in pyproject.read_text():
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _ruff_declared_as_dependency(cwd: Path) -> bool:
+    """True if ruff is named in a requirements file - the signal this repo
+    itself actually emits (no ruff.toml/[tool.ruff] anywhere; ruff is pinned
+    only in requirements-dev.txt and CI runs a bare ``ruff check .`` with
+    ruff's default rules). A config-file-only detection premise misses this
+    entirely, which is exactly what happened when detect_lint_command was
+    first speced against a false assumption about this repo's own setup."""
+    for name in ("requirements-dev.txt", "requirements-test.txt", "requirements.txt"):
+        req = cwd / name
+        if req.exists():
+            try:
+                if "ruff" in req.read_text().lower():
+                    return True
+            except OSError:
+                pass
+    return False
+
+
+def _eslint_config_present(cwd: Path) -> bool:
+    for name in ("eslint.config.js", "eslint.config.mjs", "eslint.config.cjs"):
+        if (cwd / name).exists():
+            return True
+    return any(cwd.glob(".eslintrc*"))
+
+
+def _lint_command_for(cwd: Path) -> list[str] | None:
+    """Return the lint command for cwd if a recognized lint signal is
+    present AND the tool it names is actually runnable, or None otherwise
+    (no signal, or signal present but tool unavailable - fail open in both
+    cases, mirroring _test_command_for's allowlist style but broader: the
+    opt-in signal is either an explicit config file OR the tool declared as
+    an installed dependency, since a real project can lint with a bare
+    default ruleset and no config at all)."""
+    is_python_project = (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists()
+    if is_python_project and (_ruff_config_present(cwd) or _ruff_declared_as_dependency(cwd)):
+        venv_python = _venv_python_for(cwd)
+        if venv_python is not None:
+            ruff_bin = venv_python.parent / "ruff"
+            if ruff_bin.exists():
+                return [str(ruff_bin), "check", "."]
+        which_ruff = shutil.which("ruff")
+        if which_ruff:
+            return [which_ruff, "check", "."]
+        return None  # signal present but no runnable tool - fail open
+
+    if (cwd / "package.json").exists() and _eslint_config_present(cwd):
+        return ["npx", "--no-install", "eslint", "."]
+
+    if (cwd / ".golangci.yml").exists() or (cwd / ".golangci.yaml").exists():
+        which_golangci = shutil.which("golangci-lint")
+        if which_golangci:
+            return [which_golangci, "run"]
+        return None
+
+    return None
+
+
+def detect_lint_command(cwd: Path) -> tuple[Path, list[str]] | None:
+    """Detect a lint command for cwd, or None if no recognized lint signal
+    is present or the detected tool isn't actually available.
+
+    Deliberately cwd-only (no immediate-subdirectory fallback like
+    detect_test_command/detect_build_command have) - callers pass the
+    worktree root, and lint is a repo-wide concern, not something that
+    needs the subproject-discovery heuristic those two use.
+
+    Fail-open throughout, same contract as detect_build_command: a repo
+    with no recognized lint signal (or a signal but no runnable tool) must
+    not be blocked by a lint gate.
+    """
+    cmd = _lint_command_for(cwd)
+    return (cwd, cmd) if cmd is not None else None
 
 
 def _apply_pytest_collection_overrides(cmd: list[str]) -> list[str]:
@@ -258,6 +347,7 @@ __all__ = [
     "_build_command_for",
     "detect_build_command",
     "detect_test_command",
+    "detect_lint_command",
     "_acceptance_rel_paths",
     "_is_pytest_cmd",
     "_scope_test_cmd_to_acceptance",

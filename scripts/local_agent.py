@@ -739,6 +739,12 @@ def _full_suite_result() -> tuple[bool, str]:
     (no acceptance scoping - this agent has no acceptance oracle), return
     (passed, tail[-500:]). No detectable test command -> (True, '') (nothing
     to fail). Kept in sync with scripts/local_agent_oracle.py:_full_suite_result.
+
+    Mode 40: once tests pass, also run detect_lint_command (if the repo has
+    one) and fold a lint failure into the same (False, tail) result - the
+    live incident that motivated this was an agent exiting DONE with a
+    green suite but a lint-failing CI, because nothing local ever checked
+    lint before this. No detected lint command -> unchanged (True, '').
     """
     test_dir, test_cmd = p.detect_test_command(CWD)
     if not test_cmd:
@@ -750,7 +756,15 @@ def _full_suite_result() -> tuple[bool, str]:
             r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
     else:
         r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
-    return r.returncode == 0, (r.stdout + r.stderr)[-500:]
+    if r.returncode != 0:
+        return False, (r.stdout + r.stderr)[-500:]
+    lint = p.detect_lint_command(CWD)
+    if lint is not None:
+        lint_dir, lint_cmd = lint
+        lr = subprocess.run(lint_cmd, cwd=lint_dir, capture_output=True, text=True)
+        if lr.returncode != 0:
+            return False, (lr.stdout + lr.stderr)[-500:]
+    return True, ""
 
 
 def _reject_done_for_suite(messages: list, step: int, suite_tail: str) -> None:
@@ -1053,6 +1067,41 @@ def _record_syntax_rejection(path_str: str, err: str) -> str:
     return err
 
 
+def _lint_feedback_for(path_str: str) -> str:
+    """Mode 40: after a successful write to `path_str`, run a fast,
+    single-file-scoped lint check and return a short findings suffix to
+    append to the tool's success message, or "" when there's nothing to
+    report. Only ruff supports cheap single-file scoping (swap the "."
+    arg for the file path); other detected linters (eslint, golangci-lint)
+    are skipped here and only caught by the full-repo _full_suite_result
+    check at done-time, to keep this per-edit check fast.
+
+    The point is closing the loop that let a live incident ship 18 ruff
+    violations undetected until CI: the model previously had zero lint
+    signal until the very end of a run (or, before this fix, never at
+    all locally). This surfaces it at the moment the mistake is made.
+    """
+    if not path_str.endswith(".py"):
+        return ""
+    lint = p.detect_lint_command(CWD)
+    if lint is None:
+        return ""
+    lint_dir, cmd = lint
+    if not cmd or "ruff" not in cmd[0]:
+        return ""
+    try:
+        res = subprocess.run(
+            [cmd[0], "check", path_str], cwd=lint_dir,
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if res.returncode == 0:
+        return ""
+    findings = (res.stdout + res.stderr).strip()[:800]
+    return f"\n\n[lint] `ruff check {path_str}` found issues (fix before calling done):\n{findings}"
+
+
 def run_tool(fn, args) -> str:
     if fn == "create_file":
         path = CWD / args["path"]
@@ -1076,7 +1125,8 @@ def run_tool(fn, args) -> str:
         path.write_text(content)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         _CREATED_THIS_RUN.add(args["path"])
-        return f"created {args['path']}" + (f" ({note})" if note else "")
+        return (f"created {args['path']}" + (f" ({note})" if note else "")
+                + _lint_feedback_for(args['path']))
     if fn == "str_replace":
         path = CWD / args["path"]
         if not path.exists():
@@ -1106,7 +1156,8 @@ def run_tool(fn, args) -> str:
             )
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
-        return f"edited {args['path']}" + (f" ({note})" if note else "")
+        return (f"edited {args['path']}" + (f" ({note})" if note else "")
+                + _lint_feedback_for(args['path']))
     if fn == "replace_lines":
         path = CWD / args["path"]
         if not path.exists():
@@ -1147,7 +1198,8 @@ def run_tool(fn, args) -> str:
             )
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
-        return f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")
+        return (f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")
+                + _lint_feedback_for(args['path']))
     if fn == "view_file":
         path = CWD / args["path"]
         if not path.exists():

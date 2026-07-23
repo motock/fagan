@@ -2489,3 +2489,215 @@ def test_dirty_tree_auto_accept_does_not_bypass_suite_gate(tmp_path, monkeypatch
     assert "DONE with auto-WIP-commit" not in out, out
     # The suite was checked at the would-be-auto-accept site and rejected.
     assert "done rejected — full test suite still fails" in out, out
+
+
+# ---------------------------------------------------------------------------
+# Mode 40 follow-up: lint feedback, both per-edit (fast, in-run) and as part
+# of the done-bar's _full_suite_result (so a rework agent can't exit DONE on
+# a lint failure the way the live incident did - see MODE40-CI-ERROR-DETAIL/
+# MODE40-LOCAL-LINT-GATE in project memory).
+# ---------------------------------------------------------------------------
+
+def test_full_suite_result_runs_lint_after_tests_pass_and_fails_on_lint_error(
+    tmp_path, monkeypatch,
+):
+    """Tests green, lint red -> _full_suite_result reports failure with the
+    lint output, not a bare pass. This is the exact gap that let the live
+    MODE40-LOCAL-LINT-GATE agent exit DONE on ruff E402/F841 violations."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la.p, "detect_test_command", lambda cwd: (tmp_path, ["pytest", "-q"]))
+    monkeypatch.setattr(la.p, "detect_lint_command", lambda cwd: (tmp_path, ["ruff", "check", "."]))
+    monkeypatch.setattr(la.p, "_is_heavy", lambda argv: False)
+
+    calls = []
+
+    class _R:
+        def __init__(self, rc, out="", err=""):
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = err
+
+    def _run(argv, cwd, capture_output, text, **kw):
+        calls.append(argv)
+        if argv[0] == "pytest":
+            return _R(0)
+        return _R(1, err="test_foo.py:5:1: F401 'os' imported but unused")
+
+    monkeypatch.setattr(la.subprocess, "run", _run)
+
+    ok, tail = la._full_suite_result()
+    assert ok is False
+    assert "F401" in tail
+    assert calls == [["pytest", "-q"], ["ruff", "check", "."]]
+
+
+def test_full_suite_result_tests_and_lint_both_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la.p, "detect_test_command", lambda cwd: (tmp_path, ["pytest", "-q"]))
+    monkeypatch.setattr(la.p, "detect_lint_command", lambda cwd: (tmp_path, ["ruff", "check", "."]))
+    monkeypatch.setattr(la.p, "_is_heavy", lambda argv: False)
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(la.subprocess, "run", lambda *a, **k: _R())
+
+    ok, tail = la._full_suite_result()
+    assert ok is True
+    assert tail == ""
+
+
+def test_full_suite_result_skips_lint_when_not_detected(tmp_path, monkeypatch):
+    """No lint signal for this repo (detect_lint_command -> None) -> lint is
+    never invoked and behavior is unchanged from before this feature."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la.p, "detect_test_command", lambda cwd: (tmp_path, ["pytest", "-q"]))
+    monkeypatch.setattr(la.p, "detect_lint_command", lambda cwd: None)
+    monkeypatch.setattr(la.p, "_is_heavy", lambda argv: False)
+
+    calls = []
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _run(argv, cwd, capture_output, text, **kw):
+        calls.append(argv)
+        return _R()
+
+    monkeypatch.setattr(la.subprocess, "run", _run)
+
+    ok, tail = la._full_suite_result()
+    assert ok is True
+    assert calls == [["pytest", "-q"]]  # lint subprocess never invoked
+
+
+def test_full_suite_result_does_not_run_lint_when_tests_fail(tmp_path, monkeypatch):
+    """Regression bar: a failing test suite short-circuits before lint runs
+    at all - unchanged existing behavior, lint is an additional gate only
+    reached once tests are already green."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la.p, "detect_test_command", lambda cwd: (tmp_path, ["pytest", "-q"]))
+    monkeypatch.setattr(la.p, "detect_lint_command", lambda cwd: (tmp_path, ["ruff", "check", "."]))
+    monkeypatch.setattr(la.p, "_is_heavy", lambda argv: False)
+
+    calls = []
+
+    class _R:
+        def __init__(self, rc, out="", err=""):
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = err
+
+    def _run(argv, cwd, capture_output, text, **kw):
+        calls.append(argv)
+        return _R(1, err="FAILED test_x.py::test_y")
+
+    monkeypatch.setattr(la.subprocess, "run", _run)
+
+    ok, tail = la._full_suite_result()
+    assert ok is False
+    assert "test_y" in tail
+    assert calls == [["pytest", "-q"]]  # lint never invoked
+
+
+def test_create_file_appends_lint_feedback_when_ruff_finds_issues(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la.p, "detect_lint_command",
+                        lambda cwd: (tmp_path, ["ruff", "check", "."]))
+
+    class _R:
+        returncode = 1
+        stdout = "foo.py:1:1: F401 'os' imported but unused\n"
+        stderr = ""
+
+    calls = []
+
+    def _run(argv, cwd, capture_output, text, timeout=None):
+        calls.append(argv)
+        return _R()
+
+    monkeypatch.setattr(la.subprocess, "run", _run)
+
+    result = la.run_tool("create_file", {"path": "foo.py", "content": "import os\n"})
+    assert "created foo.py" in result
+    assert "F401" in result
+    assert calls == [["ruff", "check", "foo.py"]]  # single-file scoped, not whole-repo
+
+
+def test_str_replace_appends_lint_feedback_when_ruff_finds_issues(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "foo.py").write_text("x = 1\n")
+    monkeypatch.setattr(la.p, "detect_lint_command",
+                        lambda cwd: (tmp_path, ["ruff", "check", "."]))
+
+    class _R:
+        returncode = 1
+        stdout = "foo.py:1:1: E741 ambiguous variable name 'l'\n"
+        stderr = ""
+
+    monkeypatch.setattr(la.subprocess, "run", lambda *a, **k: _R())
+
+    result = la.run_tool("str_replace", {"path": "foo.py", "old_str": "x = 1\n", "new_str": "l = 1\n"})
+    assert "edited foo.py" in result
+    assert "E741" in result
+
+
+def test_replace_lines_appends_lint_feedback_when_ruff_finds_issues(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "foo.py").write_text("x = 1\n")
+    monkeypatch.setattr(la.p, "detect_lint_command",
+                        lambda cwd: (tmp_path, ["ruff", "check", "."]))
+
+    class _R:
+        returncode = 1
+        stdout = "foo.py:1:1: E741 ambiguous variable name 'l'\n"
+        stderr = ""
+
+    monkeypatch.setattr(la.subprocess, "run", lambda *a, **k: _R())
+
+    result = la.run_tool("replace_lines", {"path": "foo.py", "start": 1, "end": 1, "new_str": "l = 1\n"})
+    assert "edited foo.py" in result
+    assert "E741" in result
+
+
+def test_lint_feedback_silent_when_clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la.p, "detect_lint_command",
+                        lambda cwd: (tmp_path, ["ruff", "check", "."]))
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(la.subprocess, "run", lambda *a, **k: _R())
+
+    result = la.run_tool("create_file", {"path": "clean.py", "content": "x = 1\n"})
+    assert result == "created clean.py"
+
+
+def test_lint_feedback_skipped_for_non_python_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la.p, "detect_lint_command",
+                        lambda cwd: (tmp_path, ["ruff", "check", "."]))
+    calls = []
+    monkeypatch.setattr(la.subprocess, "run", lambda *a, **k: calls.append(1))
+
+    result = la.run_tool("create_file", {"path": "notes.md", "content": "hello\n"})
+    assert result == "created notes.md"
+    assert calls == []  # ruff never invoked for a non-.py file
+
+
+def test_lint_feedback_skipped_when_lint_not_detected(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la.p, "detect_lint_command", lambda cwd: None)
+    calls = []
+    monkeypatch.setattr(la.subprocess, "run", lambda *a, **k: calls.append(1))
+
+    result = la.run_tool("create_file", {"path": "foo.py", "content": "x = 1\n"})
+    assert result == "created foo.py"
+    assert calls == []

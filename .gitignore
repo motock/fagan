@@ -12,3 +12,6 @@ node_modules/
 .DS_Store
 *.bak
 .tdd_split_test_author_done
+
+# Local scratch/runtime state (not source)
+.local/

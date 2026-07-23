@@ -347,6 +347,11 @@ READ_HEAVY_WINDOW = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_WINDOW", "6"))
 # change in the base harness must be mirrored here or acceptance-bearing
 # stories silently regress.
 READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINCT_WINDOWS", "3"))
+# Net-progress guard. Ported from local_agent.py (2026-07-22,
+# MODE-29-REVIEW-STORY-LOCK-GUARD) — see that file for the full rationale.
+# Default (30) stays above the read-heavy guard's own distinct-exploration
+# cap (6 + 3*6 = 24) so it doesn't preempt that guard's already-tuned park.
+NET_PROGRESS_MAX_STEPS = int(os.environ.get("LOCAL_AGENT_NET_PROGRESS_MAX_STEPS", "30"))
 # Mutating tools: any that produce new code in the worktree. Anything else
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior
@@ -450,6 +455,11 @@ TOOLS = [
             "line_start": {"type": "integer"},
             "line_end": {"type": "integer"}},
             "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "restore_file",
+        "description": "Discard your changes to ONE file and restore it to the last commit (git checkout HEAD -- <path>). Use this when your edits to a file have gone wrong and you want a clean slate for it specifically, instead of str_replace/replace_lines patches on top of a mess. Does not touch any other file.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {
         "name": "bash", "description": "Run a bash command (run tests, git, etc.). Do NOT use to create or edit files.",
         "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
@@ -762,11 +772,13 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
             if messages is not None:
                 messages.append({"role": "user", "content": (
                     "The acceptance oracle passes but the FULL test suite still "
-                    "fails - your own committed test has a wrong assertion. The "
-                    f"merge-gate CI will reject this on the same failure:\n{full_tail}"
-                    "\n\nFix the failing test (re-read the file:line above, correct "
-                    "the expected value or the code so the assertion holds) and do "
-                    "NOT call done until `pytest` passes in full.")})
+                    f"fails. The merge-gate CI will reject this on the same "
+                    f"failure:\n{full_tail}\n\nThe bug could be in the "
+                    "implementation you just changed, or in a test file - do "
+                    "not assume either side is correct. Re-read the failing "
+                    "test and the code it exercises, identify which one is "
+                    "actually wrong, and make ONE targeted fix there. Do NOT "
+                    "call done until `pytest` passes in full.")})
             print(f"[step {step}] ORACLE GREEN but full suite still fails - "
                   f"rework done-bar not met; continuing.", flush=True)
             return False
@@ -919,6 +931,41 @@ def _function_name_scopes(tree: ast.AST) -> dict[str, tuple[set[str], set[str]]]
     return scopes
 
 
+def _newly_undefined_module_defs(old_content: str, new_content: str) -> list[str]:
+    """Return names of module-level `def`/`class` statements deleted by this
+    edit while a reference to that name survives. Ported verbatim from
+    local_agent.py; keep both copies in sync - see that file's docstring
+    for the live-incident rationale (MODE-29-REVIEW-STORY-LOCK-GUARD,
+    2026-07-22: a replace_lines edit deleted only the `def
+    _review_story_impl(...):` line, leaving its body as syntactically
+    valid trailing dead code in the caller and the caller's call site
+    intact - compile() accepts it, only a runtime NameError surfaces)."""
+    try:
+        old_tree = ast.parse(old_content)
+        new_tree = ast.parse(new_content)
+    except SyntaxError:
+        return []
+    old_top_defs = {
+        n.name for n in old_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    new_top_defs = {
+        n.name for n in new_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    removed = old_top_defs - new_top_defs
+    if not removed:
+        return []
+    new_loaded = {
+        n.id for n in ast.walk(new_tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    return [
+        f"{name} (module-level def deleted but still called)"
+        for name in sorted(removed & new_loaded)
+    ]
+
+
 def _newly_undefined_names(path_str: str, old_content: str, new_content: str) -> list[str]:
     """Return "name (in function)" entries for a name whose only assignment
     within a function existed in `old_content`, was read later in that SAME
@@ -944,6 +991,7 @@ def _newly_undefined_names(path_str: str, old_content: str, new_content: str) ->
         for var in sorted(old_assigned & old_loaded):
             if var in new_loaded and var not in new_assigned:
                 orphaned.append(f"{var} (in {name})")
+    orphaned.extend(_newly_undefined_module_defs(old_content, new_content))
     return orphaned
 
 
@@ -1173,6 +1221,19 @@ def run_tool(fn, args) -> str:
             + f"\n... [truncated; {args['path']} has {len(lines)} lines total — "
               f"call view_file again with line_start/line_end to see more]"
         )
+    if fn == "restore_file":
+        path_str = args.get("path", "")
+        if not path_str:
+            return "ERROR: restore_file requires a path."
+        result = subprocess.run(
+            ["git", "checkout", "HEAD", "--", path_str],
+            cwd=CWD, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return (f"ERROR: could not restore {path_str} to HEAD: "
+                     f"{result.stderr.strip()[:300]}")
+        return (f"restored {path_str} to its last commit (HEAD) — any "
+                 f"uncommitted changes to this file are gone. Other files are untouched.")
     if fn == "bash":
         cmd = args.get("command", "")
         # Refuse destructive git ops before they reach the shell — they discard
@@ -1185,7 +1246,11 @@ def run_tool(fn, args) -> str:
                 f"commits or uncommitted changes). To change a file, use "
                 f"str_replace; to unstage, use `git reset HEAD <path>` (no "
                 f"--hard). To undo a recent commit but keep the changes, use "
-                f"`git reset HEAD~1` (default --mixed, keeps the working tree)."
+                f"`git reset HEAD~1` (default --mixed, keeps the working tree). "
+                f"To throw away your OWN uncommitted edits to one specific file "
+                f"and start it clean from the last commit, use the restore_file "
+                f"tool on that path — it does exactly this, safely, without "
+                f"touching any other file."
             )
         # Acquire the cross-dispatch heavy-build lock for any command whose
         # first token is a known build/test executable (cargo, npm, mvn,
@@ -1280,6 +1345,7 @@ def main() -> int:
     # to that path (and re-arm the nudge so a second stall is caught too).
     failed_sr: dict[str, int] = {}
     nudged_sr_fail: set[str] = set()
+    last_progress_step = 0
     start_time = time.monotonic()
 
     for step in range(MAX_STEPS):
@@ -1288,6 +1354,23 @@ def main() -> int:
             if worktree_dirty():
                 auto_commit("WIP (wall-clock timeout)")
             return 2
+        if step - last_progress_step >= NET_PROGRESS_MAX_STEPS:
+            print(f"[step {step}] no successful edit in {step - last_progress_step} steps "
+                  f"(last progress at step {last_progress_step}); parking", flush=True)
+            if worktree_dirty():
+                auto_commit("WIP (no net progress)")
+            if not PARK_ENABLED:
+                messages.append({"role": "user", "content": (
+                    f"You have made no successful file edit in the last "
+                    f"{step - last_progress_step} steps. Stop investigating "
+                    f"and make ONE concrete change now: str_replace/"
+                    f"replace_lines to fix something specific, restore_file "
+                    f"if a file's edits went wrong and you want to restart "
+                    f"it clean, or checkpoint if you need to save partial "
+                    f"progress before continuing.")})
+                last_progress_step = step
+            else:
+                return 3
         try:
             m = chat(messages)
         except Exception as e:
@@ -1336,15 +1419,17 @@ def main() -> int:
                         if not full_ok:
                             print(f"[step {step}] done rejected — full test suite "
                                   f"still fails (rework done-bar); asking agent to "
-                                  f"fix its own test", flush=True)
+                                  f"fix the failure", flush=True)
                             messages.append({"role": "user", "content": (
                                 "The acceptance oracle passes but the FULL test suite "
-                                "still fails - your own committed test has a wrong "
-                                "assertion. The merge-gate CI will reject this on the "
-                                f"same failure:\n{full_tail}\n\nRe-read the file:line "
-                                "above, correct the expected value or the code so the "
-                                "assertion holds, and do NOT call done until `pytest` "
-                                "passes in full.")})
+                                f"still fails. The merge-gate CI will reject this on "
+                                f"the same failure:\n{full_tail}\n\nThe bug could be "
+                                "in the implementation you just changed, or in a test "
+                                "file - do not assume either side is correct. Re-read "
+                                "the failing test and the code it exercises, identify "
+                                "which one is actually wrong, and make ONE targeted "
+                                "fix there. Do NOT call done until `pytest` passes in "
+                                "full.")})
                             break
                     if worktree_dirty():
                         auto_commit("feat: implement task (acceptance oracle green)")
@@ -1358,7 +1443,17 @@ def main() -> int:
                     f"modify the acceptance suite at: {oracle_list}.")})
                 break
 
-            sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
+            if fn == "view_file":
+                # Range-aware: reading several DIFFERENT regions of one large
+                # file is not repetition. Ported from local_agent.py
+                # (2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD).
+                ls, le = args.get("line_start"), args.get("line_end")
+                if isinstance(ls, int) and isinstance(le, int):
+                    sig = (fn, args.get("path"), ls // 200, le // 200)
+                else:
+                    sig = (fn, args.get("path"))
+            else:
+                sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
             # str_replace calls are excluded from the per-target repetition
             # guard: each one produces a *different* file state (the
             # `old_str` next time will differ, or `run_tool` will reject
@@ -1423,6 +1518,7 @@ def main() -> int:
                     seen.clear()
                     if fn not in ("str_replace", "replace_lines"):
                         seen[sig] = current
+                    last_progress_step = step
 
             # Failing-str_replace loop guard (mirrored from local_agent.py):
             # str_replace is excluded from the per-target repetition guard

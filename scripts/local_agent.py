@@ -364,6 +364,25 @@ READ_HEAVY_WINDOW = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_WINDOW", "6"))
 # still parks at the strict 2 * READ_HEAVY_WINDOW (12) — only all-distinct
 # exploration gets the longer leash, and it is still bounded, not disabled.
 READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINCT_WINDOWS", "3"))
+# Net-progress guard (2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD): the
+# per-target and read-heavy guards above both reset on ANY successful
+# mutation, and the no-tool-call cap only counts CONSECUTIVE narration turns
+# - a run that alternates "one small edit" with long stretches of distinct,
+# non-repeating inspection (git status, git log, git diff, ...) and isolated
+# give-up narration (each followed by a real tool call, so the counter never
+# accumulates) evades every existing guard indefinitely. Observed live: 50 of
+# 60 steps spent this way with zero further successful edits after an early
+# one. This guard tracks steps since the last successful mutation directly -
+# immune to how those unproductive steps are distributed or how many
+# different-looking-but-equally-useless actions fill them.
+# Default (30) is deliberately ABOVE the read-heavy guard's own distinct-
+# exploration cap (READ_HEAVY_WINDOW + READ_HEAVY_DISTINCT_WINDOWS *
+# READ_HEAVY_WINDOW = 6 + 3*6 = 24 by default), so this coarser, later-firing
+# net doesn't preempt that guard's own already-tuned park message for the
+# pure-distinct-reads-forever case it already handles. It exists to catch
+# the pattern that guard CANNOT see: edits interleaved with unproductive
+# investigation, which resets that guard's window every time.
+NET_PROGRESS_MAX_STEPS = int(os.environ.get("LOCAL_AGENT_NET_PROGRESS_MAX_STEPS", "30"))
 # Mutating tools: any that produce new code in the worktree. Anything else
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior
@@ -456,6 +475,11 @@ TOOLS = [
             "line_start": {"type": "integer"},
             "line_end": {"type": "integer"}},
             "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "restore_file",
+        "description": "Discard your changes to ONE file and restore it to the last commit (git checkout HEAD -- <path>). Use this when your edits to a file have gone wrong and you want a clean slate for it specifically, instead of str_replace/replace_lines patches on top of a mess. Does not touch any other file.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {
         "name": "bash", "description": "Run a bash command (run tests, git, etc.). Do NOT use to create or edit files.",
         "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
@@ -737,14 +761,15 @@ def _reject_done_for_suite(messages: list, step: int, suite_tail: str) -> None:
     caller increments `suite_rejections` and `break`s out of the tool-call
     loop so the next step re-enters with this fed-back excerpt."""
     print(f"[step {step}] done rejected — full test suite still fails "
-          f"(rework done-bar); asking agent to fix its own test", flush=True)
+          f"(rework done-bar); asking agent to fix the failure", flush=True)
     messages.append({"role": "user", "content": (
-        "The full test suite still fails - your own committed "
-        "test has a wrong assertion. The merge-gate CI will reject "
-        f"this on the same failure:\n{suite_tail}\n\nRe-read the "
-        "file:line above, correct the expected value or the code so "
-        "the assertion holds, and do NOT call done until `pytest` "
-        "passes in full.")})
+        "The full test suite still fails. The merge-gate CI will reject "
+        f"this on the same failure:\n{suite_tail}\n\nThe bug could be in "
+        "the implementation you just changed, or in a test file - do not "
+        "assume either side is correct. Re-read the failing test and the "
+        "code it exercises, identify which one is actually wrong, and make "
+        "ONE targeted fix there. Do NOT call done until `pytest` passes in "
+        "full.")})
 
 
 # Consecutive syntax-rejection count per path, so a model that resubmits the
@@ -854,6 +879,51 @@ def _function_name_scopes(tree: ast.AST) -> dict[str, tuple[set[str], set[str]]]
     return scopes
 
 
+def _newly_undefined_module_defs(old_content: str, new_content: str) -> list[str]:
+    """Return names of module-level `def`/`class` statements present in
+    `old_content` but deleted by this edit while a reference to that name
+    survives anywhere in `new_content` - the shape of the MODE-29 incident
+    (2026-07-22): a replace_lines edit deleted only the
+    `def _review_story_impl(...):` line itself, leaving its ~300-line body
+    correctly indented as trailing dead code inside the CALLER's function
+    and the caller's `return _review_story_impl(...)` untouched. That
+    result is syntactically valid Python (compile() accepts it - the body
+    is now just unreachable code after an earlier return), so only a
+    NameError surfaces, at runtime, on every call.
+
+    `_newly_undefined_names` above only tracks function-LOCAL Name-Store/
+    Load bindings via `_function_name_scopes` and cannot see this: a `def`
+    statement's name isn't an `ast.Name` node, and the deleted function's
+    own body being reachable syntax elsewhere is irrelevant to whether the
+    NAME `_review_story_impl` is still defined. This is deliberately a
+    separate, narrower check (top-level statements only, not nested defs)
+    rather than folding module scope into `_function_name_scopes`."""
+    try:
+        old_tree = ast.parse(old_content)
+        new_tree = ast.parse(new_content)
+    except SyntaxError:
+        return []
+    old_top_defs = {
+        n.name for n in old_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    new_top_defs = {
+        n.name for n in new_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    removed = old_top_defs - new_top_defs
+    if not removed:
+        return []
+    new_loaded = {
+        n.id for n in ast.walk(new_tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    return [
+        f"{name} (module-level def deleted but still called)"
+        for name in sorted(removed & new_loaded)
+    ]
+
+
 def _newly_undefined_names(path_str: str, old_content: str, new_content: str) -> list[str]:
     """Return "name (in function)" entries for every name whose only
     assignment within a function existed in `old_content`, was read later in
@@ -881,6 +951,7 @@ def _newly_undefined_names(path_str: str, old_content: str, new_content: str) ->
         for var in sorted(old_assigned & old_loaded):
             if var in new_loaded and var not in new_assigned:
                 orphaned.append(f"{var} (in {name})")
+    orphaned.extend(_newly_undefined_module_defs(old_content, new_content))
     return orphaned
 
 
@@ -1103,6 +1174,19 @@ def run_tool(fn, args) -> str:
             + f"\n... [truncated; {args['path']} has {len(lines)} lines total — "
               f"call view_file again with line_start/line_end to see more]"
         )
+    if fn == "restore_file":
+        path_str = args.get("path", "")
+        if not path_str:
+            return "ERROR: restore_file requires a path."
+        result = subprocess.run(
+            ["git", "checkout", "HEAD", "--", path_str],
+            cwd=CWD, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return (f"ERROR: could not restore {path_str} to HEAD: "
+                     f"{result.stderr.strip()[:300]}")
+        return (f"restored {path_str} to its last commit (HEAD) — any "
+                 f"uncommitted changes to this file are gone. Other files are untouched.")
     if fn == "bash":
         cmd = args.get("command", "")
         # Refuse destructive git ops before they reach the shell — they discard
@@ -1116,7 +1200,11 @@ def run_tool(fn, args) -> str:
                 f"commits or uncommitted changes). To change a file, use "
                 f"str_replace; to unstage, use `git reset HEAD <path>` (no "
                 f"--hard). To undo a recent commit but keep the changes, use "
-                f"`git reset HEAD~1` (default --mixed, keeps the working tree)."
+                f"`git reset HEAD~1` (default --mixed, keeps the working tree). "
+                f"To throw away your OWN uncommitted edits to one specific file "
+                f"and start it clean from the last commit, use the restore_file "
+                f"tool on that path — it does exactly this, safely, without "
+                f"touching any other file."
             )
         # Acquire the cross-dispatch heavy-build lock for any command whose
         # first token is a known build/test executable (cargo, npm, mvn,
@@ -1260,6 +1348,7 @@ def main() -> int:
     # to that path (and re-arm the nudge so a second stall is caught too).
     failed_sr: dict[str, int] = {}
     nudged_sr_fail: set[str] = set()
+    last_progress_step = 0
     start_time = time.monotonic()
 
     for step in range(MAX_STEPS):
@@ -1268,8 +1357,59 @@ def main() -> int:
             if worktree_dirty():
                 auto_wip_commit("wall-clock timeout")
             return 2
+        if step - last_progress_step >= NET_PROGRESS_MAX_STEPS:
+            print(f"[step {step}] no successful edit in {step - last_progress_step} steps "
+                  f"(last progress at step {last_progress_step}); parking", flush=True)
+            if worktree_dirty():
+                auto_wip_commit("no net progress")
+            if not PARK_ENABLED:
+                messages.append({"role": "user", "content": (
+                    f"You have made no successful file edit in the last "
+                    f"{step - last_progress_step} steps. Stop investigating "
+                    f"and make ONE concrete change now: str_replace/"
+                    f"replace_lines to fix something specific, restore_file "
+                    f"if a file's edits went wrong and you want to restart "
+                    f"it clean, or checkpoint if you need to save partial "
+                    f"progress before continuing.")})
+                last_progress_step = step
+            else:
+                return 3
         try:
             m = chat(messages)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code < 500:
+                print(f"[step {step}] LLM call failed: {e}", flush=True)
+                if worktree_dirty():
+                    auto_wip_commit("llm error")
+                return 1
+            # A 5xx that survived chat()'s own CHAT_MAX_ATTEMPTS retries is
+            # not a transient fault - every retry sent the IDENTICAL payload,
+            # so an unchanged 5xx after 3 attempts is very likely a context-
+            # window overflow (Ollama/llama.cpp returns 500 rather than a
+            # clean 4xx for this), not a fluke. Retrying again would just
+            # repeat the same failure (confirmed live 2026-07-22: a ~190K
+            # char / ~47.6K estimated-token transcript against a 32768-token
+            # NUM_CTX). Trim once, reusing the same helper the resume path
+            # already uses, and retry exactly once with the smaller payload
+            # before giving up.
+            budget_chars = int(NUM_CTX * _CHARS_PER_TOKEN_ESTIMATE * 0.75)
+            trimmed = _trim_resumed_transcript(messages, budget_chars)
+            if len(trimmed) == len(messages):
+                print(f"[step {step}] LLM call failed: {e}", flush=True)
+                if worktree_dirty():
+                    auto_wip_commit("llm error")
+                return 1
+            print(f"[step {step}] 5xx after {CHAT_MAX_ATTEMPTS} attempts with an "
+                  f"oversized transcript; trimming and retrying once", flush=True)
+            messages[:] = trimmed
+            _persist_messages(messages, transcript_path)
+            try:
+                m = chat(messages)
+            except Exception as e2:
+                print(f"[step {step}] LLM call failed after trim-retry: {e2}", flush=True)
+                if worktree_dirty():
+                    auto_wip_commit("llm error")
+                return 1
         except Exception as e:
             print(f"[step {step}] LLM call failed: {e}", flush=True)
             if worktree_dirty():
@@ -1346,7 +1486,23 @@ def main() -> int:
                 print(f"[step {step}] DONE: {args.get('summary', '')}", flush=True)
                 return 0
 
-            sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
+            if fn == "view_file":
+                # Range-aware: reading several DIFFERENT regions of one large
+                # file (exactly what orienting in a multi-hundred-line
+                # function requires) is not repetition and must not share a
+                # signature with re-reading the SAME region. Bucket by 200-
+                # line window so near-identical ranges (e.g. an off-by-one
+                # retry) still count as the same target, but a genuinely
+                # different region does not. A bare call (no range - the
+                # file's head, truncated) keeps the old path-only signature,
+                # since re-issuing that exact call is always a true repeat.
+                ls, le = args.get("line_start"), args.get("line_end")
+                if isinstance(ls, int) and isinstance(le, int):
+                    sig = (fn, args.get("path"), ls // 200, le // 200)
+                else:
+                    sig = (fn, args.get("path"))
+            else:
+                sig = (fn, args.get("path") or args.get("command") or args.get("old_str", ""))
             # str_replace and replace_lines calls are excluded from the
             # per-target repetition guard: each one produces a *different*
             # file state (the `old_str`/line-range next time will differ, or
@@ -1365,12 +1521,22 @@ def main() -> int:
             print(f"[step {step}] {fn}: {str(args.get('command') or args.get('path') or '')[:120]}", flush=True)
 
             if above_threshold:
-                if not nudged_repeat:
-                    nudged_repeat = True
-                    print("   [repetition nudge]", flush=True)
-                    messages.append({"role": "user", "content": _repetition_nudge()})
+                first_trip = not nudged_repeat
+                nudged_repeat = True
+                print("   [repetition nudge]" if first_trip
+                      else "   [parking: repeated action after nudge]", flush=True)
+                # Every trip answers the triggering tool_calls entry with a
+                # `tool`-role message, not just the first: leaving a later
+                # trip's call unanswered orphans it for the rest of the run
+                # (no tool_call ever goes without a reply), which live
+                # (Mode 33, 2026-07-22) correlated directly with gpt-oss:20b's
+                # Harmony-format output degrading into leaked special tokens
+                # a few turns after the first orphaned call. Re-delivering the
+                # guidance every time also gives the model a fresh chance to
+                # self-correct instead of going silent after one warning.
+                messages.append({"role": "tool", "content": _repetition_nudge()})
+                if first_trip:
                     break
-                print("   [parking: repeated action after nudge]", flush=True)
                 if worktree_dirty():
                     auto_wip_commit("parked on repetition")
                 if not PARK_ENABLED:
@@ -1419,6 +1585,7 @@ def main() -> int:
                     seen.clear()
                     if fn not in ("str_replace", "replace_lines"):
                         seen[sig] = current
+                    last_progress_step = step
 
             # Failing-str_replace loop guard. str_replace is excluded from the
             # per-target repetition guard above, so a no-match loop on one file
@@ -1484,6 +1651,14 @@ def main() -> int:
                     if worktree_dirty():
                         auto_wip_commit("read-heavy parking")
                     if not PARK_ENABLED:
+                        # Same class of bug as the per-target guard (Mode 33):
+                        # a silent break here means the model gets no renewed
+                        # feedback on any window after the first nudge.
+                        messages.append({"role": "user", "content": (
+                            "You're still re-reading targets you've already "
+                            "seen instead of acting. STOP READING and make an "
+                            "edit (create_file, str_replace, or checkpoint) "
+                            "now.")})
                         recent_tools.clear()
                         break
                     return 3
@@ -1504,6 +1679,11 @@ def main() -> int:
                         if worktree_dirty():
                             auto_wip_commit("read-heavy parking")
                         if not PARK_ENABLED:
+                            messages.append({"role": "user", "content": (
+                                "You've read many distinct files without "
+                                "making an edit. STOP READING and make an "
+                                "edit (create_file, str_replace, or "
+                                "checkpoint) now.")})
                             recent_tools.clear()
                             break
                         return 3

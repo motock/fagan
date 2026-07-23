@@ -475,6 +475,46 @@ def test_replace_lines_rejects_edit_that_orphans_a_referenced_variable(tmp_path,
     assert (tmp_path / "mod.py").read_text() == original
 
 
+def test_replace_lines_rejects_edit_that_deletes_a_called_module_level_def(
+    tmp_path, monkeypatch,
+):
+    """Reproduces the live MODE-29-REVIEW-STORY-LOCK-GUARD incident
+    (2026-07-22): a replace_lines edit deleted only the
+    `def _review_story_impl(...):` line itself (replacing it with a blank
+    line) while its ~300-line body and its caller's
+    `return _review_story_impl(...)` both survived untouched. Because the
+    orphaned body stayed correctly indented as trailing (unreachable) code
+    inside the CALLER's function, the result is syntactically valid Python
+    - compile() accepts it - so only a NameError surfaces, at runtime, on
+    every call. The existing orphaned-variable check
+    (_newly_undefined_names) only tracks function-local Name-Store/Load
+    bindings and does not see a deleted module-level `def`; this is a
+    distinct check. The edit must be rejected and the file left unchanged."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def review_story(plan_name, story_key):\n"
+        "    with _plan_lock(plan_name) as acquired:\n"
+        "        if not acquired:\n"
+        "            return {\"ok\": True}\n"
+        "        return _review_story_impl(plan_name, story_key)\n"
+        "\n"
+        "\n"
+        "def _review_story_impl(plan_name, story_key):\n"
+        "    return {\"plan\": plan_name, \"story\": story_key}\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 8,
+        "end": 8,
+        "new_str": "",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "_review_story_impl" in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
 def test_orphaned_variable_check_accepts_edit_that_removes_assignment_and_all_uses(
     tmp_path, monkeypatch,
 ):
@@ -798,6 +838,195 @@ def test_bash_passes_non_destructive_commands_through(tmp_path, monkeypatch, cmd
     assert result == "ok"              # ran and returned output
 
 
+# ---------- restore_file tool (2026-07-22 harness-improvement plan) ----------
+# The destructive-git-op guard correctly blocks `git reset --hard`/`git
+# checkout -- <path>`, but observed live: a model that WANTS exactly that (its
+# own edits to one file went wrong and it wants a clean slate) got blocked
+# three times with no alternative it could actually use, and spent the rest
+# of its step budget stuck. restore_file is the safe, scoped escape hatch:
+# git checkout HEAD -- <path>, one file only, reachable directly (not through
+# the blocked bash patterns).
+
+def test_restore_file_reverts_to_last_commit(tmp_path, monkeypatch):
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    f = tmp_path / "a.py"
+    f.write_text("original\n")
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    f.write_text("a mess the model made\n")
+
+    result = la.run_tool("restore_file", {"path": "a.py"})
+
+    assert not result.startswith("ERROR"), f"unexpected error: {result}"
+    assert f.read_text() == "original\n"
+
+
+def test_restore_file_leaves_other_files_untouched(tmp_path, monkeypatch):
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    a, b = tmp_path / "a.py", tmp_path / "b.py"
+    a.write_text("original a\n")
+    b.write_text("original b\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    a.write_text("messed up a\n")
+    b.write_text("a real in-progress edit to b\n")
+
+    la.run_tool("restore_file", {"path": "a.py"})
+
+    assert a.read_text() == "original a\n"
+    assert b.read_text() == "a real in-progress edit to b\n"
+
+
+def test_restore_file_requires_path():
+    result = la.run_tool("restore_file", {})
+    assert result.startswith("ERROR")
+
+
+def test_restore_file_reports_git_error(tmp_path, monkeypatch):
+    """A path git can't resolve (no repo, no such path in history) must
+    surface as a clear ERROR, not crash the loop."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    result = la.run_tool("restore_file", {"path": "nonexistent.py"})
+    assert result.startswith("ERROR")
+
+
+def test_destructive_git_op_error_points_to_restore_file(tmp_path, monkeypatch):
+    """The blocked-op message must name restore_file as the alternative for
+    exactly the intent it's blocking (discard my own edits to one file)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    result = la.run_tool("bash", {"command": "git reset --hard HEAD"})
+    assert "restore_file" in result
+
+
+# ---------- net-progress guard (2026-07-22) ----------
+# The per-target and read-heavy guards both reset on any successful mutation,
+# and the no-tool-call cap only counts CONSECUTIVE narration turns. A run
+# that alternates one edit with long stretches of distinct, non-repeating
+# inspection and isolated give-up narration evades both indefinitely -
+# observed live: 50 of 60 steps with zero further edits after an early one,
+# no guard ever fired. This guard tracks steps since the last successful
+# mutation directly.
+
+def test_net_progress_guard_parks_after_max_steps_with_no_mutation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 3)
+    # Large so the read-heavy guard doesn't also fire and confuse the signal.
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(10)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 3, f"expected net-progress park, got rc={rc}\noutput: {out!r}"
+    assert "no successful edit in 3 steps" in out, f"output: {out!r}"
+    assert len(calls) == 3, (  # steps 0,1,2 run; the check at step 3 parks before calling chat()
+        f"expected exactly 3 chat() calls before parking, got {len(calls)}\noutput: {out!r}"
+    )
+
+
+def test_net_progress_guard_resets_on_successful_mutation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 3)
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    responses = (
+        [("bash", {"command": "cat a"}), ("bash", {"command": "cat b"})]
+        + [("create_file", {"path": "new.py", "content": "# real code\n"})]
+        + [("bash", {"command": "cat c"})]
+        + [("done", {"summary": "wrote the module"})]
+    )
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, (
+        f"the mutation at call 3 should reset the counter so the run "
+        f"reaches done, not park; got rc={rc}\noutput: {out!r}"
+    )
+    assert "no successful edit" not in out, f"output: {out!r}"
+
+
+def test_net_progress_guard_park_disabled_renudges_instead_of_terminating(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 2)
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(8)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc != 3, f"PARK_ENABLED=False must not terminate; got rc={rc}\noutput: {out!r}"
+    assert out.count("no successful edit in") >= 2, (
+        f"expected the guard to re-fire (not just once), output: {out!r}"
+    )
+    assert len(calls) > 3, (
+        f"disabled parking should let the run continue past the first "
+        f"trip, got {len(calls)} chat calls"
+    )
+
+
+# ---------- view_file range-aware repetition signature (2026-07-22) ----------
+# Reading several DIFFERENT regions of one large file (routine when orienting
+# in a multi-hundred-line function) must not share a signature with
+# re-reading the SAME region 3x - the guard's per-path-only key made both
+# indistinguishable, so a story instructing the model to consult 6 different
+# locations in one 2500-line file tripped a false-positive lockout almost
+# immediately.
+
+def test_view_file_different_ranges_do_not_trip_repetition_guard(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 1, "line_end": 50}),
+        ("view_file", {"path": "big.py", "line_start": 500, "line_end": 550}),
+        ("view_file", {"path": "big.py", "line_start": 1000, "line_end": 1050}),
+        ("view_file", {"path": "big.py", "line_start": 1500, "line_end": 1550}),
+        ("done", {"summary": "oriented"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected clean finish, got rc={rc}\noutput: {out!r}"
+    assert "[repetition nudge]" not in out, (
+        f"4 different regions of one file must not look like repetition; output: {out!r}"
+    )
+
+
+def test_view_file_same_range_three_times_still_trips_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 100, "line_end": 150})
+        for _ in range(4)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, (
+        f"the SAME range 3x must still be caught as repetition; output: {out!r}"
+    )
+
+
 @pytest.mark.parametrize("content,expected_name", [
     ('```json\r\n{"name": "bash", "parameters": {"command": "ls"}}\r\n```', "bash"),
     ('{"name": "done", "arguments": {"summary": "ok"}}', "done"),
@@ -1078,6 +1307,104 @@ def test_local_agent_park_disabled_continues_past_per_target_park(tmp_path, monk
     assert len(calls) > 4, (
         f"disabled parking should let the run continue past the per-target "
         f"park point, got {len(calls)} chat calls"
+    )
+
+
+def test_local_agent_repeated_per_target_park_never_leaves_tool_call_unanswered(
+    tmp_path, monkeypatch, capsys,
+):
+    """Bug found live 2026-07-22 (Mode 33, MODE-29-REVIEW-STORY-LOCK-GUARD):
+    with PARK_ENABLED=False (the scheduler plist), only the FIRST trip of the
+    per-target repetition guard appended anything to the conversation (the
+    nudge, as a `user`-role message). Every trip after that for the rest of
+    the run silently dropped the tool call -- `break` with nothing appended
+    -- leaving the triggering assistant message's `tool_calls` entry with no
+    `tool`-role answer at all. Inspecting the live `.agent_transcript.json`
+    confirmed this directly: two consecutive `assistant` messages with no
+    intervening `tool` message, appearing immediately before gpt-oss:20b's
+    Harmony-format output started leaking raw special tokens
+    (`<|start|>assistant<|channel|>...`) and the run eventually collapsed
+    into narration-only turns and parked.
+
+    Fix: every trip of the guard, not just the first, must append a
+    `tool`-role response for the triggering call -- this keeps the
+    transcript well-formed (no orphaned tool_calls) AND re-delivers the
+    corrective guidance every time instead of going silent after one
+    warning."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    # Same script as test_local_agent_park_disabled_continues_past_per_target_park:
+    # 6 identical view_file calls -> seen=1,2 pass through normally, seen=3..6
+    # each trip the guard (first trip nudges, the other 3 previously parked
+    # silently).
+    responses = [("view_file", {"path": "static/style.css"}) for _ in range(6)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    capsys.readouterr()
+
+    messages = calls[-1]
+    for i, m in enumerate(messages[:-1]):
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            nxt = messages[i + 1]
+            assert nxt.get("role") == "tool", (
+                f"assistant tool_calls at index {i} has no tool-role answer "
+                f"(orphaned tool call); next message is {nxt!r}"
+            )
+
+    # 4 trips of the guard fire (seen reaches 3, 4, 5, 6) -- each must
+    # re-deliver the corrective guidance, not just the first.
+    nudge_msgs = [
+        m for m in messages
+        if m.get("role") == "tool" and "STOP reading" in (m.get("content") or "")
+    ]
+    assert len(nudge_msgs) == 4, (
+        f"expected the corrective guidance re-delivered on every one of the "
+        f"4 guard trips, got {len(nudge_msgs)}: {messages!r}"
+    )
+
+
+def test_local_agent_read_heavy_park_disabled_renudges_every_window(tmp_path, monkeypatch, capsys):
+    """Same bug class as test_local_agent_repeated_per_target_park_never_leaves_tool_call_unanswered
+    (Mode 33), applied to the read-heavy guard's `has_repetition` branch:
+    with PARK_ENABLED=False, only the first read-heavy window that trips
+    the guard got a corrective message; every later window that also showed
+    repetition went completely silent (a bare `break`). This guard doesn't
+    orphan a tool_calls entry (the real tool response for the triggering
+    call already landed before this check runs), but it shares the "nudge
+    once, then silence for the rest of the run" defect. Fix: append a fresh
+    corrective message on every window that trips, not just the first.
+
+    Three windows of 6 non-mutating calls: window 1 is all-distinct (fires
+    the initial nudge), windows 2 and 3 each repeat one target within the
+    window (wedging, not exploration) -> the has_repetition branch should
+    fire twice more, each time appending the renewed guidance."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    responses = (
+        [("bash", {"command": f"cat {c}"}) for c in "abcdef"]
+        + [("bash", {"command": "cat g"}), ("bash", {"command": "cat g"}),
+           ("bash", {"command": "cat h"}), ("bash", {"command": "cat i"}),
+           ("bash", {"command": "cat j"}), ("bash", {"command": "cat k"})]
+        + [("bash", {"command": "cat l"}), ("bash", {"command": "cat l"}),
+           ("bash", {"command": "cat m"}), ("bash", {"command": "cat n"}),
+           ("bash", {"command": "cat o"}), ("bash", {"command": "cat p"})]
+    )
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    capsys.readouterr()
+
+    messages = calls[-1]
+    renudge_msgs = [
+        m for m in messages
+        if m.get("role") == "user" and "still re-reading targets" in (m.get("content") or "")
+    ]
+    assert len(renudge_msgs) == 2, (
+        f"expected the read-heavy re-nudge on both post-initial-nudge "
+        f"windows that showed repetition, got {len(renudge_msgs)}: {messages!r}"
     )
 
 
@@ -1515,6 +1842,105 @@ def test_chat_does_not_retry_on_4xx(monkeypatch):
     except httpx.HTTPStatusError:
         pass
     assert calls["n"] == 1, "4xx must NOT be retried"
+
+
+# ---------- main() trims and retries once on a persistent 5xx (2026-07-22) ----------
+# Found live on MODE-29-REVIEW-STORY-LOCK-GUARD: chat()'s own CHAT_MAX_ATTEMPTS
+# retry sends the IDENTICAL payload every attempt, so a 5xx caused by an
+# oversized transcript (Ollama/llama.cpp returns 500 rather than a clean 4xx
+# for a context-window overflow) fails identically every time - confirmed via
+# the real failing transcript, ~190K chars / ~47.6K estimated tokens against a
+# 32768-token context window. Retrying alone can never help; main() must
+# shrink the request. These pin main()'s new recovery: on a 5xx that survives
+# chat()'s own retries, trim the transcript (reusing _trim_resumed_transcript)
+# and retry chat() exactly once more before giving up.
+
+def test_local_agent_trims_transcript_and_retries_once_on_persistent_5xx(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    # A tiny NUM_CTX means genuine post-head content (grown by the two
+    # successful reads below) already exceeds the trim budget, so trimming
+    # reliably triggers without needing to hand-construct a huge transcript.
+    # _trim_resumed_transcript always preserves messages[:2] (system+task) as
+    # the head and only ever drops content BEYOND it, so the failing call
+    # must not be the very first one - there must be real history to trim.
+    monkeypatch.setattr(la, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            raise _status_error(500)
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected the trim-and-retry to recover, got rc={rc}\noutput: {out!r}"
+    assert calls["n"] == 4, (
+        f"expected exactly 4 chat() calls (2 reads, fail once, succeed on "
+        f"the trim-retry), got {calls['n']}\noutput: {out!r}"
+    )
+    assert "trimming and retrying once" in out, f"expected the trim log line, output: {out!r}"
+
+
+def test_local_agent_gives_up_when_trim_retry_also_fails(tmp_path, monkeypatch, capsys):
+    """The trim-retry is exactly one extra attempt, not another open-ended
+    loop: if chat() still fails after the trim, main() must give up (return 1)
+    rather than retrying indefinitely."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(la, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        raise _status_error(500)
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, f"expected give-up after the trim-retry also fails, got rc={rc}\noutput: {out!r}"
+    assert calls["n"] == 4, (
+        f"expected exactly 4 chat() calls (2 reads + original failure + one "
+        f"trim-retry), got {calls['n']}\noutput: {out!r}"
+    )
+    assert "LLM call failed after trim-retry" in out, f"output: {out!r}"
+
+
+def test_local_agent_does_not_trim_on_4xx(tmp_path, monkeypatch, capsys):
+    """A 4xx is a bad request, not a context-overflow signature - trimming
+    and retrying would just mask a real bug in the request shape. Must fail
+    immediately, same as before this fix, with no trim attempt."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _bad_request(messages):
+        calls["n"] += 1
+        raise _status_error(400)
+
+    monkeypatch.setattr(la, "chat", _bad_request)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, f"expected immediate give-up on a 4xx, got rc={rc}\noutput: {out!r}"
+    assert calls["n"] == 1, f"a 4xx must not trigger a trim-retry, got {calls['n']} calls"
+    assert "trimming and retrying" not in out, f"output: {out!r}"
 
 
 # ---------- chat() provider routing (LOCAL_AGENT_PROVIDER, S3) ----------
@@ -1956,6 +2382,38 @@ def test_done_rejected_on_rework_round_when_full_suite_fails(tmp_path, monkeypat
     assert len(calls) >= 2
     last_user = [m for m in calls[1] if m["role"] == "user"][-1]
     assert excerpt in last_user["content"], last_user["content"]
+
+
+def test_done_rejected_message_does_not_presume_the_test_is_wrong(tmp_path, monkeypatch, capsys):
+    """Root cause diagnosed live (2026-07-22/23, MODE-29-REVIEW-STORY-LOCK-GUARD):
+    this message originated for the CI-fail-rework case, where the failure IS
+    always the agent's own test (an oracle-scoped review never saw it). Once
+    Gap 1 armed this same gate for ordinary REVIEW rework too, the message's
+    flat assertion - "your own committed test has a wrong assertion" -
+    became false in that case: the failure can equally be a still-incomplete
+    IMPLEMENTATION. Observed consequence: immediately after this exact
+    rejection, the agent pivoted to obsessively rewriting its test file for
+    ~15 steps instead of fixing the implementation, because the message told
+    it the test was the problem. The fed-back content must not assert which
+    side is wrong; it must direct the agent to check both and make one
+    targeted fix."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(la, "MAX_STEPS", 3)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+    excerpt = "FAILED test_review_story_lock_guard.py::test_review_story_skips_when_lock_held"
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt))
+
+    fake, calls = _sequence_chat([("done", {"summary": "first attempt"})])
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    last_user = [m for m in calls[1] if m["role"] == "user"][-1]["content"]
+
+    assert "your own committed test has a wrong assertion" not in last_user
+    assert "implementation" in last_user.lower()
+    assert excerpt in last_user
 
 
 def test_done_accepted_on_non_rework_round_without_consulting_suite(tmp_path, monkeypatch, capsys):

@@ -21,4 +21,5 @@ testpaths = [
     "test_test_collection_gate.py",
     "test_local_agent_steering_hardening.py",
     "test_tdd_split_always_on.py",
+    "test_code_reviewer_persona_blocking_format.py",
 ]

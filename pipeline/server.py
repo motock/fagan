@@ -722,7 +722,7 @@ def ingest_plan(
     already exists gets its authored fields (summary, agent_instructions,
     dependencies, persona, model, acceptance, risk) refreshed while its
     runtime state (status, pr_url, ...) is kept, and top-level manifest keys
-    outside epics/stories/repo_root (paused, local_model_fallback, ...) carry
+    outside epics/stories/repo_root (paused, local_model_fallback, final_rework_escalation, ...) carry
     over untouched. Pass overwrite=True to restore the old wholesale-replace
     behavior (drops anything not produced by this call).
     """

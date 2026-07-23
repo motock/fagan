@@ -1973,7 +1973,6 @@ def list_decisions(plan_name: str) -> list[dict]:
     return json.loads(path.read_text()) if path.exists() else []
 
 
-@mcp.tool()
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
@@ -2324,6 +2323,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         return _original_review_story(plan_name, story_key)
 
 
+@mcp.tool()
 def advance_pipeline(plan_name: str) -> dict[str, Any]:
     """
     Run one orchestration tick: dispatch every ready story (deps satisfied),

@@ -74,6 +74,7 @@ from .config import (  # noqa: F401
     DISPATCH_STARTUP_GRACE_SECONDS,
     DISPATCH_WATCHDOG_SECONDS,
     STEP_CAP_MARKERS,
+    INFRA_FAILURE_LOG_SUBSTRING,
     STEP_CAP_FALLBACK_THRESHOLD,
     PIPELINE_LOCAL_MAX_RISK,
     _LOCAL_SKIP_PERSONAS,
@@ -1152,12 +1153,24 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # we're actually invoking that driver so Claude's signature stays clean.
         if dispatch_backend in _LOCAL_BACKEND_NAMES and acceptance_paths:
             dispatch_kwargs["acceptance"] = acceptance_paths
-        # L1 (REVIEWER_ESCALATION_PLAN.md): a CI-triggered rework
-        # (story["ci_rework"], set by the merge-CI rework router) raises the
-        # agent's done-bar to full-suite-green so it cannot declare done while
-        # its own broken test still fails. Local-only: the env reaches the
-        # local agent subprocess; Claude's dispatch signature stays clean.
-        if dispatch_backend in _LOCAL_BACKEND_NAMES and story.get("ci_rework"):
+        # L1 (REVIEWER_ESCALATION_PLAN.md): any rework redispatch - a
+        # CI-triggered rework (story["ci_rework"]) OR a reviewer
+        # REQUEST_CHANGES rework (story["review_feedback"]) - raises the
+        # agent's done-bar to full-suite-green so it cannot declare done
+        # while its own edit left the rest of the suite broken. The
+        # reviewer's own pass is acceptance-scoped (see
+        # _scope_test_cmd_to_acceptance in review.py), so a regression
+        # outside the acceptance paths is otherwise invisible until the
+        # merge gate - or, worse, never re-checked at all if `done` is
+        # accepted on a broken tree (observed live 2026-07-22,
+        # MODE-29-REVIEW-STORY-LOCK-GUARD: a rework redispatch's own edit
+        # orphaned a function definition, the agent called done with 79
+        # tests failing, and nothing rejected it because this gate was
+        # only armed for ci_rework). Local-only: the env reaches the local
+        # agent subprocess; Claude's dispatch signature stays clean.
+        if dispatch_backend in _LOCAL_BACKEND_NAMES and (
+            story.get("ci_rework") or story.get("review_feedback")
+        ):
             dispatch_kwargs["rework_full_suite"] = True
 
         if resume_via_transcript:
@@ -1330,6 +1343,31 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # advance_pipeline tick resumes the agent in its existing worktree from
     # its WIP commit, seeded by the journal entry we write below.
     last_log_line = _last_nonempty_line(agent_log) if agent_log.exists() else ""
+
+    # Infra-failure exit routing: a dispatch that died on an LLM/Ollama
+    # transport error (after chat()'s own retries and the 5xx trim-retry are
+    # exhausted) is not a review/test-quality outcome and must not be graded
+    # or counted against rework_attempts - see INFRA_FAILURE_LOG_SUBSTRING's
+    # docstring for the live incident this fixes. Deliberately simpler than
+    # the STEP_CAP_MARKERS branch below: no model-fallback-switching logic,
+    # since an infra blip is not evidence the model itself is struggling.
+    if INFRA_FAILURE_LOG_SUBSTRING in last_log_line:
+        sha = _commit_wip(str(worktree), story_key, "infra_failure")
+        interrupted_at = datetime.now(timezone.utc).isoformat()
+        _append_journal(plan_name, story_key, {
+            "step": "infra_failure",
+            "summary": "Dispatch died on an infrastructure failure (LLM/Ollama "
+                       "transport error); checkpointed for resume.",
+            "next_hint": "",
+            "commit": sha,
+            "ts": interrupted_at,
+        })
+        story["status"] = "interrupted"
+        story["last_commit"] = sha
+        story["interrupted_at"] = interrupted_at
+        _atomic_write_json(manifest_path, manifest)
+        return {"status": "interrupted", "pid": pid, "reason": "infra_failure"}
+
     if last_log_line in STEP_CAP_MARKERS:
         sha = _commit_wip(str(worktree), story_key, "step_cap_reached")
         interrupted_at = datetime.now(timezone.utc).isoformat()
@@ -1461,6 +1499,23 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             env=test_env,
         )
     passed = test_result.returncode == 0
+
+    # Diagnostic gap found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD):
+    # this test-run result was only ever returned transiently from the tool
+    # call - nothing persisted it, so a status that later turned out to be
+    # wrong (tests_passed recorded when the same command deterministically
+    # fails on manual re-run) was impossible to diagnose after the fact.
+    # Persist it on the story every time, regardless of pass/fail, so a
+    # future occurrence leaves a paper trail. getattr() on stderr: some
+    # test doubles for subprocess.run's return value don't define it.
+    story["last_test_check"] = {
+        "cmd": test_cmd,
+        "cwd": str(test_dir),
+        "returncode": test_result.returncode,
+        "stdout_tail": (test_result.stdout or "")[-2000:],
+        "stderr_tail": (getattr(test_result, "stderr", "") or "")[-2000:],
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
 
     # The agent produced real output and the tests ran: the launch worked, so
     # clear any failed-launch attempts accumulated by earlier infra blips.
@@ -1918,7 +1973,6 @@ def list_decisions(plan_name: str) -> list[dict]:
     return json.loads(path.read_text()) if path.exists() else []
 
 
-@mcp.tool()
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
@@ -2246,8 +2300,27 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         "status": story["status"],
         "pr_url": story.get("pr_url"),
     }
+# Preserve original review_story implementation
+_original_review_story = review_story
 
+@mcp.tool()
+def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
+    """
+    Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
+    open a PR via gh and set status to pr_open; otherwise set status to
+    changes_requested. Does not merge — merge is the overlord's decision.
 
+    Only reviewable when story["status"] == "tests_passed" - any other status
+    (a stale/duplicate call, e.g. a second tick racing an already-merged
+    story) is a no-op skip; see README.md's "Review & merge" section.
+    """
+    _validate_key(plan_name)
+    _validate_key(story_key)
+    with _plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {"ok": True, "skipped": "locked",
+                    "reason": "another dispatch/ingest/interrupt/review is in progress for this plan"}
+        return _original_review_story(plan_name, story_key)
 
 
 @mcp.tool()

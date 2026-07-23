@@ -108,6 +108,22 @@ STEP_CAP_MARKERS = (
     "[ended without oracle green — step cap reached]",
 )
 
+# Substring (not exact-match, unlike STEP_CAP_MARKERS - the message carries a
+# variable exception string) marking a dispatch that died on an INFRASTRUCTURE
+# failure (an Ollama/LLM transport error, after chat()'s own retries and the
+# 5xx trim-retry are exhausted) rather than a genuine review/test-quality
+# outcome. Found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD): two
+# separate infra deaths (an Ollama 500, an outright timeout) each burned a
+# full rework_attempts slot exactly like a real REQUEST_CHANGES cycle would,
+# even though the model never got a fair, complete attempt either time - the
+# rework cap parked the story partly on infrastructure flakiness it had no
+# way to avoid. check_story_status routes a last-line match here to
+# "interrupted" (dispatch-eligible, resumes from the WIP commit) WITHOUT
+# incrementing rework_attempts, mirroring the STEP_CAP_MARKERS branch but
+# without that branch's model-fallback-switching logic (an infra blip is not
+# evidence the MODEL is struggling, so it must not trigger a model switch).
+INFRA_FAILURE_LOG_SUBSTRING = "LLM call failed"
+
 # A story that keeps hitting the step cap is classified "interrupted" (see the
 # STEP_CAP_MARKERS branch below), never "failed" - so it never reaches the
 # "failed"-gated local_model_fallback check in advance_pipeline's polling loop
@@ -227,6 +243,7 @@ __all__ = [
     "DISPATCH_STARTUP_GRACE_SECONDS",
     "DISPATCH_WATCHDOG_SECONDS",
     "STEP_CAP_MARKERS",
+    "INFRA_FAILURE_LOG_SUBSTRING",
     "STEP_CAP_FALLBACK_THRESHOLD",
     "PIPELINE_LOCAL_MAX_RISK",
     "_LOCAL_SKIP_PERSONAS",

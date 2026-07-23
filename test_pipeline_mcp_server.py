@@ -1705,6 +1705,34 @@ def test_run_reviewer_prompt_does_not_block_on_docs_for_brand_new_code(
     assert "brand-new" in prompt or "brand new" in prompt
 
 
+def test_run_reviewer_prompt_asks_for_every_blocking_finding_in_one_pass(
+    agents_dir, monkeypatch,
+):
+    """The reviewer rubric must ask for ALL Blocking findings in a single
+    review, not just the first one noticed - otherwise a weak local
+    implementer burns a full rework cycle per finding, and each cycle is a
+    fresh opportunity to regress already-correct code (observed live
+    2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD: review #1 flagged only the
+    missing docstring; review #2, on otherwise-correct code, surfaced a
+    SECOND pre-existing issue (validate-before-lock) that was visible in
+    review #1's diff but never raised there; the extra rework cycle this
+    forced is where the implementation broke)."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    prompt = captured["prompt"].lower()
+    assert "every" in prompt and "blocking" in prompt
+    assert "rework" in prompt
+
+
 def test_run_reviewer_scopes_test_command_to_acceptance_paths(
     agents_dir, tmp_path, monkeypatch,
 ):
@@ -7052,6 +7080,78 @@ def test_check_story_status_passes_when_agent_committed_changes(
     assert "failure_reason" not in manifest["stories"]["S1"]
 
 
+def test_check_story_status_records_last_test_check_on_pass(plan_dir, monkeypatch):
+    """Diagnostic gap found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD):
+    check_story_status's test-run result (command, cwd, returncode, output)
+    was only ever returned transiently from the tool call - nothing persisted
+    it to the manifest, so a status that later turned out to be wrong
+    (tests_passed recorded when the same command deterministically fails when
+    re-run by hand) was impossible to diagnose after the fact. Persist it on
+    the story as `last_test_check` every time a test run determines status,
+    regardless of pass/fail, so a future occurrence has a paper trail."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("[step 0] bash: pwd\n")
+    _write_manifest(plan_dir, "diag1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["pytest", "-q"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, stdout="3 passed", stderr="",
+        ),
+    )
+
+    result = p.check_story_status("diag1", "S1")
+    assert result["status"] == "tests_passed"
+
+    manifest = _read_manifest(plan_dir, "diag1")
+    check = manifest["stories"]["S1"]["last_test_check"]
+    assert check["cmd"] == ["pytest", "-q"]
+    assert check["cwd"] == str(worktree)
+    assert check["returncode"] == 0
+    assert "3 passed" in check["stdout_tail"]
+    assert "ts" in check
+
+
+def test_check_story_status_records_last_test_check_on_fail_without_stderr_attr(
+    plan_dir, monkeypatch,
+):
+    """Same as above, but on the failure path, and with a test double that
+    doesn't define .stderr at all (mirrors this file's own `Result` stub
+    class used elsewhere) - the diagnostic capture must not crash when the
+    subprocess result lacks a stderr attribute."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("[step 0] bash: pwd\n")
+    _write_manifest(plan_dir, "diag2", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class Result:
+        stdout = "1 failed"
+        returncode = 1
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    result = p.check_story_status("diag2", "S1")
+    assert result["status"] == "failed"
+
+    manifest = _read_manifest(plan_dir, "diag2")
+    check = manifest["stories"]["S1"]["last_test_check"]
+    assert check["returncode"] == 1
+    assert "1 failed" in check["stdout_tail"]
+    assert check["stderr_tail"] == ""
+
+
 def test_check_story_status_handles_git_error_safely(plan_dir, monkeypatch):
     """If `_worktree_has_new_commits` returns False (covers the
     `git log` failure case — broken worktree, missing branch, any git
@@ -7862,6 +7962,84 @@ def test_check_story_status_routes_step_cap_to_interrupted(
     assert any(e.get("step") == "step_cap_reached" for e in journal), journal
 
 
+def test_check_story_status_routes_infra_failure_to_interrupted_without_burning_rework(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD): a dispatch
+    that died on an Ollama 500 (or timeout) after chat()'s own retries and
+    the 5xx trim-retry are exhausted got treated exactly like a real review
+    cycle - the test suite ran against its incomplete WIP and, worse, the
+    infra death counted against rework_attempts, parking a story partly on
+    infrastructure flakiness the model had no way to avoid. The last line
+    must route to interrupted (no test run, dispatch-eligible for a clean
+    resume) with rework_attempts UNCHANGED - distinct from the STEP_CAP_MARKERS
+    routing, which shares the interrupted/no-test-run behavior but is a
+    capability signal, not an infra one, so it's allowed to feed the
+    model-fallback-switching logic that this path must NOT trigger."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[boot] pid=123 model=gpt-oss:20b endpoint=http://localhost:11434 provider=ollama steps=60 timeout=5400.0s\n"
+        "[step 17] LLM call failed: Server error '500 Internal Server Error' for url 'http://localhost:11434/api/chat'\n"
+    )
+    _write_manifest(plan_dir, "infra1", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree), "rework_attempts": 1},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    def _fail_detect(*a, **k):
+        raise AssertionError("detect_test_command must not run on an infra-failure exit")
+    monkeypatch.setattr(p, "detect_test_command", _fail_detect)
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    result = p.check_story_status("infra1", "S1")
+
+    assert result["status"] == "interrupted"
+    assert result["reason"] == "infra_failure"
+    manifest = _read_manifest(plan_dir, "infra1")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "interrupted"
+    assert story["rework_attempts"] == 1, (
+        f"an infra death must not burn a rework attempt, got {story['rework_attempts']!r}"
+    )
+    journal = p._read_journal("infra1", "S1")
+    assert any(e.get("step") == "infra_failure" for e in journal), journal
+
+
+def test_check_story_status_infra_failure_does_not_trigger_model_fallback(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """An infra death is not evidence the MODEL is struggling - it must not
+    feed the STEP_CAP_MARKERS branch's consecutive-failure model-fallback
+    switch, even when the plan has opted in to local_model_fallback."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[step 5] LLM call failed after trim-retry: Server error '500'\n"
+    )
+    _write_manifest(plan_dir, "infra2", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "dispatched_model": "gpt-oss:20b", "step_cap_streak": 2,
+               "step_cap_streak_model": "gpt-oss:20b"},
+    })
+    manifest_path = plan_dir / "infra2.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "devstral:24b"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run tests")))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("infra2", "S1")
+
+    manifest = _read_manifest(plan_dir, "infra2")
+    story = manifest["stories"]["S1"]
+    assert story["model"] == "gpt-oss:20b", "infra death must not switch the model"
+
+
 def test_check_story_status_routes_oracle_step_cap_to_interrupted(
     plan_dir, tmp_path, monkeypatch,
 ):
@@ -8590,6 +8768,44 @@ def test_dispatch_story_omits_rework_full_suite_without_ci_rework(
     result = p.dispatch_story("cirsnone", "S1")
     assert result["ok"] is True
     assert "LOCAL_AGENT_REWORK_FULL_SUITE" not in captured["env"]
+
+
+def test_dispatch_story_passes_rework_full_suite_when_review_feedback_set(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """L1 gap: a story carrying reviewer `review_feedback` (a REQUEST_CHANGES
+    rework redispatch, not a CI-fail rework) must ALSO reach the agent
+    subprocess as LOCAL_AGENT_REWORK_FULL_SUITE=1. Without this, the
+    reviewer-rework path lets the agent call `done` on a dirty/broken tree
+    the reviewer never re-checked in full - the acceptance oracle stays
+    green even when the agent's own edit broke the rest of the suite
+    (observed live 2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD cycle 3: a
+    botched replace_lines orphaned a function definition, the agent called
+    done with 79 tests failing, and nothing rejected it)."""
+    captured: dict = {}
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(
+        backend.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakeProc(4323),
+    )
+    monkeypatch.setattr(pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    _write_manifest(plan_dir, "revfb", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "changes_requested", "dependencies": [],
+               "review_feedback": "REQUEST_CHANGES: fix the docstring placement.",
+               "acceptance": [{"path": "tests/test_a.py", "source": "def test_a(): pass"}]},
+    })
+
+    result = p.dispatch_story("revfb", "S1")
+    assert result["ok"] is True
+    assert captured["env"]["LOCAL_AGENT_REWORK_FULL_SUITE"] == "1"
 
 
 def test_dispatch_story_excludes_review_and_agent_log_from_worktree_tracking(
@@ -11794,6 +12010,43 @@ def test_planner_system_exception_for_small_edits():
     assert "preserve" in p._PLANNER_SYSTEM
 
 
+def test_planner_system_prescribes_delegate_wrapper_for_large_function_edits():
+    """Root cause diagnosed live (2026-07-22, MODE-29-REVIEW-STORY-LOCK-GUARD,
+    8 failed dispatch attempts): the story asked the executor to wrap a
+    ~300-line existing function's ENTIRE body in a new `with` block - an
+    in-place mass re-indent through a truncated view_file/create_file tool,
+    the mechanically hardest edit shape for this engine. The identical
+    pattern (guard + delegate to a renamed `_foo_impl`) already existed 350
+    lines away in the same file for exactly this situation, but nothing
+    steered the executor (or the story author) toward it - one attempt tried
+    it anyway and botched the split (duplicate defs, orphaned fragments) from
+    getting no guidance on the mechanics. Neither existing EDITING MECHANICS
+    branch (whole-file create_file rewrite, or str_replace for a small
+    preserve-most edit) fits a large-function in-place wrap; the checklist
+    must name the rename-and-delegate shape as the correct move for it."""
+    assert "_impl" in p._PLANNER_SYSTEM
+    assert "delegate" in p._PLANNER_SYSTEM.lower()
+
+
+def test_planner_system_delegate_wrapper_specifies_what_to_preserve():
+    """Root cause diagnosed live (2026-07-22/23, MODE-29-REVIEW-STORY-LOCK-GUARD
+    redispatch): the rename-and-delegate recipe told the executor to rename
+    `foo` to `_foo_impl` and define a new short `foo` that delegates, but
+    never said what the new `foo` must carry over from the original. Every
+    Blocking finding across two full review cycles traced to this gap - the
+    `@mcp.tool()` decorator was left on the renamed `_foo_impl` (silently
+    deregistering the real MCP entrypoint even though tests calling the bare
+    module attribute passed), the docstring moved with it (emptying the
+    tool's client-facing description), and argument validation ended up
+    running inside `_foo_impl` - after the new wrapper's lock/guard setup
+    instead of before it, opening a path-traversal window. The recipe must
+    name all three explicitly."""
+    text = p._PLANNER_SYSTEM.lower()
+    assert "decorator" in text
+    assert "docstring" in text
+    assert "valid" in text and "before" in text
+
+
 def test_planner_system_worked_examples_must_verify_persisted_state():
     """Live-discovered bug (2026-07-16, production-config benchmark run,
     token_bucket via glm-5.2:cloud/Ollama planner + mlx implementer): the
@@ -12157,6 +12410,28 @@ def test_rework_planner_exception_for_small_edits():
     assert "str_replace" in p._REWORK_PLANNER_SYSTEM
     assert "preserve" in p._REWORK_PLANNER_SYSTEM
     assert p._REWORK_PLANNER_SYSTEM != p._PLANNER_SYSTEM
+
+
+def test_rework_planner_system_prescribes_delegate_wrapper_for_large_function_edits():
+    """Mirrors test_planner_system_prescribes_delegate_wrapper_for_large_function_edits
+    - a rework cycle's fix checklist needs the same edit-shape guidance as
+    the initial checklist, since a review's requested fix can land inside
+    the same kind of large existing function."""
+    assert "_impl" in p._REWORK_PLANNER_SYSTEM
+    assert "delegate" in p._REWORK_PLANNER_SYSTEM.lower()
+
+
+def test_rework_planner_system_delegate_wrapper_specifies_what_to_preserve():
+    """Mirrors test_planner_system_delegate_wrapper_specifies_what_to_preserve
+    - a rework cycle's fix checklist needs the same completed rename-and-
+    delegate recipe as the initial checklist, since a reviewer's requested
+    fix can land inside the same large-function-wrap shape (this is exactly
+    where it recurred live: the story's own rework cycle re-applied the
+    same incomplete recipe and reproduced the same two Blocking findings)."""
+    text = p._REWORK_PLANNER_SYSTEM.lower()
+    assert "decorator" in text
+    assert "docstring" in text
+    assert "valid" in text and "before" in text
 
 
 def test_run_rework_planner_returns_none_on_backend_failure(agents_dir, monkeypatch):

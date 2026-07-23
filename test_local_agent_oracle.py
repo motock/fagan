@@ -321,6 +321,35 @@ def test_oracle_replace_lines_rejects_edit_that_orphans_a_referenced_variable(tm
     assert (tmp_path / "mod.py").read_text() == original
 
 
+def test_oracle_replace_lines_rejects_edit_that_deletes_a_called_module_level_def(
+    tmp_path, monkeypatch,
+):
+    """Ported verbatim from test_local_agent.py; keep both copies in sync."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = (
+        "def review_story(plan_name, story_key):\n"
+        "    with _plan_lock(plan_name) as acquired:\n"
+        "        if not acquired:\n"
+        "            return {\"ok\": True}\n"
+        "        return _review_story_impl(plan_name, story_key)\n"
+        "\n"
+        "\n"
+        "def _review_story_impl(plan_name, story_key):\n"
+        "    return {\"plan\": plan_name, \"story\": story_key}\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = lao.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 8,
+        "end": 8,
+        "new_str": "",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "_review_story_impl" in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
 def test_oracle_orphaned_variable_check_accepts_edit_that_removes_assignment_and_all_uses(
     tmp_path, monkeypatch,
 ):
@@ -676,6 +705,122 @@ def test_oracle_bash_passes_non_destructive_commands_through(tmp_path, monkeypat
     result = lao.run_tool("bash", {"command": cmd})
     assert seen["cmd"] == cmd
     assert result == "ok"
+
+
+# ---------- restore_file tool (ported from local_agent.py, 2026-07-22) ----------
+
+def test_oracle_restore_file_reverts_to_last_commit(tmp_path, monkeypatch):
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    f = tmp_path / "a.py"
+    f.write_text("original\n")
+    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    f.write_text("a mess\n")
+
+    result = lao.run_tool("restore_file", {"path": "a.py"})
+
+    assert not result.startswith("ERROR"), f"unexpected error: {result}"
+    assert f.read_text() == "original\n"
+
+
+def test_oracle_restore_file_requires_path():
+    result = lao.run_tool("restore_file", {})
+    assert result.startswith("ERROR")
+
+
+def test_oracle_destructive_git_op_error_points_to_restore_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    result = lao.run_tool("bash", {"command": "git reset --hard HEAD"})
+    assert "restore_file" in result
+
+
+# ---------- net-progress guard (ported from local_agent.py, 2026-07-22) ----------
+
+def test_oracle_net_progress_guard_parks_after_max_steps_with_no_mutation(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "NET_PROGRESS_MAX_STEPS", 3)
+    monkeypatch.setattr(lao, "READ_HEAVY_WINDOW", 1000)
+    responses = [("bash", {"command": f"cat distinct_{i}"}) for i in range(10)]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 3, f"expected net-progress park, got rc={rc}\noutput: {out!r}"
+    assert "no successful edit in 3 steps" in out, f"output: {out!r}"
+    assert len(calls) == 3, f"expected 3 chat() calls before parking, got {len(calls)}"
+
+
+def test_oracle_net_progress_guard_resets_on_successful_mutation(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "NET_PROGRESS_MAX_STEPS", 3)
+    monkeypatch.setattr(lao, "READ_HEAVY_WINDOW", 1000)
+    responses = (
+        [("bash", {"command": "cat a"}), ("bash", {"command": "cat b"})]
+        + [("create_file", {"path": "new.py", "content": "# real code\n"})]
+        + [("bash", {"command": "cat c"})]
+        + [("done", {"summary": "wrote the module"})]
+    )
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, (
+        f"the mutation should reset the counter so the run reaches done, "
+        f"not park; got rc={rc}\noutput: {out!r}"
+    )
+
+
+# ---------- view_file range-aware repetition signature (ported, 2026-07-22) ----------
+
+def test_oracle_view_file_different_ranges_do_not_trip_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 1, "line_end": 50}),
+        ("view_file", {"path": "big.py", "line_start": 500, "line_end": 550}),
+        ("view_file", {"path": "big.py", "line_start": 1000, "line_end": 1050}),
+        ("view_file", {"path": "big.py", "line_start": 1500, "line_end": 1550}),
+        ("done", {"summary": "oriented"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected clean finish, got rc={rc}\noutput: {out!r}"
+    assert "[repetition nudge]" not in out, f"output: {out!r}"
+
+
+def test_oracle_view_file_same_range_three_times_still_trips_repetition_guard(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line {i}" for i in range(1, 3000)) + "\n")
+    responses = [
+        ("view_file", {"path": "big.py", "line_start": 100, "line_end": 150})
+        for _ in range(4)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(lao, "chat", fake)
+
+    lao.main()
+    out = capsys.readouterr().out
+
+    assert "[repetition nudge]" in out, f"output: {out!r}"
 
 
 def test_oracle_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatch, capsys):
@@ -2131,6 +2276,36 @@ def test_oracle_done_rejected_on_rework_round_when_full_suite_fails(
     assert len(calls) >= 2
     last_user = [m for m in calls[1] if m["role"] == "user"][-1]
     assert excerpt in last_user["content"], last_user["content"]
+
+
+def test_oracle_done_rejected_message_does_not_presume_the_test_is_wrong(
+    tmp_path, monkeypatch,
+):
+    """Ported alongside test_done_rejected_message_does_not_presume_the_test_is_wrong
+    (local_agent.py) - keep both copies in sync. Once Gap 1 armed this gate
+    for ordinary REVIEW rework (not just CI-fail rework), the flat assertion
+    that the agent's OWN test is wrong stopped being reliably true - the
+    failure can equally be a still-incomplete implementation."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(lao, "MAX_STEPS", 3)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
+    excerpt = "FAILED test_review_story_lock_guard.py::test_review_story_skips_when_lock_held"
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (False, excerpt))
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
+
+    fake, calls = _sequence_chat([("done", {"summary": "all done"})])
+    monkeypatch.setattr(lao, "chat", fake)
+
+    lao.main()
+    last_user = [m for m in calls[1] if m["role"] == "user"][-1]["content"]
+
+    assert "your own committed test has a wrong assertion" not in last_user
+    assert "implementation" in last_user.lower()
+    assert excerpt in last_user
 
 
 def test_oracle_done_accepted_on_cold_start_without_consulting_suite(

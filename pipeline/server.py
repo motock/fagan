@@ -100,6 +100,7 @@ from .build_detect import (  # noqa: F401
     _build_command_for,
     detect_build_command,
     detect_test_command,
+    detect_lint_command,
     _acceptance_rel_paths,
     _is_pytest_cmd,
     _scope_test_cmd_to_acceptance,
@@ -117,6 +118,7 @@ from .parsers import (  # noqa: F401
     _parse_verdict,
     _has_review_findings,
     _extract_blocking_finding_files,
+    _synthesize_test_failure_feedback,
     _RATE_LIMIT_PATTERNS,
     _is_rate_limited,
     _TRANSIENT_BACKEND_PATTERNS,
@@ -2015,41 +2017,60 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 pass
         
     plan_role_config = _plan_role_config(plan_name)
-    try:
-        # Once a story is escalated (see _escalate_review_to_claude below),
-        # every subsequent review must go to Claude regardless of the global
-        # PIPELINE_BACKEND_REVIEW setting - review backend is otherwise
-        # resolved purely from that env var with no per-story override, so
-        # this is the one seam that needs an explicit check.
-        reviewer_output = (
-            _run_reviewer(worktree, branch, backend_name="claude",
-                          plan_role_config=plan_role_config,
-                          acceptance=story.get("acceptance"))
-            if story.get("escalated") else
-            _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
-                          acceptance=story.get("acceptance"))
-        )
-    except backend.RateLimitedError:
-        # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
-        # is an infrastructure event, not a real review cycle. Treat it the
-        # same as Claude's weekly-usage pause: defer and retry on the next
-        # tick, do NOT burn REVIEW_INCONCLUSIVE_MAX. Without this, a
-        # misclassified rate-limit would eventually park a correct impl.
-        story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
-        _notify_user(plan_name,
-                     f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.")
-        _atomic_write_json(manifest_path, manifest)
-        return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
-    except Exception as e:
-        # Defense in depth: a reviewer backend's own internal error (a bad
-        # tool-call shape, a malformed backend response, ...) must not crash
-        # the pipeline process. Fail safe into the same UNKNOWN-verdict path
-        # a genuinely inconclusive review already takes below - never treat
-        # this as an APPROVE (fail-closed). Log only the exception type, not
-        # its text, which could carry sensitive detail.
-        _notify_user(plan_name, f"{story_key} review failed with an unexpected "
-                                f"{type(e).__name__}; treating as inconclusive.")
-        reviewer_output = ""
+    # Mode 40: a story routed to review via acceptance_failed_review
+    # (PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1) whose last recorded test run
+    # actually failed can't be meaningfully correctness-reviewed by the LLM
+    # reviewer - a live incident showed the reviewer's own principal finding
+    # was just restating the failing-test list check_story_status had
+    # already recorded. Skip the reviewer call entirely and synthesize
+    # REQUEST_CHANGES directly from that test output. Only fires when both
+    # the flag AND a genuinely failing last_test_check are present - a
+    # missing last_test_check, or one that passed (acceptance oracle failed
+    # while the detected test command itself passed), falls through to the
+    # normal reviewer call below.
+    last_test_check = story.get("last_test_check") or {}
+    skip_llm_reviewer = (
+        story.get("acceptance_failed_review")
+        and last_test_check.get("returncode") not in (0, None)
+    )
+    if skip_llm_reviewer:
+        reviewer_output = _synthesize_test_failure_feedback(last_test_check)
+    else:
+        try:
+            # Once a story is escalated (see _escalate_review_to_claude below),
+            # every subsequent review must go to Claude regardless of the global
+            # PIPELINE_BACKEND_REVIEW setting - review backend is otherwise
+            # resolved purely from that env var with no per-story override, so
+            # this is the one seam that needs an explicit check.
+            reviewer_output = (
+                _run_reviewer(worktree, branch, backend_name="claude",
+                              plan_role_config=plan_role_config,
+                              acceptance=story.get("acceptance"))
+                if story.get("escalated") else
+                _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
+                              acceptance=story.get("acceptance"))
+            )
+        except backend.RateLimitedError:
+            # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
+            # is an infrastructure event, not a real review cycle. Treat it the
+            # same as Claude's weekly-usage pause: defer and retry on the next
+            # tick, do NOT burn REVIEW_INCONCLUSIVE_MAX. Without this, a
+            # misclassified rate-limit would eventually park a correct impl.
+            story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
+            _notify_user(plan_name,
+                         f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.")
+            _atomic_write_json(manifest_path, manifest)
+            return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
+        except Exception as e:
+            # Defense in depth: a reviewer backend's own internal error (a bad
+            # tool-call shape, a malformed backend response, ...) must not crash
+            # the pipeline process. Fail safe into the same UNKNOWN-verdict path
+            # a genuinely inconclusive review already takes below - never treat
+            # this as an APPROVE (fail-closed). Log only the exception type, not
+            # its text, which could carry sensitive detail.
+            _notify_user(plan_name, f"{story_key} review failed with an unexpected "
+                                    f"{type(e).__name__}; treating as inconclusive.")
+            reviewer_output = ""
     verdict = _parse_verdict(reviewer_output)
 
     # FM-B: a rate-limit response from the reviewer is an infrastructure event,

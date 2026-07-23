@@ -287,12 +287,64 @@ def _extract_blocking_finding_files(text: str) -> list[str]:
             result.append(path)
     return result
 
+
+_PYTEST_FAILED_RE = re.compile(r"^FAILED\s+(\S+?)(?:::\S+)?(?:\s|$)", re.MULTILINE)
+
+
+def _synthesize_test_failure_feedback(last_test_check: dict) -> str:
+    """Build REQUEST_CHANGES reviewer_output directly from a known-failing
+    last_test_check, for review_story to use INSTEAD of calling the LLM
+    reviewer (Mode 40: a submission that doesn't even pass its own detected
+    test command can't be meaningfully correctness-reviewed - a live
+    incident sent exactly this shape of red submission to a full reviewer
+    call whose principal finding just restated the failing-test list the
+    gate had already recorded in last_test_check).
+
+    Output is in the same format _parse_verdict/_extract_blocking_finding_files
+    already expect (a VERDICT line, "- Blocking: <path>: <desc>" lines) so
+    downstream handling (rework routing, Mode 24/28's finding-target
+    tracking) works unchanged on a synthesized review same as a real one.
+    """
+    cmd = " ".join(last_test_check.get("cmd") or [])
+    tail = ((last_test_check.get("stdout_tail") or "")
+            + (last_test_check.get("stderr_tail") or ""))[-1500:]
+    files = list(dict.fromkeys(_PYTEST_FAILED_RE.findall(tail)))  # dedup, order preserved
+
+    lines = [
+        "## Gate-synthesized review (LLM reviewer skipped)",
+        "",
+        "The test command detected for this story failed - a submission "
+        "that does not pass its own tests cannot be meaningfully "
+        "correctness-reviewed, so this feedback is generated directly from "
+        "the failing test run rather than spending a reviewer call "
+        "restating it.",
+        "",
+        f"Failing command: `{cmd}`",
+        "",
+        "```",
+        tail,
+        "```",
+        "",
+        "### Blocking",
+    ]
+    if files:
+        for f in files:
+            lines.append(f"- Blocking: {f}: one or more tests fail in this "
+                         f"file; see the failing test output above")
+    else:
+        lines.append("- Blocking: (unscoped) the detected test command "
+                      "exited non-zero; see the failing test output above")
+    lines += ["", "VERDICT: REQUEST_CHANGES"]
+    return "\n".join(lines)
+
+
 __all__ = [
     "_extract_json_block",
     "_parse_ruling",
     "_parse_verdict",
     "_has_review_findings",
     "_extract_blocking_finding_files",
+    "_synthesize_test_failure_feedback",
     "_RATE_LIMIT_PATTERNS",
     "_is_rate_limited",
     "_TRANSIENT_BACKEND_PATTERNS",

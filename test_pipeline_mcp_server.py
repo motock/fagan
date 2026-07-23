@@ -2100,6 +2100,112 @@ def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
     assert story["pr_url"] == "https://gh/pr/1"
 
 
+def test_review_story_skips_llm_reviewer_on_known_failing_acceptance_review(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Mode 40: a story routed to review via acceptance_failed_review
+    (PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1) with a recorded failing
+    last_test_check must skip the expensive LLM reviewer call entirely and
+    synthesize REQUEST_CHANGES feedback directly from the test output -
+    the LLM reviewer can't meaningfully correctness-review a submission
+    that doesn't pass its own tests, and a live incident showed the
+    reviewer's own principal finding was just restating this same
+    failing-test list."""
+    reviewer_calls = []
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, **k: reviewer_calls.append(1) or "VERDICT: APPROVE")
+    _write_manifest(plan_dir, "rv2", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance_failed_review": True,
+               "last_test_check": {
+                   "cmd": ["pytest", "-q"], "returncode": 1,
+                   "stdout_tail": "FAILED test_foo.py::test_bar - assert False\n",
+                   "stderr_tail": "",
+               }},
+    })
+
+    result = p.review_story("rv2", "S1")
+
+    assert reviewer_calls == []  # LLM reviewer never invoked
+    assert result["verdict"] == "REQUEST_CHANGES"
+    assert result["status"] == "changes_requested"
+    story = _read_manifest(plan_dir, "rv2")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
+    assert "FAILED test_foo.py::test_bar" in story["review_feedback"]
+    assert story["last_review_findings"] == ["test_foo.py"]
+    assert story["rework_attempts"] == 1
+
+
+def test_review_story_calls_llm_reviewer_normally_without_acceptance_failed_review(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Regression bar: an ordinary tests_passed story (acceptance_failed_review
+    not set) always goes through the real reviewer, unaffected by this
+    story's field."""
+    reviewer_calls = []
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, **k: reviewer_calls.append(1) or "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+    _write_manifest(plan_dir, "rv3", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+
+    result = p.review_story("rv3", "S1")
+
+    assert reviewer_calls == [1]
+    assert result["verdict"] == "APPROVE"
+
+
+def test_review_story_calls_llm_reviewer_when_acceptance_failed_review_but_no_last_test_check(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """Defensive fallback: acceptance_failed_review=True but no
+    last_test_check recorded (shouldn't normally happen, but must not
+    crash) falls back to the real reviewer rather than synthesizing
+    feedback from nothing."""
+    reviewer_calls = []
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, **k: reviewer_calls.append(1) or "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+    _write_manifest(plan_dir, "rv4", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance_failed_review": True},
+    })
+
+    result = p.review_story("rv4", "S1")
+
+    assert reviewer_calls == [1]
+    assert result["verdict"] == "APPROVE"
+
+
+def test_review_story_calls_llm_reviewer_when_last_test_check_passed(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """acceptance_failed_review=True but last_test_check.returncode == 0
+    (the acceptance oracle failed while the detected test command itself
+    passed - a real, distinct case) must still call the real reviewer,
+    since there's no test failure to synthesize feedback from."""
+    reviewer_calls = []
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, **k: reviewer_calls.append(1) or "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+    _write_manifest(plan_dir, "rv5", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance_failed_review": True,
+               "last_test_check": {"cmd": ["pytest"], "returncode": 0,
+                                    "stdout_tail": "", "stderr_tail": ""}},
+    })
+
+    result = p.review_story("rv5", "S1")
+
+    assert reviewer_calls == [1]
+    assert result["verdict"] == "APPROVE"
+
+
 def test_review_story_passes_plan_role_config_from_manifest_to_reviewer(
     plan_dir, agents_dir, monkeypatch,
 ):

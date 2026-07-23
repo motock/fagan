@@ -722,7 +722,7 @@ def ingest_plan(
     already exists gets its authored fields (summary, agent_instructions,
     dependencies, persona, model, acceptance, risk) refreshed while its
     runtime state (status, pr_url, ...) is kept, and top-level manifest keys
-    outside epics/stories/repo_root (paused, local_model_fallback, ...) carry
+    outside epics/stories/repo_root (paused, local_model_fallback, final_rework_escalation, ...) carry
     over untouched. Pass overwrite=True to restore the old wholesale-replace
     behavior (drops anything not produced by this call).
     """
@@ -2291,8 +2291,15 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 _notify_user(plan_name, f"{story_key} parked: reviewer still requesting changes "
                                         f"after {attempts} cycles - needs human review.")
         else:
+            fre = manifest.get("final_rework_escalation") or {}
+            if attempts == rework_cap - 1 and fre.get("enabled"):
+                provider = fre.get("provider")
+                if provider in {"claude", "local", "ollama", "lmstudio", "mlx"}:
+                    model = fre.get("model")
+                    story["backend"] = provider
+                    story["model"] = model
+                    _notify_user(plan_name, f"{story_key} final rework attempt ({attempts}/{rework_cap}) escalating to {provider}/{model}.")
             story["status"] = "changes_requested"
-
     _atomic_write_json(manifest_path, manifest)
     return {
         "ok": True,

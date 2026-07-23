@@ -69,11 +69,8 @@ def setup_real_repo_workspace(cell: Path, base_commit: str) -> dict[str, Path]:
 
     # Update the existing ``origin`` remote to point at the new bare repo.
     subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", str(origin)], check=True, capture_output=True)
-
-    # Symlink the pipeline's virtualenv into the clone so pytest resolves correctly.
-    (repo / ".venv").symlink_to(PIPELINE_REPO / ".venv")
-
-    return {"repo": repo, "origin": origin, "plans": plans, "worktrees": worktrees}
+    # Push master to the newly created origin to populate it with the base commit.
+    subprocess.run(["git", "-C", str(repo), "push", "-q", "-u", "origin", "master"], check=True, capture_output=True)
 
 
 def run_groundtruth_in_place(repo: Path, groundtruth_source: str, groundtruth_name: str = "test_groundtruth_review_story_lock_guard.py") -> dict:

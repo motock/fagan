@@ -2304,7 +2304,19 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
 # Preserve original review_story implementation
 _original_review_story = review_story
 
+@mcp.tool()
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
+    """
+    Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
+    open a PR via gh and set status to pr_open; otherwise set status to
+    changes_requested. Does not merge — merge is the overlord's decision.
+
+    Only reviewable when story["status"] == "tests_passed" - any other status
+    (a stale/duplicate call, e.g. a second tick racing an already-merged
+    story) is a no-op skip; see README.md's "Review & merge" section.
+    """
+    _validate_key(plan_name)
+    _validate_key(story_key)
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {"ok": True, "skipped": "locked",
@@ -2312,8 +2324,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         return _original_review_story(plan_name, story_key)
 
 
-
-@mcp.tool()
 def advance_pipeline(plan_name: str) -> dict[str, Any]:
     """
     Run one orchestration tick: dispatch every ready story (deps satisfied),

@@ -475,6 +475,31 @@ def _make_fixture_repo_with_venv(root: Path) -> str:
     return sha
 
 
+def _pin_plan_dir(monkeypatch, workdir, task="review_story_lock_guard",
+                  model="gptoss", trial=0):
+    """Rebind the pipeline modules' PLAN_DIR to this test's cell plans dir.
+
+    main() sets PLAN_DIR via os.environ before importing pipeline_mcp_server,
+    which works for the real CLI (fresh process per invocation) but not for
+    these in-process tests: Python caches the module on first import, so only
+    the first test in a session actually binds PLAN_DIR from the env var -
+    every subsequent test in the same process silently reuses whatever
+    PLAN_DIR the module already has (in a full-suite run, pipeline modules
+    are already imported against the operator's real ~/.claude/plans before
+    this file even collects, so main() would write/ingest a live plan there
+    instead of into the test's own tmp_path cell). Patching the module
+    globals directly - the same pattern test_pipeline_mcp_server.py's own
+    plan_dir fixture uses - makes these tests hermetic and order-independent
+    regardless of what else has already imported the pipeline package.
+    """
+    import pipeline.server as _ps
+    import pipeline.persistence as _ppers
+    import pipeline.concurrency as _pcon
+    plans_dir = Path(workdir).resolve() / f"{task}__{model}__t{trial}" / "plans"
+    for mod in (_ps, _ppers, _pcon):
+        monkeypatch.setattr(mod, "PLAN_DIR", plans_dir)
+
+
 def test_main_builds_plan_with_single_story_and_empty_acceptance(
     tmp_path, monkeypatch,
 ):
@@ -504,6 +529,7 @@ def test_main_builds_plan_with_single_story_and_empty_acceptance(
          "--model", "gptoss",
          "--workdir", str(workdir)],
     )
+    _pin_plan_dir(monkeypatch, workdir)
 
     rc = rrt.main()
     assert rc == 0, f"main() should succeed with drive stubbed, got rc={rc}"
@@ -570,6 +596,7 @@ def test_main_writes_result_json_with_required_fields(tmp_path, monkeypatch):
          "--model", "gptoss",
          "--workdir", str(workdir)],
     )
+    _pin_plan_dir(monkeypatch, workdir)
 
     rc = rrt.main()
     assert rc == 0
@@ -616,6 +643,7 @@ def test_main_default_task_is_review_story_lock_guard(tmp_path, monkeypatch):
          "--model", "gptoss",
          "--workdir", str(tmp_path / "runs")],
     )
+    _pin_plan_dir(monkeypatch, tmp_path / "runs")
 
     rc = rrt.main()
     assert rc == 0

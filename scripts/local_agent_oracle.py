@@ -201,6 +201,9 @@ MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "30"))
 # break this because no real action resolves a self-contradictory test. Park
 # after this many consecutive no-tool turns rather than burning the whole run.
 NO_TOOL_CAP = int(os.environ.get("LOCAL_AGENT_NO_TOOL_CAP", "5"))
+# Mirror local_agent.py: park a rework round after this many full-suite
+# done-rejections so a model that cannot green the suite stops burning budget.
+REWORK_SUITE_REJECT_CAP = int(os.environ.get("LOCAL_AGENT_REWORK_SUITE_REJECT_CAP", "3"))
 TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
 
 
@@ -1407,6 +1410,10 @@ def main() -> int:
     recent_tools: deque[tuple[str, str]] = deque(maxlen=READ_HEAVY_WINDOW)
     distinct_windows = 0
     consecutive_no_tool = 0
+    # Mirror local_agent.py: cap full-suite done-rejections on a rework round so
+    # a model that cannot green the suite parks rather than burning the whole
+    # budget alternating `done` with narration. See REWORK_SUITE_REJECT_CAP.
+    suite_rejections = 0
     # Failing-str_replace loop guard: str_replace is excluded from the
     # per-target repetition guard (each old_str differs), so a no-match loop
     # on one file runs uncaught. Track consecutive FAILED str_replace per
@@ -1486,6 +1493,14 @@ def main() -> int:
                     if REWORK_FULL_SUITE:
                         full_ok, full_tail = _full_suite_result()
                         if not full_ok:
+                            suite_rejections += 1
+                            if suite_rejections >= REWORK_SUITE_REJECT_CAP:
+                                if worktree_dirty():
+                                    auto_commit("wip: rework suite-reject cap")
+                                print(f"[step {step}] rework suite-reject cap "
+                                      f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
+                                      f"cannot green the full suite — parking", flush=True)
+                                return 2
                             print(f"[step {step}] done rejected — full test suite "
                                   f"still fails (rework done-bar); asking agent to "
                                   f"fix the failure", flush=True)

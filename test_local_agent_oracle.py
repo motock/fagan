@@ -779,6 +779,41 @@ def test_oracle_net_progress_guard_resets_on_successful_mutation(
     )
 
 
+def test_oracle_rework_suite_reject_cap_parks_instead_of_burning_the_budget(
+    tmp_path, monkeypatch, capsys,
+):
+    """Parity with test_local_agent's suite-reject-cap guard: on a rework round
+    where the acceptance oracle is green but the full suite stays red, the
+    oracle driver must PARK (rc=2) after REWORK_SUITE_REJECT_CAP done-rejections
+    rather than re-prompting until MAX_STEPS."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(lao, "REWORK_SUITE_REJECT_CAP", 3)
+    monkeypatch.setattr(lao, "MAX_STEPS", 30)
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, ""))
+
+    suite_calls: list = []
+
+    def _suite_spy():
+        suite_calls.append(True)
+        return (False, "FAILED test_x.py::test_y - assert 1 == 2")
+
+    monkeypatch.setattr(lao, "_full_suite_result", _suite_spy)
+
+    fake, calls = _sequence_chat([("done", {"summary": "attempt"})])
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 2, f"expected park (rc=2) at the cap; got rc={rc}\n{out!r}"
+    assert "rework suite-reject cap (3) reached" in out, out
+    assert len(suite_calls) == 3, f"suite consulted {len(suite_calls)}x, expected 3"
+    assert len(calls) <= 4, f"took {len(calls)} turns; expected to park by ~3"
+
+
 # ---------- view_file range-aware repetition signature (ported, 2026-07-22) ----------
 
 def test_oracle_view_file_different_ranges_do_not_trip_repetition_guard(

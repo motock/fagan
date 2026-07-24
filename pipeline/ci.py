@@ -21,6 +21,8 @@ from .build_detect import (
     detect_build_command,
     _acceptance_rel_paths,
     _scope_test_cmd_to_acceptance,
+    _is_pytest_cmd,
+    _added_pytest_test_paths,
 )
 from .concurrency import _is_heavy, _heavy_lock
 
@@ -214,7 +216,9 @@ def _ci_rerun(sha: str) -> bool:
     return rerun.returncode == 0
 
 
-def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]:
+def _reverify_acceptance(
+    story: dict[str, Any], worktree: str, story_key: str = ""
+) -> dict[str, str]:
     """Re‑run a story's acceptance oracle against its rebased worktree.
 
     The function first attempts to run only the acceptance paths when the
@@ -228,6 +232,12 @@ def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]
     this protects against accidental regressions in the mainline tests.  An
     operator may opt out of the full‑suite run by setting the environment
     variable ``PIPELINE_REVERIFY_FULL_SUITE=0``.
+
+    ``story_key`` (when given) lets a no-acceptance story additionally pull
+    in its own new/modified tests/test_*.py files that the full-suite
+    command's --ignore=tests would otherwise hide from this last gate before
+    merge — the same Mode 42 done-bar blindspot check_story_status's test
+    gate closes; see :func:`_added_pytest_test_paths`.
     """
     acceptance = story.get("acceptance") or []
     if not worktree or not Path(worktree).is_dir():
@@ -246,6 +256,13 @@ def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]
         # No acceptance block: run the full suite unless the operator opted out.
         if os.environ.get("PIPELINE_REVERIFY_FULL_SUITE", "1") == "0":
             return {"state": "none", "error": ""}
+        if story_key and _is_pytest_cmd(test_cmd):
+            from .server import _default_branch
+            own_test_paths = _added_pytest_test_paths(
+                Path(worktree), story_key, _default_branch())
+            if own_test_paths:
+                test_cmd = [*test_cmd,
+                            *(str(Path(worktree) / p) for p in own_test_paths)]
 
     test_env = {
         k: v

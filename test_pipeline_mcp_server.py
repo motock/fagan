@@ -2308,7 +2308,7 @@ def test_review_story_request_changes_warns_rework_when_acceptance_oracle_curren
     reviewer_output = "Some unrelated nit.\nVERDICT: REQUEST_CHANGES"
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "pass", "error": ""})
+                        lambda story, wt, *a, **k: {"state": "pass", "error": ""})
 
     p.review_story("rvoracle", "S1")
 
@@ -2333,7 +2333,7 @@ def test_review_story_request_changes_no_oracle_warning_when_oracle_fails(
     reviewer_output = "Real bug found.\nVERDICT: REQUEST_CHANGES"
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "fail", "error": "boom"})
+                        lambda story, wt, *a, **k: {"state": "fail", "error": "boom"})
 
     p.review_story("rvoraclefail", "S1")
 
@@ -2356,7 +2356,7 @@ def test_review_story_request_changes_no_oracle_check_without_acceptance_block(
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
     calls = []
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: calls.append(1) or {"state": "pass", "error": ""})
+                        lambda story, wt, *a, **k: calls.append(1) or {"state": "pass", "error": ""})
 
     p.review_story("rvnoacc", "S1")
 
@@ -6141,6 +6141,106 @@ def test_reverify_acceptance_reruns_full_suite_for_unscopeable_runner(monkeypatc
     assert seen_cmd["cmd"] == ["mvn", "test"]
 
 
+def test_reverify_acceptance_appends_own_test_paths_without_acceptance_block(
+    monkeypatch, tmp_path,
+):
+    # Mode 42 done-bar blindspot, merge-gate side: a no-acceptance story
+    # whose deliverable lives under tests/ gets its own new tests/test_*.py
+    # file appended to the full-suite re-run when story_key is given, so a
+    # break the model's own test would have caught can't slip through the
+    # last check before merge (see _added_pytest_test_paths).
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(
+        pci, "_added_pytest_test_paths",
+        lambda wt, key, base: ["tests/benchmark/test_driver.py"]
+        if key == "S1" else [],
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), "S1")
+
+    assert result == {"state": "pass", "error": ""}
+    assert seen_cmd["cmd"] == [
+        "pytest", str(tmp_path / "tests/benchmark/test_driver.py")]
+
+
+def test_reverify_acceptance_no_story_key_leaves_full_suite_unscoped(
+    monkeypatch, tmp_path,
+):
+    # Backward-compat default: callers that don't pass story_key (the
+    # pre-existing 2-arg call shape) get the plain full suite, unchanged.
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(
+        pci, "_added_pytest_test_paths",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not be called without a story_key")),
+    )
+
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path))
+
+    assert result == {"state": "pass", "error": ""}
+    assert seen_cmd["cmd"] == ["pytest"]
+
+
+def test_reverify_acceptance_does_not_augment_when_acceptance_block_present(
+    monkeypatch, tmp_path,
+):
+    # A story WITH an acceptance block stays scoped to the oracle only
+    # (FM-A) - own-test-path augmentation is only for the no-acceptance
+    # full-suite arm.
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["pytest"]))
+    monkeypatch.setattr(
+        pci, "_added_pytest_test_paths",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not be called when acceptance block is present")),
+    )
+    story = {"acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]}
+
+    result = p._reverify_acceptance(story, str(tmp_path), "S1")
+
+    assert result == {"state": "pass", "error": ""}
+    assert seen_cmd["cmd"] == ["pytest", str(tmp_path / "test_acceptance.py")]
+
+
+def test_reverify_acceptance_skips_augmentation_for_non_pytest_runner(
+    monkeypatch, tmp_path,
+):
+    # A non-pytest full-suite command (e.g. mvn) must not have
+    # _added_pytest_test_paths' output appended - it only knows how to
+    # extend a pytest invocation.
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(pci, "detect_test_command", lambda wt: (wt, ["mvn", "test"]))
+    monkeypatch.setattr(
+        pci, "_added_pytest_test_paths",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not be called for a non-pytest runner")),
+    )
+
+    result = p._reverify_acceptance({"summary": "x"}, str(tmp_path), "S1")
+
+    assert result == {"state": "pass", "error": ""}
+    assert seen_cmd["cmd"] == ["mvn", "test"]
+
+
 def test_reverify_acceptance_returns_none_for_missing_worktree(monkeypatch):
     def _boom_run(*a, **k):
         raise AssertionError("must not run tests against a missing worktree")
@@ -6270,7 +6370,7 @@ def test_advance_pipeline_build_reverify_fail_blocks_merge(plan_dir, monkeypatch
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "pass", "error": ""})
+                        lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_build",
                         lambda wt: {"state": "fail", "error": "Error: Can't resolve 'crypto'"})
     merged_calls = []
@@ -6296,7 +6396,7 @@ def test_advance_pipeline_build_reverify_pass_merges(plan_dir, monkeypatch):
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "pass", "error": ""})
+                        lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
@@ -6319,7 +6419,7 @@ def test_approve_merge_build_reverify_fail_returns_error(plan_dir, monkeypatch):
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "pass", "error": ""})
+                        lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_build",
                         lambda wt: {"state": "fail", "error": "build broke"})
     merged_calls = []
@@ -6347,7 +6447,7 @@ def test_advance_pipeline_acceptance_reverify_fail_blocks_merge(plan_dir, monkey
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "fail", "error": "AttributeError"})
+                        lambda story, wt, *a, **k: {"state": "fail", "error": "AttributeError"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
 
@@ -6381,7 +6481,7 @@ def test_advance_pipeline_full_suite_reverify_fail_blocks_merge(plan_dir, monkey
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "fail", "error": "ModuleNotFoundError: shared"})
+                        lambda story, wt, *a, **k: {"state": "fail", "error": "ModuleNotFoundError: shared"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
 
@@ -6406,7 +6506,7 @@ def test_advance_pipeline_acceptance_reverify_pass_merges(plan_dir, monkeypatch)
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "pass", "error": ""})
+                        lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
 
@@ -6429,7 +6529,7 @@ def test_approve_merge_acceptance_reverify_fail_returns_error(plan_dir, monkeypa
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "fail", "error": "AttributeError"})
+                        lambda story, wt, *a, **k: {"state": "fail", "error": "AttributeError"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
 
@@ -7222,6 +7322,84 @@ def test_check_story_status_records_last_test_check_on_pass(plan_dir, monkeypatc
     assert check["returncode"] == 0
     assert "3 passed" in check["stdout_tail"]
     assert "ts" in check
+
+
+def test_check_story_status_gate_appends_own_new_tests_under_tests_dir(
+    plan_dir, monkeypatch,
+):
+    """Mode 42 done-bar blindspot: a no-acceptance story whose deliverable
+    lives under tests/ (e.g. tests/benchmark/run_real_repo_task.py) can add
+    its own tests/test_*.py file there, but detect_test_command's
+    --ignore=tests then hides that file from THIS SAME gate run - so a
+    broken implementation can pass its own (never-executed) test and land
+    tests_passed. check_story_status must pass the story's own new/modified
+    tests/test_*.py paths explicitly so they actually run (see
+    _added_pytest_test_paths)."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("[step 0] bash: pwd\n")
+    _write_manifest(plan_dir, "diag2", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree)},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (wt, ["pytest", "--ignore=tests"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(
+        p, "_added_pytest_test_paths",
+        lambda wt, key, base: ["tests/benchmark/test_driver.py"]
+        if key == "S1" and base == "main" else [],
+    )
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="4 passed", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_story_status("diag2", "S1")
+
+    assert result["status"] == "tests_passed"
+    assert seen_cmd["cmd"] == [
+        "pytest", "--ignore=tests", str(worktree / "tests/benchmark/test_driver.py")]
+
+
+def test_check_story_status_gate_skips_own_test_append_with_acceptance_block(
+    plan_dir, monkeypatch,
+):
+    """A story WITH an acceptance block stays scoped to the harness-owned
+    oracle only (FM-A) - the own-new-tests augmentation must not fire, since
+    that would grade the story on the model's own (possibly buggy)
+    assertions instead of the oracle."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("[step 0] bash: pwd\n")
+    _write_manifest(plan_dir, "diag3", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree),
+               "acceptance": [{"path": "test_acceptance.py", "source": "def test_x(): pass"}]},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (wt, ["pytest", "--ignore=tests"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+    monkeypatch.setattr(
+        p, "_added_pytest_test_paths",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not be called when acceptance block is present")),
+    )
+    seen_cmd = {}
+    def _fake_run(cmd, **kwargs):
+        seen_cmd["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="1 passed", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    result = p.check_story_status("diag3", "S1")
+
+    assert result["status"] == "tests_passed"
+    assert seen_cmd["cmd"] == [
+        "pytest", "--ignore=tests", str(worktree / "test_acceptance.py")]
 
 
 def test_check_story_status_records_last_test_check_on_fail_without_stderr_attr(
@@ -11754,7 +11932,7 @@ def test_approve_merge_rereads_manifest_inside_lock(plan_dir, monkeypatch):
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, sha: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "pass"})
+                        lambda story, wt, *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
 
     def _capture_merge(wt, key):
@@ -11880,7 +12058,7 @@ def test_scheduler_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
     monkeypatch.setattr(p, "_ci_status", lambda br, sha: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda story, wt: {"state": "pass"})
+                        lambda story, wt, *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)

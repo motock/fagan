@@ -2701,3 +2701,88 @@ def test_lint_feedback_skipped_when_lint_not_detected(tmp_path, monkeypatch):
     result = la.run_tool("create_file", {"path": "foo.py", "content": "x = 1\n"})
     assert result == "created foo.py"
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Mode 41 follow-up (D): replace_lines echoes the lines it actually removed
+# back in the tool result. Neither _newly_undefined_names nor
+# _newly_undefined_module_defs catches a silently-dropped statement with no
+# surviving reference to orphan (e.g. a bare `time.sleep(10)` call, or a
+# `story["x"] = x` write nothing else reads) - the exact shape of the live
+# MODE40-CI-ERROR-DETAIL-V2/MODE40-LINT-GATE-WIRING regressions (a deleted
+# time.sleep(10) causing a busy-loop; a deleted story["interrupted_at"]
+# assignment breaking dashboard staleness). An always-on echo lets the
+# model self-catch this the moment it happens instead of only at review.
+# ---------------------------------------------------------------------------
+
+def test_replace_lines_echoes_removed_lines_in_result(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def f():\n"
+        "    do_thing()\n"
+        "    time.sleep(10)  # keep polling\n"
+        "    return\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 3,
+        "new_str": "    do_thing()\n",
+    })
+
+    assert result.startswith("edited mod.py (lines 2-3)")
+    assert "removed" in result.lower()
+    assert "time.sleep(10)" in result
+    removed_section = result.split("removed", 1)[1]
+    assert "do_thing()" not in removed_section  # the kept line isn't echoed as removed
+
+
+def test_replace_lines_no_echo_when_old_line_preserved_verbatim(tmp_path, monkeypatch):
+    """A pure insertion - the old line reappears verbatim inside new_str,
+    alongside newly added lines - has nothing genuinely removed, so no
+    echo. Only lines that DON'T survive anywhere in the replacement block
+    get flagged."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = "def f():\n    return 1\n"
+    (tmp_path / "mod.py").write_text(original)
+
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 2,
+        "new_str": "    log.debug('entering')\n    return 1\n",
+    })
+
+    assert result.startswith("edited mod.py (lines 2-2)")
+    assert "removed" not in result.lower()
+
+
+def test_replace_lines_echo_capped_for_large_removals(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = "def f():\n" + "".join(f"    line_{i}\n" for i in range(200)) + "    return\n"
+    (tmp_path / "mod.py").write_text(original)
+
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 201,
+        "new_str": "    pass\n",
+    })
+
+    assert result.startswith("edited mod.py (lines 2-201)")
+    assert len(result) < 3000  # capped, not a 200-line dump
+    assert "truncated" in result.lower() or "more line" in result.lower()
+
+
+def test_str_replace_does_not_echo_removed_lines(tmp_path, monkeypatch):
+    """str_replace's old_str IS the removed content, byte-for-byte, as
+    already specified by the model in its own tool call - echoing it back
+    would be redundant. Only replace_lines (stale-line-number-prone) gets
+    the echo."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    result = la.run_tool("str_replace", {"path": "mod.py", "old_str": "x = 1\n", "new_str": "x = 2\n"})
+    assert result == "edited mod.py"
+    assert "removed" not in result.lower()

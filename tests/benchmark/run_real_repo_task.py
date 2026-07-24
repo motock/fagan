@@ -2,7 +2,7 @@
 Utility functions for the real‑repo integration harness.
 
 This module implements two small, independently testable helpers used by the
-real‑repo benchmark driver.  The implementation closely mirrors the logic in
+real‑repo benchmark driver. The implementation closely mirrors the logic in
 ``harness.setup_workspace`` and ``harness.run_groundtruth`` but is adapted to
 work with a full clone of the pipeline repository instead of a synthetic
 scaffold.
@@ -14,12 +14,31 @@ exercise, without any additional side‑effects.  They rely on the constants
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
-import harness
-# Import constants from harness – use the same import style as compound_harness.py
-from harness import PIPELINE_REPO, VENV_PY, drive
+
+# Import harness helpers – keep the names exactly as used by the tests.
+import harness  # noqa: F401
+from harness import (
+    PIPELINE_REPO,
+    VENV_PY,
+    build_plan_from_stories,
+    install_merge_stubs,
+    _set_review_backend_env,
+)
+# ``drive`` must be a module‑level name for monkeypatching.
+from harness import drive
+
+# ---------------------------------------------------------------------------
+# Helper functions – unchanged from the original implementation.
+# ---------------------------------------------------------------------------
+
 def setup_real_repo_workspace(cell: Path, base_commit: str) -> dict[str, Path]:
     """Create a throwaway workspace that contains a full clone of the pipeline repo.
 
@@ -52,24 +71,47 @@ def setup_real_repo_workspace(cell: Path, base_commit: str) -> dict[str, Path]:
 
     # Clone the pipeline repo locally – ``--local`` keeps it a copy of the same
     # working tree without network traffic.
-        subprocess.run(["git", "clone", "--local", str(harness.PIPELINE_REPO), str(repo)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", "--local", str(PIPELINE_REPO), str(repo)],
+        check=True,
+        capture_output=True,
+    )
     # Pin to the requested commit.  This detaches HEAD.
     subprocess.run(["git", "-C", str(repo), "checkout", base_commit], check=True, capture_output=True)
 
     # Create a real ``master`` branch pointing at that commit so pushes work.
-    subprocess.run(["git", "-C", str(repo), "branch", "--force", "master", "HEAD"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "branch", "--force", "master", "HEAD"],
+        check=True,
+        capture_output=True,
+    )
     subprocess.run(["git", "-C", str(repo), "checkout", "master"], check=True, capture_output=True)
 
     # Initialise the bare origin in the sibling directory.  The ``-q`` flag keeps
     # output quiet; ``-b master`` ensures the remote has a default branch.
-    subprocess.run(["git", "init", "--bare", "-q", "-b", "master", "."], cwd=str(origin), check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", "-q", "-b", "master", "."],
+        cwd=str(origin),
+        check=True,
+        capture_output=True,
+    )
 
     # Update the existing ``origin`` remote to point at the new bare repo.
-    subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", str(origin)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "set-url", "origin", str(origin)],
+        check=True,
+        capture_output=True,
+    )
     # Symlink the pipeline's virtualenv into the clone so pytest resolves correctly.
     (repo / ".venv").symlink_to(PIPELINE_REPO / ".venv")
-    subprocess.run(["git", "-C", str(repo), "push", "-q", "-u", "origin", "master"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "push", "-q", "-u", "origin", "master"],
+        check=True,
+        capture_output=True,
+    )
     return {"repo": repo, "origin": origin, "plans": plans, "worktrees": worktrees}
+
+
 def run_groundtruth_in_place(repo: Path, groundtruth_source: str, groundtruth_name: str = "test_groundtruth_review_story_lock_guard.py") -> dict:
     """Run a ground‑truth test file inside *repo* and clean up.
 
@@ -96,33 +138,31 @@ def run_groundtruth_in_place(repo: Path, groundtruth_source: str, groundtruth_na
     tail = (result.stdout + result.stderr)[-700:]
     return {"ran": True, "passed": result.returncode == 0, "tail": tail}
 
+# ---------------------------------------------------------------------------
+# Main entry point – implements the CLI described in the task.
+# ---------------------------------------------------------------------------
 
 def main() -> int:
-    import argparse
-    import json
-    import os
-    import sys
-    import time
-    from pathlib import Path
-
-    # Import harness helpers
-    from harness import build_plan_from_stories, install_merge_stubs, _set_review_backend_env
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="review_story_lock_guard")
     parser.add_argument("--model", required=True)
     parser.add_argument("--trial", type=int, default=0)
     workdir_default = str(Path(__file__).resolve().parent / "_runs")
     parser.add_argument("--workdir", default=workdir_default)
-    parser.add_argument("--timeout", type=int, default=10800)
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=10800,
+        help="Timeout in seconds (default: %(default)s)",
+    )
     parser.add_argument("--tick", type=float, default=10.0)
     parser.add_argument("--max-defer-extension", type=int, default=14400)
 
     args = parser.parse_args()
 
-    # Unknown model check
+    # Unknown model check – load MODELS lazily.
     try:
-        from models import MODELS
+        from models import MODELS  # noqa: F401
     except Exception:
         print("Could not load models", file=sys.stderr)
         return 2
@@ -142,23 +182,33 @@ def main() -> int:
     with open(spec_path) as f:
         task = json.loads(f.read())
 
-
+    # Resolve base_commit – fall back to HEAD if the ref cannot be resolved.
     try:
         base_commit = subprocess.run(
             ["git", "-C", str(PIPELINE_REPO), "rev-parse", "HEAD"],
-            text=True
+            text=True,
+            capture_output=True,
+            check=True,
         ).stdout.strip()
     except Exception:
         base_commit = "HEAD"
+
     cell = Path(args.workdir).resolve() / f"{args.task}__{args.model}__t{args.trial}"
     paths = setup_real_repo_workspace(cell, base_commit)
+
+    # Environment setup for the pipeline server.
     os.environ["PIPELINE_AUTONOMY"] = "full"
     os.environ["PIPELINE_RISK_THRESHOLD"] = "low"
     os.environ["PIPELINE_MAX_CONCURRENT_AGENTS"] = "1"
     _set_review_backend_env()
-    # Clear any explicit review backend overrides
-    for key in ["PIPELINE_LOCAL_MODEL_SONNET", "PIPELINE_LOCAL_MODEL_OPUS", "PIPELINE_LOCAL_MODEL_HAIKU"]:
+    for key in [
+        "PIPELINE_LOCAL_MODEL_SONNET",
+        "PIPELINE_LOCAL_MODEL_OPUS",
+        "PIPELINE_LOCAL_MODEL_HAIKU",
+    ]:
         os.environ.pop(key, None)
+    # Import MODELS again to get env mapping.
+    from models import MODELS  # noqa: F401
     os.environ.update(MODELS[args.model]["env"])
 
     import pipeline_mcp_server as p
@@ -174,7 +224,7 @@ def main() -> int:
             "model": task["model"],
             "risk": task["risk"],
             "dependencies": [],
-            "acceptance": []
+            "acceptance": [],
         }
     ]
     plan = build_plan_from_stories(paths["repo"], task["summary"], stories)
@@ -222,7 +272,7 @@ def main() -> int:
         "infra_failures": infra_failures,
         "task": args.task,
         "model": args.model,
-        "trial": args.trial
+        "trial": args.trial,
     }
 
     cell.mkdir(parents=True, exist_ok=True)
@@ -230,3 +280,4 @@ def main() -> int:
     print(json.dumps(result))
     return 0
 
+# End of file

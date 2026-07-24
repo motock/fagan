@@ -226,6 +226,17 @@ REWORK_FULL_SUITE = os.environ.get("LOCAL_AGENT_REWORK_FULL_SUITE") == "1"
 # break this because no real action resolves a self-contradictory test. Park
 # after this many consecutive no-tool turns rather than burning the whole run.
 NO_TOOL_CAP = int(os.environ.get("LOCAL_AGENT_NO_TOOL_CAP", "5"))
+# Cap full-suite done-rejections on a CI-fail-rework round. A model that has
+# corrupted the code and cannot get the suite green will alternate `done`
+# (rejected: suite red) with narration ("I cannot resolve this") — and because
+# a `done` tool call resets consecutive_no_tool, that alternation never trips
+# NO_TOOL_CAP and never trips the per-target repetition guard (done/str_replace
+# are both excluded from it). Before this cap the run burned the entire step
+# budget / wall-clock timeout doing nothing, then re-dispatched and repeated
+# (observed live: ~20h across 7+ re-dispatches on one story). Park the run once
+# the agent has failed to green the suite this many times so a stuck rework
+# ends in seconds, not the whole budget.
+REWORK_SUITE_REJECT_CAP = int(os.environ.get("LOCAL_AGENT_REWORK_SUITE_REJECT_CAP", "3"))
 TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
 
 
@@ -1433,8 +1444,10 @@ def main() -> int:
     # L1: separate counter for full-suite done-rejections on a CI-fail-rework
     # round. Kept distinct from done_rejections so it cannot trip the dirty-
     # tree auto-accept-at-2 logic (a failing suite must NEVER be auto-
-    # accepted). Bounded by MAX_STEPS: if the agent never fixes its own test,
-    # the step cap binds and the run ends in the WIP-commit terminal path.
+    # accepted). Bounded by REWORK_SUITE_REJECT_CAP: once the agent has failed
+    # to green the suite that many times the run parks (return 2) rather than
+    # burning the rest of the step/wall-clock budget re-prompting a model that
+    # cannot make progress.
     suite_rejections = 0
     consecutive_no_tool = 0
     # Failing-str_replace loop guard: str_replace is excluded from the
@@ -1556,6 +1569,11 @@ def main() -> int:
                             if not suite_ok:
                                 suite_rejections += 1
                                 auto_wip_commit("commit enforcement")
+                                if suite_rejections >= REWORK_SUITE_REJECT_CAP:
+                                    print(f"[step {step}] rework suite-reject cap "
+                                          f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
+                                          f"cannot green the full suite — parking", flush=True)
+                                    return 2
                                 _reject_done_for_suite(messages, step, suite_tail)
                                 break
                         auto_wip_commit("commit enforcement")
@@ -1577,6 +1595,13 @@ def main() -> int:
                     suite_ok, suite_tail = _full_suite_result()
                     if not suite_ok:
                         suite_rejections += 1
+                        if suite_rejections >= REWORK_SUITE_REJECT_CAP:
+                            if worktree_dirty():
+                                auto_wip_commit("rework suite-reject cap")
+                            print(f"[step {step}] rework suite-reject cap "
+                                  f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
+                                  f"cannot green the full suite — parking", flush=True)
+                            return 2
                         _reject_done_for_suite(messages, step, suite_tail)
                         break
                 print(f"[step {step}] DONE: {args.get('summary', '')}", flush=True)

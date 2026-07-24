@@ -2491,6 +2491,77 @@ def test_dirty_tree_auto_accept_does_not_bypass_suite_gate(tmp_path, monkeypatch
     assert "done rejected — full test suite still fails" in out, out
 
 
+def test_rework_suite_reject_cap_parks_instead_of_burning_the_budget(
+    tmp_path, monkeypatch, capsys):
+    """Regression guard (root-caused live 2026-07-24 on the MODE40 stories):
+    on a CI-fail-rework round a model that has corrupted the code and cannot
+    green the suite alternates `done` (rejected: suite red) with narration
+    ("I cannot resolve this"). That oscillation is invisible to NO_TOOL_CAP
+    (a `done` tool call resets consecutive_no_tool) and to the per-target
+    repetition guard (done/str_replace are both excluded from it), so before
+    the cap the run burned the ENTIRE step/wall-clock budget doing nothing,
+    parked, re-dispatched, and repeated — ~20h across 7+ re-dispatches on one
+    story. The run must PARK (rc=2) after REWORK_SUITE_REJECT_CAP suite
+    rejections, well before MAX_STEPS."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(la, "REWORK_SUITE_REJECT_CAP", 3)
+    monkeypatch.setattr(la, "MAX_STEPS", 30)  # far above the cap
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+
+    suite_calls: list = []
+
+    def _suite_spy():
+        suite_calls.append(True)
+        return (False, "FAILED test_x.py::test_y - assert 1 == 2")
+
+    monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
+
+    # _sequence_chat emits `done` for every turn once the script runs out, so
+    # this models an agent that keeps calling done on a persistently-red suite.
+    fake, calls = _sequence_chat([("done", {"summary": "attempt"})])
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 2, f"expected park (rc=2) at the cap; got rc={rc}\n{out!r}"
+    assert "rework suite-reject cap (3) reached" in out, out
+    # Parked exactly at the cap — did NOT burn all 30 steps.
+    assert len(suite_calls) == 3, f"suite consulted {len(suite_calls)}x, expected 3"
+    assert len(calls) <= 4, f"took {len(calls)} turns; expected to park by ~3"
+
+
+def test_rework_suite_reject_cap_is_driven_by_the_constant(tmp_path, monkeypatch, capsys):
+    """The park point honors REWORK_SUITE_REJECT_CAP, not a hardcoded 3: with
+    the cap set to 2 the run parks after exactly two suite rejections."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(la, "REWORK_SUITE_REJECT_CAP", 2)
+    monkeypatch.setattr(la, "MAX_STEPS", 30)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+
+    suite_calls: list = []
+
+    def _suite_spy():
+        suite_calls.append(True)
+        return (False, "FAILED test_x.py::test_y")
+
+    monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
+
+    fake, _ = _sequence_chat([("done", {"summary": "attempt"})])
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 2, f"expected park (rc=2); got rc={rc}\n{out!r}"
+    assert "rework suite-reject cap (2) reached" in out, out
+    assert len(suite_calls) == 2, f"suite consulted {len(suite_calls)}x, expected 2"
+
+
 # ---------------------------------------------------------------------------
 # Mode 40 follow-up: lint feedback, both per-edit (fast, in-run) and as part
 # of the done-bar's _full_suite_result (so a rework agent can't exit DONE on

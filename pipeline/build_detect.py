@@ -341,6 +341,61 @@ def _scope_test_cmd_to_acceptance(
     return None
 
 
+def _added_pytest_test_paths(
+    worktree: Path, story_key: str, base_branch: str
+) -> list[str]:
+    """Return worktree-relative paths of python test files the story's
+    branch added or modified under ``tests/``, diffed against base_branch.
+
+    detect_test_command's ``--ignore=tests`` (see
+    _apply_pytest_collection_overrides) excludes tests/ from the gated
+    pytest run so the benchmark harness's own non-graded fixtures (red by
+    design, or needing fixtures CI doesn't set up) don't run in every
+    story's gate. But that same exclusion hides a story's own new
+    ``tests/test_*.py`` file from the done-bar when the story's deliverable
+    lives under tests/ - the model's tests for its own code become
+    invisible to both itself and the gate, so a broken implementation can
+    still land ``tests_passed`` (Mode 42, REAL-REPO-HARNESS-TASK-AND-DRIVER:
+    the model's own test suite for its tests/benchmark/run_real_repo_task.py
+    deliverable never ran against the gate, hiding a broken
+    run_groundtruth_in_place delegation from the local done-bar).
+
+    Passing these paths explicitly closes the gap without touching the
+    exclusion for the rest of tests/: pytest's ``--ignore`` only filters
+    paths it discovers on its own during collection, not ones given
+    explicitly as positional arguments (verified empirically - ``pytest
+    --ignore=tests tests/foo.py`` still collects and runs foo.py).
+
+    Only meant to be called for stories WITHOUT an acceptance block - a
+    story with one is intentionally graded on the harness-owned oracle only
+    (FM-A, _scope_test_cmd_to_acceptance), and adding the model's own tests
+    back in would undermine that.
+    """
+    branch = f"agent/{story_key.lower()}"
+    try:
+        r = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=ACM",
+             f"{base_branch}...{branch}"],
+            cwd=str(worktree), capture_output=True, text=True,
+        )
+    except OSError:
+        # Worktree path doesn't exist (or `git` isn't runnable) - fail open,
+        # same contract as detect_lint_command/detect_build_command.
+        return []
+    if r.returncode != 0:
+        return []
+    paths = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        p = Path(line)
+        if (p.parts and p.parts[0] == "tests" and p.suffix == ".py"
+                and (p.name.startswith("test_") or p.name.endswith("_test.py"))):
+            paths.append(line)
+    return paths
+
+
 __all__ = [
     "_venv_python_for",
     "_test_command_for",
@@ -351,4 +406,5 @@ __all__ = [
     "_acceptance_rel_paths",
     "_is_pytest_cmd",
     "_scope_test_cmd_to_acceptance",
+    "_added_pytest_test_paths",
 ]

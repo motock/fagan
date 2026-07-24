@@ -104,6 +104,7 @@ from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,
     _is_pytest_cmd,
     _scope_test_cmd_to_acceptance,
+    _added_pytest_test_paths,
 )
 
 from .git_ops import (
@@ -1460,6 +1461,16 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         scoped = _scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
         if scoped is not None:
             test_cmd = scoped
+    elif _is_pytest_cmd(test_cmd):
+        # Mode 42 done-bar blindspot: a story without an acceptance block
+        # whose deliverable lives under tests/ can add its own test_*.py
+        # there, which --ignore=tests then hides from this same gate run
+        # (see _added_pytest_test_paths). Pass those paths explicitly so the
+        # model's own tests for its own tests/-scoped code actually execute.
+        own_test_paths = _added_pytest_test_paths(
+            worktree, story_key, _default_branch())
+        if own_test_paths:
+            test_cmd = [*test_cmd, *(str(worktree / p) for p in own_test_paths)]
 
     # Grade in a clean dev env, not the MCP server's operational one. The
     # server carries PIPELINE_* (pause/resume thresholds, backend dispatch,
@@ -2265,7 +2276,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # gives the next dispatch a fact the reviewer's own text can't convey.
         feedback = reviewer_output
         if story.get("acceptance"):
-            oracle_now = _reverify_acceptance(story, worktree)
+            oracle_now = _reverify_acceptance(story, worktree, story_key)
             if oracle_now.get("state") == "pass":
                 feedback = (
                     "NOTE: the acceptance oracle is currently PASSING against "
@@ -2676,7 +2687,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     # against the just-rebased branch right before merging.
                     # Closes the gap CI alone can't (a repo without CI, or a
                     # CI-independent slip between tests_passed and review).
-                    acc = _reverify_acceptance(story, worktree)
+                    acc = _reverify_acceptance(story, worktree, key)
                     if acc["state"] == "fail":
                         gate_error = f"acceptance reverify fail: {acc['error']}"
                 if not gate_error:
@@ -2871,7 +2882,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                 if ci["state"] == "pending":
                     return {"ok": False, "error": f"CI still pending: {ci['error']}",
                             "story_key": story_key}
-                acc = _reverify_acceptance(story, worktree)
+                acc = _reverify_acceptance(story, worktree, story_key)
                 if acc["state"] == "fail":
                     return {"ok": False, "error": f"acceptance reverify fail: {acc['error']}",
                             "story_key": story_key}

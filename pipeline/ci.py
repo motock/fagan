@@ -156,6 +156,19 @@ def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[s
                          if e.get("bucket") in {"fail", "error", "action_required"}
                      )[:300],
                  }
+             # Handle cancelled bucket(s)
+             if "cancelled" in buckets:
+                 return {
+                     "state": "cancelled",
+                     "error": "; ".join(
+                         f"{e.get('name')}: {e.get('bucket')}"
+                         for e in entries
+                         if e.get("bucket") == "cancelled"
+                     )[:300],
+                 }
+             # Handle all-pass case
+             if buckets <= {"pass"}:
+                 return {"state": "pass", "error": ""}
 def _ci_rerun(sha: str) -> bool:
     """Rerun the failed/cancelled jobs of the workflow run for the specific
     commit `sha` via `gh run rerun --failed`, for the one-shot auto-retry on

@@ -196,7 +196,7 @@ log as an audit record.
    instruction is the remaining backstop for those. Stories without an
    `acceptance` block still run the full suite as before.
 When a lint signal is detected (`detect_lint_command`), a story that passes its tests but fails lint is also routed to `failed`, not `tests_passed`; the result is recorded in `story['last_lint_check']` alongside `last_test_check`.
-  `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
+When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   nonetheless produced real work (new commits) is routed to the reviewer
   instead of straight to terminal `failed`, so the rework loop can re-dispatch
   it with feedback; an empty-branch failure (no commits) still goes to
@@ -315,7 +315,8 @@ When a lint signal is detected (`detect_lint_command`), a story that passes its 
 
 ## Status lifecycle
 
-```\n todo ──dispatch──► in_progress ──tests+lint pass──► (review) ──► pr_open ──merge?──► done
+```
+todo ──dispatch──► in_progress ──tests+lint pass──► (review) ──► pr_open ──merge?──► done
    ▲                     │   │                       │                  └park──► parked
    │                     │   └──tests/lint fail──► failed └─REQUEST_CHANGES─► changes_requested
    │                     └──usage gate trips──► interrupted ──dispatch (resume)──┘   │

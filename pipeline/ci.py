@@ -169,7 +169,36 @@ def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[s
              # Handle all-pass case
              if buckets <= {"pass"}:
                  return {"state": "pass", "error": ""}
+    return {"state": "pending", "error": "CI did not complete within timeout"}
+
 def _ci_rerun(sha: str) -> bool:
+    """Rerun the failed/cancelled jobs of the workflow run for the specific
+    commit `sha` via `gh run rerun --failed`, for the one-shot auto-retry on
+    a `cancelled` `_ci_status` result. Never raises - `gh`/network failures
+    return False so the caller falls through to the ordinary fail/retry path
+    rather than crashing the scheduler tick.
+    """
+    try:
+        r = subprocess.run(
+            ["gh", "api", f"repos/{{owner}}/{{repo}}/actions/runs?head_sha={sha}",
+             "--jq", ".workflow_runs[0].id"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return False
+    if r.returncode != 0:
+        return False
+    run_id = r.stdout.strip()
+    if not run_id:
+        return False
+    try:
+        rerun = subprocess.run(
+            ["gh", "run", "rerun", run_id, "--failed"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return False
+    return rerun.returncode == 0
     """Rerun the failed/cancelled jobs of the workflow run for the specific
     commit `sha` via `gh run rerun --failed`, for the one-shot auto-retry on
     a `cancelled` `_ci_status` result. Never raises - `gh`/network failures

@@ -193,8 +193,9 @@ log as an audit record.
   prevents a correct implementation from being blocked by the model's own wrong
   test assertions, but it also means the gate no longer catches regressions
   elsewhere in the worktree; the reviewer's own "run the test suite"
-  instruction is the remaining backstop for those. Stories without an
-  `acceptance` block still run the full suite as before. When
+   instruction is the remaining backstop for those. Stories without an
+   `acceptance` block still run the full suite as before.
+When a lint signal is detected (`detect_lint_command`), a story that passes its tests but fails lint is also routed to `failed`, not `tests_passed`; the result is recorded in `story['last_lint_check']` alongside `last_test_check`.
   `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   nonetheless produced real work (new commits) is routed to the reviewer
   instead of straight to terminal `failed`, so the rework loop can re-dispatch
@@ -314,13 +315,13 @@ log as an audit record.
 
 ## Status lifecycle
 
+```\n todo ──dispatch──► in_progress ──tests+lint pass──► (review) ──► pr_open ──merge?──► done
+   ▲                     │   │                       │                  └park──► parked
+   │                     │   └──tests/lint fail──► failed └─REQUEST_CHANGES─► changes_requested
+   │                     └──usage gate trips──► interrupted ──dispatch (resume)──┘   │
+   ├──────────────────────────── redispatch (rework, w/ feedback) ─────────────────┘
+   └─ rework budget exhausted ─► parked
 ```
-todo ──dispatch──► in_progress ──tests pass──► (review) ──► pr_open ──merge?──► done
-  ▲                     │   │                       │                  └park──► parked
-  │                     │   └──tests fail──► failed └─REQUEST_CHANGES─► changes_requested
-  │                     └──usage gate trips──► interrupted ──dispatch (resume)──┘   │
-  ├──────────────────────────── redispatch (rework, w/ feedback) ─────────────────┘
-  └─ rework budget exhausted ─► parked
 ```
 
 `interrupted` is distinct from `failed`: it means the agent was stopped (by

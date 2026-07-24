@@ -1249,6 +1249,24 @@ def _last_done_summary(agent_log: Path) -> str:
 
 
 
+def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
+    lint = detect_lint_command(worktree)
+    if lint is None:
+        return None
+    lint_dir, cmd = lint
+    try:
+        result = subprocess.run(cmd, cwd=lint_dir, capture_output=True, text=True, env=test_env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {
+        "cmd": cmd,
+        "returncode": result.returncode,
+        "stdout_tail": (result.stdout or "")[-2000:],
+        "stderr_tail": (result.stderr or "")[-2000:],
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Check whether a dispatched agent has finished. If complete, runs tests
@@ -1529,6 +1547,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         "stderr_tail": (getattr(test_result, "stderr", "") or "")[-2000:],
         "ts": datetime.now(timezone.utc).isoformat(),
     }
+    if passed:
+        lint = _run_lint_gate(worktree, test_env)
+        if lint is not None:
+            story["last_lint_check"] = lint
+            if lint["returncode"] != 0:
+                passed = False
 
     # The agent produced real output and the tests ran: the launch worked, so
     # clear any failed-launch attempts accumulated by earlier infra blips.

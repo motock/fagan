@@ -52,8 +52,7 @@ def setup_real_repo_workspace(cell: Path, base_commit: str) -> dict[str, Path]:
 
     # Clone the pipeline repo locally – ``--local`` keeps it a copy of the same
     # working tree without network traffic.
-        subprocess.run(["git", "clone", "--local", str(harness.PIPELINE_REPO), str(repo)], check=True, capture_output=True)
-
+        subprocess.run(["git", "clone", "--local", str(PIPELINE_REPO), str(repo)], check=True, capture_output=True)
     # Pin to the requested commit.  This detaches HEAD.
     subprocess.run(["git", "-C", str(repo), "checkout", base_commit], check=True, capture_output=True)
 
@@ -68,8 +67,7 @@ def setup_real_repo_workspace(cell: Path, base_commit: str) -> dict[str, Path]:
     # Update the existing ``origin`` remote to point at the new bare repo.
     subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", str(origin)], check=True, capture_output=True)
     # Symlink the pipeline's virtualenv into the clone so pytest resolves correctly.
-    (repo / ".venv").symlink_to(harness.PIPELINE_REPO / ".venv")
-    # Push master to the newly created origin to populate it with the base commit.
+    (repo / ".venv").symlink_to(PIPELINE_REPO / ".venv")
     subprocess.run(["git", "-C", str(repo), "push", "-q", "-u", "origin", "master"], check=True, capture_output=True)
     return {"repo": repo, "origin": origin, "plans": plans, "worktrees": worktrees}
 def run_groundtruth_in_place(repo: Path, groundtruth_source: str, groundtruth_name: str = "test_groundtruth_review_story_lock_guard.py") -> dict:
@@ -85,7 +83,7 @@ def run_groundtruth_in_place(repo: Path, groundtruth_source: str, groundtruth_na
 
     try:
         result = subprocess.run(
-            [str(harness.VENV_PY), "-m", "pytest", groundtruth_name, "-q", "--no-header", "-p", "no:cacheprovider"],
+            [str(VENV_PY), "-m", "pytest", groundtruth_name, "-q", "--no-header", "-p", "no:cacheprovider"],
             cwd=repo,
             capture_output=True,
             text=True,
@@ -147,9 +145,7 @@ def main() -> int:
 
     try:
         base_commit = subprocess.run(
-            ["git", "-C", str(harness.PIPELINE_REPO), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
+            ["git", "-C", str(PIPELINE_REPO), "rev-parse", "HEAD"],
             text=True
         ).stdout.strip()
     except Exception:

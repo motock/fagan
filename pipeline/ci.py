@@ -41,10 +41,13 @@ def _repo_has_ci_configured() -> bool:
     identically to "no CI configured".
     """
     from .server import REPO_ROOT
+
     return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
 
 
-def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[str, str]:
+def _ci_status(
+    branch: str, *, sha: str, timeout_s: int | None = None
+) -> dict[str, str]:
     """Poll GitHub for the status of checks on ``sha`` or ``branch``.
 
     Parameters
@@ -71,15 +74,21 @@ def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[s
         try:
             if sha:
                 r = subprocess.run(
-                    ["gh", "api",
-                     f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
-                     "--jq", ".check_runs[] | {name, status, conclusion}"]
-                    , capture_output=True, text=True
+                    [
+                        "gh",
+                        "api",
+                        f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+                        "--jq",
+                        ".check_runs[] | {name, status, conclusion}",
+                    ],
+                    capture_output=True,
+                    text=True,
                 )
             else:
                 r = subprocess.run(
                     ["gh", "pr", "checks", branch, "--json", "name,bucket"],
-                    capture_output=True, text=True,
+                    capture_output=True,
+                    text=True,
                 )
         except OSError as e:
             return {"state": "none", "error": f"gh unavailable: {e}"}
@@ -89,9 +98,14 @@ def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[s
 
         if sha:
             try:
-                runs = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
+                runs = [
+                    json.loads(line) for line in r.stdout.splitlines() if line.strip()
+                ]
             except ValueError:
-                return {"state": "none", "error": "unparseable gh api check-runs output"}
+                return {
+                    "state": "none",
+                    "error": "unparseable gh api check-runs output",
+                }
 
             if not runs:
                 if not _repo_has_ci_configured():
@@ -107,7 +121,8 @@ def _ci_status(branch: str, *, sha: str, timeout_s: int | None = None) -> dict[s
                     "error": "; ".join(
                         f"{r.get('name')}: {r.get('conclusion')}"
                         for r in runs
-                        if r.get("conclusion") in {"failure", "timed_out", "action_required"}
+                        if r.get("conclusion")
+                        in {"failure", "timed_out", "action_required"}
                     )[:300],
                 }
             if "cancelled" in conclusions:
@@ -171,10 +186,15 @@ def _ci_rerun(sha: str) -> bool:
     """
     try:
         r = subprocess.run(
-            ["gh", "api",
-             f"repos/{{owner}}/{{repo}}/actions/runs?head_sha={sha}",
-             "--jq", ".workflow_runs[0].id"],
-            capture_output=True, text=True,
+            [
+                "gh",
+                "api",
+                f"repos/{{owner}}/{{repo}}/actions/runs?head_sha={sha}",
+                "--jq",
+                ".workflow_runs[0].id",
+            ],
+            capture_output=True,
+            text=True,
         )
     except OSError:
         return False
@@ -186,7 +206,8 @@ def _ci_rerun(sha: str) -> bool:
     try:
         rerun = subprocess.run(
             ["gh", "run", "rerun", run_id, "--failed"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
     except OSError:
         return False
@@ -215,7 +236,9 @@ def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]
     test_dir, test_cmd = detect_test_command(Path(worktree))
     scoped = None
     if acceptance:
-        acceptance_paths = [str(Path(worktree) / p) for p in _acceptance_rel_paths(story)]
+        acceptance_paths = [
+            str(Path(worktree) / p) for p in _acceptance_rel_paths(story)
+        ]
         scoped = _scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
     if scoped is not None:
         test_cmd = scoped
@@ -225,14 +248,21 @@ def _reverify_acceptance(story: dict[str, Any], worktree: str) -> dict[str, str]
             return {"state": "none", "error": ""}
 
     test_env = {
-        k: v for k, v in os.environ.items()
-        if not k.startswith("PIPELINE_") and not k.startswith("LOCAL_AGENT_") and k != "REPO_ROOT"
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("PIPELINE_")
+        and not k.startswith("LOCAL_AGENT_")
+        and k != "REPO_ROOT"
     }
     if _is_heavy(test_cmd):
         with _heavy_lock():
-            r = subprocess.run(test_cmd, cwd=test_dir, capture_output=True, text=True, env=test_env)
+            r = subprocess.run(
+                test_cmd, cwd=test_dir, capture_output=True, text=True, env=test_env
+            )
     else:
-        r = subprocess.run(test_cmd, cwd=test_dir, capture_output=True, text=True, env=test_env)
+        r = subprocess.run(
+            test_cmd, cwd=test_dir, capture_output=True, text=True, env=test_env
+        )
 
     if r.returncode == 0:
         return {"state": "pass", "error": ""}
@@ -257,18 +287,26 @@ def _reverify_build(worktree: str) -> dict[str, str]:
     build_dir, build_cmd = detected
 
     build_env = {
-        k: v for k, v in os.environ.items()
-        if not k.startswith("PIPELINE_") and not k.startswith("LOCAL_AGENT_") and k != "REPO_ROOT"
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("PIPELINE_")
+        and not k.startswith("LOCAL_AGENT_")
+        and k != "REPO_ROOT"
     }
     if _is_heavy(build_cmd):
         with _heavy_lock():
-            r = subprocess.run(build_cmd, cwd=build_dir, capture_output=True, text=True, env=build_env)
+            r = subprocess.run(
+                build_cmd, cwd=build_dir, capture_output=True, text=True, env=build_env
+            )
     else:
-        r = subprocess.run(build_cmd, cwd=build_dir, capture_output=True, text=True, env=build_env)
+        r = subprocess.run(
+            build_cmd, cwd=build_dir, capture_output=True, text=True, env=build_env
+        )
 
     if r.returncode == 0:
         return {"state": "pass", "error": ""}
     return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
+
 
 __all__ = [
     "PIPELINE_MERGE_CI_GATE",

@@ -34,7 +34,7 @@ from harness import (
 )
 # ``drive`` must be a module‑level name for monkeypatching.
 from harness import drive
-
+from models import MODELS
 # ---------------------------------------------------------------------------
 # Helper functions – unchanged from the original implementation.
 # ---------------------------------------------------------------------------
@@ -160,13 +160,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Unknown model check – load MODELS lazily.
-    try:
-        from models import MODELS  # noqa: F401
-    except Exception:
-        print("Could not load models", file=sys.stderr)
-        return 2
-
+    # Unknown model check – use pre‑imported MODELS
     if args.model not in MODELS:
         print(f"Unknown model: {args.model}", file=sys.stderr)
         return 2
@@ -207,9 +201,12 @@ def main() -> int:
         "PIPELINE_LOCAL_MODEL_HAIKU",
     ]:
         os.environ.pop(key, None)
-    # Import MODELS again to get env mapping.
-    from models import MODELS  # noqa: F401
     os.environ.update(MODELS[args.model]["env"])
+
+    # Set environment paths used by the pipeline server.
+    os.environ["PLAN_DIR"] = str(paths["plans"])
+    os.environ["WORKTREE_ROOT"] = str(paths["worktrees"])
+    os.environ["REPO_ROOT"] = str(paths["repo"])
 
     import pipeline_mcp_server as p
     install_merge_stubs(p, paths["repo"])

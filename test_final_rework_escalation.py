@@ -383,7 +383,7 @@ def test_final_rework_escalation_noop_on_oracle_cap_of_one(
     # The acceptance-oracle re-verification path runs on REQUEST_CHANGES for
     # acceptance-bearing stories; stub it so no real subprocess is needed.
     monkeypatch.setattr(p, "_reverify_acceptance",
-                        lambda s, wt: {"state": "fail", "error": ""})
+                        lambda s, wt, sk="": {"state": "fail", "error": ""})
 
     _force_request_changes(monkeypatch)
 

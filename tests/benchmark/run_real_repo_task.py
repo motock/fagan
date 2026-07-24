@@ -17,7 +17,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
-
+import harness
 # Import constants from harness – use the same import style as compound_harness.py
 from harness import PIPELINE_REPO, VENV_PY, drive
 def setup_real_repo_workspace(cell: Path, base_commit: str) -> dict[str, Path]:
@@ -52,7 +52,7 @@ def setup_real_repo_workspace(cell: Path, base_commit: str) -> dict[str, Path]:
 
     # Clone the pipeline repo locally – ``--local`` keeps it a copy of the same
     # working tree without network traffic.
-        subprocess.run(["git", "clone", "--local", str(PIPELINE_REPO), str(repo)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", "--local", str(harness.PIPELINE_REPO), str(repo)], check=True, capture_output=True)
     # Pin to the requested commit.  This detaches HEAD.
     subprocess.run(["git", "-C", str(repo), "checkout", base_commit], check=True, capture_output=True)
 

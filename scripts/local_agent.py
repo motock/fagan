@@ -53,7 +53,7 @@ import shlex
 import subprocess
 import sys
 import time
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 
 import httpx
@@ -1067,6 +1067,49 @@ def _record_syntax_rejection(path_str: str, err: str) -> str:
     return err
 
 
+def _removed_lines_echo(old_lines: list[str], new_str: str) -> str:
+    """Mode 41 (D): return a short echo of the lines a replace_lines call
+    genuinely removed (present in the old range, absent anywhere in the
+    replacement block), or "" if nothing was truly dropped.
+
+    replace_lines is uniquely prone to silent collateral: the model
+    supplies a line RANGE, not the content it expects to be there, so a
+    stale range (computed from an earlier, since-trimmed view_file call)
+    can delete a statement the model never intended to touch - with no
+    syntax error and no orphaned name to trip the existing guards (a bare
+    `time.sleep(10)` call or a `story["x"] = x` write nothing reads back
+    orphans nothing). This is a plain echo, not a block - the deletion
+    already happened; the point is making it visible immediately instead
+    of only at review. str_replace does NOT need this: its old_str IS the
+    removed content, already known to the caller.
+
+    Line-exact multiset diff (Counter), not a real sequence diff - cheap
+    and sufficient for a heads-up: a line whose exact text doesn't survive
+    anywhere in new_str is flagged, even if a very similar (edited) line
+    does.
+    """
+    new_lines = new_str.splitlines(keepends=True) if new_str else []
+    remaining = Counter(new_lines)
+    removed: list[str] = []
+    for line in old_lines:
+        if remaining.get(line, 0) > 0:
+            remaining[line] -= 1
+        else:
+            removed.append(line)
+    if not removed:
+        return ""
+    MAX_ECHO_LINES = 15
+    MAX_ECHO_CHARS = 1500
+    shown = removed[:MAX_ECHO_LINES]
+    body = "".join(shown)
+    if len(body) > MAX_ECHO_CHARS:
+        body = body[:MAX_ECHO_CHARS] + "\n... [truncated]"
+    elif len(removed) > MAX_ECHO_LINES:
+        body += f"... [{len(removed) - MAX_ECHO_LINES} more line(s) truncated]\n"
+    return (f"\n\n[removed {len(removed)} line(s) not present in your replacement - "
+            f"verify this wasn't unintentional collateral:]\n{body}")
+
+
 def _lint_feedback_for(path_str: str) -> str:
     """Mode 40: after a successful write to `path_str`, run a fast,
     single-file-scoped lint check and return a short findings suffix to
@@ -1198,8 +1241,9 @@ def run_tool(fn, args) -> str:
             )
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
+        removed_echo = _removed_lines_echo(lines[start - 1:end], new_str)
         return (f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")
-                + _lint_feedback_for(args['path']))
+                + removed_echo + _lint_feedback_for(args['path']))
     if fn == "view_file":
         path = CWD / args["path"]
         if not path.exists():

@@ -2562,3 +2562,73 @@ def test_lint_feedback_skipped_when_lint_not_detected(tmp_path, monkeypatch):
     result = lao.run_tool("create_file", {"path": "foo.py", "content": "x = 1\n"})
     assert result == "created foo.py"
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Mode 41 follow-up (D): kept in sync with test_local_agent.py's equivalent
+# block - replace_lines echoes lines it genuinely removed.
+# ---------------------------------------------------------------------------
+
+def test_replace_lines_echoes_removed_lines_in_result(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = (
+        "def f():\n"
+        "    do_thing()\n"
+        "    time.sleep(10)  # keep polling\n"
+        "    return\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+
+    result = lao.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 3,
+        "new_str": "    do_thing()\n",
+    })
+
+    assert result.startswith("edited mod.py (lines 2-3)")
+    assert "removed" in result.lower()
+    assert "time.sleep(10)" in result
+    removed_section = result.split("removed", 1)[1]
+    assert "do_thing()" not in removed_section
+
+
+def test_replace_lines_no_echo_when_old_line_preserved_verbatim(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = "def f():\n    return 1\n"
+    (tmp_path / "mod.py").write_text(original)
+
+    result = lao.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 2,
+        "new_str": "    log.debug('entering')\n    return 1\n",
+    })
+
+    assert result.startswith("edited mod.py (lines 2-2)")
+    assert "removed" not in result.lower()
+
+
+def test_replace_lines_echo_capped_for_large_removals(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = "def f():\n" + "".join(f"    line_{i}\n" for i in range(200)) + "    return\n"
+    (tmp_path / "mod.py").write_text(original)
+
+    result = lao.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 201,
+        "new_str": "    pass\n",
+    })
+
+    assert result.startswith("edited mod.py (lines 2-201)")
+    assert len(result) < 3000
+    assert "truncated" in result.lower() or "more line" in result.lower()
+
+
+def test_str_replace_does_not_echo_removed_lines(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text("x = 1\n")
+    result = lao.run_tool("str_replace", {"path": "mod.py", "old_str": "x = 1\n", "new_str": "x = 2\n"})
+    assert result == "edited mod.py"
+    assert "removed" not in result.lower()

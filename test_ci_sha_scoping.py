@@ -56,7 +56,7 @@ def test_ci_status_falls_back_to_branch_query_when_sha_empty(monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_MERGE_CI_GATE", True)
     result = p._ci_status("agent/x", sha="")
     assert result == {"state": "pass", "error": ""}
-    assert calls[0] == ["gh", "pr", "checks", "agent/x", "--json", "bucket"]
+    assert calls[0] == ["gh", "pr", "checks", "agent/x", "--json", "name,bucket"]
 
 
 def test_ci_status_sha_scoped_fail_bucket(monkeypatch):

@@ -245,7 +245,7 @@ def main() -> int:
         wt = Path(story.get("worktree", ""))
         gt_src = wt if wt.is_dir() else paths["repo"]
 
-    gt = run_groundtruth_in_place(gt_src, task["groundtruth_source"])
+    gt = run_groundtruth_in_place(gt_src, (task_dir / "groundtruth.py").read_text())
 
     rework_cycles = story.get("rework_attempts", 0)
 

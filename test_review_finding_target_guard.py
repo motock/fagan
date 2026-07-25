@@ -255,6 +255,86 @@ def test_approve_proceeds_when_no_trackable_findings(plan_dir, tmp_path, monkeyp
     assert story["status"] == "pr_open"
 
 
+# (f2) tracked finding is a TEST FILE and the current full suite is green
+# (review_story only reaches APPROVE when status == "tests_passed") -> a
+# correct fix that lands in the implementation the test exercises, not the
+# test file itself, must not be downgraded. Root-caused live 2026-07-24 on
+# MODE40-CI-REWORK-FEEDBACK-V2: a gate-synthesized review flagged
+# test_ci_rework_feedback.py (the file where the assertion failed), the
+# agent correctly fixed the bug in pipeline/feedback.py (the file the test
+# exercises), the full suite went green and a real reviewer said APPROVE,
+# but this guard downgraded it back to REQUEST_CHANGES anyway because
+# test_ci_rework_feedback.py's own bytes were untouched - burning the
+# story's entire rework budget on a finding that was already resolved.
+
+def test_approve_proceeds_when_tracked_test_file_untouched_but_suite_passes(
+        plan_dir, tmp_path, monkeypatch):
+    plan_name, story_key = "P1", "S1"
+    worktree = init_repo(tmp_path)
+    create_manifest(plan_dir, plan_name, story_key, worktree, acceptance=[])
+    # First cycle: REQUEST_CHANGES flags a failing TEST file (the shape a
+    # gate-synthesized review or an LLM reviewer produces for a red test).
+    monkeypatch.setattr(
+        p, "_run_reviewer",
+        lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: test_foo.py: assertion fails")
+    p.review_story(plan_name, story_key)
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story.get("last_review_findings") == ["test_foo.py"]
+    # Rework: fix lands in the IMPLEMENTATION the test exercises, not the
+    # test file itself. The story only reaches "tests_passed" (the
+    # precondition for review_story to even run) once the full suite -
+    # including test_foo.py - is green, so this is a real, verified fix.
+    commit(worktree, "impl.py", "fixed the bug", msg="fix impl")
+    reset_to_tests_passed(plan_dir, plan_name, story_key)
+    # Second cycle: a real reviewer's independent verdict is APPROVE.
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    open_pr = Mock(return_value="https://gh/pr/1")
+    monkeypatch.setattr(p, "_open_pr", open_pr)
+    result = p.review_story(plan_name, story_key)
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+    open_pr.assert_called_once()
+    story = load_story(plan_dir, plan_name, story_key)
+    assert story["status"] == "pr_open"
+    assert story.get("last_review_findings", []) == []
+
+
+# (f3) mixed findings: a tracked TEST file (untouched, suite green - exempt)
+# alongside a tracked NON-test file (also untouched) -> APPROVE is still
+# downgraded, and only the real non-test finding is named. Proves the
+# test-file exemption is scoped narrowly, not a blanket bypass of the guard.
+
+def test_approve_still_downgraded_for_untouched_non_test_file_alongside_exempt_test_file(
+        plan_dir, tmp_path, monkeypatch):
+    plan_name, story_key = "P1", "S1"
+    worktree = init_repo(tmp_path)
+    create_manifest(plan_dir, plan_name, story_key, worktree, acceptance=[])
+    monkeypatch.setattr(
+        p, "_run_reviewer",
+        lambda *a, **k: (
+            "VERDICT: REQUEST_CHANGES\n"
+            "- Blocking: test_foo.py: assertion fails\n"
+            "- Blocking: server.py: logic bug unrelated to the test failure"
+        ))
+    p.review_story(plan_name, story_key)
+    story = load_story(plan_dir, plan_name, story_key)
+    assert set(story.get("last_review_findings", [])) == {"test_foo.py", "server.py"}
+    # Rework: fixes the test (suite goes green) but never touches server.py.
+    commit(worktree, "impl.py", "fixed the test failure", msg="fix impl")
+    reset_to_tests_passed(plan_dir, plan_name, story_key)
+    monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
+    open_pr = Mock(return_value="https://gh/pr/1")
+    monkeypatch.setattr(p, "_open_pr", open_pr)
+    result = p.review_story(plan_name, story_key)
+    assert result["verdict"] == "REQUEST_CHANGES"
+    assert result["status"] == "changes_requested"
+    open_pr.assert_not_called()
+    story = load_story(plan_dir, plan_name, story_key)
+    feedback = story.get("review_feedback", "")
+    assert "server.py" in feedback
+    assert "test_foo.py" not in feedback
+
+
 # (f) git-diff subprocess failure does NOT block the APPROVE (fail-open)
 
 def test_approve_fail_open_on_git_diff_error(plan_dir, tmp_path, monkeypatch):

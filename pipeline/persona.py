@@ -140,6 +140,35 @@ def _persona_requires_claude(story: dict[str, Any]) -> bool:
     return persona in _LOCAL_SKIP_PERSONAS
 
 
+# A repo-wide, unscoped lint/fix sweep (e.g. RUFF-016-ADOPTION: "run `ruff
+# check . --fix` ... fix every remaining finding") is structurally unwinnable
+# for local dispatch, independent of executor capability: the done-bar
+# demands every finding fixed, but on a real ruff-default-ruleset-adoption
+# baseline roughly 40% of the files with findings are test files (35/83,
+# confirmed live 2026-07-25) - and _NEVER_TOUCH_TESTS_STEERING forbids the
+# local executor from editing them. A story scoped to specific path(s)
+# doesn't hit this bind, so only the unscoped ". "/repo-wide phrasing matches.
+_UNWINNABLE_SCOPE_PATTERNS = (
+    re.compile(r"ruff check \.(?:\s|$)", re.IGNORECASE),
+    re.compile(r"eslint \.(?:\s|$)", re.IGNORECASE),
+    re.compile(r"\brepo[- ]wide\b", re.IGNORECASE),
+    re.compile(r"\bacross the (?:entire |whole )?repo(?:sitory)?\b", re.IGNORECASE),
+)
+
+
+def _story_has_unwinnable_local_scope(story: dict[str, Any]) -> bool:
+    """Whether story["agent_instructions"] describes a repo-wide, unscoped
+    lint/fix sweep - a scope local dispatch cannot complete without either
+    blowing past reasonable step budgets or violating the never-touch-tests
+    rule. See _UNWINNABLE_SCOPE_PATTERNS for the concrete signals.
+
+    Shared by _route_dispatch_backend and dispatch_story's explicit-mode
+    override, mirroring _persona_requires_claude's dual call sites exactly.
+    """
+    text = story.get("agent_instructions") or ""
+    return any(pattern.search(text) for pattern in _UNWINNABLE_SCOPE_PATTERNS)
+
+
 __all__ = [
     "_FRONTMATTER_RE",
     "_persona_path",
@@ -149,4 +178,5 @@ __all__ = [
     "_allowed_tools_for",
     "_build_dispatch_command",
     "_persona_requires_claude",
+    "_story_has_unwinnable_local_scope",
 ]

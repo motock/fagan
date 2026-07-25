@@ -28,6 +28,7 @@ import json
 import pytest
 
 import backend
+from pipeline import planner as pplanner
 from pipeline import server as p
 from pipeline import ticketing as pt
 import role_registry
@@ -268,8 +269,12 @@ def test_tdd_split_same_model_refusal_skips_phase(
     # Force the real _run_test_author_phase down the refusal path: the role
     # resolver returns (None, None) -> phase returns False before any
     # dispatch is attempted. This exercises the genuine safety net, not a
-    # mocked phase result.
-    monkeypatch.setattr(p, "_resolve_test_author_backend",
+    # mocked phase result. _run_test_author_phase's body lives in
+    # pipeline.planner and resolves _resolve_test_author_backend as a bare
+    # name against that module's own globals - patching p (pipeline.server)'s
+    # re-exported copy is a no-op on the real call site, so patch the
+    # planner module directly.
+    monkeypatch.setattr(pplanner, "_resolve_test_author_backend",
                         lambda *a, **k: (None, None))
     popen_calls = _wire_dispatch_no_plane(monkeypatch, pid=9202)
 

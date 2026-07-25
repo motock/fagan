@@ -28,8 +28,6 @@
 		<string>gpt-oss:20b</string>
 		<key>PIPELINE_LOCAL_NUM_CTX</key>
 		<string>32768</string>
-		<key>PIPELINE_LOCAL_REVIEW_MODEL</key>
-		<string>glm-5.2:cloud</string>
 		<key>PIPELINE_LOCAL_TEMPERATURE</key>
 		<string>0.3</string>
 		<key>PIPELINE_MAX_CONCURRENT_AGENTS</key>

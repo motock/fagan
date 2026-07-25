@@ -599,9 +599,23 @@ def build_plan_from_stories(repo: Path, epic_summary: str, stories: list[dict]) 
 
 
 def install_merge_stubs(p, repo: Path) -> None:
-    """Replace the three gh-calling seams with hermetic git-only equivalents."""
+    """Replace the three gh-calling seams with hermetic git-only equivalents.
 
-    def _ci_status_stub(branch, *, timeout_s=None):
+    `p` is `pipeline_mcp_server`, a backward-compat shim that COPIES each
+    name out of `pipeline.server` into its own namespace at import time
+    (`globals()[_name] = getattr(_server, _name)`). Assigning `p._ci_status =
+    ...` only rebinds that copy - the real review/merge-gate code inside
+    pipeline/server.py resolves `_ci_status` etc. from ITS OWN module
+    globals, so the shim-only assignment silently never took effect (root-
+    caused live 2026-07-25: every benchmark cell's merge gate was calling
+    the REAL `_ci_status`/`_open_pr`/`_merge_pr` - which shell out to `gh` -
+    against this harness's local-only bare-repo remote, not these hermetic
+    stubs). Patch the actual `pipeline.server` module directly; also patch
+    the shim for API-surface consistency with anything still reading `p.X`.
+    """
+    import pipeline.server as _pserver
+
+    def _ci_status_stub(branch, *, sha=None, timeout_s=None):
         """Actually run the story's worktree test suite, mirroring what a
         real CI pipeline would do -- unlike a rubber-stamp "always pass",
         this is a second, independent check before merge. Without it the
@@ -639,9 +653,10 @@ def install_merge_stubs(p, repo: Path) -> None:
         _sh(["git", "branch", "-D", branch], repo, check=False)
         return "merged (stub)"
 
-    p._ci_status = _ci_status_stub
-    p._open_pr = _open_pr_stub
-    p._merge_pr = _merge_pr_stub
+    for target in (p, _pserver):
+        target._ci_status = _ci_status_stub
+        target._open_pr = _open_pr_stub
+        target._merge_pr = _merge_pr_stub
 
 
 class MockBackend:
@@ -973,7 +988,21 @@ def main() -> int:
         _backend.get_backend = _get_backend
         p.backend.get_backend = _get_backend
         # _parse_verdict looks for the "VERDICT: APPROVE" marker, not a bare word.
-        p._run_reviewer = lambda worktree, branch: "VERDICT: APPROVE"
+        # **kwargs absorbs whatever backend_name=/plan_role_config=/acceptance=
+        # the real call sites in pipeline/server.py pass so this stub doesn't
+        # go stale again. Must patch pipeline.server directly (see
+        # install_merge_stubs's docstring) - `p._run_reviewer = ...` alone
+        # only rebinds the compat-shim's copy and never actually intercepts
+        # the real reviewer call, which is why every mock-model cell parked
+        # with review_verdict "UNKNOWN" after REVIEW_INCONCLUSIVE_MAX
+        # attempts instead of completing (root-caused live 2026-07-25).
+        import pipeline.server as _pserver
+
+        def mock_reviewer(worktree, branch, **kwargs):
+            return "VERDICT: APPROVE"
+
+        p._run_reviewer = mock_reviewer
+        _pserver._run_reviewer = mock_reviewer
 
     plan_name = f"bench_{args.task}_{args.model}_t{args.trial}"
     story_key = task["name"].upper().replace("_", "-")

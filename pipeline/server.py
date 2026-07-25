@@ -35,7 +35,6 @@ import ast
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import time
@@ -50,6 +49,58 @@ from mcp.server.fastmcp import FastMCP
 import backend
 import role_registry
 
+from .build_detect import (  # noqa: F401
+    _acceptance_rel_paths,
+    _added_pytest_test_paths,
+    _build_command_for,
+    _is_pytest_cmd,
+    _provision_worktree_venv,
+    _scope_test_cmd_to_acceptance,
+    _test_command_for,
+    _venv_python_for,
+    detect_build_command,
+    detect_lint_command,
+    detect_test_command,
+)
+
+# Checkpoint helpers. _checkpoint_impl reads PLAN_DIR via a lazy import from
+# the server.
+from .checkpoint import (
+    _checkpoint_impl,
+    _terminate_and_checkpoint,
+)
+
+# CI status polling for the merge gate. PIPELINE_MERGE_CI_GATE /
+# PIPELINE_MERGE_CI_TIMEOUT / PIPELINE_MERGE_BUILD_GATE live here (CI-specific
+# gates, not general config); tests patch pipeline_ci.<name> directly for
+# the gates and p.<name> for _ci_status / _ci_rerun (server call sites use
+# bare names -> re-export -> patch lands). _repo_has_ci_configured reads
+# REPO_ROOT via a lazy import from this module (Option B - see
+# PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
+from .ci import (  # noqa: F401
+    PIPELINE_MERGE_BUILD_GATE,
+    PIPELINE_MERGE_CI_GATE,
+    PIPELINE_MERGE_CI_TIMEOUT,
+    _ci_rerun,
+    _ci_status,
+    _repo_has_ci_configured,
+    _reverify_acceptance,
+    _reverify_build,
+)
+
+# Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
+# PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
+# and pipeline_concurrency.PLAN_DIR.
+from .concurrency import (  # noqa: F401
+    HEAVY_EXECUTABLES,
+    _count_in_progress_agents,
+    _heavy_lock,
+    _held_plan_locks,
+    _is_heavy,
+    _plan_lock,
+    _plan_lock_state,
+    _reap_zombie_in_progress_stories,
+)
 
 # ---------- Config ----------
 # Path constants + the PLAN_DIR/WORKTREE_ROOT mkdir live in pipeline_paths.
@@ -57,90 +108,169 @@ import role_registry
 # Scalar env-var-driven knobs (rework budgets, dispatch/merge caps, step-cap
 # markers, risk orderings, local-backend name sets) live in pipeline_config.
 from .config import (  # noqa: F401
-    PIPELINE_AUTONOMY,
-    PIPELINE_RISK_THRESHOLD,
+    _LOCAL_BACKEND_NAMES,
+    _LOCAL_SKIP_PERSONAS,
     _RISK_ORDER,
-    DEFAULT_MODEL,
-    SESSION_PAUSE_THRESHOLD,
-    SESSION_RESUME_THRESHOLD,
-    WEEK_PAUSE_THRESHOLD,
-    WEEK_RESUME_THRESHOLD,
-    USAGE_STALE_AFTER_SECONDS,
     DAILY_REQUEST_THRESHOLD,
-    WEEKLY_REQUEST_THRESHOLD,
-    USAGE_BLIND_PAUSE_AFTER_SECONDS,
-    USAGE_BLIND_LOG_INTERVAL,
-    MAX_CONCURRENT_AGENTS,
-    MERGE_MAX_ATTEMPTS,
+    DEFAULT_MODEL,
     DISPATCH_MAX_ATTEMPTS,
     DISPATCH_STARTUP_GRACE_SECONDS,
     DISPATCH_WATCHDOG_SECONDS,
-    STEP_CAP_MARKERS,
     INFRA_FAILURE_LOG_SUBSTRING,
-    STEP_CAP_FALLBACK_THRESHOLD,
+    MAX_CONCURRENT_AGENTS,
+    MERGE_MAX_ATTEMPTS,
+    PIPELINE_AUTONOMY,
     PIPELINE_LOCAL_MAX_RISK,
-    _LOCAL_SKIP_PERSONAS,
-    _LOCAL_BACKEND_NAMES,
-    REWORK_MAX_ATTEMPTS,
-    REWORK_MAX_ATTEMPTS_ORACLE,
-    REWORK_MAX_ATTEMPTS_ESCALATED,
+    PIPELINE_RISK_THRESHOLD,
     REVIEW_INCONCLUSIVE_MAX,
+    REWORK_MAX_ATTEMPTS,
+    REWORK_MAX_ATTEMPTS_ESCALATED,
+    REWORK_MAX_ATTEMPTS_ORACLE,
+    SESSION_PAUSE_THRESHOLD,
+    SESSION_RESUME_THRESHOLD,
+    STEP_CAP_FALLBACK_THRESHOLD,
+    STEP_CAP_MARKERS,
+    USAGE_BLIND_LOG_INTERVAL,
+    USAGE_BLIND_PAUSE_AFTER_SECONDS,
+    USAGE_STALE_AFTER_SECONDS,
+    WEEK_PAUSE_THRESHOLD,
+    WEEK_RESUME_THRESHOLD,
+    WEEKLY_REQUEST_THRESHOLD,
 )
 
+# Escalation helpers. Read REPO_ROOT / PLAN_DIR via lazy imports from the
+# server (circular-avoidance).
+from .escalation import (
+    _auto_escalation_enabled,
+    _escalate_review_to_claude,
+    _escalate_to_claude,
+    _escalate_to_local_fallback_model,
+)
+from .git_ops import (
+    _commit_wip,
+    _last_nonempty_line,
+    _test_files_added_on_branch,
+    _test_names_in_file,
+    _worktree_has_new_commits,
+)
+
+# Overlord / decision helpers. _load_policy reads POLICY_PATH / REPO_ROOT via
+# lazy imports from this module (tests patch p.<name>; the lazy import sees
+# the patched value). _invoke_overlord is patched via p._invoke_overlord;
+# server call site (request_decision) uses the bare name -> re-export ->
+# patch lands.
+from .overlord import (
+    _invoke_overlord,
+    _load_policy,
+)
+from .parsers import (  # noqa: F401
+    _AUTO_RESOLVE_IMPORT_PATTERN,
+    _GIVE_UP_PHRASES,
+    _KEY_RE,
+    _RATE_LIMIT_PATTERNS,
+    _TRANSIENT_BACKEND_PATTERNS,
+    _atomic_write_json,
+    _completed_dep_ids,
+    _extract_blocking_finding_files,
+    _extract_json_block,
+    _git_show_stage,
+    _has_review_findings,
+    _is_give_up_summary,
+    _is_pure_additive_import_diff,
+    _is_rate_limited,
+    _is_test_file_path,
+    _is_transient_backend_error,
+    _parse_conflict_blocks,
+    _parse_ruling,
+    _parse_verdict,
+    _resolve_conflict_blocks,
+    _synthesize_test_failure_feedback,
+    _validate_key,
+)
 from .paths import (  # noqa: F401
-    PLAN_DIR,
-    WORKTREE_ROOT,
     AGENTS_DIR,
+    PLAN_DIR,
     POLICY_PATH,
     USAGE_STATE_PATH,
+    WORKTREE_ROOT,
     _exclude_worktree_logs_from_tracking,
 )
 
-from .build_detect import (  # noqa: F401
-    _venv_python_for,
-    _provision_worktree_venv,
-    _test_command_for,
-    _build_command_for,
-    detect_build_command,
-    detect_test_command,
-    detect_lint_command,
-    _acceptance_rel_paths,
-    _is_pytest_cmd,
-    _scope_test_cmd_to_acceptance,
-    _added_pytest_test_paths,
+# Persistence helpers. Tests patch pipeline_persistence directly for the
+# names whose moved code reads them as free vars (PLAN_DIR, _notify_user,
+# _plan_role_config, ...) - see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4. The
+# plan_dir fixture in the test suite patches both p.PLAN_DIR and
+# pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
+# reads both see the same temp dir.
+from .persistence import (  # noqa: F401
+    _append_decision,
+    _append_journal,
+    _decisions_path,
+    _journal_path,
+    _notify_user,
+    _plan_role_config,
+    _read_journal,
 )
 
-from .git_ops import (
-    _last_nonempty_line,
-    _commit_wip,
-    _worktree_has_new_commits,
-    _test_files_added_on_branch,
-    _test_names_in_file,
+# Persona helpers. AGENTS_DIR is patched by the agents_dir fixture, which
+# now patches both p.AGENTS_DIR and pipeline_persona.AGENTS_DIR (Option B -
+# see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
+from .persona import (  # noqa: F401
+    _FRONTMATTER_RE,
+    _PERSONA_TOOLS,
+    _allowed_tools_for,
+    _build_dispatch_command,
+    _persona_body,
+    _persona_default_model,
+    _persona_path,
+    _persona_requires_claude,
+    _story_has_unwinnable_local_scope,
 )
 
-from .parsers import (  # noqa: F401
-    _extract_json_block,
-    _parse_ruling,
-    _parse_verdict,
-    _has_review_findings,
-    _extract_blocking_finding_files,
-    _is_test_file_path,
-    _synthesize_test_failure_feedback,
-    _RATE_LIMIT_PATTERNS,
-    _is_rate_limited,
-    _TRANSIENT_BACKEND_PATTERNS,
-    _is_transient_backend_error,
-    _AUTO_RESOLVE_IMPORT_PATTERN,
-    _parse_conflict_blocks,
-    _resolve_conflict_blocks,
-    _git_show_stage,
-    _is_pure_additive_import_diff,
-    _atomic_write_json,
-    _KEY_RE,
-    _validate_key,
-    _completed_dep_ids,
-    _GIVE_UP_PHRASES,
-    _is_give_up_summary,
+# Planner / test-author dispatch helpers. All patched via p.<name> by tests;
+# server call sites use bare names -> re-export -> patch lands. No server-
+# global free-var reads except _run_test_author_phase's lazy import of
+# _default_branch (circular-avoidance).
+from .planner import (  # noqa: F401
+    _NEVER_TOUCH_TESTS_STEERING,
+    _PLANNER_SCRATCHPAD_CLAUSE,
+    _PLANNER_SYSTEM,
+    _REWORK_PLANNER_SYSTEM,
+    _TEST_AUTHOR_ALLOWED_TOOLS,
+    _TEST_AUTHOR_ALREADY_RAN_CLAUSE,
+    _TEST_AUTHOR_SYSTEM,
+    _planner_system,
+    _resolve_planner_backend,
+    _resolve_test_author_backend,
+    _run_decompose,
+    _run_planner,
+    _run_rework_planner,
+    _run_test_author_phase,
+    _test_author_prompt,
+    _wait_for_agent_exit,
+)
+
+# PR open / merge helpers. _merge_decision stays in the server (reads
+# PIPELINE_AUTONOMY / PIPELINE_RISK_THRESHOLD / _RISK_ORDER, patched across
+# many functions). _merge_pr reads REPO_ROOT via a lazy import from the
+# server.
+from .pr import (
+    _merge_pr,
+    _open_pr,
+)
+
+# Rebase + conflict auto-resolution. _rebase_onto_master reads REPO_ROOT /
+# _default_branch via lazy imports from the server (circular-avoidance).
+from .rebase import (  # noqa: F401
+    _rebase_onto_master,
+    _try_auto_resolve_conflict,
+)
+
+# Reviewer dispatch. Patched via p.<name> by tests; server call sites use
+# bare names -> re-export -> patch lands. No server-global free-var reads.
+from .review import (
+    _run_reviewer,
+    _run_security_reviewer,
 )
 
 # Ticketing backend. Tests patch the pipeline_ticketing module directly
@@ -154,59 +284,28 @@ from .parsers import (  # noqa: F401
 # still work; tests that *patch* the ticketing helpers must patch
 # pipeline_ticketing, not p.
 from .ticketing import (  # noqa: F401
-    PLANE_BASE,
-    PLANE_API_KEY,
-    PLANE_WORKSPACE,
-    PLANE_PROJECT,
-    _plane_enabled,
-    plane_request,
-    _state_cache,
-    _get_state,
-    _label_cache,
-    _UUID_RE,
-    _resolve_issue_uuid,
-    _get_or_create_label,
-    LogicalState,
     _PLANE_STATE_GROUP,
-    TicketProvider,
+    _TICKET_PROVIDERS,
+    _UUID_RE,
+    PLANE_API_KEY,
+    PLANE_BASE,
+    PLANE_PROJECT,
+    PLANE_WORKSPACE,
+    JiraTicketProvider,
+    LogicalState,
     NullTicketProvider,
     PlaneTicketProvider,
-    JiraTicketProvider,
-    _TICKET_PROVIDERS,
-    get_ticket_provider,
-    _plane_set_state,
+    TicketProvider,
+    _get_or_create_label,
+    _get_state,
+    _label_cache,
     _mark_plane_done,
-)
-
-# Persistence helpers. Tests patch pipeline_persistence directly for the
-# names whose moved code reads them as free vars (PLAN_DIR, _notify_user,
-# _plan_role_config, ...) - see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4. The
-# plan_dir fixture in the test suite patches both p.PLAN_DIR and
-# pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
-# reads both see the same temp dir.
-from .persistence import (  # noqa: F401
-    _notify_user,
-    _decisions_path,
-    _append_decision,
-    _journal_path,
-    _append_journal,
-    _read_journal,
-    _plan_role_config,
-)
-
-# Persona helpers. AGENTS_DIR is patched by the agents_dir fixture, which
-# now patches both p.AGENTS_DIR and pipeline_persona.AGENTS_DIR (Option B -
-# see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
-from .persona import (  # noqa: F401
-    _FRONTMATTER_RE,
-    _persona_path,
-    _persona_body,
-    _persona_default_model,
-    _PERSONA_TOOLS,
-    _allowed_tools_for,
-    _build_dispatch_command,
-    _persona_requires_claude,
-    _story_has_unwinnable_local_scope,
+    _plane_enabled,
+    _plane_set_state,
+    _resolve_issue_uuid,
+    _state_cache,
+    get_ticket_provider,
+    plane_request,
 )
 
 # Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
@@ -215,119 +314,14 @@ from .persona import (  # noqa: F401
 # pipeline_usage.USAGE_STATE_PATH.
 from .usage import (  # noqa: F401
     _parse_usage_output,
-    _run_usage_probe,
-    _write_usage_state,
     _read_usage_state,
-    _usage_state_age_seconds,
-    _usage_gate,
-    _route_dispatch_backend,
     _role_resource_ok,
+    _route_dispatch_backend,
+    _run_usage_probe,
+    _usage_gate,
+    _usage_state_age_seconds,
+    _write_usage_state,
 )
-
-# CI status polling for the merge gate. PIPELINE_MERGE_CI_GATE /
-# PIPELINE_MERGE_CI_TIMEOUT / PIPELINE_MERGE_BUILD_GATE live here (CI-specific
-# gates, not general config); tests patch pipeline_ci.<name> directly for
-# the gates and p.<name> for _ci_status / _ci_rerun (server call sites use
-# bare names -> re-export -> patch lands). _repo_has_ci_configured reads
-# REPO_ROOT via a lazy import from this module (Option B - see
-# PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
-from .ci import (  # noqa: F401
-    PIPELINE_MERGE_CI_GATE,
-    PIPELINE_MERGE_CI_TIMEOUT,
-    PIPELINE_MERGE_BUILD_GATE,
-    _repo_has_ci_configured,
-    _ci_status,
-    _ci_rerun,
-    _reverify_acceptance,
-    _reverify_build,
-)
-
-# Overlord / decision helpers. _load_policy reads POLICY_PATH / REPO_ROOT via
-# lazy imports from this module (tests patch p.<name>; the lazy import sees
-# the patched value). _invoke_overlord is patched via p._invoke_overlord;
-# server call site (request_decision) uses the bare name -> re-export ->
-# patch lands.
-from .overlord import (  # noqa: F401
-    _load_policy,
-    _invoke_overlord,
-)
-
-# Planner / test-author dispatch helpers. All patched via p.<name> by tests;
-# server call sites use bare names -> re-export -> patch lands. No server-
-# global free-var reads except _run_test_author_phase's lazy import of
-# _default_branch (circular-avoidance).
-from .planner import (  # noqa: F401
-    _PLANNER_SYSTEM,
-    _PLANNER_SCRATCHPAD_CLAUSE,
-    _TEST_AUTHOR_ALREADY_RAN_CLAUSE,
-    _planner_system,
-    _resolve_planner_backend,
-    _run_planner,
-    _REWORK_PLANNER_SYSTEM,
-    _run_rework_planner,
-    _NEVER_TOUCH_TESTS_STEERING,
-    _resolve_test_author_backend,
-    _TEST_AUTHOR_SYSTEM,
-    _TEST_AUTHOR_ALLOWED_TOOLS,
-    _test_author_prompt,
-    _wait_for_agent_exit,
-    _run_test_author_phase,
-    _run_decompose,
-)
-
-# Reviewer dispatch. Patched via p.<name> by tests; server call sites use
-# bare names -> re-export -> patch lands. No server-global free-var reads.
-from .review import (  # noqa: F401
-    _run_reviewer,
-    _run_security_reviewer,
-)
-
-# PR open / merge helpers. _merge_decision stays in the server (reads
-# PIPELINE_AUTONOMY / PIPELINE_RISK_THRESHOLD / _RISK_ORDER, patched across
-# many functions). _merge_pr reads REPO_ROOT via a lazy import from the
-# server.
-from .pr import (  # noqa: F401
-    _open_pr,
-    _merge_pr,
-)
-
-# Rebase + conflict auto-resolution. _rebase_onto_master reads REPO_ROOT /
-# _default_branch via lazy imports from the server (circular-avoidance).
-from .rebase import (  # noqa: F401
-    _try_auto_resolve_conflict,
-    _rebase_onto_master,
-)
-
-# Escalation helpers. Read REPO_ROOT / PLAN_DIR via lazy imports from the
-# server (circular-avoidance).
-from .escalation import (  # noqa: F401
-    _escalate_to_claude,
-    _escalate_to_local_fallback_model,
-    _escalate_review_to_claude,
-    _auto_escalation_enabled,
-)
-
-# Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
-# PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
-# and pipeline_concurrency.PLAN_DIR.
-from .concurrency import (  # noqa: F401
-    _count_in_progress_agents,
-    _reap_zombie_in_progress_stories,
-    _plan_lock,
-    _plan_lock_state,
-    _held_plan_locks,
-    _heavy_lock,
-    HEAVY_EXECUTABLES,
-    _is_heavy,
-)
-
-# Checkpoint helpers. _checkpoint_impl reads PLAN_DIR via a lazy import from
-# the server.
-from .checkpoint import (  # noqa: F401
-    _terminate_and_checkpoint,
-    _checkpoint_impl,
-)
-
 
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
 
@@ -1992,8 +1986,28 @@ _PATCHABLE_STORY_FIELDS = frozenset((
 _VALID_STORY_STATUSES = frozenset((
     "todo", "in_progress", "running", "interrupted", "failed",
     "tests_passed", "pr_open", "changes_requested", "parked", "done",
+    "done",
 ))
 
+
+def _ci_rework_feedback(gate_error: str) -> str:
+    """Generate review feedback for merge-gate CI failures."""
+    lint_keywords = ("lint", "ruff", "eslint", "clippy", "golangci")
+    lower = gate_error.lower()
+    if any(k in lower for k in lint_keywords):
+        return (
+            f"The merge-gate CI check failed on your submitted branch "
+            f"Gate error: {gate_error}\n\n"
+            "This is a LINT failure, not a test failure - the test suite may already pass, so re-running tests alone proves nothing. Run the project's lint command (e.g. `ruff check .` for Python) from the repo root, fix every finding, and commit.\n\n"
+            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
+        )
+    else:
+        return (
+            f"The merge-gate CI check failed on your submitted branch "
+            f"Gate error: {gate_error}\n\n"
+            "The bug could be in the implementation OR in a test file you wrote; re-examine both against the spec and make a targeted fix.\n\n"
+            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
+        )
 
 @mcp.tool()
 def patch_story(plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any]:
@@ -2975,15 +2989,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     # assertion every round (the agent's own broken test is
                     # invisible to the acceptance-scoped oracle/reviewer).
                     story["ci_rework"] = True
-                    story["review_feedback"] = (
-                        "The merge-gate CI check failed on your submitted branch "
-                        f"(reviewer already APPROVEd this work):\n{gate_error}\n\n"
-                        "This is often caused by a test file YOU wrote containing "
-                        "an incorrect assertion, not the implementation. Re-examine "
-                        "your own test files against the spec, fix any incorrect "
-                        "assertions, and ensure the full suite passes before "
-                        "resubmitting."
-                    )
+                    story["review_feedback"] = _ci_rework_feedback(gate_error)
                     story["status"] = "changes_requested"
                     _notify_user(plan_name, f"{key} merge-gate CI failed ({gate_error}); "
                                             f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).")

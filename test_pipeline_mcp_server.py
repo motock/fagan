@@ -2793,7 +2793,12 @@ def test_run_reviewer_ordinary_review_still_honors_local_backend_setting(agents_
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
 
     assert captured["role"] == "review"
-    assert captured["name"] is None
+    # model_registry.json now carries an explicit "review" entry
+    # (claude/sonnet), so _run_reviewer passes the env-resolved provider
+    # ("local", since PIPELINE_BACKEND_REVIEW wins) explicitly through to
+    # get_backend instead of leaving it to get_backend's own internal
+    # lookup - same real backend, just resolved one layer earlier now.
+    assert captured["name"] == "local"
 
 
 # ---------- Per-plan repo_root ----------
@@ -9422,8 +9427,10 @@ def test_dispatch_story_auto_routes_low_risk_local(
     assert result["ok"] is True
     manifest = _read_manifest(plan_dir, "auto1")
     assert manifest["stories"]["S1"]["backend"] == "local"
-    # OllamaDriver uses venv python, not "claude"
-    assert popen_calls[0][0] != "claude"
+    # OllamaDriver uses venv python, not "claude". test_author (claude/sonnet
+    # per model_registry.json) issues its own leading Popen call first, so
+    # the executor's call is the last one.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_dispatch_story_auto_routes_high_risk_claude(
@@ -9533,7 +9540,8 @@ def test_dispatch_story_explicit_local_non_security_persona_stays_local(
     p.dispatch_story("sec2", "S1")
 
     assert _read_manifest(plan_dir, "sec2")["stories"]["S1"]["backend"] == "local"
-    assert popen_calls[0][0] != "claude"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_dispatch_story_explicit_local_missing_persona_stays_local(
@@ -9555,7 +9563,8 @@ def test_dispatch_story_explicit_local_missing_persona_stays_local(
     p.dispatch_story("sec3", "S1")
 
     assert _read_manifest(plan_dir, "sec3")["stories"]["S1"]["backend"] == "local"
-    assert popen_calls[0][0] != "claude"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_dispatch_story_explicit_local_security_persona_case_insensitive(
@@ -9608,7 +9617,8 @@ def test_dispatch_story_stored_backend_wins_over_security_persona(
     # story["backend"] was already explicitly "local" - the persona override
     # must not clobber it, even though persona is in _LOCAL_SKIP_PERSONAS.
     assert _read_manifest(plan_dir, "sec5")["stories"]["S1"]["backend"] == "local"
-    assert popen_calls[0][0] != "claude"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_dispatch_story_explicit_claude_security_persona_stays_claude(
@@ -10468,11 +10478,13 @@ def test_dispatch_story_omits_oracle_env_when_no_acceptance(
 
     p.dispatch_story("no_oracle", "S1")
 
-    env = popen_calls[0]["env"]
+    # test_author (claude/sonnet) issues its own leading Popen call first;
+    # the executor's (local, oracle-relevant) call is the last one.
+    env = popen_calls[-1]["env"]
     assert "LOCAL_AGENT_ACCEPTANCE" not in env
     assert "LOCAL_AGENT_MODE" not in env
     # base script (not the oracle variant)
-    assert popen_calls[0]["cmd"][1].endswith("scripts/local_agent.py")
+    assert popen_calls[-1]["cmd"][1].endswith("scripts/local_agent.py")
 
 
 def test_dispatch_story_skips_oracle_write_when_resumed(
@@ -13287,7 +13299,11 @@ def test_dispatch_story_decompose_fails_open_when_planner_returns_none(
 
     assert result["ok"] is True
     assert not (worktree_root / "S1" / ".agent_plan.md").exists()
-    assert ".agent_scratchpad.md" not in popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    # test_author now resolves to claude/sonnet (model_registry.json), so it
+    # issues its own leading Popen call (claude backend env, no
+    # LOCAL_AGENT_TASK) before the local executor's - assert against the
+    # last call, which is the executor's.
+    assert ".agent_scratchpad.md" not in popen_calls[-1]["env"]["LOCAL_AGENT_TASK"]
 
 
 def test_dispatch_story_decompose_skips_replanning_on_resume_but_keeps_referencing_plan(

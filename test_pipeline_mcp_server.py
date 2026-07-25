@@ -2793,7 +2793,12 @@ def test_run_reviewer_ordinary_review_still_honors_local_backend_setting(agents_
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
 
     assert captured["role"] == "review"
-    assert captured["name"] is None
+    # model_registry.json now carries an explicit "review" entry
+    # (claude/sonnet), so _run_reviewer passes the env-resolved provider
+    # ("local", since PIPELINE_BACKEND_REVIEW wins) explicitly through to
+    # get_backend instead of leaving it to get_backend's own internal
+    # lookup - same real backend, just resolved one layer earlier now.
+    assert captured["name"] == "local"
 
 
 # ---------- Per-plan repo_root ----------
@@ -7357,16 +7362,20 @@ def test_check_story_status_gate_appends_own_new_tests_under_tests_dir(
         lambda wt, key, base: ["tests/benchmark/test_driver.py"]
         if key == "S1" and base == "main" else [],
     )
-    seen_cmd = {}
+    # Capture EVERY subprocess.run call, not just the last: the dead-code
+    # gate (which runs after tests pass) also shells out to git, so "the
+    # last call" is no longer reliably the test command. The test command
+    # is always the first call in check_story_status's flow.
+    seen_calls = []
     def _fake_run(cmd, **kwargs):
-        seen_cmd["cmd"] = cmd
+        seen_calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="4 passed", stderr="")
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
 
     result = p.check_story_status("diag2", "S1")
 
     assert result["status"] == "tests_passed"
-    assert seen_cmd["cmd"] == [
+    assert seen_calls[0] == [
         "pytest", "--ignore=tests", str(worktree / "tests/benchmark/test_driver.py")]
 
 
@@ -7394,16 +7403,20 @@ def test_check_story_status_gate_skips_own_test_append_with_acceptance_block(
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("must not be called when acceptance block is present")),
     )
-    seen_cmd = {}
+    # Capture EVERY subprocess.run call, not just the last: the dead-code
+    # gate (which runs after tests pass) also shells out to git, so "the
+    # last call" is no longer reliably the test command. The test command
+    # is always the first call in check_story_status's flow.
+    seen_calls = []
     def _fake_run(cmd, **kwargs):
-        seen_cmd["cmd"] = cmd
+        seen_calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="1 passed", stderr="")
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
 
     result = p.check_story_status("diag3", "S1")
 
     assert result["status"] == "tests_passed"
-    assert seen_cmd["cmd"] == [
+    assert seen_calls[0] == [
         "pytest", "--ignore=tests", str(worktree / "test_acceptance.py")]
 
 
@@ -7567,6 +7580,60 @@ def test_check_story_status_no_progress_exhausts_rework_cap_parks(plan_dir, monk
     assert manifest["status"] == "parked"
     assert manifest["rework_attempts"] == 3
     assert "no new commit after 3" in manifest["parked_reason"]
+
+
+def test_check_story_status_no_progress_exhausts_rework_cap_escalates_to_claude(
+    plan_dir, monkeypatch,
+):
+    """Root-caused live 2026-07-24 (RUFF-016-ADOPTION, MODE40-CI-REWORK-
+    FEEDBACK-V2): review_story's three park paths all escalate to Claude
+    under PIPELINE_BACKEND_DISPATCH=auto before parking for a human - this
+    was the one rework-exhaustion park path in the file missing that hook,
+    so a story that hit exactly this "no new commit" guard never got a
+    chance at Claude even with auto-escalation enabled. Same cap/inputs as
+    test_check_story_status_no_progress_exhausts_rework_cap_parks, but with
+    auto-escalation on: must escalate (backend -> claude, escalated=True,
+    status -> changes_requested for redispatch) instead of parking."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="abc123", rework_attempts=2)
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(p, "_auto_escalation_enabled", lambda: True)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "changes_requested"
+    assert result["reason"] == "no_new_commit_escalated_to_claude"
+    manifest = _read_manifest(plan_dir, "plan")["stories"]["S1"]
+    assert manifest["status"] == "changes_requested"
+    assert manifest["backend"] == "claude"
+    assert manifest["escalated"] is True
+    # A fresh rework budget for Claude - _escalate_review_to_claude clears
+    # the counter, same as its other two call sites.
+    assert "rework_attempts" not in manifest
+    # A story that has ALREADY been escalated must terminally park on a
+    # second rework-cap exhaustion, not escalate again or loop forever -
+    # there is no further fallback past Claude.
+
+
+def test_check_story_status_no_progress_already_escalated_parks_not_loops(
+    plan_dir, monkeypatch,
+):
+    """The escalated=True guard: a story already on Claude that STILL hits
+    the no-new-commit rework cap a second time must park for a human, not
+    re-escalate (there's nothing past Claude to fall back to)."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="abc123", rework_attempts=2)
+    manifest = _read_manifest(plan_dir, "plan")
+    manifest["stories"]["S1"]["escalated"] = True
+    manifest["stories"]["S1"]["backend"] = "claude"
+    manifest_path = plan_dir / "plan.manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(p, "_auto_escalation_enabled", lambda: True)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "parked"
+    assert result["reason"] == "no_new_commit_rework_budget_exhausted"
+    manifest = _read_manifest(plan_dir, "plan")["stories"]["S1"]
+    assert manifest["status"] == "parked"
+    assert manifest["backend"] == "claude"
 
 
 def test_check_story_status_routes_acceptance_fail_to_review_when_opted_in(
@@ -9360,8 +9427,10 @@ def test_dispatch_story_auto_routes_low_risk_local(
     assert result["ok"] is True
     manifest = _read_manifest(plan_dir, "auto1")
     assert manifest["stories"]["S1"]["backend"] == "local"
-    # OllamaDriver uses venv python, not "claude"
-    assert popen_calls[0][0] != "claude"
+    # OllamaDriver uses venv python, not "claude". test_author (claude/sonnet
+    # per model_registry.json) issues its own leading Popen call first, so
+    # the executor's call is the last one.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_dispatch_story_auto_routes_high_risk_claude(
@@ -9471,7 +9540,8 @@ def test_dispatch_story_explicit_local_non_security_persona_stays_local(
     p.dispatch_story("sec2", "S1")
 
     assert _read_manifest(plan_dir, "sec2")["stories"]["S1"]["backend"] == "local"
-    assert popen_calls[0][0] != "claude"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_dispatch_story_explicit_local_missing_persona_stays_local(
@@ -9493,7 +9563,8 @@ def test_dispatch_story_explicit_local_missing_persona_stays_local(
     p.dispatch_story("sec3", "S1")
 
     assert _read_manifest(plan_dir, "sec3")["stories"]["S1"]["backend"] == "local"
-    assert popen_calls[0][0] != "claude"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_dispatch_story_explicit_local_security_persona_case_insensitive(
@@ -9546,7 +9617,8 @@ def test_dispatch_story_stored_backend_wins_over_security_persona(
     # story["backend"] was already explicitly "local" - the persona override
     # must not clobber it, even though persona is in _LOCAL_SKIP_PERSONAS.
     assert _read_manifest(plan_dir, "sec5")["stories"]["S1"]["backend"] == "local"
-    assert popen_calls[0][0] != "claude"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_dispatch_story_explicit_claude_security_persona_stays_claude(
@@ -9572,6 +9644,93 @@ def test_dispatch_story_explicit_claude_security_persona_stays_claude(
 
     assert _read_manifest(plan_dir, "sec6")["stories"]["S1"]["backend"] == "claude"
     assert popen_calls[0][0] == "claude"
+
+
+# ---------- Unwinnable-as-scoped safety override (Mode 40 retro #4) ----------
+# A story whose agent_instructions describe a repo-wide, unscoped lint/fix
+# sweep is structurally unwinnable for local dispatch: the done-bar demands
+# every finding fixed, but a meaningful fraction of findings routinely land
+# in test files (35/83 files on the live ruff baseline that motivated this),
+# which the never-touch-tests steering forbids the local executor from
+# editing. Detected and hard-routed to Claude, mirroring the existing
+# security-persona override exactly.
+
+def test_story_has_unwinnable_local_scope_detects_repo_wide_ruff_sweep():
+    story = {"agent_instructions": "Run `.venv/bin/ruff check . --fix` from "
+             "the repo root and fix every remaining finding."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_detects_repo_wide_language():
+    story = {"agent_instructions": "Fix every lint finding repo-wide."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_false_for_scoped_lint_instructions():
+    story = {"agent_instructions": "Run `ruff check pipeline/foo.py` and fix "
+             "the two findings in that file."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_missing_instructions():
+    assert p._story_has_unwinnable_local_scope({}) is False
+
+
+def test_route_dispatch_backend_unwinnable_scope_overrides_low_risk(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "high")
+    story = {"risk": "low", "persona": "software-engineer",
+              "agent_instructions": "Run `ruff check .` repo-wide and fix "
+              "every finding."}
+    assert p._route_dispatch_backend(story) == "claude"
+
+
+def test_dispatch_story_explicit_local_unwinnable_scope_routes_to_claude(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_BACKEND_DISPATCH=local must not bypass the unwinnable-scope
+    safety override: a repo-wide lint-sweep story still dispatches to Claude."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "scope1", {
+        "S1": {"summary": "Adopt new lint ruleset",
+               "agent_instructions": "Run `ruff check . --fix` from the repo "
+               "root and manually fix every remaining finding.",
+               "status": "todo", "dependencies": []},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(60))[1])
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("scope1", "S1")
+
+    assert _read_manifest(plan_dir, "scope1")["stories"]["S1"]["backend"] == "claude"
+    assert popen_calls[0][0] == "claude"
+
+
+def test_dispatch_story_explicit_local_scoped_lint_stays_local(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A lint-flavored story scoped to specific files (not a repo-wide sweep)
+    is unaffected by the new override - no regression on ordinary stories."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "scope2", {
+        "S1": {"summary": "Fix two lint findings",
+               "agent_instructions": "Run `ruff check pipeline/foo.py` and "
+               "fix the reported findings in that file only.",
+               "status": "todo", "dependencies": []},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(61))[1])
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("scope2", "S1")
+
+    assert _read_manifest(plan_dir, "scope2")["stories"]["S1"]["backend"] == "local"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_advance_pipeline_escalates_local_failure_to_claude(
@@ -10406,11 +10565,13 @@ def test_dispatch_story_omits_oracle_env_when_no_acceptance(
 
     p.dispatch_story("no_oracle", "S1")
 
-    env = popen_calls[0]["env"]
+    # test_author (claude/sonnet) issues its own leading Popen call first;
+    # the executor's (local, oracle-relevant) call is the last one.
+    env = popen_calls[-1]["env"]
     assert "LOCAL_AGENT_ACCEPTANCE" not in env
     assert "LOCAL_AGENT_MODE" not in env
     # base script (not the oracle variant)
-    assert popen_calls[0]["cmd"][1].endswith("scripts/local_agent.py")
+    assert popen_calls[-1]["cmd"][1].endswith("scripts/local_agent.py")
 
 
 def test_dispatch_story_skips_oracle_write_when_resumed(
@@ -13225,7 +13386,11 @@ def test_dispatch_story_decompose_fails_open_when_planner_returns_none(
 
     assert result["ok"] is True
     assert not (worktree_root / "S1" / ".agent_plan.md").exists()
-    assert ".agent_scratchpad.md" not in popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    # test_author now resolves to claude/sonnet (model_registry.json), so it
+    # issues its own leading Popen call (claude backend env, no
+    # LOCAL_AGENT_TASK) before the local executor's - assert against the
+    # last call, which is the executor's.
+    assert ".agent_scratchpad.md" not in popen_calls[-1]["env"]["LOCAL_AGENT_TASK"]
 
 
 def test_dispatch_story_decompose_skips_replanning_on_resume_but_keeps_referencing_plan(

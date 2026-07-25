@@ -31,6 +31,7 @@ Per-project overrides (set in project .mcp.json env block):
     across all plans in this session (default: 3; <=0 disables the cap)
 """
 
+import ast
 import json
 import logging
 import os
@@ -48,6 +49,58 @@ from mcp.server.fastmcp import FastMCP
 import backend
 import role_registry
 
+from .build_detect import (  # noqa: F401
+    _acceptance_rel_paths,
+    _added_pytest_test_paths,
+    _build_command_for,
+    _is_pytest_cmd,
+    _provision_worktree_venv,
+    _scope_test_cmd_to_acceptance,
+    _test_command_for,
+    _venv_python_for,
+    detect_build_command,
+    detect_lint_command,
+    detect_test_command,
+)
+
+# Checkpoint helpers. _checkpoint_impl reads PLAN_DIR via a lazy import from
+# the server.
+from .checkpoint import (
+    _checkpoint_impl,
+    _terminate_and_checkpoint,
+)
+
+# CI status polling for the merge gate. PIPELINE_MERGE_CI_GATE /
+# PIPELINE_MERGE_CI_TIMEOUT / PIPELINE_MERGE_BUILD_GATE live here (CI-specific
+# gates, not general config); tests patch pipeline_ci.<name> directly for
+# the gates and p.<name> for _ci_status / _ci_rerun (server call sites use
+# bare names -> re-export -> patch lands). _repo_has_ci_configured reads
+# REPO_ROOT via a lazy import from this module (Option B - see
+# PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
+from .ci import (  # noqa: F401
+    PIPELINE_MERGE_BUILD_GATE,
+    PIPELINE_MERGE_CI_GATE,
+    PIPELINE_MERGE_CI_TIMEOUT,
+    _ci_rerun,
+    _ci_status,
+    _repo_has_ci_configured,
+    _reverify_acceptance,
+    _reverify_build,
+)
+
+# Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
+# PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
+# and pipeline_concurrency.PLAN_DIR.
+from .concurrency import (  # noqa: F401
+    HEAVY_EXECUTABLES,
+    _count_in_progress_agents,
+    _heavy_lock,
+    _held_plan_locks,
+    _is_heavy,
+    _plan_lock,
+    _plan_lock_state,
+    _reap_zombie_in_progress_stories,
+)
 
 # ---------- Config ----------
 # Path constants + the PLAN_DIR/WORKTREE_ROOT mkdir live in pipeline_paths.
@@ -55,86 +108,169 @@ import role_registry
 # Scalar env-var-driven knobs (rework budgets, dispatch/merge caps, step-cap
 # markers, risk orderings, local-backend name sets) live in pipeline_config.
 from .config import (  # noqa: F401
-    PIPELINE_AUTONOMY,
-    PIPELINE_RISK_THRESHOLD,
+    _LOCAL_BACKEND_NAMES,
+    _LOCAL_SKIP_PERSONAS,
     _RISK_ORDER,
-    DEFAULT_MODEL,
-    SESSION_PAUSE_THRESHOLD,
-    SESSION_RESUME_THRESHOLD,
-    WEEK_PAUSE_THRESHOLD,
-    WEEK_RESUME_THRESHOLD,
-    USAGE_STALE_AFTER_SECONDS,
     DAILY_REQUEST_THRESHOLD,
-    WEEKLY_REQUEST_THRESHOLD,
-    USAGE_BLIND_PAUSE_AFTER_SECONDS,
-    USAGE_BLIND_LOG_INTERVAL,
-    MAX_CONCURRENT_AGENTS,
-    MERGE_MAX_ATTEMPTS,
+    DEFAULT_MODEL,
     DISPATCH_MAX_ATTEMPTS,
     DISPATCH_STARTUP_GRACE_SECONDS,
     DISPATCH_WATCHDOG_SECONDS,
-    STEP_CAP_MARKERS,
     INFRA_FAILURE_LOG_SUBSTRING,
-    STEP_CAP_FALLBACK_THRESHOLD,
+    MAX_CONCURRENT_AGENTS,
+    MERGE_MAX_ATTEMPTS,
+    PIPELINE_AUTONOMY,
     PIPELINE_LOCAL_MAX_RISK,
-    _LOCAL_SKIP_PERSONAS,
-    _LOCAL_BACKEND_NAMES,
-    REWORK_MAX_ATTEMPTS,
-    REWORK_MAX_ATTEMPTS_ORACLE,
-    REWORK_MAX_ATTEMPTS_ESCALATED,
+    PIPELINE_RISK_THRESHOLD,
     REVIEW_INCONCLUSIVE_MAX,
+    REWORK_MAX_ATTEMPTS,
+    REWORK_MAX_ATTEMPTS_ESCALATED,
+    REWORK_MAX_ATTEMPTS_ORACLE,
+    SESSION_PAUSE_THRESHOLD,
+    SESSION_RESUME_THRESHOLD,
+    STEP_CAP_FALLBACK_THRESHOLD,
+    STEP_CAP_MARKERS,
+    USAGE_BLIND_LOG_INTERVAL,
+    USAGE_BLIND_PAUSE_AFTER_SECONDS,
+    USAGE_STALE_AFTER_SECONDS,
+    WEEK_PAUSE_THRESHOLD,
+    WEEK_RESUME_THRESHOLD,
+    WEEKLY_REQUEST_THRESHOLD,
 )
 
-from .paths import (  # noqa: F401
-    PLAN_DIR,
-    WORKTREE_ROOT,
-    AGENTS_DIR,
-    POLICY_PATH,
-    USAGE_STATE_PATH,
-    _exclude_worktree_logs_from_tracking,
+# Escalation helpers. Read REPO_ROOT / PLAN_DIR via lazy imports from the
+# server (circular-avoidance).
+from .escalation import (
+    _auto_escalation_enabled,
+    _escalate_review_to_claude,
+    _escalate_to_claude,
+    _escalate_to_local_fallback_model,
 )
-
-from .build_detect import (  # noqa: F401
-    _venv_python_for,
-    _test_command_for,
-    _build_command_for,
-    detect_build_command,
-    detect_test_command,
-    detect_lint_command,
-    _acceptance_rel_paths,
-    _is_pytest_cmd,
-    _scope_test_cmd_to_acceptance,
-    _added_pytest_test_paths,
-)
-
 from .git_ops import (
-    _last_nonempty_line,
     _commit_wip,
+    _last_nonempty_line,
+    _test_files_added_on_branch,
+    _test_names_in_file,
     _worktree_has_new_commits,
 )
 
+# Overlord / decision helpers. _load_policy reads POLICY_PATH / REPO_ROOT via
+# lazy imports from this module (tests patch p.<name>; the lazy import sees
+# the patched value). _invoke_overlord is patched via p._invoke_overlord;
+# server call site (request_decision) uses the bare name -> re-export ->
+# patch lands.
+from .overlord import (
+    _invoke_overlord,
+    _load_policy,
+)
 from .parsers import (  # noqa: F401
+    _AUTO_RESOLVE_IMPORT_PATTERN,
+    _GIVE_UP_PHRASES,
+    _KEY_RE,
+    _RATE_LIMIT_PATTERNS,
+    _TRANSIENT_BACKEND_PATTERNS,
+    _atomic_write_json,
+    _completed_dep_ids,
+    _extract_blocking_finding_files,
     _extract_json_block,
+    _git_show_stage,
+    _has_review_findings,
+    _is_give_up_summary,
+    _is_pure_additive_import_diff,
+    _is_rate_limited,
+    _is_test_file_path,
+    _is_transient_backend_error,
+    _parse_conflict_blocks,
     _parse_ruling,
     _parse_verdict,
-    _has_review_findings,
-    _extract_blocking_finding_files,
-    _synthesize_test_failure_feedback,
-    _RATE_LIMIT_PATTERNS,
-    _is_rate_limited,
-    _TRANSIENT_BACKEND_PATTERNS,
-    _is_transient_backend_error,
-    _AUTO_RESOLVE_IMPORT_PATTERN,
-    _parse_conflict_blocks,
     _resolve_conflict_blocks,
-    _git_show_stage,
-    _is_pure_additive_import_diff,
-    _atomic_write_json,
-    _KEY_RE,
+    _synthesize_test_failure_feedback,
     _validate_key,
-    _completed_dep_ids,
-    _GIVE_UP_PHRASES,
-    _is_give_up_summary,
+)
+from .paths import (  # noqa: F401
+    AGENTS_DIR,
+    PLAN_DIR,
+    POLICY_PATH,
+    USAGE_STATE_PATH,
+    WORKTREE_ROOT,
+    _exclude_worktree_logs_from_tracking,
+)
+
+# Persistence helpers. Tests patch pipeline_persistence directly for the
+# names whose moved code reads them as free vars (PLAN_DIR, _notify_user,
+# _plan_role_config, ...) - see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4. The
+# plan_dir fixture in the test suite patches both p.PLAN_DIR and
+# pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
+# reads both see the same temp dir.
+from .persistence import (  # noqa: F401
+    _append_decision,
+    _append_journal,
+    _decisions_path,
+    _journal_path,
+    _notify_user,
+    _plan_role_config,
+    _read_journal,
+)
+
+# Persona helpers. AGENTS_DIR is patched by the agents_dir fixture, which
+# now patches both p.AGENTS_DIR and pipeline_persona.AGENTS_DIR (Option B -
+# see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
+from .persona import (  # noqa: F401
+    _FRONTMATTER_RE,
+    _PERSONA_TOOLS,
+    _allowed_tools_for,
+    _build_dispatch_command,
+    _persona_body,
+    _persona_default_model,
+    _persona_path,
+    _persona_requires_claude,
+    _story_has_unwinnable_local_scope,
+)
+
+# Planner / test-author dispatch helpers. All patched via p.<name> by tests;
+# server call sites use bare names -> re-export -> patch lands. No server-
+# global free-var reads except _run_test_author_phase's lazy import of
+# _default_branch (circular-avoidance).
+from .planner import (  # noqa: F401
+    _NEVER_TOUCH_TESTS_STEERING,
+    _PLANNER_SCRATCHPAD_CLAUSE,
+    _PLANNER_SYSTEM,
+    _REWORK_PLANNER_SYSTEM,
+    _TEST_AUTHOR_ALLOWED_TOOLS,
+    _TEST_AUTHOR_ALREADY_RAN_CLAUSE,
+    _TEST_AUTHOR_SYSTEM,
+    _planner_system,
+    _resolve_planner_backend,
+    _resolve_test_author_backend,
+    _run_decompose,
+    _run_planner,
+    _run_rework_planner,
+    _run_test_author_phase,
+    _test_author_prompt,
+    _wait_for_agent_exit,
+)
+
+# PR open / merge helpers. _merge_decision stays in the server (reads
+# PIPELINE_AUTONOMY / PIPELINE_RISK_THRESHOLD / _RISK_ORDER, patched across
+# many functions). _merge_pr reads REPO_ROOT via a lazy import from the
+# server.
+from .pr import (
+    _merge_pr,
+    _open_pr,
+)
+
+# Rebase + conflict auto-resolution. _rebase_onto_master reads REPO_ROOT /
+# _default_branch via lazy imports from the server (circular-avoidance).
+from .rebase import (  # noqa: F401
+    _rebase_onto_master,
+    _try_auto_resolve_conflict,
+)
+
+# Reviewer dispatch. Patched via p.<name> by tests; server call sites use
+# bare names -> re-export -> patch lands. No server-global free-var reads.
+from .review import (
+    _run_reviewer,
+    _run_security_reviewer,
 )
 
 # Ticketing backend. Tests patch the pipeline_ticketing module directly
@@ -148,58 +284,28 @@ from .parsers import (  # noqa: F401
 # still work; tests that *patch* the ticketing helpers must patch
 # pipeline_ticketing, not p.
 from .ticketing import (  # noqa: F401
-    PLANE_BASE,
-    PLANE_API_KEY,
-    PLANE_WORKSPACE,
-    PLANE_PROJECT,
-    _plane_enabled,
-    plane_request,
-    _state_cache,
-    _get_state,
-    _label_cache,
-    _UUID_RE,
-    _resolve_issue_uuid,
-    _get_or_create_label,
-    LogicalState,
     _PLANE_STATE_GROUP,
-    TicketProvider,
+    _TICKET_PROVIDERS,
+    _UUID_RE,
+    PLANE_API_KEY,
+    PLANE_BASE,
+    PLANE_PROJECT,
+    PLANE_WORKSPACE,
+    JiraTicketProvider,
+    LogicalState,
     NullTicketProvider,
     PlaneTicketProvider,
-    JiraTicketProvider,
-    _TICKET_PROVIDERS,
-    get_ticket_provider,
-    _plane_set_state,
+    TicketProvider,
+    _get_or_create_label,
+    _get_state,
+    _label_cache,
     _mark_plane_done,
-)
-
-# Persistence helpers. Tests patch pipeline_persistence directly for the
-# names whose moved code reads them as free vars (PLAN_DIR, _notify_user,
-# _plan_role_config, ...) - see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4. The
-# plan_dir fixture in the test suite patches both p.PLAN_DIR and
-# pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
-# reads both see the same temp dir.
-from .persistence import (  # noqa: F401
-    _notify_user,
-    _decisions_path,
-    _append_decision,
-    _journal_path,
-    _append_journal,
-    _read_journal,
-    _plan_role_config,
-)
-
-# Persona helpers. AGENTS_DIR is patched by the agents_dir fixture, which
-# now patches both p.AGENTS_DIR and pipeline_persona.AGENTS_DIR (Option B -
-# see PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
-from .persona import (  # noqa: F401
-    _FRONTMATTER_RE,
-    _persona_path,
-    _persona_body,
-    _persona_default_model,
-    _PERSONA_TOOLS,
-    _allowed_tools_for,
-    _build_dispatch_command,
-    _persona_requires_claude,
+    _plane_enabled,
+    _plane_set_state,
+    _resolve_issue_uuid,
+    _state_cache,
+    get_ticket_provider,
+    plane_request,
 )
 
 # Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
@@ -208,118 +314,14 @@ from .persona import (  # noqa: F401
 # pipeline_usage.USAGE_STATE_PATH.
 from .usage import (  # noqa: F401
     _parse_usage_output,
-    _run_usage_probe,
-    _write_usage_state,
     _read_usage_state,
-    _usage_state_age_seconds,
-    _usage_gate,
-    _route_dispatch_backend,
     _role_resource_ok,
+    _route_dispatch_backend,
+    _run_usage_probe,
+    _usage_gate,
+    _usage_state_age_seconds,
+    _write_usage_state,
 )
-
-# CI status polling for the merge gate. PIPELINE_MERGE_CI_GATE /
-# PIPELINE_MERGE_CI_TIMEOUT / PIPELINE_MERGE_BUILD_GATE live here (CI-specific
-# gates, not general config); tests patch pipeline_ci.<name> directly for
-# the gates and p.<name> for _ci_status / _ci_rerun (server call sites use
-# bare names -> re-export -> patch lands). _repo_has_ci_configured reads
-# REPO_ROOT via a lazy import from this module (Option B - see
-# PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
-from .ci import (  # noqa: F401
-    PIPELINE_MERGE_CI_GATE,
-    PIPELINE_MERGE_CI_TIMEOUT,
-    PIPELINE_MERGE_BUILD_GATE,
-    _repo_has_ci_configured,
-    _ci_status,
-    _ci_rerun,
-    _reverify_acceptance,
-    _reverify_build,
-)
-
-# Overlord / decision helpers. _load_policy reads POLICY_PATH / REPO_ROOT via
-# lazy imports from this module (tests patch p.<name>; the lazy import sees
-# the patched value). _invoke_overlord is patched via p._invoke_overlord;
-# server call site (request_decision) uses the bare name -> re-export ->
-# patch lands.
-from .overlord import (  # noqa: F401
-    _load_policy,
-    _invoke_overlord,
-)
-
-# Planner / test-author dispatch helpers. All patched via p.<name> by tests;
-# server call sites use bare names -> re-export -> patch lands. No server-
-# global free-var reads except _run_test_author_phase's lazy import of
-# _default_branch (circular-avoidance).
-from .planner import (  # noqa: F401
-    _PLANNER_SYSTEM,
-    _PLANNER_SCRATCHPAD_CLAUSE,
-    _planner_system,
-    _resolve_planner_backend,
-    _run_planner,
-    _REWORK_PLANNER_SYSTEM,
-    _run_rework_planner,
-    _NEVER_TOUCH_TESTS_STEERING,
-    _resolve_test_author_backend,
-    _TEST_AUTHOR_SYSTEM,
-    _TEST_AUTHOR_ALLOWED_TOOLS,
-    _test_author_prompt,
-    _wait_for_agent_exit,
-    _run_test_author_phase,
-    _run_decompose,
-)
-
-# Reviewer dispatch. Patched via p.<name> by tests; server call sites use
-# bare names -> re-export -> patch lands. No server-global free-var reads.
-from .review import (  # noqa: F401
-    _run_reviewer,
-    _run_security_reviewer,
-)
-
-# PR open / merge helpers. _merge_decision stays in the server (reads
-# PIPELINE_AUTONOMY / PIPELINE_RISK_THRESHOLD / _RISK_ORDER, patched across
-# many functions). _merge_pr reads REPO_ROOT via a lazy import from the
-# server.
-from .pr import (  # noqa: F401
-    _open_pr,
-    _merge_pr,
-)
-
-# Rebase + conflict auto-resolution. _rebase_onto_master reads REPO_ROOT /
-# _default_branch via lazy imports from the server (circular-avoidance).
-from .rebase import (  # noqa: F401
-    _try_auto_resolve_conflict,
-    _rebase_onto_master,
-)
-
-# Escalation helpers. Read REPO_ROOT / PLAN_DIR via lazy imports from the
-# server (circular-avoidance).
-from .escalation import (  # noqa: F401
-    _escalate_to_claude,
-    _escalate_to_local_fallback_model,
-    _escalate_review_to_claude,
-    _auto_escalation_enabled,
-)
-
-# Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
-# PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
-# and pipeline_concurrency.PLAN_DIR.
-from .concurrency import (  # noqa: F401
-    _count_in_progress_agents,
-    _reap_zombie_in_progress_stories,
-    _plan_lock,
-    _plan_lock_state,
-    _held_plan_locks,
-    _heavy_lock,
-    HEAVY_EXECUTABLES,
-    _is_heavy,
-)
-
-# Checkpoint helpers. _checkpoint_impl reads PLAN_DIR via a lazy import from
-# the server.
-from .checkpoint import (  # noqa: F401
-    _terminate_and_checkpoint,
-    _checkpoint_impl,
-)
-
 
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
 
@@ -948,6 +950,15 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     cwd=repo_root, check=True,
                 )
                 _exclude_worktree_logs_from_tracking(Path(repo_root))
+                # A fresh worktree has no .venv (gitignored) - give it its own
+                # complete one now rather than let it fall back to (and
+                # potentially mutate) the shared main-repo venv other
+                # concurrently-dispatched stories may be using. See
+                # _provision_worktree_venv's docstring for the failure mode
+                # this closes (root-caused live on RUFF-016-ADOPTION).
+                # No-ops for non-Python projects or ones without a
+                # requirements file.
+                _provision_worktree_venv(worktree_path)
 
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
@@ -964,6 +975,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # story already had an explicit backend (a prior escalation flip), which
         # wins as-is and is never re-routed here.
         if not story.get("backend") and _persona_requires_claude(story):
+            dispatch_backend = "claude"
+        # Unwinnable-as-scoped safety override: a repo-wide, unscoped lint/fix
+        # sweep always dispatches to Claude too, for the same reason (Mode 40
+        # retro #4) - see _story_has_unwinnable_local_scope's docstring.
+        if not story.get("backend") and _story_has_unwinnable_local_scope(story):
             dispatch_backend = "claude"
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
@@ -1098,11 +1114,37 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             and not resuming
             and not plan_path.exists()
         ):
+            # Ground the planner in the test-author's ACTUAL committed test
+            # file(s) when the phase ran this branch (root-caused live
+            # 2026-07-25 on MODE40-CI-REWORK-FEEDBACK-V2's THIRD reset: the
+            # prohibition-only tests_already_authored clause still let the
+            # planner re-derive a "Write the test file" step with invented
+            # test-case names, because it had no concrete grounding in
+            # which file/tests exist). Detect the test_*.py files added on
+            # this branch and their top-level test-case names, and hand
+            # them to the planner so it can point the executor at READING
+            # the real files. Fail open: if git detects nothing (or the
+            # phase ran but committed no test_*.py), authored_test_files is
+            # empty and the planner degrades to the prohibition-only clause.
+            authored_test_files: list[tuple[str, list[str]]] | None = None
+            if test_author_marker.exists():
+                try:
+                    added = _test_files_added_on_branch(
+                        worktree_path, _default_branch(),
+                    )
+                    authored_test_files = [
+                        (path, _test_names_in_file(worktree_path, path))
+                        for path in added
+                    ]
+                except Exception:
+                    authored_test_files = []
             plan_text = _run_planner(
                 story.get("agent_instructions", ""),
                 dispatch_backend=dispatch_backend, local_model=spec["model"],
                 include_scratchpad=scratchpad_on,
                 plan_role_config=_plan_role_config(plan_name),
+                tests_already_authored=test_author_marker.exists(),
+                authored_test_files=authored_test_files,
             )
             if plan_text:
                 plan_path.write_text(plan_text)
@@ -1142,7 +1184,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{spec['prompt']}\n\n"
                 "--- Tests already written by your tech lead ---\n"
                 "The test file(s) for this task have already been written "
-                "and committed to this branch by your tech lead. "
+                "and committed to this branch by your tech lead. If the "
+                "task description or checklist above says to write tests "
+                "yourself first, DISREGARD that - it does not apply here; "
+                "the tests already exist. Do not create, write, or modify "
+                "any test file. "
                 f"{_NEVER_TOUCH_TESTS_STEERING} Run them to see the current "
                 "failures, then implement until they pass."
             )
@@ -1265,6 +1311,114 @@ def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
         "stderr_tail": (result.stderr or "")[-2000:],
         "ts": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _module_level_function_names(source: str) -> set[str]:
+    """Top-level (module-scope) function names defined in `source`. Ignores
+    nested defs, closures, and class methods - only a bare module-level
+    `def` is a candidate for _find_dead_new_functions, since that's the
+    shape of an independently-callable production symbol a call site is
+    expected to reference by name."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    return {
+        node.name for node in ast.iter_child_nodes(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
+    """Detect newly-added module-level functions (in .py files changed
+    since base_branch, excluding test files) whose name appears NOWHERE
+    else in the tracked worktree - i.e. defined but never called or
+    referenced, not even from a different file (a new public entry point
+    called only from elsewhere in the repo must not false-positive here).
+
+    A cheap, conservative text-based heuristic, not a full call-graph
+    analysis: a name occurring anywhere else in the worktree (even a
+    comment, even in another file) is treated as "referenced", keeping
+    false positives near zero. A name occurring ONLY on its own `def`
+    line, repo-wide, is a strong, low-noise signal of dead code.
+
+    Root-caused live 2026-07-25 on MODE40-CI-REWORK-FEEDBACK-V2: a
+    correctly-implemented, correctly-unit-tested helper function
+    (`_ci_rework_feedback`) was added but never wired into the production
+    call path it was meant to replace - invisible to any test that only
+    exercises the function in isolation, since the story's own tests
+    called it directly rather than through the code path that was
+    supposed to route to it. The real LLM reviewer caught it, but that
+    spends a whole review cycle on something this cheap, static,
+    pre-review check catches for free (see _run_lint_gate for the sibling
+    pattern this mirrors).
+
+    Best-effort: any git/IO failure returns [] (fail open - a quality
+    signal, not a security boundary, must never block or corrupt a
+    story's dispatch).
+    """
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=AM",
+             base_branch, "HEAD"],
+            cwd=worktree, capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if diff.returncode != 0:
+        return []
+
+    dead: list[str] = []
+    for rel_path in diff.stdout.splitlines():
+        rel_path = rel_path.strip()
+        if not rel_path.endswith(".py"):
+            continue
+        base_name = Path(rel_path).name
+        if base_name.startswith("test_") or base_name.endswith("_test.py"):
+            continue
+        full_path = worktree / rel_path
+        if not full_path.is_file():
+            continue
+        try:
+            source = full_path.read_text()
+        except OSError:
+            continue
+
+        try:
+            old_show = subprocess.run(
+                ["git", "show", f"{base_branch}:{rel_path}"],
+                cwd=worktree, capture_output=True, text=True, timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        old_names = (
+            _module_level_function_names(old_show.stdout)
+            if old_show.returncode == 0 else set()
+        )
+        new_names = _module_level_function_names(source) - old_names
+
+        for fn_name in sorted(new_names):
+            if fn_name.startswith("__") and fn_name.endswith("__"):
+                continue  # dunder - never a candidate
+            try:
+                grep = subprocess.run(
+                    ["git", "grep", "--count", "-w", fn_name],
+                    cwd=worktree, capture_output=True, text=True, timeout=15,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            # `git grep --count` prints "path:N" per matching tracked file
+            # (exit 1, empty stdout, if no match anywhere - not an error).
+            # The function's own def line contributes exactly 1; a repo-
+            # wide total <= 1 means "only its own definition, nowhere else
+            # in the tracked worktree" - not even a different file.
+            total = sum(
+                int(line.rsplit(":", 1)[-1])
+                for line in grep.stdout.splitlines() if line.strip()
+            )
+            if total <= 1:
+                dead.append(f"{rel_path}:{fn_name}")
+    return dead
 
 
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
@@ -1554,6 +1708,14 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             if lint["returncode"] != 0:
                 passed = False
 
+    # Only worth checking once the baseline (tests, lint) actually passed -
+    # a story already failing on those has enough signal without this too.
+    if passed:
+        dead_functions = _find_dead_new_functions(worktree, _default_branch())
+        story["last_dead_code_check"] = dead_functions
+        if dead_functions:
+            passed = False
+
     # The agent produced real output and the tests ran: the launch worked, so
     # clear any failed-launch attempts accumulated by earlier infra blips.
     story.pop("dispatch_attempts", None)
@@ -1632,6 +1794,27 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             else:
                 rework_cap = REWORK_MAX_ATTEMPTS
             if attempts >= rework_cap:
+                # Mirror review_story's own rework-cap escalation (Mode 24/28):
+                # a local agent that keeps parking/crashing without writing
+                # code is exactly the same "local tier couldn't finish this"
+                # signal as a reviewer's rework budget running out - give it
+                # to Claude before parking for a human, under the same
+                # PIPELINE_BACKEND_DISPATCH=auto opt-in. Root-caused live
+                # 2026-07-24: this guard was the one park path in the file
+                # missing the hook every other rework-exhaustion park path
+                # already had (review_story's three call sites), so a story
+                # that hit exactly this path never got a chance at Claude.
+                if _auto_escalation_enabled() and not story.get("escalated"):
+                    _escalate_review_to_claude(
+                        story, story_key, plan_name,
+                        f"no new commit after {attempts} rework redispatches",
+                    )
+                    story["status"] = "changes_requested"
+                    _atomic_write_json(manifest_path, manifest)
+                    return {
+                        "status": "changes_requested",
+                        "reason": "no_new_commit_escalated_to_claude",
+                    }
                 story["status"] = "parked"
                 story["parked_reason"] = (
                     f"no new commit after {attempts} rework redispatches - "
@@ -1803,8 +1986,28 @@ _PATCHABLE_STORY_FIELDS = frozenset((
 _VALID_STORY_STATUSES = frozenset((
     "todo", "in_progress", "running", "interrupted", "failed",
     "tests_passed", "pr_open", "changes_requested", "parked", "done",
+    "done",
 ))
 
+
+def _ci_rework_feedback(gate_error: str) -> str:
+    """Generate review feedback for merge-gate CI failures."""
+    lint_keywords = ("lint", "ruff", "eslint", "clippy", "golangci")
+    lower = gate_error.lower()
+    if any(k in lower for k in lint_keywords):
+        return (
+            f"The merge-gate CI check failed on your submitted branch "
+            f"Gate error: {gate_error}\n\n"
+            "This is a LINT failure, not a test failure - the test suite may already pass, so re-running tests alone proves nothing. Run the project's lint command (e.g. `ruff check .` for Python) from the repo root, fix every finding, and commit.\n\n"
+            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
+        )
+    else:
+        return (
+            f"The merge-gate CI check failed on your submitted branch "
+            f"Gate error: {gate_error}\n\n"
+            "The bug could be in the implementation OR in a test file you wrote; re-examine both against the spec and make a targeted fix.\n\n"
+            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
+        )
 
 @mcp.tool()
 def patch_story(plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any]:
@@ -2246,6 +2449,21 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # prior REQUEST_CHANGES cycle's Blocking findings wasn't touched by the
     # diff since then, downgrade this APPROVE back to REQUEST_CHANGES
     # instead of opening a PR.
+    #
+    # Exception: a flagged TEST file is exempt from the "was it touched"
+    # check, because review_story only reaches this APPROVE branch when
+    # story["status"] == "tests_passed" - the full suite, including that
+    # test file, is provably green right now. That is strictly stronger,
+    # directly-verified proof the finding (a failing test) is resolved than
+    # "were the test file's own bytes touched" - a correct fix legitimately
+    # lands in the implementation the test exercises, not the test itself.
+    # Root-caused live 2026-07-24 (MODE40-CI-REWORK-FEEDBACK-V2): a
+    # gate-synthesized review flagged the failing test file, the agent fixed
+    # the bug in the implementation module, the suite went green and a real
+    # reviewer said APPROVE, but this guard downgraded it anyway - burning
+    # the story's entire rework budget on an already-resolved finding.
+    # Non-test findings (README prose, server.py logic) still require the
+    # flagged file to be touched; there's no equivalent objective proof.
     if verdict == "APPROVE" and story.get("last_reviewed_sha") and story.get("last_review_findings"):
         try:
             diff_res = subprocess.run(
@@ -2253,7 +2471,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 cwd=worktree, check=True, capture_output=True, text=True,
             )
             changed_files = set(diff_res.stdout.splitlines())
-            untouched = [p for p in story["last_review_findings"] if p not in changed_files]
+            untouched = [
+                p for p in story["last_review_findings"]
+                if p not in changed_files and not _is_test_file_path(p)
+            ]
             if untouched:
                 verdict = "REQUEST_CHANGES"
                 reviewer_output = (
@@ -2768,15 +2989,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     # assertion every round (the agent's own broken test is
                     # invisible to the acceptance-scoped oracle/reviewer).
                     story["ci_rework"] = True
-                    story["review_feedback"] = (
-                        "The merge-gate CI check failed on your submitted branch "
-                        f"(reviewer already APPROVEd this work):\n{gate_error}\n\n"
-                        "This is often caused by a test file YOU wrote containing "
-                        "an incorrect assertion, not the implementation. Re-examine "
-                        "your own test files against the spec, fix any incorrect "
-                        "assertions, and ensure the full suite passes before "
-                        "resubmitting."
-                    )
+                    story["review_feedback"] = _ci_rework_feedback(gate_error)
                     story["status"] = "changes_requested"
                     _notify_user(plan_name, f"{key} merge-gate CI failed ({gate_error}); "
                                             f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).")

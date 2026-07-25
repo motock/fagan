@@ -48,6 +48,59 @@ def _venv_python_for(cwd: Path) -> Path | None:
     return None
 
 
+def _provision_worktree_venv(worktree: Path) -> None:
+    """Give a fresh worktree its own fully-provisioned venv, isolated from
+    the shared main-repo venv other concurrently-dispatched stories may be
+    using.
+
+    Two problems this solves, both observed live 2026-07-24 on
+    RUFF-016-ADOPTION: (1) `_venv_python_for` checks a worktree-local
+    ``.venv`` BEFORE the shared main-repo one - a story that follows a
+    completely reasonable instruction like "install the new version into
+    .venv" (with none existing yet, since ``.venv`` is gitignored) creates a
+    fresh, minimal venv containing only what it explicitly installed, which
+    then silently shadows the fully-configured shared venv for every
+    subsequent test run in that worktree - the story's own test gate false-
+    fails on missing deps it never touched. (2) absent this, EVERY worktree
+    without its own venv resolves to the SAME shared, mutable main-repo
+    ``.venv`` - so a story that bumps or installs a dependency (again,
+    entirely reasonable) mutates the interpreter every OTHER concurrently-
+    dispatched story's test gate also depends on: a silent cross-story
+    contamination risk bounded only by MAX_CONCURRENT_AGENTS.
+
+    Best-effort and language-agnostic by the same static-marker convention
+    `detect_test_command` uses: only fires for a Python project
+    (``pyproject.toml`` or ``setup.py`` present) that declares its own
+    dependencies file (``requirements-dev.txt``, falling back to
+    ``requirements.txt``). No-ops for any other ecosystem, or a Python
+    project with neither file - those are unaffected by this failure mode
+    and keep falling back to the shared main-repo venv exactly as before.
+
+    Raises on a real setup failure (network down, no python3, a broken
+    requirements file) so the caller's dispatch attempt fails fast and
+    retries on the next tick, rather than silently proceeding with a worktree
+    that has no working test environment at all.
+    """
+    if not ((worktree / "pyproject.toml").exists() or (worktree / "setup.py").exists()):
+        return
+    req = next(
+        (name for name in ("requirements-dev.txt", "requirements.txt")
+         if (worktree / name).exists()),
+        None,
+    )
+    if req is None:
+        return
+    subprocess.run(
+        ["python3", "-m", "venv", str(worktree / ".venv")],
+        cwd=worktree, check=True, capture_output=True, text=True, timeout=120,
+    )
+    venv_python = worktree / ".venv" / "bin" / "python3"
+    subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "--quiet", "-r", req],
+        cwd=worktree, check=True, capture_output=True, text=True, timeout=300,
+    )
+
+
 def _test_command_for(cwd: Path) -> list[str] | None:
     """Return the test command for cwd if a recognized build marker is present."""
     if (cwd / "pom.xml").exists():
@@ -398,6 +451,7 @@ def _added_pytest_test_paths(
 
 __all__ = [
     "_venv_python_for",
+    "_provision_worktree_venv",
     "_test_command_for",
     "_build_command_for",
     "detect_build_command",

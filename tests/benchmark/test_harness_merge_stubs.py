@@ -16,6 +16,7 @@ if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
 import harness  # noqa: E402
+import pipeline.server as _pserver  # noqa: E402
 import pipeline_mcp_server as p  # noqa: E402
 
 
@@ -70,6 +71,26 @@ def test_ci_status_stub_catches_missing_method_like_the_rli3_incident(tmp_path, 
     result = p._ci_status("agent/rli-3")
 
     assert result["state"] == "fail"
+
+
+def test_stubs_actually_patch_pipeline_server_not_just_the_compat_shim(tmp_path):
+    """Root-caused live 2026-07-25: pipeline_mcp_server (`p`) is a backward-
+    compat shim that COPIES each name out of pipeline.server into its own
+    namespace at import time. Assigning `p._ci_status = ...` only rebinds
+    that copy - the real merge-gate code inside pipeline/server.py resolves
+    `_ci_status`/`_open_pr`/`_merge_pr` from ITS OWN module globals, so a
+    shim-only assignment silently never took effect. Every benchmark cell's
+    merge gate was calling the REAL functions (which shell out to `gh`)
+    against this harness's local-only bare-repo remote instead of these
+    hermetic stubs - invisible to the tests above, which all call `p._ci_
+    status(...)` directly rather than going through the real internal call
+    path. This asserts the fix: the patched function must be identical on
+    BOTH pipeline.server (what the real code actually calls) and the shim."""
+    harness.install_merge_stubs(p, tmp_path / "repo_unused")
+
+    assert _pserver._ci_status is p._ci_status
+    assert _pserver._open_pr is p._open_pr
+    assert _pserver._merge_pr is p._merge_pr
 
 
 def test_ci_status_stub_passes_when_worktree_directory_is_missing(tmp_path, monkeypatch):

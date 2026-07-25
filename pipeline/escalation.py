@@ -36,16 +36,16 @@ def _escalate_to_claude(
     clean-slate teardown applies since a repeated step-cap streak isn't a
     trustworthy foundation for Claude to build on either.
     """
-    from .server import REPO_ROOT, PLAN_DIR
+    from .server import PLAN_DIR, REPO_ROOT
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
     # Remove worktree and branch — best-effort (may already be gone).
     if worktree:
         subprocess.run(["git", "worktree", "remove", "--force", worktree],
-                        cwd=REPO_ROOT, capture_output=True, text=True)
+                        check=False, cwd=REPO_ROOT, capture_output=True, text=True)
     subprocess.run(["git", "branch", "-D", branch],
-                    cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
     # Clear journal so Claude starts fresh (not from a broken local checkpoint).
     journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
     if journal_path.exists():
@@ -77,16 +77,16 @@ def _escalate_to_local_fallback_model(
     since the prior run may have left broken/half-written state a different
     model shouldn't inherit.
     """
-    from .server import REPO_ROOT, PLAN_DIR
+    from .server import PLAN_DIR, REPO_ROOT
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
     # Remove worktree and branch — best-effort (may already be gone).
     if worktree:
         subprocess.run(["git", "worktree", "remove", "--force", worktree],
-                        cwd=REPO_ROOT, capture_output=True, text=True)
+                        check=False, cwd=REPO_ROOT, capture_output=True, text=True)
     subprocess.run(["git", "branch", "-D", branch],
-                    cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
     # Clear journal so the fallback model starts fresh, not from a broken
     # checkpoint left by the model that just failed.
     journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
@@ -136,8 +136,8 @@ def _auto_escalation_enabled() -> bool:
 
 
 __all__ = [
+    "_auto_escalation_enabled",
+    "_escalate_review_to_claude",
     "_escalate_to_claude",
     "_escalate_to_local_fallback_model",
-    "_escalate_review_to_claude",
-    "_auto_escalation_enabled",
 ]

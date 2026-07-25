@@ -21,9 +21,8 @@ BENCH = Path(__file__).resolve().parent
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-import harness  # noqa: E402
-import run_real_repo_task as rrt  # noqa: E402
-
+import harness
+import run_real_repo_task as rrt
 
 # ---------------------------------------------------------------------------
 # Fixture helpers: build a tiny throwaway git repo inside tmp_path.
@@ -256,10 +255,10 @@ def test_run_groundtruth_in_place_result_shape(tmp_path):
 # to a no-op) so the plan-building path can be exercised hermetically.
 # ===========================================================================
 
-import ast  # noqa: E402
-import json  # noqa: E402
+import ast
+import json
 
-import pytest  # noqa: E402
+import pytest
 
 TASK_DIR = BENCH / "tasks" / "review_story_lock_guard"
 SPEC_PATH = TASK_DIR / "spec.json"
@@ -295,7 +294,7 @@ def test_spec_json_base_commit_is_present_in_repo():
     # Validate the commit exists without printing anything.
     r = subprocess.run(
         ["git", "rev-parse", "--verify", f"{sha}^{{commit}}"],
-        cwd=str(Path(__file__).resolve().parent.parent.parent),
+        check=False, cwd=str(Path(__file__).resolve().parent.parent.parent),
         capture_output=True, text=True,
     )
     assert r.returncode == 0, f"base_commit {sha!r} not found in repo history"
@@ -492,9 +491,9 @@ def _pin_plan_dir(monkeypatch, workdir, task="review_story_lock_guard",
     plan_dir fixture uses - makes these tests hermetic and order-independent
     regardless of what else has already imported the pipeline package.
     """
-    import pipeline.server as _ps
-    import pipeline.persistence as _ppers
     import pipeline.concurrency as _pcon
+    import pipeline.persistence as _ppers
+    import pipeline.server as _ps
     plans_dir = Path(workdir).resolve() / f"{task}__{model}__t{trial}" / "plans"
     for mod in (_ps, _ppers, _pcon):
         monkeypatch.setattr(mod, "PLAN_DIR", plans_dir)

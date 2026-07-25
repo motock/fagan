@@ -23,20 +23,20 @@ from datetime import datetime, timezone
 from typing import Any
 
 import backend
+
 from .config import (
+    _RISK_ORDER,
     DAILY_REQUEST_THRESHOLD,
-    WEEKLY_REQUEST_THRESHOLD,
+    PIPELINE_LOCAL_MAX_RISK,
     SESSION_PAUSE_THRESHOLD,
     SESSION_RESUME_THRESHOLD,
     WEEK_PAUSE_THRESHOLD,
     WEEK_RESUME_THRESHOLD,
-    PIPELINE_LOCAL_MAX_RISK,
-    _RISK_ORDER,
+    WEEKLY_REQUEST_THRESHOLD,
 )
-from .paths import USAGE_STATE_PATH
 from .parsers import _atomic_write_json
+from .paths import USAGE_STATE_PATH
 from .persona import _persona_requires_claude, _story_has_unwinnable_local_scope
-
 
 # ---------- Usage probe ----------
 # Legacy format (Claude Code ≤ ~Jun 2026): "Current session: N% used · resets …"
@@ -133,11 +133,7 @@ def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
     """
     if session_pct >= SESSION_PAUSE_THRESHOLD or week_pct >= WEEK_PAUSE_THRESHOLD:
         return True
-    if prev_paused and (
-        session_pct >= SESSION_RESUME_THRESHOLD or week_pct >= WEEK_RESUME_THRESHOLD
-    ):
-        return True
-    return False
+    return bool(prev_paused and (session_pct >= SESSION_RESUME_THRESHOLD or week_pct >= WEEK_RESUME_THRESHOLD))
 
 
 # ---------- Dispatch routing / resource gate ----------
@@ -186,16 +182,16 @@ def _role_resource_ok(role: str) -> tuple[bool, str]:
 
 
 __all__ = [
-    "_SESSION_USAGE_RE",
-    "_WEEK_USAGE_RE",
     "_DAILY_REQ_RE",
+    "_SESSION_USAGE_RE",
     "_WEEKLY_REQ_RE",
+    "_WEEK_USAGE_RE",
     "_parse_usage_output",
-    "_run_usage_probe",
-    "_write_usage_state",
     "_read_usage_state",
-    "_usage_state_age_seconds",
-    "_usage_gate",
-    "_route_dispatch_backend",
     "_role_resource_ok",
+    "_route_dispatch_backend",
+    "_run_usage_probe",
+    "_usage_gate",
+    "_usage_state_age_seconds",
+    "_write_usage_state",
 ]

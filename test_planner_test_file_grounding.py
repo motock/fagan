@@ -49,7 +49,7 @@ def _repo_with_worktree_branch(tmp_path: Path):
 # ---------- _test_files_added_on_branch ----------
 
 def test_test_files_added_on_branch_returns_added_test_files(tmp_path):
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     (wt / "test_foo.py").write_text("def test_a(): assert True\n")
     subprocess.run(["git", "add", "-A"], cwd=wt,
                    capture_output=True, text=True, check=True)
@@ -59,7 +59,7 @@ def test_test_files_added_on_branch_returns_added_test_files(tmp_path):
 
 
 def test_test_files_added_on_branch_excludes_non_test_files(tmp_path):
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     (wt / "test_foo.py").write_text("def test_a(): assert True\n")
     (wt / "impl.py").write_text("x = 1\n")
     (wt / "README.md").write_text("more\n")
@@ -71,12 +71,12 @@ def test_test_files_added_on_branch_excludes_non_test_files(tmp_path):
 
 
 def test_test_files_added_on_branch_empty_when_no_new_commits(tmp_path):
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     assert _test_files_added_on_branch(wt, "main") == []
 
 
 def test_test_files_added_on_branch_multiple_test_files(tmp_path):
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     (wt / "test_a.py").write_text("def test_x(): assert True\n")
     (wt / "test_b.py").write_text("def test_y(): assert True\n")
     subprocess.run(["git", "add", "-A"], cwd=wt,
@@ -92,7 +92,7 @@ def test_test_files_added_on_branch_returns_empty_on_git_error(tmp_path):
     # A nonexistent base branch makes `git diff base..HEAD` fail; the helper
     # must fail open to [] rather than raising, so a git hiccup never blocks
     # the planner call (which degrades to the prohibition-only clause).
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     assert _test_files_added_on_branch(wt, "nonexistent-branch") == []
 
 
@@ -125,7 +125,7 @@ def test_test_files_added_on_branch_excludes_test_file_modified_not_added(tmp_pa
 # ---------- _test_names_in_file ----------
 
 def test_test_names_in_file_extracts_top_level_test_functions(tmp_path):
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     (wt / "test_foo.py").write_text(
         "def test_a():\n    assert True\n\n"
         "def helper():\n    pass\n\n"
@@ -137,7 +137,7 @@ def test_test_names_in_file_extracts_top_level_test_functions(tmp_path):
 def test_test_names_in_file_ignores_indented_def(tmp_path):
     # A nested `def test_nested` inside a test function is not its own test
     # case - the helper must only pick up column-0 defs.
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     (wt / "test_foo.py").write_text(
         "def test_outer():\n"
         "    def test_nested():\n"
@@ -147,20 +147,20 @@ def test_test_names_in_file_ignores_indented_def(tmp_path):
 
 
 def test_test_names_in_file_empty_when_no_tests(tmp_path):
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     (wt / "test_foo.py").write_text("def helper():\n    pass\n")
     assert _test_names_in_file(wt, "test_foo.py") == []
 
 
 def test_test_names_in_file_missing_file_returns_empty(tmp_path):
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     assert _test_names_in_file(wt, "test_missing.py") == []
 
 
 def test_test_names_in_file_handles_subdir_path(tmp_path):
     # A test file committed under tests/ is addressed by its repo-relative
     # path; the helper must join it onto the worktree correctly.
-    repo, wt = _repo_with_worktree_branch(tmp_path)
+    _repo, wt = _repo_with_worktree_branch(tmp_path)
     sub = wt / "tests"
     sub.mkdir()
     (sub / "test_x.py").write_text("def test_one(): assert True\n")

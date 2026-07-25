@@ -19,7 +19,7 @@ PIPELINE_REPO = BENCH.parents[1]
 if str(PIPELINE_REPO) not in sys.path:
     sys.path.insert(0, str(PIPELINE_REPO))
 
-import harness  # noqa: E402
+import harness
 
 SEED_IMPL = Path("/tmp/seed_rate_limiter.py").read_text()
 SEED_TEST = Path("/tmp/seed_test_rate_limiter.py").read_text()

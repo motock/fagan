@@ -714,8 +714,8 @@ def test_oracle_restore_file_reverts_to_last_commit(tmp_path, monkeypatch):
     monkeypatch.setattr(lao, "CWD", tmp_path)
     f = tmp_path / "a.py"
     f.write_text("original\n")
-    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "add", "a.py"], check=False, cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], check=False, cwd=tmp_path, capture_output=True)
     f.write_text("a mess\n")
 
     result = lao.run_tool("restore_file", {"path": "a.py"})
@@ -767,7 +767,7 @@ def test_oracle_net_progress_guard_resets_on_successful_mutation(
         + [("bash", {"command": "cat c"})]
         + [("done", {"summary": "wrote the module"})]
     )
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(lao, "chat", fake)
 
     rc = lao.main()
@@ -829,7 +829,7 @@ def test_oracle_view_file_different_ranges_do_not_trip_repetition_guard(
         ("view_file", {"path": "big.py", "line_start": 1500, "line_end": 1550}),
         ("done", {"summary": "oriented"}),
     ]
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(lao, "chat", fake)
 
     rc = lao.main()
@@ -849,7 +849,7 @@ def test_oracle_view_file_same_range_three_times_still_trips_repetition_guard(
         ("view_file", {"path": "big.py", "line_start": 100, "line_end": 150})
         for _ in range(4)
     ]
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(lao, "chat", fake)
 
     lao.main()
@@ -1331,7 +1331,6 @@ def test_oracle_returns_true_with_short_circuit_when_no_acceptance_paths(tmp_pat
 
     def _fake_run(*a, **kw):
         called["run"] = True
-        return None
 
     monkeypatch.setattr(lao.subprocess, "run", _fake_run)
     ok, tail = lao.oracle_result()
@@ -1446,13 +1445,13 @@ def test_oracle_script_importable_from_non_pipeline_cwd(tmp_path):
         venv_python = sys.executable
     r = subprocess.run(
         [venv_python, "-c",
-         "import importlib.util, pathlib; "
+         ("import importlib.util, pathlib; "
          f"spec = importlib.util.spec_from_file_location('lao', {str(Path(repo) / 'scripts' / 'local_agent_oracle.py')!r}); "
          "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); "
          "assert hasattr(m, 'p'), 'pipeline_mcp_server alias not bound'; "
          "assert hasattr(m.p, '_heavy_lock'), 'heavy_lock helper missing'; "
-         "assert hasattr(m.p, '_is_heavy'), 'is_heavy helper missing'"],
-        cwd=tmp_path,
+         "assert hasattr(m.p, '_is_heavy'), 'is_heavy helper missing'")],
+        check=False, cwd=tmp_path,
         capture_output=True, text=True, timeout=30,
     )
     assert r.returncode == 0, (
@@ -1681,8 +1680,7 @@ class _FakeStreamResponse:
             raise _status_error(self.status_code)
 
     def iter_lines(self):
-        for line in self._lines:
-            yield line
+        yield from self._lines
 
 
 class _FakeStreamCM:
@@ -2005,9 +2003,9 @@ def test_oracle_main_resumes_transcript_and_skips_fresh_pair(monkeypatch, tmp_pa
 
 
 def _init_git_repo(path):
-    subprocess.run(["git", "init"], cwd=path, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "init"], check=False, cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], check=False, cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test"], check=False, cwd=path, capture_output=True, text=True)
 
 
 def test_oracle_exclude_runtime_artifacts_adds_agent_transcript_json(tmp_path, monkeypatch):
@@ -2065,7 +2063,7 @@ def test_oracle_exclude_runtime_artifacts_hides_transcript_file_from_git_status(
     (tmp_path / ".agent_transcript.json").write_text('{"messages": []}')
 
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True
+        ["git", "status", "--porcelain"], check=False, cwd=tmp_path, capture_output=True, text=True
     ).stdout
     assert ".agent_transcript.json" not in status
 
@@ -2468,7 +2466,7 @@ def test_full_suite_result_skips_lint_when_not_detected(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lao.subprocess, "run", _run)
 
-    ok, tail = lao._full_suite_result()
+    ok, _tail = lao._full_suite_result()
     assert ok is True
     assert calls == [["pytest", "-q"]]
 

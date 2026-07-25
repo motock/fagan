@@ -23,9 +23,9 @@ from pathlib import Path
 
 import backend
 import role_registry
-from .persona import _persona_body, _persona_default_model
-from .git_ops import _worktree_has_new_commits
 
+from .git_ops import _worktree_has_new_commits
+from .persona import _persona_body, _persona_default_model
 
 # ---------- Guided-decomposition planner ----------
 _PLANNER_SYSTEM = (
@@ -297,7 +297,7 @@ def _run_planner(
             ),
             model=model,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 (broad and intentional: this call must never be a gate, per the comment below)
         # Broad and intentional: this call must never be a gate. Mirrors
         # the Gap-7 multi-model warning's "observability hook, never a
         # gate" except-Exception pattern elsewhere in dispatch_story.
@@ -362,7 +362,7 @@ def _run_rework_planner(
         text = backend.get_backend("planner", name=backend_name).complete(
             review_feedback, system=_REWORK_PLANNER_SYSTEM, model=model,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 (deliberate fail-open-to-None contract, per this function's docstring)
         return None
     text = (text or "").strip()
     return text or None
@@ -537,7 +537,7 @@ def _run_test_author_phase(
             allowed_tools=_TEST_AUTHOR_ALLOWED_TOOLS,
             cwd=worktree_path, log_path=log_path, append=False,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 (already logged below; dispatch/process-launch failures are unpredictable and must not raise past this function)
         logging.getLogger("pipeline").warning(
             f"test-author dispatch failed to start for {story_key}; "
             "falling back to monolithic dispatch"
@@ -561,7 +561,7 @@ def _run_test_author_phase(
     from .server import _default_branch
     try:
         return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 (already logged below; git-detection failures are unpredictable and must not raise past this function)
         logging.getLogger("pipeline").warning(
             f"test-author dispatch failed to detect commits for {story_key}: {exc}"
         )
@@ -590,29 +590,29 @@ def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str
             request, system=_persona_body("product-analyst"), model=resolution.model,
             allowed_tools="Read",
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 (deliberate fail-open to None on any exception, per this function's docstring)
         return None
     text = (text or "").strip()
     return text or None
 
 
 __all__ = [
-    "_PLANNER_SYSTEM",
-    "_PLANNER_SCRATCHPAD_CLAUSE",
-    "_TEST_AUTHOR_ALREADY_RAN_CLAUSE",
     "_AUTHORED_TEST_FILES_CLAUSE_TEMPLATE",
+    "_NEVER_TOUCH_TESTS_STEERING",
+    "_PLANNER_SCRATCHPAD_CLAUSE",
+    "_PLANNER_SYSTEM",
+    "_REWORK_PLANNER_SYSTEM",
+    "_TEST_AUTHOR_ALLOWED_TOOLS",
+    "_TEST_AUTHOR_ALREADY_RAN_CLAUSE",
+    "_TEST_AUTHOR_SYSTEM",
     "_format_authored_test_files",
     "_planner_system",
     "_resolve_planner_backend",
-    "_run_planner",
-    "_REWORK_PLANNER_SYSTEM",
-    "_run_rework_planner",
-    "_NEVER_TOUCH_TESTS_STEERING",
     "_resolve_test_author_backend",
-    "_TEST_AUTHOR_SYSTEM",
-    "_TEST_AUTHOR_ALLOWED_TOOLS",
+    "_run_decompose",
+    "_run_planner",
+    "_run_rework_planner",
+    "_run_test_author_phase",
     "_test_author_prompt",
     "_wait_for_agent_exit",
-    "_run_test_author_phase",
-    "_run_decompose",
 ]

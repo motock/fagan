@@ -9,6 +9,7 @@ ground-truth tests in test_groundtruth.py.
 Usage: python run.py <A|B|C>
 """
 from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -64,7 +65,7 @@ ARMS = {
 
 
 def sh(cmd, cwd, **kw):
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, **kw)
+    return subprocess.run(cmd, check=False, cwd=cwd, capture_output=True, text=True, **kw)
 
 
 def persona_body() -> str:
@@ -105,7 +106,7 @@ def main(arm: str) -> None:
 
     log = work / "agent.log"
     with log.open("w") as lf:
-        proc = subprocess.run([PY, ORACLE_AGENT], cwd=work, env=env,
+        proc = subprocess.run([PY, ORACLE_AGENT], check=False, cwd=work, env=env,
                               stdout=lf, stderr=subprocess.STDOUT)
     agent_exit = proc.returncode
 

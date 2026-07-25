@@ -25,16 +25,18 @@ from pathlib import Path
 
 # Import harness helpers – keep the names exactly as used by the tests.
 import harness  # noqa: F401
+
+# ``drive`` must be a module‑level name for monkeypatching.
 from harness import (
     PIPELINE_REPO,
     VENV_PY,
-    build_plan_from_stories,
-    install_merge_stubs,
     _set_review_backend_env,
+    build_plan_from_stories,
+    drive,
+    install_merge_stubs,
 )
-# ``drive`` must be a module‑level name for monkeypatching.
-from harness import drive
 from models import MODELS
+
 # ---------------------------------------------------------------------------
 # Helper functions – unchanged from the original implementation.
 # ---------------------------------------------------------------------------
@@ -184,7 +186,7 @@ def main() -> int:
             capture_output=True,
             check=True,
         ).stdout.strip()
-    except Exception:
+    except Exception:  # noqa: BLE001 (deliberate fail-open: falls back to HEAD if the ref cannot be resolved, per the comment above)
         base_commit = "HEAD"
 
     cell = Path(args.workdir).resolve() / f"{args.task}__{args.model}__t{args.trial}"

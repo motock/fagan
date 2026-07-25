@@ -32,7 +32,7 @@ def test_ci_status_queries_the_sha_scoped_check_runs_endpoint(monkeypatch):
 
 def test_ci_status_never_falls_back_to_branch_only_query_when_sha_present(monkeypatch):
     def _fake_run(argv, **_):
-        assert not (argv[:3] == ["gh", "pr", "checks"]), (
+        assert argv[:3] != ["gh", "pr", "checks"], (
             "must not issue a branch-only query when a SHA is available - "
             "that's the exact stale-read race Mode 26 closes"
         )
@@ -132,7 +132,7 @@ def test_ci_rerun_queries_the_sha_scoped_actions_runs_endpoint(monkeypatch):
 
 def test_ci_rerun_never_uses_branch_scoped_run_list(monkeypatch):
     def _fake_run(argv, **_):
-        assert not (argv[:3] == ["gh", "run", "list"]), (
+        assert argv[:3] != ["gh", "run", "list"], (
             "must resolve the run to rerun by SHA, never by branch name - "
             "the stale-run race Mode 26 closes applies here too"
         )

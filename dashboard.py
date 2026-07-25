@@ -234,8 +234,7 @@ def _read_story_log(
     """
     if not isinstance(lines, int) or lines < 1:
         lines = _LOG_TAIL_DEFAULT
-    if lines > _LOG_TAIL_CAP:
-        lines = _LOG_TAIL_CAP
+    lines = min(lines, _LOG_TAIL_CAP)
 
     stories = manifest.get("stories") if isinstance(manifest, dict) else None
     if not isinstance(stories, dict):

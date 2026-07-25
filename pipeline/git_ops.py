@@ -70,7 +70,7 @@ def _commit_wip(worktree: str, story_key: str, step: str,
                     check=True, capture_output=True, text=True)
 
     # Unstage agent.log unconditionally.
-    subprocess.run(["git", "reset", "-q", "--", "agent.log"], cwd=worktree,
+    subprocess.run(["git", "reset", "-q", "--", "agent.log"], check=False, cwd=worktree,
                     capture_output=True, text=True)
 
     if guard_against_deletion:
@@ -79,14 +79,14 @@ def _commit_wip(worktree: str, story_key: str, step: str,
         # skip restoration to preserve real WIP changes.
         added_mods = subprocess.run(
             ["git", "diff", "--cached", "--diff-filter=AM", "--name-only"],
-            cwd=worktree,
+            check=False, cwd=worktree,
             capture_output=True,
             text=True,
         )
         if not added_mods.stdout.strip():
             diff_res = subprocess.run(
                 ["git", "diff", "--cached", "--diff-filter=D", "--name-only"],
-                cwd=worktree,
+                check=False, cwd=worktree,
                 capture_output=True,
                 text=True,
             )
@@ -96,7 +96,7 @@ def _commit_wip(worktree: str, story_key: str, step: str,
                     subprocess.run(["git", "add", "--", path], cwd=worktree, check=True)
     commit = subprocess.run(
         ["git", "commit", "-m", f"wip({story_key}): {step}"],
-        cwd=worktree, capture_output=True, text=True,
+        check=False, cwd=worktree, capture_output=True, text=True,
     )
     output = commit.stdout + commit.stderr
     nothing_to_commit = "nothing to commit" in output or "nothing added to commit" in output
@@ -125,7 +125,7 @@ def _worktree_has_new_commits(worktree: Path, story_key: str, base_branch: str) 
     branch = f"agent/{story_key.lower()}"
     r = subprocess.run(
         ["git", "log", f"{base_branch}..{branch}", "--oneline"],
-        cwd=str(worktree), capture_output=True, text=True,
+        check=False, cwd=str(worktree), capture_output=True, text=True,
     )
     return r.returncode == 0 and bool(r.stdout.strip())
 
@@ -156,7 +156,7 @@ def _test_files_added_on_branch(
     r = subprocess.run(
         ["git", "diff", "--name-only", "--diff-filter=A",
          f"{base_branch}..HEAD"],
-        cwd=str(worktree), capture_output=True, text=True,
+        check=False, cwd=str(worktree), capture_output=True, text=True,
     )
     if r.returncode != 0:
         return []

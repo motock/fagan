@@ -15,9 +15,10 @@ BENCH = Path(__file__).resolve().parent
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-import harness  # noqa: E402
-import pipeline.server as _pserver  # noqa: E402
-import pipeline_mcp_server as p  # noqa: E402
+import harness
+
+import pipeline.server as _pserver
+import pipeline_mcp_server as p
 
 
 def _seed_worktree(root: Path, story_key: str, test_file_content: str) -> Path:

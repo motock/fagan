@@ -2,6 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
+
 import pytest
 
 import pipeline.server as p
@@ -97,7 +98,7 @@ def test_review_story_records_last_reviewed_sha_on_request_changes(setup_story, 
 # Test 2: skip reviewer when HEAD unchanged since last review
 
 def test_review_story_skips_reviewer_when_head_unchanged_since_last_review(setup_story, monkeypatch):
-    plan_name, story_key, worktree = setup_story
+    plan_name, story_key, _worktree = setup_story
     mock_rev = Mock(return_value="VERDICT: REQUEST_CHANGES\nsome finding")
     monkeypatch.setattr(p, "_run_reviewer", mock_rev)
     p.review_story(plan_name, story_key)  # first call sets SHA

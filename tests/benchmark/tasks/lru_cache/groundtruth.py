@@ -10,7 +10,6 @@ API under test:
     .size -> int                 # read-only property
 """
 import pytest
-
 from lru_cache import LRUCache
 
 

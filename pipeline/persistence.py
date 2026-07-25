@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .paths import PLAN_DIR
 from .parsers import _atomic_write_json
+from .paths import PLAN_DIR
 
 
 def _notify_user(plan_name: str, message: str) -> None:
@@ -78,11 +78,11 @@ def _plan_role_config(plan_name: str) -> dict:
 
 
 __all__ = [
-    "_notify_user",
-    "_decisions_path",
     "_append_decision",
-    "_journal_path",
     "_append_journal",
-    "_read_journal",
+    "_decisions_path",
+    "_journal_path",
+    "_notify_user",
     "_plan_role_config",
+    "_read_journal",
 ]

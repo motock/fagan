@@ -1,5 +1,6 @@
 import pipeline_mcp_server as p
 
+
 def test_run_reviewer_includes_new_check_and_preserves_existing(monkeypatch):
     captured = {}
     class _FakeDriver:

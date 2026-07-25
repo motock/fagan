@@ -170,7 +170,7 @@ FMG_IMPL = REF_IMPL.replace(
 
 
 def sh(argv, cwd, check=True, capture=True):
-    r = subprocess.run(argv, cwd=str(cwd), capture_output=capture, text=True)
+    r = subprocess.run(argv, check=False, cwd=str(cwd), capture_output=capture, text=True)
     if check and r.returncode != 0:
         raise RuntimeError(f"cmd {argv} failed in {cwd}: {r.stderr[:500]}")
     return r
@@ -211,7 +211,7 @@ def dispatch(prompt: str, model: str, backend_env: dict, cwd: Path,
     for k, v in backend_env.items():
         os.environ[k] = v
     sys.path.insert(0, str(REPO))
-    import backend  # noqa: E402
+    import backend
     driver = backend.get_backend("dispatch")
     h = driver.dispatch(
         prompt, system=SYSTEM, model=model,
@@ -263,7 +263,7 @@ def run_pytest_against(test_file: Path, impl_src: str, scratch: Path,
     r = subprocess.run(
         [str(VENV_PY), "-m", "pytest", test_file.name, "-q",
          "--no-header", "-p", "no:cacheprovider"],
-        cwd=str(scratch), capture_output=True, text=True,
+        check=False, cwd=str(scratch), capture_output=True, text=True,
     )
     return (r.returncode == 0, (r.stdout + r.stderr)[-800:])
 
@@ -283,7 +283,7 @@ def run_groundtruth(impl_src: Path) -> tuple[bool, str]:
     r = subprocess.run(
         [str(VENV_PY), "-m", "pytest", "test_groundtruth.py", "-q",
          "--no-header", "-p", "no:cacheprovider"],
-        cwd=str(scratch), capture_output=True, text=True,
+        check=False, cwd=str(scratch), capture_output=True, text=True,
     )
     return (r.returncode == 0, (r.stdout + r.stderr)[-800:])
 
@@ -428,8 +428,8 @@ def main() -> int:
     # Ensure gpt-oss is warm (avoids a cold-start skew on the first cell).
     try:
         subprocess.run(["ollama", "run", GPTOSS_TAG, ""],
-                       capture_output=True, text=True, timeout=120)
-    except Exception as e:
+                       check=False, capture_output=True, text=True, timeout=120)
+    except Exception as e:  # noqa: BLE001 (deliberate fail-open: warm-up is an optional latency optimization, per the comment above)
         print(f"ollama warm-up skipped: {e}", flush=True)
 
     results = {}
@@ -471,7 +471,7 @@ def main() -> int:
             tq_s = f"ntests={tq['ntests']} valid={tq['pass_vs_correct_impl']} catchesFMG={tq['fails_vs_fmg_impl']}"
         else:
             tq_s = "n/a"
-        print(f"{name:<10} {gt_s:<9} {str(wrote):<14} {tq_s:<40}")
+        print(f"{name:<10} {gt_s:<9} {wrote!s:<14} {tq_s:<40}")
     print("\nBaseline reproduces 8/9 run's parked 0/1 => apparatus valid.")
     print("A beats baseline => fresh impl dispatch unblocks the stuck implementer.")
     print("B beats A => stronger test-author is the bigger lever.")

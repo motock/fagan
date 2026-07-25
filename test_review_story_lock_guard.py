@@ -33,7 +33,6 @@ import pipeline.server as p
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (mirror test_review_story_stale_guard.py / test_pipeline_mcp_server.py
 # so this file is fully standalone).

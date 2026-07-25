@@ -26,7 +26,6 @@ from pathlib import Path
 
 from pipeline.build_detect import detect_test_command
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -52,7 +51,7 @@ def _run_gate(worktree: Path) -> subprocess.CompletedProcess:
     """
     test_dir, test_cmd = detect_test_command(worktree)
     return subprocess.run(
-        test_cmd, cwd=str(test_dir), capture_output=True, text=True,
+        test_cmd, check=False, cwd=str(test_dir), capture_output=True, text=True,
     )
 
 

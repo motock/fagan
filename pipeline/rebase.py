@@ -16,10 +16,10 @@ from pathlib import Path
 from typing import Any
 
 from .parsers import (
-    _parse_conflict_blocks,
-    _resolve_conflict_blocks,
     _git_show_stage,
     _is_pure_additive_import_diff,
+    _parse_conflict_blocks,
+    _resolve_conflict_blocks,
 )
 
 
@@ -41,7 +41,7 @@ def _try_auto_resolve_conflict(worktree: str) -> list[str]:
     untouched so the caller's abort path is unaffected."""
     try:
         diff = subprocess.run(["git", "diff", "--name-only", "--diff-filter=U"],
-                              cwd=worktree, capture_output=True, text=True)
+                              check=False, cwd=worktree, capture_output=True, text=True)
     except OSError:
         return []
     if diff.returncode != 0:
@@ -116,7 +116,7 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
         # Catch OSError so this helper honors its never-raises contract and
         # reports a non-conflict failure instead of crashing the tick.
         try:
-            return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, env=env)
+            return subprocess.run(argv, check=False, cwd=cwd, capture_output=True, text=True, env=env)
         except OSError as e:
             return subprocess.CompletedProcess(argv, 127, "", str(e))
 
@@ -173,6 +173,6 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
 
 
 __all__ = [
-    "_try_auto_resolve_conflict",
     "_rebase_onto_master",
+    "_try_auto_resolve_conflict",
 ]

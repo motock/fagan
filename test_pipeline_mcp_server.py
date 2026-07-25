@@ -22,17 +22,17 @@ import httpx
 import pytest
 
 import backend
+import pipeline_mcp_server  # noqa: F401  backward compat
+import role_registry
+from pipeline import checkpoint as pcheckpoint
 from pipeline import ci as pci
 from pipeline import concurrency as pcon
-from pipeline import checkpoint as pcheckpoint  # noqa: E402,F401
-from pipeline import server as p
-import pipeline_mcp_server  # noqa: F401  backward compat
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import review as prev
+from pipeline import server as p
 from pipeline import ticketing as pt
 from pipeline import usage as pusage
-import role_registry
 
 
 # ---------- Fixtures ----------
@@ -164,7 +164,7 @@ def test_detect_test_command_prefers_root_over_subdirectory(tmp_path):
     sub = tmp_path / "engine"
     sub.mkdir()
     (sub / "package.json").write_text("{}")
-    test_dir, cmd = p.detect_test_command(tmp_path)
+    test_dir, _cmd = p.detect_test_command(tmp_path)
     assert test_dir == tmp_path
 
 
@@ -2849,9 +2849,8 @@ def test_scoped_repo_root_restores_on_exception(plan_dir, monkeypatch, tmp_path)
     original = p.Path("/original/repo")
     monkeypatch.setattr(p, "REPO_ROOT", original)
 
-    with pytest.raises(RuntimeError):
-        with p._scoped_repo_root("sr2"):
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), p._scoped_repo_root("sr2"):
+        raise RuntimeError("boom")
     assert p.REPO_ROOT == original
 
 
@@ -5055,7 +5054,7 @@ def test_rebase_onto_master_uses_default_branch_on_main_repo(tmp_path, monkeypat
     repo.mkdir()
     for d in (repo,):
         r = subprocess.run(["git", "init", "-q", "-b", "main", str(d)],
-                           capture_output=True, text=True)
+                           check=False, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         subprocess.run(["git", "config", "user.email", "t@e"],
                        cwd=d, capture_output=True, text=True, check=True)
@@ -5077,7 +5076,7 @@ def test_rebase_onto_master_uses_default_branch_on_main_repo(tmp_path, monkeypat
     # Real worktree off `repo` so it shares `.git/`. A new commit on
     # `agent/x` from the worktree gives the rebase something to fast-forward.
     r = subprocess.run(["git", "worktree", "add", "-b", "agent/x", str(wt)],
-                       cwd=repo, capture_output=True, text=True)
+                       check=False, cwd=repo, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     (wt / "new.txt").write_text("agent edit\n")
     subprocess.run(["git", "add", "-A"], cwd=wt, capture_output=True, text=True, check=True)
@@ -5119,7 +5118,7 @@ def _setup_conflict_repo(tmp_path, files_base, agent_edits, master_edits):
                    capture_output=True, text=True, check=True)
 
     r = subprocess.run(["git", "worktree", "add", "-b", "agent/x", str(wt)],
-                       cwd=repo, capture_output=True, text=True)
+                       check=False, cwd=repo, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     for name, content in agent_edits.items():
         (wt / name).write_text(content)
@@ -5228,7 +5227,7 @@ def test_auto_resolve_conflict_disqualifies_on_write_failure(tmp_path, monkeypat
     )
     monkeypatch.setattr(p, "REPO_ROOT", str(repo))
     subprocess.run(["git", "fetch", "origin"], cwd=wt, capture_output=True, text=True, check=True)
-    r = subprocess.run(["git", "rebase", "origin/master"], cwd=wt, capture_output=True, text=True)
+    r = subprocess.run(["git", "rebase", "origin/master"], check=False, cwd=wt, capture_output=True, text=True)
     assert r.returncode != 0, "expected the rebase to conflict"
 
     def _boom(self, *a, **kw):
@@ -6830,7 +6829,6 @@ def test_count_in_progress_agents_skips_dead_pids(plan_dir, monkeypatch):
     def _fake_kill(pid, sig):
         if pid == 222:
             raise ProcessLookupError
-        return None
 
     monkeypatch.setattr(p.os, "kill", _fake_kill)
 
@@ -6852,7 +6850,6 @@ def test_reap_zombie_in_progress_stories(plan_dir, monkeypatch):
     def _fake_kill(pid, sig):
         if pid == 222:
             raise ProcessLookupError
-        return None
 
     monkeypatch.setattr(p.os, "kill", _fake_kill)
 
@@ -12602,7 +12599,7 @@ def test_resolve_planner_backend_local_mode_honors_env_var_independent_of_dispat
     independent of whatever dispatch_backend is - this is the gap fix:
     the planner no longer mirrors dispatch_backend."""
     monkeypatch.setenv("PIPELINE_BACKEND_PLANNER", "mlx")
-    backend_name, model = p._resolve_planner_backend(
+    backend_name, _model = p._resolve_planner_backend(
         "ollama", "gpt-oss:20b",
     )
     assert backend_name == "mlx"
@@ -12793,7 +12790,7 @@ def test_run_test_author_phase_returns_true_on_successful_commit(monkeypatch, tm
     and the agent branch has a new commit by the time it exits, the phase
     reports success - the commit is what the executor will build on."""
     monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
-    repo, wt = _make_worktree_repo(tmp_path, "agent/s1")
+    _repo, wt = _make_worktree_repo(tmp_path, "agent/s1")
     (wt / "test_foo.py").write_text("def test_x(): assert True\n")
     subprocess.run(["git", "add", "-A"], cwd=wt, capture_output=True, text=True, check=True)
     subprocess.run(["git", "commit", "-qm", "tests"], cwd=wt,
@@ -12818,7 +12815,7 @@ def test_run_test_author_phase_returns_false_when_no_new_commit(monkeypatch, tmp
     no test file, or wrote one but didn't commit) - the executor has
     nothing to build on, so this must fail open exactly like a timeout."""
     monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
-    repo, wt = _make_worktree_repo(tmp_path, "agent/s1")
+    _repo, wt = _make_worktree_repo(tmp_path, "agent/s1")
 
     fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)

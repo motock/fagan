@@ -1,6 +1,5 @@
 """Hidden acceptance oracle for the lru_cache task (read-only to the agent)."""
 import pytest
-
 from lru_cache import LRUCache
 
 

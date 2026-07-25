@@ -29,7 +29,7 @@ PY = str(VENV_PY) if VENV_PY.exists() else sys.executable
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-import harness  # noqa: E402
+import harness
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -157,7 +157,7 @@ def test_venv_py_resolves_to_real_interpreter_from_worktree(tmp_path):
     resolved_venv_py = resolved_repo / ".venv" / "bin" / "python"
 
     assert resolved_venv_py.exists()
-    completed = subprocess.run([str(resolved_venv_py)], capture_output=True)
+    completed = subprocess.run([str(resolved_venv_py)], check=False, capture_output=True)
     assert completed.returncode == 0
 
 

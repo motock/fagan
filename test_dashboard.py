@@ -981,8 +981,8 @@ def test_story_log_endpoint_garbage_bytes_decode_replacement(client, plan_dir):
 # accurate between polls (no re-fetch needed as the clock advances). These
 # tests exercise the pure helpers exposed by app.js by shelling out to Node
 # in a subprocess — no JS test runner / jsdom dependency, just plain pytest.
-import os  # noqa: E402
-import subprocess  # noqa: E402
+import os
+import subprocess
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
@@ -1043,7 +1043,7 @@ def _run_app_js(expr):
     )
     proc = subprocess.run(
         ["node", "-e", script],
-        capture_output=True, text=True, timeout=10,
+        check=False, capture_output=True, text=True, timeout=10,
     )
     assert proc.returncode == 0, f"node failed: {proc.stderr}"
     return json.loads(proc.stdout)

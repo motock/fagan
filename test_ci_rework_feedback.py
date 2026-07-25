@@ -16,7 +16,6 @@ later dispatch adds the helper to `pipeline/server.py`.
 
 from pipeline import server as p
 
-
 # The exact commit-required closing sentence the helper must ALWAYS append.
 _COMMIT_REQUIRED = (
     "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed "

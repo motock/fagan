@@ -1,5 +1,5 @@
 """Tests for tests/benchmark/models.py per-model temperature/num_ctx overrides."""
-from models import MODELS, _local, _LOCAL_AGENT_ENV
+from models import _LOCAL_AGENT_ENV, MODELS, _local
 
 
 def test_devstral_retains_tuned_temperature_and_num_ctx():

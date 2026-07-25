@@ -12,10 +12,10 @@ _extract_blocking_finding_files already expect, so downstream handling
 (rework routing, Mode 24/28's finding-target tracking) is unaffected.
 """
 from pipeline.parsers import (
-    _synthesize_test_failure_feedback,
-    _parse_verdict,
     _extract_blocking_finding_files,
     _has_review_findings,
+    _parse_verdict,
+    _synthesize_test_failure_feedback,
 )
 
 

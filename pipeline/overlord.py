@@ -14,6 +14,7 @@ through the re-export to the patched binding.
 
 import backend
 import role_registry
+
 from .persona import _persona_body, _persona_default_model
 
 
@@ -57,6 +58,6 @@ def _invoke_overlord(prompt: str, plan_role_config: dict | None = None) -> str:
 
 
 __all__ = [
-    "_load_policy",
     "_invoke_overlord",
+    "_load_policy",
 ]

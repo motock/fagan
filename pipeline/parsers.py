@@ -21,7 +21,6 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-
 # ---------- JSON / overlord / verdict / rate-limit parsing ----------
 
 def _extract_json_block(text: str) -> str:
@@ -181,7 +180,7 @@ def _git_show_stage(worktree: str, stage: int, fname: str) -> str | None:
     rename/delete conflict has no stage-1 entry - or a git/OSError), which
     the caller treats as "can't verify, disqualify"."""
     try:
-        r = subprocess.run(["git", "show", f":{stage}:{fname}"], cwd=worktree,
+        r = subprocess.run(["git", "show", f":{stage}:{fname}"], check=False, cwd=worktree,
                            capture_output=True, text=True)
     except OSError:
         return None
@@ -320,11 +319,11 @@ def _synthesize_test_failure_feedback(last_test_check: dict) -> str:
     lines = [
         "## Gate-synthesized review (LLM reviewer skipped)",
         "",
-        "The test command detected for this story failed - a submission "
+        ("The test command detected for this story failed - a submission "
         "that does not pass its own tests cannot be meaningfully "
         "correctness-reviewed, so this feedback is generated directly from "
         "the failing test run rather than spending a reviewer call "
-        "restating it.",
+        "restating it."),
         "",
         f"Failing command: `{cmd}`",
         "",
@@ -346,26 +345,26 @@ def _synthesize_test_failure_feedback(last_test_check: dict) -> str:
 
 
 __all__ = [
+    "_AUTO_RESOLVE_IMPORT_PATTERN",
+    "_GIVE_UP_PHRASES",
+    "_KEY_RE",
+    "_RATE_LIMIT_PATTERNS",
+    "_TRANSIENT_BACKEND_PATTERNS",
+    "_atomic_write_json",
+    "_completed_dep_ids",
+    "_extract_blocking_finding_files",
     "_extract_json_block",
+    "_git_show_stage",
+    "_has_review_findings",
+    "_is_give_up_summary",
+    "_is_pure_additive_import_diff",
+    "_is_rate_limited",
+    "_is_test_file_path",
+    "_is_transient_backend_error",
+    "_parse_conflict_blocks",
     "_parse_ruling",
     "_parse_verdict",
-    "_has_review_findings",
-    "_extract_blocking_finding_files",
-    "_is_test_file_path",
-    "_synthesize_test_failure_feedback",
-    "_RATE_LIMIT_PATTERNS",
-    "_is_rate_limited",
-    "_TRANSIENT_BACKEND_PATTERNS",
-    "_is_transient_backend_error",
-    "_AUTO_RESOLVE_IMPORT_PATTERN",
-    "_parse_conflict_blocks",
     "_resolve_conflict_blocks",
-    "_git_show_stage",
-    "_is_pure_additive_import_diff",
-    "_atomic_write_json",
-    "_KEY_RE",
+    "_synthesize_test_failure_feedback",
     "_validate_key",
-    "_completed_dep_ids",
-    "_GIVE_UP_PHRASES",
-    "_is_give_up_summary",
 ]

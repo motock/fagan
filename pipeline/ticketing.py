@@ -67,6 +67,39 @@ def plane_request(method: str, path: str, **kwargs) -> dict:
     return r.json() if r.content else {}
 
 
+# Process-level reachability verdict for a configured-but-down Plane.
+# None  = not yet known (the first real operation will probe).
+# False = Plane did not answer at the transport level (connection refused /
+#         timeout) on a prior call this process - stop firing HTTP at it.
+# True  = reserved for a future explicit "answered" cache; today the verdict
+#         only ever flips to False (silencing) - a responding server stays on
+#         the normal retry/notify path, never setting this.
+# Without this, a deployment whose ~/.claude.json still carries PLANE_* env
+# vars from a one-time local Plane install (so _plane_enabled() is True) but
+# no longer runs Plane would fire PLANE_MAX_ATTEMPTS HTTP requests at a dead
+# http://localhost on every set_state - and write a "Plane sync ... failed"
+# line to the plan's notifications.log - on every orchestration tick, forever.
+_plane_reachable: bool | None = None
+
+
+def _mark_plane_unreachable(err: Exception) -> None:
+    """Record that Plane is not answering at the transport level and announce
+    it once, so the rest of the process stops hammering a dead endpoint.
+
+    Idempotent: the first transport failure announces and flips the verdict;
+    later failures are silent (the flag is already False). The message goes
+    to stdout (not the per-plan notifications log) because a down Plane is a
+    process-wide, plan-agnostic condition - one line, not one per story.
+    """
+    global _plane_reachable
+    if _plane_reachable is False:
+        return
+    _plane_reachable = False
+    print(f"Warning: Plane is configured ({PLANE_BASE}) but unreachable "
+          f"({type(err).__name__}: {err}); ticketing sync disabled for this "
+          f"session. The manifest remains the sole source of truth.")
+
+
 _state_cache: dict[str, str] = {}
 
 
@@ -347,12 +380,26 @@ def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = N
     """
     if not _plane_enabled():
         return True  # no Plane to sync to; the manifest is the source of truth
+    if _plane_reachable is False:
+        # Plane already failed at the transport level earlier this process:
+        # don't fire PLANE_MAX_ATTEMPTS more requests at a dead endpoint, and
+        # don't notify per call - the drop was announced once at detection.
+        return True
     last_err: Exception | None = None
     for _ in range(max(1, PLANE_MAX_ATTEMPTS)):
         try:
             issue_uuid = _resolve_issue_uuid(story_key)
             plane_request("PATCH", f"/projects/{PLANE_PROJECT}/work-items/{issue_uuid}/",
                           json={"state": _get_state(state_group)})
+            return True
+        except httpx.TransportError as e:
+            # The server is not there (connection refused, timeout) - as
+            # opposed to a RuntimeError from plane_request, which means the
+            # server IS responding (non-2xx). A transport failure is not
+            # retried: hammering a dead host is pure latency, not recovery.
+            # Silence this process's future Plane calls and treat the
+            # transition as a best-effort no-op (manifest is source of truth).
+            _mark_plane_unreachable(e)
             return True
         except Exception as e:
             last_err = e
@@ -391,6 +438,8 @@ __all__ = [
     "PLANE_WORKSPACE",
     "PLANE_PROJECT",
     "_plane_enabled",
+    "_plane_reachable",
+    "_mark_plane_unreachable",
     "plane_request",
     "_state_cache",
     "_get_state",

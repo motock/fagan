@@ -40,6 +40,11 @@ import role_registry
 def _clear_caches():
     pt._state_cache.clear()
     pt._label_cache.clear()
+    # Reset the process-level Plane reachability verdict introduced in
+    # test_ticketing_reachability.py's change: a prior test that found Plane
+    # unreachable flips pt._plane_reachable to False, which would make every
+    # later _plane_set_state call short-circuit and break retry/notify tests.
+    pt._plane_reachable = None
     yield
 
 

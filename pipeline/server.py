@@ -119,6 +119,7 @@ from .parsers import (  # noqa: F401
     _parse_verdict,
     _has_review_findings,
     _extract_blocking_finding_files,
+    _is_test_file_path,
     _synthesize_test_failure_feedback,
     _RATE_LIMIT_PATTERNS,
     _is_rate_limited,
@@ -2246,6 +2247,21 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # prior REQUEST_CHANGES cycle's Blocking findings wasn't touched by the
     # diff since then, downgrade this APPROVE back to REQUEST_CHANGES
     # instead of opening a PR.
+    #
+    # Exception: a flagged TEST file is exempt from the "was it touched"
+    # check, because review_story only reaches this APPROVE branch when
+    # story["status"] == "tests_passed" - the full suite, including that
+    # test file, is provably green right now. That is strictly stronger,
+    # directly-verified proof the finding (a failing test) is resolved than
+    # "were the test file's own bytes touched" - a correct fix legitimately
+    # lands in the implementation the test exercises, not the test itself.
+    # Root-caused live 2026-07-24 (MODE40-CI-REWORK-FEEDBACK-V2): a
+    # gate-synthesized review flagged the failing test file, the agent fixed
+    # the bug in the implementation module, the suite went green and a real
+    # reviewer said APPROVE, but this guard downgraded it anyway - burning
+    # the story's entire rework budget on an already-resolved finding.
+    # Non-test findings (README prose, server.py logic) still require the
+    # flagged file to be touched; there's no equivalent objective proof.
     if verdict == "APPROVE" and story.get("last_reviewed_sha") and story.get("last_review_findings"):
         try:
             diff_res = subprocess.run(
@@ -2253,7 +2269,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 cwd=worktree, check=True, capture_output=True, text=True,
             )
             changed_files = set(diff_res.stdout.splitlines())
-            untouched = [p for p in story["last_review_findings"] if p not in changed_files]
+            untouched = [
+                p for p in story["last_review_findings"]
+                if p not in changed_files and not _is_test_file_path(p)
+            ]
             if untouched:
                 verdict = "REQUEST_CHANGES"
                 reviewer_output = (

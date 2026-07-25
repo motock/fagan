@@ -275,6 +275,13 @@ def _is_give_up_summary(summary: str) -> bool:
     lowered = summary.lower()
     return any(phrase in lowered for phrase in _GIVE_UP_PHRASES)
 
+def _is_test_file_path(path: str) -> bool:
+    """True iff `path`'s basename follows this repo's test-file naming
+    convention (test_*.py or *_test.py), regardless of directory."""
+    name = path.rsplit("/", 1)[-1]
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
 def _extract_blocking_finding_files(text: str) -> list[str]:
     """Extract file paths from Blocking findings in reviewer output."""
     pattern = r'^\s*-?\s*Blocking:\s*(\S+):'
@@ -344,6 +351,7 @@ __all__ = [
     "_parse_verdict",
     "_has_review_findings",
     "_extract_blocking_finding_files",
+    "_is_test_file_path",
     "_synthesize_test_failure_feedback",
     "_RATE_LIMIT_PATTERNS",
     "_is_rate_limited",

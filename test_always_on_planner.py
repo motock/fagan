@@ -383,6 +383,230 @@ def test_dispatch_story_planner_told_tests_not_authored_when_phase_skipped(
     assert planner_calls[0]["tests_already_authored"] is False
 
 
+# ---------- authored_test_files: ground the planner in the test-author's
+# ACTUAL committed files (strengthening _TEST_AUTHOR_ALREADY_RAN_CLAUSE) ----------
+#
+# Root-caused live 2026-07-25 on MODE40-CI-REWORK-FEEDBACK-V2's THIRD reset:
+# the prohibition-only _TEST_AUTHOR_ALREADY_RAN_CLAUSE told the planner not
+# to emit a write-the-test-file step, but gave it no concrete grounding in
+# which file/tests actually exist on the branch. Even sonnet, planning from
+# the story's own agent_instructions (which still describe the pre-split TDD
+# flow verbatim), re-derived a "Write test_ci_rework_feedback.py" step with
+# INVENTED test-case names that did not match the ones the test-author had
+# committed - handing the executor a contradictory brief. The fix passes
+# the test-author's actual committed file names + test-case names into the
+# planner's system prompt as concrete grounding, so the planner names the
+# real file/tests and points the executor at READING them instead of
+# re-deriving them. authored_test_files is a list of (file_path, [test_names]).
+
+def test_planner_system_default_unchanged_when_no_authored_files_even_if_flag():
+    """authored_test_files defaults to None and must not alter
+    _planner_system's base output when tests_already_authored is False
+    (preserve every existing by-reference test of _PLANNER_SYSTEM)."""
+    assert p._planner_system(
+        tests_already_authored=False, authored_test_files=None,
+    ) == p._PLANNER_SYSTEM
+
+
+def test_planner_system_tests_already_authored_without_files_keeps_prohibition_only():
+    """tests_already_authored=True with no authored_test_files (git could not
+    detect them, or the test-author committed no test_*.py) falls back to
+    the prohibition-only clause - behavior is unchanged from the prior fix,
+    so a git-detection failure degrades gracefully rather than producing a
+    malformed prompt."""
+    system = p._planner_system(tests_already_authored=True, authored_test_files=None)
+    assert p._TEST_AUTHOR_ALREADY_RAN_CLAUSE in system
+    # No grounding section because no files were passed.
+    assert "CONCRETE GROUNDING" not in system
+    # And an empty list is treated the same as None.
+    system_empty = p._planner_system(
+        tests_already_authored=True, authored_test_files=[],
+    )
+    assert "CONCRETE GROUNDING" not in system_empty
+
+
+def test_planner_system_authored_files_requires_tests_already_authored_flag():
+    """authored_test_files passed WITHOUT tests_already_authored=True must NOT
+    add the grounding clause - the two go together (grounding only applies to
+    a split story whose test-author phase ran). Prevents a caller from
+    accidentally grounding an unsplit dispatch."""
+    system = p._planner_system(
+        tests_already_authored=False,
+        authored_test_files=[("test_foo.py", ["test_a"])],
+    )
+    assert system == p._PLANNER_SYSTEM
+
+
+def test_planner_system_authored_files_names_file_and_tests_verbatim():
+    """The grounding clause must name BOTH the file AND every test-case name
+    verbatim, so the planner can reference them instead of inventing names
+    from the task description - the exact live failure mode."""
+    system = p._planner_system(
+        tests_already_authored=True,
+        authored_test_files=[("test_ci_rework_feedback.py", [
+            "test_lint_gate_error_contains_gate_error_verbatim",
+            "test_lint_gate_error_gives_lint_instruction_not_test_instruction",
+        ])],
+    )
+    assert "test_ci_rework_feedback.py" in system
+    assert "test_lint_gate_error_contains_gate_error_verbatim" in system
+    assert "test_lint_gate_error_gives_lint_instruction_not_test_instruction" in system
+
+
+def test_planner_system_authored_files_forbids_inventing_names():
+    """The clause must explicitly forbid the planner from inventing or
+    re-deriving test file/case names - the live failure mode was sonnet
+    re-deriving wrong test-case names from agent_instructions."""
+    system = p._planner_system(
+        tests_already_authored=True,
+        authored_test_files=[("test_foo.py", ["test_a"])],
+    )
+    lowered = system.lower()
+    assert "invent" in lowered or "re-derive" in lowered or "rederive" in lowered
+
+
+def test_planner_system_authored_files_directs_executor_to_read_first():
+    """The grounding clause must make the checklist's first implementation
+    step be to READ the committed test file(s) to learn the spec, not
+    write them."""
+    system = p._planner_system(
+        tests_already_authored=True,
+        authored_test_files=[("test_foo.py", ["test_a"])],
+    )
+    lowered = system.lower()
+    assert "read" in lowered
+    assert "test_foo.py" in system
+
+
+def test_planner_system_authored_files_composes_with_scratchpad():
+    """All three augmentations (prohibition, grounding, scratchpad) can be on
+    at once for a split scratchpad story - just presence matters."""
+    system = p._planner_system(
+        tests_already_authored=True,
+        authored_test_files=[("test_foo.py", ["test_a"])],
+        include_scratchpad=True,
+    )
+    assert p._TEST_AUTHOR_ALREADY_RAN_CLAUSE in system
+    assert "test_foo.py" in system
+    assert p._PLANNER_SCRATCHPAD_CLAUSE in system
+
+
+def test_run_planner_passes_authored_test_files_through_to_system(monkeypatch):
+    fake = _FakePlannerBackend(response="1. Implement it.")
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
+
+    p._run_planner(
+        "Fix the thing.", dispatch_backend="ollama", local_model="gpt-oss:20b",
+        tests_already_authored=True,
+        authored_test_files=[("test_foo.py", ["test_a", "test_b"])],
+    )
+
+    system = fake.calls[0]["system"]
+    assert "test_foo.py" in system
+    assert "test_a" in system
+    assert "test_b" in system
+
+
+def test_dispatch_story_passes_authored_test_files_to_planner_when_phase_succeeded(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When the test-author phase succeeds and commits test files on the
+    branch, dispatch_story must pass the detected authored test files
+    (file + test names) into _run_planner, so the planner is grounded in
+    the real committed work - not just told to suppress a write-tests step."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "grounding", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "tdd_split": True},
+    })
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: True)
+    monkeypatch.setattr(p, "_test_files_added_on_branch",
+                        lambda wt, base: ["test_foo.py"])
+    monkeypatch.setattr(p, "_test_names_in_file",
+                        lambda wt, rel: ["test_a", "test_b"])
+
+    planner_calls = []
+
+    def _fake_planner(agent_instructions, **kwargs):
+        planner_calls.append(kwargs)
+        return "1. Implement it."
+
+    monkeypatch.setattr(p, "_run_planner", _fake_planner)
+    _stub_dispatch_externals(monkeypatch)
+
+    result = p.dispatch_story("grounding", "S1")
+
+    assert result["ok"] is True
+    assert planner_calls[0]["tests_already_authored"] is True
+    assert planner_calls[0]["authored_test_files"] == [
+        ("test_foo.py", ["test_a", "test_b"]),
+    ]
+
+
+def test_dispatch_story_passes_empty_authored_files_when_git_detects_none(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When the test-author phase ran but git detects no added test_*.py
+    (e.g. the test-author committed a non-matching file name, or git
+    failed), the planner must still be called with tests_already_authored
+    True and an empty authored list - degrading to the prohibition-only
+    clause, never crashing dispatch."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "groundingempty", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "tdd_split": True},
+    })
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: True)
+    monkeypatch.setattr(p, "_test_files_added_on_branch", lambda wt, base: [])
+
+    planner_calls = []
+
+    def _fake_planner(agent_instructions, **kwargs):
+        planner_calls.append(kwargs)
+        return "1. Implement it."
+
+    monkeypatch.setattr(p, "_run_planner", _fake_planner)
+    _stub_dispatch_externals(monkeypatch)
+
+    result = p.dispatch_story("groundingempty", "S1")
+
+    assert result["ok"] is True
+    assert planner_calls[0]["tests_already_authored"] is True
+    # Empty list (not None) - git ran and found nothing.
+    assert planner_calls[0]["authored_test_files"] == []
+
+
+def test_dispatch_story_no_authored_files_when_phase_skipped(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When the test-author phase did NOT run (not opted in), the planner
+    must be called with tests_already_authored=False and authored_test_files
+    falsy - the ordinary unsplit case must be unaffected."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "groundingskip", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
+
+    planner_calls = []
+
+    def _fake_planner(agent_instructions, **kwargs):
+        planner_calls.append(kwargs)
+        return "1. Implement it."
+
+    monkeypatch.setattr(p, "_run_planner", _fake_planner)
+    _stub_dispatch_externals(monkeypatch)
+
+    result = p.dispatch_story("groundingskip", "S1")
+
+    assert result["ok"] is True
+    assert planner_calls[0]["tests_already_authored"] is False
+    assert not planner_calls[0]["authored_test_files"]
+
+
 def test_dispatch_story_prompt_disregards_stale_write_tests_instruction(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):

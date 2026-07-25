@@ -112,17 +112,74 @@ _TEST_AUTHOR_ALREADY_RAN_CLAUSE = (
     "write or edit the implementation until those tests pass."
 )
 
+# Spliced into _PLANNER_SYSTEM AFTER _TEST_AUTHOR_ALREADY_RAN_CLAUSE when the
+# test-author phase committed specific test file(s) we could detect on the
+# branch (git_ops._test_files_added_on_branch + _test_names_in_file). The
+# prohibition clause above tells the planner not to emit a write-the-test
+# step but gives it no grounding in WHICH file/tests exist - so even a
+# strong planner re-derives a plausible-but-wrong "Write the test file" step
+# with INVENTED test-case names from the story's own agent_instructions
+# (root-caused live 2026-07-25 on MODE40-CI-REWORK-FEEDBACK-V2's THIRD reset:
+# sonnet named a `test_lint_gate_error_gets_lint_instruction` case that the
+# committed file did not contain - it named a different one). This clause
+# hands the planner the EXACT file paths and test-case names so it can
+# point the executor at READING them instead of re-deriving them.
+_AUTHORED_TEST_FILES_CLAUSE_TEMPLATE = (
+    " CONCRETE GROUNDING: the test-author phase has committed the "
+    "following test file(s) to this branch - they are on disk and "
+    "currently failing, and they ARE the spec the executor must "
+    "implement to. {file_summary} "
+    "Reference these files by their EXACT names above and use the exact "
+    "test-case names listed; do NOT invent, rename, or re-derive test "
+    "file names or test-case names from the task description. The "
+    "checklist's FIRST implementation step must be to READ the file(s) "
+    "named above to learn the exact required behavior (the test names "
+    "and assertions there are the spec the implementation must satisfy), "
+    "then implement until those tests pass. Every step after the read "
+    "step must be implementation work that makes those tests pass - "
+    "never a step to create, write, or modify a test file."
+)
+
+
+def _format_authored_test_files(
+    authored_test_files: list[tuple[str, list[str]]],
+) -> str:
+    """Render the (file_path, [test_names]) pairs as a human-readable
+    summary for the grounding clause, e.g.:
+        `test_foo.py` (tests: test_a, test_b); `test_bar.py` (tests: test_c)
+    """
+    parts = []
+    for path, names in authored_test_files:
+        if names:
+            parts.append(f"`{path}` (tests: {', '.join(names)})")
+        else:
+            parts.append(f"`{path}` (no test functions detected)")
+    return "; ".join(parts) + "."
+
 
 def _planner_system(
     *, include_scratchpad: bool = False, tests_already_authored: bool = False,
+    authored_test_files: list[tuple[str, list[str]]] | None = None,
 ) -> str:
     """The planner's system prompt, optionally augmented with the scratchpad
     and/or test-author-already-ran clauses. Base prompt (_PLANNER_SYSTEM) is
     returned unchanged when both are off, preserving the H3 ablation and the
-    by-reference tests."""
+    by-reference tests.
+
+    authored_test_files: the test-author phase's ACTUAL committed (file_path,
+    [test_names]) pairs, detected on the branch. Only splices the grounding
+    clause when tests_already_authored is True AND the list is non-empty -
+    the two go together (grounding only applies to a split story whose
+    test-author phase ran and produced detectable tests). An empty/None
+    list with tests_already_authored=True falls back to the prohibition-only
+    clause so a git-detection failure degrades gracefully."""
     system = _PLANNER_SYSTEM
     if tests_already_authored:
         system += _TEST_AUTHOR_ALREADY_RAN_CLAUSE
+        if authored_test_files:
+            system += _AUTHORED_TEST_FILES_CLAUSE_TEMPLATE.format(
+                file_summary=_format_authored_test_files(authored_test_files),
+            )
     if include_scratchpad:
         system += _PLANNER_SCRATCHPAD_CLAUSE
     return system
@@ -199,6 +256,7 @@ def _run_planner(
     local_model: str,
     include_scratchpad: bool = False, plan_role_config: dict | None = None,
     tests_already_authored: bool = False,
+    authored_test_files: list[tuple[str, list[str]]] | None = None,
 ) -> str | None:
     """Call a bounded, single-turn LLM to produce an ordered sub-step
     checklist for agent_instructions.
@@ -211,6 +269,14 @@ def _run_planner(
     already ran for this dispatch (see dispatch_story's test_author_marker
     check) - the checklist must be implementation-only in that case; see
     _TEST_AUTHOR_ALREADY_RAN_CLAUSE.
+
+    authored_test_files: when tests_already_authored is True, the test-author
+    phase's ACTUAL committed (file_path, [test_names]) pairs detected on the
+    branch (git_ops._test_files_added_on_branch + _test_names_in_file). Splices
+    a grounding clause naming the real file/tests so the planner points the
+    executor at READING them instead of re-deriving (and inventing) test names.
+    None/empty falls back to the prohibition-only clause; see
+    _planner_system.
 
     Returns the raw checklist text, or None on any failure. Callers MUST
     treat None as "no plan" and fall open to the existing no-plan dispatch
@@ -227,6 +293,7 @@ def _run_planner(
             system=_planner_system(
                 include_scratchpad=include_scratchpad,
                 tests_already_authored=tests_already_authored,
+                authored_test_files=authored_test_files,
             ),
             model=model,
         )
@@ -533,6 +600,8 @@ __all__ = [
     "_PLANNER_SYSTEM",
     "_PLANNER_SCRATCHPAD_CLAUSE",
     "_TEST_AUTHOR_ALREADY_RAN_CLAUSE",
+    "_AUTHORED_TEST_FILES_CLAUSE_TEMPLATE",
+    "_format_authored_test_files",
     "_planner_system",
     "_resolve_planner_backend",
     "_run_planner",

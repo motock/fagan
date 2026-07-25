@@ -114,6 +114,8 @@ from .git_ops import (
     _last_nonempty_line,
     _commit_wip,
     _worktree_has_new_commits,
+    _test_files_added_on_branch,
+    _test_names_in_file,
 )
 
 from .parsers import (  # noqa: F401
@@ -1118,12 +1120,37 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             and not resuming
             and not plan_path.exists()
         ):
+            # Ground the planner in the test-author's ACTUAL committed test
+            # file(s) when the phase ran this branch (root-caused live
+            # 2026-07-25 on MODE40-CI-REWORK-FEEDBACK-V2's THIRD reset: the
+            # prohibition-only tests_already_authored clause still let the
+            # planner re-derive a "Write the test file" step with invented
+            # test-case names, because it had no concrete grounding in
+            # which file/tests exist). Detect the test_*.py files added on
+            # this branch and their top-level test-case names, and hand
+            # them to the planner so it can point the executor at READING
+            # the real files. Fail open: if git detects nothing (or the
+            # phase ran but committed no test_*.py), authored_test_files is
+            # empty and the planner degrades to the prohibition-only clause.
+            authored_test_files: list[tuple[str, list[str]]] | None = None
+            if test_author_marker.exists():
+                try:
+                    added = _test_files_added_on_branch(
+                        worktree_path, _default_branch(),
+                    )
+                    authored_test_files = [
+                        (path, _test_names_in_file(worktree_path, path))
+                        for path in added
+                    ]
+                except Exception:
+                    authored_test_files = []
             plan_text = _run_planner(
                 story.get("agent_instructions", ""),
                 dispatch_backend=dispatch_backend, local_model=spec["model"],
                 include_scratchpad=scratchpad_on,
                 plan_role_config=_plan_role_config(plan_name),
                 tests_already_authored=test_author_marker.exists(),
+                authored_test_files=authored_test_files,
             )
             if plan_text:
                 plan_path.write_text(plan_text)

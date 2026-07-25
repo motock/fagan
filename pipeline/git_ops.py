@@ -12,6 +12,7 @@ pipeline_mcp_server.py to the patched attribute (Option A in
 PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
 """
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -127,3 +128,57 @@ def _worktree_has_new_commits(worktree: Path, story_key: str, base_branch: str) 
         cwd=str(worktree), capture_output=True, text=True,
     )
     return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def _test_files_added_on_branch(
+    worktree: Path, base_branch: str,
+) -> list[str]:
+    """Repo-relative paths of ``test_*.py`` files added in commits on this
+    branch that aren't on ``base_branch`` - i.e. the test-author phase's
+    committed work, to ground the planner in the ACTUAL files rather than
+    letting it re-derive test file/case names from the task description.
+
+    Root-caused live 2026-07-25 on MODE40-CI-REWORK-FEEDBACK-V2's THIRD reset:
+    the prohibition-only ``_TEST_AUTHOR_ALREADY_RAN_CLAUSE`` told the planner
+    not to emit a write-the-test-file step, but gave it no concrete grounding
+    in WHICH file/tests exist on the branch - so even sonnet, planning from
+    the story's own ``agent_instructions`` (which still describe the pre-split
+    TDD flow verbatim), re-derived a "Write test_ci_rework_feedback.py" step
+    with INVENTED test-case names that did not match the ones the test-author
+    had committed. The caller pairs this list with ``_test_names_in_file`` and
+    passes the result into ``_run_planner`` as ``authored_test_files``.
+
+    Returns ``[]`` on any git error or non-git cwd (fail open) - the planner
+    then degrades to the prohibition-only clause rather than crashing
+    dispatch. ``--diff-filter=A`` restricts to files ADDED on the branch (a
+    test file present on the base branch that the branch merely modified is
+    not the test-author's new work and is excluded)."""
+    r = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=A",
+         f"{base_branch}..HEAD"],
+        cwd=str(worktree), capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return []
+    return [
+        line for line in r.stdout.splitlines()
+        if line.startswith("test_") and line.endswith(".py")
+    ]
+
+
+def _test_names_in_file(worktree: Path, rel_path: str) -> list[str]:
+    """Top-level ``def test_*`` function names declared in the test file at
+    ``rel_path`` within ``worktree``. Used to ground the planner with the
+    exact test-case names so it references them instead of inventing them
+    (see ``_test_files_added_on_branch``'s root-cause note).
+
+    Only column-0 ``def`` lines match: a nested ``def test_inner`` inside a
+    test function is not its own test case. Returns ``[]`` on a missing file
+    or read/decode error (fail open) so one unparseable file never blocks the
+    planner call."""
+    abs_path = worktree / rel_path
+    try:
+        text = abs_path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return []
+    return re.findall(r"^def (test_\w+)\b", text, re.MULTILINE)

@@ -5665,6 +5665,43 @@ def test_advance_pipeline_ci_fail_rework_sets_ci_rework_flag(plan_dir, monkeypat
     assert story.get("ci_rework") is True
 
 
+def test_advance_pipeline_ci_fail_rework_feedback_uses_wired_helper(plan_dir, monkeypatch):
+    # Dead-code/wiring guard (MODE40-CI-REWORK-FEEDBACK-V2): the merge-gate
+    # CI-fail block must CALL _ci_rework_feedback(gate_error) rather than keep
+    # an inline template. The glm-authored unit suite calls the helper in
+    # isolation, so an executor that defines _ci_rework_feedback but skips
+    # wiring it into the merge-gate ships DEAD CODE and still passes that
+    # suite. This integration test closes that gap: it drives advance_pipeline's
+    # real CI-fail -> rework path and asserts review_feedback carries the
+    # commit-required sentence the helper ALWAYS appends (both lint and
+    # non-lint branches). The pre-MODE40 inline template lacks that sentence
+    # (it instead says "an incorrect assertion"), so this assertion fails on
+    # an unwired/inline merge-gate and passes only when the helper is wired.
+    monkeypatch.setenv("PIPELINE_REWORK_ON_CI_FAIL", "1")
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    monkeypatch.setattr(p, "MERGE_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "cireworkwired", {
+        "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
+               "risk": "low", "worktree": "/x"},
+    })
+    monkeypatch.setattr(p, "_rebase_onto_master",
+                        lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    monkeypatch.setattr(p, "_ci_status",
+                        lambda br, **_: {"state": "fail", "error": "test_clamp_boundary failed"})
+    monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
+
+    p.advance_pipeline("cireworkwired")
+
+    story = _read_manifest(plan_dir, "cireworkwired")["stories"]["P1"]
+    assert story["status"] == "changes_requested"
+    # The helper always appends this commit-required sentence; the old inline
+    # template does not. Its presence proves the merge-gate called the helper.
+    assert "A NEW COMMIT on your branch is REQUIRED" in story["review_feedback"]
+    # And the old inline template's telltale wording must be gone.
+    assert "incorrect assertion" not in story["review_feedback"]
+
+
 def test_advance_pipeline_ci_fail_stays_terminal_without_opt_in(plan_dir, monkeypatch):
     # Without the flag, a definitive CI failure keeps today's exact behavior:
     # merge_attempts increments and the story terminal-fails at the cap - no

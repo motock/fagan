@@ -31,9 +31,11 @@ Per-project overrides (set in project .mcp.json env block):
     across all plans in this session (default: 3; <=0 disables the cap)
 """
 
+import ast
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1284,6 +1286,114 @@ def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
     }
 
 
+def _module_level_function_names(source: str) -> set[str]:
+    """Top-level (module-scope) function names defined in `source`. Ignores
+    nested defs, closures, and class methods - only a bare module-level
+    `def` is a candidate for _find_dead_new_functions, since that's the
+    shape of an independently-callable production symbol a call site is
+    expected to reference by name."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    return {
+        node.name for node in ast.iter_child_nodes(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
+    """Detect newly-added module-level functions (in .py files changed
+    since base_branch, excluding test files) whose name appears NOWHERE
+    else in the tracked worktree - i.e. defined but never called or
+    referenced, not even from a different file (a new public entry point
+    called only from elsewhere in the repo must not false-positive here).
+
+    A cheap, conservative text-based heuristic, not a full call-graph
+    analysis: a name occurring anywhere else in the worktree (even a
+    comment, even in another file) is treated as "referenced", keeping
+    false positives near zero. A name occurring ONLY on its own `def`
+    line, repo-wide, is a strong, low-noise signal of dead code.
+
+    Root-caused live 2026-07-25 on MODE40-CI-REWORK-FEEDBACK-V2: a
+    correctly-implemented, correctly-unit-tested helper function
+    (`_ci_rework_feedback`) was added but never wired into the production
+    call path it was meant to replace - invisible to any test that only
+    exercises the function in isolation, since the story's own tests
+    called it directly rather than through the code path that was
+    supposed to route to it. The real LLM reviewer caught it, but that
+    spends a whole review cycle on something this cheap, static,
+    pre-review check catches for free (see _run_lint_gate for the sibling
+    pattern this mirrors).
+
+    Best-effort: any git/IO failure returns [] (fail open - a quality
+    signal, not a security boundary, must never block or corrupt a
+    story's dispatch).
+    """
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=AM",
+             base_branch, "HEAD"],
+            cwd=worktree, capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if diff.returncode != 0:
+        return []
+
+    dead: list[str] = []
+    for rel_path in diff.stdout.splitlines():
+        rel_path = rel_path.strip()
+        if not rel_path.endswith(".py"):
+            continue
+        base_name = Path(rel_path).name
+        if base_name.startswith("test_") or base_name.endswith("_test.py"):
+            continue
+        full_path = worktree / rel_path
+        if not full_path.is_file():
+            continue
+        try:
+            source = full_path.read_text()
+        except OSError:
+            continue
+
+        try:
+            old_show = subprocess.run(
+                ["git", "show", f"{base_branch}:{rel_path}"],
+                cwd=worktree, capture_output=True, text=True, timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        old_names = (
+            _module_level_function_names(old_show.stdout)
+            if old_show.returncode == 0 else set()
+        )
+        new_names = _module_level_function_names(source) - old_names
+
+        for fn_name in sorted(new_names):
+            if fn_name.startswith("__") and fn_name.endswith("__"):
+                continue  # dunder - never a candidate
+            try:
+                grep = subprocess.run(
+                    ["git", "grep", "--count", "-w", fn_name],
+                    cwd=worktree, capture_output=True, text=True, timeout=15,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            # `git grep --count` prints "path:N" per matching tracked file
+            # (exit 1, empty stdout, if no match anywhere - not an error).
+            # The function's own def line contributes exactly 1; a repo-
+            # wide total <= 1 means "only its own definition, nowhere else
+            # in the tracked worktree" - not even a different file.
+            total = sum(
+                int(line.rsplit(":", 1)[-1])
+                for line in grep.stdout.splitlines() if line.strip()
+            )
+            if total <= 1:
+                dead.append(f"{rel_path}:{fn_name}")
+    return dead
+
+
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Check whether a dispatched agent has finished. If complete, runs tests
@@ -1570,6 +1680,14 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             story["last_lint_check"] = lint
             if lint["returncode"] != 0:
                 passed = False
+
+    # Only worth checking once the baseline (tests, lint) actually passed -
+    # a story already failing on those has enough signal without this too.
+    if passed:
+        dead_functions = _find_dead_new_functions(worktree, _default_branch())
+        story["last_dead_code_check"] = dead_functions
+        if dead_functions:
+            passed = False
 
     # The agent produced real output and the tests ran: the launch worked, so
     # clear any failed-launch attempts accumulated by earlier infra blips.

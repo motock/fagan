@@ -7357,16 +7357,20 @@ def test_check_story_status_gate_appends_own_new_tests_under_tests_dir(
         lambda wt, key, base: ["tests/benchmark/test_driver.py"]
         if key == "S1" and base == "main" else [],
     )
-    seen_cmd = {}
+    # Capture EVERY subprocess.run call, not just the last: the dead-code
+    # gate (which runs after tests pass) also shells out to git, so "the
+    # last call" is no longer reliably the test command. The test command
+    # is always the first call in check_story_status's flow.
+    seen_calls = []
     def _fake_run(cmd, **kwargs):
-        seen_cmd["cmd"] = cmd
+        seen_calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="4 passed", stderr="")
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
 
     result = p.check_story_status("diag2", "S1")
 
     assert result["status"] == "tests_passed"
-    assert seen_cmd["cmd"] == [
+    assert seen_calls[0] == [
         "pytest", "--ignore=tests", str(worktree / "tests/benchmark/test_driver.py")]
 
 
@@ -7394,16 +7398,20 @@ def test_check_story_status_gate_skips_own_test_append_with_acceptance_block(
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("must not be called when acceptance block is present")),
     )
-    seen_cmd = {}
+    # Capture EVERY subprocess.run call, not just the last: the dead-code
+    # gate (which runs after tests pass) also shells out to git, so "the
+    # last call" is no longer reliably the test command. The test command
+    # is always the first call in check_story_status's flow.
+    seen_calls = []
     def _fake_run(cmd, **kwargs):
-        seen_cmd["cmd"] = cmd
+        seen_calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="1 passed", stderr="")
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
 
     result = p.check_story_status("diag3", "S1")
 
     assert result["status"] == "tests_passed"
-    assert seen_cmd["cmd"] == [
+    assert seen_calls[0] == [
         "pytest", "--ignore=tests", str(worktree / "test_acceptance.py")]
 
 

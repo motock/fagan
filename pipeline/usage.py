@@ -35,7 +35,7 @@ from .config import (
 )
 from .paths import USAGE_STATE_PATH
 from .parsers import _atomic_write_json
-from .persona import _persona_requires_claude
+from .persona import _persona_requires_claude, _story_has_unwinnable_local_scope
 
 
 # ---------- Usage probe ----------
@@ -157,6 +157,8 @@ def _route_dispatch_backend(story: dict[str, Any]) -> str:
     if risk_rank > max_risk_rank:
         return "claude"
     if _persona_requires_claude(story):
+        return "claude"
+    if _story_has_unwinnable_local_scope(story):
         return "claude"
     return "local"
 

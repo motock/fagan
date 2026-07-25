@@ -204,6 +204,7 @@ from .persona import (  # noqa: F401
     _allowed_tools_for,
     _build_dispatch_command,
     _persona_requires_claude,
+    _story_has_unwinnable_local_scope,
 )
 
 # Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
@@ -978,6 +979,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # story already had an explicit backend (a prior escalation flip), which
         # wins as-is and is never re-routed here.
         if not story.get("backend") and _persona_requires_claude(story):
+            dispatch_backend = "claude"
+        # Unwinnable-as-scoped safety override: a repo-wide, unscoped lint/fix
+        # sweep always dispatches to Claude too, for the same reason (Mode 40
+        # retro #4) - see _story_has_unwinnable_local_scope's docstring.
+        if not story.get("backend") and _story_has_unwinnable_local_scope(story):
             dispatch_backend = "claude"
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend

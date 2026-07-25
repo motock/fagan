@@ -9646,6 +9646,93 @@ def test_dispatch_story_explicit_claude_security_persona_stays_claude(
     assert popen_calls[0][0] == "claude"
 
 
+# ---------- Unwinnable-as-scoped safety override (Mode 40 retro #4) ----------
+# A story whose agent_instructions describe a repo-wide, unscoped lint/fix
+# sweep is structurally unwinnable for local dispatch: the done-bar demands
+# every finding fixed, but a meaningful fraction of findings routinely land
+# in test files (35/83 files on the live ruff baseline that motivated this),
+# which the never-touch-tests steering forbids the local executor from
+# editing. Detected and hard-routed to Claude, mirroring the existing
+# security-persona override exactly.
+
+def test_story_has_unwinnable_local_scope_detects_repo_wide_ruff_sweep():
+    story = {"agent_instructions": "Run `.venv/bin/ruff check . --fix` from "
+             "the repo root and fix every remaining finding."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_detects_repo_wide_language():
+    story = {"agent_instructions": "Fix every lint finding repo-wide."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_false_for_scoped_lint_instructions():
+    story = {"agent_instructions": "Run `ruff check pipeline/foo.py` and fix "
+             "the two findings in that file."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_missing_instructions():
+    assert p._story_has_unwinnable_local_scope({}) is False
+
+
+def test_route_dispatch_backend_unwinnable_scope_overrides_low_risk(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "high")
+    story = {"risk": "low", "persona": "software-engineer",
+              "agent_instructions": "Run `ruff check .` repo-wide and fix "
+              "every finding."}
+    assert p._route_dispatch_backend(story) == "claude"
+
+
+def test_dispatch_story_explicit_local_unwinnable_scope_routes_to_claude(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_BACKEND_DISPATCH=local must not bypass the unwinnable-scope
+    safety override: a repo-wide lint-sweep story still dispatches to Claude."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "scope1", {
+        "S1": {"summary": "Adopt new lint ruleset",
+               "agent_instructions": "Run `ruff check . --fix` from the repo "
+               "root and manually fix every remaining finding.",
+               "status": "todo", "dependencies": []},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(60))[1])
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("scope1", "S1")
+
+    assert _read_manifest(plan_dir, "scope1")["stories"]["S1"]["backend"] == "claude"
+    assert popen_calls[0][0] == "claude"
+
+
+def test_dispatch_story_explicit_local_scoped_lint_stays_local(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A lint-flavored story scoped to specific files (not a repo-wide sweep)
+    is unaffected by the new override - no regression on ordinary stories."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "scope2", {
+        "S1": {"summary": "Fix two lint findings",
+               "agent_instructions": "Run `ruff check pipeline/foo.py` and "
+               "fix the reported findings in that file only.",
+               "status": "todo", "dependencies": []},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(61))[1])
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("scope2", "S1")
+
+    assert _read_manifest(plan_dir, "scope2")["stories"]["S1"]["backend"] == "local"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
+
+
 def test_advance_pipeline_escalates_local_failure_to_claude(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):

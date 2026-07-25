@@ -270,6 +270,152 @@ def test_dispatch_story_planner_always_runs_for_local_when_decompose_unset(
     assert (worktree_path / ".agent_plan.md").exists()
 
 
+# ---------- tests_already_authored: planner must not tell the executor to
+# write tests when a test-author phase already committed them ----------
+#
+# Root-caused live 2026-07-25 on MODE40-CI-REWORK-FEEDBACK-V2: _PLANNER_SYSTEM's
+# base "preserve TDD ordering" instruction is unconditional, so the glm-driven
+# checklist told the gpt-oss:20b executor to "Create the NEW file test_ci_
+# rework_feedback.py" - a file the test-author phase had already committed -
+# a directly contradictory brief the executor had no reliable way to resolve.
+
+def test_planner_system_default_unchanged_when_tests_not_authored():
+    """tests_already_authored defaults to False and must not alter
+    _planner_system's output at all (preserves the H3 ablation guarantee and
+    every existing by-reference test of _PLANNER_SYSTEM)."""
+    assert p._planner_system() == p._PLANNER_SYSTEM
+    assert p._planner_system(tests_already_authored=False) == p._PLANNER_SYSTEM
+
+
+def test_planner_system_tests_already_authored_adds_override_clause():
+    system = p._planner_system(tests_already_authored=True)
+    assert p._TEST_AUTHOR_ALREADY_RAN_CLAUSE in system
+    # Base steering (don't touch test files) must still be present - the
+    # override clause supplements it, it doesn't replace the whole prompt.
+    assert "implementation file" in system
+    # The clause must explicitly tell the planner not to emit a
+    # write-the-test-file step.
+    assert "already" in p._TEST_AUTHOR_ALREADY_RAN_CLAUSE.lower()
+    assert "do not include" in p._TEST_AUTHOR_ALREADY_RAN_CLAUSE.lower()
+
+
+def test_planner_system_tests_already_authored_composes_with_scratchpad():
+    """Both clauses can be on at once (a split story with the scratchpad
+    ablation also on) - order doesn't matter for correctness, just presence."""
+    system = p._planner_system(tests_already_authored=True, include_scratchpad=True)
+    assert p._TEST_AUTHOR_ALREADY_RAN_CLAUSE in system
+    assert p._PLANNER_SCRATCHPAD_CLAUSE in system
+
+
+def test_run_planner_passes_tests_already_authored_through_to_system(monkeypatch):
+    fake = _FakePlannerBackend(response="1. Implement it.")
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
+
+    p._run_planner(
+        "Fix the thing.", dispatch_backend="ollama", local_model="gpt-oss:20b",
+        tests_already_authored=True,
+    )
+
+    assert p._TEST_AUTHOR_ALREADY_RAN_CLAUSE in fake.calls[0]["system"]
+
+
+def test_dispatch_story_planner_told_tests_already_authored_when_phase_succeeded(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When the test-author phase runs and succeeds THIS dispatch (marker
+    written before the planner call), _run_planner must be called with
+    tests_already_authored=True - not left at the False default."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "taplanner", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": [], "tdd_split": True},
+    })
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: True)
+
+    planner_calls = []
+
+    def _fake_planner(agent_instructions, **kwargs):
+        planner_calls.append(kwargs)
+        return "1. Implement it."
+
+    monkeypatch.setattr(p, "_run_planner", _fake_planner)
+    _stub_dispatch_externals(monkeypatch)
+
+    result = p.dispatch_story("taplanner", "S1")
+
+    assert result["ok"] is True
+    assert len(planner_calls) == 1
+    assert planner_calls[0]["tests_already_authored"] is True
+
+
+def test_dispatch_story_planner_told_tests_not_authored_when_phase_skipped(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When no test-author phase ran (not opted in), _run_planner must be
+    called with tests_already_authored=False - the ordinary unsplit case
+    must be unaffected by this change."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "notaplanner", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
+
+    planner_calls = []
+
+    def _fake_planner(agent_instructions, **kwargs):
+        planner_calls.append(kwargs)
+        return "1. Implement it."
+
+    monkeypatch.setattr(p, "_run_planner", _fake_planner)
+    _stub_dispatch_externals(monkeypatch)
+
+    result = p.dispatch_story("notaplanner", "S1")
+
+    assert result["ok"] is True
+    assert len(planner_calls) == 1
+    assert planner_calls[0]["tests_already_authored"] is False
+
+
+def test_dispatch_story_prompt_disregards_stale_write_tests_instruction(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Defense-in-depth backstop for stories whose own agent_instructions
+    still say 'write failing tests first' (pre-dating a test-author-phase
+    story split): the trailing steering block must explicitly tell the
+    executor to disregard that instruction, not just describe that tests
+    exist."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "disregard", {
+        "S1": {"summary": "Do thing",
+               "agent_instructions": "TDD - write failing tests FIRST, then implement.",
+               "status": "todo", "dependencies": [], "tdd_split": True},
+    })
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: True)
+    monkeypatch.setattr(p, "_run_planner", lambda *a, **k: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9600)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("disregard", "S1")
+
+    assert result["ok"] is True
+    task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    assert "DISREGARD" in task
+    assert p._NEVER_TOUCH_TESTS_STEERING in task
+
+
 # ---------- (g) garbage/unknown PIPELINE_BACKEND_PLANNER fails open, never crashes ----------
 
 def test_resolve_planner_backend_garbage_provider_fails_open_no_crash(monkeypatch):

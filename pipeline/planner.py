@@ -85,14 +85,47 @@ _PLANNER_SCRATCHPAD_CLAUSE = (
     "that file, so an interrupted run can resume from where it left off."
 )
 
+# Spliced into _PLANNER_SYSTEM when the TDD-split test-author phase already
+# ran and committed a test file to this branch before the planner is asked
+# to produce a checklist for the (separate, later) executor dispatch.
+# _PLANNER_SYSTEM's base instruction ("preserve test-driven-development
+# ordering: a failing test before the implementation") is written for the
+# unsplit case and is unconditional - without this override the planner
+# faithfully includes a "write the test file" step even though one was
+# already authored and committed, producing a checklist that contradicts
+# check_story_status's later steering (which tells the executor "tests
+# already written, do not touch them"). Root-caused live 2026-07-25 on
+# MODE40-CI-REWORK-FEEDBACK-V2: the glm-authored checklist's step 3 told
+# the gpt-oss:20b executor to "Create the NEW file test_ci_rework_feedback.py"
+# - a file the test-author phase had already committed - handing the
+# executor a genuinely contradictory brief (create vs. never-touch the same
+# file) that a weak model has no reliable way to resolve.
+_TEST_AUTHOR_ALREADY_RAN_CLAUSE = (
+    " IMPORTANT OVERRIDE: a separate tech-lead dispatch has ALREADY written "
+    "and committed the test file(s) for this task to this branch, before "
+    "you are being asked to plan. Ignore the test-driven-development "
+    "instruction above for this checklist - do NOT include ANY step that "
+    "creates, writes, or modifies a test file (or restates 'write a failing "
+    "test' as a step). The checklist must be implementation-only: the "
+    "junior engineer's job is to read the existing (currently failing, "
+    "already-committed) tests to understand the required behavior, then "
+    "write or edit the implementation until those tests pass."
+)
 
-def _planner_system(*, include_scratchpad: bool = False) -> str:
+
+def _planner_system(
+    *, include_scratchpad: bool = False, tests_already_authored: bool = False,
+) -> str:
     """The planner's system prompt, optionally augmented with the scratchpad
-    clause. Base prompt (_PLANNER_SYSTEM) is returned unchanged when the
-    scratchpad is off, preserving the H3 ablation and the by-reference tests."""
-    if not include_scratchpad:
-        return _PLANNER_SYSTEM
-    return _PLANNER_SYSTEM + _PLANNER_SCRATCHPAD_CLAUSE
+    and/or test-author-already-ran clauses. Base prompt (_PLANNER_SYSTEM) is
+    returned unchanged when both are off, preserving the H3 ablation and the
+    by-reference tests."""
+    system = _PLANNER_SYSTEM
+    if tests_already_authored:
+        system += _TEST_AUTHOR_ALREADY_RAN_CLAUSE
+    if include_scratchpad:
+        system += _PLANNER_SCRATCHPAD_CLAUSE
+    return system
 
 
 def _default_planner_model_tag(registry: dict) -> str:
@@ -165,6 +198,7 @@ def _run_planner(
     dispatch_backend: str,
     local_model: str,
     include_scratchpad: bool = False, plan_role_config: dict | None = None,
+    tests_already_authored: bool = False,
 ) -> str | None:
     """Call a bounded, single-turn LLM to produce an ordered sub-step
     checklist for agent_instructions.
@@ -172,6 +206,11 @@ def _run_planner(
     This is one complete() call, never an agent loop - it must stay cheap
     relative to the story's own dispatch or the economics this feature
     exists for collapse (see GUIDED_DECOMPOSITION_PLAN.md §3.1/§4.5).
+
+    tests_already_authored: True when the TDD-split test-author phase
+    already ran for this dispatch (see dispatch_story's test_author_marker
+    check) - the checklist must be implementation-only in that case; see
+    _TEST_AUTHOR_ALREADY_RAN_CLAUSE.
 
     Returns the raw checklist text, or None on any failure. Callers MUST
     treat None as "no plan" and fall open to the existing no-plan dispatch
@@ -185,7 +224,10 @@ def _run_planner(
         )
         text = backend.get_backend("planner", name=backend_name).complete(
             agent_instructions,
-            system=_planner_system(include_scratchpad=include_scratchpad),
+            system=_planner_system(
+                include_scratchpad=include_scratchpad,
+                tests_already_authored=tests_already_authored,
+            ),
             model=model,
         )
     except Exception:
@@ -490,6 +532,7 @@ def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str
 __all__ = [
     "_PLANNER_SYSTEM",
     "_PLANNER_SCRATCHPAD_CLAUSE",
+    "_TEST_AUTHOR_ALREADY_RAN_CLAUSE",
     "_planner_system",
     "_resolve_planner_backend",
     "_run_planner",

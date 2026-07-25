@@ -254,6 +254,7 @@ from .overlord import (  # noqa: F401
 from .planner import (  # noqa: F401
     _PLANNER_SYSTEM,
     _PLANNER_SCRATCHPAD_CLAUSE,
+    _TEST_AUTHOR_ALREADY_RAN_CLAUSE,
     _planner_system,
     _resolve_planner_backend,
     _run_planner,
@@ -1114,6 +1115,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 dispatch_backend=dispatch_backend, local_model=spec["model"],
                 include_scratchpad=scratchpad_on,
                 plan_role_config=_plan_role_config(plan_name),
+                tests_already_authored=test_author_marker.exists(),
             )
             if plan_text:
                 plan_path.write_text(plan_text)
@@ -1153,7 +1155,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{spec['prompt']}\n\n"
                 "--- Tests already written by your tech lead ---\n"
                 "The test file(s) for this task have already been written "
-                "and committed to this branch by your tech lead. "
+                "and committed to this branch by your tech lead. If the "
+                "task description or checklist above says to write tests "
+                "yourself first, DISREGARD that - it does not apply here; "
+                "the tests already exist. Do not create, write, or modify "
+                "any test file. "
                 f"{_NEVER_TOUCH_TESTS_STEERING} Run them to see the current "
                 "failures, then implement until they pass."
             )

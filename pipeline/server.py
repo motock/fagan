@@ -1643,6 +1643,27 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             else:
                 rework_cap = REWORK_MAX_ATTEMPTS
             if attempts >= rework_cap:
+                # Mirror review_story's own rework-cap escalation (Mode 24/28):
+                # a local agent that keeps parking/crashing without writing
+                # code is exactly the same "local tier couldn't finish this"
+                # signal as a reviewer's rework budget running out - give it
+                # to Claude before parking for a human, under the same
+                # PIPELINE_BACKEND_DISPATCH=auto opt-in. Root-caused live
+                # 2026-07-24: this guard was the one park path in the file
+                # missing the hook every other rework-exhaustion park path
+                # already had (review_story's three call sites), so a story
+                # that hit exactly this path never got a chance at Claude.
+                if _auto_escalation_enabled() and not story.get("escalated"):
+                    _escalate_review_to_claude(
+                        story, story_key, plan_name,
+                        f"no new commit after {attempts} rework redispatches",
+                    )
+                    story["status"] = "changes_requested"
+                    _atomic_write_json(manifest_path, manifest)
+                    return {
+                        "status": "changes_requested",
+                        "reason": "no_new_commit_escalated_to_claude",
+                    }
                 story["status"] = "parked"
                 story["parked_reason"] = (
                     f"no new commit after {attempts} rework redispatches - "

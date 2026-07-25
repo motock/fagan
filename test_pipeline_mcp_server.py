@@ -7569,6 +7569,60 @@ def test_check_story_status_no_progress_exhausts_rework_cap_parks(plan_dir, monk
     assert "no new commit after 3" in manifest["parked_reason"]
 
 
+def test_check_story_status_no_progress_exhausts_rework_cap_escalates_to_claude(
+    plan_dir, monkeypatch,
+):
+    """Root-caused live 2026-07-24 (RUFF-016-ADOPTION, MODE40-CI-REWORK-
+    FEEDBACK-V2): review_story's three park paths all escalate to Claude
+    under PIPELINE_BACKEND_DISPATCH=auto before parking for a human - this
+    was the one rework-exhaustion park path in the file missing that hook,
+    so a story that hit exactly this "no new commit" guard never got a
+    chance at Claude even with auto-escalation enabled. Same cap/inputs as
+    test_check_story_status_no_progress_exhausts_rework_cap_parks, but with
+    auto-escalation on: must escalate (backend -> claude, escalated=True,
+    status -> changes_requested for redispatch) instead of parking."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="abc123", rework_attempts=2)
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(p, "_auto_escalation_enabled", lambda: True)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "changes_requested"
+    assert result["reason"] == "no_new_commit_escalated_to_claude"
+    manifest = _read_manifest(plan_dir, "plan")["stories"]["S1"]
+    assert manifest["status"] == "changes_requested"
+    assert manifest["backend"] == "claude"
+    assert manifest["escalated"] is True
+    # A fresh rework budget for Claude - _escalate_review_to_claude clears
+    # the counter, same as its other two call sites.
+    assert "rework_attempts" not in manifest
+    # A story that has ALREADY been escalated must terminally park on a
+    # second rework-cap exhaustion, not escalate again or loop forever -
+    # there is no further fallback past Claude.
+
+
+def test_check_story_status_no_progress_already_escalated_parks_not_loops(
+    plan_dir, monkeypatch,
+):
+    """The escalated=True guard: a story already on Claude that STILL hits
+    the no-new-commit rework cap a second time must park for a human, not
+    re-escalate (there's nothing past Claude to fall back to)."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="abc123", rework_attempts=2)
+    manifest = _read_manifest(plan_dir, "plan")
+    manifest["stories"]["S1"]["escalated"] = True
+    manifest["stories"]["S1"]["backend"] = "claude"
+    manifest_path = plan_dir / "plan.manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(p, "_auto_escalation_enabled", lambda: True)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "parked"
+    assert result["reason"] == "no_new_commit_rework_budget_exhausted"
+    manifest = _read_manifest(plan_dir, "plan")["stories"]["S1"]
+    assert manifest["status"] == "parked"
+    assert manifest["backend"] == "claude"
+
+
 def test_check_story_status_routes_acceptance_fail_to_review_when_opted_in(
     plan_dir, monkeypatch,
 ):

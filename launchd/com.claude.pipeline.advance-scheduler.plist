@@ -17,7 +17,7 @@
 		<key>PIPELINE_BACKEND_DISPATCH</key>
 		<string>local</string>
 		<key>PIPELINE_BACKEND_REVIEW</key>
-		<string>claude</string>
+		<string>ollama</string>
 		<key>PIPELINE_DECOMPOSE_SCRATCHPAD</key>
 		<string>on</string>
 		<key>PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS</key>

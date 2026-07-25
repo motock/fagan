@@ -96,6 +96,7 @@ from .paths import (  # noqa: F401
 
 from .build_detect import (  # noqa: F401
     _venv_python_for,
+    _provision_worktree_venv,
     _test_command_for,
     _build_command_for,
     detect_build_command,
@@ -949,6 +950,15 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     cwd=repo_root, check=True,
                 )
                 _exclude_worktree_logs_from_tracking(Path(repo_root))
+                # A fresh worktree has no .venv (gitignored) - give it its own
+                # complete one now rather than let it fall back to (and
+                # potentially mutate) the shared main-repo venv other
+                # concurrently-dispatched stories may be using. See
+                # _provision_worktree_venv's docstring for the failure mode
+                # this closes (root-caused live on RUFF-016-ADOPTION).
+                # No-ops for non-Python projects or ones without a
+                # requirements file.
+                _provision_worktree_venv(worktree_path)
 
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 

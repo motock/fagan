@@ -5,10 +5,16 @@ real-repo driver against the merged/surviving code to judge whether the fix
 is actually correct, regardless of what the model's own acceptance suite
 checked.
 
-Calling convention (mirrors the other ``tests/benchmark/tasks/*/groundtruth.py``
-files, which run via pytest inside the repo root so the module-under-test is
-importable): ``import pipeline_mcp_server as p`` is expected to resolve here.
-The assertions below assume that alias is already set up by the caller.
+Imports ``pipeline.server`` directly (not the ``pipeline_mcp_server`` compat
+shim) - the shim does ``from pipeline.server import *``, which copies each
+name into its OWN separate module binding. ``review_story``'s function body
+resolves free variables (``PLAN_DIR``, ``_run_reviewer``) from
+``pipeline.server``'s own globals at call time, so a monkeypatch on the
+shim's copy is silently ineffective. ``pipeline.concurrency`` and
+``pipeline.persistence`` each import their own separate ``PLAN_DIR`` binding
+from ``pipeline.paths`` too and need patching independently - mirrors
+``test_review_story_lock_guard.py``'s own ``plan_dir``/``agents_dir``
+fixtures exactly.
 """
 import fcntl
 import json
@@ -16,7 +22,9 @@ import os
 
 import pytest
 
-import pipeline_mcp_server as p
+import pipeline.server as p
+from pipeline import concurrency as pcon
+from pipeline import persistence as ppers
 
 # ---------------------------------------------------------------------------
 # Helpers (replicated standalone - do not import across test files).
@@ -92,6 +100,8 @@ def test_invalid_plan_name_raises_and_creates_no_stray_lock(tmp_path, monkeypatc
     plan_dir = tmp_path / "plans"
     plan_dir.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(pcon, "PLAN_DIR", plan_dir)
     # Snapshot the filesystem under tmp_path before the call so we can detect
     # any stray .lock file created as a side effect.
     locks_before = {
@@ -128,6 +138,8 @@ def test_review_story_skips_when_lock_held(tmp_path, monkeypatch):
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
+    monkeypatch.setattr(pcon, "PLAN_DIR", plan_dir)
     monkeypatch.setattr(p, "AGENTS_DIR", agents_dir)
 
     story = _make_story(plan_dir, status="tests_passed")

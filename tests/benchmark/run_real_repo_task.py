@@ -294,4 +294,6 @@ def main() -> int:
     print(json.dumps(result))
     return 0
 
-# End of file
+
+if __name__ == "__main__":
+    sys.exit(main())

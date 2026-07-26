@@ -713,3 +713,24 @@ def test_main_timeout_default_is_at_least_10800(tmp_path, monkeypatch):
         "--timeout default must be at least 10800 (3h); help text: "
         f"{help_text!r}"
     )
+
+
+def test_script_is_runnable_as_a_subprocess_not_only_importable():
+    """The file must actually invoke main() when run as `python
+    run_real_repo_task.py ...` (an `if __name__ == "__main__"` guard) -
+    every other main() test in this file calls rrt.main() in-process, which
+    would keep passing even if the script had no entry point at all and
+    silently did nothing when run for real. Use a nonexistent task so this
+    stays fast (exits at the early file-existence check, before any clone)."""
+    result = subprocess.run(
+        [sys.executable, str(BENCH / "run_real_repo_task.py"),
+         "--task", "definitely_not_a_real_task_xyz", "--model", "gptoss"],
+        text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 2, (
+        "running the script directly for an unknown task must exit 2, "
+        f"got rc={result.returncode!r} stdout={result.stdout!r} "
+        f"stderr={result.stderr!r} - if this is 0 with no output, the "
+        "script has no __main__ guard and never actually ran main()"
+    )
+    assert "does not exist" in result.stderr

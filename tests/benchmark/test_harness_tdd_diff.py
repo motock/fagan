@@ -14,7 +14,7 @@ import harness as h
 
 
 def _git(cwd, *argv, env=None):
-    return subprocess.run(["git", *argv], cwd=cwd, capture_output=True, text=True, env=env)
+    return subprocess.run(["git", *argv], check=False, cwd=cwd, capture_output=True, text=True, env=env)
 
 
 def _seed_repo(repo, impl_file: str, test_file: str) -> str:

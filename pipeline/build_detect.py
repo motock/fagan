@@ -33,14 +33,14 @@ def _venv_python_for(cwd: Path) -> Path | None:
     try:
         common = subprocess.run(
             ["git", "-C", str(cwd), "rev-parse", "--git-common-dir"],
-            capture_output=True, text=True, timeout=10,
+            check=False, capture_output=True, text=True, timeout=10,
         ).stdout.strip()
         if common:
             common_path = Path(common)
             if not common_path.is_absolute():
                 common_path = (cwd / common_path).resolve()
             candidates.append(common_path.parent / ".venv" / "bin" / "python")
-    except Exception:
+    except Exception:  # noqa: S110, BLE001 (deliberate fail-open: any git/path failure here just skips this candidate and falls through to the existing-candidates loop, per this function's docstring)
         pass
     for cand in candidates:
         if cand.exists():
@@ -113,7 +113,7 @@ def _test_command_for(cwd: Path) -> list[str] | None:
         return ["npm", "test"]
     if (cwd / "Makefile").exists():
         result = subprocess.run(
-            ["grep", "-q", "^test:", "Makefile"], cwd=cwd, capture_output=True
+            ["grep", "-q", "^test:", "Makefile"], check=False, cwd=cwd, capture_output=True
         )
         if result.returncode == 0:
             return ["make", "test"]
@@ -386,7 +386,7 @@ def _scope_test_cmd_to_acceptance(
         try:
             scripts = json.loads(pkg.read_text()).get("scripts", {})
             test_script = str(scripts.get("test") or "").strip()
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             return None
         if test_script.startswith("node --test"):
             return ["node", "--test", *acceptance_paths]
@@ -429,7 +429,7 @@ def _added_pytest_test_paths(
         r = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=ACM",
              f"{base_branch}...{branch}"],
-            cwd=str(worktree), capture_output=True, text=True,
+            check=False, cwd=str(worktree), capture_output=True, text=True,
         )
     except OSError:
         # Worktree path doesn't exist (or `git` isn't runnable) - fail open,
@@ -450,15 +450,15 @@ def _added_pytest_test_paths(
 
 
 __all__ = [
-    "_venv_python_for",
-    "_provision_worktree_venv",
-    "_test_command_for",
-    "_build_command_for",
-    "detect_build_command",
-    "detect_test_command",
-    "detect_lint_command",
     "_acceptance_rel_paths",
-    "_is_pytest_cmd",
-    "_scope_test_cmd_to_acceptance",
     "_added_pytest_test_paths",
+    "_build_command_for",
+    "_is_pytest_cmd",
+    "_provision_worktree_venv",
+    "_scope_test_cmd_to_acceptance",
+    "_test_command_for",
+    "_venv_python_for",
+    "detect_build_command",
+    "detect_lint_command",
+    "detect_test_command",
 ]

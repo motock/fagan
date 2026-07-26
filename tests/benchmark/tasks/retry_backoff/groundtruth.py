@@ -8,7 +8,6 @@ API under test:
     should_retry(status_code, attempt, max_attempts) -> bool
 """
 import pytest
-
 from backoff import backoff_delays, should_retry
 
 

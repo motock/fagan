@@ -17,14 +17,14 @@ from typing import Any
 # :func:`_reverify_acceptance` below; the ``noqa`` comments were removed as
 # they were incorrect.
 from .build_detect import (
-    detect_test_command,
-    detect_build_command,
     _acceptance_rel_paths,
-    _scope_test_cmd_to_acceptance,
-    _is_pytest_cmd,
     _added_pytest_test_paths,
+    _is_pytest_cmd,
+    _scope_test_cmd_to_acceptance,
+    detect_build_command,
+    detect_test_command,
 )
-from .concurrency import _is_heavy, _heavy_lock
+from .concurrency import _heavy_lock, _is_heavy
 
 # ---------- CI env-var gates ----------
 PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
@@ -83,13 +83,13 @@ def _ci_status(
                         "--jq",
                         ".check_runs[] | {name, status, conclusion}",
                     ],
-                    capture_output=True,
+                    check=False, capture_output=True,
                     text=True,
                 )
             else:
                 r = subprocess.run(
                     ["gh", "pr", "checks", branch, "--json", "name,bucket"],
-                    capture_output=True,
+                    check=False, capture_output=True,
                     text=True,
                 )
         except OSError as e:
@@ -195,7 +195,7 @@ def _ci_rerun(sha: str) -> bool:
                 "--jq",
                 ".workflow_runs[0].id",
             ],
-            capture_output=True,
+            check=False, capture_output=True,
             text=True,
         )
     except OSError:
@@ -208,7 +208,7 @@ def _ci_rerun(sha: str) -> bool:
     try:
         rerun = subprocess.run(
             ["gh", "run", "rerun", run_id, "--failed"],
-            capture_output=True,
+            check=False, capture_output=True,
             text=True,
         )
     except OSError:
@@ -274,11 +274,11 @@ def _reverify_acceptance(
     if _is_heavy(test_cmd):
         with _heavy_lock():
             r = subprocess.run(
-                test_cmd, cwd=test_dir, capture_output=True, text=True, env=test_env
+                test_cmd, check=False, cwd=test_dir, capture_output=True, text=True, env=test_env
             )
     else:
         r = subprocess.run(
-            test_cmd, cwd=test_dir, capture_output=True, text=True, env=test_env
+            test_cmd, check=False, cwd=test_dir, capture_output=True, text=True, env=test_env
         )
 
     if r.returncode == 0:
@@ -313,11 +313,11 @@ def _reverify_build(worktree: str) -> dict[str, str]:
     if _is_heavy(build_cmd):
         with _heavy_lock():
             r = subprocess.run(
-                build_cmd, cwd=build_dir, capture_output=True, text=True, env=build_env
+                build_cmd, check=False, cwd=build_dir, capture_output=True, text=True, env=build_env
             )
     else:
         r = subprocess.run(
-            build_cmd, cwd=build_dir, capture_output=True, text=True, env=build_env
+            build_cmd, check=False, cwd=build_dir, capture_output=True, text=True, env=build_env
         )
 
     if r.returncode == 0:
@@ -326,12 +326,12 @@ def _reverify_build(worktree: str) -> dict[str, str]:
 
 
 __all__ = [
+    "PIPELINE_MERGE_BUILD_GATE",
     "PIPELINE_MERGE_CI_GATE",
     "PIPELINE_MERGE_CI_TIMEOUT",
-    "PIPELINE_MERGE_BUILD_GATE",
-    "_repo_has_ci_configured",
-    "_ci_status",
     "_ci_rerun",
+    "_ci_status",
+    "_repo_has_ci_configured",
     "_reverify_acceptance",
     "_reverify_build",
 ]

@@ -70,11 +70,11 @@ def _exclude_worktree_logs_from_tracking(repo_root: Path) -> None:
 
 
 __all__ = [
-    "PLAN_DIR",
-    "WORKTREE_ROOT",
     "AGENTS_DIR",
+    "PLAN_DIR",
     "POLICY_PATH",
     "USAGE_STATE_PATH",
+    "WORKTREE_ROOT",
     "_WORKTREE_LOG_EXCLUDES",
     "_exclude_worktree_logs_from_tracking",
 ]

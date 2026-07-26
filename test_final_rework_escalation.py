@@ -50,10 +50,9 @@ import json
 import pytest
 
 import pipeline.server as p
+import pipeline.ticketing as pt
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
-import pipeline.ticketing as pt
-
 
 # ---------------------------------------------------------------------------
 # Fixtures (mirror test_review_story_stale_guard.py / test_review_story_lock_guard.py

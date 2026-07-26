@@ -7,7 +7,6 @@ API under test:
     match_field(field: str, lo: int, hi: int) -> set[int]
 """
 import pytest
-
 from cron_field import match_field
 
 

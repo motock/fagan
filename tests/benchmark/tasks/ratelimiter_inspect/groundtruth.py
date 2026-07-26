@@ -14,7 +14,6 @@ API under test:
     .available_tokens(now=None) -> float
 """
 import pytest
-
 from rate_limiter import TokenBucket
 
 

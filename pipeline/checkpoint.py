@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from .git_ops import _commit_wip
-from .persistence import _append_journal
 from .parsers import _atomic_write_json
+from .persistence import _append_journal
 
 
 def _terminate_and_checkpoint(
@@ -80,6 +80,6 @@ def _checkpoint_impl(
 
 
 __all__ = [
-    "_terminate_and_checkpoint",
     "_checkpoint_impl",
+    "_terminate_and_checkpoint",
 ]

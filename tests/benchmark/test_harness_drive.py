@@ -21,7 +21,7 @@ BENCH = Path(__file__).resolve().parent
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-import harness  # noqa: E402
+import harness
 
 
 class _FakeClock:

@@ -28,7 +28,6 @@ import pipeline.persistence as ppersist
 from pipeline.checkpoint import _terminate_and_checkpoint
 from pipeline.git_ops import _commit_wip
 
-
 # ---------- helpers ----------
 
 def _init_repo(tmp: Path) -> str:
@@ -41,19 +40,19 @@ def _init_repo(tmp: Path) -> str:
     subprocess.run(["git", "add", "-A"], cwd=tmp, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=tmp, check=True)
     return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=tmp, capture_output=True, text=True,
+        ["git", "rev-parse", "HEAD"], check=False, cwd=tmp, capture_output=True, text=True,
     ).stdout.strip()
 
 
 def _head_sha(tmp: Path) -> str:
     return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=tmp, capture_output=True, text=True,
+        ["git", "rev-parse", "HEAD"], check=False, cwd=tmp, capture_output=True, text=True,
     ).stdout.strip()
 
 
 def _porcelain(tmp: Path) -> str:
     return subprocess.run(
-        ["git", "status", "--porcelain"], cwd=tmp, capture_output=True, text=True,
+        ["git", "status", "--porcelain"], check=False, cwd=tmp, capture_output=True, text=True,
     ).stdout
 
 

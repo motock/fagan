@@ -22,11 +22,10 @@ import json
 import pytest
 
 import backend
+import pipeline_mcp_server  # noqa: F401  backward compat
 import role_registry
 from pipeline import server as p
 from pipeline import ticketing as pt
-import pipeline_mcp_server  # noqa: F401  backward compat
-
 
 # ---------- helpers shared with the main test suite ----------
 
@@ -741,7 +740,7 @@ def test_resolve_planner_backend_no_mode_parameter(monkeypatch):
     # Without mode — must succeed. (backend_name reflects the real registry's
     # roles.planner.provider - claude/sonnet as of 2026-07-25; the point of
     # this assertion is just "the call succeeded", not the specific value.)
-    backend_name, model = p._resolve_planner_backend("ollama", "gpt-oss:20b")
+    backend_name, _model = p._resolve_planner_backend("ollama", "gpt-oss:20b")
     assert backend_name == "claude"
 
     # With mode keyword — must raise TypeError (parameter removed).
@@ -897,8 +896,9 @@ def test_no_pipeline_decompose_mode_references_in_planner_module():
     """The planner module must not reference PIPELINE_DECOMPOSE (as its own
     var, not the scratchpad) or PIPELINE_DECOMPOSE_CLOUD_MODEL or
     mode == 'cloud' or decompose_mode."""
-    import pipeline.planner as planner_mod
     import inspect
+
+    import pipeline.planner as planner_mod
     source = inspect.getsource(planner_mod)
     assert "PIPELINE_DECOMPOSE_CLOUD_MODEL" not in source
     assert "mode == \"cloud\"" not in source

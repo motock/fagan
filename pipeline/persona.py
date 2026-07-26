@@ -12,9 +12,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .config import _LOCAL_SKIP_PERSONAS, DEFAULT_MODEL
 from .paths import AGENTS_DIR
-from .config import DEFAULT_MODEL, _LOCAL_SKIP_PERSONAS
-
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 
@@ -171,12 +170,12 @@ def _story_has_unwinnable_local_scope(story: dict[str, Any]) -> bool:
 
 __all__ = [
     "_FRONTMATTER_RE",
-    "_persona_path",
-    "_persona_body",
-    "_persona_default_model",
     "_PERSONA_TOOLS",
     "_allowed_tools_for",
     "_build_dispatch_command",
+    "_persona_body",
+    "_persona_default_model",
+    "_persona_path",
     "_persona_requires_claude",
     "_story_has_unwinnable_local_scope",
 ]

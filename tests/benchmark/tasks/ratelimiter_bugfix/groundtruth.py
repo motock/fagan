@@ -8,7 +8,6 @@ this is a bug fix, not a rewrite) plus the reported-bug regression and one
 additional scenario the acceptance oracle doesn't cover.
 """
 import pytest
-
 from ratelimiter import RateLimiter
 
 

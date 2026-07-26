@@ -81,7 +81,7 @@ def _load_resume_transcript() -> list | None:
             print("[local_agent] RESUME FAILED: transcript shape invalid", flush=True)
             return None
         return data
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 (resume is best-effort; any failure falls back to a cold start)
         print(f"[local_agent] RESUME FAILED: {e}", flush=True)
         return None
 
@@ -176,7 +176,7 @@ def _persist_messages(messages, path):
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(messages, f, ensure_ascii=False)
         os.replace(tmp_path, path)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 (transcript persistence is best-effort; a write failure must not crash the agent loop)
         print(f"[local_agent] persistence error: {e}", flush=True)
 
 class PersistingList(list):
@@ -195,8 +195,8 @@ class PersistingList(list):
             _persist_messages(self, self.transcript_path)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import pipeline_mcp_server as p  # noqa: E402  (reuses _checkpoint_impl + PLAN_DIR config)
-import inference_providers  # noqa: E402  (non-Ollama chat() branch, see PROVIDER below)
+import inference_providers
+import pipeline_mcp_server as p
 
 CWD = Path.cwd()
 MODEL = os.environ["LOCAL_AGENT_MODEL"]
@@ -674,13 +674,13 @@ def _loads_tolerant(candidate):
     rejecting on this one class of already-well-structured input."""
     try:
         return json.loads(candidate, strict=False)
-    except Exception:
+    except json.JSONDecodeError:
         pass
     repaired = _repair_triple_quoted_strings(candidate)
     if repaired != candidate:
         try:
             return json.loads(repaired, strict=False)
-        except Exception:
+        except json.JSONDecodeError:
             pass
     return None
 
@@ -707,7 +707,7 @@ def recover_tool_calls(content):
 
 
 def git(*args):
-    return subprocess.run(["git", *args], cwd=CWD, capture_output=True, text=True)
+    return subprocess.run(["git", *args], check=False, cwd=CWD, capture_output=True, text=True)
 
 
 def exclude_runtime_artifacts() -> None:
@@ -764,15 +764,15 @@ def _full_suite_result() -> tuple[bool, str]:
     needs_heavy = bool(argv) and p._is_heavy(argv)
     if needs_heavy:
         with p._heavy_lock():
-            r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
+            r = subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
     else:
-        r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)
+        r = subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
     if r.returncode != 0:
         return False, (r.stdout + r.stderr)[-500:]
     lint = p.detect_lint_command(CWD)
     if lint is not None:
         lint_dir, lint_cmd = lint
-        lr = subprocess.run(lint_cmd, cwd=lint_dir, capture_output=True, text=True)
+        lr = subprocess.run(lint_cmd, check=False, cwd=lint_dir, capture_output=True, text=True)
         if lr.returncode != 0:
             return False, (lr.stdout + lr.stderr)[-500:]
     return True, ""
@@ -1144,7 +1144,7 @@ def _lint_feedback_for(path_str: str) -> str:
     if not cmd or "ruff" not in cmd[0]:
         return ""
     try:
-        res = subprocess.run(
+        res = subprocess.run(  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see test_local_agent.py)
             [cmd[0], "check", path_str], cwd=lint_dir,
             capture_output=True, text=True, timeout=15,
         )
@@ -1287,7 +1287,7 @@ def run_tool(fn, args) -> str:
             return "ERROR: restore_file requires a path."
         result = subprocess.run(
             ["git", "checkout", "HEAD", "--", path_str],
-            cwd=CWD, capture_output=True, text=True,
+            check=False, cwd=CWD, capture_output=True, text=True,
         )
         if result.returncode != 0:
             return (f"ERROR: could not restore {path_str} to HEAD: "
@@ -1327,20 +1327,20 @@ def run_tool(fn, args) -> str:
         except ValueError:
             argv0 = ""
         is_heavy = bool(argv0) and p._is_heavy([argv0])
-        run_kwargs = dict(shell=True, cwd=CWD, capture_output=True, text=True,
-                          timeout=BASH_TIMEOUT)
+        run_kwargs = {"shell": True, "cwd": CWD, "capture_output": True, "text": True,
+                          "timeout": BASH_TIMEOUT}
         if is_heavy:
             with p._heavy_lock():
-                pr = subprocess.run(cmd, **run_kwargs)
+                pr = subprocess.run(cmd, check=False, **run_kwargs)
         else:
-            pr = subprocess.run(cmd, **run_kwargs)
+            pr = subprocess.run(cmd, check=False, **run_kwargs)
         return (pr.stdout + pr.stderr)[:3000] or "(no output)"
     if fn == "checkpoint":
         try:
             res = p._checkpoint_impl(args["plan_name"], args["story_key"], args["step"],
                                      args.get("summary", ""), args.get("next_hint", ""))
             return f"checkpoint recorded: {json.dumps(res)[:200]}"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 (checkpoint is a tool call result to the model, not a gate; any failure is reported back as tool output, not raised)
             return f"ERROR checkpointing: {e}"
     if fn == "search":
         return (
@@ -1376,7 +1376,7 @@ def safe_run_tool(fn, args) -> str:
     """
     try:
         return run_tool(fn, args)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 (a tool call's own failure is reported back to the model as tool output, not raised - the agent loop must never crash on an unpredictable tool error)
         msg = f"ERROR running {fn}: {type(e).__name__}: {e}"
         required = _TOOL_SCHEMAS.get(fn, {}).get("required", [])
         missing = [r for r in required if r not in args]
@@ -1514,12 +1514,12 @@ def main() -> int:
             _persist_messages(messages, transcript_path)
             try:
                 m = chat(messages)
-            except Exception as e2:
+            except Exception as e2:  # noqa: BLE001 (an LLM backend call can fail in unpredictable ways; must not crash the agent loop)
                 print(f"[step {step}] LLM call failed after trim-retry: {e2}", flush=True)
                 if worktree_dirty():
                     auto_wip_commit("llm error")
                 return 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 (an LLM backend call can fail in unpredictable ways; must not crash the agent loop)
             print(f"[step {step}] LLM call failed: {e}", flush=True)
             if worktree_dirty():
                 auto_wip_commit("llm error")
@@ -1546,7 +1546,7 @@ def main() -> int:
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
-                except Exception:
+                except Exception:  # noqa: BLE001 (malformed tool-call args from the model fall back to empty args rather than crashing the loop)
                     args = {}
 
             if fn == "done":

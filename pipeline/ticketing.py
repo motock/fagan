@@ -35,7 +35,6 @@ import httpx
 
 from .config import PLANE_MAX_ATTEMPTS
 
-
 # ---------- Plane config (env vars) ----------
 PLANE_BASE      = os.environ.get("PLANE_BASE", "http://localhost").rstrip("/")
 PLANE_API_KEY   = os.environ.get("PLANE_API_KEY", "")
@@ -248,7 +247,7 @@ class PlaneTicketProvider:
             resp = plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/",
                                   json={"name": summary})
             return resp["id"]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 (Plane is optional/best-effort; any failure falls back to no epic, warned below)
             print(f"Warning: Plane create_epic({summary!r}) failed, "
                   f"continuing without a Plane epic: {e}")
             return None
@@ -269,7 +268,7 @@ class PlaneTicketProvider:
                 "labels": [label_id],
             })
             issue_id = issue_resp["id"]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 (Plane is optional/best-effort; any failure falls back to a synthetic key, warned below)
             print(f"Warning: Plane create_story({summary!r}) failed, "
                   f"falling back to a local/synthetic story key: {e}")
             return None
@@ -283,7 +282,7 @@ class PlaneTicketProvider:
             try:
                 plane_request("POST", f"/projects/{PLANE_PROJECT}/epics/{epic_id}/issues/",
                               json={"issue_id": issue_id})
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 (Plane is optional/best-effort; a linking failure is warned below and does not undo the story creation)
                 print(f"Warning: Plane create_story({summary!r}) succeeded but "
                       f"linking issue {issue_id!r} to epic {epic_id!r} failed, "
                       f"continuing without the epic link: {e}")
@@ -401,7 +400,7 @@ def _plane_set_state(story_key: str, state_group: str, plan_name: str | None = N
             # transition as a best-effort no-op (manifest is source of truth).
             _mark_plane_unreachable(e)
             return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 (Plane is optional/best-effort; retried up to PLANE_MAX_ATTEMPTS, then reported below)
             last_err = e
     msg = (f"Plane sync for {story_key} → {state_group} failed after "
            f"{PLANE_MAX_ATTEMPTS} attempts: {last_err}")
@@ -433,28 +432,28 @@ def _mark_plane_done(story_key: str, plan_name: str | None = None) -> None:
 
 
 __all__ = [
-    "PLANE_BASE",
     "PLANE_API_KEY",
-    "PLANE_WORKSPACE",
+    "PLANE_BASE",
     "PLANE_PROJECT",
-    "_plane_enabled",
-    "_plane_reachable",
-    "_mark_plane_unreachable",
-    "plane_request",
-    "_state_cache",
-    "_get_state",
-    "_label_cache",
-    "_UUID_RE",
-    "_resolve_issue_uuid",
-    "_get_or_create_label",
-    "LogicalState",
+    "PLANE_WORKSPACE",
     "_PLANE_STATE_GROUP",
-    "TicketProvider",
+    "_TICKET_PROVIDERS",
+    "_UUID_RE",
+    "JiraTicketProvider",
+    "LogicalState",
     "NullTicketProvider",
     "PlaneTicketProvider",
-    "JiraTicketProvider",
-    "_TICKET_PROVIDERS",
-    "get_ticket_provider",
-    "_plane_set_state",
+    "TicketProvider",
+    "_get_or_create_label",
+    "_get_state",
+    "_label_cache",
     "_mark_plane_done",
+    "_mark_plane_unreachable",
+    "_plane_enabled",
+    "_plane_reachable",
+    "_plane_set_state",
+    "_resolve_issue_uuid",
+    "_state_cache",
+    "get_ticket_provider",
+    "plane_request",
 ]

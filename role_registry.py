@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 _REGISTRY_PATH_ENV = "PIPELINE_MODEL_REGISTRY_PATH"
 _DEFAULT_REGISTRY_PATH = Path(__file__).resolve().parent / "model_registry.json"

@@ -10,7 +10,6 @@ API under test:
     .allow(tokens=1.0, now=None) -> bool
 """
 import pytest
-
 from rate_limiter import TokenBucket
 
 

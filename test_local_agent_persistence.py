@@ -93,7 +93,7 @@ def test_resume_fallback_missing_file(tmp_path, capsys):
     la = load_module_with_env(env)
     loaded = la._load_resume_transcript()
     assert loaded is None
-    out, err = capsys.readouterr()
+    out, _err = capsys.readouterr()
     assert "RESUME FAILED" in out
 
 # Test resume fallback invalid JSON
@@ -105,7 +105,7 @@ def test_resume_fallback_invalid_json(tmp_path, capsys):
     la = load_module_with_env(env)
     loaded = la._load_resume_transcript()
     assert loaded is None
-    out, err = capsys.readouterr()
+    out, _err = capsys.readouterr()
     assert "RESUME FAILED" in out
 
 # Test resume fallback invalid shape (empty list)
@@ -117,7 +117,7 @@ def test_resume_fallback_invalid_shape(tmp_path, capsys):
     la = load_module_with_env(env)
     loaded = la._load_resume_transcript()
     assert loaded is None
-    out, err = capsys.readouterr()
+    out, _err = capsys.readouterr()
     assert "RESUME FAILED" in out
 
 # Test resume fallback invalid shape (dict instead of list)
@@ -129,7 +129,7 @@ def test_resume_fallback_invalid_shape_dict(tmp_path, capsys):
     la = load_module_with_env(env)
     loaded = la._load_resume_transcript()
     assert loaded is None
-    out, err = capsys.readouterr()
+    out, _err = capsys.readouterr()
     assert "RESUME FAILED" in out
 
 # Test resume fallback invalid shape (unknown role value)
@@ -141,7 +141,7 @@ def test_resume_fallback_invalid_shape_unknown_role(tmp_path, capsys):
     la = load_module_with_env(env)
     loaded = la._load_resume_transcript()
     assert loaded is None
-    out, err = capsys.readouterr()
+    out, _err = capsys.readouterr()
     assert "RESUME FAILED" in out
 
 # Test transcript path unset: no file written

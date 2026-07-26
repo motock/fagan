@@ -53,6 +53,7 @@ import sys
 import time
 from pathlib import Path
 
+
 def _resolve_pipeline_repo(bench_dir: Path) -> Path:
     """Resolve the canonical pipeline repo root from bench_dir.
 
@@ -72,14 +73,14 @@ def _resolve_pipeline_repo(bench_dir: Path) -> Path:
     try:
         result = subprocess.run(
             ["git", "-C", str(bench_dir), "rev-parse", "--git-common-dir"],
-            capture_output=True, text=True, timeout=10,
+            check=False, capture_output=True, text=True, timeout=10,
         )
         if result.returncode == 0 and result.stdout.strip():
             common_path = Path(result.stdout.strip())
             if not common_path.is_absolute():
                 common_path = (bench_dir / common_path).resolve()
             return common_path.parent
-    except Exception:
+    except Exception:  # noqa: S110, BLE001 (deliberate fail-open: any git/path failure here just falls back to bench_dir.parents[1], per this function's docstring)
         pass
     return bench_dir.parents[1]
 
@@ -634,7 +635,7 @@ def install_merge_stubs(p, repo: Path) -> None:
         test_dir, test_cmd = p.detect_test_command(worktree)
         if not test_cmd:
             return {"state": "pass", "error": ""}
-        r = subprocess.run(test_cmd, cwd=test_dir, capture_output=True, text=True)
+        r = subprocess.run(test_cmd, check=False, cwd=test_dir, capture_output=True, text=True)
         if r.returncode == 0:
             return {"state": "pass", "error": ""}
         return {"state": "fail", "error": (r.stdout + r.stderr)[-500:]}
@@ -868,7 +869,7 @@ def run_groundtruth(impl_src: Path, impl_file: str, groundtruth: str,
         r = subprocess.run(
             [str(VENV_PY), "-m", "pytest", "test_groundtruth.py", "-q",
              "--no-header", "-p", "no:cacheprovider"],
-            cwd=str(scratch), capture_output=True, text=True,
+            check=False, cwd=str(scratch), capture_output=True, text=True,
         )
         return {"ran": True, "passed": r.returncode == 0,
                 "tail": (r.stdout + r.stderr)[-700:]}
@@ -898,7 +899,7 @@ def run_groundtruth(impl_src: Path, impl_file: str, groundtruth: str,
         # they should wrap this call in _heavy_lock.
         r = subprocess.run(
             ["cargo", "test", "--quiet"],
-            cwd=str(scratch), capture_output=True, text=True,
+            check=False, cwd=str(scratch), capture_output=True, text=True,
         )
         return {"ran": True, "passed": r.returncode == 0,
                 "tail": (r.stdout + r.stderr)[-700:]}
@@ -919,7 +920,7 @@ def run_groundtruth(impl_src: Path, impl_file: str, groundtruth: str,
         (scratch / "test" / "groundtruth.test.js").write_text(groundtruth)
         r = subprocess.run(
             ["node", "--test", "test/groundtruth.test.js"],
-            cwd=str(scratch), capture_output=True, text=True,
+            check=False, cwd=str(scratch), capture_output=True, text=True,
         )
         return {"ran": True, "passed": r.returncode == 0,
                 "tail": (r.stdout + r.stderr)[-700:]}

@@ -420,28 +420,28 @@ def _sync_local_default_branch() -> dict[str, Any]:
         branch = _default_branch()
         head = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            check=False, cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if head.returncode != 0 or head.stdout.strip() != branch:
             return {"ok": True, "synced": False, "reason": "not_on_default_branch"}
 
         status = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            check=False, cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if status.returncode != 0 or status.stdout.strip():
             return {"ok": True, "synced": False, "reason": "dirty_worktree"}
 
         fetch = subprocess.run(
             ["git", "fetch", "origin", branch],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            check=False, cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if fetch.returncode != 0:
             return {"ok": True, "synced": False, "reason": "fetch_failed"}
 
         counts = subprocess.run(
             ["git", "rev-list", "--left-right", "--count", f"{branch}...origin/{branch}"],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            check=False, cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if counts.returncode != 0:
             return {"ok": True, "synced": False, "reason": "rev_list_failed"}
@@ -455,7 +455,7 @@ def _sync_local_default_branch() -> dict[str, Any]:
 
         merge = subprocess.run(
             ["git", "merge", "--ff-only", f"origin/{branch}"],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            check=False, cwd=REPO_ROOT, capture_output=True, text=True,
         )
         if merge.returncode != 0:
             return {"ok": True, "synced": False, "reason": "ff_merge_failed"}
@@ -1029,7 +1029,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 loaded = backend._ollama_loaded_models(
                     os.environ.get("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 (observability hook, never a gate)
                 loaded = set()  # observability hook, never a gate
             if loaded and target_model and target_model not in loaded:
                 msg = (
@@ -1078,13 +1078,12 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             dispatch_backend in _LOCAL_BACKEND_NAMES
             and not resuming
             and not test_author_marker.exists()
+        ) and _run_test_author_phase(
+            story, story_key=story_key, worktree_path=worktree_path,
+            dispatch_backend=dispatch_backend, local_model=spec["model"],
+            plan_role_config=_plan_role_config(plan_name),
         ):
-            if _run_test_author_phase(
-                story, story_key=story_key, worktree_path=worktree_path,
-                dispatch_backend=dispatch_backend, local_model=spec["model"],
-                plan_role_config=_plan_role_config(plan_name),
-            ):
-                test_author_marker.write_text("ok\n")
+            test_author_marker.write_text("ok\n")
 
         # GUIDED_DECOMPOSITION_PLAN.md: a "tech lead" checklist is always on
         # for the weak local executor (the on/off toggle was removed; the
@@ -1136,7 +1135,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                         (path, _test_names_in_file(worktree_path, path))
                         for path in added
                     ]
-                except Exception:
+                except Exception:  # noqa: BLE001 (best-effort grounding enrichment; a git hiccup here must degrade to the prohibition-only planner clause, not raise)
                     authored_test_files = []
             plan_text = _run_planner(
                 story.get("agent_instructions", ""),
@@ -1193,11 +1192,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 "failures, then implement until they pass."
             )
 
-        dispatch_kwargs: dict[str, Any] = dict(
-            prompt=spec["prompt"], system=spec["system"], model=spec["model"],
-            allowed_tools=spec["allowed_tools"],
-            cwd=worktree_path, log_path=log_path, append=resuming,
-        )
+        dispatch_kwargs: dict[str, Any] = {
+            "prompt": spec["prompt"], "system": spec["system"], "model": spec["model"],
+            "allowed_tools": spec["allowed_tools"],
+            "cwd": worktree_path, "log_path": log_path, "append": resuming,
+        }
         # Only the local driver accepts/uses `acceptance`; pass it through when
         # we're actually invoking that driver so Claude's signature stays clean.
         if dispatch_backend in _LOCAL_BACKEND_NAMES and acceptance_paths:
@@ -1301,7 +1300,7 @@ def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
         return None
     lint_dir, cmd = lint
     try:
-        result = subprocess.run(cmd, cwd=lint_dir, capture_output=True, text=True, env=test_env)
+        result = subprocess.run(cmd, check=False, cwd=lint_dir, capture_output=True, text=True, env=test_env)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return {
@@ -1361,7 +1360,7 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
         diff = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=AM",
              base_branch, "HEAD"],
-            cwd=worktree, capture_output=True, text=True, timeout=15,
+            check=False, cwd=worktree, capture_output=True, text=True, timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -1387,7 +1386,7 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
         try:
             old_show = subprocess.run(
                 ["git", "show", f"{base_branch}:{rel_path}"],
-                cwd=worktree, capture_output=True, text=True, timeout=15,
+                check=False, cwd=worktree, capture_output=True, text=True, timeout=15,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -1403,7 +1402,7 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
             try:
                 grep = subprocess.run(
                     ["git", "grep", "--count", "-w", fn_name],
-                    cwd=worktree, capture_output=True, text=True, timeout=15,
+                    check=False, cwd=worktree, capture_output=True, text=True, timeout=15,
                 )
             except (OSError, subprocess.TimeoutExpired):
                 continue
@@ -1444,7 +1443,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # os.kill succeeds for zombie (defunct) processes too — check ps stat
         ps = subprocess.run(
             ["ps", "-p", str(pid), "-o", "stat="],
-            capture_output=True, text=True,
+            check=False, capture_output=True, text=True,
         )
         stat = ps.stdout.strip()
         if stat and not stat.startswith("Z"):
@@ -1675,12 +1674,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if _is_heavy(test_cmd):
         with _heavy_lock():
             test_result = subprocess.run(
-                test_cmd, cwd=test_dir, capture_output=True, text=True,
+                test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
                 env=test_env,
             )
     else:
         test_result = subprocess.run(
-            test_cmd, cwd=test_dir, capture_output=True, text=True,
+            test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
             env=test_env,
         )
     passed = test_result.returncode == 0
@@ -1782,7 +1781,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # the rework cap so a stuck agent parks rather than looping forever.
     if story["status"] == "tests_passed" and story.get("last_reviewed_sha"):
         head_res = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=worktree, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"], check=False, cwd=worktree, capture_output=True, text=True
         )
         if head_res.stdout.strip() == story["last_reviewed_sha"]:
             attempts = story.get("rework_attempts", 0) + 1
@@ -2299,7 +2298,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                          f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.")
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
             # Defense in depth: a reviewer backend's own internal error (a bad
             # tool-call shape, a malformed backend response, ...) must not crash
             # the pipeline process. Fail safe into the same UNKNOWN-verdict path
@@ -2759,7 +2758,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         summary["dispatched"].append(key)
                     else:
                         summary.setdefault("skipped", []).append(key)
-                except Exception as e:  # git pull/worktree/backend launch failure
+                except Exception as e:  # noqa: BLE001 (git pull/worktree/backend launch failure)
                     # Re-read: dispatch_story only writes the manifest on a
                     # successful launch, so on a raise the on-disk status is
                     # still todo/interrupted - bump the attempt counter there.
@@ -2894,7 +2893,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 pushed_sha = ""
                 if Path(worktree).is_dir():
                     push = subprocess.run(["git", "push", "--force-with-lease", "origin",
-                                           branch], cwd=REPO_ROOT,
+                                           branch], check=False, cwd=REPO_ROOT,
                                           capture_output=True, text=True)
                     if push.returncode != 0:
                         gate_error = f"push: {(push.stderr or push.stdout).strip()[:200]}"
@@ -2903,7 +2902,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         # exact commit that was just pushed, not the branch
                         # name - a branch-name query can read a stale result
                         # from an older, already-superseded run.
-                        rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=worktree,
+                        rev = subprocess.run(["git", "rev-parse", "HEAD"], check=False, cwd=worktree,
                                              capture_output=True, text=True)
                         pushed_sha = rev.stdout.strip()
                 if not gate_error:
@@ -3013,7 +3012,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
 
             try:
                 _merge_pr(story.get("worktree", ""), key)
-            except Exception as e:  # gh/git transient failure - see MERGE_MAX_ATTEMPTS
+            except Exception as e:  # noqa: BLE001 (gh/git transient failure - see MERGE_MAX_ATTEMPTS)
                 attempts = story.get("merge_attempts", 0) + 1
                 story["merge_attempts"] = attempts
                 if attempts >= MERGE_MAX_ATTEMPTS:
@@ -3093,7 +3092,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                 pushed_sha = ""
                 if Path(worktree).is_dir():
                     push = subprocess.run(["git", "push", "--force-with-lease", "origin",
-                                           branch], cwd=REPO_ROOT,
+                                           branch], check=False, cwd=REPO_ROOT,
                                           capture_output=True, text=True)
                     if push.returncode != 0:
                         return {"ok": False,
@@ -3102,7 +3101,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                     # Mode 26: pin to the exact commit that was just pushed,
                     # not the branch name - see the matching comment in
                     # advance_pipeline's own merge adjudication above.
-                    rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=worktree,
+                    rev = subprocess.run(["git", "rev-parse", "HEAD"], check=False, cwd=worktree,
                                          capture_output=True, text=True)
                     pushed_sha = rev.stdout.strip()
                 ci = _ci_status(branch, sha=pushed_sha)
@@ -3128,7 +3127,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                     return {"ok": False, "error": f"build reverify fail: {build['error']}",
                             "story_key": story_key}
                 _merge_pr(story.get("worktree", ""), story_key)
-        except Exception as e:  # surface the gh/git failure to the human, don't raise
+        except Exception as e:  # noqa: BLE001 (surface the gh/git failure to the human, don't raise)
             return {"ok": False, "error": str(e), "story_key": story_key}
         # Final write INSIDE the lock, using the manifest re-read inside the
         # lock (not a pre-lock copy). Clear parked_reason on leaving 'parked'.
@@ -3201,7 +3200,7 @@ def advance_all_plans() -> dict[str, Any]:
         plan_name = manifest_path.name.removesuffix(".manifest.json")
         try:
             plans[plan_name] = advance_pipeline(plan_name)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 (one plan's failure must not stop every other plan's tick, per the comment below)
             # One plan's failure (bad repo_root, missing tool, transient git
             # error, ...) must not stop every other plan from getting its tick.
             plans[plan_name] = {"ok": False, "error": str(e)}

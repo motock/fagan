@@ -1,6 +1,5 @@
 """Hidden acceptance oracle for the retry_backoff task (read-only to the agent)."""
 import pytest
-
 from backoff import backoff_delays, should_retry
 
 

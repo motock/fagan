@@ -1,6 +1,5 @@
 """Hidden acceptance oracle for the cron_field task (read-only to the agent)."""
 import pytest
-
 from cron_field import match_field
 
 

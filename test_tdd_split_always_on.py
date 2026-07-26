@@ -28,10 +28,10 @@ import json
 import pytest
 
 import backend
+import role_registry
 from pipeline import planner as pplanner
 from pipeline import server as p
 from pipeline import ticketing as pt
-import role_registry
 
 
 # ---------- Fixtures (mirror test_pipeline_mcp_server.py) ----------

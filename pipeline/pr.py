@@ -74,16 +74,16 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     result = proc.stdout.strip()
 
     subprocess.run(["git", "worktree", "remove", "--force", worktree],
-                    cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
     subprocess.run(["git", "branch", "-D", branch],
-                    cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
     subprocess.run(["git", "push", "origin", "--delete", branch],
-                    cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
 
     return result
 
 
 __all__ = [
-    "_open_pr",
     "_merge_pr",
+    "_open_pr",
 ]

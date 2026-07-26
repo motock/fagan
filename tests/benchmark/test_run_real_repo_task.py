@@ -571,6 +571,48 @@ def test_main_builds_plan_with_single_story_and_empty_acceptance(
     assert story["risk"] == spec["risk"]
 
 
+def test_main_checks_out_the_spec_pinned_base_commit_not_current_head(
+    tmp_path, monkeypatch,
+):
+    """main() must clone and check out the spec's pinned base_commit, not
+    whatever HEAD the live pipeline repo happens to be on today. The whole
+    point of pinning (REAL_REPO_INTEGRATION_TEST_PLAN.md) is that every
+    trial replays byte-identical historical conditions - if main() ignores
+    the pin, results silently drift as the repo's master branch moves on."""
+    monkeypatch.setattr(rrt, "drive", lambda *a, **k: [])
+    monkeypatch.setattr(
+        rrt, "run_groundtruth_in_place",
+        lambda *a, **k: {"ran": True, "passed": True, "tail": "stubbed"},
+    )
+
+    workdir = tmp_path / "runs"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["run_real_repo_task.py",
+         "--task", "review_story_lock_guard",
+         "--model", "gptoss",
+         "--workdir", str(workdir)],
+    )
+    _pin_plan_dir(monkeypatch, workdir)
+
+    rc = rrt.main()
+    assert rc == 0, f"main() should succeed with drive stubbed, got rc={rc}"
+
+    cell = workdir.resolve() / "review_story_lock_guard__gptoss__t0"
+    repo = cell / "repo"
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        text=True, capture_output=True, check=True,
+    ).stdout.strip()
+
+    spec = json.loads(SPEC_PATH.read_text())
+    assert head == spec["base_commit"], (
+        "main() must check out the spec's pinned base_commit "
+        f"({spec['base_commit']!r}), got {head!r} instead - it must not "
+        "silently clone whatever HEAD the live pipeline repo is on today"
+    )
+
+
 def test_main_writes_result_json_with_required_fields(tmp_path, monkeypatch):
     """main() must write cell/result.json with the scorecard fields
     (final_status, review_verdict, merged, dispatched_model, elapsed_s,

@@ -178,16 +178,31 @@ def main() -> int:
     with open(spec_path) as f:
         task = json.loads(f.read())
 
-    # Resolve base_commit – fall back to HEAD if the ref cannot be resolved.
+    # Resolve the spec's pinned base_commit against the live repo – fall
+    # back to HEAD only if that exact ref cannot be found (e.g. the spec
+    # omits one, or history was rewritten since it was pinned).
     try:
+        pinned_ref = task.get("base_commit", "HEAD")
         base_commit = subprocess.run(
-            ["git", "-C", str(PIPELINE_REPO), "rev-parse", "HEAD"],
+            ["git", "-C", str(PIPELINE_REPO), "rev-parse", "--verify", f"{pinned_ref}^{{commit}}"],
             text=True,
             capture_output=True,
             check=True,
         ).stdout.strip()
-    except Exception:  # noqa: BLE001 (deliberate fail-open: falls back to HEAD if the ref cannot be resolved, per the comment above)
-        base_commit = "HEAD"
+    except Exception:  # noqa: BLE001 (deliberate fail-open: the pinned ref may not exist, e.g. omitted from the spec or rewritten history)
+        # Resolve to HEAD's *actual sha*, not the literal ref "HEAD" - the
+        # downstream checkout must detach so the later `git branch --force
+        # master HEAD` step is safe (it refuses to force-move a branch the
+        # worktree currently has checked out).
+        try:
+            base_commit = subprocess.run(
+                ["git", "-C", str(PIPELINE_REPO), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+        except Exception:  # noqa: BLE001 (last-resort fallback if PIPELINE_REPO itself is unusable)
+            base_commit = "HEAD"
 
     cell = Path(args.workdir).resolve() / f"{args.task}__{args.model}__t{args.trial}"
     paths = setup_real_repo_workspace(cell, base_commit)

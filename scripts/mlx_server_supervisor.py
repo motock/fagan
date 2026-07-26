@@ -129,7 +129,7 @@ def _kill_listening_process(port: str) -> None:
     supervisor tick."""
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f":{port}"], capture_output=True, text=True, timeout=5,
+            ["lsof", "-ti", f":{port}"], check=False, capture_output=True, text=True, timeout=5,
         )
         for pid_str in result.stdout.split():
             try:
@@ -165,16 +165,15 @@ def start_server(model_path: str, port: str) -> subprocess.Popen:
     dispatch trials with nothing evicting it, which is what preceded the
     2026-07-14 kernel panic. Bounding it here means the server self-evicts;
     no periodic restart or manual flush is needed to keep memory in check."""
-    log_file = open(LOG_PATH, "a")
-    proc = subprocess.Popen(
-        [
-            PYTHON, str(WRAPPER_PATH), "--model", model_path, "--port", str(port),
-            "--prompt-concurrency", PROMPT_CONCURRENCY,
-            "--prompt-cache-size", PROMPT_CACHE_SIZE, "--prompt-cache-bytes", PROMPT_CACHE_BYTES,
-        ],
-        stdout=log_file, stderr=log_file, start_new_session=True,
-    )
-    log_file.close()
+    with open(LOG_PATH, "a") as log_file:
+        proc = subprocess.Popen(
+            [
+                PYTHON, str(WRAPPER_PATH), "--model", model_path, "--port", str(port),
+                "--prompt-concurrency", PROMPT_CONCURRENCY,
+                "--prompt-cache-size", PROMPT_CACHE_SIZE, "--prompt-cache-bytes", PROMPT_CACHE_BYTES,
+            ],
+            stdout=log_file, stderr=log_file, start_new_session=True,
+        )
     return proc
 
 

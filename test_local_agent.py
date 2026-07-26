@@ -852,8 +852,8 @@ def test_restore_file_reverts_to_last_commit(tmp_path, monkeypatch):
     monkeypatch.setattr(la, "CWD", tmp_path)
     f = tmp_path / "a.py"
     f.write_text("original\n")
-    subprocess.run(["git", "add", "a.py"], cwd=tmp_path, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "add", "a.py"], check=False, cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], check=False, cwd=tmp_path, capture_output=True)
     f.write_text("a mess the model made\n")
 
     result = la.run_tool("restore_file", {"path": "a.py"})
@@ -868,8 +868,8 @@ def test_restore_file_leaves_other_files_untouched(tmp_path, monkeypatch):
     a, b = tmp_path / "a.py", tmp_path / "b.py"
     a.write_text("original a\n")
     b.write_text("original b\n")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "add", "-A"], check=False, cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], check=False, cwd=tmp_path, capture_output=True)
     a.write_text("messed up a\n")
     b.write_text("a real in-progress edit to b\n")
 
@@ -938,7 +938,7 @@ def test_net_progress_guard_resets_on_successful_mutation(tmp_path, monkeypatch,
         + [("bash", {"command": "cat c"})]
         + [("done", {"summary": "wrote the module"})]
     )
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
 
     rc = la.main()
@@ -994,7 +994,7 @@ def test_view_file_different_ranges_do_not_trip_repetition_guard(tmp_path, monke
         ("view_file", {"path": "big.py", "line_start": 1500, "line_end": 1550}),
         ("done", {"summary": "oriented"}),
     ]
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
 
     rc = la.main()
@@ -1016,7 +1016,7 @@ def test_view_file_same_range_three_times_still_trips_repetition_guard(
         ("view_file", {"path": "big.py", "line_start": 100, "line_end": 150})
         for _ in range(4)
     ]
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
 
     la.main()
@@ -1794,8 +1794,7 @@ class _FakeStreamResponse:
             raise _status_error(self.status_code)
 
     def iter_lines(self):
-        for line in self._lines:
-            yield line
+        yield from self._lines
 
 
 class _FakeStreamCM:
@@ -2284,9 +2283,9 @@ def test_ollama_payload_think_unknown_value_is_omitted(monkeypatch):
 
 
 def _init_git_repo(path):
-    subprocess.run(["git", "init"], cwd=path, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "init"], check=False, cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], check=False, cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test"], check=False, cwd=path, capture_output=True, text=True)
 
 
 def test_exclude_runtime_artifacts_adds_agent_transcript_json(tmp_path, monkeypatch):
@@ -2344,7 +2343,7 @@ def test_exclude_runtime_artifacts_hides_transcript_file_from_git_status(tmp_pat
     (tmp_path / ".agent_transcript.json").write_text('{"messages": []}')
 
     status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True
+        ["git", "status", "--porcelain"], check=False, cwd=tmp_path, capture_output=True, text=True
     ).stdout
     assert ".agent_transcript.json" not in status
 
@@ -2641,7 +2640,7 @@ def test_full_suite_result_skips_lint_when_not_detected(tmp_path, monkeypatch):
 
     monkeypatch.setattr(la.subprocess, "run", _run)
 
-    ok, tail = la._full_suite_result()
+    ok, _tail = la._full_suite_result()
     assert ok is True
     assert calls == [["pytest", "-q"]]  # lint subprocess never invoked
 

@@ -1,6 +1,5 @@
 """Hidden acceptance oracle for the interval_merge task (read-only to the agent)."""
 import pytest
-
 from intervals import merge
 
 

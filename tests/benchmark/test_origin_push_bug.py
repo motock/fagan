@@ -10,7 +10,6 @@ empty.  This test reproduces that failure by asserting the SHA of the
 import subprocess
 from pathlib import Path
 
-
 # Import harness constants and the implementation under test
 import harness
 import run_real_repo_task as rrt

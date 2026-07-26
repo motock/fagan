@@ -49,7 +49,7 @@ def run_cell(task: str, model: str, trial: int, workdir: Path,
         [PY, str(BENCH / "harness.py"), "--task", task, "--model", model,
          "--trial", str(trial), "--workdir", str(workdir),
          "--timeout", str(timeout), "--tick", str(tick)],
-        capture_output=True, text=True,
+        check=False, capture_output=True, text=True,
     )
     result_path = cell_dir / "result.json"
     if result_path.exists():
@@ -112,7 +112,7 @@ def main() -> int:
         t0 = time.time()
         r = run_cell(t, m, i, workdir, args.timeout, args.tick)
         print(f"  [{t}/{m}/t{i}] {r['final_status']:13} "
-              f"gt={str(r.get('groundtruth_passed')):5} "
+              f"gt={r.get('groundtruth_passed')!s:5} "
               f"({round(time.time() - t0, 1)}s)", file=sys.stderr)
         return r
 

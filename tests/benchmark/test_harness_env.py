@@ -21,7 +21,7 @@ PY = str(VENV_PY) if VENV_PY.exists() else sys.executable
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-import harness  # noqa: E402
+import harness
 
 
 def test_default_sets_claude_when_unset(monkeypatch):

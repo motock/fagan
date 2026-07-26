@@ -6,7 +6,6 @@ the implementation makes these pass. Kept deliberately separate from
 groundtruth.py (the investigator's independent judgment).
 """
 import pytest
-
 from rate_limiter import TokenBucket
 
 

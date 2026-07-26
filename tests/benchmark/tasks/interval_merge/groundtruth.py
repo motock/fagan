@@ -7,7 +7,6 @@ API under test:
     merge(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]
 """
 import pytest
-
 from intervals import merge
 
 

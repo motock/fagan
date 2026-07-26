@@ -23,7 +23,7 @@ PY = str(VENV_PY) if VENV_PY.exists() else sys.executable
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
-import harness  # noqa: E402
+import harness
 
 
 # ---------- spec.json / load_task ----------
@@ -326,7 +326,7 @@ def test_mock_cargo_task_drives_to_done_and_passes_groundtruth(tmp_path):
     Skipped if cargo isn't installed locally (it isn't in the
     pipeline venv). The end-to-end "real model" run in Phase 2 is
     what proves the cargo path on a real machine."""
-    if subprocess.run(["cargo", "--version"], capture_output=True).returncode != 0:
+    if subprocess.run(["cargo", "--version"], check=False, capture_output=True).returncode != 0:
         import pytest
         pytest.skip("cargo not installed in this environment")
     r = _run_mock_ecosystem("lru_cache_rs", tmp_path)
@@ -345,7 +345,7 @@ def test_mock_npm_task_drives_to_done_and_passes_groundtruth(tmp_path):
     Skipped if Node 18+ isn't available (we use node:test + node:assert
     which require 18+)."""
     node_version = subprocess.run(
-        ["node", "--version"], capture_output=True, text=True,
+        ["node", "--version"], check=False, capture_output=True, text=True,
     )
     if node_version.returncode != 0:
         import pytest

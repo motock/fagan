@@ -9,11 +9,11 @@ lazy import, ``scripts/local_agent.py``, ``scripts/local_agent_oracle.py``,
 keep working unchanged.
 """
 
-from pipeline.server import *  # noqa: F401,F403
-
 # Re-export private names too (from pipeline.server import * skips _-prefixed).
 # backend.py accesses _p._read_usage_state, tests access p._run_planner etc.
 import pipeline.server as _server
+from pipeline.server import *
+
 for _name in dir(_server):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_server, _name)

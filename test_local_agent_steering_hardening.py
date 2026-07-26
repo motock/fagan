@@ -35,11 +35,11 @@ _spec.loader.exec_module(la)
 
 def _init_git_repo(path):
     import subprocess
-    subprocess.run(["git", "init"], cwd=path, capture_output=True, text=True)
+    subprocess.run(["git", "init"], check=False, cwd=path, capture_output=True, text=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"],
-                   cwd=path, capture_output=True, text=True)
+                   check=False, cwd=path, capture_output=True, text=True)
     subprocess.run(["git", "config", "user.name", "Test"],
-                   cwd=path, capture_output=True, text=True)
+                   check=False, cwd=path, capture_output=True, text=True)
 
 
 def _sequence_chat(responses):

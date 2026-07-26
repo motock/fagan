@@ -1,5 +1,7 @@
-import pytest
 from pathlib import Path
+
+import pytest
+
 import pipeline.server as p
 
 # Test that the registered tool function is the guarded wrapper

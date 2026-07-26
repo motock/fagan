@@ -22,7 +22,6 @@ import pipeline.server as p
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (mirror test_pipeline_mcp_server.py / test_review_story_same_sha.py
 # so this file is fully standalone).
@@ -201,7 +200,7 @@ def test_review_story_skips_when_status_missing(plan_dir, agents_dir, monkeypatc
         f"_open_pr must not be invoked when status is missing; calls={pr_calls!r}"
     )
     assert result["ok"] is True
-    assert "skipped" in result and result["skipped"]
+    assert result.get("skipped")
     # status field was absent on disk; returned status should reflect that
     # (None or absent) rather than a fabricated reviewable state.
     assert result.get("status") in (None, "tests_passed") or "status" not in result, (
@@ -236,7 +235,7 @@ def test_review_story_skips_when_status_is_none(plan_dir, agents_dir, monkeypatc
         f"_open_pr must not be invoked when status is None; calls={pr_calls!r}"
     )
     assert result["ok"] is True
-    assert "skipped" in result and result["skipped"]
+    assert result.get("skipped")
     assert result.get("status") is None, (
         f"returned status should be None, got {result.get('status')!r}"
     )
@@ -286,7 +285,7 @@ def test_review_story_skip_fires_before_sha_guard_no_subprocess(
 
     assert result["ok"] is True
     assert result["status"] == "done"
-    assert "skipped" in result and result["skipped"]
+    assert result.get("skipped")
     assert subprocess_calls == [], (
         f"expected zero subprocess calls (state guard must fire before SHA "
         f"guard), got {subprocess_calls!r}"
@@ -342,7 +341,7 @@ def test_review_story_skip_does_not_write_manifest(
     )
     assert result["ok"] is True
     assert result["status"] == "pr_open"
-    assert "skipped" in result and result["skipped"]
+    assert result.get("skipped")
     assert write_calls == [], (
         f"_atomic_write_json must not be called on the skip path, got {write_calls!r}"
     )

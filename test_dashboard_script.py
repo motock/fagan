@@ -39,7 +39,7 @@ def _run_script(*args: str, env: dict[str, str]) -> subprocess.CompletedProcess:
     """Run scripts/dashboard.sh with `args` under `env` (no shell inheritance)."""
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
-        env=env,
+        check=False, env=env,
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
@@ -106,7 +106,7 @@ def env(tmp_path: Path):
     # `.dashboard.<port>.pid` from a parallel run can't kill the wrong process.
     subprocess.run(
         ["bash", str(SCRIPT), "stop"],
-        env=env,
+        check=False, env=env,
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
@@ -125,7 +125,7 @@ def test_script_syntax_ok():
     """
     res = subprocess.run(
         ["bash", "-n", str(SCRIPT)],
-        capture_output=True,
+        check=False, capture_output=True,
         text=True,
         timeout=10,
     )
@@ -317,13 +317,13 @@ def test_start_when_already_running_refuses(env):
     # which is what we want — bare uvicorn workers from other repos will not
     # contain "dashboard:app".
     try:
-        before = set(
+        before = {
             int(p)
             for p in subprocess.run(
                 ["pgrep", "-f", "uvicorn dashboard:app"],
                 capture_output=True, text=True, check=True,
             ).stdout.split()
-        )
+        }
     except subprocess.CalledProcessError:
         before = set()
 
@@ -339,13 +339,13 @@ def test_start_when_already_running_refuses(env):
     # Give a moment for any erroneous spawn to register with the kernel.
     time.sleep(0.5)
     try:
-        after = set(
+        after = {
             int(p)
             for p in subprocess.run(
                 ["pgrep", "-f", "uvicorn dashboard:app"],
                 capture_output=True, text=True, check=True,
             ).stdout.split()
-        )
+        }
     except subprocess.CalledProcessError:
         after = set()
     new_pids = after - before

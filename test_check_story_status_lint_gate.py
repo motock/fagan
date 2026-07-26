@@ -26,7 +26,6 @@ import pytest
 
 from pipeline import server as p
 
-
 # ---------- Local scaffolding (mirrors test_pipeline_mcp_server.py) ----------
 
 @pytest.fixture

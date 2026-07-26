@@ -15,7 +15,7 @@ import pipeline.server as p
 
 
 def run(args, cwd):
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    return subprocess.run(args, check=False, cwd=cwd, capture_output=True, text=True)
 
 
 def make_origin_and_clone(tmp_path):

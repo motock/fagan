@@ -12,9 +12,10 @@ from pathlib import Path
 
 import backend
 import role_registry
-from .config import DEFAULT_MODEL, _LOCAL_BACKEND_NAMES
+
+from .build_detect import _scope_test_cmd_to_acceptance, detect_test_command
+from .config import _LOCAL_BACKEND_NAMES, DEFAULT_MODEL
 from .persona import _persona_body, _persona_default_model
-from .build_detect import detect_test_command, _scope_test_cmd_to_acceptance
 
 
 def _run_reviewer(
@@ -120,7 +121,7 @@ def _run_reviewer(
             f"substitute a different interpreter path): cd "
             f"{shlex.quote(str(test_dir))} && {shlex.join(test_cmd)}\n\n"
         )
-    except Exception:
+    except Exception:  # noqa: S110, BLE001 (deliberate fail-open: test-command detection is best-effort prompt enrichment, not required - a failure here just omits test_command_instruction rather than blocking the review)
         pass
     prompt = (
         f"{test_command_instruction}"

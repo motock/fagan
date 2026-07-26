@@ -18,7 +18,6 @@ import pytest
 
 import pipeline_mcp_server as p
 
-
 # ---------------------------------------------------------------------------
 # Helpers (replicated standalone - do not import across test files).
 # ---------------------------------------------------------------------------
@@ -95,18 +94,18 @@ def test_invalid_plan_name_raises_and_creates_no_stray_lock(tmp_path, monkeypatc
     monkeypatch.setattr(p, "PLAN_DIR", plan_dir)
     # Snapshot the filesystem under tmp_path before the call so we can detect
     # any stray .lock file created as a side effect.
-    locks_before = set(
+    locks_before = {
         str(f.relative_to(tmp_path))
         for f in tmp_path.rglob("*.lock")
-    )
+    }
 
     with pytest.raises(ValueError):
         p.review_story("../../../../tmp/x", "S1")
 
-    locks_after = set(
+    locks_after = {
         str(f.relative_to(tmp_path))
         for f in tmp_path.rglob("*.lock")
-    )
+    }
     new_locks = locks_after - locks_before
     assert not new_locks, (
         f"an invalid plan_name must not create any stray .lock file; "

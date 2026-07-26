@@ -17,8 +17,8 @@ import os
 import threading
 from contextlib import contextmanager
 
-from .paths import PLAN_DIR
 from .parsers import _atomic_write_json
+from .paths import PLAN_DIR
 
 
 def _count_in_progress_agents() -> int:
@@ -239,18 +239,16 @@ def _is_heavy(cmd: list[str]) -> bool:
     exe = cmd[0]
     if exe in HEAVY_EXECUTABLES:
         return True
-    if exe == "make" and len(cmd) > 1 and cmd[1] in ("test", "build", "check", "all", "ci"):
-        return True
-    return False
+    return bool(exe == "make" and len(cmd) > 1 and cmd[1] in ("test", "build", "check", "all", "ci"))
 
 
 __all__ = [
+    "HEAVY_EXECUTABLES",
     "_count_in_progress_agents",
-    "_reap_zombie_in_progress_stories",
+    "_heavy_lock",
+    "_held_plan_locks",
+    "_is_heavy",
     "_plan_lock",
     "_plan_lock_state",
-    "_held_plan_locks",
-    "_heavy_lock",
-    "HEAVY_EXECUTABLES",
-    "_is_heavy",
+    "_reap_zombie_in_progress_stories",
 ]

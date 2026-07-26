@@ -11,7 +11,7 @@ which requires every Blocking finding to be written on its own line as
 The extraction is best-effort: reviewer output that doesn't follow the new
 format simply yields no tracked targets (an empty list), never an error.
 """
-import pipeline.parsers as parsers
+from pipeline import parsers
 
 
 def test_single_well_formed_blocking_line_extracts_path():

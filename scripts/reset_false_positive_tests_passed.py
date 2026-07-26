@@ -47,7 +47,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import pipeline_mcp_server as p  # noqa: E402
+import pipeline_mcp_server as p
 
 PLAN_NAME = "e2e-decentralized-messaging-roadmap"
 PLAN_DIR = Path("~/.claude/plans").expanduser()

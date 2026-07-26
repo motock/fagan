@@ -21,14 +21,17 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import ClassVar, Protocol
 
 import httpx
 
 import inference_providers
-from inference_providers import RateLimitedError  # noqa: F401 (re-exported: backend.RateLimitedError)
+from inference_providers import (
+    RateLimitedError,  # noqa: F401 (re-exported: backend.RateLimitedError)
+)
 
 
 @dataclass
@@ -193,7 +196,7 @@ class ClaudeCliDriver:
         # doesn't pass cell_dir (the overlord path, ad-hoc single-shots).
         if cell_dir is not None:
             cmd += ["--output-format", "json"]
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see backend.py test suite)
             cmd, cwd=cwd, capture_output=True, text=True,
             env=_first_party_claude_env(),
         )
@@ -302,12 +305,11 @@ class ClaudeCliDriver:
             cmd += ["--append-system-prompt", system]
         if allowed_tools:
             cmd += ["--allowedTools", allowed_tools]
-        log_file = open(log_path, "a" if append else "w")
-        proc = subprocess.Popen(
-            cmd, cwd=cwd, env=_first_party_claude_env(),
-            stdout=log_file, stderr=log_file,
-        )
-        log_file.close()
+        with open(log_path, "a" if append else "w") as log_file:
+            proc = subprocess.Popen(
+                cmd, cwd=cwd, env=_first_party_claude_env(),
+                stdout=log_file, stderr=log_file,
+            )
         return AgentHandle(pid=proc.pid, model=model)
 
     def usage_probe_text(self) -> str:
@@ -336,7 +338,7 @@ class ClaudeCliDriver:
         if _claude_identity_status is not None:
             return _claude_identity_status
         tier = "sonnet"
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see backend.py test suite)
             ["claude", "-p", "1+1", "--model", tier, "--output-format", "json"],
             capture_output=True, text=True, env=_first_party_claude_env(),
         )
@@ -535,8 +537,9 @@ def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
         # claim, and we don't want it stomping on a concurrent in-flight
         # dispatch's build. Same lock the agent harness uses, see
         # pipeline_mcp_server._heavy_lock docstring.
-        import pipeline_mcp_server as _p  # local: avoid import cycle at module load
         import shlex
+
+        import pipeline_mcp_server as _p  # local: avoid import cycle at module load
         cmd = args.get("command", "")
         try:
             argv0 = shlex.split(cmd)[0] if cmd.strip() else ""
@@ -544,10 +547,10 @@ def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
             argv0 = ""
         if argv0 and _p._is_heavy([argv0]):
             with _p._heavy_lock():
-                pr = subprocess.run(cmd, shell=True, cwd=cwd,
+                pr = subprocess.run(cmd, check=False, shell=True, cwd=cwd,
                                     capture_output=True, text=True)
         else:
-            pr = subprocess.run(cmd, shell=True, cwd=cwd,
+            pr = subprocess.run(cmd, check=False, shell=True, cwd=cwd,
                                 capture_output=True, text=True)
         return (pr.stdout + pr.stderr)[:3000] or "(no output)"
     return f"unknown tool {fn}"
@@ -711,7 +714,7 @@ class OllamaDriver:
     # submit_review is the explicit terminator (like dispatch's `done`): far
     # more reliable for a weak local model than scanning free prose for a
     # VERDICT line, which in testing it failed to emit cleanly.
-    _REVIEW_TOOLS = [
+    _REVIEW_TOOLS: ClassVar[list[dict]] = [
         {"type": "function", "function": {
             "name": "bash", "description": "Run a bash command in the worktree (run tests, git diff/log, etc.).",
             "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
@@ -890,7 +893,7 @@ class OllamaDriver:
                     _append_review_log(cwd, f"RESULT: {result[:_REVIEW_LOG_TRUNCATE]}\n")
             except RuntimeError:
                 raise  # preserve the httpx.HTTPError -> RuntimeError contract above
-            except Exception:
+            except Exception:  # noqa: BLE001 (deliberate: any other per-step failure must fail safe rather than crash the harness, per the comment below)
                 # Any other failure this step (malformed response shape, a bad
                 # tool call, a read-only tool erroring) must not crash the
                 # caller. Fail safe into the same "no verdict" path a
@@ -1053,9 +1056,8 @@ class OllamaDriver:
         if resume_append_content is not None:
             env["LOCAL_AGENT_RESUME_APPEND_CONTENT"] = resume_append_content
         argv = [str(self._VENV_PYTHON), str(agent_script)]
-        log_file = open(log_path, "a" if append else "w")
-        proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log_file, stderr=log_file)
-        log_file.close()
+        with open(log_path, "a" if append else "w") as log_file:
+            proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log_file, stderr=log_file)
         return AgentHandle(pid=proc.pid, model=resolved_model)
 
     def usage_probe_text(self) -> str:
@@ -1143,7 +1145,7 @@ class OllamaDriver:
         than blocking dispatch on a platform where the check can't run.
         """
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see backend.py test suite)
                 ["vm_stat"], capture_output=True, text=True, timeout=5,
             )
             if result.returncode != 0:
@@ -1195,7 +1197,7 @@ def _ollama_loaded_models(endpoint: str) -> set[str]:
 # which incorrectly implies "runs on this machine" when Ollama/LM Studio can
 # equally proxy :cloud-tagged models - and lets different roles pin
 # different local providers, since PIPELINE_LOCAL_PROVIDER is process-wide.
-_DRIVERS: dict[str, type | Callable[[], "OllamaDriver"]] = {
+_DRIVERS: dict[str, type | Callable[[], OllamaDriver]] = {
     "claude": ClaudeCliDriver,
     "local": OllamaDriver,
     "ollama": functools.partial(OllamaDriver, provider_name="ollama"),

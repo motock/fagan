@@ -725,7 +725,7 @@ def test_script_is_runnable_as_a_subprocess_not_only_importable():
     result = subprocess.run(
         [sys.executable, str(BENCH / "run_real_repo_task.py"),
          "--task", "definitely_not_a_real_task_xyz", "--model", "gptoss"],
-        text=True, capture_output=True, timeout=30,
+        text=True, capture_output=True, timeout=30, check=False,
     )
     assert result.returncode == 2, (
         "running the script directly for an unknown task must exit 2, "

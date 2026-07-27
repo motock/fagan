@@ -16,10 +16,11 @@ This is a quickstart guide for the Autonomous SDLC Agent Pipeline, describing th
 | Monitoring dashboard | `dashboard.py`, `static/` | Read-only FastAPI status/lifecycle viewer |
 | Install / deps | `scripts/install.sh`, `requirements*.txt` | venv + dependency setup |
 | Tests | `test_pipeline_mcp_server.py`, `test_backend.py`, `test_dashboard.py` | `pytest`, run via the venv |
-
 | Plans / manifests / logs | `~/.claude/plans/` | Plan, manifest, decisions, notifications |
 | Worktrees | `~/.claude/worktrees/` | Isolated per-story branches |
 | Issue tracker | Plane (external, optional) | Mirror of story state; skipped entirely when unconfigured (manifest is the source of truth) |
+
+---
 
 ## Architecture
 

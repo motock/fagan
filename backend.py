@@ -1186,6 +1186,56 @@ def _ollama_loaded_models(endpoint: str) -> set[str]:
     return inference_providers.OllamaProvider().loaded_models(endpoint)
 
 
+def _ollama_serving_parallelism() -> int | None:
+    """Detect Ollama's actual serving parallelism at runtime.
+
+    Ollama spawns one ``llama-server`` runner process per loaded model and
+    passes it ``-np N`` (the ``OLLAMA_NUM_PARALLEL`` value the server was
+    started with). ``N`` is the number of concurrent decode slots on that
+    runner: with ``N=1`` a second in-flight request queues behind the
+    first, and with ``MAX_CONCURRENT_AGENTS>1`` the pipeline will dispatch
+    a second agent that then blocks on that queue until the 180s
+    read-silence timeout fires ("LLM call failed: timed out" - Mode 2).
+
+    The value is read from the live process table rather than trusted to
+    stay in sync with ``OLLAMA_NUM_PARALLEL``: that env var is set via
+    ``launchctl setenv`` and is silently dropped whenever Ollama.app
+    auto-updates and relaunches (observed 2026-07-25, v0.32.4). A runtime
+    probe is the only signal that survives an upgrade the user didn't
+    initiate.
+
+    Returns the smallest ``-np`` across all running ``llama-server``
+    processes (the binding constraint on concurrent dispatch when multiple
+    models are loaded), or ``None`` if no runner is running, ``ps`` fails,
+    or no ``-np`` flag can be parsed. ``None`` means "unknown" - callers
+    must NOT treat it as zero, which would false-warn on every first
+    dispatch; they skip the warning instead. This is an observability
+    hook, never a gate: any failure returns ``None`` rather than raising.
+    """
+    try:
+        result = subprocess.run(  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see _ollama_loaded_models)
+            ["ps", "-axo", "pid,command"], capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    # `-np N` is whitespace-delimited; anchor on a leading boundary so we
+    # don't match a longer flag like `-npX` or a substring of another arg.
+    np_re = re.compile(r"(?:^|\s)-np\s+(\d+)(?:\s|$)")
+    smallest: int | None = None
+    for line in result.stdout.splitlines():
+        if "llama-server" not in line:
+            continue
+        m = np_re.search(line)
+        if not m:
+            continue
+        val = int(m.group(1))
+        if smallest is None or val < smallest:
+            smallest = val
+    return smallest
+
+
 # Registry of available drivers by config name. Register new drivers here -
 # orchestration code never changes.
 #

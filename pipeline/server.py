@@ -1040,6 +1040,39 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 _notify_user(plan_name, msg)
                 logging.getLogger("pipeline").warning(msg)
 
+        # Mode 2 regression guard: OLLAMA_NUM_PARALLEL is set via
+        # `launchctl setenv` and silently dropped whenever Ollama.app
+        # auto-updates and relaunches (observed 2026-07-25, v0.32.4),
+        # leaving every llama-server runner at -np 1. With
+        # MAX_CONCURRENT_AGENTS>1 the pipeline then dispatches a second
+        # agent that queues behind the first and hits the 180s
+        # read-silence timeout. Probe the runner's actual -np at dispatch
+        # time and warn loudly when configured concurrency exceeds what
+        # Ollama can actually serve in parallel. Only fires on a 2nd+
+        # concurrent local dispatch (same guard as the multi-model check
+        # above): the first dispatch loads the model and there is no
+        # queue yet. Observability hook, never a gate - a None probe
+        # (no model loaded yet, ps unavailable) means "unknown", not "0".
+        if (dispatch_backend in _LOCAL_BACKEND_NAMES
+                and MAX_CONCURRENT_AGENTS > 1
+                and _count_in_progress_agents() > 0):
+            try:
+                detected_np = backend._ollama_serving_parallelism()
+            except Exception:  # noqa: BLE001 (observability hook, never a gate)
+                detected_np = None
+            if detected_np is not None and detected_np < MAX_CONCURRENT_AGENTS:
+                msg = (
+                    f"ollama serving parallelism ({detected_np}) is below "
+                    f"MAX_CONCURRENT_AGENTS ({MAX_CONCURRENT_AGENTS}): a "
+                    f"second concurrent dispatch will queue behind the "
+                    f"first and may hit the 180s read-silence timeout. "
+                    f"Re-apply `launchctl setenv OLLAMA_NUM_PARALLEL "
+                    f"{MAX_CONCURRENT_AGENTS}` and restart Ollama, or set "
+                    f"MAX_CONCURRENT_AGENTS=1."
+                )
+                _notify_user(plan_name, msg)
+                logging.getLogger("pipeline").warning(msg)
+
         # Fix #1: if the story carries an `acceptance` block, materialize the
         # oracle files into the worktree BEFORE the backend launches so the local
         # harness can grade against them. On a resumed story skip the write —

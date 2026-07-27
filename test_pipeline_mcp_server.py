@@ -11114,6 +11114,120 @@ def test_dispatch_warns_with_resolved_tag_when_tier_mismatches_loaded(
         f"warning message must use the resolved concrete tag, not the raw tier name: {swap_notes}"
 
 
+# ---------- Mode 2: detect Ollama serving parallelism at dispatch time ----------
+def test_dispatch_warns_when_serving_parallelism_below_max_concurrent(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Mode 2 regression guard: when a concurrent local dispatch is about
+    to start and the running llama-server's -np (1) is below
+    MAX_CONCURRENT_AGENTS (2), dispatch_story must warn loudly - the second
+    agent will queue behind the first and hit the 180s read-silence
+    timeout. This is the exact signature of an Ollama.app upgrade having
+    silently dropped OLLAMA_NUM_PARALLEL back to 1 (observed 2026-07-25,
+    v0.32.4). Same-model loaded so the multi-model check stays silent and
+    the parallelism warning is isolated."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    # Same model loaded -> multi-model check must not fire.
+    monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: {"gpt-oss:20b"})
+    # Runner serving parallelism dropped to 1 by the upgrade.
+    monkeypatch.setattr(backend, "_ollama_serving_parallelism", lambda: 1)
+
+    _write_manifest(plan_dir, "np_dropped", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "gpt-oss:20b"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1240))
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("np_dropped", "S1")
+
+    np_notes = [n for n in notes if "ollama serving parallelism" in n]
+    assert np_notes, f"expected serving-parallelism warning, got: {notes}"
+    assert any("MAX_CONCURRENT_AGENTS (2)" in n for n in np_notes), \
+        f"warning must name the configured concurrency: {np_notes}"
+    assert any("launchctl setenv OLLAMA_NUM_PARALLEL" in n for n in np_notes), \
+        f"warning must tell the operator how to restore parallelism: {np_notes}"
+
+
+def test_dispatch_no_warn_when_serving_parallelism_unknown(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """None (no llama-server running yet, ps unavailable) means 'unknown',
+    not '0': a first dispatch that loads the model must not false-warn.
+    The warning is gated on a 2nd+ concurrent dispatch anyway, but the
+    None guard is belt-and-suspenders so a degraded probe never reads as
+    'parallelism is zero'."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: {"gpt-oss:20b"})
+    monkeypatch.setattr(backend, "_ollama_serving_parallelism", lambda: None)
+
+    _write_manifest(plan_dir, "np_unknown", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "gpt-oss:20b"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1241))
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("np_unknown", "S1")
+
+    assert not any("ollama serving parallelism" in n for n in notes), \
+        f"unknown parallelism must not warn, got: {notes}"
+
+
+def test_dispatch_no_warn_when_serving_parallelism_meets_max_concurrent(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When -np matches MAX_CONCURRENT_AGENTS, Ollama can actually serve
+    that many concurrent decodes - no warning. This is the steady-state
+    the operator wants: OLLAMA_NUM_PARALLEL kept in sync with
+    MAX_CONCURRENT_AGENTS."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(p, "MAX_CONCURRENT_AGENTS", 2)
+    monkeypatch.setattr(p, "_count_in_progress_agents", lambda: 1)
+    monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: {"gpt-oss:20b"})
+    monkeypatch.setattr(backend, "_ollama_serving_parallelism", lambda: 2)
+
+    _write_manifest(plan_dir, "np_ok", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build.",
+               "status": "todo", "dependencies": [],
+               "model": "gpt-oss:20b"},
+    })
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, **kw: _FakeProc(1242))
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    notes = []
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+
+    p.dispatch_story("np_ok", "S1")
+
+    assert not any("ollama serving parallelism" in n for n in notes), \
+        f"adequate parallelism must not warn, got: {notes}"
+
+
 # ---------- FM-B: reviewer rate-limit must defer, not consume rework budget ----------
 
 _RATE_LIMIT_MSG = (

@@ -2566,3 +2566,110 @@ def test_ollama_loaded_models_handles_missing_models_field(monkeypatch):
         lambda url, timeout: _FakePsResponse([]),
     )
     assert b._ollama_loaded_models("http://localhost:11434") == set()
+
+
+# ---------------------------------------------------------------------------
+# _ollama_serving_parallelism: detect the -np flag of the llama-server
+# runner Ollama spawns per loaded model. Closes the Mode 2 regression where
+# an Ollama.app upgrade silently drops OLLAMA_NUM_PARALLEL back to 1: with
+# MAX_CONCURRENT_AGENTS>1 against a 1-slot runner, concurrent dispatches
+# queue behind each other and hit the 180s read-silence timeout. The value
+# is read from the live process table at dispatch time rather than trusted
+# to stay in sync with a launchctl env var a human must re-apply after every
+# upgrade.
+# ---------------------------------------------------------------------------
+
+_REAL_LLAMA_SERVER_LINE = (
+    "56470 /Applications/Ollama.app/Contents/Resources/llama-server "
+    "--model /Users/jessecarroll/.ollama/models/blobs/sha256-e7b273f9636059a6 "
+    "--port 59546 --host 127.0.0.1 --no-webui --offline -c 262144 -np 2 "
+    "--log-verbosity 4 --no-log-prefix --no-jinja --chat-template chatml "
+    "--no-mmap --flash-attn auto -b 512 -ub 512 --context-shift --keep 4"
+)
+
+
+def _fake_ps_run(stdout, returncode=0):
+    def _run(cmd, capture_output=True, text=True, timeout=None):
+        return _FakeCompletedProcess(stdout, returncode=returncode)
+    return _run
+
+
+def test_ollama_serving_parallelism_parses_np_flag(monkeypatch):
+    """The -np flag of the running llama-server process is the actual
+    serving parallelism Ollama was started with - the value that decides
+    whether a second concurrent dispatch queues or runs in parallel."""
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        _fake_ps_run(f"  PID COMMAND\n{_REAL_LLAMA_SERVER_LINE}\n"),
+    )
+    assert b._ollama_serving_parallelism() == 2
+
+
+def test_ollama_serving_parallelism_returns_none_when_no_runner(monkeypatch):
+    """No model loaded yet -> no llama-server process -> can't detect. The
+    caller must treat None as 'unknown, don't warn' rather than 0, which
+    would false-warn on every first dispatch."""
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        _fake_ps_run("  PID COMMAND\n  344 /Applications/Ollama.app/Contents/MacOS/Ollama\n"),
+    )
+    assert b._ollama_serving_parallelism() is None
+
+
+def test_ollama_serving_parallelism_takes_min_across_runners(monkeypatch):
+    """With multiple models loaded each on its own runner, the binding
+    constraint on concurrent dispatch is the SMALLEST -np (a 1-slot runner
+    queues any second request to that model). OLLAMA_NUM_PARALLEL is a
+    server-wide default so all runners normally share one value; taking the
+    min is the conservative bound when they differ (e.g. a Modelfile
+    override). Captured live 2026-07-27: the Mode 2 upgrade-drop sets
+    every runner to -np 1."""
+    line_a = _REAL_LLAMA_SERVER_LINE.replace("-np 2", "-np 2")
+    line_b = _REAL_LLAMA_SERVER_LINE.replace("-np 2", "-np 1").replace("59546", "59547")
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        _fake_ps_run(f"  PID COMMAND\n{line_a}\n{line_b}\n"),
+    )
+    assert b._ollama_serving_parallelism() == 1
+
+
+def test_ollama_serving_parallelism_ignores_unrelated_np_args(monkeypatch):
+    """-np is not a unique flag name; only llama-server lines count, so an
+    unrelated process carrying an -np token must not pollute the result."""
+    unrelated = "  999 some-other-daemon -np 8 --foo bar"
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        _fake_ps_run(f"  PID COMMAND\n{unrelated}\n"),
+    )
+    assert b._ollama_serving_parallelism() is None
+
+
+def test_ollama_serving_parallelism_returns_none_on_subprocess_error(monkeypatch):
+    """Observability hook, never a gate: a ps failure (permissions, missing
+    binary on a non-macOS host) must return None, not raise."""
+    def _boom(cmd, capture_output=True, text=True, timeout=None):
+        raise OSError("command not found")
+    monkeypatch.setattr(b.subprocess, "run", _boom)
+    assert b._ollama_serving_parallelism() is None
+
+
+def test_ollama_serving_parallelism_returns_none_on_nonzero_returncode(monkeypatch):
+    """A nonzero ps exit must not be trusted as 'no runners' blindly via an
+    empty-parse path - return None so the caller can't misread a degraded
+    ps as 'parallelism is zero'."""
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        _fake_ps_run("ps: illegal argument", returncode=1),
+    )
+    assert b._ollama_serving_parallelism() is None
+
+
+def test_ollama_serving_parallelism_handles_runner_without_np_flag(monkeypatch):
+    """An older or non-Ollama llama-server build without -np in its args
+    must yield None (unknown), not a false 0."""
+    line = _REAL_LLAMA_SERVER_LINE.replace(" -np 2", "")
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        _fake_ps_run(f"  PID COMMAND\n{line}\n"),
+    )
+    assert b._ollama_serving_parallelism() is None

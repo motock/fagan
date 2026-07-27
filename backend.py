@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime
 import functools
 import json
+import logging
 import os
 import re
 import subprocess
@@ -33,7 +34,19 @@ from inference_providers import (
     RateLimitedError,  # noqa: F401 (re-exported: backend.RateLimitedError)
 )
 
-
+# Warn if operator mistakenly set transport-only env vars
+_logger = logging.getLogger("pipeline")
+for _var, _real in (
+    ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+    ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+):
+    if _var in os.environ:
+        _logger.warning(
+            f"{_var} is set in the environment but is a transport-only value that backend.py overwrites on every dispatch - it has no effect as an input; "
+            f"set {_real} instead."
+        )
+_logger = logging.getLogger("pipeline")
 @dataclass
 class AgentHandle:
     """A non-blocking agentic run (dispatch/review-style), identified by pid."""

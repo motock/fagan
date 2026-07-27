@@ -2559,8 +2559,8 @@ def test_ollama_loaded_models_returns_empty_set_on_http_error(monkeypatch):
 
 
 def test_ollama_loaded_models_handles_missing_models_field(monkeypatch):
-    """Some Ollama versions / proxies return an empty payload; we must
-    not crash on that."""
+    """Some Ollama versions / proxies return an empty payload; we must not
+    crash on that."""
     monkeypatch.setattr(
         b.httpx, "get",
         lambda url, timeout: _FakePsResponse([]),
@@ -2673,3 +2673,113 @@ def test_ollama_serving_parallelism_handles_runner_without_np_flag(monkeypatch):
         _fake_ps_run(f"  PID COMMAND\n{line}\n"),
     )
     assert b._ollama_serving_parallelism() is None
+# ---------- One-time transport-only env-var warning ----------
+# LOCAL_AGENT_MAX_STEPS / LOCAL_AGENT_NUM_CTX / LOCAL_AGENT_TEMPERATURE are
+# transport-only values backend.py overwrites on every dispatch into the
+# subprocess env dict; the real operator-facing input knobs are the
+# PIPELINE_LOCAL_* vars. If an operator sets a LOCAL_AGENT_* var directly in
+# their shell/plist (a natural mistake), their setting is silently clobbered.
+# backend.py must emit a ONE-TIME (per process, not per dispatch) warning at
+# module-load time when any of the three is already present in os.environ.
+#
+# Because the check runs at import time and Python caches imports, each test
+# reloads backend AFTER setting the env for that case, then reloads again in
+# the teardown fixture to restore normal state so nothing leaks into siblings.
+_TRANSPORT_VARS = (
+    ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+    ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+)
+
+
+@pytest.fixture
+def _clean_transport_env(monkeypatch):
+    """Ensure none of the three LOCAL_AGENT_* transport vars leak in or out
+    across a transport-warning test, and reload backend to a clean state on
+    teardown."""
+    for wrong, _correct in _TRANSPORT_VARS:
+        monkeypatch.delenv(wrong, raising=False)
+    yield
+    # Teardown: wipe any vars the test set and reload backend so the module
+    # is back to its normal (no-warning) state for subsequent tests.
+    for wrong, _correct in _TRANSPORT_VARS:
+        monkeypatch.delenv(wrong, raising=False)
+    import importlib
+
+    importlib.reload(b)
+
+
+def _reload_backend():
+    import importlib
+
+    importlib.reload(b)
+
+
+def test_transport_warning_fires_for_local_agent_max_steps(monkeypatch, caplog, _clean_transport_env):
+    """With LOCAL_AGENT_MAX_STEPS set in os.environ before backend loads, the
+    module-load warning must name both the wrong var and the correct one."""
+    monkeypatch.setenv("LOCAL_AGENT_MAX_STEPS", "99")
+    with caplog.at_level("WARNING", logger="pipeline"):
+        _reload_backend()
+    msgs = [r.getMessage() for r in caplog.records if r.name == "pipeline"]
+    transport_msgs = [m for m in msgs if "LOCAL_AGENT_MAX_STEPS" in m]
+    assert len(transport_msgs) == 1, f"expected exactly one warning for LOCAL_AGENT_MAX_STEPS, got {len(transport_msgs)}"
+    assert any("LOCAL_AGENT_MAX_STEPS" in m and "PIPELINE_LOCAL_MAX_STEPS" in m for m in msgs), (
+        f"expected a warning naming LOCAL_AGENT_MAX_STEPS and PIPELINE_LOCAL_MAX_STEPS, got {msgs}"
+    )
+
+
+def test_transport_warning_fires_for_local_agent_num_ctx(monkeypatch, caplog, _clean_transport_env):
+    """With LOCAL_AGENT_NUM_CTX set in os.environ before backend loads, the
+    module-load warning must name both the wrong var and the correct one."""
+    monkeypatch.setenv("LOCAL_AGENT_NUM_CTX", "8192")
+    with caplog.at_level("WARNING", logger="pipeline"):
+        _reload_backend()
+    msgs = [r.getMessage() for r in caplog.records if r.name == "pipeline"]
+    assert any("LOCAL_AGENT_NUM_CTX" in m and "PIPELINE_LOCAL_NUM_CTX" in m for m in msgs), (
+        f"expected a warning naming LOCAL_AGENT_NUM_CTX and PIPELINE_LOCAL_NUM_CTX, got {msgs}"
+    )
+
+
+def test_transport_warning_fires_for_local_agent_temperature(monkeypatch, caplog, _clean_transport_env):
+    """With LOCAL_AGENT_TEMPERATURE set in os.environ before backend loads,
+    the module-load warning must name both the wrong var and the correct one."""
+    monkeypatch.setenv("LOCAL_AGENT_TEMPERATURE", "0.7")
+    with caplog.at_level("WARNING", logger="pipeline"):
+        _reload_backend()
+    msgs = [r.getMessage() for r in caplog.records if r.name == "pipeline"]
+    assert any("LOCAL_AGENT_TEMPERATURE" in m and "PIPELINE_LOCAL_TEMPERATURE" in m for m in msgs), (
+        f"expected a warning naming LOCAL_AGENT_TEMPERATURE and PIPELINE_LOCAL_TEMPERATURE, got {msgs}"
+    )
+
+
+def test_transport_warning_silent_when_none_set(monkeypatch, caplog, _clean_transport_env):
+    """Negative test: with NONE of the three transport vars set, reloading
+    backend must NOT emit any transport-only warning."""
+    for wrong, _correct in _TRANSPORT_VARS:
+        monkeypatch.delenv(wrong, raising=False)
+    with caplog.at_level("WARNING", logger="pipeline"):
+        _reload_backend()
+    msgs = [r.getMessage() for r in caplog.records if r.name == "pipeline"]
+    transport_msgs = [
+        m for m in msgs
+        if any(wrong in m for wrong, _c in _TRANSPORT_VARS)
+    ]
+    assert transport_msgs == [], (
+        f"expected no transport-only warning when none are set, got {transport_msgs}"
+    )
+
+
+def test_transport_warning_fires_for_all_three_independently(monkeypatch, caplog, _clean_transport_env):
+    """With all three transport vars set simultaneously, all three distinct
+    warnings must fire — proving they're checked independently, not
+    short-circuited after the first."""
+    monkeypatch.setenv("LOCAL_AGENT_MAX_STEPS", "99")
+    monkeypatch.setenv("LOCAL_AGENT_NUM_CTX", "8192")
+    monkeypatch.setenv("LOCAL_AGENT_TEMPERATURE", "0.7")
+    with caplog.at_level("WARNING", logger="pipeline"):
+        _reload_backend()
+    msgs = [r.getMessage() for r in caplog.records if r.name == "pipeline"]
+    assert any("LOCAL_AGENT_MAX_STEPS" in m and "PIPELINE_LOCAL_MAX_STEPS" in m for m in msgs), msgs
+    assert any("LOCAL_AGENT_NUM_CTX" in m and "PIPELINE_LOCAL_NUM_CTX" in m for m in msgs), msgs
+    assert any("LOCAL_AGENT_TEMPERATURE" in m and "PIPELINE_LOCAL_TEMPERATURE" in m for m in msgs), msgs

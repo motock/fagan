@@ -130,17 +130,13 @@ def _stub_dispatch_externals(monkeypatch):
 
 def test_resolve_planner_backend_defaults_to_claude_sonnet_no_env_no_role_config(monkeypatch):
     """With NO env vars and NO plan_role_config, the planner must resolve to
-    ollama/glm via the registry's roles.planner entry (the stock production
-    registry pinned planner=claude/sonnet briefly on 2026-07-25 - glm's
-    checklists were high quality, but its test-authoring validity was the
-    ceiling on TDD-split correctness, root-caused live on MODE40-CI-REWORK-
-    FEEDBACK-V2's invalid test - but PR #173, later the same day, reverted
-    planner/test_author/review back to ollama/glm: claude and ollama/glm
-    resolve to the identical model (glm-5.2:cloud), and the claude CLI
-    transport itself was found to fail in this interactive MCP context while
-    working fine under the scheduler, so ollama/glm is the one that works in
-    both). This is the always-on default - no PIPELINE_DECOMPOSE mode flag
-    involved."""
+    claude/sonnet via the registry's roles.planner entry. Commit c16fe7f
+    ("fix(registry): route test_author/planner/review roles to claude/
+    sonnet") re-enabled this default after confirming live that the claude
+    CLI transport works fine in this interactive MCP context (the earlier
+    ANTHROPIC_BASE_URL redirect that caused it to fail closed is no longer
+    present in any env source). This is the always-on default - no
+    PIPELINE_DECOMPOSE mode flag involved."""
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
     # Use the REAL registry (not an empty stub) so the stock roles.planner
@@ -148,8 +144,8 @@ def test_resolve_planner_backend_defaults_to_claude_sonnet_no_env_no_role_config
     backend_name, model = p._resolve_planner_backend(
         "ollama", "gpt-oss:20b",
     )
-    assert backend_name == "ollama"
-    assert model == "glm-5.2:cloud"
+    assert backend_name == "claude"
+    assert model == "sonnet"
 
 
 # ---------- (b) no roles.planner registry entry → ollama/glm via fallback ----------
@@ -742,11 +738,11 @@ def test_resolve_planner_backend_no_mode_parameter(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
 
     # Without mode — must succeed. (backend_name reflects the real registry's
-    # roles.planner.provider - ollama/glm as of PR #173 (2026-07-25); the
+    # roles.planner.provider - claude/sonnet as of c16fe7f (2026-07-28); the
     # point of this assertion is just "the call succeeded", not the specific
     # value.)
     backend_name, _model = p._resolve_planner_backend("ollama", "gpt-oss:20b")
-    assert backend_name == "ollama"
+    assert backend_name == "claude"
 
     # With mode keyword — must raise TypeError (parameter removed).
     with pytest.raises(TypeError):
@@ -884,15 +880,15 @@ def test_dispatch_story_scratchpad_env_still_respected(
 
 def test_get_role_config_planner_resolves_to_claude_sonnet(monkeypatch):
     """get_role_config(plan_name=None) must show the planner role resolving
-    to ollama/glm (stock registry, reverted by PR #173 (2026-07-25) - see
+    to claude/sonnet (stock registry, per c16fe7f (2026-07-28) - see
     test_resolve_planner_backend_defaults_to_claude_sonnet_no_env_no_role_config)."""
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
     result = p.get_role_config(plan_name=None)
     assert result["ok"] is True
     planner = result["roles"]["planner"]
-    assert planner["provider"] == "ollama"
-    assert planner["model"] == "glm-5.2:cloud"
+    assert planner["provider"] == "claude"
+    assert planner["model"] == "sonnet"
 
 
 # ---------- no PIPELINE_DECOMPOSE / PIPELINE_DECOMPOSE_CLOUD_MODEL references remain ----------

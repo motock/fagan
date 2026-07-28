@@ -334,8 +334,18 @@ def _section_body(path: Path, title: str) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
+# 5f7d811 is the commit that performed the README/REFERENCE split itself, so
+# its parent (5f7d811~1) is the last commit with the original, unsplit
+# README.md. Pinned to this immutable SHA rather than a HEAD-relative ref
+# (e.g. HEAD~2) because a HEAD-relative ref's distance from the split commit
+# grows as new commits land on top of it, silently returning the wrong
+# (already-split) README and breaking every case in
+# test_moved_section_body_is_verbatim.
+_ORIGINAL_README_REF = "5f7d811~1"
+
+
 def _original_readme_text() -> str:
-    """Return the pre-split README.md content from git (HEAD~1).
+    """Return the pre-split README.md content from git.
 
     This is the source of truth for every section that was supposed to be moved
     verbatim into REFERENCE.md.
@@ -343,12 +353,52 @@ def _original_readme_text() -> str:
     import subprocess
 
     result = subprocess.run(
-        ["git", "show", "HEAD~2:README.md"],
+        ["git", "show", f"{_ORIGINAL_README_REF}:README.md"],
         capture_output=True,
         text=True,
         check=True,
     )
     return result.stdout
+
+
+def test_original_readme_text_survives_extra_commits_on_head(tmp_path, monkeypatch):
+    """_original_readme_text() must return the same pre-split content no
+    matter how many commits sit on top of the split commit. This reproduces
+    the bug where a HEAD-relative ref (e.g. HEAD~2) only happened to be
+    correct while HEAD was exactly 2 commits past the split; the very next
+    commit on top would make it resolve to the wrong (already-split) blob.
+    """
+    import subprocess
+
+    baseline = _original_readme_text()
+
+    worktree_dir = tmp_path / "scratch-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(worktree_dir), "HEAD"],
+        cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+    )
+    try:
+        commit_env = {
+            **__import__("os").environ,
+            "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com",
+            "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com",
+        }
+        for i in range(3):
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", f"chore: dummy commit {i}"],
+                cwd=worktree_dir, check=True, capture_output=True, text=True,
+                env=commit_env,
+            )
+        monkeypatch.chdir(worktree_dir)
+        result = _original_readme_text()
+    finally:
+        monkeypatch.undo()
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree_dir)],
+            cwd=REPO_ROOT, check=False, capture_output=True, text=True,
+        )
+
+    assert result == baseline
 
 
 @pytest.mark.parametrize("title", EXPECTED_REFERENCE_SECTIONS)

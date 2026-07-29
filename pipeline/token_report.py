@@ -33,9 +33,8 @@ def _parse_ts(ts: str | None) -> datetime | None:
     try:
         # fromisoformat accepts the format used in the test data.
         return datetime.fromisoformat(ts)
-    except Exception:
+    except ValueError:
         return None
-
 # ---------------------------------------------------------------------------
 # Main public API
 # ---------------------------------------------------------------------------

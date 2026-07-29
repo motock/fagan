@@ -49,6 +49,35 @@ There is no `id`, `title`, `acceptance_criteria`, or `depends_on` field. `ingest
 
 Sparse stories (a summary alone) leave the agent to guess. Populate, at minimum: what to build, the approach, the TDD expectation (write the failing test first), testable success criteria (concrete, checkable statements such as *"`cargo test -p storage` passes"* or *"rejects a zero-length key with `StoreError::Corrupted`"*), and the negative/boundary cases the tests must cover. The testable criteria live here, not in a separate field.
 
+## Grading the integration, not just the unit
+
+An acceptance fixture that calls the changed function directly — never
+touching the call site, registration path, or wiring the story actually
+asks for — creates a graded path that bypasses the integration work. The
+oracle goes green the moment the unit works in isolation, so a weak
+executor (and even a capable one under time pressure) will skip the
+ungraded wiring step no matter how clearly `agent_instructions` states it,
+and the story ships dead code. This is not hypothetical: it happened live
+on `harness-targeted-done-nudge` (2026-07-28) — the fixture asserted
+`_no_tool_nudge(0)` returns the right string, the brief said "wire this at
+the call site," and the executor never touched the call site because
+nothing graded it. The full-suite done-bar didn't catch it either, since it
+doesn't exercise the call site any more than the fixture did.
+
+Before writing an `acceptance` fixture, check: if `agent_instructions`
+requires a call-site change, a decorator/registration move, or wiring one
+piece into another, does the fixture's assertion actually fail when that
+wiring is missing — or does it still pass if the wired piece is just
+sitting there unconnected? If the fixture would still pass with the change
+half-done, rewrite it to exercise the real path: drive the actual
+entrypoint (`main()`, the CLI, the route handler) with the unit mocked only
+at its true external boundary, or assert against the production source/
+registry to confirm the wiring landed, rather than calling the unit
+directly. `pipeline.build_detect._isolation_only_acceptance_warning` runs a
+non-blocking heuristic on this at `ingest_plan` and posts a notification
+when it looks isolation-only — treat that notification as a prompt to
+re-check the fixture, not noise to ignore.
+
 ### Local (non-Claude) dispatch — hard-won rules
 
 These rules come from live dispatch failures on weak/local executors; follow them when the dispatch backend is not `claude`:

@@ -8,6 +8,7 @@ re-export in pipeline_mcp_server.py.
 """
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -305,6 +306,72 @@ def _apply_pytest_collection_overrides(cmd: list[str]) -> list[str]:
 def _acceptance_rel_paths(story: dict[str, Any]) -> list[str]:
     """Return the worktree-root-relative paths of a story's acceptance fixtures."""
     return [entry["path"] for entry in (story.get("acceptance") or [])]
+
+
+# Integration-wiring signal in agent_instructions: phrases that mean the
+# change touches a call site / registration / wiring point, not just a unit.
+# Matched case-insensitively. "call site" covers "call-site"/"call site";
+# "wire" covers wire/wiring/wired; "register the/it/that" and "registration
+# path" cover decorator/registry wiring.
+_WIRING_RE = re.compile(
+    r"call[ -]?site|wire|registration path|register (?:the|it|that)|"
+    r"decorator that registers|at the (?:call ?site|invocation site)",
+    re.IGNORECASE,
+)
+
+# Evidence that an acceptance fixture grades the *integration* rather than
+# just invoking the unit in isolation. If ANY marker appears in the fixture
+# source, the isolation-only warning is suppressed (the fixture is doing
+# real integration work). Kept broad on purpose: this is a non-blocking
+# nudge, so over-suppression (missing a real isolation-only fixture) is
+# cheaper than nagging an author whose fixture is fine.
+_ACCEPTANCE_INTEGRATION_MARKERS = (
+    "monkeypatch", "main(", "subprocess", "capsys", "capfd",
+    "assert_called", "mock", "patch(", "@patch", "mocker",
+    "read_text", "findall", "re.search", "re.match", "importlib",
+    "exec_module", "reload(", "getattr", "setattr", "inspect",
+    "traceback", "cli_runner", "test_client", "requests.",
+)
+
+
+def _isolation_only_acceptance_warning(story: dict[str, Any]) -> str | None:
+    """Non-blocking heuristic: return a warning message when a story's
+    ``agent_instructions`` require integration wiring (e.g. "update the call
+    site") but its acceptance fixture appears to test only the unit in
+    isolation.
+
+    Why this exists: an acceptance fixture that calls a function directly
+    creates a graded path that bypasses the integration wiring. A weak
+    executor passes the oracle while skipping the ungraded wiring step, then
+    ships dead code — observed live on the harness-targeted-done-nudge story
+    (2026-07-28), where the fixture tested ``_no_tool_nudge`` in isolation
+    while the brief told the agent to wire it at the call site. The full
+    done-bar suite didn't catch it either, because it doesn't grade the call
+    site either.
+
+    Returns ``None`` when there is nothing to flag: no wiring signal in the
+    instructions, no acceptance fixture, or the fixture carries integration-
+    grading evidence (monkeypatch/main()/subprocess/mock/read_text/etc.).
+    Purely advisory — never blocks ingest or dispatch.
+    """
+    instructions = story.get("agent_instructions") or ""
+    acceptance = story.get("acceptance") or []
+    if not instructions or not acceptance:
+        return None
+    if not _WIRING_RE.search(instructions):
+        return None
+    sources = "\n".join(entry.get("source", "") for entry in acceptance)
+    if any(marker in sources for marker in _ACCEPTANCE_INTEGRATION_MARKERS):
+        return None
+    summary = story.get("summary", "?")
+    return (
+        f"acceptance fixture for {summary!r} looks isolation-only: "
+        f"agent_instructions require integration wiring (e.g. a call-site "
+        f"change) but the fixture source has no integration-grading evidence "
+        f"(no monkeypatch/main()/subprocess/mock/read_text/etc.). A weak "
+        f"executor can pass this fixture while skipping the wiring -- add a "
+        f"test that exercises the real call path, not just the unit."
+    )
 
 
 def _is_pytest_cmd(cmd: list[str]) -> bool:

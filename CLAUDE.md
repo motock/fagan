@@ -502,6 +502,18 @@ A task is not complete when the code is written. It is complete when all of the 
 
 Teams should extend this checklist with their own gates (e.g., QA sign-off, security review for sensitive changes, performance benchmarks for critical paths). This list is the minimum floor, not a ceiling.
 
+### Step 9 — Diagnose before redispatching a stalled or failed automated attempt
+
+When an automated implementation attempt (agent, script, or pipeline worker) fails, stalls, or gives up before completing a task, do not simply resubmit the same task or tell it to "try again." Diagnose first:
+
+1. **Pull the actual failure evidence.** Read the real error — the failing test's traceback, the exact exception message, the specific log line — rather than working from a vague summary like "it didn't work" or "tests are failing."
+2. **Read the relevant code and identify the precise root cause.** Do not guess at cause from symptoms. Trace the failure to the exact line, condition, or interaction responsible.
+3. **Encode the diagnosis into the next attempt's instructions.** The follow-up task should state the exact defect and the minimal fix required — not issue an open-ended retry and hope the same approach lands differently. An attempt that failed once with no new information is likely to fail the same way again, or fail differently but just as unproductively.
+
+This matters most when the executor is a weaker or resource-constrained model — one operating under a limited context or step budget. Such executors are especially prone to thrashing (repeated, unproductive self-directed debugging loops) when left to re-diagnose from scratch, and a generic "regenerate it" or "fix the failing tests" instruction can cost several wasted cycles where a two-sentence root-cause statement would have resolved it in one. The stronger and more context-rich the executor, the more it can safely be trusted to self-diagnose from a bare failure signal; the weaker or more context-constrained it is, the more of the diagnosis must be done for it up front.
+
+If a stalled attempt's scope was also too broad (e.g., it touches many concerns or files at once), consider narrowing the follow-up task's scope in addition to supplying the diagnosis — a smaller, single-concern retry with a precise root cause is far more likely to converge than a broad retry with none.
+
 ---
 
 ## Code Review

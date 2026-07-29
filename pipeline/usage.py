@@ -23,8 +23,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 import backend
+import role_registry
 
 from .config import (
+    _LOCAL_BACKEND_NAMES,
     _RISK_ORDER,
     DAILY_REQUEST_THRESHOLD,
     PIPELINE_LOCAL_MAX_RISK,
@@ -159,12 +161,65 @@ def _route_dispatch_backend(story: dict[str, Any]) -> str:
     return "local"
 
 
-def _role_resource_ok(role: str) -> tuple[bool, str]:
+def _role_resource_ok(
+    role: str, plan_role_config: dict | None = None
+) -> tuple[bool, str]:
     """Whether the backend serving `role` ("dispatch"/"review") can take work
     right now. Delegates to that backend's resource_status() (Step 5): the
     Claude driver reports the poller-fed usage gate; the local driver reports
     Ollama reachability. So a Claude usage pause gates only Claude-backed roles
-    and never freezes local dispatch. Returns (ok, reason)."""
+    and never freezes local dispatch. Returns (ok, reason).
+
+    plan_role_config: a plan's top-level role_config. When it (or the registry)
+    pins *review* to a concrete provider, gate on THAT provider's
+    resource_status() — mirroring exactly how _run_reviewer resolves the review
+    backend via role_registry.resolve_role("review", plan_role_config=...).
+    Without this, a plan that pins review to a local backend (e.g. ollama/glm)
+    is still gated by Claude's usage poller (the env default), freezing review
+    whenever Claude's session/weekly usage maxes out even though review never
+    touches Claude (live incident, 2026-07-28: a mode30 plan with
+    role_config review=ollama/glm had review permanently deferred as
+    review_paused while Claude usage sat at 100%). Only review is resolved this
+    way: dispatch's real backend is per-story via _route_dispatch_backend
+    (env-local-first), not role_registry, so passing plan_role_config for
+    dispatch would mismatch and re-introduce the same bug. The override branch
+    only fires when a plan/registry provider actually exists, so an
+    unconfigured install or an env=auto review resolves identically to before."""
+    if role == "review" and plan_role_config is not None:
+        plan_cfg = (plan_role_config or {}).get("review", {})
+        registry = role_registry.load_registry()
+        registry_provider = (
+            registry.get("roles", {}).get("review", {}).get("provider")
+        )
+        if plan_cfg.get("provider") or registry_provider:
+            # Mirror _run_reviewer's own override detection (review.py): only
+            # use the registry-resolved provider when a plan/registry override
+            # actually names one, else get_backend's env lookup (incl. auto)
+            # must stay in charge. Fail open on a garbage/unresolvable provider
+            # so a bad role_config can't crash advance_pipeline or freeze the
+            # pipeline — fall through to the env-based gate below.
+            try:
+                resolution = role_registry.resolve_role(
+                    "review",
+                    plan_role_config=plan_role_config,
+                    default_provider=os.environ.get(
+                        "PIPELINE_BACKEND_REVIEW", "claude"
+                    ).strip().lower(),
+                )
+                # Guard against a provider with no registered driver (mirrors
+                # _resolve_planner_backend's known-providers check) so a
+                # registry/plan misconfiguration fails open instead of crashing.
+                known = set(registry.get("providers", {})) | _LOCAL_BACKEND_NAMES
+                if resolution.provider not in known:
+                    raise role_registry.RoleRegistryError(
+                        f"review resolved to unknown provider {resolution.provider!r}"
+                    )
+                status = backend.get_backend(
+                    "review", name=resolution.provider
+                ).resource_status()
+                return bool(status.get("ok", True)), status.get("reason", "")
+            except (role_registry.RoleRegistryError, NotImplementedError, ValueError):
+                pass  # fall through to the env-based path below
     env_backend = os.environ.get(f"PIPELINE_BACKEND_{role.upper()}", "claude").strip().lower()
     if env_backend == "auto":
         # "auto" is not a concrete driver (get_backend rejects it): the role

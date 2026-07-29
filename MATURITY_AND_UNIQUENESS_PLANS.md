@@ -155,8 +155,7 @@ Reference comparables:
       `status == "done"` (or PR-already-merged) before dispatching any review
       pass. `pipeline/server.py` (`review_story`, `advance_pipeline`/
       `advance_all_plans` scheduling).
-- [ ] **P0 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
-       — Mode 30 – Scheduler/dispatch now guards `git fetch` with an advisory lock (`_try_acquire_git_lock`).**
+- [x] **P0 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`) — Mode 30 – Scheduler/dispatch now guards `git fetch` with an advisory lock (`_try_acquire_git_lock`). (#177, #178)**
       `advance-scheduler`'s launchd job runs `git checkout`/fast-forward
       directly against this repo's working directory every 60s with no
       visible locking against external writers. A manual `git rebase` run

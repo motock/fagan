@@ -887,6 +887,57 @@ def test_ingest_plan_leaves_unresolvable_dependency_keys_unchanged(plan_dir, mon
     assert manifest["stories"]["issue-1"]["dependencies"] == ["no-such-key"]
 
 
+def test_ingest_plan_warns_on_isolation_only_acceptance_fixture(plan_dir, monkeypatch, tmp_path):
+    """Non-blocking authoring nudge: a story whose instructions require
+    wiring at a call site but whose acceptance fixture only invokes the unit
+    directly should notify the user, without failing ingest. Root-caused
+    live 2026-07-28 on harness-targeted-done-nudge -- see
+    pipeline.build_detect._isolation_only_acceptance_warning."""
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(
+                summary="wire the nudge at the call site",
+                agent_instructions="Update the call site to pass content.",
+                acceptance=[{
+                    "path": "tests/test_nudge.py",
+                    "source": "def test_x():\n    assert _no_tool_nudge(0)\n",
+                }],
+            )],
+        }]
+    }
+    (plan_dir / "isowarn.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("isowarn")
+    assert result["ok"] is True
+    notifications = (plan_dir / "isowarn.notifications.log").read_text()
+    assert "isolation-only" in notifications
+    assert "wire the nudge at the call site" in notifications
+
+
+def test_ingest_plan_no_warning_when_fixture_exercises_integration(plan_dir, monkeypatch, tmp_path):
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
+    plan = {
+        "repo_root": str(tmp_path),
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(
+                summary="wire the nudge at the call site",
+                agent_instructions="Update the call site to pass content.",
+                acceptance=[{
+                    "path": "tests/test_nudge.py",
+                    "source": "def test_x(monkeypatch):\n    rc = main()\n    assert rc == 0\n",
+                }],
+            )],
+        }]
+    }
+    (plan_dir / "isook.json").write_text(json.dumps(plan))
+    result = p.ingest_plan("isook")
+    assert result["ok"] is True
+    assert not (plan_dir / "isook.notifications.log").exists()
+
+
 # ---------- Logging hygiene ----------
 def test_http_loggers_are_quieted():
     """Importing the server caps httpx/httpcore at WARNING so the per-tick

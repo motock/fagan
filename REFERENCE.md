@@ -387,6 +387,37 @@ the cost gate.
 
 ---
 
+## Acceptance fixture grading
+
+An `acceptance` fixture that calls the changed function directly — never
+touching the call site, registration path, or wiring the story actually
+asks for — creates a graded path that bypasses the integration work. The
+oracle goes green the moment the unit works in isolation, so a weak
+executor (and even a capable one under time pressure) will skip the
+ungraded wiring step no matter how clearly `agent_instructions` states it,
+and the story ships dead code. This happened live: a fixture asserted a
+helper function's return value directly, `agent_instructions` said to wire
+the helper into an existing call site, and the dispatched agent shipped the
+helper unwired — the oracle was green because it never exercised the call
+site, and the full-suite done-bar didn't catch it either since it doesn't
+exercise the call site any more than the fixture did.
+
+Before writing an `acceptance` fixture, check: if `agent_instructions`
+requires a call-site change, a decorator/registration move, or wiring one
+piece into another, does the fixture's assertion actually fail when that
+wiring is missing — or would it still pass if the wired piece were just
+sitting there unconnected? If the latter, drive the real entrypoint
+(`main()`, the CLI, the route handler) rather than calling the unit
+directly, or assert against the production source/registry that the
+connection landed (e.g. `mcp._tool_manager._tools["foo"].fn is foo`, not
+just `foo(...)` returning the right value). `ingest_plan` runs a
+non-blocking heuristic (`pipeline.build_detect._isolation_only_acceptance_warning`)
+that flags fixtures which look isolation-only against instructions
+mentioning wiring, and posts the warning to the plan's notification log —
+treat it as a prompt to re-check the fixture, not a hard gate.
+
+---
+
 ## Per-role provider/model configuration
 
 Every pipeline role — **overlord**, **planner** (the guided-decomposition

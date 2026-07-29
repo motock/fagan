@@ -13,7 +13,12 @@ from pathlib import Path
 import backend
 import role_registry
 
-from .config import _LOCAL_BACKEND_NAMES, DEFAULT_MODEL
+from .config import (
+    _LOCAL_BACKEND_NAMES,
+    DEFAULT_MODEL,
+    REVIEWER_AUTO_FIX_MAX_FILES,
+    REVIEWER_AUTO_FIX_MAX_LINES,
+)
 from .persona import _persona_body, _persona_default_model
 
 
@@ -21,6 +26,7 @@ def _run_reviewer(
     worktree: str, branch: str, backend_name: str | None = None,
     plan_role_config: dict | None = None,
     since_sha: str | None = None,
+    risk: str = "low",
 ) -> str:
     """Run the code-reviewer persona over a branch and return its raw output.
 
@@ -46,6 +52,16 @@ def _run_reviewer(
     `git diff {since_sha}..HEAD`, exactly as a human reviewer reviews only
     the new commits pushed to a PR after sending it back. None on a first
     review means the full branch diff.
+
+    risk gates the reviewer self-fix option (VERDICT: APPROVE_WITH_FIX,
+    2026-07-29): only offered when PIPELINE_REVIEWER_AUTO_FIX=1 AND risk is
+    "low". Read live via os.environ (not a config.py-imported constant) so
+    tests can toggle it per-call, matching PIPELINE_LOCAL_REVIEW_MODEL's
+    convention above. This is a prompt-construction-level gate, not the only
+    one - review_story's _verify_reviewer_auto_fix mechanically re-checks
+    risk (and diff size, and the full suite) before honoring the verdict, so
+    a reviewer that ignores this instruction and emits APPROVE_WITH_FIX
+    anyway on a high-risk story still can't get it applied.
     """
     body = _persona_body("code-reviewer")
     # Provider/model fall through role_registry (PIPELINE_BACKEND_REVIEW /
@@ -112,8 +128,38 @@ def _run_reviewer(
             f"Review the changes on branch {branch} in this worktree against "
             f"our standards.\n\n"
         )
+    # Reviewer self-fix (2026-07-29): only ever offered for a low-risk story
+    # when the operator has explicitly opted in - never mentioned otherwise,
+    # so an unconfigured install's reviewer behaves exactly as before. Even
+    # when offered, this is advisory, not the only gate: review_story's
+    # _verify_reviewer_auto_fix mechanically re-checks risk, diff size, and
+    # the full test suite before an APPROVE_WITH_FIX is honored.
+    auto_fix_enabled = os.environ.get("PIPELINE_REVIEWER_AUTO_FIX", "0") == "1"
+    if auto_fix_enabled and risk == "low":
+        auto_fix_note = (
+            f"\n\nSelf-fix option: if the ONLY Blocking finding is a small, "
+            f"mechanical, single-concern fix you are highly confident is "
+            f"correct (e.g. a narrow logic/regex bug, an off-by-one, a "
+            f"missing null/negative-input check) - NOT a design change, NOT "
+            f"a multi-file change, NOT anything touching auth/secrets/"
+            f"payments/data-access - you may apply it directly (edit the "
+            f"file, run the tests, commit) and report `VERDICT: "
+            f"APPROVE_WITH_FIX` instead of REQUEST_CHANGES. Describe exactly "
+            f"what you changed and why you're confident it's correct and "
+            f"low-risk. The harness independently re-verifies this before "
+            f"trusting it: the fix must touch at most "
+            f"{REVIEWER_AUTO_FIX_MAX_FILES} file(s) and "
+            f"{REVIEWER_AUTO_FIX_MAX_LINES} changed lines, and the full "
+            f"test suite must still pass - if any of that fails, this "
+            f"downgrades to REQUEST_CHANGES automatically, so do not use "
+            f"this path to sneak through something you are not genuinely "
+            f"confident about. When in doubt, REQUEST_CHANGES instead."
+        )
+    else:
+        auto_fix_note = ""
     prompt = (
         f"{lead}"
+        f"{auto_fix_note}"
         f"Report EVERY Blocking finding you notice in this single "
         f"pass, not just the first one - the implementer is a weak local "
         f"model and each REQUEST_CHANGES cycle is a full rework redispatch, "

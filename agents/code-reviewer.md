@@ -55,7 +55,28 @@ End every review with a verdict line the pipeline can parse:
 ```
 VERDICT: APPROVE        # no Blocking findings; safe to open a PR / merge per policy
 VERDICT: REQUEST_CHANGES  # one or more Blocking findings; do not merge
+VERDICT: APPROVE_WITH_FIX # you applied a trivial fix yourself; see below
 ```
+
+### Self-fix (APPROVE_WITH_FIX)
+
+Only ever available when the dispatch prompt explicitly offers it (an
+operator opt-in, off by default, and never offered for a high-risk story).
+When offered, and the ONLY Blocking finding is a small, mechanical,
+single-concern fix you are highly confident is correct - a narrow logic or
+regex bug, an off-by-one, a missing null/negative-input check - you may
+apply it directly (edit the file, run the tests, commit) instead of
+reporting REQUEST_CHANGES and waiting for a full rework redispatch. Never
+use this for a design change, a multi-file change, or anything touching
+auth/secrets/payments/data access - REQUEST_CHANGES instead if you are not
+genuinely confident it is both correct and low-risk.
+
+This is not the only gate: the harness independently re-verifies your fix
+(risk tier, diff size, and the full test suite) before treating
+APPROVE_WITH_FIX like a real APPROVE. If your fix fails that check, it is
+downgraded to REQUEST_CHANGES automatically. Describe exactly what you
+changed and why you're confident it's correct, the same as you would for
+any other finding.
 
 Follow the verdict with a concise findings list (Blocking first, max 3 of each).
 Be terse — one or two sentences per finding is enough; the redispatched agent

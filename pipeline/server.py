@@ -123,8 +123,11 @@ from .config import (  # noqa: F401
     MERGE_MAX_ATTEMPTS,
     PIPELINE_AUTONOMY,
     PIPELINE_LOCAL_MAX_RISK,
+    PIPELINE_REVIEWER_AUTO_FIX,
     PIPELINE_RISK_THRESHOLD,
     REVIEW_INCONCLUSIVE_MAX,
+    REVIEWER_AUTO_FIX_MAX_FILES,
+    REVIEWER_AUTO_FIX_MAX_LINES,
     REWORK_MAX_ATTEMPTS,
     REWORK_MAX_ATTEMPTS_ESCALATED,
     REWORK_MAX_ATTEMPTS_ORACLE,
@@ -2256,6 +2259,106 @@ def list_decisions(plan_name: str) -> list[dict]:
     return json.loads(path.read_text()) if path.exists() else []
 
 
+def _verify_reviewer_auto_fix(
+    worktree: str, story: dict[str, Any], reviewer_output: str,
+    before_sha: str | None,
+) -> tuple[str, str]:
+    """Mechanically re-verify a reviewer's self-reported APPROVE_WITH_FIX
+    before review_story ever honors it like a real APPROVE (2026-07-29).
+
+    Defense in depth: the reviewer's own "this is trivial and I'm
+    confident" claim is never trusted alone. Independently re-checks (in
+    order, cheapest first): the story's risk tier, that a new commit
+    actually landed, that its diff stays within the configured file/line
+    caps, and that the full test suite still passes. Any failure downgrades
+    to REQUEST_CHANGES (fail closed) with an explanation - this folds back
+    into review_story's ordinary rejection path, so an unverified self-fix
+    still counts against the rework budget rather than looping forever or
+    silently landing unverified code.
+
+    Returns (verdict, feedback) where verdict is "APPROVE" or
+    "REQUEST_CHANGES" - never the raw "APPROVE_WITH_FIX", so callers can
+    treat the result exactly like any other reviewer verdict.
+    """
+    if story.get("risk", "low") != "low":
+        return "REQUEST_CHANGES", (
+            f"Reviewer self-fix (APPROVE_WITH_FIX) is only allowed for "
+            f"risk: low stories; this story is risk: "
+            f"{story.get('risk', 'low')!r}. Downgraded to REQUEST_CHANGES - "
+            f"a human must review this change.\n\n{reviewer_output}"
+        )
+    if not before_sha:
+        return "REQUEST_CHANGES", (
+            "Reviewer self-fix could not be verified (no baseline commit "
+            "was recorded before the review ran). Downgraded to "
+            f"REQUEST_CHANGES.\n\n{reviewer_output}"
+        )
+    try:
+        after_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+            capture_output=True, text=True).stdout.strip()
+    except (subprocess.CalledProcessError, OSError) as e:
+        return "REQUEST_CHANGES", (
+            f"Reviewer self-fix could not be verified (git rev-parse failed: "
+            f"{type(e).__name__}). Downgraded to REQUEST_CHANGES.\n\n{reviewer_output}"
+        )
+    if after_sha == before_sha:
+        return "REQUEST_CHANGES", (
+            "Reviewer reported APPROVE_WITH_FIX but no new commit was found "
+            "on the branch - the claimed fix was never actually committed. "
+            f"Downgraded to REQUEST_CHANGES.\n\n{reviewer_output}"
+        )
+    try:
+        numstat = subprocess.run(
+            ["git", "diff", "--numstat", before_sha, after_sha],
+            cwd=worktree, check=True, capture_output=True, text=True).stdout
+    except (subprocess.CalledProcessError, OSError) as e:
+        return "REQUEST_CHANGES", (
+            f"Reviewer self-fix could not be verified (git diff failed: "
+            f"{type(e).__name__}). Downgraded to REQUEST_CHANGES.\n\n{reviewer_output}"
+        )
+    changed_lines = [ln for ln in numstat.splitlines() if ln.strip()]
+    files_changed = len(changed_lines)
+    total_lines = sum(
+        int(part)
+        for ln in changed_lines
+        for part in ln.split("\t")[:2]
+        if part.isdigit()
+    )
+    if files_changed > REVIEWER_AUTO_FIX_MAX_FILES or total_lines > REVIEWER_AUTO_FIX_MAX_LINES:
+        return "REQUEST_CHANGES", (
+            f"Reviewer self-fix touched {files_changed} file(s) and "
+            f"{total_lines} changed line(s), exceeding the auto-fix cap "
+            f"({REVIEWER_AUTO_FIX_MAX_FILES} file(s), "
+            f"{REVIEWER_AUTO_FIX_MAX_LINES} line(s)). Downgraded to "
+            f"REQUEST_CHANGES - too large to trust as a mechanical, "
+            f"low-risk fix; a full rework/re-review cycle is required.\n\n"
+            f"{reviewer_output}"
+        )
+    test_dir, test_cmd = detect_test_command(Path(worktree))
+    test_env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("PIPELINE_")
+        and not k.startswith("LOCAL_AGENT_")
+        and k != "REPO_ROOT"
+    }
+    test_result = subprocess.run(
+        test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+        env=test_env,
+    )
+    if test_result.returncode != 0:
+        return "REQUEST_CHANGES", (
+            "Reviewer self-fix failed the full test suite after being "
+            "applied. Downgraded to REQUEST_CHANGES.\n\n"
+            f"Failing command: {' '.join(str(c) for c in test_cmd)}\n\n"
+            f"```\n{(test_result.stdout or '')[-2000:]}\n```\n\n{reviewer_output}"
+        )
+    return "APPROVE", (
+        f"{reviewer_output}\n\n[harness-verified self-fix: {files_changed} "
+        f"file(s), {total_lines} line(s) changed, full test suite passed]"
+    )
+
+
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
@@ -2298,6 +2401,20 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 pass
         
     plan_role_config = _plan_role_config(plan_name)
+    # Reviewer self-fix (2026-07-29): captured before invoking the reviewer
+    # so a later APPROVE_WITH_FIX can be mechanically verified against what
+    # actually changed. Guarded like the last_reviewed_sha capture above -
+    # a missing/fake worktree (or any git error) must not crash review;
+    # _verify_reviewer_auto_fix treats a None before_sha as unverifiable and
+    # downgrades to REQUEST_CHANGES rather than trusting an unbounded diff.
+    before_sha = None
+    if worktree and os.path.isdir(worktree):
+        try:
+            before_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+                capture_output=True, text=True).stdout.strip()
+        except (subprocess.CalledProcessError, OSError):
+            before_sha = None
     # Mode 40: a story routed to review via acceptance_failed_review
     # (PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1) whose last recorded test run
     # actually failed can't be meaningfully correctness-reviewed by the LLM
@@ -2326,10 +2443,12 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             reviewer_output = (
                 _run_reviewer(worktree, branch, backend_name="claude",
                               plan_role_config=plan_role_config,
-                              since_sha=story.get("last_reviewed_sha"))
+                              since_sha=story.get("last_reviewed_sha"),
+                              risk=story.get("risk", "low"))
                 if story.get("escalated") else
                 _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
-                              since_sha=story.get("last_reviewed_sha"))
+                              since_sha=story.get("last_reviewed_sha"),
+                              risk=story.get("risk", "low"))
             )
         except backend.RateLimitedError:
             # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
@@ -2370,6 +2489,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 worktree, branch, backend_name=fallback_mode,
                 plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
+                risk=story.get("risk", "low"),
             )
             verdict = _parse_verdict(reviewer_output)
             # Fall through into the normal verdict-handling code below —
@@ -2390,13 +2510,27 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         reviewer_output = (
             _run_reviewer(worktree, branch, backend_name="claude",
                           plan_role_config=plan_role_config,
-                          since_sha=story.get("last_reviewed_sha"))
+                          since_sha=story.get("last_reviewed_sha"),
+                          risk=story.get("risk", "low"))
             if story.get("escalated") else
             _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
-                          since_sha=story.get("last_reviewed_sha"))
+                          since_sha=story.get("last_reviewed_sha"),
+                          risk=story.get("risk", "low"))
         )
         verdict = _parse_verdict(reviewer_output)
         _transient_retried = True
+
+    # Reviewer self-fix (2026-07-29): the reviewer's own "trivial and
+    # confident" self-assessment is never trusted alone - mechanically
+    # re-verify risk, diff size, and the full test suite before honoring it.
+    # Folds into the existing APPROVE/REQUEST_CHANGES branches below
+    # unchanged: verified -> APPROVE (opens a PR like any other approval);
+    # unverified -> REQUEST_CHANGES (counts against the rework budget like
+    # any other rejection, so an unverifiable self-fix can't loop forever).
+    if verdict == "APPROVE_WITH_FIX":
+        verdict, reviewer_output = _verify_reviewer_auto_fix(
+            worktree, story, reviewer_output, before_sha,
+        )
 
     story["review_verdict"] = verdict
     story["review_deferred_count"] = 0

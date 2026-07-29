@@ -137,7 +137,7 @@ def _force_request_changes(monkeypatch, output=None):
     out = output if output is not None else _REQUEST_CHANGES_WITH_FINDINGS
 
     def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None,
-                       acceptance=None, since_sha=None):
+                       acceptance=None, since_sha=None, risk=None):
         reviewer_calls.append({"backend_name": backend_name})
         return out
 

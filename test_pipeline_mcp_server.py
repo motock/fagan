@@ -1703,6 +1703,17 @@ def test_parse_verdict_variants():
     assert p._parse_verdict("no verdict here") == "UNKNOWN"
 
 
+def test_parse_verdict_recognizes_approve_with_fix():
+    """APPROVE_WITH_FIX must parse as its own distinct verdict, not collapse
+    into bare APPROVE via prefix-matching in the regex alternation (ordering
+    matters: APPROVE_WITH_FIX must be tried before the bare APPROVE
+    alternative, or a naive alternation matches "APPROVE" as a substring of
+    "APPROVE_WITH_FIX" and silently drops the _WITH_FIX distinction)."""
+    assert p._parse_verdict("...\nVERDICT: APPROVE_WITH_FIX\n") == "APPROVE_WITH_FIX"
+    # Bare APPROVE must still parse as plain APPROVE, not get upgraded.
+    assert p._parse_verdict("VERDICT: APPROVE") == "APPROVE"
+
+
 def test_run_reviewer_prompt_asks_reviewer_to_flag_missing_documentation(
     agents_dir, monkeypatch,
 ):
@@ -1786,6 +1797,68 @@ def test_run_reviewer_prompt_asks_for_every_blocking_finding_in_one_pass(
     prompt = captured["prompt"].lower()
     assert "every" in prompt and "blocking" in prompt
     assert "rework" in prompt
+
+
+def test_run_reviewer_prompt_omits_approve_with_fix_by_default(agents_dir, monkeypatch):
+    """The reviewer self-fix option (APPROVE_WITH_FIX) must be off by
+    default (secure-by-default: this is a new capability that auto-commits
+    reviewer-authored code) - an operator opts in explicitly via
+    PIPELINE_REVIEWER_AUTO_FIX. Without the env var set, the prompt must
+    never mention the option, even for a low-risk story."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+    monkeypatch.delenv("PIPELINE_REVIEWER_AUTO_FIX", raising=False)
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch", risk="low")
+
+    assert "APPROVE_WITH_FIX" not in captured["prompt"]
+
+
+def test_run_reviewer_prompt_mentions_approve_with_fix_when_enabled_and_low_risk(
+    agents_dir, monkeypatch,
+):
+    """Enabled + low risk is the only combination that offers the reviewer
+    the self-fix option."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+    monkeypatch.setenv("PIPELINE_REVIEWER_AUTO_FIX", "1")
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch", risk="low")
+
+    assert "APPROVE_WITH_FIX" in captured["prompt"]
+
+
+def test_run_reviewer_prompt_omits_approve_with_fix_for_high_risk_even_when_enabled(
+    agents_dir, monkeypatch,
+):
+    """Defense in depth at the prompt-construction layer, not just the
+    harness-side guardrail: a high-risk story never even gets offered the
+    self-fix option, regardless of the operator's global opt-in."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+    monkeypatch.setenv("PIPELINE_REVIEWER_AUTO_FIX", "1")
+
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch", risk="high")
+
+    assert "APPROVE_WITH_FIX" not in captured["prompt"]
 
 
 def test_run_reviewer_does_not_run_test_suite(agents_dir, tmp_path, monkeypatch):
@@ -2248,7 +2321,7 @@ def test_review_story_passes_plan_role_config_from_manifest_to_reviewer(
     }))
     captured = {}
 
-    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None, since_sha=None):
+    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None, since_sha=None, risk=None):
         captured["plan_role_config"] = plan_role_config
         return "VERDICT: APPROVE"
 
@@ -2836,6 +2909,248 @@ def test_run_security_reviewer_incremental_review_scopes_to_since_sha(agents_dir
     prompt = captured["prompt"]
     assert "git diff deadbee..HEAD" in prompt
     assert "Run the test suite" not in prompt
+
+
+# ---------- Reviewer self-fix (APPROVE_WITH_FIX) ----------
+
+def _init_auto_fix_repo(path):
+    p.subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    p.subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=path, check=True)
+    p.subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
+
+
+def _head_sha(path):
+    return p.subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_verify_reviewer_auto_fix_rejects_non_low_risk_without_running_anything(
+    tmp_path, monkeypatch,
+):
+    """The risk check is a mechanical veto, checked BEFORE anything else -
+    a high-risk story never even gets its diff stat computed or its tests
+    run, regardless of what the reviewer claims."""
+    _init_auto_fix_repo(tmp_path)
+    (tmp_path / "f.py").write_text("x = 1\n")
+    p.subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    before_sha = _head_sha(tmp_path)
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (_ for _ in ()).throw(AssertionError("tests must not run")))
+
+    verdict, feedback = p._verify_reviewer_auto_fix(
+        str(tmp_path), {"risk": "high"}, "VERDICT: APPROVE_WITH_FIX", before_sha,
+    )
+
+    assert verdict == "REQUEST_CHANGES"
+    assert "risk" in feedback.lower()
+
+
+def test_verify_reviewer_auto_fix_rejects_when_no_baseline_sha(tmp_path):
+    """A missing before_sha (e.g. the worktree didn't exist/wasn't a git
+    repo when review started) is unverifiable - fail closed rather than
+    trusting an unbounded diff."""
+    verdict, feedback = p._verify_reviewer_auto_fix(
+        str(tmp_path), {"risk": "low"}, "VERDICT: APPROVE_WITH_FIX", None,
+    )
+    assert verdict == "REQUEST_CHANGES"
+    assert "could not be verified" in feedback.lower()
+
+
+def test_verify_reviewer_auto_fix_rejects_when_no_new_commit(tmp_path, monkeypatch):
+    _init_auto_fix_repo(tmp_path)
+    (tmp_path / "f.py").write_text("x = 1\n")
+    p.subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    before_sha = _head_sha(tmp_path)
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (_ for _ in ()).throw(AssertionError("tests must not run")))
+
+    verdict, feedback = p._verify_reviewer_auto_fix(
+        str(tmp_path), {"risk": "low"}, "VERDICT: APPROVE_WITH_FIX", before_sha,
+    )
+
+    assert verdict == "REQUEST_CHANGES"
+    assert "never actually committed" in feedback.lower()
+
+
+def test_verify_reviewer_auto_fix_rejects_when_too_many_files_changed(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "REVIEWER_AUTO_FIX_MAX_FILES", 1)
+    monkeypatch.setattr(p, "REVIEWER_AUTO_FIX_MAX_LINES", 100)
+    _init_auto_fix_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "b.py").write_text("y = 1\n")
+    p.subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    before_sha = _head_sha(tmp_path)
+    (tmp_path / "a.py").write_text("x = 2\n")
+    (tmp_path / "b.py").write_text("y = 2\n")
+    p.subprocess.run(["git", "commit", "-aq", "-m", "fix"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (_ for _ in ()).throw(AssertionError("tests must not run")))
+
+    verdict, feedback = p._verify_reviewer_auto_fix(
+        str(tmp_path), {"risk": "low"}, "VERDICT: APPROVE_WITH_FIX", before_sha,
+    )
+
+    assert verdict == "REQUEST_CHANGES"
+    assert "2 file" in feedback
+
+
+def test_verify_reviewer_auto_fix_rejects_when_too_many_lines_changed(tmp_path, monkeypatch):
+    monkeypatch.setattr(p, "REVIEWER_AUTO_FIX_MAX_FILES", 5)
+    monkeypatch.setattr(p, "REVIEWER_AUTO_FIX_MAX_LINES", 3)
+    _init_auto_fix_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    p.subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    before_sha = _head_sha(tmp_path)
+    (tmp_path / "a.py").write_text("x = 2\ny = 3\nz = 4\nw = 5\n")
+    p.subprocess.run(["git", "commit", "-aq", "-m", "fix"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (_ for _ in ()).throw(AssertionError("tests must not run")))
+
+    verdict, feedback = p._verify_reviewer_auto_fix(
+        str(tmp_path), {"risk": "low"}, "VERDICT: APPROVE_WITH_FIX", before_sha,
+    )
+
+    assert verdict == "REQUEST_CHANGES"
+    assert "changed line" in feedback.lower()
+
+
+def test_verify_reviewer_auto_fix_rejects_when_tests_fail(tmp_path, monkeypatch):
+    _init_auto_fix_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    p.subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    before_sha = _head_sha(tmp_path)
+    (tmp_path / "a.py").write_text("x = 2\n")
+    p.subprocess.run(["git", "commit", "-aq", "-m", "fix"], cwd=tmp_path, check=True)
+
+    marker = "__auto_fix_test_marker__"
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, [marker, "pytest"]))
+    real_run = p.subprocess.run
+
+    def _fake_run(cmd, **kw):
+        if cmd and cmd[0] == marker:
+            return subprocess.CompletedProcess(cmd, 1, stdout="1 failed", stderr="")
+        return real_run(cmd, **kw)
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    verdict, feedback = p._verify_reviewer_auto_fix(
+        str(tmp_path), {"risk": "low"}, "VERDICT: APPROVE_WITH_FIX", before_sha,
+    )
+
+    assert verdict == "REQUEST_CHANGES"
+    assert "1 failed" in feedback
+
+
+def test_verify_reviewer_auto_fix_approves_small_verified_fix(tmp_path, monkeypatch):
+    _init_auto_fix_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    p.subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    p.subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+    before_sha = _head_sha(tmp_path)
+    (tmp_path / "a.py").write_text("x = 2\n")
+    p.subprocess.run(["git", "commit", "-aq", "-m", "fix"], cwd=tmp_path, check=True)
+
+    marker = "__auto_fix_test_marker__"
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, [marker, "pytest"]))
+    real_run = p.subprocess.run
+
+    def _fake_run(cmd, **kw):
+        if cmd and cmd[0] == marker:
+            return subprocess.CompletedProcess(cmd, 0, stdout="1 passed", stderr="")
+        return real_run(cmd, **kw)
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    verdict, feedback = p._verify_reviewer_auto_fix(
+        str(tmp_path), {"risk": "low"}, "VERDICT: APPROVE_WITH_FIX - trivial fix", before_sha,
+    )
+
+    assert verdict == "APPROVE"
+    assert "trivial fix" in feedback
+    assert "harness-verified" in feedback
+
+
+def test_review_story_approve_with_fix_verified_opens_pr(plan_dir, agents_dir, monkeypatch):
+    """DYNAMIC integration check: review_story itself must call
+    _verify_reviewer_auto_fix and honor its result, not just parse the raw
+    VERDICT line - a verified self-fix proceeds exactly like an ordinary
+    APPROVE (opens a PR, clears rework state)."""
+    _write_manifest(plan_dir, "autofixok", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE_WITH_FIX")
+    monkeypatch.setattr(p, "_verify_reviewer_auto_fix",
+                        lambda wt, story, output, before_sha: ("APPROVE", "verified fix"))
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    result = p.review_story("autofixok", "S1")
+
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "pr_open"
+    story = _read_manifest(plan_dir, "autofixok")["stories"]["S1"]
+    assert story["status"] == "pr_open"
+
+
+def test_review_story_approve_with_fix_failed_verification_becomes_changes_requested(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """The mirror case: an APPROVE_WITH_FIX that FAILS harness verification
+    (too many files changed, the full suite broke, etc.) must downgrade to
+    REQUEST_CHANGES exactly like an ordinary rejection - no PR opens, and it
+    counts against the rework budget so a story can't loop on unverified
+    self-fixes forever."""
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS", 3)
+    _write_manifest(plan_dir, "autofixbad", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: APPROVE_WITH_FIX")
+    monkeypatch.setattr(p, "_verify_reviewer_auto_fix",
+                        lambda wt, story, output, before_sha: (
+                            "REQUEST_CHANGES", "self-fix touched too many files"))
+
+    def _boom(*a, **k):
+        raise AssertionError("PR must not be opened when auto-fix verification fails")
+    monkeypatch.setattr(p, "_open_pr", _boom)
+
+    result = p.review_story("autofixbad", "S1")
+
+    assert result["verdict"] == "REQUEST_CHANGES"
+    assert result["status"] == "changes_requested"
+    story = _read_manifest(plan_dir, "autofixbad")["stories"]["S1"]
+    assert story["status"] == "changes_requested"
+    assert "too many files" in story["review_feedback"]
+    assert story["rework_attempts"] == 1
+
+
+def test_review_story_passes_risk_to_run_reviewer(plan_dir, agents_dir, monkeypatch):
+    """review_story must thread the story's risk tier into _run_reviewer so
+    the self-fix option is only ever offered when actually eligible - not
+    just tolerated by signature."""
+    captured = {}
+    _write_manifest(plan_dir, "riskthread", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "high"},
+    })
+
+    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None,
+                        since_sha=None, risk="low"):
+        captured["risk"] = risk
+        return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _fake_reviewer)
+    monkeypatch.setattr(p, "_run_security_reviewer", lambda wt, br, **k: "VERDICT: APPROVE")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("riskthread", "S1")
+
+    assert captured["risk"] == "high"
 
 
 def test_review_story_threads_last_reviewed_sha_as_since_sha(plan_dir, agents_dir, monkeypatch):

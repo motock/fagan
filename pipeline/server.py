@@ -55,6 +55,7 @@ from .build_detect import (  # noqa: F401
     _added_pytest_test_paths,
     _build_command_for,
     _is_pytest_cmd,
+    _isolation_only_acceptance_warning,
     _provision_worktree_venv,
     _scope_test_cmd_to_acceptance,
     _test_command_for,
@@ -824,6 +825,17 @@ def ingest_plan(
         final_manifest["role_config"] = plan.get("role_config", prior.get("role_config", {}))
 
         _atomic_write_json(manifest_path, final_manifest)
+
+        # Non-blocking authoring nudge: flag acceptance fixtures that grade
+        # only the unit in isolation while the brief requires integration
+        # wiring (a call-site/registration change). A weak executor passes
+        # such a fixture while skipping the ungraded wiring and ships dead
+        # code (observed live 2026-07-28). Advisory only — never blocks.
+        for key, story in final_manifest["stories"].items():
+            msg = _isolation_only_acceptance_warning(story)
+            if msg is not None:
+                _notify_user(plan_name, f"{key}: {msg}")
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {msg}")
 
     return {"ok": True, "manifest_path": str(manifest_path), **final_manifest}
 

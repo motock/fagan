@@ -117,16 +117,8 @@ def summarize_token_costs(
 
         # Aggregate totals.
         total_records += 1
-
-        backend_entry = by_backend.setdefault(
-            backend,
-            {"input_tokens": 0, "output_tokens": 0, "total_cost_usd": 0.0},
-        )
-        backend_entry["input_tokens"] += input_tokens
-        backend_entry["output_tokens"] += output_tokens
-        backend_entry["total_cost_usd"] += cost
-        # Aggregate role metrics.
-        role_entry = by_role.setdefault(role, {"count": 0, "input_tokens": 0, "output_tokens": 0})
-        role_entry["count"] += 1
-        role_entry["input_tokens"] += input_tokens
-        role_entry["output_tokens"] += output_tokens
+    return {
+        "total_records": total_records,
+        "by_backend": by_backend,
+        "by_role": by_role,
+    }

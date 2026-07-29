@@ -6,41 +6,25 @@ This file governs how AI-assisted development should be conducted in this codeba
 
 ## How to use this template
 
-This file is a starting point, not a final specification. Fork it, adapt it, and commit it as `CLAUDE.md` at the root of your repository.
+Shared engineering-standards template — fork and adapt for your repo.
 
-**Keep as-is (invariant):** Core Principles, Code Quality, Testing, Security, Secure by Design, Observability & Logging, and Architecture & Design. These are universal engineering standards; weakening them reduces the value of the template for your team and makes it harder to share practices across teams.
+**Keep as-is (invariant):** Core Principles, Code Quality, Testing, Security, Secure by Design, Observability & Logging, and Architecture & Design. Weakening these reduces the template's value and cross-team shareability.
 
 **Customize for your context:**
-- **Agent Workflow — Step 1:** If your team's pipeline tool exposes different story/plan primitives than `mcp__pipeline__*`, swap in the equivalent calls. The sequence (ingest plan → claim story → mark in progress) should stay the same.
-- **Agent Workflow — Step 5:** Detection is intentionally language-agnostic — it inspects whatever build/config files are present rather than assuming one ecosystem. No customization should be needed unless your repo's test command can't be inferred from its build files.
-- **Commit Standards:** Adopt Conventional Commits as written, or substitute your team's preferred format — but pick one and apply it consistently.
-- **Definition of Done:** Add or remove gates to match your team's release process (e.g., QA sign-off, load test, security review).
+- **Agent Workflow — Step 1:** Swap in your pipeline tool's story/plan primitives if not `mcp__pipeline__*`; the sequence (ingest plan → claim story → mark in progress) stays the same.
+- **Agent Workflow — Step 5:** Language-agnostic by design — customize only if your repo's test command can't be inferred from its build files.
+- **Commit Standards:** Adopt Conventional Commits as written, or substitute your team's format — pick one and apply it consistently.
+- **Definition of Done:** Add or remove gates to match your release process (e.g., QA sign-off, load test, security review).
 
-**Extend with team-specific sections:** Add language-, framework-, or domain-specific guidance below the existing sections. Prefer adding new sections over editing shared ones so the document stays composable with future updates to the base template.
+Prefer adding new sections over editing the invariant ones, so the document stays composable across template updates.
 
 ---
 
 ## Local Development Setup
 
-> **Template instruction:** Replace this section with your project's actual setup steps before committing. Delete this notice when done.
+> **Template instruction:** Replace with your project's actual setup steps; delete this notice when done. See `README.md` for this repo's setup.
 
-Document the minimum steps required to get a new contributor running locally:
-
-```
-# 1. Clone and install dependencies
-#    <replace with your commands>
-
-# 2. Configure environment variables
-#    <list required variables and where to get values>
-
-# 3. Start the application
-#    <replace with your start command>
-
-# 4. Run the test suite
-#    <replace with your test command>
-```
-
-Include any prerequisites (runtime versions, required tools, local services) and note any common setup pitfalls. If a service dependency (database, message broker, etc.) is required, document how to start it — preferably via a single command such as `docker compose up`.
+Document the minimum steps for a new contributor: clone/install, env vars, start command, test command. Note prerequisites (runtime versions, tools, services) and common pitfalls; if a service dependency is required, document how to start it (e.g. `docker compose up`).
 
 ---
 

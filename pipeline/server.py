@@ -2699,7 +2699,9 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     # than one global Claude flag. This is what lets local dispatch keep
     # running when Claude's weekly limit is hit (and vice versa).
     dispatch_ok, dispatch_reason = _role_resource_ok("dispatch")
-    review_ok, review_reason = _role_resource_ok("review")
+    review_ok, review_reason = _role_resource_ok(
+        "review", plan_role_config=manifest.get("role_config")
+    )
     # A-posteriori escalation of a failed local run to Claude is a feature of
     # auto dispatch only. Under an explicit local (or claude) backend the
     # operator has pinned the dispatcher on purpose, so a local failure is

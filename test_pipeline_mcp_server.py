@@ -4102,7 +4102,7 @@ def test_advance_pipeline_actually_dispatches_ready_story_not_just_reports_it(
                "status": "todo", "dependencies": []},
     })
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
     monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
     monkeypatch.setattr(pt, "plane_request",
@@ -4131,7 +4131,7 @@ def test_advance_pipeline_actually_interrupts_in_progress_when_dispatch_gated(
     })
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     # Dispatch backend gated -> advance_pipeline interrupts in_progress agents.
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (False, "gate down"))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (False, "gate down"))
     monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
 
     class _GitResult:
@@ -4170,7 +4170,7 @@ def test_advance_pipeline_does_not_interrupt_in_progress_on_memory_pressure_gate
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(
         p, "_role_resource_ok",
-        lambda role: (False, "insufficient free memory (1024mb < 2048mb floor)"),
+        lambda role, plan_role_config=None: (False, "insufficient free memory (1024mb < 2048mb floor)"),
     )
     monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
 
@@ -4912,6 +4912,84 @@ def test_role_resource_ok_auto_gated_only_when_both_backends_unavailable(
     assert reason == "Claude usage gate tripped"
 
 
+def test_role_resource_ok_review_uses_plan_role_config_backend_not_claude(
+    usage_state_path, monkeypatch,
+):
+    """A plan that pins review to a local provider (e.g. ollama/glm) must be
+    gated by THAT provider's resource_status(), not Claude's usage poller. With
+    Claude's gate tripped (session paused) but Ollama healthy, review must be
+    ok — this is the mode30 E2E incident: review was permanently deferred as
+    review_paused while Claude usage sat at 100% even though review never
+    touches Claude."""
+    usage_state_path.write_text(json.dumps({"session_pct": 100, "week_pct": 100, "paused": True}))
+    monkeypatch.setattr(backend.OllamaDriver, "resource_status",
+                        lambda self: {"ok": True, "reason": ""})
+
+    ok, reason = p._role_resource_ok(
+        "review", plan_role_config={"review": {"provider": "ollama", "model": "glm"}}
+    )
+
+    assert ok is True
+    assert reason == ""
+
+
+def test_role_resource_ok_review_plan_role_config_gates_when_local_down(
+    usage_state_path, monkeypatch,
+):
+    """Negative side: when the plan-pinned review backend (ollama) is down,
+    review must be gated with that backend's reason — even if Claude is
+    healthy. The gate follows the plan role_config, not the env default."""
+    usage_state_path.write_text(json.dumps({"session_pct": 5, "week_pct": 5, "paused": False}))
+    monkeypatch.setattr(backend.OllamaDriver, "resource_status",
+                        lambda self: {"ok": False, "reason": "Ollama unreachable"})
+
+    ok, reason = p._role_resource_ok(
+        "review", plan_role_config={"review": {"provider": "ollama", "model": "glm"}}
+    )
+
+    assert ok is False
+    assert reason == "Ollama unreachable"
+
+
+def test_role_resource_ok_review_garbage_plan_provider_fails_open_to_env(
+    usage_state_path, monkeypatch,
+):
+    """A garbage provider in plan role_config must not crash advance_pipeline:
+    the gate fails open to the env-based path. With env review=claude and
+    Claude's gate tripped, that fallback yields ok=False (Claude's reason) —
+    the point is it doesn't raise and it doesn't silently ok=True."""
+    usage_state_path.write_text(json.dumps({"session_pct": 100, "week_pct": 100, "paused": True}))
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "claude")
+
+    ok, reason = p._role_resource_ok(
+        "review", plan_role_config={"review": {"provider": "not-a-real-backend"}}
+    )
+
+    assert ok is False
+    assert reason == "Claude usage gate tripped"
+
+
+def test_role_resource_ok_dispatch_ignores_plan_role_config(
+    usage_state_path, monkeypatch,
+):
+    """dispatch's real backend is per-story via _route_dispatch_backend
+    (env-local-first), NOT role_registry — so plan_role_config must NOT
+    redirect the dispatch gate to a registry provider. With env dispatch=local
+    and a plan role_config that pins review (not dispatch), the dispatch gate
+    still checks the local backend and ignores the plan config entirely."""
+    usage_state_path.write_text(json.dumps({"session_pct": 100, "week_pct": 100, "paused": True}))
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(backend.OllamaDriver, "resource_status",
+                        lambda self: {"ok": True, "reason": ""})
+
+    ok, reason = p._role_resource_ok(
+        "dispatch", plan_role_config={"review": {"provider": "ollama", "model": "glm"}}
+    )
+
+    assert ok is True
+    assert reason == ""
+
+
 def test_list_ready_stories_resolves_summary_dependencies(plan_dir):
     """Dependencies expressed as a prerequisite's summary string (the documented
     save_plan schema) must resolve against done stories even when the manifest is
@@ -4933,7 +5011,7 @@ def test_advance_pipeline_dispatches_story_with_summary_dependency(plan_dir, mon
     """The dispatch tick must treat a satisfied summary-string dependency as met
     and dispatch the dependent story, not silently skip it forever."""
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
     _write_manifest(plan_dir, "adep", {
         "uuid-a": {"summary": "Foundation", "status": "done", "dependencies": []},
         "uuid-b": {"summary": "Next", "status": "todo", "dependencies": ["Foundation"]},
@@ -9861,7 +9939,7 @@ def test_advance_pipeline_escalates_local_failure_to_claude(
             return _Gone()
         return _FailResult()
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
 
     result = p.advance_pipeline("esc1")
 
@@ -9911,7 +9989,7 @@ def test_advance_pipeline_does_not_escalate_claude_failure(
             return _Gone()
         return _FailResult()
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
 
     result = p.advance_pipeline("esc2")
 
@@ -9957,7 +10035,7 @@ def test_advance_pipeline_does_not_escalate_already_escalated(
             return _Gone()
         return _FailResult()
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
 
     result = p.advance_pipeline("esc3")
 
@@ -10007,7 +10085,7 @@ def test_advance_pipeline_give_up_failure_gets_distinguishing_notify(
         return _FailResult()
     monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
     notes = []
     monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
 
@@ -10059,7 +10137,7 @@ def test_advance_pipeline_local_failure_terminal_under_local_mode(
             return _Gone()
         return _FailResult()
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
 
     result = p.advance_pipeline("esclocal")
 
@@ -10109,7 +10187,7 @@ def test_advance_pipeline_retries_on_local_fallback_model(
             return _Gone()
         return _FailResult()
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
 
     result = p.advance_pipeline("escfallback")
 
@@ -10163,7 +10241,7 @@ def test_advance_pipeline_fallback_model_failure_is_terminal(
             return _Gone()
         return _FailResult()
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
-    monkeypatch.setattr(p, "_role_resource_ok", lambda role: (True, ""))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
 
     result = p.advance_pipeline("escfallback2")
 

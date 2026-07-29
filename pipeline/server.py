@@ -32,6 +32,7 @@ Per-project overrides (set in project .mcp.json env block):
 """
 
 import ast
+import fcntl
 import json
 import logging
 import os
@@ -432,27 +433,48 @@ def _scoped_repo_root(plan_name: str):
         yield REPO_ROOT
     finally:
         REPO_ROOT = previous
+_lock_state = {}
 
+@contextmanager
+def _try_acquire_git_lock(repo_root: Path):
+    """Non-blocking advisory flock guarding .git-mutating dispatch.
 
-
-
-
-
-
-# ---------- Overlord / decision helpers ----------
-
-
-# GUIDED_DECOMPOSITION_PLAN.md: a "tech lead" planner call that turns a
-# coarse story into an ordered sub-step checklist for the weak local
-# executor to work through inside its own single worktree/transcript. This
-# is deliberately NOT the story-splitting approach already tried and
-# disproven (tests/benchmark/PRODUCT_ANALYST_VALIDATION_PLAN.md) - the
-# checklist augments one story's prompt, it never creates new stories or
-# new cold dispatches.
-
-
-
-
+    Reentrant per call stack: flock() is scoped to the open file
+    description, not the process, so a nested call must recognize the
+    lock is already held by an ancestor frame rather than re-flocking
+    (which would fail against its own outer acquisition).
+    """
+    lock_path = repo_root / ".git" / ".pipeline-git-lock"
+    key = str(lock_path)
+    if _lock_state.get(key, 0) > 0:
+        _lock_state[key] += 1
+        try:
+            yield True
+        finally:
+            _lock_state[key] -= 1
+        return
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    except OSError:
+        yield True
+        return
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_path.write_text(str(repo_root))
+        except OSError:
+            yield False
+            return
+        _lock_state[key] = 1
+        try:
+            yield True
+        finally:
+            _lock_state[key] -= 1
+            if _lock_state[key] <= 0:
+                del _lock_state[key]
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 # ---------- Review / PR helpers ----------
 
 
@@ -877,25 +899,27 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
         if not resuming:
             with _scoped_repo_root(plan_name) as repo_root:
-                subprocess.run(
-                    ["git", "fetch", "origin", _default_branch()],
-                    cwd=repo_root, check=True,
-                )
+                with _try_acquire_git_lock(repo_root) as acquired:
+                    if acquired:
+                        subprocess.run(
+                            ["git", "fetch", "origin", _default_branch()],
+                            cwd=repo_root, check=True,
+                        )
                 subprocess.run(
                     ["git", "worktree", "add", "-b", branch, str(worktree_path),
                      f"origin/{_default_branch()}"],
                     cwd=repo_root, check=True,
                 )
-                _exclude_worktree_logs_from_tracking(Path(repo_root))
-                # A fresh worktree has no .venv (gitignored) - give it its own
-                # complete one now rather than let it fall back to (and
-                # potentially mutate) the shared main-repo venv other
-                # concurrently-dispatched stories may be using. See
-                # _provision_worktree_venv's docstring for the failure mode
-                # this closes (root-caused live on RUFF-016-ADOPTION).
-                # No-ops for non-Python projects or ones without a
-                # requirements file.
-                _provision_worktree_venv(worktree_path)
+            _exclude_worktree_logs_from_tracking(Path(repo_root))
+            # A fresh worktree has no .venv (gitignored) - give it its own
+            # complete one now rather than let it fall back to (and
+            # potentially mutate) the shared main-repo venv other
+            # concurrently-dispatched stories may be using. See
+            # _provision_worktree_venv's docstring for the failure mode
+            # this closes (root-caused live on RUFF-016-ADOPTION).
+            # No-ops for non-Python projects or ones without a
+            # requirements file.
+            _provision_worktree_venv(worktree_path)
 
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 

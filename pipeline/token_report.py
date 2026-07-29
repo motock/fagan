@@ -1,7 +1,7 @@
 """
 Token usage summarization utility.
 
-This module provides a single public function `summarize_token_costs` that reads a JSONL file containing per‑record token and cost metrics, applies optional filtering by timestamp, and aggregates totals per backend and per role.
+This module provides a single public function ``summarize_token_costs`` that reads a JSONL file containing per‑record token and cost metrics, applies optional filtering by timestamp, and aggregates totals per backend and per role.
 
 The implementation follows the expectations defined in the acceptance tests:
 
@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable, Mapping
 from typing import Any, Dict
+
+# ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
 
@@ -61,7 +63,8 @@ def summarize_token_costs(
         ``{"total_records": int, "by_backend": dict, "by_role": dict}``
         where ``by_backend`` maps backend names to a dictionary containing
         ``input_tokens``, ``output_tokens`` and ``total_cost_usd``.  ``by_role``
-        maps role names to a dictionary with a single ``count`` key.
+        maps role names to a dictionary with the same token/cost fields plus a
+        ``count`` key.
     """
 
     # Zero‑ed summary for missing or empty files.
@@ -74,7 +77,7 @@ def summarize_token_costs(
 
     total_records = 0
     by_backend: Dict[str, Dict[str, Any]] = {}
-    by_role: Dict[str, Dict[str, int]] = {}
+    by_role: Dict[str, Dict[str, Any]] = {}
 
     for raw_line in file_iter:
         line = raw_line.strip()
@@ -117,6 +120,26 @@ def summarize_token_costs(
 
         # Aggregate totals.
         total_records += 1
+
+        # Backend aggregation
+        backend_entry = by_backend.setdefault(
+            backend,
+            {"input_tokens": 0, "output_tokens": 0, "total_cost_usd": 0.0},
+        )
+        backend_entry["input_tokens"] += input_tokens
+        backend_entry["output_tokens"] += output_tokens
+        backend_entry["total_cost_usd"] += cost
+
+        # Role aggregation (count and token/cost totals)
+        role_entry = by_role.setdefault(
+            role,
+            {"count": 0, "input_tokens": 0, "output_tokens": 0, "total_cost_usd": 0.0},
+        )
+        role_entry["count"] += 1
+        role_entry["input_tokens"] += input_tokens
+        role_entry["output_tokens"] += output_tokens
+        role_entry["total_cost_usd"] += cost
+
     return {
         "total_records": total_records,
         "by_backend": by_backend,

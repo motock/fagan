@@ -63,10 +63,15 @@ Reference comparables:
 - [ ] **Finish the MLX validate re-run.** Stopped at 5/9; `lru_cache_rs`
       gt=True-not-merged (memory pressure) still open. Re-verify, then commit
       the 3 fixes or record why they're parked.
-- [ ] **Implement the reviewer-escalation plan** (L1 harness-enforced
-      full-suite done-bar on CI-fail rework). `MERGE_CI_REWORK` is committed
-      but the agent still ignores CI detail because its done-criterion is
-      oracle-green — the rework path is half-wired.
+- [x] **Implement the reviewer-escalation plan L1** (2026-07-22/23, Mode 40
+      series — PRs #166/#168/#171/#172). L1 shipped: `_ci_status` now
+      populates the failing-check names, the merge gate synthesizes
+      CI-fail-specific rework feedback, `detect_lint_command` is wired into
+      `check_story_status`'s test gate, and the merge-gate CI-fail rework
+      helper has an integration test. The agent's done-criterion is no longer
+      purely oracle-green on CI-fail rework. **L2/L3 (reviewer-escalation
+      tiers above L1) remain unimplemented** — see
+      `REVIEWER_ESCALATION_PLAN.md`.
 - [ ] **Implement token-context optimization**, measuring cache hits first
       (per the plan's own caveat). Dead `PIPELINE_REVIEW_MAX_TOKENS`,
       duplicated uncached system prompts.
@@ -80,13 +85,18 @@ Reference comparables:
 - [ ] **Make `model_registry.json` the single source of truth**; demote the
       ~50 `PIPELINE_*` env vars to overrides-only. The priority chain
       (plan → env → registry → hardcoded) is documented but sprawling.
-- [ ] **Deprecate/rename the alias traps** the memory already flags:
+- [~] **Deprecate/rename the alias traps** the memory already flags:
       `LOCAL_AGENT_MAX_STEPS` (transport-only no-op) vs
       `PIPELINE_LOCAL_MAX_STEPS` (real knob); `local` as permanent back-compat
-      alias; per-provider tier overrides. Rename with a deprecation warning or
-      document the trap loudly in one place.
-- [ ] **Split the 74 KB README** into a quickstart + a reference doc. A new
-      contributor currently reads 1,000 lines to do anything.
+      alias; per-provider tier overrides. **Partial (2026-07-27, PR #174):
+      `backend.py` now emits a one-time module-load `logging.warning` naming
+      both the wrong `LOCAL_AGENT_*` var and the correct `PIPELINE_LOCAL_*`
+      one whenever any of the three transport-only vars is set** — the
+      "document the trap loudly in one place" half. The actual rename/deprecation
+      (removing the alias, not just warning) is still open.
+- [x] **Split the 74 KB README** into a quickstart + a reference doc
+      (2026-07-27, `5f7d811`). README.md is now a 126-line quickstart;
+      REFERENCE.md (919 lines) holds the moved reference material.
 
 ### A3. Stabilize the active bug surface
 
@@ -101,7 +111,9 @@ Reference comparables:
       dispatching the Mode 24/28 fix itself — see `project_dispatch_failure_modes.md`
       for full writeups). Add a "no new modes for N benchmark runs" gate as
       a stability signal — not done, and the discovery rate argues this is
-      more urgent than when first written.
+      more urgent than when first written. **Update 2026-07-27: the count
+      has plateaued at 32 — no new modes since 2026-07-22 — but no gate
+      enforces it, so this is luck rather than a measured signal.**
 - [ ] **Mode 31 (2026-07-22, NOT fixed) — confident off-task drift.** A
       correctly-scoped, narrowly-instructed dispatch (verified via its own
       transcript) abandoned the assigned task and invented an unrelated one
@@ -125,9 +137,14 @@ Reference comparables:
       `quantization_level`, consistent with a serving/plumbing gap rather
       than a weights problem (same lesson as the earlier MLX tool-format
       investigation).
-- [ ] **P0 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
+- [x] **P0 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
       — Mode 29: guard `review_story`/the scheduler against dispatching a
-      review pass on an already-`done`/merged story.** A redundant tick fired
+      review pass on an already-`done`/merged story.** Fixed 2026-07-22/23
+      (PR #157 + #160): `review_story` now skips when `status !=
+      "tests_passed"` (no longer re-reviews a done/merged story) AND is
+      wrapped in `_plan_lock` so a concurrent MCP call can't race the
+      scheduler's own internal review and clobber an already-merged story's
+      status. A redundant tick fired
       after a story was already auto-reviewed, auto-merged, and had its
       worktree cleaned up; it found the (correctly) nonexistent worktree and
       reported `REQUEST_CHANGES`, flipping the manifest's status for a done,
@@ -177,10 +194,12 @@ Reference comparables:
       herrings and tripping the per-target repetition guard. Fix the
       shared-state/order-dependence or mark them non-blocking.
       `test_local_agent.py`, `test_pipeline_mcp_server.py`.
-- [ ] **P1 (same retro) — route rework to a stronger model when remaining
-      findings are polish-only** (doc/comment/test-coherence, no logic
-      failures) — gpt-oss:20b reliably stalls on this work shape. Depends on
-      the P0 finding-target storage above.
+- [x] **P1 (same retro) — route rework to a stronger model when remaining
+      findings are polish-only** (2026-07-23, PR #164). `final_rework_escalation`
+      plan-level config (default off) routes a story's LAST rework redispatch
+      — the one immediately before it would park — to a configured stronger
+      provider+model. Depends on the P0 finding-target storage above (PR
+      #158), which shipped first.
 - [ ] **P1 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
       — when a story changes `pipeline/server.py` or `pipeline_mcp_server.py`
       itself, make "restart + reconnect the MCP server" an explicit, checked

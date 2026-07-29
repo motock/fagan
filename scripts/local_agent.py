@@ -1064,20 +1064,31 @@ def _try_repair_indentation(content: str) -> tuple[str, str] | None:
     return content, note
 
 
-def _record_syntax_rejection(path_str: str, err: str) -> str:
+def _record_syntax_rejection(path_str: str, err: str, existing_line_count: int | None = None) -> str:
     """Bump the consecutive-rejection counter for `path_str` and, from the
     second consecutive rejection onward, append a nudge to regenerate the
-    file from scratch instead of resubmitting the same broken content."""
+    ENTIRE file from scratch instead of resubmitting the same broken content.
+    If *existing_line_count* is provided and exceeds THRESHOLD (500 lines),
+    use a different smaller-anchored-edit nudge instead - regenerating a
+    large file from scratch risks corrupting the untouched majority of it.
+    """
     count = _SYNTAX_REJECT_COUNTS.get(path_str, 0) + 1
     _SYNTAX_REJECT_COUNTS[path_str] = count
     if count >= 2:
-        err += (
-            "\nDo NOT resubmit the same content. Regenerate the ENTIRE file "
-            "from scratch, with no diff markers and no surrounding prose."
-        )
+        # Threshold for large files: 500 lines. If the file is larger than this,
+        # advise a smaller anchored edit instead of regenerating.
+        THRESHOLD = 500
+        if existing_line_count is not None and existing_line_count > THRESHOLD:
+            err += (
+                f"\nDo NOT resubmit the same content. The file has {existing_line_count} lines; "
+                "instead retry with a SMALLER anchored str_replace: quote a few exact lines of surrounding context immediately before and after the specific span you need to change, and change only that minimal span."
+            )
+        else:
+            err += (
+                "\nDo NOT resubmit the same content. Regenerate the ENTIRE file "
+                "from scratch, with no diff markers and no surrounding prose."
+            )
     return err
-
-
 def _removed_lines_echo(old_lines: list[str], new_str: str) -> str:
     """Mode 41 (D): return a short echo of the lines a replace_lines call
     genuinely removed (present in the old range, absent anywhere in the
@@ -1197,7 +1208,7 @@ def run_tool(fn, args) -> str:
         if err:
             repair = _try_repair_indentation(new_text)
             if repair is None:
-                return _record_syntax_rejection(args["path"], err)
+                return _record_syntax_rejection(args["path"], err, len(text.splitlines()))
             new_text, note = repair
         orphaned = _newly_undefined_names(args["path"], text, new_text)
         if orphaned:
@@ -1239,7 +1250,7 @@ def run_tool(fn, args) -> str:
         if err:
             repair = _try_repair_indentation(new_text)
             if repair is None:
-                return _record_syntax_rejection(args["path"], err)
+                return _record_syntax_rejection(args["path"], err, len(old_text.splitlines()))
             new_text, note = repair
         orphaned = _newly_undefined_names(args["path"], old_text, new_text)
         if orphaned:

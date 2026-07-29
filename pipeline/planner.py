@@ -158,7 +158,9 @@ def _format_authored_test_files(
 
 
 def _planner_system(
-    *, include_scratchpad: bool = False, tests_already_authored: bool = False,
+    *,
+    include_scratchpad: bool = False,
+    tests_already_authored: bool = False,
     authored_test_files: list[tuple[str, list[str]]] | None = None,
 ) -> str:
     """The planner's system prompt, optionally augmented with the scratchpad
@@ -254,7 +256,8 @@ def _run_planner(
     *,
     dispatch_backend: str,
     local_model: str,
-    include_scratchpad: bool = False, plan_role_config: dict | None = None,
+    include_scratchpad: bool = False,
+    plan_role_config: dict | None = None,
     tests_already_authored: bool = False,
     authored_test_files: list[tuple[str, list[str]]] | None = None,
 ) -> str | None:
@@ -286,7 +289,9 @@ def _run_planner(
     """
     try:
         backend_name, model = _resolve_planner_backend(
-            dispatch_backend, local_model, plan_role_config=plan_role_config,
+            dispatch_backend,
+            local_model,
+            plan_role_config=plan_role_config,
         )
         text = backend.get_backend("planner", name=backend_name).complete(
             agent_instructions,
@@ -345,9 +350,26 @@ _REWORK_PLANNER_SYSTEM = (
     "then the numbered steps - no other preamble, no closing remarks."
 )
 
+# Single-turn classifier: does a rework's review feedback call for at least
+# one NEW test case (not just a code change against tests that already
+# exist)? Used by _rework_requires_new_tests to decide whether to run the
+# rework test-author phase before the main executor redispatch.
+_REWORK_NEEDS_NEW_TEST_SYSTEM = (
+    "You are assessing code review feedback for a pending rework. Read "
+    "the review feedback below and answer ONLY: does properly "
+    "addressing it require writing at least one NEW test case that "
+    "does not already exist (e.g. a regression test reproducing a "
+    "specific bug, an edge case the reviewer named that is not yet "
+    "covered)? Answer with exactly one word, YES or NO, with no other "
+    "text."
+)
+
 
 def _run_rework_planner(
-    review_feedback: str, *, dispatch_backend: str, local_model: str,
+    review_feedback: str,
+    *,
+    dispatch_backend: str,
+    local_model: str,
     plan_role_config: dict | None = None,
 ) -> str | None:
     """Like _run_planner, but translates code-review feedback into an
@@ -357,15 +379,51 @@ def _run_rework_planner(
     """
     try:
         backend_name, model = _resolve_planner_backend(
-            dispatch_backend, local_model, plan_role_config=plan_role_config,
+            dispatch_backend,
+            local_model,
+            plan_role_config=plan_role_config,
         )
         text = backend.get_backend("planner", name=backend_name).complete(
-            review_feedback, system=_REWORK_PLANNER_SYSTEM, model=model,
+            review_feedback,
+            system=_REWORK_PLANNER_SYSTEM,
+            model=model,
         )
     except Exception:  # noqa: BLE001 (deliberate fail-open-to-None contract, per this function's docstring)
         return None
     text = (text or "").strip()
     return text or None
+
+
+def _rework_requires_new_tests(
+    review_feedback: str,
+    *,
+    dispatch_backend: str,
+    local_model: str,
+    plan_role_config: dict | None = None,
+) -> bool:
+    """Bounded single-turn LLM call: does review_feedback's fix require
+    at least one new test case, not just a code change against tests that
+    already exist? Same bounded single-call contract as
+    _run_planner/_run_rework_planner (one complete() call, never an agent
+    loop) - see their docstrings. Fails open to False (skip the rework
+    test-author phase entirely, today's unmodified behavior) on ANY
+    exception or a non-YES response: a false negative here only costs the
+    pre-existing status quo, never a broken build.
+    """
+    try:
+        backend_name, model = _resolve_planner_backend(
+            dispatch_backend,
+            local_model,
+            plan_role_config=plan_role_config,
+        )
+        text = backend.get_backend("planner", name=backend_name).complete(
+            review_feedback,
+            system=_REWORK_NEEDS_NEW_TEST_SYSTEM,
+            model=model,
+        )
+    except Exception:  # noqa: BLE001 (fail-open, mirrors _run_rework_planner's contract)
+        return False
+    return (text or "").strip().upper().startswith("YES")
 
 
 # ---------- TDD-split test-author role (TDD_SPLIT_PRODUCTION_PLAN.md) ----------
@@ -378,7 +436,8 @@ _NEVER_TOUCH_TESTS_STEERING = (
 
 
 def _resolve_test_author_backend(
-    dispatch_backend: str, local_model: str,
+    dispatch_backend: str,
+    local_model: str,
     plan_role_config: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """Resolve (provider, model) for the "test_author" role - the tech lead
@@ -406,7 +465,9 @@ def _resolve_test_author_backend(
         return None, None
     try:
         resolution = role_registry.resolve_role(
-            "test_author", plan_role_config=plan_role_config, registry=registry,
+            "test_author",
+            plan_role_config=plan_role_config,
+            registry=registry,
             model_fallback=lambda: None,
         )
     except role_registry.RoleRegistryError as e:
@@ -470,6 +531,46 @@ def _test_author_prompt(agent_instructions: str) -> str:
     )
 
 
+def _rework_test_author_prompt(
+    review_feedback: str,
+    fix_checklist: str | None,
+) -> str:
+    """Build the rework test-authoring dispatch's prompt: write ONLY the
+    new regression test(s) the review feedback demands, never the fix.
+    Mirrors _test_author_prompt's initial-dispatch contract one cycle later
+    - a rework redispatch whose reviewer feedback (per
+    _rework_requires_new_tests) calls for new tests gets the same
+    tech-lead-writes-tests-before-the-weaker-executor-fixes split, applied
+    one rework cycle later."""
+    checklist_block = (
+        f"\n\nYour tech lead's fix checklist for context:\n{fix_checklist}"
+        if fix_checklist
+        else ""
+    )
+    return (
+        "The code reviewer REQUESTED CHANGES on this branch. Your ONLY "
+        "job on this dispatch is to write the NEW regression test(s) "
+        "that reproduce the bug(s) described below - never the fix "
+        "itself. A separate, later dispatch (a different, weaker "
+        f"engineer) will implement the fix against your test(s) next.\n\n"
+        f"Review feedback:\n{review_feedback}"
+        f"{checklist_block}\n\n"
+        "--- Test-authoring scope for THIS dispatch ---\n"
+        "Write ONLY the new test(s) needed to reproduce the bug(s) "
+        "named above - do NOT edit the implementation file(s). Add "
+        "them to the existing test file for this module (or add a new "
+        "test_*.py file if none exists yet) alongside the existing "
+        "tests - do not remove or modify any existing test. Run the "
+        "test command to confirm the new test(s) FAIL for the right "
+        "reason (reproducing the exact bug the reviewer described - "
+        "e.g. the exact exception type/message), not because of a "
+        "syntax or import error. When confirmed red, commit them "
+        "(`git add` the test file(s), then `git commit`). Do not push. "
+        "Then say you are done - do not attempt the implementation fix "
+        "yourself."
+    )
+
+
 def _wait_for_agent_exit(pid: int, timeout: float, poll_interval: float = 1.0) -> bool:
     """Block the calling thread until the agent process at `pid` exits, or
     `timeout` seconds elapse (whichever first). Returns True iff the
@@ -508,8 +609,12 @@ def _wait_for_agent_exit(pid: int, timeout: float, poll_interval: float = 1.0) -
 
 
 def _run_test_author_phase(
-    story: dict, *, story_key: str, worktree_path: Path,
-    dispatch_backend: str, local_model: str,
+    story: dict,
+    *,
+    story_key: str,
+    worktree_path: Path,
+    dispatch_backend: str,
+    local_model: str,
     plan_role_config: dict | None = None,
     timeout: float | None = None,
 ) -> bool:
@@ -525,7 +630,9 @@ def _run_test_author_phase(
     feature's single most safety-critical property. Never raises.
     """
     test_author_backend, test_author_model = _resolve_test_author_backend(
-        dispatch_backend, local_model, plan_role_config=plan_role_config,
+        dispatch_backend,
+        local_model,
+        plan_role_config=plan_role_config,
     )
     if not test_author_backend:
         return False
@@ -533,9 +640,12 @@ def _run_test_author_phase(
     try:
         handle = backend.get_backend("dispatch", name=test_author_backend).dispatch(
             prompt=_test_author_prompt(story.get("agent_instructions", "")),
-            system=_TEST_AUTHOR_SYSTEM, model=test_author_model,
+            system=_TEST_AUTHOR_SYSTEM,
+            model=test_author_model,
             allowed_tools=_TEST_AUTHOR_ALLOWED_TOOLS,
-            cwd=worktree_path, log_path=log_path, append=False,
+            cwd=worktree_path,
+            log_path=log_path,
+            append=False,
         )
     except Exception:  # noqa: BLE001 (already logged below; dispatch/process-launch failures are unpredictable and must not raise past this function)
         logging.getLogger("pipeline").warning(
@@ -545,9 +655,9 @@ def _run_test_author_phase(
         return False
     exited = _wait_for_agent_exit(
         handle.pid,
-        timeout if timeout is not None else float(
-            os.environ.get("PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS", "5400")
-        ),
+        timeout
+        if timeout is not None
+        else float(os.environ.get("PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS", "5400")),
     )
     if not exited:
         logging.getLogger("pipeline").warning(
@@ -559,6 +669,7 @@ def _run_test_author_phase(
     # REPO_ROOT, patched by tests via p.REPO_ROOT); the server imports this
     # module at top level, so a module-load import would cycle.
     from .server import _default_branch
+
     try:
         return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
     except Exception as exc:  # noqa: BLE001 (already logged below; git-detection failures are unpredictable and must not raise past this function)
@@ -566,6 +677,82 @@ def _run_test_author_phase(
             f"test-author dispatch failed to detect commits for {story_key}: {exc}"
         )
         return False
+
+
+def _run_rework_test_author_phase(
+    story: dict,
+    *,
+    story_key: str,
+    worktree_path: Path,
+    dispatch_backend: str,
+    local_model: str,
+    review_feedback: str,
+    fix_checklist: str | None = None,
+    plan_role_config: dict | None = None,
+    timeout: float | None = None,
+) -> bool:
+    """Like _run_test_author_phase, but for a REWORK cycle whose review
+    feedback (per _rework_requires_new_tests) calls for at least one new
+    test case. Dispatches a BLOCKING single test-authoring agent run in
+    worktree_path BEFORE the main executor rework redispatch, so the
+    executor implements against tests that already exist and already fail
+    for the right reason - applying TDD_SPLIT_PRODUCTION_PLAN.md's
+    tech-lead/weak-executor split one cycle later. Returns True iff the
+    test-author produced a real new commit on the branch; False on ANY
+    failure (role unconfigured, dispatch error, timeout, no new commit) -
+    callers MUST treat False as "fall back to today's monolithic rework
+    dispatch", identical to _run_test_author_phase's fail-open contract.
+    Never raises.
+    """
+    test_author_backend, test_author_model = _resolve_test_author_backend(
+        dispatch_backend,
+        local_model,
+        plan_role_config=plan_role_config,
+    )
+    if not test_author_backend:
+        return False
+    log_path = worktree_path / "rework_test_author.log"
+    try:
+        handle = backend.get_backend("dispatch", name=test_author_backend).dispatch(
+            prompt=_rework_test_author_prompt(review_feedback, fix_checklist),
+            system=_TEST_AUTHOR_SYSTEM,
+            model=test_author_model,
+            allowed_tools=_TEST_AUTHOR_ALLOWED_TOOLS,
+            cwd=worktree_path,
+            log_path=log_path,
+            append=False,
+        )
+    except Exception:  # noqa: BLE001 (mirrors _run_test_author_phase's contract)
+        logging.getLogger("pipeline").warning(
+            f"rework test-author dispatch failed to start for {story_key}; "
+            "falling back to monolithic rework dispatch"
+        )
+        return False
+    exited = _wait_for_agent_exit(
+        handle.pid,
+        timeout
+        if timeout is not None
+        else float(os.environ.get("PIPELINE_TEST_AUTHOR_TIMEOUT_SECONDS", "5400")),
+    )
+    if not exited:
+        logging.getLogger("pipeline").warning(
+            f"rework test-author dispatch timed out for {story_key}; "
+            "falling back to monolithic rework dispatch"
+        )
+        return False
+    # Lazy import: _default_branch lives in the server module (reads
+    # REPO_ROOT, patched by tests via p.REPO_ROOT); the server imports this
+    # module at top level, so a module-load import would cycle.
+    from .server import _default_branch
+
+    try:
+        return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
+    except Exception as exc:  # noqa: BLE001 (mirrors _run_test_author_phase's contract)
+        logging.getLogger("pipeline").warning(
+            f"rework test-author dispatch failed to detect commits for {story_key}: {exc}"
+        )
+        return False
+
 
 # ---------- Decompose (provider-configurable product-analyst) ----------
 def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str | None:
@@ -582,12 +769,15 @@ def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str
     raise past this function, mirroring _run_planner's contract.
     """
     resolution = role_registry.resolve_role(
-        "decompose", plan_role_config=plan_role_config,
+        "decompose",
+        plan_role_config=plan_role_config,
         model_fallback=lambda: _persona_default_model("product-analyst") or "opus",
     )
     try:
         text = backend.get_backend("decompose", name=resolution.provider).complete(
-            request, system=_persona_body("product-analyst"), model=resolution.model,
+            request,
+            system=_persona_body("product-analyst"),
+            model=resolution.model,
             allowed_tools="Read",
         )
     except Exception:  # noqa: BLE001 (deliberate fail-open to None on any exception, per this function's docstring)
@@ -601,6 +791,7 @@ __all__ = [
     "_NEVER_TOUCH_TESTS_STEERING",
     "_PLANNER_SCRATCHPAD_CLAUSE",
     "_PLANNER_SYSTEM",
+    "_REWORK_NEEDS_NEW_TEST_SYSTEM",
     "_REWORK_PLANNER_SYSTEM",
     "_TEST_AUTHOR_ALLOWED_TOOLS",
     "_TEST_AUTHOR_ALREADY_RAN_CLAUSE",
@@ -609,9 +800,12 @@ __all__ = [
     "_planner_system",
     "_resolve_planner_backend",
     "_resolve_test_author_backend",
+    "_rework_requires_new_tests",
+    "_rework_test_author_prompt",
     "_run_decompose",
     "_run_planner",
     "_run_rework_planner",
+    "_run_rework_test_author_phase",
     "_run_test_author_phase",
     "_test_author_prompt",
     "_wait_for_agent_exit",

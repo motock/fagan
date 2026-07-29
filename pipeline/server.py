@@ -240,6 +240,7 @@ from .planner import (  # noqa: F401
     _NEVER_TOUCH_TESTS_STEERING,
     _PLANNER_SCRATCHPAD_CLAUSE,
     _PLANNER_SYSTEM,
+    _REWORK_NEEDS_NEW_TEST_SYSTEM,
     _REWORK_PLANNER_SYSTEM,
     _TEST_AUTHOR_ALLOWED_TOOLS,
     _TEST_AUTHOR_ALREADY_RAN_CLAUSE,
@@ -247,9 +248,12 @@ from .planner import (  # noqa: F401
     _planner_system,
     _resolve_planner_backend,
     _resolve_test_author_backend,
+    _rework_requires_new_tests,
+    _rework_test_author_prompt,
     _run_decompose,
     _run_planner,
     _run_rework_planner,
+    _run_rework_test_author_phase,
     _run_test_author_phase,
     _test_author_prompt,
     _wait_for_agent_exit,
@@ -374,7 +378,10 @@ def _default_branch() -> str:
     try:
         ref = subprocess.run(
             ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-            cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
         _default_branch_cache[key] = ref.split("/", 1)[-1]
         return _default_branch_cache[key]
@@ -391,7 +398,10 @@ def _default_branch() -> str:
     try:
         branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.strip()
         if branch and branch != "HEAD":
             _default_branch_cache[key] = branch
@@ -437,7 +447,10 @@ def _scoped_repo_root(plan_name: str):
         yield REPO_ROOT
     finally:
         REPO_ROOT = previous
+
+
 _lock_state = {}
+
 
 @contextmanager
 def _try_acquire_git_lock(repo_root: Path):
@@ -479,10 +492,9 @@ def _try_acquire_git_lock(repo_root: Path):
             fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
 # ---------- Review / PR helpers ----------
-
-
-
 
 
 # ---------- Merge adjudication / notifications ----------
@@ -497,7 +509,9 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
     if PIPELINE_AUTONOMY == "dry-run":
         return {"action": "park", "reason": "dry-run"}
 
-    risk_rank = _RISK_ORDER.get((story.get("risk") or "low").lower(), _RISK_ORDER["high"])
+    risk_rank = _RISK_ORDER.get(
+        (story.get("risk") or "low").lower(), _RISK_ORDER["high"]
+    )
     if risk_rank >= _RISK_ORDER["high"]:
         return {"action": "park", "reason": "high risk held for human review"}
     if PIPELINE_AUTONOMY == "full":
@@ -505,10 +519,14 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
 
     threshold = _RISK_ORDER.get(PIPELINE_RISK_THRESHOLD, _RISK_ORDER["low"])
     if risk_rank <= threshold:
-        return {"action": "merge", "reason": f"risk <= threshold {PIPELINE_RISK_THRESHOLD}"}
-    return {"action": "park", "reason": f"risk above threshold {PIPELINE_RISK_THRESHOLD}"}
-
-
+        return {
+            "action": "merge",
+            "reason": f"risk <= threshold {PIPELINE_RISK_THRESHOLD}",
+        }
+    return {
+        "action": "park",
+        "reason": f"risk above threshold {PIPELINE_RISK_THRESHOLD}",
+    }
 
 
 # ---------- Rebase-before-merge + CI gate (Mode 9) ----------
@@ -522,31 +540,14 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
 # ~/.claude/plans/orchestrator-rebase-before-merge.json and memory Mode 9.
 
 
-
 # Conservative, narrow allowlist of import/use-statement prefixes for the
 # additive-only rebase-conflict auto-resolver below. Intentionally not
 # exhaustive - unrecognized statement shapes simply don't qualify for
 # auto-resolution and fall through to the existing abort behavior.
 
 
-
-
-
-
-
-
-
-
-
-
 # ---------- Usage probe ----------
 # Legacy format (Claude Code ≤ ~Jun 2026): "Current session: N% used · resets …"
-
-
-
-
-
-
 
 
 # ---------- Tools ----------
@@ -578,7 +579,9 @@ def get_role_config(plan_name: str | None = None) -> dict[str, Any]:
     roles = {}
     for role, fallback in role_fallbacks.items():
         resolution = role_registry.resolve_role(
-            role, plan_role_config=plan_role_config, model_fallback=fallback,
+            role,
+            plan_role_config=plan_role_config,
+            model_fallback=fallback,
         )
         roles[role] = {"provider": resolution.provider, "model": resolution.model}
     return {"ok": True, "roles": roles}
@@ -663,8 +666,15 @@ def list_plans() -> list[str]:
 # survive a re-ingest untouched - see the merge behavior in ingest_plan below
 # (T1, 2026-07-07 web-client-epic retro incident #2).
 _INGEST_AUTHORED_STORY_FIELDS = (
-    "summary", "agent_instructions", "dependencies", "persona", "model",
-    "acceptance", "risk", "backend", "tdd_split",
+    "summary",
+    "agent_instructions",
+    "dependencies",
+    "persona",
+    "model",
+    "acceptance",
+    "risk",
+    "backend",
+    "tdd_split",
 )
 
 # Valid story["backend"] values at ingest time: every registered driver name
@@ -676,7 +686,9 @@ _VALID_STORY_BACKENDS = frozenset(backend._DRIVERS) | {"auto"}
 
 @mcp.tool()
 def ingest_plan(
-    plan_name: str, only_epics: list[str] | None = None, overwrite: bool = False,
+    plan_name: str,
+    only_epics: list[str] | None = None,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     """
     Push a saved plan into Plane. Creates epics first, then issues linked
@@ -710,7 +722,10 @@ def ingest_plan(
     # failures.
     repo_root = plan.get("repo_root")
     if not repo_root or not Path(repo_root).is_dir():
-        return {"ok": False, "error": f"Plan repo_root is missing or not a directory: {repo_root!r}"}
+        return {
+            "ok": False,
+            "error": f"Plan repo_root is missing or not a directory: {repo_root!r}",
+        }
 
     # Validate story["backend"] upfront, before any Plane side effects, so a
     # typo'd provider name fails closed here rather than surfacing as a
@@ -735,7 +750,8 @@ def ingest_plan(
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
-                "ok": True, "skipped": "locked",
+                "ok": True,
+                "skipped": "locked",
                 "reason": "another ingest/dispatch/interrupt is in progress for this plan",
             }
 
@@ -762,7 +778,9 @@ def ingest_plan(
 
             for story in epic.get("stories", []):
                 issue_id = provider.create_story(
-                    story["summary"], story.get("description", ""), epic_id,
+                    story["summary"],
+                    story.get("description", ""),
+                    epic_id,
                     "agent-pipeline",
                 )
                 if issue_id is None:
@@ -825,7 +843,9 @@ def ingest_plan(
         final_manifest["epics"] = merged_epics
         final_manifest["stories"] = merged_stories
         final_manifest["repo_root"] = repo_root
-        final_manifest["role_config"] = plan.get("role_config", prior.get("role_config", {}))
+        final_manifest["role_config"] = plan.get(
+            "role_config", prior.get("role_config", {})
+        )
 
         _atomic_write_json(manifest_path, final_manifest)
 
@@ -841,8 +861,6 @@ def ingest_plan(
                 logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {msg}")
 
     return {"ok": True, "manifest_path": str(manifest_path), **final_manifest}
-
-
 
 
 @mcp.tool()
@@ -895,7 +913,8 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
-                "ok": True, "skipped": "locked",
+                "ok": True,
+                "skipped": "locked",
                 "reason": "another dispatch/interrupt is in progress for this plan",
             }
         manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
@@ -918,12 +937,21 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     if acquired:
                         subprocess.run(
                             ["git", "fetch", "origin", _default_branch()],
-                            cwd=repo_root, check=True,
+                            cwd=repo_root,
+                            check=True,
                         )
                 subprocess.run(
-                    ["git", "worktree", "add", "-b", branch, str(worktree_path),
-                     f"origin/{_default_branch()}"],
-                    cwd=repo_root, check=True,
+                    [
+                        "git",
+                        "worktree",
+                        "add",
+                        "-b",
+                        branch,
+                        str(worktree_path),
+                        f"origin/{_default_branch()}",
+                    ],
+                    cwd=repo_root,
+                    check=True,
                 )
             _exclude_worktree_logs_from_tracking(Path(repo_root))
             # A fresh worktree has no .venv (gitignored) - give it its own
@@ -942,7 +970,9 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         #   1. story["backend"] already set (e.g. from an escalation flip)
         #   2. PIPELINE_BACKEND_DISPATCH=auto  → a-priori router
         #   3. PIPELINE_BACKEND_DISPATCH=local|claude  → that driver directly
-        env_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+        env_backend = (
+            os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+        )
         dispatch_backend = story.get("backend") or (
             _route_dispatch_backend(story) if env_backend == "auto" else env_backend
         )
@@ -974,7 +1004,9 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         review_feedback = story.get("review_feedback")
         transcript_path = worktree_path / ".agent_transcript.json"
         resume_via_transcript = (
-            dispatch_backend in _LOCAL_BACKEND_NAMES and review_feedback and transcript_path.exists()
+            dispatch_backend in _LOCAL_BACKEND_NAMES
+            and review_feedback
+            and transcript_path.exists()
         )
         # Detect an operator's patch_story edit to agent_instructions since
         # the story's last dispatch. A transcript-resume rework otherwise
@@ -1007,7 +1039,10 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             )
 
         spec = _build_dispatch_command(
-            story, story_key, plan_name=plan_name, resume_journal=journal or None,
+            story,
+            story_key,
+            plan_name=plan_name,
+            resume_journal=journal or None,
             review_feedback=None if resume_via_transcript else review_feedback,
         )
         worktree_path.mkdir(parents=True, exist_ok=True)
@@ -1020,9 +1055,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # different model, Ollama will swap the existing model out to make room
         # (or OOM-split if 24GB unified memory is tight). Warn, don't block:
         # same-model concurrency is safe, and even a swap is just slow.
-        if (dispatch_backend in _LOCAL_BACKEND_NAMES
-                and MAX_CONCURRENT_AGENTS > 1
-                and _count_in_progress_agents() > 0):
+        if (
+            dispatch_backend in _LOCAL_BACKEND_NAMES
+            and MAX_CONCURRENT_AGENTS > 1
+            and _count_in_progress_agents() > 0
+        ):
             target_model = spec.get("model") or story.get("model")
             if target_model:
                 # spec["model"]/story["model"] may be an unresolved tier
@@ -1058,9 +1095,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # above): the first dispatch loads the model and there is no
         # queue yet. Observability hook, never a gate - a None probe
         # (no model loaded yet, ps unavailable) means "unknown", not "0".
-        if (dispatch_backend in _LOCAL_BACKEND_NAMES
-                and MAX_CONCURRENT_AGENTS > 1
-                and _count_in_progress_agents() > 0):
+        if (
+            dispatch_backend in _LOCAL_BACKEND_NAMES
+            and MAX_CONCURRENT_AGENTS > 1
+            and _count_in_progress_agents() > 0
+        ):
             try:
                 detected_np = backend._ollama_serving_parallelism()
             except Exception:  # noqa: BLE001 (observability hook, never a gate)
@@ -1117,8 +1156,11 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             and not resuming
             and not test_author_marker.exists()
         ) and _run_test_author_phase(
-            story, story_key=story_key, worktree_path=worktree_path,
-            dispatch_backend=dispatch_backend, local_model=spec["model"],
+            story,
+            story_key=story_key,
+            worktree_path=worktree_path,
+            dispatch_backend=dispatch_backend,
+            local_model=spec["model"],
             plan_role_config=_plan_role_config(plan_name),
         ):
             test_author_marker.write_text("ok\n")
@@ -1143,7 +1185,8 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # feeds BOTH the planner call (so the scratchpad becomes a first-class
         # generated step) and the trailing-instruction backstop below.
         scratchpad_on = (
-            os.environ.get("PIPELINE_DECOMPOSE_SCRATCHPAD", "on").strip().lower() != "off"
+            os.environ.get("PIPELINE_DECOMPOSE_SCRATCHPAD", "on").strip().lower()
+            != "off"
         )
         plan_path = worktree_path / ".agent_plan.md"
         if (
@@ -1167,7 +1210,8 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             if test_author_marker.exists():
                 try:
                     added = _test_files_added_on_branch(
-                        worktree_path, _default_branch(),
+                        worktree_path,
+                        _default_branch(),
                     )
                     authored_test_files = [
                         (path, _test_names_in_file(worktree_path, path))
@@ -1177,7 +1221,8 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     authored_test_files = []
             plan_text = _run_planner(
                 story.get("agent_instructions", ""),
-                dispatch_backend=dispatch_backend, local_model=spec["model"],
+                dispatch_backend=dispatch_backend,
+                local_model=spec["model"],
                 include_scratchpad=scratchpad_on,
                 plan_role_config=_plan_role_config(plan_name),
                 tests_already_authored=test_author_marker.exists(),
@@ -1231,9 +1276,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             )
 
         dispatch_kwargs: dict[str, Any] = {
-            "prompt": spec["prompt"], "system": spec["system"], "model": spec["model"],
+            "prompt": spec["prompt"],
+            "system": spec["system"],
+            "model": spec["model"],
             "allowed_tools": spec["allowed_tools"],
-            "cwd": worktree_path, "log_path": log_path, "append": resuming,
+            "cwd": worktree_path,
+            "log_path": log_path,
+            "append": resuming,
         }
         # Only the local driver accepts/uses `acceptance`; pass it through when
         # we're actually invoking that driver so Claude's signature stays clean.
@@ -1272,8 +1321,59 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             if dispatch_backend in _LOCAL_BACKEND_NAMES:
                 fix_checklist = _run_rework_planner(
                     review_feedback,
-                    dispatch_backend=dispatch_backend, local_model=spec["model"],
+                    dispatch_backend=dispatch_backend,
+                    local_model=spec["model"],
                     plan_role_config=_plan_role_config(plan_name),
+                )
+            # Rework test-author phase: when the reviewer's feedback itself
+            # calls for NEW test(s) (e.g. a regression test reproducing a
+            # named bug), author them via the dedicated test_author role
+            # BEFORE the main executor redispatch, then steer the executor
+            # to implement against those already-committed tests instead of
+            # writing the tests itself - applying the tech-lead/weak-
+            # executor split (TDD_SPLIT_PRODUCTION_PLAN.md) one rework cycle
+            # later. Gated to local-family dispatch (Claude doesn't need the
+            # crutch) and to a per-sha "already done" marker so a
+            # retried/resumed dispatch on the same reviewer verdict never
+            # re-runs the phase or re-asks the classifier. Fails open: on
+            # any failure, unconfigured role, or "no new tests required",
+            # rework_tests_note stays "" and the resumed prompt + manifest
+            # are byte-for-byte identical to today's monolithic rework
+            # dispatch.
+            rework_tests_committed = False
+            if dispatch_backend in _LOCAL_BACKEND_NAMES:
+                already_done_sha = story.get("rework_test_author_done_for_sha")
+                current_sha = story.get("last_reviewed_sha")
+                if (
+                    current_sha
+                    and already_done_sha != current_sha
+                    and _rework_requires_new_tests(
+                        review_feedback,
+                        dispatch_backend=dispatch_backend,
+                        local_model=spec["model"],
+                        plan_role_config=_plan_role_config(plan_name),
+                    )
+                ):
+                    rework_tests_committed = _run_rework_test_author_phase(
+                        story,
+                        story_key=story_key,
+                        worktree_path=worktree_path,
+                        dispatch_backend=dispatch_backend,
+                        local_model=spec["model"],
+                        review_feedback=review_feedback,
+                        fix_checklist=fix_checklist,
+                        plan_role_config=_plan_role_config(plan_name),
+                    )
+                    if rework_tests_committed:
+                        story["rework_test_author_done_for_sha"] = current_sha
+            rework_tests_note = ""
+            if rework_tests_committed:
+                rework_tests_note = (
+                    "\n\nThe regression test(s) reproducing this bug have already "
+                    "been written and committed to this branch by your tech lead. "
+                    "Do NOT create, write, or modify any test file. "
+                    f"{_NEVER_TOUCH_TESTS_STEERING} Run them to see the current "
+                    "failures, then implement until they pass."
                 )
             if fix_checklist:
                 dispatch_kwargs["resume_append_content"] = (
@@ -1282,15 +1382,19 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"into a fix checklist:\n{fix_checklist}\n\n"
                     f"Original review feedback (for reference):\n{review_feedback}"
                     f"{revised_instructions_note}"
+                    f"{rework_tests_note}"
                 )
             else:
                 dispatch_kwargs["resume_append_content"] = (
                     "The code reviewer REQUESTED CHANGES on your previous attempt. "
                     f"Address this feedback:\n{review_feedback}"
                     f"{revised_instructions_note}"
+                    f"{rework_tests_note}"
                 )
 
-        handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(**dispatch_kwargs)
+        handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(
+            **dispatch_kwargs
+        )
 
         story["status"] = "in_progress"
         story["pid"] = handle.pid
@@ -1313,8 +1417,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         story["_dispatched_agent_instructions"] = story.get("agent_instructions", "")
         _atomic_write_json(manifest_path, manifest)
 
-        return {"ok": True, "story_key": story_key, "pid": handle.pid, "branch": branch,
-                "resumed": resuming}
+        return {
+            "ok": True,
+            "story_key": story_key,
+            "pid": handle.pid,
+            "branch": branch,
+            "resumed": resuming,
+        }
 
 
 @mcp.tool()
@@ -1335,10 +1444,8 @@ def _last_done_summary(agent_log: Path) -> str:
             line = raw.decode("utf-8", errors="replace").strip()
             idx = line.find(marker)
             if idx != -1:
-                last = line[idx + len(marker):].strip()
+                last = line[idx + len(marker) :].strip()
     return last
-
-
 
 
 def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
@@ -1347,7 +1454,9 @@ def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
         return None
     lint_dir, cmd = lint
     try:
-        result = subprocess.run(cmd, check=False, cwd=lint_dir, capture_output=True, text=True, env=test_env)
+        result = subprocess.run(
+            cmd, check=False, cwd=lint_dir, capture_output=True, text=True, env=test_env
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return {
@@ -1370,7 +1479,8 @@ def _module_level_function_names(source: str) -> set[str]:
     except SyntaxError:
         return set()
     return {
-        node.name for node in ast.iter_child_nodes(tree)
+        node.name
+        for node in ast.iter_child_nodes(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
@@ -1405,9 +1515,12 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
     """
     try:
         diff = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=AM",
-             base_branch, "HEAD"],
-            check=False, cwd=worktree, capture_output=True, text=True, timeout=15,
+            ["git", "diff", "--name-only", "--diff-filter=AM", base_branch, "HEAD"],
+            check=False,
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -1433,13 +1546,18 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
         try:
             old_show = subprocess.run(
                 ["git", "show", f"{base_branch}:{rel_path}"],
-                check=False, cwd=worktree, capture_output=True, text=True, timeout=15,
+                check=False,
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
         old_names = (
             _module_level_function_names(old_show.stdout)
-            if old_show.returncode == 0 else set()
+            if old_show.returncode == 0
+            else set()
         )
         new_names = _module_level_function_names(source) - old_names
 
@@ -1449,7 +1567,11 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
             try:
                 grep = subprocess.run(
                     ["git", "grep", "--count", "-w", fn_name],
-                    check=False, cwd=worktree, capture_output=True, text=True, timeout=15,
+                    check=False,
+                    cwd=worktree,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
                 )
             except (OSError, subprocess.TimeoutExpired):
                 continue
@@ -1460,7 +1582,8 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
             # in the tracked worktree" - not even a different file.
             total = sum(
                 int(line.rsplit(":", 1)[-1])
-                for line in grep.stdout.splitlines() if line.strip()
+                for line in grep.stdout.splitlines()
+                if line.strip()
             )
             if total <= 1:
                 dead.append(f"{rel_path}:{fn_name}")
@@ -1490,7 +1613,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # os.kill succeeds for zombie (defunct) processes too — check ps stat
         ps = subprocess.run(
             ["ps", "-p", str(pid), "-o", "stat="],
-            check=False, capture_output=True, text=True,
+            check=False,
+            capture_output=True,
+            text=True,
         )
         stat = ps.stdout.strip()
         if stat and not stat.startswith("Z"):
@@ -1501,8 +1626,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 ).total_seconds()
                 if elapsed > DISPATCH_WATCHDOG_SECONDS:
                     _terminate_and_checkpoint(
-                        manifest, manifest_path, plan_name, story_key, story,
-                        pid=pid, step="dispatch_watchdog_timeout",
+                        manifest,
+                        manifest_path,
+                        plan_name,
+                        story_key,
+                        story,
+                        pid=pid,
+                        step="dispatch_watchdog_timeout",
                         summary=(
                             f"Dispatch watchdog: no completion after "
                             f"{elapsed:.0f}s; process terminated."
@@ -1512,7 +1642,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         f"watchdog killed after {elapsed:.0f}s with no completion"
                     )
                     _atomic_write_json(manifest_path, manifest)
-                    return {"status": "interrupted", "pid": pid, "watchdog_killed": True}
+                    return {
+                        "status": "interrupted",
+                        "pid": pid,
+                        "watchdog_killed": True,
+                    }
             return {"status": "running", "pid": pid}
         # process is zombie or gone — fall through to test detection
     except ProcessLookupError:
@@ -1542,9 +1676,14 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         story["dispatch_attempts"] = attempts
         if attempts >= DISPATCH_MAX_ATTEMPTS:
             story["status"] = "failed"
-            story["dispatch_error"] = f"agent produced no output in {attempts} launch attempts"
-            _notify_user(plan_name, f"{story_key} failed to launch {attempts}x; "
-                                    f"giving up - needs human intervention.")
+            story["dispatch_error"] = (
+                f"agent produced no output in {attempts} launch attempts"
+            )
+            _notify_user(
+                plan_name,
+                f"{story_key} failed to launch {attempts}x; "
+                f"giving up - needs human intervention.",
+            )
             _atomic_write_json(manifest_path, manifest)
             return {"status": "failed", "pid": pid}
         story["status"] = "interrupted"
@@ -1575,14 +1714,18 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if INFRA_FAILURE_LOG_SUBSTRING in last_log_line:
         sha = _commit_wip(str(worktree), story_key, "infra_failure")
         interrupted_at = datetime.now(timezone.utc).isoformat()
-        _append_journal(plan_name, story_key, {
-            "step": "infra_failure",
-            "summary": "Dispatch died on an infrastructure failure (LLM/Ollama "
-                       "transport error); checkpointed for resume.",
-            "next_hint": "",
-            "commit": sha,
-            "ts": interrupted_at,
-        })
+        _append_journal(
+            plan_name,
+            story_key,
+            {
+                "step": "infra_failure",
+                "summary": "Dispatch died on an infrastructure failure (LLM/Ollama "
+                "transport error); checkpointed for resume.",
+                "next_hint": "",
+                "commit": sha,
+                "ts": interrupted_at,
+            },
+        )
         story["status"] = "interrupted"
         story["last_commit"] = sha
         story["interrupted_at"] = interrupted_at
@@ -1592,13 +1735,17 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if last_log_line in STEP_CAP_MARKERS:
         sha = _commit_wip(str(worktree), story_key, "step_cap_reached")
         interrupted_at = datetime.now(timezone.utc).isoformat()
-        _append_journal(plan_name, story_key, {
-            "step": "step_cap_reached",
-            "summary": "Agent hit the step cap; checkpointed for resume.",
-            "next_hint": "",
-            "commit": sha,
-            "ts": interrupted_at,
-        })
+        _append_journal(
+            plan_name,
+            story_key,
+            {
+                "step": "step_cap_reached",
+                "summary": "Agent hit the step cap; checkpointed for resume.",
+                "next_hint": "",
+                "commit": sha,
+                "ts": interrupted_at,
+            },
+        )
         story["status"] = "interrupted"
         story["last_commit"] = sha
         story["interrupted_at"] = interrupted_at
@@ -1617,8 +1764,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # "backend" defaults to local: dispatch_story always sets it
         # explicitly, so an absent key only occurs in tests exercising this
         # branch in isolation.
-        if (fallback_model and current_model != fallback_model
-                and story.get("backend", "local") == "local"):
+        if (
+            fallback_model
+            and current_model != fallback_model
+            and story.get("backend", "local") == "local"
+        ):
             if story.get("step_cap_streak_model") == current_model:
                 story["step_cap_streak"] = story.get("step_cap_streak", 0) + 1
             else:
@@ -1632,10 +1782,14 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
                     f"on {current_model}; switching to fallback model "
-                    f"{fallback_model} for the next resume.")
-        elif (not fallback_model and _auto_escalation_enabled()
-                and story.get("backend", "local") == "local"
-                and not story.get("escalated")):
+                    f"{fallback_model} for the next resume.",
+                )
+        elif (
+            not fallback_model
+            and _auto_escalation_enabled()
+            and story.get("backend", "local") == "local"
+            and not story.get("escalated")
+        ):
             # No local_model_fallback opt-in for this plan: under auto
             # dispatch, escalate to Claude instead of cycling on the same
             # struggling local model forever. Mutually exclusive with the
@@ -1652,9 +1806,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
                     f"on {current_model}; escalating to Claude (no "
-                    f"local_model_fallback configured).")
-                return {"status": "todo", "reason": "step_cap_escalated_to_claude",
-                        "pid": pid}
+                    f"local_model_fallback configured).",
+                )
+                return {
+                    "status": "todo",
+                    "reason": "step_cap_escalated_to_claude",
+                    "pid": pid,
+                }
         _atomic_write_json(manifest_path, manifest)
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
 
@@ -1686,7 +1844,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # (see _added_pytest_test_paths). Pass those paths explicitly so the
         # model's own tests for its own tests/-scoped code actually execute.
         own_test_paths = _added_pytest_test_paths(
-            worktree, story_key, _default_branch())
+            worktree, story_key, _default_branch()
+        )
         if own_test_paths:
             test_cmd = [*test_cmd, *(str(worktree / p) for p in own_test_paths)]
 
@@ -1708,7 +1867,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # includes test_local_agent.py). REPO_ROOT is a per-plan sentinel
     # (/nonexistent-...) that likewise isn't a developer default.
     test_env = {
-        k: v for k, v in os.environ.items()
+        k: v
+        for k, v in os.environ.items()
         if not k.startswith("PIPELINE_")
         and not k.startswith("LOCAL_AGENT_")
         and k != "REPO_ROOT"
@@ -1721,12 +1881,20 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if _is_heavy(test_cmd):
         with _heavy_lock():
             test_result = subprocess.run(
-                test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+                test_cmd,
+                check=False,
+                cwd=test_dir,
+                capture_output=True,
+                text=True,
                 env=test_env,
             )
     else:
         test_result = subprocess.run(
-            test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+            test_cmd,
+            check=False,
+            cwd=test_dir,
+            capture_output=True,
+            text=True,
             env=test_env,
         )
     passed = test_result.returncode == 0
@@ -1775,7 +1943,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # model on the same empty worktree is unlikely to produce a different
     # outcome next tick; better to surface it for the dashboard.
     if passed and not _worktree_has_new_commits(
-        worktree, story_key, base_branch=_default_branch(),
+        worktree,
+        story_key,
+        base_branch=_default_branch(),
     ):
         base = _default_branch()
         story["status"] = "failed"
@@ -1804,11 +1974,14 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # the same stuck prompt to the same model won't help. Opt-in so default
     # production behavior is unchanged; review_story's existing rework cap
     # (park/escalate after REWORK_MAX_ATTEMPTS) bounds the cycles.
-    if (not passed
-            and story["status"] == "failed"
-            and os.environ.get("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "0") == "1"
-            and _worktree_has_new_commits(
-                worktree, story_key, base_branch=_default_branch())):
+    if (
+        not passed
+        and story["status"] == "failed"
+        and os.environ.get("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "0") == "1"
+        and _worktree_has_new_commits(
+            worktree, story_key, base_branch=_default_branch()
+        )
+    ):
         story["status"] = "tests_passed"  # reviewable; reviewer sees the failure
         story["acceptance_failed_review"] = True
 
@@ -1828,7 +2001,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # the rework cap so a stuck agent parks rather than looping forever.
     if story["status"] == "tests_passed" and story.get("last_reviewed_sha"):
         head_res = subprocess.run(
-            ["git", "rev-parse", "HEAD"], check=False, cwd=worktree, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"],
+            check=False,
+            cwd=worktree,
+            capture_output=True,
+            text=True,
         )
         if head_res.stdout.strip() == story["last_reviewed_sha"]:
             attempts = story.get("rework_attempts", 0) + 1
@@ -1852,7 +2029,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 # that hit exactly this path never got a chance at Claude.
                 if _auto_escalation_enabled() and not story.get("escalated"):
                     _escalate_review_to_claude(
-                        story, story_key, plan_name,
+                        story,
+                        story_key,
+                        plan_name,
                         f"no new commit after {attempts} rework redispatches",
                     )
                     story["status"] = "changes_requested"
@@ -1906,8 +2085,6 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
-
-
 @mcp.tool()
 def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
@@ -1929,7 +2106,8 @@ def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
-                "ok": True, "skipped": "locked",
+                "ok": True,
+                "skipped": "locked",
                 "reason": "another dispatch/interrupt is in progress for this plan",
             }
         manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
@@ -1941,8 +2119,13 @@ def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
             return {"ok": False, "error": "Story not dispatched"}
 
         sha = _terminate_and_checkpoint(
-            manifest, manifest_path, plan_name, story_key, story,
-            pid=story["pid"], step="interrupted",
+            manifest,
+            manifest_path,
+            plan_name,
+            story_key,
+            story,
+            pid=story["pid"],
+            step="interrupted",
             summary="Agent process terminated; checkpointed for resume.",
         )
 
@@ -1968,11 +2151,13 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
     return {"ok": True}
 
 
-
-
 @mcp.tool()
 def checkpoint(
-    plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "",
+    plan_name: str,
+    story_key: str,
+    step: str,
+    summary: str,
+    next_hint: str = "",
 ) -> dict[str, Any]:
     """
     Record a durable checkpoint for a dispatched agent's progress.
@@ -2004,9 +2189,7 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     _atomic_write_json(manifest_path, manifest)
 
     # Check if all stories are now done
-    all_done = all(
-        s.get("status") == "done" for s in manifest["stories"].values()
-    )
+    all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
     if all_done:
         return {
             "ok": True,
@@ -2020,20 +2203,39 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
 # set_story_status), "worktree", "pid", "review_verdict" and other
 # pipeline-owned runtime state - this tool is for correcting what the plan
 # authored, not for mechanically bypassing the review/merge gates.
-_PATCHABLE_STORY_FIELDS = frozenset((
-    "agent_instructions", "model", "persona", "risk", "dependencies",
-    "acceptance", "pr_url", "summary", "tdd_split",
-))
+_PATCHABLE_STORY_FIELDS = frozenset(
+    (
+        "agent_instructions",
+        "model",
+        "persona",
+        "risk",
+        "dependencies",
+        "acceptance",
+        "pr_url",
+        "summary",
+        "tdd_split",
+    )
+)
 
 # Every status value the pipeline itself assigns to a story (see the
 # "status"] = / "status": literal assignments throughout this file). Kept as
 # an explicit allowlist so set_story_status can't be used to invent a status
 # the rest of the code doesn't know how to handle.
-_VALID_STORY_STATUSES = frozenset((
-    "todo", "in_progress", "running", "interrupted", "failed",
-    "tests_passed", "pr_open", "changes_requested", "parked", "done",
-    "done",
-))
+_VALID_STORY_STATUSES = frozenset(
+    (
+        "todo",
+        "in_progress",
+        "running",
+        "interrupted",
+        "failed",
+        "tests_passed",
+        "pr_open",
+        "changes_requested",
+        "parked",
+        "done",
+        "done",
+    )
+)
 
 
 def _ci_rework_feedback(gate_error: str) -> str:
@@ -2055,8 +2257,11 @@ def _ci_rework_feedback(gate_error: str) -> str:
             "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
         )
 
+
 @mcp.tool()
-def patch_story(plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any]:
+def patch_story(
+    plan_name: str, story_key: str, fields: dict[str, Any]
+) -> dict[str, Any]:
     """
     Edit a story's plan-authored fields (agent_instructions, model, persona,
     risk, dependencies, acceptance, pr_url, summary) without hand-editing the
@@ -2073,13 +2278,17 @@ def patch_story(plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[
     _validate_key(story_key)
     unknown = set(fields) - _PATCHABLE_STORY_FIELDS
     if unknown:
-        return {"ok": False, "error": f"cannot patch field(s) {sorted(unknown)}: "
-                                       f"only {sorted(_PATCHABLE_STORY_FIELDS)} are editable"}
+        return {
+            "ok": False,
+            "error": f"cannot patch field(s) {sorted(unknown)}: "
+            f"only {sorted(_PATCHABLE_STORY_FIELDS)} are editable",
+        }
 
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
-                "ok": True, "skipped": "locked",
+                "ok": True,
+                "skipped": "locked",
                 "reason": "another dispatch/ingest/interrupt is in progress for this plan",
             }
         manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
@@ -2108,13 +2317,17 @@ def set_story_status(plan_name: str, story_key: str, status: str) -> dict[str, A
     _validate_key(plan_name)
     _validate_key(story_key)
     if status not in _VALID_STORY_STATUSES:
-        return {"ok": False, "error": f"invalid status {status!r}: "
-                                       f"must be one of {sorted(_VALID_STORY_STATUSES)}"}
+        return {
+            "ok": False,
+            "error": f"invalid status {status!r}: "
+            f"must be one of {sorted(_VALID_STORY_STATUSES)}",
+        }
 
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
-                "ok": True, "skipped": "locked",
+                "ok": True,
+                "skipped": "locked",
                 "reason": "another dispatch/ingest/interrupt is in progress for this plan",
             }
         manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
@@ -2165,10 +2378,16 @@ def check_usage() -> dict[str, Any]:
         state["checked_at"] = now_iso
         # Count how many polls in a row have failed to parse, so the blind
         # window is visible (and quantifiable) rather than a silent stderr line.
-        state["consecutive_parse_failures"] = prev.get("consecutive_parse_failures", 0) + 1
+        state["consecutive_parse_failures"] = (
+            prev.get("consecutive_parse_failures", 0) + 1
+        )
         measured_at = prev.get("measured_at", prev.get("checked_at"))
         state["measured_at"] = measured_at
-        age = _usage_state_age_seconds({"checked_at": measured_at}) if measured_at else None
+        age = (
+            _usage_state_age_seconds({"checked_at": measured_at})
+            if measured_at
+            else None
+        )
         if age is not None and age > USAGE_STALE_AFTER_SECONDS:
             state["stale"] = True
             state["gate_blind"] = True
@@ -2177,7 +2396,11 @@ def check_usage() -> dict[str, Any]:
                 state["blind_since"] = now_iso
 
             blind_since = state.get("blind_since")
-            blind_age = _usage_state_age_seconds({"checked_at": blind_since}) if blind_since else None
+            blind_age = (
+                _usage_state_age_seconds({"checked_at": blind_since})
+                if blind_since
+                else None
+            )
             if blind_age is not None and blind_age > USAGE_BLIND_PAUSE_AFTER_SECONDS:
                 # Prolonged blindness: fail-closed so a permanent CLI-format
                 # change can't leave spend unguarded indefinitely.
@@ -2188,7 +2411,11 @@ def check_usage() -> dict[str, Any]:
             failures = state["consecutive_parse_failures"]
             should_log = first_blind or (failures % USAGE_BLIND_LOG_INTERVAL == 0)
             if should_log:
-                status = "pausing (fail-closed)" if state["paused"] else "failing the gate OPEN"
+                status = (
+                    "pausing (fail-closed)"
+                    if state["paused"]
+                    else "failing the gate OPEN"
+                )
                 print(
                     f"check_usage: usage data is {age:.0f}s stale and the CLI is "
                     f"still not parseable ({failures} consecutive failures) - "
@@ -2199,7 +2426,9 @@ def check_usage() -> dict[str, Any]:
         return state
     state["measured_at"] = state["checked_at"]
     state["paused"] = _usage_gate(
-        prev.get("paused", False), state["session_pct"], state["week_pct"],
+        prev.get("paused", False),
+        state["session_pct"],
+        state["week_pct"],
     )
     # A real measurement clears any blind/stale state from prior failures.
     state["consecutive_parse_failures"] = 0
@@ -2260,7 +2489,9 @@ def list_decisions(plan_name: str) -> list[dict]:
 
 
 def _verify_reviewer_auto_fix(
-    worktree: str, story: dict[str, Any], reviewer_output: str,
+    worktree: str,
+    story: dict[str, Any],
+    reviewer_output: str,
     before_sha: str | None,
 ) -> tuple[str, str]:
     """Mechanically re-verify a reviewer's self-reported APPROVE_WITH_FIX
@@ -2295,8 +2526,12 @@ def _verify_reviewer_auto_fix(
         )
     try:
         after_sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
-            capture_output=True, text=True).stdout.strip()
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
     except (subprocess.CalledProcessError, OSError) as e:
         return "REQUEST_CHANGES", (
             f"Reviewer self-fix could not be verified (git rev-parse failed: "
@@ -2311,7 +2546,11 @@ def _verify_reviewer_auto_fix(
     try:
         numstat = subprocess.run(
             ["git", "diff", "--numstat", before_sha, after_sha],
-            cwd=worktree, check=True, capture_output=True, text=True).stdout
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
     except (subprocess.CalledProcessError, OSError) as e:
         return "REQUEST_CHANGES", (
             f"Reviewer self-fix could not be verified (git diff failed: "
@@ -2325,7 +2564,10 @@ def _verify_reviewer_auto_fix(
         for part in ln.split("\t")[:2]
         if part.isdigit()
     )
-    if files_changed > REVIEWER_AUTO_FIX_MAX_FILES or total_lines > REVIEWER_AUTO_FIX_MAX_LINES:
+    if (
+        files_changed > REVIEWER_AUTO_FIX_MAX_FILES
+        or total_lines > REVIEWER_AUTO_FIX_MAX_LINES
+    ):
         return "REQUEST_CHANGES", (
             f"Reviewer self-fix touched {files_changed} file(s) and "
             f"{total_lines} changed line(s), exceeding the auto-fix cap "
@@ -2337,13 +2579,18 @@ def _verify_reviewer_auto_fix(
         )
     test_dir, test_cmd = detect_test_command(Path(worktree))
     test_env = {
-        k: v for k, v in os.environ.items()
+        k: v
+        for k, v in os.environ.items()
         if not k.startswith("PIPELINE_")
         and not k.startswith("LOCAL_AGENT_")
         and k != "REPO_ROOT"
     }
     test_result = subprocess.run(
-        test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+        test_cmd,
+        check=False,
+        cwd=test_dir,
+        capture_output=True,
+        text=True,
         env=test_env,
     )
     if test_result.returncode != 0:
@@ -2381,25 +2628,41 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     worktree = story.get("worktree", "")
     # Guard: skip if story is not in tests_passed state
     if story.get("status") != "tests_passed":
-        _notify_user(plan_name,
-                     f"{story_key} review skipped: status {story.get('status')!r} - only stories with status 'tests_passed' are reviewable.")
-        return {"ok": True, "status": story.get("status"), "skipped": "not_reviewable_state"}
+        _notify_user(
+            plan_name,
+            f"{story_key} review skipped: status {story.get('status')!r} - only stories with status 'tests_passed' are reviewable.",
+        )
+        return {
+            "ok": True,
+            "status": story.get("status"),
+            "skipped": "not_reviewable_state",
+        }
     if story.get("last_reviewed_sha"):
         if not worktree or not os.path.isdir(worktree):
             pass
         else:
             try:
                 current_sha = subprocess.run(
-                    ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
-                    capture_output=True, text=True).stdout.strip()
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=worktree,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
                 if current_sha == story["last_reviewed_sha"]:
-                    _notify_user(plan_name,
-                                 f"{story_key} review skipped: HEAD unchanged since the last REQUEST_CHANGES ({current_sha[:9]}) - a redispatch/rework must land a new commit before re-review.")
+                    _notify_user(
+                        plan_name,
+                        f"{story_key} review skipped: HEAD unchanged since the last REQUEST_CHANGES ({current_sha[:9]}) - a redispatch/rework must land a new commit before re-review.",
+                    )
                     _atomic_write_json(manifest_path, manifest)
-                    return {"ok": True, "status": story["status"], "skipped": "unchanged_since_last_review"}
+                    return {
+                        "ok": True,
+                        "status": story["status"],
+                        "skipped": "unchanged_since_last_review",
+                    }
             except (subprocess.CalledProcessError, OSError):
                 pass
-        
+
     plan_role_config = _plan_role_config(plan_name)
     # Reviewer self-fix (2026-07-29): captured before invoking the reviewer
     # so a later APPROVE_WITH_FIX can be mechanically verified against what
@@ -2411,8 +2674,12 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     if worktree and os.path.isdir(worktree):
         try:
             before_sha = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
-                capture_output=True, text=True).stdout.strip()
+                ["git", "rev-parse", "HEAD"],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
         except (subprocess.CalledProcessError, OSError):
             before_sha = None
     # Mode 40: a story routed to review via acceptance_failed_review
@@ -2427,10 +2694,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # while the detected test command itself passed), falls through to the
     # normal reviewer call below.
     last_test_check = story.get("last_test_check") or {}
-    skip_llm_reviewer = (
-        story.get("acceptance_failed_review")
-        and last_test_check.get("returncode") not in (0, None)
-    )
+    skip_llm_reviewer = story.get("acceptance_failed_review") and last_test_check.get(
+        "returncode"
+    ) not in (0, None)
     if skip_llm_reviewer:
         reviewer_output = _synthesize_test_failure_feedback(last_test_check)
     else:
@@ -2441,14 +2707,22 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # resolved purely from that env var with no per-story override, so
             # this is the one seam that needs an explicit check.
             reviewer_output = (
-                _run_reviewer(worktree, branch, backend_name="claude",
-                              plan_role_config=plan_role_config,
-                              since_sha=story.get("last_reviewed_sha"),
-                              risk=story.get("risk", "low"))
-                if story.get("escalated") else
-                _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
-                              since_sha=story.get("last_reviewed_sha"),
-                              risk=story.get("risk", "low"))
+                _run_reviewer(
+                    worktree,
+                    branch,
+                    backend_name="claude",
+                    plan_role_config=plan_role_config,
+                    since_sha=story.get("last_reviewed_sha"),
+                    risk=story.get("risk", "low"),
+                )
+                if story.get("escalated")
+                else _run_reviewer(
+                    worktree,
+                    branch,
+                    plan_role_config=plan_role_config,
+                    since_sha=story.get("last_reviewed_sha"),
+                    risk=story.get("risk", "low"),
+                )
             )
         except backend.RateLimitedError:
             # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
@@ -2457,8 +2731,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # tick, do NOT burn REVIEW_INCONCLUSIVE_MAX. Without this, a
             # misclassified rate-limit would eventually park a correct impl.
             story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
-            _notify_user(plan_name,
-                         f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.")
+            _notify_user(
+                plan_name,
+                f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.",
+            )
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
         except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
@@ -2468,8 +2744,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # a genuinely inconclusive review already takes below - never treat
             # this as an APPROVE (fail-closed). Log only the exception type, not
             # its text, which could carry sensitive detail.
-            _notify_user(plan_name, f"{story_key} review failed with an unexpected "
-                                    f"{type(e).__name__}; treating as inconclusive.")
+            _notify_user(
+                plan_name,
+                f"{story_key} review failed with an unexpected "
+                f"{type(e).__name__}; treating as inconclusive.",
+            )
             reviewer_output = ""
     verdict = _parse_verdict(reviewer_output)
 
@@ -2480,13 +2759,23 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # correct implementations silently.
     if verdict == "UNKNOWN" and _is_rate_limited(reviewer_output):
         story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
-        fallback_mode = os.environ.get("PIPELINE_REVIEW_FALLBACK", "off").strip().lower()
+        fallback_mode = (
+            os.environ.get("PIPELINE_REVIEW_FALLBACK", "off").strip().lower()
+        )
         fallback_after = int(os.environ.get("PIPELINE_REVIEW_FALLBACK_AFTER", "3"))
-        if fallback_mode in _LOCAL_BACKEND_NAMES and story["review_deferred_count"] >= fallback_after:
-            _notify_user(plan_name, f"{story_key} review falling back to {fallback_mode} backend "
-                                    f"after {story['review_deferred_count']} rate-limited attempts.")
+        if (
+            fallback_mode in _LOCAL_BACKEND_NAMES
+            and story["review_deferred_count"] >= fallback_after
+        ):
+            _notify_user(
+                plan_name,
+                f"{story_key} review falling back to {fallback_mode} backend "
+                f"after {story['review_deferred_count']} rate-limited attempts.",
+            )
             reviewer_output = _run_reviewer(
-                worktree, branch, backend_name=fallback_mode,
+                worktree,
+                branch,
+                backend_name=fallback_mode,
                 plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
@@ -2495,7 +2784,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # Fall through into the normal verdict-handling code below —
             # this is a genuine review attempt now, not a deferral.
         else:
-            _notify_user(plan_name, f"{story_key} review deferred: reviewer rate-limited; will retry next tick.")
+            _notify_user(
+                plan_name,
+                f"{story_key} review deferred: reviewer rate-limited; will retry next tick.",
+            )
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
 
@@ -2506,16 +2798,26 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # when still UNKNOWN after the single retry) touches that counter.
     _transient_retried = False
     if verdict == "UNKNOWN" and _is_transient_backend_error(reviewer_output):
-        _notify_user(plan_name, f"{story_key} review hit transient backend error; retrying once.")
+        _notify_user(
+            plan_name, f"{story_key} review hit transient backend error; retrying once."
+        )
         reviewer_output = (
-            _run_reviewer(worktree, branch, backend_name="claude",
-                          plan_role_config=plan_role_config,
-                          since_sha=story.get("last_reviewed_sha"),
-                          risk=story.get("risk", "low"))
-            if story.get("escalated") else
-            _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
-                          since_sha=story.get("last_reviewed_sha"),
-                          risk=story.get("risk", "low"))
+            _run_reviewer(
+                worktree,
+                branch,
+                backend_name="claude",
+                plan_role_config=plan_role_config,
+                since_sha=story.get("last_reviewed_sha"),
+                risk=story.get("risk", "low"),
+            )
+            if story.get("escalated")
+            else _run_reviewer(
+                worktree,
+                branch,
+                plan_role_config=plan_role_config,
+                since_sha=story.get("last_reviewed_sha"),
+                risk=story.get("risk", "low"),
+            )
         )
         verdict = _parse_verdict(reviewer_output)
         _transient_retried = True
@@ -2529,7 +2831,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # any other rejection, so an unverifiable self-fix can't loop forever).
     if verdict == "APPROVE_WITH_FIX":
         verdict, reviewer_output = _verify_reviewer_auto_fix(
-            worktree, story, reviewer_output, before_sha,
+            worktree,
+            story,
+            reviewer_output,
+            before_sha,
         )
 
     story["review_verdict"] = verdict
@@ -2539,13 +2844,16 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # must APPROVE before the story proceeds to pr_open.
     if verdict == "APPROVE" and story.get("risk") == "high":
         security_output = _run_security_reviewer(
-            worktree, branch, since_sha=story.get("last_reviewed_sha"))
+            worktree, branch, since_sha=story.get("last_reviewed_sha")
+        )
         security_verdict = _parse_verdict(security_output)
 
         # FM-B: same rate-limit deferral for the security-reviewer pass.
         if security_verdict == "UNKNOWN" and _is_rate_limited(security_output):
-            _notify_user(plan_name,
-                         f"{story_key} security review deferred: reviewer rate-limited; will retry next tick.")
+            _notify_user(
+                plan_name,
+                f"{story_key} security review deferred: reviewer rate-limited; will retry next tick.",
+            )
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
 
@@ -2565,7 +2873,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
             if _auto_escalation_enabled() and not story.get("escalated"):
                 _escalate_review_to_claude(
-                    story, story_key, plan_name,
+                    story,
+                    story_key,
+                    plan_name,
                     f"review inconclusive after {inconclusive} attempts",
                 )
                 # status stays at its pre-review value (e.g. tests_passed) -
@@ -2575,8 +2885,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["parked_reason"] = (
                     f"review inconclusive after {inconclusive} attempts - needs human review"
                 )
-                _notify_user(plan_name, f"{story_key} parked: review inconclusive after "
-                                        f"{inconclusive} attempts - needs human review.")
+                _notify_user(
+                    plan_name,
+                    f"{story_key} parked: review inconclusive after "
+                    f"{inconclusive} attempts - needs human review.",
+                )
         else:
             _notify_user(plan_name, f"{story_key} review inconclusive; will retry.")
         _atomic_write_json(manifest_path, manifest)
@@ -2599,7 +2912,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         if inconclusive >= REVIEW_INCONCLUSIVE_MAX:
             if _auto_escalation_enabled() and not story.get("escalated"):
                 _escalate_review_to_claude(
-                    story, story_key, plan_name,
+                    story,
+                    story_key,
+                    plan_name,
                     f"review inconclusive after {inconclusive} attempts (empty REQUEST_CHANGES)",
                 )
             else:
@@ -2607,11 +2922,17 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["parked_reason"] = (
                     f"review inconclusive after {inconclusive} attempts - needs human review"
                 )
-                _notify_user(plan_name, f"{story_key} parked: review inconclusive after "
-                                        f"{inconclusive} attempts - needs human review.")
+                _notify_user(
+                    plan_name,
+                    f"{story_key} parked: review inconclusive after "
+                    f"{inconclusive} attempts - needs human review.",
+                )
         else:
-            _notify_user(plan_name, f"{story_key} review approved-changes-requested-empty: "
-                                    f"REQUEST_CHANGES with no findings text; will retry.")
+            _notify_user(
+                plan_name,
+                f"{story_key} review approved-changes-requested-empty: "
+                f"REQUEST_CHANGES with no findings text; will retry.",
+            )
         _atomic_write_json(manifest_path, manifest)
         return {"ok": True, "verdict": verdict, "status": story["status"]}
 
@@ -2642,15 +2963,23 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # the story's entire rework budget on an already-resolved finding.
     # Non-test findings (README prose, server.py logic) still require the
     # flagged file to be touched; there's no equivalent objective proof.
-    if verdict == "APPROVE" and story.get("last_reviewed_sha") and story.get("last_review_findings"):
+    if (
+        verdict == "APPROVE"
+        and story.get("last_reviewed_sha")
+        and story.get("last_review_findings")
+    ):
         try:
             diff_res = subprocess.run(
                 ["git", "diff", "--name-only", story["last_reviewed_sha"], "HEAD"],
-                cwd=worktree, check=True, capture_output=True, text=True,
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+                text=True,
             )
             changed_files = set(diff_res.stdout.splitlines())
             untouched = [
-                p for p in story["last_review_findings"]
+                p
+                for p in story["last_review_findings"]
                 if p not in changed_files and not _is_test_file_path(p)
             ]
             if untouched:
@@ -2719,8 +3048,12 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         if worktree and os.path.isdir(worktree):
             try:
                 story["last_reviewed_sha"] = subprocess.run(
-                    ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
-                    capture_output=True, text=True).stdout.strip()
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=worktree,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
             except (subprocess.CalledProcessError, OSError):
                 pass
         attempts = story.get("rework_attempts", 0) + 1
@@ -2734,7 +3067,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         if attempts >= rework_cap:
             if _auto_escalation_enabled() and not story.get("escalated"):
                 _escalate_review_to_claude(
-                    story, story_key, plan_name,
+                    story,
+                    story_key,
+                    plan_name,
                     f"rework budget exhausted after {attempts} review cycles",
                 )
                 # A redispatch will pick up the real review_feedback already
@@ -2742,9 +3077,14 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["status"] = "changes_requested"
             else:
                 story["status"] = "parked"
-                story["parked_reason"] = f"rework budget exhausted after {attempts} review cycles"
-                _notify_user(plan_name, f"{story_key} parked: reviewer still requesting changes "
-                                        f"after {attempts} cycles - needs human review.")
+                story["parked_reason"] = (
+                    f"rework budget exhausted after {attempts} review cycles"
+                )
+                _notify_user(
+                    plan_name,
+                    f"{story_key} parked: reviewer still requesting changes "
+                    f"after {attempts} cycles - needs human review.",
+                )
         else:
             fre = manifest.get("final_rework_escalation") or {}
             if attempts == rework_cap - 1 and fre.get("enabled"):
@@ -2753,7 +3093,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     model = fre.get("model")
                     story["backend"] = provider
                     story["model"] = model
-                    _notify_user(plan_name, f"{story_key} final rework attempt ({attempts}/{rework_cap}) escalating to {provider}/{model}.")
+                    _notify_user(
+                        plan_name,
+                        f"{story_key} final rework attempt ({attempts}/{rework_cap}) escalating to {provider}/{model}.",
+                    )
             story["status"] = "changes_requested"
     _atomic_write_json(manifest_path, manifest)
     return {
@@ -2762,8 +3105,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         "status": story["status"],
         "pr_url": story.get("pr_url"),
     }
+
+
 # Preserve original review_story implementation
 _original_review_story = review_story
+
 
 @mcp.tool()
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
@@ -2780,8 +3126,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(story_key)
     with _plan_lock(plan_name) as acquired:
         if not acquired:
-            return {"ok": True, "skipped": "locked",
-                    "reason": "another dispatch/ingest/interrupt/review is in progress for this plan"}
+            return {
+                "ok": True,
+                "skipped": "locked",
+                "reason": "another dispatch/ingest/interrupt/review is in progress for this plan",
+            }
         return _original_review_story(plan_name, story_key)
 
 
@@ -2816,7 +3165,8 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
-                "ok": True, "skipped": "locked",
+                "ok": True,
+                "skipped": "locked",
                 "reason": "another advance_pipeline tick is already running for this plan",
             }
         return _advance_pipeline_locked(plan_name)
@@ -2852,11 +3202,14 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     # auto dispatch only. Under an explicit local (or claude) backend the
     # operator has pinned the dispatcher on purpose, so a local failure is
     # terminal rather than silently spending Claude.
-    dispatch_mode = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+    dispatch_mode = (
+        os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+    )
 
     done = _completed_dep_ids(stories)
     ready = [
-        k for k, v in stories.items()
+        k
+        for k, v in stories.items()
         if v["status"] in ("todo", "interrupted", "changes_requested")
         and all(d in done for d in v.get("dependencies", []))
     ]
@@ -2873,7 +3226,8 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             "would_dispatch": ready if dispatch_ok else [],
             "would_merge_decisions": {
                 k: _merge_decision(v)
-                for k, v in stories.items() if v["status"] == "pr_open"
+                for k, v in stories.items()
+                if v["status"] == "pr_open"
             },
         }
 
@@ -2882,8 +3236,13 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
         "paused": not dispatch_ok,
         "dispatch_paused": not dispatch_ok,
         "review_paused": not review_ok,
-        "dispatched": [], "advanced": [], "merged": [],
-        "parked": [], "failed": [], "interrupted": [], "notify": [],
+        "dispatched": [],
+        "advanced": [],
+        "merged": [],
+        "parked": [],
+        "failed": [],
+        "interrupted": [],
+        "notify": [],
         "review_deferred": [],
     }
 
@@ -2917,7 +3276,10 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         continue
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
-            _notify_user(plan_name, f"Dispatch backend gated ({dispatch_reason}): deferring dispatch.")
+            _notify_user(
+                plan_name,
+                f"Dispatch backend gated ({dispatch_reason}): deferring dispatch.",
+            )
             summary["notify"].append("dispatch_paused")
         else:
             # 1. Dispatch ready (and resumable-interrupted) stories, capped to
@@ -2945,13 +3307,19 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     if attempts >= DISPATCH_MAX_ATTEMPTS:
                         st["status"] = "failed"
                         st["dispatch_error"] = str(e)
-                        _notify_user(plan_name, f"{key} dispatch failed {attempts}x "
-                                                f"({e}); giving up - needs human intervention.")
+                        _notify_user(
+                            plan_name,
+                            f"{key} dispatch failed {attempts}x "
+                            f"({e}); giving up - needs human intervention.",
+                        )
                         summary["failed"].append(key)
                     else:
                         # leave status dispatch-eligible; the next tick retries.
-                        _notify_user(plan_name, f"{key} dispatch attempt {attempts}/"
-                                                f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.")
+                        _notify_user(
+                            plan_name,
+                            f"{key} dispatch attempt {attempts}/"
+                            f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.",
+                        )
                     summary["notify"].append(key)
                     _atomic_write_json(manifest_path, m)
 
@@ -2969,29 +3337,42 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         # wipe its worktree and re-queue for Claude. A second
                         # failure (on Claude), or any failure under an explicit
                         # non-auto backend, is terminal.
-                        if (dispatch_mode == "auto"
-                                and story.get("backend") == "local"
-                                and not story.get("escalated")):
+                        if (
+                            dispatch_mode == "auto"
+                            and story.get("backend") == "local"
+                            and not story.get("escalated")
+                        ):
                             manifest = json.loads(manifest_path.read_text())
                             _escalate_to_claude(manifest, plan_name, key, manifest_path)
-                            _notify_user(plan_name,
-                                f"{key} local agent failed; escalating to Claude and starting clean.")
+                            _notify_user(
+                                plan_name,
+                                f"{key} local agent failed; escalating to Claude and starting clean.",
+                            )
                             summary["notify"].append(key)
-                        elif (fallback_model
-                                and story.get("backend") == "local"
-                                and story.get("model") != fallback_model
-                                and not story.get("tried_fallback_model")):
+                        elif (
+                            fallback_model
+                            and story.get("backend") == "local"
+                            and story.get("model") != fallback_model
+                            and not story.get("tried_fallback_model")
+                        ):
                             # Plan-scoped opt-in (manifest["local_model_fallback"]):
                             # never escalates to Claude - just gives one other
                             # local model a shot before the terminal park/fail
                             # path below.
                             manifest = json.loads(manifest_path.read_text())
-                            failed_model = story.get("dispatched_model") or story.get("model") or "default"
+                            failed_model = (
+                                story.get("dispatched_model")
+                                or story.get("model")
+                                or "default"
+                            )
                             _escalate_to_local_fallback_model(
-                                manifest, plan_name, key, manifest_path, fallback_model)
-                            _notify_user(plan_name,
+                                manifest, plan_name, key, manifest_path, fallback_model
+                            )
+                            _notify_user(
+                                plan_name,
                                 f"{key} local agent failed on {failed_model}; retrying on "
-                                f"fallback model {fallback_model} before parking.")
+                                f"fallback model {fallback_model} before parking.",
+                            )
                             summary["notify"].append(key)
                         elif check_result.get("failure_kind") == "give_up":
                             # T6: the agent explicitly surrendered rather than
@@ -2999,11 +3380,13 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                             # the story's scope/clarity instead of the generic
                             # message - a missing/wrong API needs a fix to
                             # agent_instructions, not another identical retry.
-                            _notify_user(plan_name,
+                            _notify_user(
+                                plan_name,
                                 f"{key} agent gave up (explicit surrender, zero productive "
                                 f"progress) - likely under-specified (missing API, wrong "
                                 f"scope) rather than a model-capability gap; needs human "
-                                f"clarification before another dispatch.")
+                                f"clarification before another dispatch.",
+                            )
                             summary["failed"].append(key)
                             summary["notify"].append(key)
                         else:
@@ -3026,7 +3409,9 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     if rv.get("deferred") == "rate_limited":
                         summary["review_deferred"].append(key)
         else:
-            _notify_user(plan_name, f"Review backend gated ({review_reason}): deferring review.")
+            _notify_user(
+                plan_name, f"Review backend gated ({review_reason}): deferring review."
+            )
             summary["notify"].append("review_paused")
 
         # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
@@ -3054,8 +3439,11 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             ci_definitive_fail = False
             rb = _rebase_onto_master(worktree, branch)
             if rb.get("auto_resolved"):
-                _notify_user(plan_name, f"{key} rebase auto-resolved an additive-import "
-                                        f"conflict against origin/{_default_branch()}.")
+                _notify_user(
+                    plan_name,
+                    f"{key} rebase auto-resolved an additive-import "
+                    f"conflict against origin/{_default_branch()}.",
+                )
             if not rb["ok"]:
                 gate_error = f"rebase: {rb['error']}"
             else:
@@ -3068,22 +3456,35 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 # on stale code — the exact cross-story breakage Mode 9 closes.
                 pushed_sha = ""
                 if Path(worktree).is_dir():
-                    push = subprocess.run(["git", "push", "--force-with-lease", "origin",
-                                           branch], check=False, cwd=REPO_ROOT,
-                                          capture_output=True, text=True)
+                    push = subprocess.run(
+                        ["git", "push", "--force-with-lease", "origin", branch],
+                        check=False,
+                        cwd=REPO_ROOT,
+                        capture_output=True,
+                        text=True,
+                    )
                     if push.returncode != 0:
-                        gate_error = f"push: {(push.stderr or push.stdout).strip()[:200]}"
+                        gate_error = (
+                            f"push: {(push.stderr or push.stdout).strip()[:200]}"
+                        )
                     else:
                         # Mode 26: _ci_status/_ci_rerun must be pinned to the
                         # exact commit that was just pushed, not the branch
                         # name - a branch-name query can read a stale result
                         # from an older, already-superseded run.
-                        rev = subprocess.run(["git", "rev-parse", "HEAD"], check=False, cwd=worktree,
-                                             capture_output=True, text=True)
+                        rev = subprocess.run(
+                            ["git", "rev-parse", "HEAD"],
+                            check=False,
+                            cwd=worktree,
+                            capture_output=True,
+                            text=True,
+                        )
                         pushed_sha = rev.stdout.strip()
                 if not gate_error:
                     ci = _ci_status(branch, sha=pushed_sha)
-                    if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
+                    if ci["state"] == "cancelled" and not story.get(
+                        "ci_rerun_attempted"
+                    ):
                         # Worth exactly one automatic rerun before treating it
                         # as a failure - an abnormal queue delay can cancel
                         # jobs with no code-quality signal at all.
@@ -3166,8 +3567,11 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     story["ci_rework"] = True
                     story["review_feedback"] = _ci_rework_feedback(gate_error)
                     story["status"] = "changes_requested"
-                    _notify_user(plan_name, f"{key} merge-gate CI failed ({gate_error}); "
-                                            f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).")
+                    _notify_user(
+                        plan_name,
+                        f"{key} merge-gate CI failed ({gate_error}); "
+                        f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).",
+                    )
                     summary["notify"].append(key)
                     continue
 
@@ -3176,13 +3580,19 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 if attempts >= MERGE_MAX_ATTEMPTS:
                     story["status"] = "failed"
                     story["merge_error"] = gate_error
-                    _notify_user(plan_name, f"{key} merge gate failed {attempts}x "
-                                            f"({gate_error}); giving up - needs human intervention.")
+                    _notify_user(
+                        plan_name,
+                        f"{key} merge gate failed {attempts}x "
+                        f"({gate_error}); giving up - needs human intervention.",
+                    )
                     summary["failed"].append(key)
                 else:
                     # leave pr_open; the next tick retries within budget.
-                    _notify_user(plan_name, f"{key} merge gate attempt {attempts}/"
-                                            f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.")
+                    _notify_user(
+                        plan_name,
+                        f"{key} merge gate attempt {attempts}/"
+                        f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.",
+                    )
                 summary["notify"].append(key)
                 continue
 
@@ -3194,13 +3604,19 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 if attempts >= MERGE_MAX_ATTEMPTS:
                     story["status"] = "failed"
                     story["merge_error"] = str(e)
-                    _notify_user(plan_name, f"{key} merge failed {attempts}x "
-                                            f"({e}); giving up - needs human intervention.")
+                    _notify_user(
+                        plan_name,
+                        f"{key} merge failed {attempts}x "
+                        f"({e}); giving up - needs human intervention.",
+                    )
                     summary["failed"].append(key)
                 else:
                     # leave pr_open; the next tick retries within budget.
-                    _notify_user(plan_name, f"{key} merge attempt {attempts}/"
-                                            f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.")
+                    _notify_user(
+                        plan_name,
+                        f"{key} merge attempt {attempts}/"
+                        f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.",
+                    )
                 summary["notify"].append(key)
                 continue
             story["status"] = "done"
@@ -3234,9 +3650,11 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
 
     with _plan_lock(plan_name) as acquired:
         if not acquired:
-            return {"ok": False,
-                    "error": "plan busy (scheduler tick in progress); retry",
-                    "retriable": True}
+            return {
+                "ok": False,
+                "error": "plan busy (scheduler tick in progress); retry",
+                "retriable": True,
+            }
         # Re-read the manifest from disk INSIDE the lock so we merge against
         # the freshest on-disk state, not a pre-lock stale copy. A scheduler
         # tick may have changed the story's status or verdict while we waited
@@ -3246,7 +3664,10 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
         if not story:
             return {"ok": False, "error": f"No such story {story_key}"}
         if story["status"] not in ("parked", "pr_open"):
-            return {"ok": False, "error": f"Story is {story['status']}, not parked/pr_open"}
+            return {
+                "ok": False,
+                "error": f"Story is {story['status']}, not parked/pr_open",
+            }
         if story.get("review_verdict") != "APPROVE":
             return {"ok": False, "error": "Story was never reviewer-approved"}
 
@@ -3259,26 +3680,43 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                 worktree = story.get("worktree", "")
                 rb = _rebase_onto_master(worktree, branch)
                 if rb.get("auto_resolved"):
-                    _notify_user(plan_name, f"{story_key} rebase auto-resolved an "
-                                            f"additive-import conflict against "
-                                            f"origin/{_default_branch()}.")
+                    _notify_user(
+                        plan_name,
+                        f"{story_key} rebase auto-resolved an "
+                        f"additive-import conflict against "
+                        f"origin/{_default_branch()}.",
+                    )
                 if not rb["ok"]:
-                    return {"ok": False, "error": f"rebase failed: {rb['error']}",
-                            "story_key": story_key}
+                    return {
+                        "ok": False,
+                        "error": f"rebase failed: {rb['error']}",
+                        "story_key": story_key,
+                    }
                 pushed_sha = ""
                 if Path(worktree).is_dir():
-                    push = subprocess.run(["git", "push", "--force-with-lease", "origin",
-                                           branch], check=False, cwd=REPO_ROOT,
-                                          capture_output=True, text=True)
+                    push = subprocess.run(
+                        ["git", "push", "--force-with-lease", "origin", branch],
+                        check=False,
+                        cwd=REPO_ROOT,
+                        capture_output=True,
+                        text=True,
+                    )
                     if push.returncode != 0:
-                        return {"ok": False,
-                                "error": f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
-                                "story_key": story_key}
+                        return {
+                            "ok": False,
+                            "error": f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
+                            "story_key": story_key,
+                        }
                     # Mode 26: pin to the exact commit that was just pushed,
                     # not the branch name - see the matching comment in
                     # advance_pipeline's own merge adjudication above.
-                    rev = subprocess.run(["git", "rev-parse", "HEAD"], check=False, cwd=worktree,
-                                         capture_output=True, text=True)
+                    rev = subprocess.run(
+                        ["git", "rev-parse", "HEAD"],
+                        check=False,
+                        cwd=worktree,
+                        capture_output=True,
+                        text=True,
+                    )
                     pushed_sha = rev.stdout.strip()
                 ci = _ci_status(branch, sha=pushed_sha)
                 if ci["state"] == "cancelled" and not story.get("ci_rerun_attempted"):
@@ -3289,19 +3727,31 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                     _ci_rerun(pushed_sha)
                     ci = _ci_status(branch, sha=pushed_sha)
                 if ci["state"] in ("fail", "cancelled"):
-                    return {"ok": False, "error": f"CI failing: {ci['error']}",
-                            "story_key": story_key}
+                    return {
+                        "ok": False,
+                        "error": f"CI failing: {ci['error']}",
+                        "story_key": story_key,
+                    }
                 if ci["state"] == "pending":
-                    return {"ok": False, "error": f"CI still pending: {ci['error']}",
-                            "story_key": story_key}
+                    return {
+                        "ok": False,
+                        "error": f"CI still pending: {ci['error']}",
+                        "story_key": story_key,
+                    }
                 acc = _reverify_acceptance(story, worktree, story_key)
                 if acc["state"] == "fail":
-                    return {"ok": False, "error": f"acceptance reverify fail: {acc['error']}",
-                            "story_key": story_key}
+                    return {
+                        "ok": False,
+                        "error": f"acceptance reverify fail: {acc['error']}",
+                        "story_key": story_key,
+                    }
                 build = _reverify_build(worktree)
                 if build["state"] == "fail":
-                    return {"ok": False, "error": f"build reverify fail: {build['error']}",
-                            "story_key": story_key}
+                    return {
+                        "ok": False,
+                        "error": f"build reverify fail: {build['error']}",
+                        "story_key": story_key,
+                    }
                 _merge_pr(story.get("worktree", ""), story_key)
         except Exception as e:  # noqa: BLE001 (surface the gh/git failure to the human, don't raise)
             return {"ok": False, "error": str(e), "story_key": story_key}
@@ -3319,7 +3769,8 @@ def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
     with _plan_lock(plan_name) as acquired:
         if not acquired:
             return {
-                "ok": True, "skipped": "locked",
+                "ok": True,
+                "skipped": "locked",
                 "reason": "an advance_pipeline tick is already running for this plan",
             }
         manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"

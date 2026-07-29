@@ -23,4 +23,6 @@ testpaths = [
     "test_tdd_split_always_on.py",
     "test_code_reviewer_persona_blocking_format.py",
     "test_mode30_resolution_docs.py",
+    "test_rework_test_author_wiring_acceptance.py",
+    "test_rework_test_author_phase.py",
 ]

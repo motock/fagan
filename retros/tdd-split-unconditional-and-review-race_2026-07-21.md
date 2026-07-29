@@ -261,3 +261,5 @@ at risk, independent of anything a dispatched story does.
   `git log origin/master` before any corrective action, which is what
   surfaced Mode 29 as a real bug instead of quietly re-running a merge that
   had already happened.
+## RESOLUTION 2026-07-27
+Mode 30's working-tree-mutating ops (`git merge --ff-only` in `_sync_local_default_branch`, `git pull --ff-only` in dispatch) were removed by the predecessor story; scheduler/dispatch no longer rewrite checked-out files; the remaining surface is `.git`-only writes (the `git fetch` in `dispatch_story`) now guarded by the advisory `_try_acquire_git_lock`; pause_plan before manual git surgery is now defense-in-depth, not load-bearing.

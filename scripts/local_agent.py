@@ -240,17 +240,40 @@ REWORK_SUITE_REJECT_CAP = int(os.environ.get("LOCAL_AGENT_REWORK_SUITE_REJECT_CA
 TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
 
 
-def _no_tool_nudge(consecutive: int) -> str:
+_COMPLETION_PHRASES = ("all done", "i'm done", "i am done", "all finished", "finished")
+
+
+def _no_tool_nudge(consecutive: int, content: str = "") -> str:
     """Nudge for an assistant turn that emitted no tool call.
 
     Early turns get the plain call-to-action (the model may simply have
-    forgotten). From the third consecutive narration turn onward, escalate to
-    behavioral guidance: a weak model stuck looping on a failing self-test is
-    usually chasing a phantom — its own test asserts behavior the correct
-    implementation can never satisfy. Tell it to re-check the spec and fix the
-    *test*, not the implementation, then call done.
+    forgotten) - unless `content` itself narrates completion (e.g. "All
+    done."), in which case it's directed to call the `done` tool specifically
+    (live 2026-07-29: a model that narrates "All done." as prose instead of
+    calling a tool can burn turns toward NO_TOOL_CAP before the generic nudge
+    happens to work). From the third consecutive narration turn onward,
+    escalate to behavioral guidance regardless of content: a weak model stuck
+    looping on a failing self-test is usually chasing a phantom — its own
+    test asserts behavior the correct implementation can never satisfy. Tell
+    it to re-check the spec and fix the *test*, not the implementation, then
+    call done.
+
+    Phrase matching uses \\b word boundaries, not bare substring search - a
+    naive `"finished" in content` also matches inside "unfinished"/
+    "refinished", wrongly flagging genuinely incomplete work as completion
+    (caught in review 2026-07-29; the acceptance oracle that shipped first
+    only exercised "not done yet"/"not finished" and missed this compound-
+    word case). A phrase match immediately preceded by the word "not" (e.g.
+    "not finished") is a negation, not completion, and is excluded too.
     """
     if consecutive < 3:
+        lc = content.lower()
+        for phrase in _COMPLETION_PHRASES:
+            for match in re.finditer(r"\b" + re.escape(phrase) + r"\b", lc):
+                preceding_words = lc[:match.start()].split()
+                if preceding_words and preceding_words[-1] == "not":
+                    continue
+                return "You reported being done — call the done tool now to finish."
         return "Call a tool now (do not write prose)."
     return (
         "You have not called a tool for several turns. If you are stuck on a "
@@ -1547,7 +1570,8 @@ def main() -> int:
                 if worktree_dirty():
                     auto_wip_commit("narration cap")
                 return 2
-            messages.append({"role": "user", "content": _no_tool_nudge(consecutive_no_tool)})
+            messages.append({"role": "user", "content": _no_tool_nudge(
+                consecutive_no_tool, content=m.get("content", ""))})
             continue
         consecutive_no_tool = 0
 

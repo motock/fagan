@@ -376,6 +376,95 @@ def test_no_tool_nudge_escalates_after_consecutive_turns():
     assert la._no_tool_nudge(5) == escalated
 
 
+_GENERIC_NUDGE = "Call a tool now (do not write prose)."
+
+
+def test_no_tool_nudge_targets_done_tool_on_completion_prose():
+    """When the model's own turn narrates completion instead of calling a
+    tool, the early (consecutive 1-2) nudge must direct it to call `done`
+    specifically rather than the generic call-to-action - a narrating model
+    that never gets told which tool to call can burn all the way to
+    NO_TOOL_CAP before self-correcting (live 2026-07-29: gpt-oss:20b said
+    "All done." as prose, not a tool call, and only recovered because the
+    generic nudge happened to work that time)."""
+    for phrase in ("All done.", "I'm done.", "I am done.", "Finished.", "All finished."):
+        for c in (1, 2):
+            nudge = la._no_tool_nudge(c, content=phrase)
+            assert "done" in nudge.lower() and nudge != _GENERIC_NUDGE, (c, phrase, nudge)
+
+
+def test_no_tool_nudge_non_completion_prose_stays_generic():
+    assert la._no_tool_nudge(1, content="Let me check the file.") == _GENERIC_NUDGE
+    assert la._no_tool_nudge(2, content="") == _GENERIC_NUDGE
+
+
+def test_no_tool_nudge_negation_not_done_or_not_finished_stays_generic():
+    """'not done yet'/'not finished' contain the negated word but are NOT
+    completion - must stay generic, not misfire the targeted nudge."""
+    assert la._no_tool_nudge(1, content="not done yet, still working") == _GENERIC_NUDGE
+    assert la._no_tool_nudge(1, content="not finished") == _GENERIC_NUDGE
+    assert la._no_tool_nudge(2, content="not finished") == _GENERIC_NUDGE
+
+
+def test_no_tool_nudge_compound_word_unfinished_stays_generic():
+    """Regression (caught in review 2026-07-29, twice missed by an
+    acceptance oracle that only exercised 'not done yet'/'not finished'):
+    plain substring search for "finished" also matches inside "unfinished"
+    and "refinished", so a model reporting genuinely incomplete work ("this
+    is unfinished") was wrongly told to call `done`. Word-boundary matching
+    must not treat a compound word as containing the bare phrase."""
+    assert la._no_tool_nudge(1, content="This is unfinished work, more to do") == _GENERIC_NUDGE
+    assert la._no_tool_nudge(2, content="unfinished") == _GENERIC_NUDGE
+    assert la._no_tool_nudge(1, content="the section was refinished") == _GENERIC_NUDGE
+
+
+def test_no_tool_nudge_escalation_unchanged_regardless_of_completion_content():
+    """The consecutive>=3 escalation path must stay exactly as before,
+    whether or not the content indicates completion - only the early
+    (1-2) turns get the new targeted-done behavior."""
+    escalated = la._no_tool_nudge(3)
+    assert la._no_tool_nudge(3, content="All done.") == escalated
+    assert la._no_tool_nudge(5, content="All done.") == escalated
+
+
+def test_no_tool_nudge_backward_compatible_without_content_arg():
+    assert la._no_tool_nudge(1) == _GENERIC_NUDGE
+    assert la._no_tool_nudge(2) == _GENERIC_NUDGE
+
+
+def test_no_tool_call_site_wires_content_into_targeted_nudge(tmp_path, monkeypatch, capsys):
+    """DYNAMIC integration check, not just the function in isolation: drive
+    the real agent loop (main()) with a mocked chat that returns "All
+    done." prose and no tool call. If the production call site does not
+    pass the assistant's content through to _no_tool_nudge, the done-prose
+    detection is dead code at runtime even though the unit tests above all
+    pass - this is exactly the gap a unit-only fixture leaves open."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "NO_TOOL_CAP", 5)
+    monkeypatch.setattr(la, "MAX_STEPS", 40)
+
+    seen = []
+
+    def _done_chat(messages):
+        seen.append([dict(m) for m in messages])
+        return {"role": "assistant", "content": "All done.", "tool_calls": []}
+
+    monkeypatch.setattr(la, "chat", _done_chat)
+
+    rc = la.main()
+    capsys.readouterr()
+
+    assert len(seen) >= 2, f"loop never reached a 2nd chat call (rc={rc})"
+    nudge = seen[1][-1]
+    assert nudge.get("role") == "user"
+    assert "done" in nudge["content"].lower() and nudge["content"] != _GENERIC_NUDGE, (
+        "the agent loop did not direct the done-prose turn to call done -- "
+        "the production call site is not passing content through: "
+        + repr(nudge["content"])
+    )
+
+
 def test_local_agent_narration_cap_parks_after_consecutive_no_tool_turns(
     tmp_path, monkeypatch, capsys
 ):

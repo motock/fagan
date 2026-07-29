@@ -364,7 +364,7 @@ def test_review_story_tests_passed_still_runs_reviewer(
     reviewer_called = []
 
     def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None,
-                       acceptance=None, since_sha=None):
+                       acceptance=None, since_sha=None, risk=None):
         reviewer_called.append(True)
         return "VERDICT: APPROVE"
 

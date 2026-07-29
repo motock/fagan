@@ -51,7 +51,11 @@ def _parse_ruling(text: str) -> dict[str, Any]:
 
 
 def _parse_verdict(text: str) -> str:
-    m = re.search(r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)", text, re.IGNORECASE)
+    # APPROVE_WITH_FIX must be tried before the bare APPROVE alternative -
+    # regex alternation is first-match, not longest-match, so listing
+    # APPROVE first would match it as a substring prefix of APPROVE_WITH_FIX
+    # and silently drop the distinction.
+    m = re.search(r"VERDICT:\s*(APPROVE_WITH_FIX|APPROVE|REQUEST_CHANGES)", text, re.IGNORECASE)
     return m.group(1).upper() if m else "UNKNOWN"
 
 

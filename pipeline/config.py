@@ -222,6 +222,18 @@ REVIEW_INCONCLUSIVE_MAX = int(os.environ.get("PIPELINE_REVIEW_INCONCLUSIVE_MAX",
 # durably (notify, not a silent print) rather than raising.
 PLANE_MAX_ATTEMPTS = int(os.environ.get("PIPELINE_PLANE_MAX_ATTEMPTS", "3"))
 
+# Reviewer self-fix: lets the code-reviewer persona apply a trivial, high-
+# confidence fix directly (VERDICT: APPROVE_WITH_FIX) instead of only ever
+# reporting REQUEST_CHANGES and waiting for a full rework redispatch. Off by
+# default (secure-by-default: this auto-commits reviewer-authored code) - an
+# operator opts in explicitly. Even when enabled, the reviewer's own
+# self-assessment of "trivial" is never trusted alone: _verify_reviewer_auto_fix
+# mechanically re-checks risk, diff size, and the full test suite before an
+# APPROVE_WITH_FIX is allowed to proceed like a real APPROVE (see review.py).
+PIPELINE_REVIEWER_AUTO_FIX = os.environ.get("PIPELINE_REVIEWER_AUTO_FIX", "0") == "1"
+REVIEWER_AUTO_FIX_MAX_FILES = int(os.environ.get("PIPELINE_REVIEWER_AUTO_FIX_MAX_FILES", "1"))
+REVIEWER_AUTO_FIX_MAX_LINES = int(os.environ.get("PIPELINE_REVIEWER_AUTO_FIX_MAX_LINES", "40"))
+
 
 __all__ = [
     "DAILY_REQUEST_THRESHOLD",
@@ -235,7 +247,10 @@ __all__ = [
     "PIPELINE_AUTONOMY",
     "PIPELINE_LOCAL_MAX_RISK",
     "PIPELINE_RISK_THRESHOLD",
+    "PIPELINE_REVIEWER_AUTO_FIX",
     "PLANE_MAX_ATTEMPTS",
+    "REVIEWER_AUTO_FIX_MAX_FILES",
+    "REVIEWER_AUTO_FIX_MAX_LINES",
     "REVIEW_INCONCLUSIVE_MAX",
     "REWORK_MAX_ATTEMPTS",
     "REWORK_MAX_ATTEMPTS_ESCALATED",

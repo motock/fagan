@@ -1797,6 +1797,201 @@ def test_stream_one_turn_uses_configurable_connect_timeout(monkeypatch):
     assert captured["timeout"].connect == 45.0
 
 
+# ---------- live chars/token calibration from ollama's own prompt_eval_count
+# (ported from local_agent.py, 2026-07-29) ----------
+
+def test_oracle_stream_one_turn_captures_prompt_eval_count_and_calibrates_ratio(monkeypatch):
+    monkeypatch.setattr(lao, "_measured_chars_per_token", None)
+    monkeypatch.setattr(lao, "_last_prompt_eval_count", None)
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "hi"}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
+                    "prompt_eval_count": 100}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(lao.httpx, "stream", _fake_stream)
+    payload = {"model": "x", "messages": [{"role": "user", "content": "x" * 250}],
+               "tools": [], "stream": True}
+    lao._stream_one_turn(payload)
+    assert lao._last_prompt_eval_count == 100
+    # 250 message chars + len("[]") for the empty tools schema, over 100
+    # measured prompt tokens (see the tools-schema test below).
+    assert lao._measured_chars_per_token == pytest.approx((250 + 2) / 100)
+
+
+def test_oracle_stream_one_turn_leaves_calibration_unset_without_prompt_eval_count(monkeypatch):
+    monkeypatch.setattr(lao, "_measured_chars_per_token", None)
+    monkeypatch.setattr(lao, "_last_prompt_eval_count", None)
+    lines = [json.dumps({"message": {"role": "assistant", "content": "hi"}, "done": True})]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(lao.httpx, "stream", _fake_stream)
+    lao._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert lao._last_prompt_eval_count is None
+    assert lao._measured_chars_per_token is None
+
+
+def test_oracle_stream_one_turn_counts_tools_schema_in_calibration(monkeypatch):
+    """The tools schema is counted in prompt_eval_count, so it must be in the
+    numerator too - see local_agent.py's copy of this test for the measured
+    bias (0.67 vs a true ~2.35 on an early turn) this guards against."""
+    monkeypatch.setattr(lao, "_measured_chars_per_token", None)
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "hi"}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
+                    "prompt_eval_count": 100}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(lao.httpx, "stream", _fake_stream)
+    tools = [{"type": "function", "function": {"name": "x" * 146}}]
+    tools_chars = len(json.dumps(tools))
+    payload = {"model": "x", "messages": [{"role": "user", "content": "y" * 250}],
+               "tools": tools, "stream": True}
+    lao._stream_one_turn(payload)
+    assert lao._measured_chars_per_token == pytest.approx((250 + tools_chars) / 100)
+
+
+def test_oracle_effective_chars_per_token_prefers_calibrated_value(monkeypatch):
+    monkeypatch.setattr(lao, "_measured_chars_per_token", 2.35)
+    assert lao._effective_chars_per_token() == 2.35
+
+
+def test_oracle_effective_chars_per_token_falls_back_to_estimate(monkeypatch):
+    monkeypatch.setattr(lao, "_measured_chars_per_token", None)
+    assert lao._effective_chars_per_token() == lao._CHARS_PER_TOKEN_ESTIMATE
+
+
+def test_oracle_main_resets_calibration_globals_at_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+    monkeypatch.setattr(lao, "_measured_chars_per_token", 1.5)
+    monkeypatch.setattr(lao, "_last_prompt_eval_count", 99999)
+    monkeypatch.setattr(lao, "MAX_STEPS", 1)
+    observed = {}
+
+    def _fake_chat(messages):
+        observed["last_prompt_eval_count"] = lao._last_prompt_eval_count
+        observed["measured_chars_per_token"] = lao._measured_chars_per_token
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(lao, "chat", _fake_chat)
+    lao.main()
+    assert observed["last_prompt_eval_count"] is None
+    assert observed["measured_chars_per_token"] is None
+
+
+def test_oracle_main_proactively_trims_when_measured_tokens_near_num_ctx(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+    monkeypatch.setattr(lao, "NUM_CTX", 100)
+    monkeypatch.setattr(lao, "PROACTIVE_TRIM_THRESHOLD", 0.85)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            # Stand in for _stream_one_turn's calibration side effect. Set via
+            # monkeypatch, not raw assignment, so these module globals are
+            # restored at teardown instead of leaking into later tests.
+            monkeypatch.setattr(lao, "_last_prompt_eval_count", 90)
+            monkeypatch.setattr(lao, "_measured_chars_per_token", 1.0)
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(lao, "chat", _fake_chat)
+    rc = lao.main()
+    out = capsys.readouterr().out
+    assert rc == 0, f"expected the run to finish cleanly, got rc={rc}\noutput: {out!r}"
+    assert "trimming proactively" in out, f"expected a proactive-trim log line, output: {out!r}"
+
+
+# ---------- main() trims and retries once on a persistent 5xx (ported from
+# local_agent.py — this variant was missing the recovery entirely, so an
+# oversized transcript on an acceptance-bearing dispatch (the production
+# path: backend.py routes every story with an `acceptance` block here) died
+# on the first unrecoverable 5xx instead of shrinking and retrying) ----------
+
+def test_oracle_main_trims_transcript_and_retries_once_on_persistent_5xx(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+    # A tiny NUM_CTX means genuine post-head content (grown by the two
+    # successful reads below) already exceeds the trim budget, so trimming
+    # reliably triggers without needing to hand-construct a huge transcript.
+    monkeypatch.setattr(lao, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            raise _status_error(500)
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(lao, "chat", _fake_chat)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected the trim-and-retry to recover, got rc={rc}\noutput: {out!r}"
+    assert calls["n"] == 4, (
+        f"expected exactly 4 chat() calls (2 reads, fail once, succeed on "
+        f"the trim-retry), got {calls['n']}\noutput: {out!r}"
+    )
+    assert "trimming and retrying once" in out, f"expected the trim log line, output: {out!r}"
+
+
+def test_oracle_main_gives_up_when_trim_retry_also_fails(tmp_path, monkeypatch, capsys):
+    """The trim-retry is exactly one extra attempt, not another open-ended
+    loop: if chat() still fails after the trim, main() must give up (return 1)
+    rather than retrying indefinitely."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+    monkeypatch.setattr(lao, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        raise _status_error(500)
+
+    monkeypatch.setattr(lao, "chat", _fake_chat)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, f"expected give-up after the trim-retry also fails, got rc={rc}\noutput: {out!r}"
+    assert calls["n"] == 4, (
+        f"expected exactly 4 chat() calls (2 reads + original failure + one "
+        f"trim-retry), got {calls['n']}\noutput: {out!r}"
+    )
+
+
 # ---------- transcript persistence + resume (ported from local_agent.py, see
 # test_local_agent_persistence.py for the reference test suite) ----------
 # These tests need a fresh module import per test with different env vars

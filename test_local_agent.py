@@ -2346,6 +2346,146 @@ def test_stream_one_turn_uses_configurable_connect_timeout(monkeypatch):
     assert captured["timeout"].connect == 45.0
 
 
+# ---------- live chars/token calibration from ollama's own prompt_eval_count
+# (2026-07-29) ----------
+# _CHARS_PER_TOKEN_ESTIMATE=4 is a guess with no tokenizer behind it. Live on
+# the ollama server log: a real 41,921-token gpt-oss prompt measured ~2.35
+# chars/token against a budget computed from the fixed 4.0 guess - the
+# budget was already ~28% over NUM_CTX by the time a trim would fire. Ollama
+# reports the real prompt token count for every turn in the streamed done
+# chunk's `prompt_eval_count`; use it to replace the guess with a live ratio.
+
+def test_stream_one_turn_captures_prompt_eval_count_and_calibrates_ratio(monkeypatch):
+    monkeypatch.setattr(la, "_measured_chars_per_token", None)
+    monkeypatch.setattr(la, "_last_prompt_eval_count", None)
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "hi"}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
+                    "prompt_eval_count": 100}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    payload = {"model": "x", "messages": [{"role": "user", "content": "x" * 250}],
+               "tools": [], "stream": True}
+    la._stream_one_turn(payload)
+    assert la._last_prompt_eval_count == 100
+    # 250 message chars + len("[]") for the empty tools schema, over 100
+    # measured prompt tokens (see the tools-schema test below).
+    assert la._measured_chars_per_token == pytest.approx((250 + 2) / 100)
+
+
+def test_stream_one_turn_leaves_calibration_unset_without_prompt_eval_count(monkeypatch):
+    """A done chunk that never reports a count (any non-ollama backend that
+    happened to route here, or a truncated stream) must not crash and must
+    not fabricate a calibration - the caller falls back to the fixed guess."""
+    monkeypatch.setattr(la, "_measured_chars_per_token", None)
+    monkeypatch.setattr(la, "_last_prompt_eval_count", None)
+    lines = [json.dumps({"message": {"role": "assistant", "content": "hi"}, "done": True})]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    la._stream_one_turn({"model": "x", "messages": [], "tools": [], "stream": True})
+    assert la._last_prompt_eval_count is None
+    assert la._measured_chars_per_token is None
+
+
+def test_stream_one_turn_counts_tools_schema_in_calibration(monkeypatch):
+    """prompt_eval_count covers the WHOLE prompt - messages plus the tools
+    schema plus chat-template scaffolding - so calibrating against message
+    chars alone biases the ratio badly low early in a run, when the ~3.4KB
+    tools schema dominates a still-small transcript. Measured: a first turn
+    calibrated to 0.67 instead of ~2.35, shrinking the reactive-5xx trim
+    budget ~3.5x more than needed. The tools payload must be counted."""
+    monkeypatch.setattr(la, "_measured_chars_per_token", None)
+    lines = [
+        json.dumps({"message": {"role": "assistant", "content": "hi"}}),
+        json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
+                    "prompt_eval_count": 100}),
+    ]
+
+    def _fake_stream(method, url, **kwargs):
+        return _FakeStreamCM(_FakeStreamResponse(lines, status_code=200))
+
+    monkeypatch.setattr(la.httpx, "stream", _fake_stream)
+    tools = [{"type": "function", "function": {"name": "x" * 146}}]
+    tools_chars = len(json.dumps(tools))
+    payload = {"model": "x", "messages": [{"role": "user", "content": "y" * 250}],
+               "tools": tools, "stream": True}
+    la._stream_one_turn(payload)
+    assert la._measured_chars_per_token == pytest.approx((250 + tools_chars) / 100)
+
+
+def test_effective_chars_per_token_prefers_calibrated_value(monkeypatch):
+    monkeypatch.setattr(la, "_measured_chars_per_token", 2.35)
+    assert la._effective_chars_per_token() == 2.35
+
+
+def test_effective_chars_per_token_falls_back_to_estimate(monkeypatch):
+    monkeypatch.setattr(la, "_measured_chars_per_token", None)
+    assert la._effective_chars_per_token() == la._CHARS_PER_TOKEN_ESTIMATE
+
+
+def test_main_resets_calibration_globals_at_start(tmp_path, monkeypatch):
+    """A stale calibration from a prior dispatch (or, in-process, a prior
+    test) must never leak into a fresh run - main() starts with no
+    measurement, matching a cold agent process."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_measured_chars_per_token", 1.5)
+    monkeypatch.setattr(la, "_last_prompt_eval_count", 99999)
+    monkeypatch.setattr(la, "MAX_STEPS", 1)
+    observed = {}
+
+    def _fake_chat(messages):
+        observed["last_prompt_eval_count"] = la._last_prompt_eval_count
+        observed["measured_chars_per_token"] = la._measured_chars_per_token
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+    la.main()
+    assert observed["last_prompt_eval_count"] is None
+    assert observed["measured_chars_per_token"] is None
+
+
+def test_main_proactively_trims_when_measured_tokens_near_num_ctx(tmp_path, monkeypatch, capsys):
+    """Reacting to a 500 with a bad char estimate is too late: once ollama's
+    own measured prompt_eval_count for a turn is already close to NUM_CTX,
+    trim the transcript BEFORE the next turn instead of waiting for a request
+    to fail first."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(la, "NUM_CTX", 100)
+    monkeypatch.setattr(la, "PROACTIVE_TRIM_THRESHOLD", 0.85)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            # Stand in for _stream_one_turn's calibration side effect. Set via
+            # monkeypatch, not raw assignment, so these module globals are
+            # restored at teardown instead of leaking into later tests.
+            monkeypatch.setattr(la, "_last_prompt_eval_count", 90)
+            monkeypatch.setattr(la, "_measured_chars_per_token", 1.0)
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done", "arguments": {"summary": "ok"}}}]}
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+    rc = la.main()
+    out = capsys.readouterr().out
+    assert rc == 0, f"expected the run to finish cleanly, got rc={rc}\noutput: {out!r}"
+    assert "trimming proactively" in out, f"expected a proactive-trim log line, output: {out!r}"
+
+
 # --- Qwen3 hybrid thinking-mode control (PIPELINE_LOCAL_THINK / LOCAL_AGENT_THINK) ---
 #
 # Qwen3.6-27B (and other Qwen3 dense models) emit a  Mattis... Mattis reasoning

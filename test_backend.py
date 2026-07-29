@@ -26,6 +26,18 @@ def _envelope(message_body: dict) -> dict:
     return {"message": message_body, "model": "test"}
 
 
+@pytest.fixture(autouse=True)
+def _clear_model_weights_cache():
+    """_ollama_model_weights_mb memoizes per (endpoint, tag) so the scheduler
+    doesn't re-probe /api/tags every tick. Without clearing it between tests,
+    one test's mocked /api/tags payload silently answers another's lookup for
+    the same tag - exactly the cross-test-leak class this repo has been bitten
+    by before. Autouse so no individual test has to remember."""
+    b._OLLAMA_MODEL_WEIGHTS_CACHE.clear()
+    yield
+    b._OLLAMA_MODEL_WEIGHTS_CACHE.clear()
+
+
 # ---------- Role routing ----------
 def test_get_backend_no_role_returns_claude_driver():
     assert isinstance(b.get_backend(), b.ClaudeCliDriver)
@@ -727,6 +739,145 @@ def test_review_loop_truncates_tool_result_in_log_but_not_in_conversation(tmp_pa
     assert "X" * 2000 in content, "truncated tool result must still appear in the log"
 
 
+# ---------- review-loop transcript trimming (2026-07-29) ----------
+# Unlike the dispatch agent loop, _review_loop appended every turn with zero
+# trimming. Measured live from review_token_costs.jsonl: gpt-oss:20b review
+# calls overflow a 16K context in 8.9% of turns (69/774), glm in 7.7%
+# (280/3628) - the likely root cause of review_verdict=UNKNOWN-with-empty-
+# feedback burning a rework cycle blind. Once a turn's real, measured
+# prompt_eval_count is close to num_ctx, trim before the next turn instead
+# of letting the transcript grow unbounded.
+
+# These use a physically consistent fake: Ollama's prompt_eval_count covers
+# the messages AND the tools schema, so the fake derives it from both at a
+# fixed 2.35 chars/token - the live-measured ratio. A fake that counted only
+# message chars would make the loop's own calibration look wrong when it
+# isn't (and vice versa).
+_LIVE_CHARS_PER_TOKEN = 2.35
+
+
+def _review_trim_spy(monkeypatch):
+    """Record every (max_chars) the loop asks _trim_review_transcript for,
+    while still applying the real trim."""
+    budgets = []
+    real = b._trim_review_transcript
+
+    def _spy(messages, max_chars):
+        budgets.append(max_chars)
+        return real(messages, max_chars)
+
+    monkeypatch.setattr(b, "_trim_review_transcript", _spy)
+    return budgets
+
+
+def _fake_review_chat(tool_turns=3, tool_output_chars=900):
+    """Build a _chat fake whose prompt_eval_count is ALWAYS physically
+    consistent with what it was actually sent (messages + tools schema, at
+    _LIVE_CHARS_PER_TOKEN) - never a forced value. Whether the loop's trim
+    threshold trips is therefore controlled purely by num_ctx vs how much
+    content has accumulated, exactly as in production. Emits `tool_turns`
+    tool-calling turns, then submits a verdict."""
+    turns = {"n": 0}
+    chunk = "z" * tool_output_chars
+
+    def _fake_chat(messages, model, tools=None):
+        turns["n"] += 1
+        if turns["n"] > tool_turns:
+            return _envelope({"tool_calls": [{"function": {
+                "name": "submit_review",
+                "arguments": {"verdict": "APPROVE", "summary": "ok"}}}]})
+        sent = (sum(b._review_msg_chars(m) for m in messages)
+                + len(json.dumps(b.OllamaDriver._REVIEW_TOOLS)))
+        return {"message": {"tool_calls": [{"function": {
+                    "name": "bash", "arguments": {"command": f"echo {chunk}"}}}]},
+                "prompt_eval_count": int(sent / _LIVE_CHARS_PER_TOKEN)}
+
+    return _fake_chat
+
+
+def test_review_loop_proactively_trims_when_measured_tokens_near_num_ctx(tmp_path, monkeypatch):
+    """The trigger: an over-threshold measured prompt_eval_count must make
+    the loop attempt a trim before the next turn."""
+    driver = b.OllamaDriver()
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "1000")
+    monkeypatch.setattr(b, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
+    budgets = _review_trim_spy(monkeypatch)
+    monkeypatch.setattr(driver, "_chat", _fake_review_chat())
+
+    driver.complete("review", system="r", model="sonnet",
+                    allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert budgets, "expected the accumulating transcript to trip the trim"
+
+
+def test_review_loop_trim_preserves_head_and_drops_oldest(tmp_path, monkeypatch):
+    """When the trim does drop content, the system+task head must survive and
+    the dropped span must be replaced by the explanatory note."""
+    messages = [
+        {"role": "system", "content": "S"},
+        {"role": "user", "content": "U"},
+        {"role": "assistant", "content": "", "tool_calls": [{"a": "1"}]},
+        {"role": "tool", "content": "x" * 500},
+        {"role": "assistant", "content": "", "tool_calls": [{"a": "2"}]},
+        {"role": "tool", "content": "y" * 500},
+    ]
+    out = b._trim_review_transcript(messages, 700)
+
+    assert out[0] is messages[0] and out[1] is messages[1], "head must survive"
+    assert out[2]["role"] == "user" and "dropped" in out[2]["content"]
+    # The newest block is what's kept; the oldest is what went.
+    assert messages[5] in out
+    assert messages[3] not in out
+
+
+def test_review_loop_trim_budget_is_calibrated_not_fixed_ratio(tmp_path, monkeypatch):
+    """The sizing: the budget must come from the turn's OWN measured
+    prompt_eval_count, not the fixed 4.0 guess. With the guess at
+    num_ctx=1000 the target is 1000*4*0.75 = 3000 chars, which at the real
+    2.35 ratio is ~1276 tokens - still ABOVE the 1000-token ceiling, so the
+    'successful' trim would leave the prompt overflowing and fail to prevent
+    the very 500 it exists to prevent."""
+    driver = b.OllamaDriver()
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "1000")
+    monkeypatch.setattr(b, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
+    budgets = _review_trim_spy(monkeypatch)
+    monkeypatch.setattr(driver, "_chat", _fake_review_chat())
+
+    driver.complete("review", system="r", model="sonnet",
+                    allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert budgets, "expected the proactive trim to fire at least once"
+    fixed_ratio_budget = int(1000 * 4 * 0.75)
+    for got in budgets:
+        assert got != fixed_ratio_budget, (
+            f"budget {got} is exactly the uncalibrated 4.0 guess - it must be "
+            f"derived from the measured ratio"
+        )
+        assert got / _LIVE_CHARS_PER_TOKEN <= 1000, (
+            f"budget {got} chars is ~{got / _LIVE_CHARS_PER_TOKEN:.0f} real "
+            f"tokens, above the num_ctx=1000 ceiling - the trim would not "
+            f"prevent the overflow"
+        )
+
+
+def test_review_loop_does_not_trim_when_below_threshold(tmp_path, monkeypatch):
+    """No measurement, or one comfortably under threshold, must leave the
+    transcript untouched - trimming is a targeted response to a real overflow
+    risk, not a constant tax on every review."""
+    driver = b.OllamaDriver()
+    # A context window far larger than anything this short review accumulates,
+    # so the threshold is never legitimately reached.
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "100000")
+    monkeypatch.setattr(b, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
+    budgets = _review_trim_spy(monkeypatch)
+    monkeypatch.setattr(driver, "_chat", _fake_review_chat())
+
+    driver.complete("review", system="r", model="sonnet",
+                    allowed_tools="Bash,Read", cwd=str(tmp_path))
+
+    assert budgets == [], f"must not trim below threshold, attempted {budgets}"
+
+
 def test_complete_stays_single_shot_for_overlord_style_call(monkeypatch):
     """Overlord-style complete() (allowed_tools='Read', no cwd) must NOT enter
     the tool loop — one plain completion, no tools offered."""
@@ -859,6 +1010,181 @@ def test_ollama_resource_status_fails_open_when_memory_read_fails(monkeypatch):
     status = driver.resource_status()
 
     assert status["ok"] is True
+
+
+# ---------- model-too-big-for-this-host gate (2026-07-29) ----------
+# An earlier attempt at this added the model's weight size to the FREE-memory
+# floor (require free >= floor + weights). That paralyzed dispatch outright:
+# measured live on a 24576mb host, free was 10837mb against a 15202mb
+# requirement, so resource_status returned ok=False forever and
+# _role_resource_ok blocked every local dispatch - the same "silently
+# paralyze all future dispatch" failure the floor's own docstring warns
+# about (T12/T13). Free memory is the wrong denominator: macOS compresses
+# and evicts under pressure, so a 13GB model demonstrably loads with under
+# 13GB "available".
+#
+# The real, stable discriminator is the model's size against TOTAL physical
+# RAM: gpt-oss:20b (13154mb = 53.5% of 24576mb) is the validated workhorse,
+# while devstral:24b (~15GB, ~61%) 500-storms on every request and is
+# unusable. So: leave the free-memory floor exactly as it was, and add an
+# ORTHOGONAL check on weights-vs-total-RAM. This cannot be tripped by
+# transient Chrome pressure, only by a genuinely oversized model.
+
+def test_ollama_model_weights_mb_reads_size_from_tags(monkeypatch):
+    tags_payload = {"models": [
+        {"name": "gpt-oss:20b", "size": 13793441244},
+        {"name": "gemma4:12b-mlx", "size": 7651251181},
+    ]}
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse(tags_payload))
+    mb = b._ollama_model_weights_mb("http://localhost:11434", "gpt-oss:20b")
+    assert mb == 13793441244 // (1024 * 1024)
+
+
+def test_ollama_model_weights_mb_returns_none_when_tag_absent(monkeypatch):
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({"models": []}))
+    assert b._ollama_model_weights_mb("http://localhost:11434", "gpt-oss:20b") is None
+
+
+def test_ollama_model_weights_mb_fails_open_on_network_error(monkeypatch):
+    def _boom(url, timeout):
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(b.httpx, "get", _boom)
+    assert b._ollama_model_weights_mb("http://localhost:11434", "gpt-oss:20b") is None
+
+
+def test_ollama_model_weights_mb_caches_per_endpoint_and_tag(monkeypatch):
+    """resource_status runs on every scheduler tick; a tag's on-disk size is
+    effectively immutable, so the /api/tags round trip is cached."""
+    calls = {"n": 0}
+    tags_payload = {"models": [{"name": "gpt-oss:20b", "size": 13793441244}]}
+
+    def _counting_get(url, timeout):
+        calls["n"] += 1
+        return _FakeResponse(tags_payload)
+
+    monkeypatch.setattr(b.httpx, "get", _counting_get)
+    for _ in range(3):
+        assert b._ollama_model_weights_mb("http://localhost:11434", "gpt-oss:20b") == 13154
+    assert calls["n"] == 1, f"expected the lookup to be cached, made {calls['n']} calls"
+
+
+def test_ollama_resource_status_not_ok_when_model_too_large_for_total_ram(monkeypatch):
+    """devstral:24b (~15GB) on a 24GB host: ~61% of total RAM, which live
+    500-storms on every request (1-3 min per failure) and is unusable."""
+    tags_payload = {"models": [{"name": "devstral:24b", "size": 16106127360}]}  # ~15360mb
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse(tags_payload))
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b")
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 20000)  # floor is satisfied
+    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is False
+    assert "too large" in status["reason"]
+    assert "devstral:24b" in status["reason"]
+
+
+def test_ollama_resource_status_ok_for_validated_workhorse_model(monkeypatch):
+    """gpt-oss:20b (13154mb = 53.5% of a 24576mb host) is the validated
+    local workhorse and must never be gated - this is the regression guard
+    for the paralysis bug described in this section's header."""
+    tags_payload = {"models": [{"name": "gpt-oss:20b", "size": 13793441244}]}  # ~13154mb
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse(tags_payload))
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "gpt-oss:20b")
+    driver = b.OllamaDriver()
+    # The live free-memory reading that the old floor+weights math rejected.
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 10837)
+    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is True, f"must not gate the validated model: {status['reason']}"
+
+
+def test_ollama_resource_status_model_size_check_fails_open_when_total_ram_unknown(
+    monkeypatch,
+):
+    tags_payload = {"models": [{"name": "devstral:24b", "size": 16106127360}]}
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse(tags_payload))
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b")
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 20000)
+    monkeypatch.setattr(b, "_total_memory_mb", lambda: None)  # non-macOS / sysctl failure
+
+    assert driver.resource_status()["ok"] is True
+
+
+def test_ollama_resource_status_model_size_check_falls_open_when_tag_unknown(monkeypatch):
+    """A tag /api/tags doesn't list (not yet pulled) must not block dispatch
+    on an estimate the gate couldn't make."""
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({"models": []}))
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 4096)
+    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+
+    assert driver.resource_status()["ok"] is True
+
+
+def test_ollama_resource_status_cloud_model_zero_size_never_gated(monkeypatch):
+    """A cloud-served tag (glm-5.2:cloud) reports size 0 in /api/tags - it has
+    no local footprint at all and must never trip the size gate."""
+    tags_payload = {"models": [{"name": "glm-5.2:cloud", "size": 0}]}
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse(tags_payload))
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "glm-5.2:cloud")
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 4096)
+    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+
+    assert driver.resource_status()["ok"] is True
+
+
+def test_ollama_resource_status_model_size_fraction_is_configurable(monkeypatch):
+    tags_payload = {"models": [{"name": "gpt-oss:20b", "size": 13793441244}]}  # 53.5%
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse(tags_payload))
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "gpt-oss:20b")
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_MODEL_RAM_FRACTION", "0.4")  # stricter than 53.5%
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 20000)
+    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+
+    assert driver.resource_status()["ok"] is False
+
+
+def test_resource_status_model_size_check_skipped_for_non_ollama_provider(monkeypatch):
+    """MLX has no /api/tags equivalent (and pins one model for the server's
+    whole lifetime - already covered by its provider-scoped floor override),
+    so the weights lookup is Ollama-specific and must not run for it."""
+    def _boom(url, timeout):
+        raise AssertionError("must not query /api/tags for a non-ollama provider")
+
+    monkeypatch.setattr(b.httpx, "get", _boom)
+    driver = b.OllamaDriver(provider_name="mlx")
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX", "512")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 4096)
+    # reachable() also calls httpx.get - bypass it directly to isolate the
+    # memory branch under test (reachability is exercised elsewhere).
+    monkeypatch.setattr(driver.provider, "reachable", lambda endpoint: (True, ""))
+
+    assert driver.resource_status()["ok"] is True
+
+
+def test_total_memory_mb_reads_sysctl(monkeypatch):
+    class _R:
+        returncode = 0
+        stdout = "25769803776\n"
+
+    monkeypatch.setattr(b.subprocess, "run", lambda *a, **k: _R())
+    assert b._total_memory_mb() == 24576
+
+
+def test_total_memory_mb_returns_none_on_failure(monkeypatch):
+    def _boom(*a, **k):
+        raise OSError("no sysctl")
+
+    monkeypatch.setattr(b.subprocess, "run", _boom)
+    assert b._total_memory_mb() is None
 
 
 def test_ollama_resource_status_reachability_failure_takes_priority_over_memory(monkeypatch):
@@ -2175,11 +2501,11 @@ def test_gptoss_20b_tuned_to_low_temperature_from_ab_experiment():
     (tests/benchmark/_runs/full_20260703_postfix vs temp_tune_20260703):
     temp=1.0 scored 6/15 success (3 zero-code-landed failures); temp=0.3
     scored 9/15 success (1 zero-code-landed failure) with an unchanged
-    ground-truth-pass rate (11/15 both). num_ctx stays 32768 (unrelated to
-    the temperature finding, kept as already tuned)."""
-    assert b._LOCAL_MODEL_TUNING["gpt-oss:20b"] == {
-        "temperature": 0.3, "num_ctx": 32768,
-    }
+    ground-truth-pass rate (11/15 both). No num_ctx entry: that value was
+    never itself A/B-tested and PIPELINE_LOCAL_NUM_CTX always overrides this
+    table anyway (see _tuned_num_ctx) - num_ctx is decided by the deployment
+    env, not this tuning table."""
+    assert b._LOCAL_MODEL_TUNING["gpt-oss:20b"] == {"temperature": 0.3}
 
 
 def test_chat_falls_back_to_init_defaults_when_model_tag_absent_from_table(

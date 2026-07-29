@@ -408,6 +408,21 @@ _LOCAL_TIER_ENV = {
 }
 _LOCAL_DEFAULT_MODEL = "devstral:24b"
 
+# Rough chars-per-token estimate for sizing the review-loop trim budget below
+# (no tokenizer available here) - deliberately NOT dynamically calibrated
+# like scripts/local_agent.py's _measured_chars_per_token: the trigger for
+# _review_loop's proactive trim is the turn's own real, measured
+# prompt_eval_count (no estimation involved), and a fixed conservative ratio
+# is sufficient for sizing how much to cut once triggered.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
+# Once a review turn's measured prompt_eval_count reaches this fraction of
+# num_ctx, _review_loop trims the transcript BEFORE the next turn instead of
+# letting it grow unbounded (see that method's trim block for the live
+# overflow rates this addresses).
+REVIEW_PROACTIVE_TRIM_THRESHOLD = float(
+    os.environ.get("PIPELINE_LOCAL_REVIEW_PROACTIVE_TRIM_THRESHOLD", "0.85"))
+
 
 def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # A value containing ':' (Ollama's tag separator, e.g. "devstral:24b")
@@ -450,8 +465,14 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int]] = {
     # cells where the implementation file never landed at all; temp=0.3 ->
     # 9/15 success, only 1 zero-code-landed cell, same 11/15 ground-truth
     # pass rate. Lower temperature measurably improves self-correction
-    # without costing correctness.
-    "gpt-oss:20b": {"temperature": 0.3, "num_ctx": 32768},
+    # without costing correctness. No num_ctx entry: an earlier 32768 value
+    # here was never itself A/B-tested (the experiment above only varied
+    # temperature) and PIPELINE_LOCAL_NUM_CTX always overrides this table
+    # anyway (see _tuned_num_ctx) - keeping an unvalidated number here just
+    # invited it to be mistaken for a settled finding. See
+    # TOKEN_CONTEXT_OPTIMIZATION_PLAN.md and the launchd plist's
+    # PIPELINE_LOCAL_NUM_CTX for where num_ctx is actually decided.
+    "gpt-oss:20b": {"temperature": 0.3},
 }
 
 
@@ -519,6 +540,65 @@ def _infer_review_tool_call(content: str | None) -> list | None:
     if "path" in obj:
         return [{"function": {"name": "view_file", "arguments": obj}}]
     return None
+
+
+def _review_msg_chars(m: dict) -> int:
+    n = len(str(m.get("content") or ""))
+    tool_calls = m.get("tool_calls")
+    if tool_calls:
+        n += len(json.dumps(tool_calls))
+    return n
+
+
+def _trim_review_transcript(messages: list, max_chars: int) -> list:
+    """Bound a review transcript to max_chars, dropping the oldest middle
+    content when it would otherwise overflow the model's context window.
+
+    Same block-preserving algorithm as scripts/local_agent.py's
+    _trim_resumed_transcript (own copy - the review loop's message shape and
+    call site differ enough that sharing the dispatch-loop original isn't a
+    clean fit; keep both in sync if the algorithm changes): messages[:2] (the
+    system+task head) is always kept, an assistant tool_calls message is
+    never split from its own tool-role response, and content is dropped in
+    whole blocks starting from the oldest until the rest fits the budget.
+    """
+    total = sum(_review_msg_chars(m) for m in messages)
+    if total <= max_chars:
+        return messages
+    head_len = min(2, len(messages))
+    head = messages[:head_len]
+    head_chars = sum(_review_msg_chars(m) for m in head)
+    blocks: list[list[dict]] = []
+    i = head_len
+    while i < len(messages):
+        block = [messages[i]]
+        i += 1
+        while i < len(messages) and messages[i].get("role") == "tool":
+            block.append(messages[i])
+            i += 1
+        blocks.append(block)
+    budget = max_chars - head_chars
+    kept: list[list[dict]] = []
+    kept_chars = 0
+    for block in reversed(blocks):
+        block_chars = sum(_review_msg_chars(m) for m in block)
+        if kept and kept_chars + block_chars > budget:
+            break
+        kept.append(block)
+        kept_chars += block_chars
+    kept.reverse()
+    dropped = len(blocks) - len(kept)
+    if dropped == 0:
+        return messages
+    note = {
+        "role": "user",
+        "content": (
+            f"[{dropped} earlier turn(s) were dropped from this review "
+            "transcript to fit the model's context window. Continue "
+            "reviewing using only the history below.]"
+        ),
+    }
+    return head + [note] + [m for block in kept for m in block]
 
 
 _REVIEW_LOG_TRUNCATE = 2000
@@ -753,6 +833,7 @@ class OllamaDriver:
         as dispatch, plus key-based tool inference, since the local model
         intermittently emits tool calls as text and drops the tool name."""
         resolved_model = _resolve_local_model(model, provider=getattr(self.provider, "name", "ollama"))
+        num_ctx = _tuned_num_ctx(resolved_model, self.num_ctx)
         _append_review_log(
             cwd,
             f"=== review cycle "
@@ -810,6 +891,15 @@ class OllamaDriver:
                     "and call submit_review now with verdict APPROVE or "
                     "REQUEST_CHANGES (or end your reply with a 'VERDICT: APPROVE' "
                     "or 'VERDICT: REQUEST_CHANGES' line)."})
+            # Snapshot what this turn actually sends, so the trim below can
+            # calibrate chars-per-token against the real prompt_eval_count
+            # this exact request comes back with (the tools schema is part of
+            # every prompt and is counted in prompt_eval_count, so it belongs
+            # in the numerator - see scripts/local_agent.py's copy).
+            sent_chars = (
+                sum(_review_msg_chars(msg) for msg in messages)
+                + len(json.dumps(self._REVIEW_TOOLS))
+            )
             try:
                 try:
                     # _chat now returns the full /api/chat envelope (not just
@@ -835,6 +925,33 @@ class OllamaDriver:
                         cell_dir=cell_dir, role="review", step=i,
                     )
                 messages.append(m)
+                # Proactive trim: once a turn's REAL measured prompt_eval_count
+                # is already close to num_ctx, shrink the transcript now
+                # rather than letting it grow into a 500/UNKNOWN-verdict on a
+                # later turn. See _trim_review_transcript's docstring for the
+                # live overflow rates this addresses (backend.py had no
+                # trimming here at all, unlike the dispatch agent loop).
+                prompt_eval_count = envelope.get("prompt_eval_count")
+                if (
+                    prompt_eval_count
+                    and prompt_eval_count >= num_ctx * REVIEW_PROACTIVE_TRIM_THRESHOLD
+                ):
+                    # Calibrate from THIS turn's real numbers rather than the
+                    # fixed guess. With the guess, the target could land above
+                    # the context window itself and the trim would not prevent
+                    # the overflow it exists to prevent: at num_ctx=16384, a
+                    # 4.0-based budget is 49152 chars, which at the live-
+                    # measured ~2.35 chars/token is ~20900 tokens - already
+                    # over the 16384 ceiling.
+                    chars_per_token = (
+                        sent_chars / prompt_eval_count
+                        if sent_chars > 0
+                        else _CHARS_PER_TOKEN_ESTIMATE
+                    )
+                    budget_chars = int(num_ctx * chars_per_token * 0.75)
+                    trimmed = _trim_review_transcript(messages, budget_chars)
+                    if len(trimmed) != len(messages):
+                        messages[:] = trimmed
                 if m.get("content"):
                     last_prose = m["content"]
                     _append_review_log(cwd, m["content"] + "\n")
@@ -1116,6 +1233,15 @@ class OllamaDriver:
         spike, false for MLX's steady state, so an ungated MLX floor would
         silently paralyze all future dispatch on this plan. The override
         does not change the generic floor or any other provider's default.
+
+        For Ollama there is a third, ORTHOGONAL check after the floor: the
+        configured model's weights against TOTAL physical RAM, refusing a
+        model too large to serve on this host at all (see the check's own
+        comment for why it is not folded into the free-memory floor, and for
+        the live calibration behind the default fraction). Like every other
+        component here it fails open - an unresolvable tag, a cloud-served
+        tag with no local footprint, or an unreadable total-RAM figure all
+        leave dispatch permitted.
         """
         try:
             ok, reason = self.provider.reachable(self.endpoint)
@@ -1134,6 +1260,49 @@ class OllamaDriver:
                 return {
                     "ok": False,
                     "reason": f"insufficient free memory ({free_mb}mb < {floor_mb}mb floor)",
+                }
+        # Model-too-big-for-this-host gate. Deliberately ORTHOGONAL to the
+        # free-memory floor above rather than folded into it: an earlier
+        # attempt required `free >= floor + weights`, which paralyzed
+        # dispatch outright (measured live on a 24576mb host: free 10837mb
+        # against a 15202mb requirement, so every tick reported not-ok and
+        # no local story could ever dispatch) - the same failure the floor's
+        # own docstring warns about. Free memory is the wrong denominator on
+        # macOS, which compresses and evicts under pressure: a 13GB model
+        # demonstrably loads with well under 13GB "available".
+        #
+        # Weights against TOTAL physical RAM is the stable discriminator,
+        # calibrated on live evidence: gpt-oss:20b (13154mb, 53.5% of
+        # 24576mb) is the validated local workhorse, while devstral:24b
+        # (~15GB, ~61%) 500-storms on every request (1-3 minutes per
+        # failure) and cannot serve at all. The default fraction sits
+        # between them, leaving the validated model ~6 points of margin -
+        # deliberately biased toward never gating a model that works, since
+        # a persistently-unservable model is ALSO caught downstream by the
+        # infra-failure streak escalation (defense in depth, and the far
+        # less damaging place to be wrong).
+        #
+        # Ollama-only: LM Studio JIT-loads with no equivalent listing, and
+        # MLX pins one model for its process lifetime (already covered by
+        # its provider-scoped floor override).
+        if self.provider.name == "ollama":
+            model_tag = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL)
+            weights_mb = _ollama_model_weights_mb(self.endpoint, model_tag)
+            total_mb = _total_memory_mb()
+            max_fraction = float(os.environ.get(
+                "PIPELINE_LOCAL_MAX_MODEL_RAM_FRACTION", "0.60"))
+            # `weights_mb` of 0 is a cloud-served tag (no local footprint);
+            # None is an unresolvable tag or a failed probe. Both fail open.
+            if weights_mb and total_mb and weights_mb > total_mb * max_fraction:
+                return {
+                    "ok": False,
+                    "reason": (
+                        f"model {model_tag} too large for this host "
+                        f"({weights_mb}mb weights > {max_fraction:.0%} of "
+                        f"{total_mb}mb total RAM); it will thrash rather than "
+                        f"serve - pick a smaller model or raise "
+                        f"PIPELINE_LOCAL_MAX_MODEL_RAM_FRACTION"
+                    ),
                 }
         return {"ok": ok, "reason": reason}
 
@@ -1177,6 +1346,78 @@ class OllamaDriver:
             return (available_pages * page_size) // (1024 * 1024)
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
+
+
+def _total_memory_mb() -> int | None:
+    """Total physical RAM in MB via macOS's `sysctl hw.memsize`.
+
+    Used by `resource_status()`'s model-size gate as the denominator for
+    "is this model simply too big for this machine" - a stable figure, unlike
+    free memory, which fluctuates with whatever else is running.
+
+    Returns None (never raises) on any subprocess/parse failure, including a
+    non-macOS host without this sysctl key - the caller then skips the gate
+    rather than guessing.
+    """
+    try:
+        result = subprocess.run(  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see _ollama_loaded_models)
+            ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        return int(result.stdout.strip()) // (1024 * 1024)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+# Cache for _ollama_model_weights_mb, keyed (endpoint, model_tag). A tag's
+# on-disk size is effectively immutable, and resource_status() runs on every
+# scheduler tick, so re-probing /api/tags each time is pure waste. Staleness
+# tradeoff: re-pulling the SAME tag with a different quantization would keep
+# the old figure until the process restarts. That is acceptable for a
+# fail-open advisory gate and is the normal cost of caching here; None
+# results are deliberately NOT cached so a transient probe failure (or a
+# model pulled after startup) is retried on the next tick.
+_OLLAMA_MODEL_WEIGHTS_CACHE: dict[tuple[str, str], int] = {}
+
+
+def _ollama_model_weights_mb(endpoint: str, model_tag: str) -> int | None:
+    """Best-effort on-disk weight size (MB) for a specific Ollama model tag,
+    read from `/api/tags` (every locally-pulled model, each with a `size` in
+    bytes - a close proxy for its resident footprint once loaded, since
+    Ollama's GGUF/safetensors weights are already quantized on disk).
+
+    Used by `resource_status()`'s model-size gate. Ollama-specific: LM Studio
+    JIT-loads with no equivalent listing, and mlx_lm.server pins one model for
+    the server's whole lifetime (already covered by its own provider-scoped
+    floor override) - never called for another provider.
+
+    A cloud-served tag (e.g. `glm-5.2:cloud`) legitimately reports size 0 and
+    is returned as 0, not None: it has no local footprint to gate on.
+
+    Returns None (never raises) on any network/parse failure or when the tag
+    isn't in the local model list - the caller then skips the gate, matching
+    every other component's fail-open contract.
+    """
+    cached = _OLLAMA_MODEL_WEIGHTS_CACHE.get((endpoint, model_tag))
+    if cached is not None:
+        return cached
+    try:
+        resp = httpx.get(f"{endpoint}/api/tags", timeout=5)
+        resp.raise_for_status()
+        payload = resp.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    for entry in payload.get("models", []) or []:
+        name = entry.get("name") or entry.get("model")
+        if name != model_tag:
+            continue
+        size = entry.get("size")
+        if isinstance(size, (int, float)):
+            mb = int(size // (1024 * 1024))
+            _OLLAMA_MODEL_WEIGHTS_CACHE[(endpoint, model_tag)] = mb
+            return mb
+    return None
 
 
 def _ollama_loaded_models(endpoint: str) -> set[str]:

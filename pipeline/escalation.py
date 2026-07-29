@@ -55,7 +55,8 @@ def _escalate_to_claude(
     story["escalated"] = True
     story["status"] = "todo"
     for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error",
-                "step_cap_streak", "step_cap_streak_model"):
+                "step_cap_streak", "step_cap_streak_model",
+                "infra_failure_streak", "infra_failure_streak_model"):
         story.pop(key, None)
     _atomic_write_json(manifest_path, manifest)
 

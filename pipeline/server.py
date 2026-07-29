@@ -118,6 +118,7 @@ from .config import (  # noqa: F401
     DISPATCH_MAX_ATTEMPTS,
     DISPATCH_STARTUP_GRACE_SECONDS,
     DISPATCH_WATCHDOG_SECONDS,
+    INFRA_FAILURE_FALLBACK_THRESHOLD,
     INFRA_FAILURE_LOG_SUBSTRING,
     MAX_CONCURRENT_AGENTS,
     MERGE_MAX_ATTEMPTS,
@@ -1708,9 +1709,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # transport error (after chat()'s own retries and the 5xx trim-retry are
     # exhausted) is not a review/test-quality outcome and must not be graded
     # or counted against rework_attempts - see INFRA_FAILURE_LOG_SUBSTRING's
-    # docstring for the live incident this fixes. Deliberately simpler than
-    # the STEP_CAP_MARKERS branch below: no model-fallback-switching logic,
-    # since an infra blip is not evidence the model itself is struggling.
+    # docstring for the live incident this fixes.
     if INFRA_FAILURE_LOG_SUBSTRING in last_log_line:
         sha = _commit_wip(str(worktree), story_key, "infra_failure")
         interrupted_at = datetime.now(timezone.utc).isoformat()
@@ -1729,6 +1728,68 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         story["status"] = "interrupted"
         story["last_commit"] = sha
         story["interrupted_at"] = interrupted_at
+
+        # See INFRA_FAILURE_FALLBACK_THRESHOLD: track consecutive infra
+        # failures on the current model with SEPARATE streak fields from
+        # STEP_CAP_MARKERS below - an infra death is not evidence the MODEL
+        # is struggling, so it must never feed that branch's model-switch
+        # logic (test_check_story_status_infra_failure_does_not_trigger_
+        # model_fallback). Notify on the very first occurrence (unlike a
+        # step-cap hit, which is routine for a local model, an infra death
+        # this late - after chat()'s own retries AND the 5xx trim-retry are
+        # exhausted - is unusual enough to be worth surfacing immediately),
+        # then apply the same two remedies step-cap uses once the streak
+        # crosses the threshold: switch to the plan's opted-in local fallback
+        # model, or escalate to Claude.
+        current_model = story.get("dispatched_model") or story.get("model")
+        if story.get("infra_failure_streak_model") == current_model:
+            story["infra_failure_streak"] = story.get("infra_failure_streak", 0) + 1
+        else:
+            story["infra_failure_streak"] = 1
+            story["infra_failure_streak_model"] = current_model
+        if story["infra_failure_streak"] == 1:
+            _notify_user(
+                plan_name,
+                f"{story_key} dispatch died on an infrastructure failure "
+                f"(LLM/Ollama transport error) on {current_model}; resuming "
+                f"from the last checkpoint.",
+            )
+
+        fallback_model = manifest.get("local_model_fallback")
+        if (
+            fallback_model
+            and current_model != fallback_model
+            and story.get("backend", "local") == "local"
+            and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
+        ):
+            story["model"] = fallback_model
+            story.pop("infra_failure_streak", None)
+            story.pop("infra_failure_streak_model", None)
+            _notify_user(
+                plan_name,
+                f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
+                f"infrastructure failures on {current_model}; switching to "
+                f"fallback model {fallback_model} for the next resume.",
+            )
+        elif (
+            not fallback_model
+            and _auto_escalation_enabled()
+            and story.get("backend", "local") == "local"
+            and not story.get("escalated")
+            and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
+        ):
+            _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
+            _notify_user(
+                plan_name,
+                f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
+                f"infrastructure failures on {current_model}; escalating to "
+                f"Claude (no local_model_fallback configured).",
+            )
+            return {
+                "status": "todo",
+                "reason": "infra_failure_escalated_to_claude",
+                "pid": pid,
+            }
         _atomic_write_json(manifest_path, manifest)
         return {"status": "interrupted", "pid": pid, "reason": "infra_failure"}
 
@@ -1932,7 +1993,19 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
 
     # The agent produced real output and the tests ran: the launch worked, so
     # clear any failed-launch attempts accumulated by earlier infra blips.
-    story.pop("dispatch_attempts", None)
+    # The step-cap and infra-failure streaks go too: both gate escalation on
+    # CONSECUTIVE failures, and a dispatch that got this far breaks any
+    # streak. Without this, non-consecutive failures accumulated across a
+    # story's whole life (two infra deaths early, one much later, real
+    # progress in between) would escalate as though they were consecutive.
+    for _streak_key in (
+        "dispatch_attempts",
+        "step_cap_streak",
+        "step_cap_streak_model",
+        "infra_failure_streak",
+        "infra_failure_streak_model",
+    ):
+        story.pop(_streak_key, None)
 
     # False-positive guard: tests passing against an untouched worktree
     # (e.g. main's suite against an empty branch because the agent parked
@@ -3038,6 +3111,44 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     "addressing it, and re-run the acceptance tests after your "
                     "change to confirm they are still green.\n\n" + reviewer_output
                 )
+            elif oracle_now.get("state") == "fail" and story.get("rework_attempts", 0) > 0:
+                # Fresh-rework-on-regression (2026-07-29 gpt-oss E2E finding,
+                # bcca562e/token_report): a rework redispatch that RESUMES
+                # the prior dispatch's transcript (see resume_via_transcript
+                # in dispatch_story) replays whatever churn led to this
+                # state, which measurably compounds it - the same story
+                # 500-died and regressed further (11/11 -> 9/11 acceptance)
+                # resuming a poisoned transcript, then converged cleanly on
+                # a FRESH rework once the transcript was deleted. Delete the
+                # transcript so the next redispatch is forced onto
+                # dispatch_story's from-scratch rework prompt.
+                #
+                # Gated on rework_attempts > 0, i.e. a rework has ALREADY
+                # happened: a failing oracle alone is not a regression. With
+                # PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1 the common path to
+                # review-with-red-oracle is a FIRST dispatch that was simply
+                # incomplete, and there the transcript is the richest context
+                # a rework could resume from - discarding it would degrade
+                # the common case to fix the rarer one. rework_attempts is
+                # incremented below, after this block, so here it still holds
+                # the count from PRIOR cycles.
+                #
+                # Best-effort: a missing/unwritable transcript must not block
+                # the review outcome itself.
+                transcript_path = Path(worktree) / ".agent_transcript.json" if worktree else None
+                if transcript_path and transcript_path.exists():
+                    try:
+                        transcript_path.unlink()
+                        _notify_user(
+                            plan_name,
+                            f"{story_key} rework regressed the acceptance "
+                            f"oracle (was passing before this rework, now "
+                            f"failing); deleted the dispatch transcript so the "
+                            f"next attempt starts fresh instead of resuming "
+                            f"the churn that caused it.",
+                        )
+                    except OSError:
+                        pass
         story["review_feedback"] = feedback
         # Mode 24/28: track which files this cycle's Blocking findings
         # target, so a later APPROVE can verify they were actually

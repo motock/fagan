@@ -961,6 +961,35 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         resume_via_transcript = (
             dispatch_backend in _LOCAL_BACKEND_NAMES and review_feedback and transcript_path.exists()
         )
+        # Detect an operator's patch_story edit to agent_instructions since
+        # the story's last dispatch. A transcript-resume rework otherwise
+        # hands the resumed agent only the reviewer's raw feedback appended
+        # to the verbatim prior transcript - it never re-reads the current
+        # agent_instructions field - so a corrected instruction (e.g. "delete
+        # the redundant wrapper" instead of "add a new one") is silently
+        # dropped and the agent re-derives its own, possibly wrong, fix
+        # (root-caused live 2026-07-28). Diff against the snapshot this
+        # function records on every dispatch (_dispatched_agent_instructions,
+        # written below); only surface a note when the instructions actually
+        # changed, so an unchanged rework round adds no noise. Fails open
+        # (no note) when no prior snapshot exists - the first rework after
+        # this feature ships has no baseline to diff against.
+        revised_instructions = story.get("agent_instructions", "")
+        prior_dispatched = story.get("_dispatched_agent_instructions")
+        revised_instructions_note = ""
+        if (
+            resume_via_transcript
+            and prior_dispatched is not None
+            and revised_instructions != prior_dispatched
+        ):
+            revised_instructions_note = (
+                "\n\n--- Revised instructions from your tech lead ---\n"
+                "Your tech lead has REVISED your task instructions since "
+                "your last attempt. These supersede the original "
+                "instructions in your transcript above. Follow them when "
+                "addressing the review feedback:\n"
+                f"{revised_instructions}"
+            )
 
         spec = _build_dispatch_command(
             story, story_key, plan_name=plan_name, resume_journal=journal or None,
@@ -1237,11 +1266,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     "attempt. Your tech lead has translated the feedback "
                     f"into a fix checklist:\n{fix_checklist}\n\n"
                     f"Original review feedback (for reference):\n{review_feedback}"
+                    f"{revised_instructions_note}"
                 )
             else:
                 dispatch_kwargs["resume_append_content"] = (
                     "The code reviewer REQUESTED CHANGES on your previous attempt. "
                     f"Address this feedback:\n{review_feedback}"
+                    f"{revised_instructions_note}"
                 )
 
         handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(**dispatch_kwargs)
@@ -1258,6 +1289,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # declared tier is left untouched (it's a routing hint).
         if getattr(handle, "model", None):
             story["dispatched_model"] = handle.model
+        # Snapshot the agent_instructions this dispatch actually handed the
+        # agent, so the next rework redispatch can diff against it to detect
+        # an operator's patch_story edit (see revised_instructions_note
+        # above). Recorded on every dispatch - cold or resumed, any backend -
+        # so the baseline is always current regardless of how the next rework
+        # is routed.
+        story["_dispatched_agent_instructions"] = story.get("agent_instructions", "")
         _atomic_write_json(manifest_path, manifest)
 
         return {"ok": True, "story_key": story_key, "pid": handle.pid, "branch": branch,

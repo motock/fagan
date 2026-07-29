@@ -83,10 +83,9 @@ def summarize_token_costs(
             continue
         try:
             record: Mapping[str, Any] = json.loads(line)
-        except Exception:
+        except json.JSONDecodeError:
             # Skip malformed JSON silently.
             continue
-
         # Apply the optional ``since`` filter.
         if since is not None:
             ts_str = record.get("ts")

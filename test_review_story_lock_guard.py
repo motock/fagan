@@ -100,7 +100,7 @@ def _approve_reviewer_and_pr(monkeypatch):
     reviewer_calls = []
 
     def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None,
-                       acceptance=None, since_sha=None):
+                       acceptance=None, since_sha=None, risk=None):
         reviewer_calls.append(True)
         return "VERDICT: APPROVE"
 

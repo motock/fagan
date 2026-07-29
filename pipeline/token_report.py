@@ -12,14 +12,10 @@ The implementation follows the expectations defined in the acceptance tests:
 * Aggregation results are returned as a dictionary with keys ``total_records``, ``by_backend`` and ``by_role``.
 """
 
-from __future__ import annotations
-
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping
-
-__all__ = ["summarize_token_costs"]
+from collections.abc import Iterable, Mapping
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -130,10 +126,8 @@ def summarize_token_costs(
         backend_entry["input_tokens"] += input_tokens
         backend_entry["output_tokens"] += output_tokens
         backend_entry["total_cost_usd"] += cost
-
-        # Return aggregated summary.
-    return {
-        "total_records": total_records,
-        "by_backend": by_backend,
-        "by_role": by_role,
-    }
+        # Aggregate role metrics.
+        role_entry = by_role.setdefault(role, {"count": 0, "input_tokens": 0, "output_tokens": 0})
+        role_entry["count"] += 1
+        role_entry["input_tokens"] += input_tokens
+        role_entry["output_tokens"] += output_tokens

@@ -10727,6 +10727,139 @@ def test_dispatch_story_explicit_provider_rework_resumes_transcript_when_present
     assert env["LOCAL_AGENT_RESUME_TRANSCRIPT_PATH"] == str(transcript_path)
 
 
+def test_dispatch_story_local_rework_surfaces_revised_agent_instructions(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A transcript-resume rework redispatch must surface an operator's
+    patch_story edit to agent_instructions since the story's last dispatch -
+    otherwise the resumed agent only ever sees the reviewer's raw feedback
+    and a corrected instruction (e.g. "delete the redundant retry wrapper
+    instead of adding a new one") is silently dropped, and the agent
+    re-derives its own (possibly wrong) fix instead of the one it was given.
+    Detected via `_dispatched_agent_instructions`, a snapshot this same
+    function records on every dispatch (see the sibling
+    test_dispatch_story_local_rework_records_dispatched_instructions_snapshot)."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    transcript_path = worktree_path / ".agent_transcript.json"
+    transcript_path.write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "localrwrevised", {
+        "S1": {"summary": "Do thing",
+               "agent_instructions": "Delete the redundant retry wrapper in foo().",
+               "_dispatched_agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+    monkeypatch.setattr(p, "_run_rework_planner", lambda *a, **k: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(6004)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("localrwrevised", "S1")
+
+    env = popen_calls[0]["env"]
+    append = env["LOCAL_AGENT_RESUME_APPEND_CONTENT"]
+    assert "Delete the redundant retry wrapper in foo()." in append
+    assert "revised" in append.lower() or "updated" in append.lower()
+    # The reviewer's raw feedback must still be present too.
+    assert "The SQL is injectable; parameterize it." in append
+
+
+def test_dispatch_story_local_rework_omits_note_when_instructions_unchanged(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When agent_instructions is identical to the snapshot recorded at the
+    story's last dispatch, no "revised instructions" note is injected - the
+    append content is exactly the existing feedback-only format. Guards
+    against re-surfacing the same instructions (as noise) on every rework
+    round when nothing was actually patched."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    transcript_path = worktree_path / ".agent_transcript.json"
+    transcript_path.write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    _write_manifest(plan_dir, "localrwsame", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "_dispatched_agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+    monkeypatch.setattr(p, "_run_rework_planner", lambda *a, **k: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(6006)
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("localrwsame", "S1")
+
+    env = popen_calls[0]["env"]
+    assert env["LOCAL_AGENT_RESUME_APPEND_CONTENT"] == (
+        "The code reviewer REQUESTED CHANGES on your previous attempt. "
+        "Address this feedback:\nThe SQL is injectable; parameterize it."
+    )
+
+
+def test_dispatch_story_records_dispatched_instructions_snapshot(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Every dispatch_story call (cold or resumed) must record the
+    agent_instructions it just handed the agent as
+    story["_dispatched_agent_instructions"], persisted to the manifest - the
+    baseline the next rework redispatch diffs against to detect an
+    operator's patch_story edit."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    transcript_path = worktree_path / ".agent_transcript.json"
+    transcript_path.write_text(json.dumps([
+        {"role": "system", "content": "sys"}, {"role": "user", "content": "task"},
+    ]))
+    manifest_path = plan_dir / "localrwsnap.manifest.json"
+    _write_manifest(plan_dir, "localrwsnap", {
+        "S1": {"summary": "Do thing",
+               "agent_instructions": "Delete the redundant retry wrapper in foo().",
+               "_dispatched_agent_instructions": "Build it.",
+               "status": "changes_requested", "worktree": str(worktree_path),
+               "review_feedback": "The SQL is injectable; parameterize it."},
+    })
+    monkeypatch.setattr(p, "_run_rework_planner", lambda *a, **k: None)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen",
+                        lambda cmd, env, **kw: _FakeProc(6007))
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("localrwsnap", "S1")
+
+    saved = json.loads(manifest_path.read_text())
+    assert saved["stories"]["S1"]["_dispatched_agent_instructions"] == (
+        "Delete the redundant retry wrapper in foo()."
+    )
+
+
 def test_dispatch_story_local_rework_falls_back_when_transcript_missing(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):

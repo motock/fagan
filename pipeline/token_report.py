@@ -13,11 +13,10 @@ The implementation follows the expectations defined in the acceptance tests:
 """
 
 import json
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Iterable, Mapping
-from typing import Any, Dict
-
+from typing import Any
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -45,7 +44,7 @@ def summarize_token_costs(
     path: str | Path,
     *,
     since: datetime | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Summarize token usage from a JSONL file.
 
     Parameters
@@ -76,8 +75,8 @@ def summarize_token_costs(
         return zero_summary
 
     total_records = 0
-    by_backend: Dict[str, Dict[str, Any]] = {}
-    by_role: Dict[str, Dict[str, Any]] = {}
+    by_backend: dict[str, dict[str, Any]] = {}
+    by_role: dict[str, dict[str, Any]] = {}
 
     for raw_line in file_iter:
         line = raw_line.strip()

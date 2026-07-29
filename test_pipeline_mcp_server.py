@@ -29,7 +29,6 @@ from pipeline import ci as pci
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import persona as pper
-from pipeline import review as prev
 from pipeline import server as p
 from pipeline import ticketing as pt
 from pipeline import usage as pusage
@@ -1738,48 +1737,13 @@ def test_run_reviewer_prompt_asks_for_every_blocking_finding_in_one_pass(
     assert "rework" in prompt
 
 
-def test_run_reviewer_scopes_test_command_to_acceptance_paths(
-    agents_dir, tmp_path, monkeypatch,
-):
-    """Mode 20 (2026-07-17): a reviewer given a bare full-suite pytest command
-    can rediscover and block on the AGENT'S OWN buggy test file, even when the
-    harness's acceptance oracle already passes -- this is FM-A's exact
-    root cause resurrected in the review path (the harness test gate was
-    already scoped to the acceptance oracle; _run_reviewer never was). When
-    the story carries an `acceptance` block and the detected command is
-    pytest, the reviewer's test command must be scoped to ONLY the acceptance
-    paths, and the prompt must tell the reviewer that a failure in an
-    agent-authored test the acceptance oracle doesn't require is not
-    sufficient grounds for REQUEST_CHANGES on its own."""
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
-    (tmp_path / "test_acceptance.py").write_text("def test_x(): assert True\n")
-    captured = {}
-
-    class _FakeDriver:
-        def complete(self, prompt, **kwargs):
-            captured["prompt"] = prompt
-            return "VERDICT: APPROVE"
-
-    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
-
-    p._run_reviewer(
-        str(tmp_path), "agent/some-branch",
-        acceptance=[{"path": "test_acceptance.py"}],
-    )
-
-    prompt = captured["prompt"]
-    assert (
-        f"pytest --override-ini=testpaths=. --ignore=tests "
-        f"{tmp_path / 'test_acceptance.py'}"
-    ) in prompt
-    assert "acceptance oracle" in prompt.lower()
-    assert "not sufficient grounds" in prompt.lower()
-
-
-def test_run_reviewer_runs_full_suite_when_no_acceptance_block(agents_dir, tmp_path, monkeypatch):
-    """Without an acceptance block (the common case for real-project stories),
-    behavior is unchanged from before Mode 20's fix: the full detected suite,
-    no scoping language."""
+def test_run_reviewer_does_not_run_test_suite(agents_dir, tmp_path, monkeypatch):
+    """Real-world PR review: the reviewer reviews the diff and trusts CI.
+    review_story only runs when status == tests_passed, so the suite is
+    already green; a reviewer-driven rerun is pure duplicate spend (a full
+    agentic Bash tool-loop re-executing what check_story_status just ran).
+    The prompt must NOT instruct the reviewer to run the test suite, and
+    must not inject any resolved test command."""
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     captured = {}
 
@@ -1793,9 +1757,31 @@ def test_run_reviewer_runs_full_suite_when_no_acceptance_block(agents_dir, tmp_p
     p._run_reviewer(str(tmp_path), "agent/some-branch")
 
     prompt = captured["prompt"]
-    assert f"cd {tmp_path} && pytest" in prompt
-    assert "test_acceptance" not in prompt
-    assert "acceptance oracle" not in prompt.lower()
+    assert "Run the test suite" not in prompt
+    assert "do not substitute" not in prompt.lower()
+    assert "-m pytest" not in prompt
+
+
+def test_run_reviewer_first_review_covers_full_branch_diff(agents_dir, tmp_path, monkeypatch):
+    """First review (no prior REQUEST_CHANGES, since_sha unset): review the
+    full branch diff -- no incremental scoping, no test-suite rerun."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_reviewer(str(tmp_path), "agent/some-branch")
+
+    prompt = captured["prompt"]
+    assert "agent/some-branch" in prompt
+    assert "Run the test suite" not in prompt
+    # No incremental since-SHA scoping on a first review.
+    assert "..HEAD" not in prompt
 
 
 def test_run_reviewer_uses_review_model_override_when_backend_is_local(agents_dir, monkeypatch):
@@ -1972,15 +1958,12 @@ def test_run_reviewer_local_review_model_override_still_beats_registry(
     assert calls == ["devstral:24b"]
 
 
-def test_run_reviewer_prompt_includes_resolved_venv_pytest_command(agents_dir, monkeypatch, tmp_path):
-    """The reviewer model has no access to detect_test_command's Python-level
-    venv resolution, so a bare "Run the test suite" instruction leaves it to
-    guess a shell command. Observed failure: the reviewer guessed the
-    relative `.venv/bin/python -m pytest`, which does not exist inside a
-    worktree (worktrees are gitignored and never contain .venv), got 'No
-    such file or directory', and burned its full step budget -- two
-    consecutive UNKNOWN verdicts on an otherwise-correct, fully-tested
-    change. The prompt must inject the exact resolved command verbatim."""
+def test_run_reviewer_incremental_review_scopes_to_since_sha(agents_dir, monkeypatch):
+    """Rework review (since_sha set to the commit the last REQUEST_CHANGES was
+    raised against): the reviewer reviews ONLY the new commits pushed since,
+    not the whole branch from zero -- mirroring a real PR re-review where the
+    developer pushed changes, CI went green, and the reviewer reviews just
+    the new diff. Unchanged, already-approved files are not re-reviewed."""
     captured = {}
 
     class _FakeDriver:
@@ -1989,31 +1972,23 @@ def test_run_reviewer_prompt_includes_resolved_venv_pytest_command(agents_dir, m
             return "VERDICT: APPROVE"
 
     monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
-    resolved_python = tmp_path / "main-repo" / ".venv" / "bin" / "python"
-    resolved_dir = tmp_path / "worktree"
 
-    def _fake_detect(cwd):
-        assert cwd == Path("/tmp/some-worktree")
-        return resolved_dir, [str(resolved_python), "-m", "pytest"]
-
-    monkeypatch.setattr(prev, "detect_test_command", _fake_detect)
-
-    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch", since_sha="abc123def")
 
     prompt = captured["prompt"]
-    assert f"cd {resolved_dir}" in prompt
-    assert f"{resolved_python} -m pytest" in prompt
-    assert "do not substitute" in prompt.lower()
-    # Existing review criteria must still be present, unchanged.
-    assert "Run the test suite" in prompt
+    assert "git diff abc123def..HEAD" in prompt
+    assert "already approved" in prompt.lower() or "not changed since" in prompt.lower()
+    assert "Run the test suite" not in prompt
+    # Substantive review criteria are still present, unchanged.
     for num in ["(1)", "(2)", "(3)", "(4)"]:
         assert num in prompt
 
 
-def test_run_reviewer_prompt_reflects_non_python_fallback_command(agents_dir, monkeypatch, tmp_path):
-    """detect_test_command's resolution is multi-language (Makefile/npm/mvn
-    etc, see _test_command_for) - the injected instruction must reflect
-    whatever it actually resolved to, not a hardcoded Python assumption."""
+def test_run_reviewer_does_not_inject_resolved_test_command(agents_dir, monkeypatch, tmp_path):
+    """The reviewer no longer runs the suite, so the detected test command
+    (Python venv pytest, npm, make, ...) is never injected into the prompt.
+    Guards the venv-pytest path that previously burned a reviewer's whole
+    step budget, and the multi-language fallback path, are both gone."""
     captured = {}
 
     class _FakeDriver:
@@ -2022,25 +1997,23 @@ def test_run_reviewer_prompt_reflects_non_python_fallback_command(agents_dir, mo
             return "VERDICT: APPROVE"
 
     monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
-    resolved_dir = tmp_path / "worktree"
-    monkeypatch.setattr(prev, "detect_test_command", lambda cwd: (resolved_dir, ["npm", "test"]))
 
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
 
     prompt = captured["prompt"]
-    assert f"cd {resolved_dir}" in prompt
-    assert "npm test" in prompt
-    assert ".venv" not in prompt
     assert "-m pytest" not in prompt
+    assert "npm test" not in prompt
+    assert ".venv" not in prompt
+    assert "do not substitute" not in prompt.lower()
 
 
-def test_run_reviewer_falls_back_to_generic_instruction_when_detection_raises(
+def test_run_reviewer_does_not_crash_when_detection_unavailable(
     agents_dir, monkeypatch,
 ):
-    """A resolution failure (e.g. the worktree path doesn't exist, or has no
-    recognizable build marker at all) must never crash _run_reviewer or
-    block review from running - it must fall back to the generic 'Run the
-    test suite' instruction that existed before this story."""
+    """A worktree path that doesn't exist (or has no build marker) must not
+    crash _run_reviewer or block review -- with the suite no longer run by
+    the reviewer, there is nothing to detect, so review proceeds on the
+    diff alone."""
     captured = {}
 
     class _FakeDriver:
@@ -2049,27 +2022,22 @@ def test_run_reviewer_falls_back_to_generic_instruction_when_detection_raises(
             return "VERDICT: APPROVE"
 
     monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
-
-    def _boom(cwd):
-        raise OSError("boom")
-
-    monkeypatch.setattr(prev, "detect_test_command", _boom)
 
     output = p._run_reviewer("/tmp/does-not-exist", "agent/some-branch")
 
     assert output == "VERDICT: APPROVE"
     prompt = captured["prompt"]
-    assert "Run the test suite" in prompt
+    assert "Run the test suite" not in prompt
     assert "do not substitute" not in prompt.lower()
 
 
-def test_run_reviewer_handles_worktree_with_no_recognizable_build_marker(
+def test_run_reviewer_proceeds_on_worktree_with_no_build_marker(
     agents_dir, monkeypatch, tmp_path,
 ):
     """Negative/boundary case: a worktree with no recognizable build marker
-    at all still resolves via detect_test_command's ultimate npm-test
-    fallback rather than raising - the resolved fallback command must still
-    reach the prompt."""
+    at all still reviews cleanly -- the reviewer reviews the diff, not the
+    test suite, so there is nothing to detect and no fallback command to
+    inject."""
     empty_worktree = tmp_path / "empty-worktree"
     empty_worktree.mkdir()
     captured = {}
@@ -2084,8 +2052,9 @@ def test_run_reviewer_handles_worktree_with_no_recognizable_build_marker(
     p._run_reviewer(str(empty_worktree), "agent/some-branch")
 
     prompt = captured["prompt"]
-    assert f"cd {empty_worktree}" in prompt
-    assert "npm test" in prompt
+    assert "Run the test suite" not in prompt
+    assert "npm test" not in prompt
+    assert "agent/some-branch" in prompt
 
 
 def test_review_story_approve_opens_pr(plan_dir, agents_dir, monkeypatch):
@@ -2228,7 +2197,7 @@ def test_review_story_passes_plan_role_config_from_manifest_to_reviewer(
     }))
     captured = {}
 
-    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None, acceptance=None):
+    def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None, since_sha=None):
         captured["plan_role_config"] = plan_role_config
         return "VERDICT: APPROVE"
 
@@ -2770,6 +2739,99 @@ def test_run_security_reviewer_always_uses_claude_backend_even_under_local_revie
 
     assert captured["role"] == "review"
     assert captured["name"] == "claude"
+
+
+def test_run_security_reviewer_does_not_run_test_suite(agents_dir, monkeypatch):
+    """The security reviewer reviews the diff for security issues and trusts
+    CI (tests_passed already gated entry); it must not re-run the test
+    suite -- that is pure duplicate spend, same rationale as the ordinary
+    reviewer."""
+    (agents_dir / "security-engineer.md").write_text(
+        '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_security_reviewer("/tmp/some-worktree", "agent/some-branch")
+
+    prompt = captured["prompt"]
+    assert "Run the test suite" not in prompt
+    assert "agent/some-branch" in prompt
+
+
+def test_run_security_reviewer_incremental_review_scopes_to_since_sha(agents_dir, monkeypatch):
+    """On a rework, the security reviewer also reviews only the new diff
+    since the last review, not the whole branch from zero."""
+    (agents_dir / "security-engineer.md").write_text(
+        '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+
+    p._run_security_reviewer("/tmp/some-worktree", "agent/some-branch", since_sha="deadbee")
+
+    prompt = captured["prompt"]
+    assert "git diff deadbee..HEAD" in prompt
+    assert "Run the test suite" not in prompt
+
+
+def test_review_story_threads_last_reviewed_sha_as_since_sha(plan_dir, agents_dir, monkeypatch):
+    """On a rework review (last_reviewed_sha recorded from the prior
+    REQUEST_CHANGES), review_story must pass it to _run_reviewer as
+    since_sha so the reviewer scopes to the new diff only -- not re-read
+    the whole branch from zero."""
+    _write_manifest(plan_dir, "incr", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "last_reviewed_sha": "abc123def"},
+    })
+    captured = {}
+
+    def _capture(wt, br, **kwargs):
+        captured["kwargs"] = kwargs
+        return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _capture)
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("incr", "S1")
+
+    assert captured["kwargs"].get("since_sha") == "abc123def"
+    # The removed acceptance= kwarg must no longer be threaded.
+    assert "acceptance" not in captured["kwargs"]
+
+
+def test_review_story_first_review_passes_no_since_sha(plan_dir, agents_dir, monkeypatch):
+    """First review (no last_reviewed_sha): since_sha is None, so the
+    reviewer covers the full branch diff."""
+    _write_manifest(plan_dir, "first", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    captured = {}
+
+    def _capture(wt, br, **kwargs):
+        captured["kwargs"] = kwargs
+        return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _capture)
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("first", "S1")
+
+    assert captured["kwargs"].get("since_sha") is None
 
 
 def test_run_reviewer_ordinary_review_still_honors_local_backend_setting(agents_dir, monkeypatch):
@@ -11888,7 +11950,7 @@ def test_review_story_high_risk_security_ignores_review_fallback(plan_dir, agent
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, backend_name=None, **k: "VERDICT: APPROVE")
     sec_calls = []
 
-    def _sec_stub(wt, br):
+    def _sec_stub(wt, br, **k):
         sec_calls.append((wt, br))
         return _RATE_LIMIT_MSG
 

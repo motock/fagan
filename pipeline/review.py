@@ -13,7 +13,6 @@ from pathlib import Path
 import backend
 import role_registry
 
-from .build_detect import _scope_test_cmd_to_acceptance, detect_test_command
 from .config import _LOCAL_BACKEND_NAMES, DEFAULT_MODEL
 from .persona import _persona_body, _persona_default_model
 
@@ -21,7 +20,7 @@ from .persona import _persona_body, _persona_default_model
 def _run_reviewer(
     worktree: str, branch: str, backend_name: str | None = None,
     plan_role_config: dict | None = None,
-    acceptance: list[dict] | None = None,
+    since_sha: str | None = None,
 ) -> str:
     """Run the code-reviewer persona over a branch and return its raw output.
 
@@ -30,15 +29,23 @@ def _run_reviewer(
     (e.g. review_story's rate-limit fallback routing to "local");
     get_backend already treats name=None as "use the env-resolved default".
 
-    acceptance is the story's acceptance block (Mode 20, 2026-07-17): when
-    present and the detected test command is pytest, the reviewer's test
-    command is scoped to ONLY those paths, exactly like _reverify_acceptance
-    scopes the pre-merge re-check. Without this, the reviewer's own free-form
-    `pytest` invocation can rediscover and block on a bug in the AGENT'S OWN
-    test file even when the harness's acceptance oracle already passes -
-    FM-A's exact root cause (see project-benchmark-failure-modes memory),
-    resurrected here because the harness test gate was scoped but the
-    reviewer never was.
+    The reviewer reviews the DIFF and trusts CI: review_story only ever
+    invokes it when story["status"] == "tests_passed", i.e. the full test
+    suite is already green (check_story_status ran it moments earlier to
+    reach that state). A reviewer-driven test-suite rerun is pure duplicate
+    spend - a full agentic Bash tool-loop re-executing what CI just ran -
+    so the prompt no longer instructs the reviewer to run the tests and no
+    longer injects a resolved test command. This mirrors a real PR review:
+    CI is the gate, the reviewer reviews the diff for correctness, security,
+    and standards.
+
+    since_sha (real-PR re-review, 2026-07-28) scopes a rework review to
+    ONLY the new commits pushed since the last REQUEST_CHANGES (the commit
+    last_reviewed_sha was recorded against). The reviewer does not re-read
+    already-approved, unchanged files from zero each cycle - it reviews just
+    `git diff {since_sha}..HEAD`, exactly as a human reviewer reviews only
+    the new commits pushed to a PR after sending it back. None on a first
+    review means the full branch diff.
     """
     body = _persona_body("code-reviewer")
     # Provider/model fall through role_registry (PIPELINE_BACKEND_REVIEW /
@@ -84,55 +91,36 @@ def _run_reviewer(
     name_for_get_backend = backend_name
     if backend_name is None and (plan_cfg_review.get("provider") or registry_review_provider):
         name_for_get_backend = resolution.provider
-    # The reviewer model has no access to detect_test_command's Python-level
-    # venv resolution, so a bare "Run the test suite" instruction leaves it
-    # to guess a shell command - e.g. the relative `.venv/bin/python -m
-    # pytest`, which does not exist inside a worktree (worktrees are
-    # gitignored and never contain .venv). Resolve the same command
-    # check_story_status's test gate trusts and hand it over verbatim. Any
-    # resolution failure (nonexistent worktree, no recognized build marker)
-    # must not block review - fall back to the generic instruction below.
-    test_command_instruction = ""
-    try:
-        test_dir, test_cmd = detect_test_command(Path(worktree))
-        scope_note = ""
-        if acceptance:
-            acceptance_paths = [
-                str(test_dir / entry["path"]) for entry in acceptance
-            ]
-            scoped = _scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
-            if scoped is not None:
-                test_cmd = scoped
-                scope_note = (
-                    "This story carries a harness-owned acceptance oracle; the "
-                    "command below is scoped to ONLY those acceptance tests, "
-                    "which are the authoritative spec for required behavior. A "
-                    "failure in the implementer's OWN test file that the "
-                    "acceptance oracle does not require is not sufficient "
-                    "grounds for REQUEST_CHANGES on its own - note it as a "
-                    "Suggestion if you notice it, but base your verdict on the "
-                    "acceptance oracle plus your own code-quality/security "
-                    "review, not on re-running the implementer's full test "
-                    "file.\n\n"
-                )
-        test_command_instruction = (
-            f"{scope_note}"
-            f"Run the test suite with exactly this command (do not "
-            f"substitute a different interpreter path): cd "
-            f"{shlex.quote(str(test_dir))} && {shlex.join(test_cmd)}\n\n"
+
+    # Diff-scoping lead. On a rework (since_sha set) the reviewer reviews
+    # ONLY the new commits since the last REQUEST_CHANGES; on a first review
+    # (None) it reviews the full branch diff. The substantive criteria block
+    # below is shared by both.
+    if since_sha:
+        lead = (
+            f"Review ONLY the new changes pushed since your last review "
+            f"(commit {shlex.quote(since_sha)}). The implementer addressed "
+            f"your prior feedback; do NOT re-review files that were already "
+            f"approved and have not changed since. See the new diff with: "
+            f"git diff {shlex.quote(since_sha)}..HEAD\n"
+            f"(start with `git diff --stat {shlex.quote(since_sha)}..HEAD` "
+            f"for scope, then `git diff {shlex.quote(since_sha)}..HEAD -- "
+            f"<file>` per file, and `view_file` for surrounding context).\n\n"
         )
-    except Exception:  # noqa: S110, BLE001 (deliberate fail-open: test-command detection is best-effort prompt enrichment, not required - a failure here just omits test_command_instruction rather than blocking the review)
-        pass
+    else:
+        lead = (
+            f"Review the changes on branch {branch} in this worktree against "
+            f"our standards.\n\n"
+        )
     prompt = (
-        f"{test_command_instruction}"
-        f"Review the changes on branch {branch} in this worktree against our "
-        f"standards. Report EVERY Blocking finding you notice in this single "
+        f"{lead}"
+        f"Report EVERY Blocking finding you notice in this single "
         f"pass, not just the first one - the implementer is a weak local "
         f"model and each REQUEST_CHANGES cycle is a full rework redispatch, "
         f"which costs time and is itself a fresh opportunity to regress "
         f"already-correct code. Do not hold a finding back to raise on a "
         f"later cycle just because it's secondary to the first one you "
-        f"noticed. Run the test suite. Specifically check: (1) any function "
+        f"noticed. Specifically check: (1) any function "
         f"taking a mutable argument (list, dict, set) does not mutate it in "
         f"place unless that is the documented contract; (2) inputs are "
         f"validated at system boundaries, including negative/out-of-range "
@@ -178,19 +166,37 @@ def _run_reviewer(
     )
 
 
-def _run_security_reviewer(worktree: str, branch: str) -> str:
+def _run_security_reviewer(
+    worktree: str, branch: str, since_sha: str | None = None,
+) -> str:
     """Run the security-engineer persona over a branch and return its raw output.
 
-    External boundary: delegates to the configured Backend (always Claude —
+    External boundary: delegates to the configured Backend (always Claude -
     security-engineer is in _LOCAL_SKIP_PERSONAS). Tests mock this function.
+
+    Like the ordinary reviewer, the security reviewer reviews the diff and
+    trusts CI (tests_passed already gated entry); it does not re-run the
+    test suite. since_sha scopes a rework review to the new commits since
+    the last review (see _run_reviewer).
     """
     body = _persona_body("security-engineer")
     model = _persona_default_model("security-engineer") or DEFAULT_MODEL
+    if since_sha:
+        lead = (
+            f"Review ONLY the new security-relevant changes pushed since your "
+            f"last review (commit {shlex.quote(since_sha)}): "
+            f"git diff {shlex.quote(since_sha)}..HEAD\n\n"
+        )
+    else:
+        lead = (
+            f"Perform a security review of the changes on branch {branch} in "
+            f"this worktree.\n\n"
+        )
     prompt = (
-        f"Perform a security review of the changes on branch {branch} in this "
-        f"worktree. Check for OWASP issues, secrets, injection, auth/authz "
-        f"bypasses, and Secure-by-Design violations. Run the test suite. "
-        f"End with your VERDICT line: APPROVE or REQUEST_CHANGES."
+        f"{lead}"
+        f"Check for OWASP issues, secrets, injection, auth/authz bypasses, "
+        f"and Secure-by-Design violations. End with your VERDICT line: "
+        f"APPROVE or REQUEST_CHANGES."
     )
     if Path(worktree).parent.name == "worktrees":
         cell_dir = str(Path(worktree).resolve().parent)

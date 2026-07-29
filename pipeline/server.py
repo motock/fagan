@@ -2314,10 +2314,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             reviewer_output = (
                 _run_reviewer(worktree, branch, backend_name="claude",
                               plan_role_config=plan_role_config,
-                              acceptance=story.get("acceptance"))
+                              since_sha=story.get("last_reviewed_sha"))
                 if story.get("escalated") else
                 _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
-                              acceptance=story.get("acceptance"))
+                              since_sha=story.get("last_reviewed_sha"))
             )
         except backend.RateLimitedError:
             # FM-B: an Ollama-cloud (or any Ollama-proxied) 429 on the review path
@@ -2357,7 +2357,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             reviewer_output = _run_reviewer(
                 worktree, branch, backend_name=fallback_mode,
                 plan_role_config=plan_role_config,
-                acceptance=story.get("acceptance"),
+                since_sha=story.get("last_reviewed_sha"),
             )
             verdict = _parse_verdict(reviewer_output)
             # Fall through into the normal verdict-handling code below —
@@ -2378,10 +2378,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         reviewer_output = (
             _run_reviewer(worktree, branch, backend_name="claude",
                           plan_role_config=plan_role_config,
-                          acceptance=story.get("acceptance"))
+                          since_sha=story.get("last_reviewed_sha"))
             if story.get("escalated") else
             _run_reviewer(worktree, branch, plan_role_config=plan_role_config,
-                          acceptance=story.get("acceptance"))
+                          since_sha=story.get("last_reviewed_sha"))
         )
         verdict = _parse_verdict(reviewer_output)
         _transient_retried = True
@@ -2392,7 +2392,8 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # High-risk stories require an additional security-engineer pass; both
     # must APPROVE before the story proceeds to pr_open.
     if verdict == "APPROVE" and story.get("risk") == "high":
-        security_output = _run_security_reviewer(worktree, branch)
+        security_output = _run_security_reviewer(
+            worktree, branch, since_sha=story.get("last_reviewed_sha"))
         security_verdict = _parse_verdict(security_output)
 
         # FM-B: same rate-limit deferral for the security-reviewer pass.

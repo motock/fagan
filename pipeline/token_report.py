@@ -13,10 +13,11 @@ The implementation follows the expectations defined in the acceptance tests:
 """
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -35,6 +36,7 @@ def _parse_ts(ts: str | None) -> datetime | None:
         return datetime.fromisoformat(ts)
     except ValueError:
         return None
+
 # ---------------------------------------------------------------------------
 # Main public API
 # ---------------------------------------------------------------------------
@@ -69,73 +71,72 @@ def summarize_token_costs(
     zero_summary = {"total_records": 0, "by_backend": {}, "by_role": {}}
 
     try:
-        file_iter: Iterable[str] = Path(path).open("r", encoding="utf-8")
+        with Path(path).open("r", encoding="utf-8") as file_iter:
+            total_records = 0
+            by_backend: dict[str, dict[str, Any]] = {}
+            by_role: dict[str, dict[str, Any]] = {}
+
+            for raw_line in file_iter:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    record: Mapping[str, Any] = json.loads(line)
+                except json.JSONDecodeError:
+                    # Skip malformed JSON silently.
+                    continue
+                # Apply the optional ``since`` filter.
+                if since is not None:
+                    ts_str = record.get("ts")
+                    parsed_ts = _parse_ts(ts_str)
+                    if parsed_ts is None or parsed_ts < since:
+                        continue
+
+                # Default values for missing fields.
+                backend = record.get("backend") or "unknown"
+                role = record.get("role") or "unknown"
+
+                input_tokens_raw = record.get("input_tokens", 0)
+                output_tokens_raw = record.get("output_tokens", 0)
+                # Treat None as zero.
+                try:
+                    input_tokens = int(input_tokens_raw) if input_tokens_raw is not None else 0
+                except (ValueError, TypeError):
+                    input_tokens = 0
+                try:
+                    output_tokens = int(output_tokens_raw) if output_tokens_raw is not None else 0
+                except (ValueError, TypeError):
+                    output_tokens = 0
+
+                cost_raw = record.get("total_cost_usd")
+                try:
+                    cost = float(cost_raw) if cost_raw is not None else 0.0
+                except (ValueError, TypeError):
+                    cost = 0.0
+
+                # Aggregate totals.
+                total_records += 1
+
+                # Backend aggregation
+                backend_entry = by_backend.setdefault(
+                    backend,
+                    {"input_tokens": 0, "output_tokens": 0, "total_cost_usd": 0.0},
+                )
+                backend_entry["input_tokens"] += input_tokens
+                backend_entry["output_tokens"] += output_tokens
+                backend_entry["total_cost_usd"] += cost
+
+                # Role aggregation (count and token/cost totals)
+                role_entry = by_role.setdefault(
+                    role,
+                    {"count": 0, "input_tokens": 0, "output_tokens": 0, "total_cost_usd": 0.0},
+                )
+                role_entry["count"] += 1
+                role_entry["input_tokens"] += input_tokens
+                role_entry["output_tokens"] += output_tokens
+                role_entry["total_cost_usd"] += cost
     except FileNotFoundError:
         return zero_summary
-
-    total_records = 0
-    by_backend: dict[str, dict[str, Any]] = {}
-    by_role: dict[str, dict[str, Any]] = {}
-
-    for raw_line in file_iter:
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            record: Mapping[str, Any] = json.loads(line)
-        except json.JSONDecodeError:
-            # Skip malformed JSON silently.
-            continue
-        # Apply the optional ``since`` filter.
-        if since is not None:
-            ts_str = record.get("ts")
-            parsed_ts = _parse_ts(ts_str)
-            if parsed_ts is None or parsed_ts < since:
-                continue
-
-        # Default values for missing fields.
-        backend = record.get("backend") or "unknown"
-        role = record.get("role") or "unknown"
-
-        input_tokens_raw = record.get("input_tokens", 0)
-        output_tokens_raw = record.get("output_tokens", 0)
-        # Treat None as zero.
-        try:
-            input_tokens = int(input_tokens_raw) if input_tokens_raw is not None else 0
-        except Exception:
-            input_tokens = 0
-        try:
-            output_tokens = int(output_tokens_raw) if output_tokens_raw is not None else 0
-        except Exception:
-            output_tokens = 0
-
-        cost_raw = record.get("total_cost_usd")
-        try:
-            cost = float(cost_raw) if cost_raw is not None else 0.0
-        except Exception:
-            cost = 0.0
-
-        # Aggregate totals.
-        total_records += 1
-
-        # Backend aggregation
-        backend_entry = by_backend.setdefault(
-            backend,
-            {"input_tokens": 0, "output_tokens": 0, "total_cost_usd": 0.0},
-        )
-        backend_entry["input_tokens"] += input_tokens
-        backend_entry["output_tokens"] += output_tokens
-        backend_entry["total_cost_usd"] += cost
-
-        # Role aggregation (count and token/cost totals)
-        role_entry = by_role.setdefault(
-            role,
-            {"count": 0, "input_tokens": 0, "output_tokens": 0, "total_cost_usd": 0.0},
-        )
-        role_entry["count"] += 1
-        role_entry["input_tokens"] += input_tokens
-        role_entry["output_tokens"] += output_tokens
-        role_entry["total_cost_usd"] += cost
 
     return {
         "total_records": total_records,

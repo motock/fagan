@@ -347,47 +347,7 @@ These are mandatory procedural steps that must be followed for every task, in or
 
 **Always drive work through the mcp pipeline tools — never start coding against an ad hoc, untracked request.**
 
-1. If the work hasn't been decomposed into a plan yet, produce epics/stories (typically via the product-analyst agent) and register them with `mcp__pipeline__save_plan` or `mcp__pipeline__ingest_plan`.
-
-   **`save_plan`'s story schema is not what its tool description implies.** The tool description only shows the epic-level shape (`{"summary", "stories": [...]}`) and omits story-level fields entirely. The shape `ingest_plan` actually reads (verified against `pipeline_mcp_server.py`) is:
-
-   ```json
-   {
-     "repo_root": "/absolute/path/to/this/plan's/git/repo",
-     "epics": [
-       {
-         "summary": "Epic name",
-         "stories": [
-           {
-             "summary": "Story title — the unique key other stories reference as a dependency",
-             "description": "Human-readable scope and rationale (becomes the Plane issue body when Plane is enabled; otherwise not stored in the manifest)",
-             "agent_instructions": "The full implementation brief the dispatched agent receives: scope, approach, the TDD expectation, and negative/boundary cases to cover. Populate richly.",
-             "acceptance": [{"path": "tests/acceptance_foo.rs", "source": "// optional read-only test fixture; the oracle grades the run on whether the impl makes these pass"}],
-             "dependencies": ["Exact summary text (or explicit key) of a prerequisite story in this same plan"],
-             "persona": "software-engineer",
-             "model": "sonnet",
-             "risk": "low",
-             "backend": "optional: claude | local | ollama | lmstudio | mlx | auto",
-             "key": "optional explicit story key; omit to auto-mint a UUID"
-           }
-         ]
-       }
-     ],
-     "role_config": {"review": {"provider": "mlx", "model": "qwen"}}
-   }
-   ```
-
-   Only `summary` is required. `repo_root` is plan-level (required — `ingest_plan` validates it's an existing directory and `advance_all_plans` scopes each plan's work to it). The fields that actually reach the agent and the review gate are `agent_instructions` (the implementation brief, seeded into the dispatch prompt), `acceptance` (an optional array of `{path, source}` read-only test fixtures — when present, the harness materializes them into the worktree and the oracle grades the run on whether the implementation makes them pass; when absent, the story runs on the base harness with a "tests pass" bar), `persona`/`model`/`risk` (routing and merge gating), and `dependencies`. `description` is read only for the Plane issue body when Plane is enabled; the manifest and the dispatch prompt do not use it, so treat it as optional human context for plan review.
-
-   **Each story benefits from rich content — sparse stories (a summary alone) leave the agent to guess.** Populate, at minimum:
-   - **`agent_instructions`** — the implementation brief: what to build, the approach, the TDD expectation (write the failing test first), the testable success criteria (concrete, checkable statements such as *"`cargo test -p storage` passes"* or *"rejects a zero-length key with `StoreError::Corrupted`"*), and the negative/boundary cases the tests must cover. This is the single most influential field on outcome quality — the testable criteria live here, not in a separate field. For local (non-Claude) dispatch: if the required change is a targeted edit *inside* a large existing function (roughly 50+ lines), specify the rename-and-delegate shape (`foo` → a guard/setup wrapper that calls a renamed `_foo_impl`) rather than an in-place re-indent of the whole body — in-place re-indenting through a truncated file-viewing tool is the single most reliable way to break a weak local executor (confirmed live, 2026-07-22: 8 failed dispatch attempts on one story asking for exactly this). Name an existing example of the pattern already in the codebase when one exists. If that function carries a decorator that performs registration at import/decoration time (e.g. `@mcp.tool()`, a route decorator, an event-handler registry), state explicitly that the decorator — and the docstring, and any argument validation that ran as the function's first statement(s) — must move to the new wrapper `foo`, not stay on the renamed `_foo_impl`, and prescribe a testable success criterion that exercises the *registration path itself* (e.g. `mcp._tool_manager._tools["foo"].fn is foo`), not just a call to the bare module attribute `foo(...)` — a test that only calls the attribute passes even when the decorator silently deregistered the real entrypoint, since Python's late name-binding makes the attribute and the registered object diverge invisibly (confirmed live, 2026-07-23: a rename-and-delegate split passed its own 4-test suite and the full suite while the actual `@mcp.tool()`-registered function was still the pre-fix, unguarded original; only a reviewer's manual registry check caught it, costing a full rework cycle). On any file above roughly 1,000 lines, steer local dispatch toward anchored edits (`str_replace` with enough surrounding context to be unique) over line-number-addressed edits (`replace_lines`) — a resumed run's transcript gets trimmed to fit the context budget, so the line numbers a model computed from an earlier `view_file` call are frequently stale by the time a later step acts on them, and a stale-line-number `replace_lines` can silently delete or corrupt an unrelated span next to the intended edit (confirmed live, 2026-07-23, MODE40-LOCAL-LINT-GATE: a `replace_lines` edit near a step-cap branch silently deleted the unrelated `story["interrupted_at"] = interrupted_at` line three lines away, passing the story's own test suite because nothing exercised that exact line — only a subsequent code review, comparing byte-for-byte against `master`, caught it). Keep a single local-dispatch story scoped to at most two production files (test files don't count) — a story touching three or more, even ones a Claude-tier model would handle in one pass, reliably costs a 20B-class local model multiple step-cap resumes and rework cycles before it converges, each resume re-deriving codebase context it already had (confirmed live, 2026-07-23: the same MODE40-LOCAL-LINT-GATE story, spanning `pipeline/build_detect.py` + `pipeline/server.py` + both `scripts/local_agent*.py` + `README.md`, took 4 dispatch rounds — 2 step-cap interrupts, 2 DONE-then-still-broken submissions — before landing a review-clean diff); split by file/concern instead (e.g. "add the detection function" as one story, "wire it into the gate" as a dependent follow-up) even when the combined work is small enough for a single PR by hand.
-   - **`acceptance`** — *optional*: an array of `{path, source}` read-only test fixtures. The harness writes each `source` to `path` in the worktree (read-only — the agent may not edit them) and the oracle grades the run on whether the implementation makes them pass. Omit it for ordinary TDD stories where the agent writes its own tests (per `agent_instructions`) and the "tests pass" bar plus the code-reviewer gate suffice; reserve it for cases where you want to pre-specify the acceptance test the implementation must satisfy.
-   - **`persona` / `model` / `risk`** — match the work: `software-engineer`/`sonnet`/`low` for mechanical backend work, `security-engineer`/`opus`/`high` for auth or crypto, etc. `risk` drives the overlord's merge gating.
-   - **`description`** — optional human context for plan review (and the Plane issue body). Useful but not dispatched.
-   - **`backend`** — *optional*: pins this one story's dispatch provider (`claude`/`local`/`ollama`/`lmstudio`/`mlx`/`auto`), independent of the process-wide `PIPELINE_BACKEND_DISPATCH`. `ingest_plan` rejects an unrecognized value at ingest time. Omit to use the process-wide default.
-   - **`role_config`** — *optional, plan-level* (a sibling of `epics`, not a story field): per-role provider/model overrides for `overlord`/`planner`/`dispatch`/`review`/`decompose`, e.g. `{"review": {"provider": "mlx", "model": "qwen"}}`. See the README's "Per-role provider/model configuration" section and `model_registry.json` for the full priority chain and the list of available providers/models.
-
-   Do **not** invent fields like `id`, `title`, `acceptance_criteria` (there is no such field — testable criteria go in `agent_instructions`; `acceptance` is an optional array of `{path, source}` file fixtures, not a list of strings), or `depends_on` — `ingest_plan` will fail with a bare `'summary'` KeyError if a story is missing `summary`, and `dependencies` must reference other stories by their exact `summary` string (or their explicit `key`), not by an invented ID. If in doubt, read an existing file under `~/.claude/plans/*.json` as ground truth before guessing.
+1. If the work hasn't been decomposed into a plan yet, produce epics/stories (typically via the product-analyst agent) and register them with `mcp__pipeline__save_plan` or `mcp__pipeline__ingest_plan`. **The story schema `ingest_plan` actually reads is not what `save_plan`'s tool description implies** — the verified shape, field semantics, and rules for writing `agent_instructions` (the single most influential field on outcome quality) are in @.claude/rules/pipeline-story-schema.md. Key points: only `summary` is required; `repo_root` is plan-level and required; do not invent fields like `id`, `title`, `acceptance_criteria`, or `depends_on` (`dependencies` references other stories by exact `summary` text or explicit `key`); `acceptance` is an array of `{path, source}` file fixtures, not a list of strings; when in doubt read an existing `~/.claude/plans/*.json` as ground truth.
 2. Find available work with `mcp__pipeline__list_ready_stories`, or check a specific story with `mcp__pipeline__check_story_status`.
 3. Claim the story with `mcp__pipeline__dispatch_story`, then mark it in progress with `mcp__pipeline__mark_story_in_progress`.
 4. Branch from the dispatched story ID: `agent/{STORY-ID}` (e.g., `agent/PIPE-123`). The branch name comes from the pipeline, not an invented identifier.
@@ -504,15 +464,13 @@ Teams should extend this checklist with their own gates (e.g., QA sign-off, secu
 
 ### Step 9 — Diagnose before redispatching a stalled or failed automated attempt
 
-When an automated implementation attempt (agent, script, or pipeline worker) fails, stalls, or gives up before completing a task, do not simply resubmit the same task or tell it to "try again." Diagnose first:
+When an automated attempt (agent, script, or pipeline worker) fails, stalls, or gives up, do not resubmit the same task or say "try again." Diagnose first:
 
-1. **Pull the actual failure evidence.** Read the real error — the failing test's traceback, the exact exception message, the specific log line — rather than working from a vague summary like "it didn't work" or "tests are failing."
-2. **Read the relevant code and identify the precise root cause.** Do not guess at cause from symptoms. Trace the failure to the exact line, condition, or interaction responsible.
-3. **Encode the diagnosis into the next attempt's instructions.** The follow-up task should state the exact defect and the minimal fix required — not issue an open-ended retry and hope the same approach lands differently. An attempt that failed once with no new information is likely to fail the same way again, or fail differently but just as unproductively.
+1. **Pull the actual failure evidence** — the failing test's traceback, the exact exception, the specific log line — not a vague summary like "it didn't work."
+2. **Read the relevant code and identify the precise root cause.** Trace the failure to the exact line, condition, or interaction; do not guess from symptoms.
+3. **Encode the diagnosis into the next attempt's instructions** — state the exact defect and the minimal fix required, not an open-ended retry. An attempt that failed once with no new information is likely to fail the same way again.
 
-This matters most when the executor is a weaker or resource-constrained model — one operating under a limited context or step budget. Such executors are especially prone to thrashing (repeated, unproductive self-directed debugging loops) when left to re-diagnose from scratch, and a generic "regenerate it" or "fix the failing tests" instruction can cost several wasted cycles where a two-sentence root-cause statement would have resolved it in one. The stronger and more context-rich the executor, the more it can safely be trusted to self-diagnose from a bare failure signal; the weaker or more context-constrained it is, the more of the diagnosis must be done for it up front.
-
-If a stalled attempt's scope was also too broad (e.g., it touches many concerns or files at once), consider narrowing the follow-up task's scope in addition to supplying the diagnosis — a smaller, single-concern retry with a precise root cause is far more likely to converge than a broad retry with none.
+This matters most for weaker or resource-constrained executors (limited context or step budget), which thrash in repeated unproductive self-debugging loops when left to re-diagnose from scratch; a two-sentence root-cause statement resolves in one cycle what a generic "fix the failing tests" burns several on. The weaker the executor, the more of the diagnosis must be done up front. If the stalled attempt's scope was also too broad, narrow the follow-up to a single concern — a small retry with a precise root cause converges far better than a broad retry with none.
 
 ---
 

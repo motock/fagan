@@ -595,6 +595,28 @@ def test_oracle_second_consecutive_syntax_rejection_same_path_carries_escalation
     assert "regenerate the entire file" in second.lower()
 
 
+def test_oracle_second_consecutive_str_replace_rejection_on_large_file_suggests_anchored_edit(
+    tmp_path, monkeypatch
+):
+    """SYNTAX-NUDGE (large file): mirrors test_local_agent's version — a
+    str_replace rejection on an existing file above the size threshold
+    must NOT get the 'regenerate the entire file' nudge and should get a
+    smaller-anchored-edit nudge instead."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    lines = [f"x{i} = {i}\n" for i in range(600)]
+    lines.append("def marker():\n    return 1\n")
+    (tmp_path / "big.py").write_text("".join(lines))
+    old_str = "def marker():\n    return 1"
+    new_str = "+def marker():\n    return 1"
+    first = lao.run_tool("str_replace", {"path": "big.py", "old_str": old_str, "new_str": new_str})
+    assert first.startswith("ERROR")
+    second = lao.run_tool("str_replace", {"path": "big.py", "old_str": old_str, "new_str": new_str})
+    assert "do not resubmit the same content" in second.lower()
+    assert "regenerate the entire file" not in second.lower()
+    assert "smaller" in second.lower()
+
+
 def test_oracle_rejection_for_different_path_does_not_inherit_escalation(tmp_path, monkeypatch):
     """SYNTAX-NUDGE boundary case: a rejection for a DIFFERENT path in
     between must not carry the escalation — the counter is per-path."""

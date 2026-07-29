@@ -27,7 +27,7 @@
 		<key>PIPELINE_LOCAL_MODEL_DEFAULT</key>
 		<string>gpt-oss:20b</string>
 		<key>PIPELINE_LOCAL_NUM_CTX</key>
-		<string>32768</string>
+		<string>16384</string>
 		<key>PIPELINE_LOCAL_TEMPERATURE</key>
 		<string>0.3</string>
 		<key>PIPELINE_MAX_CONCURRENT_AGENTS</key>

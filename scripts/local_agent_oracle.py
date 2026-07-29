@@ -81,6 +81,19 @@ def _load_resume_transcript() -> list | None:
 # 93fdc371, 2026-07-20) that motivated this. Keep both copies in sync.
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
+# Calibrated at runtime from ollama's own measured prompt_eval_count. Ported
+# from local_agent.py - see that file's comment for the live incident
+# (2026-07-29 ollama server log, ~2.35 chars/token measured vs the 4.0 guess)
+# that motivated this. Keep both copies in sync.
+_measured_chars_per_token: float | None = None
+_last_prompt_eval_count: int | None = None
+
+
+def _effective_chars_per_token() -> float:
+    """The live-calibrated chars/token ratio when available, else the fixed
+    _CHARS_PER_TOKEN_ESTIMATE guess."""
+    return _measured_chars_per_token or _CHARS_PER_TOKEN_ESTIMATE
+
 
 def _message_char_len(m: dict) -> int:
     n = len(str(m.get("content") or ""))
@@ -370,6 +383,9 @@ READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINC
 # Default (30) stays above the read-heavy guard's own distinct-exploration
 # cap (6 + 3*6 = 24) so it doesn't preempt that guard's already-tuned park.
 NET_PROGRESS_MAX_STEPS = int(os.environ.get("LOCAL_AGENT_NET_PROGRESS_MAX_STEPS", "30"))
+# Proactive-trim threshold. Ported from local_agent.py - keep both copies in
+# sync.
+PROACTIVE_TRIM_THRESHOLD = float(os.environ.get("LOCAL_AGENT_PROACTIVE_TRIM_THRESHOLD", "0.85"))
 # Mutating tools: any that produce new code in the worktree. Anything else
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior
@@ -503,9 +519,11 @@ def _stream_one_turn(payload):
     httpx.TransportError (TimeoutException/ConnectError/ReadError) on a
     connect/read stall — chat() decides which of those are retryable.
     """
+    global _measured_chars_per_token, _last_prompt_eval_count
     content_parts: list[str] = []
     tool_calls = None
     role = "assistant"
+    prompt_eval_count = None
     with httpx.stream(
         "POST", f"{ENDPOINT}/api/chat", json=payload,
         timeout=httpx.Timeout(connect=CONNECT_TIMEOUT_SECONDS, read=READ_SILENCE_SECONDS,
@@ -532,10 +550,24 @@ def _stream_one_turn(payload):
             if tc:
                 tool_calls = tc
             if chunk.get("done"):
+                prompt_eval_count = chunk.get("prompt_eval_count")
                 break
     assembled = {"role": role, "content": "".join(content_parts)}
     if tool_calls:
         assembled["tool_calls"] = tool_calls
+    # Calibrate the chars/token ratio from ollama's own real count for this
+    # request. Ported from local_agent.py - keep both copies in sync.
+    if prompt_eval_count:
+        _last_prompt_eval_count = prompt_eval_count
+        # The tools schema is counted in prompt_eval_count, so it must be
+        # counted here too - see local_agent.py's copy for the measured bias
+        # this avoids. Keep both copies in sync.
+        sent_chars = (
+            sum(_message_char_len(m) for m in payload.get("messages", []))
+            + len(json.dumps(payload.get("tools") or []))
+        )
+        if sent_chars > 0:
+            _measured_chars_per_token = sent_chars / prompt_eval_count
     return assembled
 
 
@@ -1395,6 +1427,12 @@ def safe_run_tool(fn, args) -> str:
 
 
 def main() -> int:
+    # A fresh dispatch has no calibration data yet - clear any value left
+    # over from a prior dispatch that shared this process (or, in-process, a
+    # prior test). Ported from local_agent.py; keep both copies in sync.
+    global _measured_chars_per_token, _last_prompt_eval_count
+    _measured_chars_per_token = None
+    _last_prompt_eval_count = None
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
     # Initialize messages list with optional persistence support.
@@ -1408,7 +1446,10 @@ def main() -> int:
     transcript_path = os.environ.get("LOCAL_AGENT_TRANSCRIPT_PATH")
     messages = PersistingList(transcript_path=transcript_path)
     if resume := _load_resume_transcript():
-        budget_chars = int(NUM_CTX * _CHARS_PER_TOKEN_ESTIMATE * 0.75)
+        # No live calibration exists yet this early (reset above, before any
+        # turn has run), so this always uses the fixed guess via
+        # _effective_chars_per_token()'s fallback.
+        budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
         resume = _trim_resumed_transcript(resume, budget_chars)
         messages.extend(resume)
     else:
@@ -1476,12 +1517,63 @@ def main() -> int:
                 return 3
         try:
             m = chat(messages)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code < 500:
+                print(f"[step {step}] LLM call failed: {e}", flush=True)
+                if worktree_dirty():
+                    auto_commit("WIP (llm error)")
+                return 1
+            # A 5xx that survived chat()'s own CHAT_MAX_ATTEMPTS retries is
+            # not a transient fault - every retry sent the IDENTICAL payload,
+            # so an unchanged 5xx after 3 attempts is very likely a context-
+            # window overflow (Ollama/llama.cpp returns 500 rather than a
+            # clean 4xx for this), not a fluke. Retrying again would just
+            # repeat the same failure. Trim once, reusing the same helper the
+            # resume path already uses, and retry exactly once with the
+            # smaller payload before giving up. Ported from local_agent.py -
+            # this variant was missing the recovery entirely even though
+            # acceptance-bearing dispatches (the production path) run here.
+            budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
+            trimmed = _trim_resumed_transcript(messages, budget_chars)
+            if len(trimmed) == len(messages):
+                print(f"[step {step}] LLM call failed: {e}", flush=True)
+                if worktree_dirty():
+                    auto_commit("WIP (llm error)")
+                return 1
+            print(f"[step {step}] 5xx after {CHAT_MAX_ATTEMPTS} attempts with an "
+                  f"oversized transcript; trimming and retrying once", flush=True)
+            messages[:] = trimmed
+            _persist_messages(messages, transcript_path)
+            try:
+                m = chat(messages)
+            except Exception as e2:  # noqa: BLE001 (an LLM backend call can fail in unpredictable ways; must not crash the agent loop)
+                print(f"[step {step}] LLM call failed after trim-retry: {e2}", flush=True)
+                if worktree_dirty():
+                    auto_commit("WIP (llm error)")
+                return 1
         except Exception as e:  # noqa: BLE001 (an LLM backend call can fail in unpredictable ways; must not crash the agent loop)
             print(f"[step {step}] LLM call failed: {e}", flush=True)
             if worktree_dirty():
                 auto_commit("WIP (llm error)")
             return 1
         messages.append(m)
+        # Proactive trim: once a turn's measured prompt_eval_count is already
+        # close to NUM_CTX, shrink the transcript now rather than waiting for
+        # the next turn to overflow and 500. Ported from local_agent.py; keep
+        # both copies in sync.
+        if (
+            _last_prompt_eval_count is not None
+            and _last_prompt_eval_count >= NUM_CTX * PROACTIVE_TRIM_THRESHOLD
+        ):
+            budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
+            trimmed = _trim_resumed_transcript(messages, budget_chars)
+            if len(trimmed) != len(messages):
+                print(f"[step {step}] measured prompt_eval_count="
+                      f"{_last_prompt_eval_count} >= {PROACTIVE_TRIM_THRESHOLD:.0%} of "
+                      f"NUM_CTX={NUM_CTX}; trimming proactively", flush=True)
+                messages[:] = trimmed
+                _persist_messages(messages, transcript_path)
+                _last_prompt_eval_count = None
         tcs = m.get("tool_calls") or recover_tool_calls(m.get("content", ""))
         if not tcs:
             consecutive_no_tool += 1

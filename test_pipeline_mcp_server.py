@@ -2463,6 +2463,110 @@ def test_review_story_request_changes_no_oracle_check_without_acceptance_block(
     assert calls == []
 
 
+# ---------- fresh-rework-on-regression (2026-07-29) ----------
+# The 2026-07-29 gpt-oss E2E finding (bcca562e/token_report): a rework
+# redispatch that RESUMES the prior dispatch's transcript replays whatever
+# churn led to a regression, compounding it (500s + acceptance 11/11 -> 9).
+# The SAME story recovered cleanly on a FRESH rework (transcript deleted,
+# from-scratch prompt) once the poisoned transcript was removed. The oracle
+# re-verify above already tells review_story whether this cycle's rework
+# just broke previously-passing behavior - when it did, delete the
+# transcript so the NEXT redispatch (resume_via_transcript in dispatch_story)
+# can't resume it and is forced onto the from-scratch rework prompt instead.
+
+def test_review_story_leaves_transcript_on_first_review_with_failing_oracle(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """A failing oracle is NOT by itself a regression. With
+    PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1 (set in this install's env) the most
+    common way a story reaches review with a red oracle is a FIRST dispatch
+    that was simply incomplete - no prior passing state to have regressed
+    from. Deleting the transcript there discards the richest context a rework
+    could resume from, to fix a problem that never happened. Only a story
+    that has already been through at least one rework cycle
+    (rework_attempts > 0, which at this point in the cycle holds the count
+    BEFORE this one is added) has a prior state it could have regressed."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    transcript_path = worktree / ".agent_transcript.json"
+    transcript_path.write_text('[{"role": "system", "content": "x"}]')
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 3)
+    _write_manifest(plan_dir, "rvfirstfail", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(worktree), "risk": "low",
+               "acceptance": [{"path": "test_acceptance.py"}]},
+    })
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, **k: "Incomplete.\nVERDICT: REQUEST_CHANGES")
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt, *a, **k: {"state": "fail", "error": "boom"})
+
+    p.review_story("rvfirstfail", "S1")
+
+    assert transcript_path.exists(), (
+        "a first review with a failing oracle is an incomplete attempt, not a "
+        "regression - the transcript must survive for the rework to resume"
+    )
+
+
+def test_review_story_deletes_transcript_when_oracle_regresses(
+    plan_dir, agents_dir, monkeypatch,
+):
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    transcript_path = worktree / ".agent_transcript.json"
+    transcript_path.write_text('[{"role": "system", "content": "x"}]')
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 3)
+    _write_manifest(plan_dir, "rvregress", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(worktree), "risk": "low",
+               # A rework has already happened, so a now-failing oracle means
+               # this cycle's dispatch broke previously-working behavior.
+               "rework_attempts": 1,
+               "acceptance": [{"path": "test_acceptance.py"}]},
+    })
+    reviewer_output = "Real bug found.\nVERDICT: REQUEST_CHANGES"
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt, *a, **k: {"state": "fail", "error": "boom"})
+
+    p.review_story("rvregress", "S1")
+
+    assert not transcript_path.exists(), (
+        "transcript must be deleted so the next redispatch can't resume "
+        "the churn that caused the regression"
+    )
+    notif = (plan_dir / "rvregress.notifications.log").read_text()
+    assert "regressed" in notif.lower()
+    assert "fresh" in notif.lower()
+
+
+def test_review_story_leaves_transcript_when_oracle_still_passing(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """The transcript deletion is specifically a regression response - a
+    REQUEST_CHANGES with the oracle still passing (e.g. a finding outside
+    its scope) must not discard useful resumable context."""
+    worktree = plan_dir / "wt"
+    worktree.mkdir()
+    transcript_path = worktree / ".agent_transcript.json"
+    transcript_path.write_text('[{"role": "system", "content": "x"}]')
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 3)
+    _write_manifest(plan_dir, "rvnoregress", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(worktree), "risk": "low",
+               "acceptance": [{"path": "test_acceptance.py"}]},
+    })
+    reviewer_output = "Some unrelated nit.\nVERDICT: REQUEST_CHANGES"
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: reviewer_output)
+    monkeypatch.setattr(p, "_reverify_acceptance",
+                        lambda story, wt, *a, **k: {"state": "pass", "error": ""})
+
+    p.review_story("rvnoregress", "S1")
+
+    assert transcript_path.exists()
+
+
 def test_review_story_clears_feedback_and_rework_on_approve(plan_dir, agents_dir, monkeypatch):
     # An approval after prior rework cycles must wipe the stale feedback/counter
     # so the story records a clean approval.
@@ -8930,6 +9034,147 @@ def test_check_story_status_infra_failure_does_not_trigger_model_fallback(
     assert story["model"] == "gpt-oss:20b", "infra death must not switch the model"
 
 
+# ---------- infra-failure streak: visibility + bound on a persistent
+# condition (2026-07-29) ----------
+# Unlike STEP_CAP_MARKERS, the infra-failure branch had no streak counter, no
+# threshold, no fallback, and no _notify_user - a persistent infra condition
+# (a wedged Ollama server, a model too large for available memory) looped
+# silently forever: dispatch, die, interrupted, redispatch, die again, with
+# nothing to show and no notification. These mirror the step-cap streak
+# tests above but use SEPARATE fields (infra_failure_streak /
+# infra_failure_streak_model) so an infra death still never feeds the
+# step-cap model-switch logic (see the does_not_trigger_model_fallback test
+# above, which stays valid unmodified: its streak of 1 is below threshold).
+
+def test_check_story_status_infra_failure_streak_notifies_on_first_occurrence(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A single infra death is worth surfacing immediately - unlike a
+    step-cap hit (routine for a local model), a transport failure after
+    chat()'s own retries AND the 5xx trim-retry are exhausted is unusual
+    enough to be worth a notification on the very first occurrence, not just
+    after a streak."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[step 5] LLM call failed after trim-retry: Server error '500'\n"
+    )
+    _write_manifest(plan_dir, "infra3", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "backend": "local", "dispatched_model": "gpt-oss:20b"},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run tests")))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("infra3", "S1")
+
+    story = _read_manifest(plan_dir, "infra3")["stories"]["S1"]
+    assert story["infra_failure_streak"] == 1
+    assert story["infra_failure_streak_model"] == "gpt-oss:20b"
+    notif = (plan_dir / "infra3.notifications.log").read_text()
+    assert "infrastructure failure" in notif
+    assert "gpt-oss:20b" in notif
+
+
+def test_check_story_status_infra_failure_streak_switches_model_at_threshold(
+    plan_dir, tmp_path, monkeypatch,
+):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[step 5] LLM call failed after trim-retry: Server error '500'\n"
+    )
+    _write_manifest(plan_dir, "infra4", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "backend": "local", "dispatched_model": "gpt-oss:20b",
+               "infra_failure_streak": p.INFRA_FAILURE_FALLBACK_THRESHOLD - 1,
+               "infra_failure_streak_model": "gpt-oss:20b"},
+    })
+    manifest_path = plan_dir / "infra4.manifest.json"
+    m = json.loads(manifest_path.read_text())
+    m["local_model_fallback"] = "glm-5.2:cloud"
+    manifest_path.write_text(json.dumps(m))
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run tests")))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p.check_story_status("infra4", "S1")
+
+    story = _read_manifest(plan_dir, "infra4")["stories"]["S1"]
+    assert story["model"] == "glm-5.2:cloud"
+    assert story["backend"] == "local"  # never claude
+    assert "infra_failure_streak" not in story
+    assert "infra_failure_streak_model" not in story
+    notif = (plan_dir / "infra4.notifications.log").read_text()
+    assert "switching to fallback model glm-5.2:cloud" in notif
+
+
+def test_check_story_status_infra_failure_streak_escalates_to_claude_at_threshold(
+    plan_dir, tmp_path, monkeypatch,
+):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "[step 5] LLM call failed after trim-retry: Server error '500'\n"
+    )
+    _write_manifest(plan_dir, "infra5", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "model": "gpt-oss:20b",
+               "backend": "local", "dispatched_model": "gpt-oss:20b",
+               "infra_failure_streak": p.INFRA_FAILURE_FALLBACK_THRESHOLD - 1,
+               "infra_failure_streak_model": "gpt-oss:20b"},
+    })
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run tests")))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    result = p.check_story_status("infra5", "S1")
+
+    assert result == {"status": "todo", "reason": "infra_failure_escalated_to_claude", "pid": 4242}
+    story = _read_manifest(plan_dir, "infra5")["stories"]["S1"]
+    assert story["backend"] == "claude"
+    assert story["escalated"] is True
+    assert story["status"] == "todo"
+    assert "infra_failure_streak" not in story
+    assert "infra_failure_streak_model" not in story
+    notif = (plan_dir / "infra5.notifications.log").read_text()
+    assert "Claude" in notif
+    assert "infrastructure failure" in notif
+
+
+def test_escalate_to_claude_pops_infra_failure_streak_fields(
+    plan_dir, tmp_path, monkeypatch,
+):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    manifest_path = plan_dir / "escih.manifest.json"
+    manifest = {
+        "epics": {},
+        "stories": {
+            "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+                   "worktree": str(worktree), "backend": "local",
+                   "infra_failure_streak": 3, "infra_failure_streak_model": "gpt-oss:20b",
+                   "dispatch_attempts": 1, "dispatch_error": "boom"},
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+
+    p._escalate_to_claude(manifest, "escih", "S1", manifest_path)
+
+    story = manifest["stories"]["S1"]
+    assert "infra_failure_streak" not in story
+    assert "infra_failure_streak_model" not in story
+    assert story["backend"] == "claude"
+
+
 def test_check_story_status_routes_oracle_step_cap_to_interrupted(
     plan_dir, tmp_path, monkeypatch,
 ):
@@ -9492,6 +9737,44 @@ def test_check_story_status_normal_completion_still_routes_to_tests_passed(
     assert result["status"] == "tests_passed"
     manifest = _read_manifest(plan_dir, "normal1")
     assert manifest["stories"]["S1"]["status"] == "tests_passed"
+
+
+def test_check_story_status_successful_dispatch_clears_both_streaks(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Both streak counters describe CONSECUTIVE failures, but neither was
+    ever cleared on a successful dispatch (only dispatch_attempts was) - so
+    two infra deaths early plus one much later escalated as "3 consecutive"
+    even with real progress in between. A dispatch that produced output and
+    ran its tests breaks any streak, so both must reset here."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("Done.\nAll tests pass.\n")
+    _write_manifest(plan_dir, "streakclear", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4242, "worktree": str(worktree),
+               "step_cap_streak": 2, "step_cap_streak_model": "gpt-oss:20b",
+               "infra_failure_streak": 2, "infra_failure_streak_model": "gpt-oss:20b",
+               "dispatch_attempts": 1},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command", lambda wt: (wt, ["true"]))
+    monkeypatch.setattr(p, "_worktree_has_new_commits", lambda *a, **k: True)
+
+    class Result:
+        stdout = "all green"
+        returncode = 0
+
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Result())
+
+    p.check_story_status("streakclear", "S1")
+
+    story = _read_manifest(plan_dir, "streakclear")["stories"]["S1"]
+    assert "dispatch_attempts" not in story
+    assert "step_cap_streak" not in story
+    assert "step_cap_streak_model" not in story
+    assert "infra_failure_streak" not in story
+    assert "infra_failure_streak_model" not in story
 
 
 def test_check_story_status_step_cap_clean_worktree_no_crash(

@@ -144,6 +144,22 @@ INFRA_FAILURE_LOG_SUBSTRING = "LLM call failed"
 STEP_CAP_FALLBACK_THRESHOLD = int(
     os.environ.get("PIPELINE_STEP_CAP_FALLBACK_THRESHOLD", "3"))
 
+# Sibling of STEP_CAP_FALLBACK_THRESHOLD for the INFRA_FAILURE_LOG_SUBSTRING
+# branch, which - unlike STEP_CAP_MARKERS - had no streak counter, threshold,
+# fallback, or notification at all: a persistent infra condition (a wedged
+# Ollama server, a model too large for available memory) looped silently
+# forever, dispatch/die/interrupted/redispatch/die again, with nothing to
+# show and no visibility. Uses its own streak fields
+# (infra_failure_streak/infra_failure_streak_model), never
+# step_cap_streak/step_cap_streak_model - an infra death is not evidence the
+# MODEL is struggling, so it must never feed the step-cap logic (see
+# test_check_story_status_infra_failure_does_not_trigger_model_fallback).
+# Same two remedies as step-cap once the streak crosses this threshold:
+# switch to the plan's opted-in local_model_fallback, or (no fallback
+# configured, PIPELINE_BACKEND_DISPATCH=auto) escalate to Claude.
+INFRA_FAILURE_FALLBACK_THRESHOLD = int(
+    os.environ.get("PIPELINE_INFRA_FAILURE_FALLBACK_THRESHOLD", "3"))
+
 # Layered local-first dispatch (PIPELINE_BACKEND_DISPATCH=auto):
 #   1. A-priori: stories with risk above PIPELINE_LOCAL_MAX_RISK (default "low")
 #      or a security persona go straight to Claude.
@@ -241,6 +257,7 @@ __all__ = [
     "DISPATCH_MAX_ATTEMPTS",
     "DISPATCH_STARTUP_GRACE_SECONDS",
     "DISPATCH_WATCHDOG_SECONDS",
+    "INFRA_FAILURE_FALLBACK_THRESHOLD",
     "INFRA_FAILURE_LOG_SUBSTRING",
     "MAX_CONCURRENT_AGENTS",
     "MERGE_MAX_ATTEMPTS",

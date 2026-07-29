@@ -96,6 +96,28 @@ def _load_resume_transcript() -> list | None:
 # 2nd AND 3rd rework attempts, both times on the model's very first turn.
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
+# Calibrated at runtime from ollama's own measured prompt_eval_count (the
+# streamed done chunk's real token count for everything sent in that
+# request). The fixed guess above is frequently wrong: live on the ollama
+# server log 2026-07-29, a real 41,921-token gpt-oss prompt measured ~2.35
+# chars/token against the 4.0 guess, so a budget computed from 4.0 alone was
+# already ~28% over NUM_CTX by the time a 500 forced a reactive trim. Set by
+# _stream_one_turn on every ollama turn that reports a count; never set by
+# _provider_chat_turn, whose contract deliberately returns only the bare
+# message (see test_provider_chat_turn_extracts_message_from_envelope) - an
+# lmstudio/mlx dispatch falls back to the fixed guess via
+# _effective_chars_per_token(). Reset to None at the top of main() so
+# calibration never leaks between dispatches (or, in-process, test runs)
+# that share this module.
+_measured_chars_per_token: float | None = None
+_last_prompt_eval_count: int | None = None
+
+
+def _effective_chars_per_token() -> float:
+    """The live-calibrated chars/token ratio when available, else the fixed
+    _CHARS_PER_TOKEN_ESTIMATE guess."""
+    return _measured_chars_per_token or _CHARS_PER_TOKEN_ESTIMATE
+
 
 def _message_char_len(m: dict) -> int:
     n = len(str(m.get("content") or ""))
@@ -417,6 +439,14 @@ READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINC
 # the pattern that guard CANNOT see: edits interleaved with unproductive
 # investigation, which resets that guard's window every time.
 NET_PROGRESS_MAX_STEPS = int(os.environ.get("LOCAL_AGENT_NET_PROGRESS_MAX_STEPS", "30"))
+# Once a turn's measured prompt_eval_count reaches this fraction of NUM_CTX,
+# trim the transcript BEFORE the next turn instead of waiting for a request
+# to overflow and 500. Complements (does not replace) the reactive 5xx
+# trim-retry below — that one is the backstop for when no measurement has
+# landed yet (e.g. the very first turn after a resume already starts over
+# budget); this one prevents most 500s from happening at all once a real
+# measurement exists.
+PROACTIVE_TRIM_THRESHOLD = float(os.environ.get("LOCAL_AGENT_PROACTIVE_TRIM_THRESHOLD", "0.85"))
 # Mutating tools: any that produce new code in the worktree. Anything else
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior
@@ -545,10 +575,12 @@ def _stream_one_turn(payload):
     httpx.TransportError (TimeoutException/ConnectError/ReadError) on a
     connect/read stall — chat() decides which of those are retryable.
     """
+    global _measured_chars_per_token, _last_prompt_eval_count
     content_parts: list[str] = []
     thinking_parts: list[str] = []
     tool_calls = None
     role = "assistant"
+    prompt_eval_count = None
     with httpx.stream(
         "POST", f"{ENDPOINT}/api/chat", json=payload,
         timeout=httpx.Timeout(connect=CONNECT_TIMEOUT_SECONDS, read=READ_SILENCE_SECONDS,
@@ -577,6 +609,7 @@ def _stream_one_turn(payload):
             if tc:
                 tool_calls = tc
             if chunk.get("done"):
+                prompt_eval_count = chunk.get("prompt_eval_count")
                 break
     content = "".join(content_parts)
     # Reasoning models (e.g. gpt-oss:20b) stream their chain-of-thought in a
@@ -590,6 +623,25 @@ def _stream_one_turn(payload):
     assembled = {"role": role, "content": content}
     if tool_calls:
         assembled["tool_calls"] = tool_calls
+    # Calibrate the chars/token ratio from ollama's own real count for this
+    # request — see _measured_chars_per_token's docstring for why the fixed
+    # estimate alone is not trustworthy.
+    if prompt_eval_count:
+        _last_prompt_eval_count = prompt_eval_count
+        # The tools schema is part of every prompt and is counted in
+        # prompt_eval_count, so it must be counted in the numerator too -
+        # omitting it biases the ratio badly low early in a run, when the
+        # ~3.4KB schema dominates a still-small transcript (measured: 0.67
+        # vs a true ~2.35, shrinking the reactive-5xx trim budget ~3.5x more
+        # than needed). Chat-template scaffolding is still unaccounted for,
+        # which leaves a small residual bias in the same safe (over-trim)
+        # direction, and shrinks as the transcript grows.
+        sent_chars = (
+            sum(_message_char_len(m) for m in payload.get("messages", []))
+            + len(json.dumps(payload.get("tools") or []))
+        )
+        if sent_chars > 0:
+            _measured_chars_per_token = sent_chars / prompt_eval_count
     return assembled
 
 
@@ -1424,6 +1476,12 @@ def safe_run_tool(fn, args) -> str:
 
 
 def main() -> int:
+    # A fresh dispatch has no calibration data yet - clear any value left
+    # over from a prior dispatch that shared this process (or, in-process,
+    # a prior test) so it never leaks in.
+    global _measured_chars_per_token, _last_prompt_eval_count
+    _measured_chars_per_token = None
+    _last_prompt_eval_count = None
     # Startup heartbeat. flush=True is load-bearing: stdout is block-buffered
     # to a non-tty file (the worktree's agent.log, redirected by Popen), so
     # without flush the line wouldn't hit disk until the buffer fills or the
@@ -1452,8 +1510,11 @@ def main() -> int:
         # Reserve headroom below NUM_CTX for the resume-append content (e.g.
         # reviewer feedback), the model's own generation, and the rough
         # imprecision of the chars/token estimate - trimming to the exact
-        # limit would still overflow once more content is added below.
-        budget_chars = int(NUM_CTX * _CHARS_PER_TOKEN_ESTIMATE * 0.75)
+        # limit would still overflow once more content is added below. No
+        # live calibration exists yet this early (reset below, before any
+        # turn has run), so this always uses the fixed guess via
+        # _effective_chars_per_token()'s fallback.
+        budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
         resume = _trim_resumed_transcript(resume, budget_chars)
         messages.extend(resume)
     else:
@@ -1535,7 +1596,7 @@ def main() -> int:
             # NUM_CTX). Trim once, reusing the same helper the resume path
             # already uses, and retry exactly once with the smaller payload
             # before giving up.
-            budget_chars = int(NUM_CTX * _CHARS_PER_TOKEN_ESTIMATE * 0.75)
+            budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
             trimmed = _trim_resumed_transcript(messages, budget_chars)
             if len(trimmed) == len(messages):
                 print(f"[step {step}] LLM call failed: {e}", flush=True)
@@ -1559,6 +1620,25 @@ def main() -> int:
                 auto_wip_commit("llm error")
             return 1
         messages.append(m)
+        # Proactive trim: once a turn's measured prompt_eval_count is already
+        # close to NUM_CTX, shrink the transcript now rather than waiting for
+        # the next turn to overflow and 500 - the reactive path above is the
+        # backstop for when no measurement exists yet, not the primary
+        # defense. No-ops when _trim_resumed_transcript finds nothing to drop
+        # (e.g. only one block of post-head content so far).
+        if (
+            _last_prompt_eval_count is not None
+            and _last_prompt_eval_count >= NUM_CTX * PROACTIVE_TRIM_THRESHOLD
+        ):
+            budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
+            trimmed = _trim_resumed_transcript(messages, budget_chars)
+            if len(trimmed) != len(messages):
+                print(f"[step {step}] measured prompt_eval_count="
+                      f"{_last_prompt_eval_count} >= {PROACTIVE_TRIM_THRESHOLD:.0%} of "
+                      f"NUM_CTX={NUM_CTX}; trimming proactively", flush=True)
+                messages[:] = trimmed
+                _persist_messages(messages, transcript_path)
+                _last_prompt_eval_count = None
         tcs = m.get("tool_calls") or recover_tool_calls(m.get("content", ""))
         if not tcs:
             consecutive_no_tool += 1

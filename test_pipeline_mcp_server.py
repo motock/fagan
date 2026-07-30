@@ -14021,6 +14021,70 @@ def test_run_decompose_routes_to_registry_configured_provider(agents_dir, monkey
     assert fake.calls[0]["model"] == "gpt-oss:20b"
 
 
+def test_run_decompose_appends_claude_tier_guidance_by_default(agents_dir, monkeypatch):
+    """No dispatch override configured -> resolves to the "claude" tier and
+    that guidance (not the local/cloud-oss variants) is appended after the
+    persona body."""
+    fake = _FakePlannerBackend(response='{"epics": []}')
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    p._run_decompose("Build a CLI todo app.")
+
+    system = fake.calls[0]["system"]
+    assert "Analyst body." in system
+    assert "Target implementer: Claude-class" in system
+    assert "local ~20B-class" not in system
+
+
+def test_run_decompose_appends_local_tier_guidance_for_local_dispatch(
+    agents_dir, monkeypatch,
+):
+    """A dispatch role resolved to a non-claude provider with a plain
+    (non-":cloud") model tag is treated as a local ~20B-class implementer,
+    and the corresponding splitting guidance is appended."""
+    fake = _FakePlannerBackend(response='{"epics": []}')
+    registry = {
+        "providers": {"ollama": {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}}}},
+        "roles": {"dispatch": {"provider": "ollama", "model": "gpt-oss"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    p._run_decompose("Build a CLI todo app.")
+
+    assert "Target implementer: local ~20B-class" in fake.calls[0]["system"]
+
+
+def test_run_decompose_appends_cloud_oss_tier_guidance_for_cloud_tagged_dispatch(
+    agents_dir, monkeypatch,
+):
+    """A dispatch role resolved to a ":cloud"-suffixed tag (e.g. glm served
+    through ollama) is a cloud open-source implementer, not local - provider
+    name alone can't tell these apart."""
+    fake = _FakePlannerBackend(response='{"epics": []}')
+    registry = {
+        "providers": {"ollama": {"models": {"glm": {"tag": "glm-5.2:cloud"}}}},
+        "roles": {"dispatch": {"provider": "ollama", "model": "glm"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+    monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+
+    p._run_decompose("Build a CLI todo app.")
+
+    system = fake.calls[0]["system"]
+    assert "Target implementer: cloud open-source" in system
+    assert "local ~20B-class" not in system
+
+
+def test_dispatch_strength_tier_fails_open_to_claude_on_registry_error(monkeypatch):
+    def _raise(*a, **k):
+        raise role_registry.RoleRegistryError("bad registry")
+
+    monkeypatch.setattr(role_registry, "resolve_role", _raise)
+
+    assert p._dispatch_strength_tier() == "claude"
+
+
 def test_run_decompose_returns_none_on_backend_failure(agents_dir, monkeypatch):
     fake = _FakePlannerBackend(raises=RuntimeError("endpoint unreachable"))
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)

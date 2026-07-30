@@ -16,8 +16,26 @@ shippable, testable, and reviewable.
 - Write **acceptance criteria** for every story — concrete, testable conditions
   that define "done".
 - Identify **dependencies** between stories so the pipeline can order them.
-- Keep stories small: each should be implementable and reviewable in well under
-  ~400 changed lines (see CLAUDE.md, Code Review → PR size). Split anything larger.
+- **Before slicing scope, confirm the target implementer's strength class** — the
+  caller (interactive session or `decompose_plan`) should tell you which tier
+  applies; ask if it hasn't. This changes how hard to split:
+  - **Claude-class**: keep each story well under ~400 changed lines (see
+    CLAUDE.md, Code Review → PR size). Split anything larger; otherwise split
+    on judgment.
+  - **Cloud open-source** (e.g. glm): same sizing as Claude-class, but every
+    mechanically-checkable requirement in `agent_instructions` must be something
+    a test-author can actually assert — a requirement nothing grades is a
+    requirement that gets silently dropped.
+  - **Local ~20B-class** (e.g. gpt-oss, devstral): cap each story at **two
+    production files** (test files don't count) — a third reliably costs
+    multiple step-cap resumes and rework cycles. Prefer rename-and-delegate
+    (`foo` → a thin wrapper calling a renamed `_foo_impl`) over prescribing an
+    in-place re-indent of a large existing function. Move decorators,
+    docstrings, and entry validation to the wrapper, not the renamed impl.
+    Prescribe anchored `str_replace`-style edits over line-number edits on
+    files >~1,000 lines. One concern per story — split by file/concern even
+    when the combined work would fit a single PR by hand. Full detail:
+    @.claude/rules/pipeline-story-schema.md, "Local (non-Claude) dispatch".
 - Recommend the right **persona** and **risk** level for each story so the
   pipeline can dispatch it correctly.
 

@@ -24,6 +24,7 @@ from pathlib import Path
 import backend
 import role_registry
 
+from .config import DEFAULT_MODEL
 from .git_ops import _worktree_has_new_commits
 from .persona import _persona_body, _persona_default_model
 
@@ -796,6 +797,60 @@ def _run_rework_test_author_phase(
 
 
 # ---------- Decompose (provider-configurable product-analyst) ----------
+
+# Guidance appended to the product-analyst's system prompt so it can
+# calibrate story splitting/detail to the implementer that will actually run
+# the stories. _run_decompose cannot ask (single complete() call, no user
+# turn) so this is resolved from config rather than requested interactively.
+_STRENGTH_TIER_GUIDANCE = {
+    "claude": (
+        "\n\nTarget implementer: Claude-class. Keep stories well under ~400 "
+        "changed lines and split on judgment; no special local-dispatch "
+        "constraints apply."
+    ),
+    "cloud-oss": (
+        "\n\nTarget implementer: cloud open-source model (e.g. glm). Same "
+        "sizing as Claude-class, but every mechanically-checkable "
+        "requirement in agent_instructions must be something a test-author "
+        "can actually assert - an ungraded requirement gets silently "
+        "dropped."
+    ),
+    "local": (
+        "\n\nTarget implementer: local ~20B-class model (e.g. gpt-oss, "
+        "devstral). Cap each story at two production files (test files "
+        "don't count); split by file/concern rather than bundling. Prefer "
+        "rename-and-delegate over prescribing an in-place re-indent of a "
+        "large existing function, and anchored str_replace-style edits over "
+        "line-number edits on files over ~1,000 lines. One concern per "
+        "story."
+    ),
+}
+
+
+def _dispatch_strength_tier(plan_role_config: dict | None = None) -> str:
+    """Classify the resolved "dispatch" role into a strength tier: "claude",
+    "cloud-oss", or "local". Provider name alone can't tell cloud from local -
+    glm dispatches *through* the ollama provider but is a cloud-served model
+    - so this keys off the ":cloud" tag suffix, the same convention backend.py
+    already uses to recognize cloud-served tags. Fails open to "claude" (the
+    same default resolve_role itself falls back to) on a misconfigured
+    registry, mirroring _run_decompose's own fail-open contract.
+    """
+    try:
+        resolution = role_registry.resolve_role(
+            "dispatch",
+            plan_role_config=plan_role_config,
+            model_fallback=lambda: DEFAULT_MODEL,
+        )
+    except role_registry.RoleRegistryError:
+        return "claude"
+    if resolution.provider == "claude":
+        return "claude"
+    if resolution.model.endswith(":cloud"):
+        return "cloud-oss"
+    return "local"
+
+
 def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str | None:
     """Call a bounded, single-turn LLM (the product-analyst persona) to turn
     a raw goal/feature request into epics/stories JSON matching save_plan's
@@ -808,16 +863,23 @@ def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str
     declared tier when none of those apply. Fails open (returns None) on
     any exception - a broken/slow/rate-limited decompose call must never
     raise past this function, mirroring _run_planner's contract.
+
+    The system prompt is the product-analyst persona plus strength-tier
+    guidance resolved from the "dispatch" role (see _dispatch_strength_tier),
+    so the story splitting/detail matches the implementer these stories will
+    actually run on.
     """
     resolution = role_registry.resolve_role(
         "decompose",
         plan_role_config=plan_role_config,
         model_fallback=lambda: _persona_default_model("product-analyst") or "opus",
     )
+    tier = _dispatch_strength_tier(plan_role_config=plan_role_config)
+    system = _persona_body("product-analyst") + _STRENGTH_TIER_GUIDANCE[tier]
     try:
         text = backend.get_backend("decompose", name=resolution.provider).complete(
             request,
-            system=_persona_body("product-analyst"),
+            system=system,
             model=resolution.model,
             allowed_tools="Read",
         )
@@ -834,9 +896,11 @@ __all__ = [
     "_PLANNER_SYSTEM",
     "_REWORK_NEEDS_NEW_TEST_SYSTEM",
     "_REWORK_PLANNER_SYSTEM",
+    "_STRENGTH_TIER_GUIDANCE",
     "_TEST_AUTHOR_ALLOWED_TOOLS",
     "_TEST_AUTHOR_ALREADY_RAN_CLAUSE",
     "_TEST_AUTHOR_SYSTEM",
+    "_dispatch_strength_tier",
     "_format_authored_test_files",
     "_planner_system",
     "_resolve_planner_backend",

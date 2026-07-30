@@ -21,8 +21,18 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
+    env:
+      # Point AGENTS_DIR at the repo's checked-in personas (agents/*.md) so
+      # tests that load a persona (e.g. code-reviewer) resolve without a
+      # local ~/.claude/agents install.
+      AGENTS_DIR: ${{ github.workspace }}/agents
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history: some tests assert against historical commits via
+          # `git show <sha>~1:...`, which a shallow (fetch-depth: 1) clone
+          # cannot resolve.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v7
@@ -32,6 +42,13 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+
+      - name: Configure git identity
+        # Several tests drive `git commit` in a temp repo, which falls back to
+        # the global identity. A fresh runner has none, so commits exit 128.
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
 
       - name: Run tests
         # Run the real full suite. `--override-ini=testpaths=` defeats the

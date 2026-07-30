@@ -324,7 +324,7 @@ def test_main_trims_oversized_resumed_transcript_before_first_chat(monkeypatch, 
     env = {
         "LOCAL_AGENT_RESUME_TRANSCRIPT_PATH": str(transcript_file),
         "PIPELINE_TRANSPORT_NUM_CTX": "256",  # tiny budget forces a real trim
-        "LOCAL_AGENT_MAX_STEPS": "1",
+        "PIPELINE_TRANSPORT_MAX_STEPS": "1",
     }
     la = load_module_with_env(env)
     monkeypatch.setattr(la, "CWD", tmp_path)

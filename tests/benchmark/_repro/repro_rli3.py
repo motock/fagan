@@ -76,7 +76,7 @@ def main() -> int:
     for k in ("PIPELINE_LOCAL_MODEL_SONNET", "PIPELINE_LOCAL_MODEL_OPUS", "PIPELINE_LOCAL_MODEL_HAIKU"):
         os.environ.pop(k, None)
 
-    import pipeline_mcp_server as p
+    from app import pipeline_mcp_server as p
     harness.install_merge_stubs(p, repo)
 
     # Override the merge stub to NOT remove the worktree on success, so

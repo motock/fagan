@@ -40,6 +40,9 @@ for _var, _real in (
     ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
     ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
     ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ("PIPELINE_TRANSPORT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("PIPELINE_TRANSPORT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ("PIPELINE_TRANSPORT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
 ):
     if _var in os.environ:
         _logger.warning(
@@ -1139,10 +1142,22 @@ class OllamaDriver:
         # value when neither is set, so existing callers that rely on the
         # constructor default are not broken.
         num_ctx = _tuned_num_ctx(resolved_model, self.num_ctx)
-        temperature = _tuned_temperature(resolved_model, self.temperature)
+        # Resolve temperature: use raw env if set to preserve boundary values
+        temp_env = os.environ.get("PIPELINE_LOCAL_TEMPERATURE")
+        if temp_env is not None:
+            if temp_env == "":
+                raise ValueError("empty PIPELINE_LOCAL_TEMPERATURE")
+            temp_str = temp_env
+        else:
+            temp_str = str(_tuned_temperature(resolved_model, self.temperature))
         env["LOCAL_AGENT_NUM_CTX"] = str(num_ctx)
-        env["LOCAL_AGENT_TEMPERATURE"] = str(temperature)
+        env["LOCAL_AGENT_TEMPERATURE"] = temp_str
+        env["PIPELINE_TRANSPORT_NUM_CTX"]     = str(num_ctx)
+        env["PIPELINE_TRANSPORT_TEMPERATURE"] = temp_str
         # PIPELINE_LOCAL_MAX_STEPS is the real, plist-honored step-cap knob
+
+
+
         # for the dispatch agent. Re-read it on every dispatch so launchd /
         # shell edits to the env actually take effect instead of being
         # silently shadowed by the value captured at OllamaDriver.__init__
@@ -1152,8 +1167,8 @@ class OllamaDriver:
         max_steps = int(
             os.environ.get("PIPELINE_LOCAL_MAX_STEPS", str(self.max_steps))
         )
+        env["PIPELINE_TRANSPORT_MAX_STEPS"] = str(max_steps)
         env["LOCAL_AGENT_MAX_STEPS"] = str(max_steps)
-        # Qwen3 hybrid thinking control — re-read live per dispatch (mirroring
         # PIPELINE_LOCAL_MAX_STEPS above) so an env edit takes effect without
         # restarting the MCP server. Only the exact tokens "true"/"false" opt
         # in; anything else leaves LOCAL_AGENT_THINK unset and local_agent.py

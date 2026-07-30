@@ -1960,7 +1960,7 @@ def test_oracle_main_trims_transcript_and_retries_once_on_persistent_5xx(
         f"expected exactly 4 chat() calls (2 reads, fail once, succeed on "
         f"the trim-retry), got {calls['n']}\noutput: {out!r}"
     )
-    assert "trimming and retrying once" in out, f"expected the trim log line, output: {out!r}"
+    assert "escalating trim and retrying" in out, f"expected the escalation trim log line, output: {out!r}"
 
 
 def test_oracle_main_gives_up_when_trim_retry_also_fails(tmp_path, monkeypatch, capsys):
@@ -1990,6 +1990,90 @@ def test_oracle_main_gives_up_when_trim_retry_also_fails(tmp_path, monkeypatch, 
         f"expected exactly 4 chat() calls (2 reads + original failure + one "
         f"trim-retry), got {calls['n']}\noutput: {out!r}"
     )
+
+
+# ---------- 5xx escalation must not crash the oracle agent loop (2026-07-30) ----------
+# Ported from test_local_agent.py: recover_from_oversized_5xx only catches
+# httpx.HTTPStatusError, so a 4xx it re-raises or a non-HTTP backend failure
+# (TransportError, RateLimitedError) propagates out of the helper. It is called
+# from inside main()'s except-HTTPStatusError handler, and a sibling
+# except-Exception does NOT catch exceptions raised from within another except
+# body - so without the guard at the call site such a failure escapes main() and
+# kills the run, regressing the original "must not crash the agent loop"
+# invariant. The oracle runs the production path for acceptance-bearing
+# dispatches, so it must carry the same guard as local_agent.py.
+
+def test_oracle_main_does_not_crash_on_transport_error_during_5xx_escalation(
+    tmp_path, monkeypatch, capsys,
+):
+    """A TransportError raised by chat() during an escalation round must give up
+    (return 1), not propagate out of main() and crash the oracle agent loop."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+    monkeypatch.setattr(lao, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            raise _status_error(500)  # enter the 5xx escalation handler
+        raise httpx.TransportError("connection reset")  # escalation round failure
+
+    monkeypatch.setattr(lao, "chat", _fake_chat)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, (
+        f"expected graceful give-up on a TransportError during escalation, got "
+        f"rc={rc}\noutput: {out!r}"
+    )
+    assert calls["n"] == 4, (
+        f"expected 4 chat() calls (2 reads + 5xx + one escalation round), got "
+        f"{calls['n']}\noutput: {out!r}"
+    )
+    assert "LLM call failed during 5xx escalation" in out, f"output: {out!r}"
+
+
+def test_oracle_main_does_not_crash_on_4xx_during_5xx_escalation(
+    tmp_path, monkeypatch, capsys,
+):
+    """A 4xx re-raised by the escalation helper must give up (return 1), not
+    escape main() and crash the oracle agent loop - matching the original
+    trim-retry path, which caught every failure and returned 1."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
+    monkeypatch.setattr(lao, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            raise _status_error(500)  # enter the 5xx escalation handler
+        raise _status_error(400)  # escalation round re-raises a 4xx
+
+    monkeypatch.setattr(lao, "chat", _fake_chat)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, (
+        f"expected graceful give-up on a 4xx during escalation, got rc={rc}\n"
+        f"output: {out!r}"
+    )
+    assert calls["n"] == 4, (
+        f"expected 4 chat() calls (2 reads + 5xx + one escalation round), got "
+        f"{calls['n']}\noutput: {out!r}"
+    )
+    assert "LLM call failed during 5xx escalation" in out, f"output: {out!r}"
 
 
 # ---------- transcript persistence + resume (ported from local_agent.py, see

@@ -1506,6 +1506,35 @@ def safe_run_tool(fn, args) -> str:
         return f"ERROR running {fn}: {type(e).__name__}: {e}"
 
 
+def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
+    """Recover from a 5xx on an oversized transcript by retrying with an
+    escalating (shrinking) context budget before giving up. A single trim-retry
+    can also 500 on a still-oversized payload, so shrink harder each round.
+    Returns the assistant message dict on success, or None if every round fails
+    (caller gives up). Mutates ``messages`` in place. Bounded: 3 budgets.
+
+    Ported from local_agent.py - keep both copies in sync. The oracle runs the
+    production path for acceptance-bearing dispatches (oracle_mode = bool(acceptance)
+    in backend.py), so a transient 5xx killing a ~95%-complete converging run here
+    (2026-07-30 LAUNCHD-PLIST-PORTABILITY) is the live failure this recovers from.
+    """
+    print(f"[step {step}] 5xx after {CHAT_MAX_ATTEMPTS} attempts with an "
+          f"oversized transcript; escalating trim and retrying", flush=True)
+    for fraction in (0.75, 0.50, 0.30):
+        budget_chars = int(NUM_CTX * _effective_chars_per_token() * fraction)
+        trimmed = _trim_resumed_transcript(messages, budget_chars)
+        if len(trimmed) == len(messages):
+            return None  # trim could not shrink the payload; nothing more to do
+        messages[:] = trimmed
+        try:
+            return chat_fn(messages)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code < 500:
+                raise  # only 5xx is escalation-worthy; propagate 4xx and others
+            continue  # 5xx: shrink harder on the next smaller budget
+    return None  # all budgets exhausted on a persistent 5xx
+
+
 def main() -> int:
     # A fresh dispatch has no calibration data yet - clear any value left
     # over from a prior dispatch that shared this process (or, in-process, a
@@ -1605,30 +1634,35 @@ def main() -> int:
                     auto_commit("WIP (llm error)")
                 return 1
             # A 5xx that survived chat()'s own CHAT_MAX_ATTEMPTS retries is
-            # not a transient fault - every retry sent the IDENTICAL payload,
-            # so an unchanged 5xx after 3 attempts is very likely a context-
-            # window overflow (Ollama/llama.cpp returns 500 rather than a
-            # clean 4xx for this), not a fluke. Retrying again would just
-            # repeat the same failure. Trim once, reusing the same helper the
-            # resume path already uses, and retry exactly once with the
-            # smaller payload before giving up. Ported from local_agent.py -
-            # this variant was missing the recovery entirely even though
-            # acceptance-bearing dispatches (the production path) run here.
-            budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
-            trimmed = _trim_resumed_transcript(messages, budget_chars)
-            if len(trimmed) == len(messages):
-                print(f"[step {step}] LLM call failed: {e}", flush=True)
+            # very likely a context-window overflow (Ollama/llama.cpp returns
+            # 500 rather than a clean 4xx for this), not a transient fault.
+            # Escalate: retry with a shrinking context budget before giving
+            # up - a single trim-retry can also 500 on a still-oversized
+            # payload (confirmed live 2026-07-22: a ~190K char / ~47.6K
+            # estimated-token transcript against a 32768-token NUM_CTX; and
+            # 2026-07-30: a single trim-retry also 500'd, killing a ~95%-
+            # complete converging run). Ported from local_agent.py - keep both
+            # copies in sync.
+            # The escalation helper only catches httpx.HTTPStatusError: a 4xx
+            # is re-raised, and a non-HTTP backend failure (httpx.TransportError,
+            # inference_providers.RateLimitedError, any other Exception chat()
+            # can raise) propagates out of the helper. A sibling except clause of
+            # this same try does NOT catch exceptions raised from inside another
+            # except handler, so the except-Exception backstop below would NOT
+            # catch what the helper lets escape - it would propagate out of
+            # main() and kill the run. The original trim-retry path this replaced
+            # wrapped its chat() in a try/except-Exception "must not crash the
+            # agent loop" guard; restore that guard here so ANY failure during
+            # escalation gives up gracefully (return 1) instead of crashing.
+            try:
+                m = recover_from_oversized_5xx(messages, chat, step=step)
+            except Exception as e2:  # noqa: BLE001 (an LLM backend call during escalation can fail in unpredictable ways; must not crash the agent loop)
+                print(f"[step {step}] LLM call failed during 5xx escalation: {e2}", flush=True)
                 if worktree_dirty():
                     auto_commit("WIP (llm error)")
                 return 1
-            print(f"[step {step}] 5xx after {CHAT_MAX_ATTEMPTS} attempts with an "
-                  f"oversized transcript; trimming and retrying once", flush=True)
-            messages[:] = trimmed
-            _persist_messages(messages, transcript_path)
-            try:
-                m = chat(messages)
-            except Exception as e2:  # noqa: BLE001 (an LLM backend call can fail in unpredictable ways; must not crash the agent loop)
-                print(f"[step {step}] LLM call failed after trim-retry: {e2}", flush=True)
+            if m is None:
+                print(f"[step {step}] LLM call failed after trim-retry: {e}", flush=True)
                 if worktree_dirty():
                     auto_commit("WIP (llm error)")
                 return 1

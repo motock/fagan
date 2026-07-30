@@ -35,7 +35,7 @@ devstral intermittently leaks well-formed calls as text even with clean tools.
 
 Config is read from the environment (set by backend.OllamaDriver.dispatch):
 LOCAL_AGENT_SYSTEM, LOCAL_AGENT_TASK, LOCAL_AGENT_MODEL, LOCAL_AGENT_ENDPOINT,
-LOCAL_AGENT_NUM_CTX, LOCAL_AGENT_TIMEOUT, LOCAL_AGENT_MAX_STEPS,
+PIPELINE_TRANSPORT_NUM_CTX, LOCAL_AGENT_TIMEOUT, LOCAL_AGENT_MAX_STEPS,
 LOCAL_AGENT_TEMPERATURE, LOCAL_AGENT_PROVIDER (default "ollama"; "lmstudio"/
 "mlx" route chat() through inference_providers instead of Ollama's streaming
 /api/chat — see PROVIDER/_provider_chat_turn below). The process CWD is the
@@ -228,9 +228,9 @@ ENDPOINT = os.environ.get("LOCAL_AGENT_ENDPOINT", "http://localhost:11434").rstr
 # unchanged; any other registered provider (lmstudio, mlx) routes through
 # _provider_chat_turn's blocking inference_providers call instead.
 PROVIDER = os.environ.get("LOCAL_AGENT_PROVIDER", "ollama").strip().lower()
-NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
+NUM_CTX = int(os.environ.get("PIPELINE_TRANSPORT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
-MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "40"))
+MAX_STEPS = int(os.environ.get("PIPELINE_TRANSPORT_MAX_STEPS", "40"))
 # L1 (REVIEWER_ESCALATION_PLAN.md): on a rework round triggered by a merge-gate
 # CI failure, the defect is the agent's OWN committed test, which the reviewer
 # (acceptance-scoped) never saw. Without a full-suite done-gate the agent can
@@ -259,7 +259,7 @@ NO_TOOL_CAP = int(os.environ.get("LOCAL_AGENT_NO_TOOL_CAP", "5"))
 # the agent has failed to green the suite this many times so a stuck rework
 # ends in seconds, not the whole budget.
 REWORK_SUITE_REJECT_CAP = int(os.environ.get("LOCAL_AGENT_REWORK_SUITE_REJECT_CAP", "3"))
-TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
+TEMPERATURE = float(os.environ.get("PIPELINE_TRANSPORT_TEMPERATURE", "0.3"))
 
 
 _COMPLETION_PHRASES = ("all done", "i'm done", "i am done", "all finished", "finished")

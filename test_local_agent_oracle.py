@@ -2436,6 +2436,61 @@ def test_finish_if_green_rework_oracle_not_green_returns_false(monkeypatch):
     assert full_calls == []  # short-circuited: oracle not green, suite not run
 
 
+# ---------------------------------------------------------------------------
+# Unbounded finish_if_green rework loop (found live 2026-07-29 on
+# TRANSPORT-ALIAS-DEPRECATION): the `done` handler bounds its full-suite
+# rejections with REWORK_SUITE_REJECT_CAP and parks (rc 2) once exhausted, but
+# finish_if_green - the OTHER termination path, which fires automatically after
+# every create_file/str_replace/bash - had no such bound. When the full suite
+# could not be greened (there, a rework-authored test that contradicted the
+# read-only acceptance oracle), it printed "ORACLE GREEN but full suite still
+# fails" and returned False on every single mutating step until the step cap,
+# burning the entire budget with no progress and no park signal.
+# ---------------------------------------------------------------------------
+
+def test_finish_if_green_parks_after_suite_reject_cap(monkeypatch):
+    """finish_if_green must bound its full-suite rejections the same way the
+    `done` handler does. After REWORK_SUITE_REJECT_CAP consecutive oracle-
+    green/suite-red calls it must signal park rather than returning False
+    forever, so an unsatisfiable suite ends the run instead of burning every
+    remaining step."""
+    messages, _commits, _full_calls = _finish_if_green_spy(
+        monkeypatch, oracle_ok=True, full_ok=False, full_tail="1 failed"
+    )
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(lao, "REWORK_SUITE_REJECT_CAP", 3)
+    lao._reset_suite_rejections()
+
+    # The first CAP-1 rejections keep the agent working the failure.
+    assert lao.finish_if_green(1, messages=messages) is False
+    assert lao.finish_if_green(2, messages=messages) is False
+    assert lao.suite_reject_cap_reached() is False
+
+    # The CAP'th rejection trips the bound.
+    assert lao.finish_if_green(3, messages=messages) is False
+    assert lao.suite_reject_cap_reached() is True
+
+
+def test_finish_if_green_suite_rejections_reset_on_green(monkeypatch):
+    """A run that recovers (suite goes green) must not carry stale rejection
+    credit into a later rework round - the counter resets on success so the
+    cap only ever fires on CONSECUTIVE unsatisfiable rounds."""
+    messages, _commits, _full_calls = _finish_if_green_spy(
+        monkeypatch, oracle_ok=True, full_ok=False, full_tail="1 failed"
+    )
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(lao, "REWORK_SUITE_REJECT_CAP", 3)
+    lao._reset_suite_rejections()
+
+    assert lao.finish_if_green(1, messages=messages) is False
+    assert lao.finish_if_green(2, messages=messages) is False
+
+    # Now the suite goes green: finish_if_green terminates and clears the count.
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (True, ""))
+    assert lao.finish_if_green(3, messages=messages) is True
+    assert lao.suite_reject_cap_reached() is False
+
+
 def test_full_suite_result_runs_unscoped_test_cmd_and_captures_tail(monkeypatch, tmp_path):
     """_full_suite_result runs the detected test_cmd UNscoped - the full
     worktree suite, NOT acceptance-scoped like oracle_result. It must reuse

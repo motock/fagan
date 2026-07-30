@@ -217,8 +217,8 @@ class PersistingList(list):
             _persist_messages(self, self.transcript_path)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import inference_providers
-import pipeline_mcp_server as p
+from app import inference_providers
+from app import pipeline_mcp_server as p
 
 CWD = Path.cwd()
 MODEL = os.environ["LOCAL_AGENT_MODEL"]

@@ -689,7 +689,7 @@ class MockBackend:
 
     def dispatch(self, *, prompt, system, model, allowed_tools, cwd, log_path,
                  append=False, acceptance=None):
-        from backend import AgentHandle  # local import; env already set
+        from app.backend import AgentHandle  # local import; env already set
         cwd = Path(cwd)
         # BENCH_MOCK_IMPL_FILE lets the harness self-test inject a deliberately
         # wrong implementation to prove the independent ground-truth catches it.
@@ -971,12 +971,12 @@ def main() -> int:
         os.environ.pop(k, None)
     os.environ.update(model_cfg["env"])
 
-    import pipeline_mcp_server as p
+    from app import pipeline_mcp_server as p
     install_merge_stubs(p, repo)
 
     if model_cfg.get("mock"):
         # Fully offline: inject the mock dispatch backend and a stub reviewer.
-        import backend as _backend
+        from app import backend as _backend
         mock = MockBackend(task)
         _orig_get_backend = _backend.get_backend
 

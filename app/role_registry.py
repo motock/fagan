@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _REGISTRY_PATH_ENV = "PIPELINE_MODEL_REGISTRY_PATH"
-_DEFAULT_REGISTRY_PATH = Path(__file__).resolve().parent / "model_registry.json"
+_DEFAULT_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "model_registry.json"
 
 
 class RoleRegistryError(ValueError):

@@ -149,12 +149,12 @@ def main() -> int:
         os.environ.pop(k, None)
     os.environ.update(model_cfg["env"])
 
-    import pipeline_mcp_server as p
+    from app import pipeline_mcp_server as p
     harness.install_merge_stubs(p, repo)
 
     mock = None
     if model_cfg.get("mock"):
-        import backend as _backend
+        from app import backend as _backend
         mock = harness.MockBackend(task)
 
         def _get_backend(role, name=None):

@@ -2,8 +2,8 @@
 Pipeline MCP Server
 Exposes tools for: planning, Plane ingestion, agent dispatch, status monitoring.
 
-Run with: python pipeline_mcp_server.py
-Register globally: claude mcp add -s user pipeline ~/.claude/mcp-servers/pipeline/.venv/bin/python3 ~/.claude/mcp-servers/pipeline/pipeline_mcp_server.py
+Run with: python app/pipeline_mcp_server.py
+Register globally: claude mcp add -s user pipeline ~/.claude/mcp-servers/pipeline/.venv/bin/python3 ~/.claude/mcp-servers/pipeline/app/pipeline_mcp_server.py
 
 Required env vars (set in ~/.zshrc or ~/.zprofile) - only if using Plane:
   PLANE_BASE       e.g. https://plane.yourcompany.com
@@ -47,8 +47,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-import backend
-import role_registry
+from app import backend, role_registry
 
 from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,

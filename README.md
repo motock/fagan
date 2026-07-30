@@ -10,12 +10,12 @@ This is a quickstart guide for the Autonomous SDLC Agent Pipeline, describing th
 |---|---|---|
 | Persona subagents | `~/.claude/agents/*.md` | The SDLC roles agents play |
 | Decision policy | `~/.claude/overlord-policy.md` | How the overlord decides |
-| Pipeline MCP server | `pipeline_mcp_server.py` | All pipeline tools + orchestration |
-| Backend seam | `backend.py` | Per-role driver routing (`claude` / `ollama` / `lmstudio` / `mlx` / `local`); single-shot, review, dispatch, resource gate |
+| Pipeline MCP server | `app/pipeline_mcp_server.py` | All pipeline tools + orchestration |
+| Backend seam | `app/backend.py` | Per-role driver routing (`claude` / `ollama` / `lmstudio` / `mlx` / `local`); single-shot, review, dispatch, resource gate |
 | Local agent loop | `scripts/local_agent.py` | Native-tool-calling write loop for local dispatch (subprocess) |
-| Monitoring dashboard | `dashboard.py`, `static/` | Read-only FastAPI status/lifecycle viewer |
+| Monitoring dashboard | `app/dashboard.py`, `static/` | Read-only FastAPI status/lifecycle viewer |
 | Install / deps | `scripts/install.sh`, `requirements*.txt` | venv + dependency setup |
-| Tests | `test_pipeline_mcp_server.py`, `test_backend.py`, `test_dashboard.py` | `pytest`, run via the venv |
+| Tests | `tests/unit/test_pipeline_mcp_server.py`, `tests/unit/test_backend.py`, `tests/unit/test_dashboard.py` | `pytest`, run via the venv |
 | Plans / manifests / logs | `~/.claude/plans/` | Plan, manifest, decisions, notifications |
 | Worktrees | `~/.claude/worktrees/` | Isolated per-story branches |
 | Issue tracker | Plane (external, optional) | Mirror of story state; skipped entirely when unconfigured (manifest is the source of truth) |

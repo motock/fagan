@@ -9,7 +9,7 @@
     <array>
         <string>{{REPO_ROOT}}/.venv/bin/python3</string>
         <string>-c</string>
-        <string>import pipeline_mcp_server as p; p.check_usage()</string>
+        <string>import app.pipeline_mcp_server as p; p.check_usage()</string>
     </array>
 
     <key>WorkingDirectory</key>

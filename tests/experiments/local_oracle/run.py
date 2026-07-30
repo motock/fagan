@@ -70,7 +70,7 @@ def sh(cmd, cwd, **kw):
 
 def persona_body() -> str:
     sys.path.insert(0, str(REPO))
-    import pipeline_mcp_server as p
+    from app import pipeline_mcp_server as p
     return p._persona_body("software-engineer")
 
 

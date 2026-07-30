@@ -29,8 +29,8 @@ from typing import ClassVar, Protocol
 
 import httpx
 
-import inference_providers
-from inference_providers import (
+from app import inference_providers
+from app.inference_providers import (
     RateLimitedError,  # noqa: F401 (re-exported: backend.RateLimitedError)
 )
 
@@ -391,7 +391,7 @@ class ClaudeCliDriver:
         only a confirmed mismatch blocks, through this same gate a tripped
         usage pause already uses.
         """
-        import pipeline_mcp_server as _p  # local: avoids an import cycle
+        from app import pipeline_mcp_server as _p  # local: avoids an import cycle
         paused = bool(_p._read_usage_state().get("paused", False))
         if paused:
             return {"ok": False, "reason": "Claude usage gate tripped"}
@@ -635,7 +635,9 @@ def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
         # pipeline_mcp_server._heavy_lock docstring.
         import shlex
 
-        import pipeline_mcp_server as _p  # local: avoid import cycle at module load
+        from app import (
+            pipeline_mcp_server as _p,  # local: avoid import cycle at module load
+        )
         cmd = args.get("command", "")
         try:
             argv0 = shlex.split(cmd)[0] if cmd.strip() else ""

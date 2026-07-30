@@ -18,7 +18,7 @@ if str(BENCH) not in sys.path:
 import harness
 
 import pipeline.server as _pserver
-import pipeline_mcp_server as p
+from app import pipeline_mcp_server as p
 
 
 def _seed_worktree(root: Path, story_key: str, test_file_content: str) -> Path:

@@ -35,7 +35,7 @@ USAGE_STATE_PATH = Path(
 # (.agent_plan.md / .agent_scratchpad.md) out of a story's worktree, which is
 # a NEW read boundary for the dashboard — but still only a read.
 WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).expanduser()
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
 

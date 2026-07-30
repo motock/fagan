@@ -1142,11 +1142,18 @@ class OllamaDriver:
         # value when neither is set, so existing callers that rely on the
         # constructor default are not broken.
         num_ctx = _tuned_num_ctx(resolved_model, self.num_ctx)
-        temperature = _tuned_temperature(resolved_model, self.temperature)
+        # Resolve temperature: use raw env if set to preserve boundary values
+        temp_env = os.environ.get("PIPELINE_LOCAL_TEMPERATURE")
+        if temp_env is not None:
+            if temp_env == "":
+                raise ValueError("empty PIPELINE_LOCAL_TEMPERATURE")
+            temp_str = temp_env
+        else:
+            temp_str = str(_tuned_temperature(resolved_model, self.temperature))
         env["LOCAL_AGENT_NUM_CTX"] = str(num_ctx)
-        env["LOCAL_AGENT_TEMPERATURE"] = str(temperature)
+        env["LOCAL_AGENT_TEMPERATURE"] = temp_str
         env["PIPELINE_TRANSPORT_NUM_CTX"]     = str(num_ctx)
-        env["PIPELINE_TRANSPORT_TEMPERATURE"] = str(temperature)
+        env["PIPELINE_TRANSPORT_TEMPERATURE"] = temp_str
         # PIPELINE_LOCAL_MAX_STEPS is the real, plist-honored step-cap knob
 
 

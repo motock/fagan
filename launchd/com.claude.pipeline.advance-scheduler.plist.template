@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AbandonProcessGroup</key>
+	<true/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>LOCAL_AGENT_PARK_ENABLED</key>
+		<string>0</string>
+		<key>LOCAL_AGENT_READ_HEAVY_DISTINCT_WINDOWS</key>
+		<string>20</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:{{HOME}}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>PIPELINE_AUTONOMY</key>
+		<string>full</string>
+		<key>PIPELINE_BACKEND_DISPATCH</key>
+		<string>local</string>
+		<key>PIPELINE_BACKEND_REVIEW</key>
+		<string>ollama</string>
+		<key>PIPELINE_DECOMPOSE_SCRATCHPAD</key>
+		<string>on</string>
+		<key>PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS</key>
+		<string>5400</string>
+		<key>PIPELINE_LOCAL_MAX_STEPS</key>
+		<string>60</string>
+		<key>PIPELINE_LOCAL_MODEL_DEFAULT</key>
+		<string>gpt-oss:20b</string>
+		<key>PIPELINE_LOCAL_NUM_CTX</key>
+		<string>16384</string>
+		<key>PIPELINE_LOCAL_TEMPERATURE</key>
+		<string>0.3</string>
+		<key>PIPELINE_MAX_CONCURRENT_AGENTS</key>
+		<string>1</string>
+		<key>PIPELINE_PAUSE_THRESHOLD</key>
+		<string>101</string>
+		<key>PIPELINE_RESUME_THRESHOLD</key>
+		<string>0</string>
+		<key>PIPELINE_REVIEW_MAX_TOKENS</key>
+		<string>4096</string>
+		<key>PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL</key>
+		<string>1</string>
+		<key>PIPELINE_REWORK_MAX_ATTEMPTS</key>
+		<string>3</string>
+		<key>PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED</key>
+		<string>3</string>
+		<key>PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE</key>
+		<string>3</string>
+		<key>PIPELINE_REWORK_ON_CI_FAIL</key>
+		<string>1</string>
+		<key>PIPELINE_WEEK_PAUSE_THRESHOLD</key>
+		<string>100</string>
+		<key>PIPELINE_WEEK_RESUME_THRESHOLD</key>
+		<string>99</string>
+		<key>REPO_ROOT</key>
+		<string>/nonexistent-repo-root-set-per-plan-only</string>
+	</dict>
+	<key>Label</key>
+	<string>com.claude.pipeline.advance-scheduler</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{REPO_ROOT}}/.venv/bin/python3</string>
+		<string>-c</string>
+		<string>import pipeline_mcp_server as p; p.advance_all_plans()</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>{{REPO_ROOT}}/advance-scheduler.err.log</string>
+	<key>StandardOutPath</key>
+	<string>{{REPO_ROOT}}/advance-scheduler.log</string>
+	<key>StartInterval</key>
+	<integer>60</integer>
+	<key>WorkingDirectory</key>
+	<string>{{REPO_ROOT}}</string>
+</dict>
+</plist>

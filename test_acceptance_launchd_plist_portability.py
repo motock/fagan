@@ -134,19 +134,28 @@ def test_regenerating_against_the_real_repo_reproduces_committed_plists(tmp_path
     WorkingDirectory (the real deployed path), not this file's own
     directory: during grading this file lives in a worktree whose path
     differs from the committed plists' baked-in root, so regenerating
-    against the worktree path would never match."""
+    against the worktree path would never match. Likewise {{HOME}} is
+    substituted from $HOME at generation time, so the grading machine's
+    real $HOME (e.g. /home/runner on CI) must be overridden to the HOME
+    baked into the committed plists (derived from their PATH entry), not
+    left as this machine's own - otherwise this test could never pass on
+    any machine other than the one the plists were committed from."""
     advance = _plutil_load(_LAUNCHD / "com.claude.pipeline.advance-scheduler.plist")
     real_repo = Path(advance["WorkingDirectory"])
+    committed_path = advance["EnvironmentVariables"]["PATH"]
+    home_entry = next(p for p in committed_path.split(":") if p.endswith("/.local/bin"))
+    committed_home = home_entry[: -len("/.local/bin")]
     current_mlx_path = _plutil_load(
         _LAUNCHD / "com.claude.pipeline.mlx-supervisor.plist"
     )["EnvironmentVariables"]["MLX_SERVER_MODEL_PATH"]
 
     out_dir = tmp_path / "regen"
     out_dir.mkdir()
+    env = {**os.environ, "HOME": committed_home}
     subprocess.run(
         [str(_GENERATOR), "--repo-root", str(real_repo), "--out-dir", str(out_dir),
          "--mlx-model-path", current_mlx_path],
-        check=True,
+        check=True, env=env,
     )
 
     for kind in _KINDS:

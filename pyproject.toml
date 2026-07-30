@@ -25,4 +25,5 @@ testpaths = [
     "test_mode30_resolution_docs.py",
     "test_rework_test_author_wiring_acceptance.py",
     "test_rework_test_author_phase.py",
+    "test_local_agent_5xx_recovery.py",
 ]

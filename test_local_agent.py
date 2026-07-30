@@ -2060,7 +2060,7 @@ def test_local_agent_trims_transcript_and_retries_once_on_persistent_5xx(
         f"expected exactly 4 chat() calls (2 reads, fail once, succeed on "
         f"the trim-retry), got {calls['n']}\noutput: {out!r}"
     )
-    assert "trimming and retrying once" in out, f"expected the trim log line, output: {out!r}"
+    assert "escalating trim and retrying" in out, f"expected the escalation trim log line, output: {out!r}"
 
 
 def test_local_agent_gives_up_when_trim_retry_also_fails(tmp_path, monkeypatch, capsys):

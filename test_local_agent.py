@@ -604,6 +604,66 @@ def test_replace_lines_rejects_edit_that_deletes_a_called_module_level_def(
     assert (tmp_path / "mod.py").read_text() == original
 
 
+def test_replace_lines_rejects_edit_that_deletes_a_read_module_level_var(
+    tmp_path, monkeypatch,
+):
+    """Reproduces the live MODE-43 incident (2026-07-30,
+    TRANSPORT-ALIAS-READERS): a replace_lines edit on
+    scripts/local_agent_oracle.py replaced the module-level
+    `TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))` line with a
+    duplicate of the preceding `NUM_CTX = ...` line, deleting the `TIMEOUT`
+    assignment while every later reference to `TIMEOUT` survived. compile()
+    accepts it (no SyntaxError); only a runtime NameError surfaces. The existing
+    guards only cover function-local names (_newly_undefined_names) and
+    module-level def/class (_newly_undefined_module_defs) - NEITHER sees a
+    deleted module-level variable assignment. The edit must be rejected and the
+    file left unchanged."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "import os\n"
+        "NUM_CTX = int(os.environ.get('LOCAL_AGENT_NUM_CTX', '16384'))\n"
+        "TIMEOUT = float(os.environ.get('LOCAL_AGENT_TIMEOUT', '900'))\n"
+        "MAX_STEPS = int(os.environ.get('LOCAL_AGENT_MAX_STEPS', '40'))\n"
+        "\n"
+        "def run():\n"
+        "    deadline = time.time() + TIMEOUT\n"
+        "    return deadline\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    # The destructive edit: line 3 (TIMEOUT) replaced with a duplicate NUM_CTX.
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 3,
+        "end": 3,
+        "new_str": "NUM_CTX = int(os.environ.get('PIPELINE_TRANSPORT_NUM_CTX', '16384'))",
+    })
+    assert isinstance(result, str)
+    assert result.startswith("ERROR")
+    assert "TIMEOUT" in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
+def test_orphaned_module_var_check_accepts_removal_with_all_uses(
+    tmp_path, monkeypatch,
+):
+    """Boundary: a legitimate refactor that removes a module-level variable
+    together with every reference to it must NOT be rejected - only a deleted
+    assignment with a SURVIVING reference is a bug."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text(
+        "TIMEOUT = float(900)\n"
+        "def run():\n"
+        "    return TIMEOUT\n"
+    )
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "TIMEOUT = float(900)\ndef run():\n    return TIMEOUT\n",
+        "new_str": "def run():\n    return 900.0\n",
+    })
+    assert result == "edited mod.py"
+    assert (tmp_path / "mod.py").read_text() == "def run():\n    return 900.0\n"
+
+
 def test_orphaned_variable_check_accepts_edit_that_removes_assignment_and_all_uses(
     tmp_path, monkeypatch,
 ):

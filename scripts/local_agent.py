@@ -1024,6 +1024,55 @@ def _newly_undefined_module_defs(old_content: str, new_content: str) -> list[str
     ]
 
 
+def _newly_undefined_module_vars(old_content: str, new_content: str) -> list[str]:
+    """Return names of module-level VARIABLE assignments (top-level
+    ast.Assign / ast.AnnAssign targets) present in `old_content` but deleted by
+    this edit while a reference to that name survives anywhere in
+    `new_content` - the shape of the MODE-43 incident (2026-07-30,
+    TRANSPORT-ALIAS-READERS): a replace_lines edit on
+    scripts/local_agent_oracle.py replaced the module-level
+    `TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))` line with a
+    duplicate of the preceding `NUM_CTX = ...` line, deleting the `TIMEOUT`
+    assignment while every later `TIMEOUT` read survived. compile() accepts the
+    result - a missing module-level name is a runtime NameError, not a
+    SyntaxError - so only a NameError surfaces, on every call.
+
+    `_newly_undefined_names` only tracks function-LOCAL bindings and
+    `_newly_undefined_module_defs` only covers `def`/`class` names - NEITHER
+    sees a deleted module-level variable assignment. Deliberately a separate,
+    narrower check (top-level statements only) mirroring
+    `_newly_undefined_module_defs`."""
+    try:
+        old_tree = ast.parse(old_content)
+        new_tree = ast.parse(new_content)
+    except SyntaxError:
+        return []
+
+    def _top_assigned_names(tree: ast.AST) -> set[str]:
+        names: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for tgt in node.targets:
+                    names.update(
+                        n.id for n in ast.walk(tgt) if isinstance(n, ast.Name)
+                    )
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+        return names
+
+    removed = _top_assigned_names(old_tree) - _top_assigned_names(new_tree)
+    if not removed:
+        return []
+    new_loaded = {
+        n.id for n in ast.walk(new_tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    return [
+        f"{name} (module-level variable deleted but still read)"
+        for name in sorted(removed & new_loaded)
+    ]
+
+
 def _newly_undefined_names(path_str: str, old_content: str, new_content: str) -> list[str]:
     """Return "name (in function)" entries for every name whose only
     assignment within a function existed in `old_content`, was read later in
@@ -1052,6 +1101,7 @@ def _newly_undefined_names(path_str: str, old_content: str, new_content: str) ->
             if var in new_loaded and var not in new_assigned:
                 orphaned.append(f"{var} (in {name})")
     orphaned.extend(_newly_undefined_module_defs(old_content, new_content))
+    orphaned.extend(_newly_undefined_module_vars(old_content, new_content))
     return orphaned
 
 

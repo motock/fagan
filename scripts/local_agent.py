@@ -1668,7 +1668,24 @@ def main() -> int:
             # estimated-token transcript against a 32768-token NUM_CTX; and
             # 2026-07-30: a single trim-retry also 500'd, killing a ~95%-
             # complete converging run).
-            m = recover_from_oversized_5xx(messages, chat, step=step)
+            # The escalation helper only catches httpx.HTTPStatusError: a 4xx
+            # is re-raised, and a non-HTTP backend failure (httpx.TransportError,
+            # inference_providers.RateLimitedError, any other Exception chat()
+            # can raise) propagates out of the helper. A sibling except clause of
+            # this same try does NOT catch exceptions raised from inside another
+            # except handler, so the except-Exception backstop below would NOT
+            # catch what the helper lets escape - it would propagate out of
+            # main() and kill the run. The original trim-retry path this replaced
+            # wrapped its chat() in a try/except-Exception "must not crash the
+            # agent loop" guard; restore that guard here so ANY failure during
+            # escalation gives up gracefully (return 1) instead of crashing.
+            try:
+                m = recover_from_oversized_5xx(messages, chat, step=step)
+            except Exception as e2:  # noqa: BLE001 (an LLM backend call during escalation can fail in unpredictable ways; must not crash the agent loop)
+                print(f"[step {step}] LLM call failed during 5xx escalation: {e2}", flush=True)
+                if worktree_dirty():
+                    auto_wip_commit("llm error")
+                return 1
             if m is None:
                 print(f"[step {step}] LLM call failed after trim-retry: {e}", flush=True)
                 if worktree_dirty():

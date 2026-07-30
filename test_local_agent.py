@@ -2114,6 +2114,86 @@ def test_local_agent_does_not_trim_on_4xx(tmp_path, monkeypatch, capsys):
     assert "trimming and retrying" not in out, f"output: {out!r}"
 
 
+# ---------- 5xx escalation must not crash the agent loop (2026-07-30) ----------
+# recover_from_oversized_5xx only catches httpx.HTTPStatusError, so a 4xx it
+# re-raises or a non-HTTP backend failure (TransportError, RateLimitedError)
+# propagates out of the helper. It is called from inside main()'s
+# except-HTTPStatusError handler, and a sibling except-Exception does NOT catch
+# exceptions raised from within another except body - so without the guard
+# restored at the call site such a failure escapes main() and kills the run,
+# regressing the original "must not crash the agent loop" invariant.
+
+def test_local_agent_does_not_crash_on_transport_error_during_5xx_escalation(
+    tmp_path, monkeypatch, capsys,
+):
+    """A TransportError raised by chat() during an escalation round must give up
+    (return 1), not propagate out of main() and crash the agent loop."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(la, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            raise _status_error(500)  # enter the 5xx escalation handler
+        raise httpx.TransportError("connection reset")  # escalation round failure
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, (
+        f"expected graceful give-up on a TransportError during escalation, got "
+        f"rc={rc}\noutput: {out!r}"
+    )
+    assert calls["n"] == 4, (
+        f"expected 4 chat() calls (2 reads + 5xx + one escalation round), got "
+        f"{calls['n']}\noutput: {out!r}"
+    )
+    assert "LLM call failed during 5xx escalation" in out, f"output: {out!r}"
+
+
+def test_local_agent_does_not_crash_on_4xx_during_5xx_escalation(
+    tmp_path, monkeypatch, capsys,
+):
+    """A 4xx re-raised by the escalation helper must give up (return 1), not
+    escape main() and crash the agent loop - matching the original trim-retry
+    path, which caught every failure and returned 1."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "a.txt").write_text("hello\n")
+    monkeypatch.setattr(la, "NUM_CTX", 10)
+    calls = {"n": 0}
+
+    def _fake_chat(messages):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "view_file", "arguments": {"path": "a.txt"}}}]}
+        if calls["n"] == 3:
+            raise _status_error(500)  # enter the 5xx escalation handler
+        raise _status_error(400)  # escalation round re-raises a 4xx
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, (
+        f"expected graceful give-up on a 4xx during escalation, got rc={rc}\n"
+        f"output: {out!r}"
+    )
+    assert calls["n"] == 4, (
+        f"expected 4 chat() calls (2 reads + 5xx + one escalation round), got "
+        f"{calls['n']}\noutput: {out!r}"
+    )
+    assert "LLM call failed during 5xx escalation" in out, f"output: {out!r}"
+
+
 # ---------- chat() provider routing (LOCAL_AGENT_PROVIDER, S3) ----------
 # Ollama (PROVIDER == "ollama", the default) keeps the streaming
 # _stream_one_turn path untouched. Any other provider (lmstudio, mlx) goes

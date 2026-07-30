@@ -1,4 +1,4 @@
 # Runtime dependencies for the pipeline MCP server.
 # Install into the project venv:  scripts/install.sh   (or: pip install -r requirements.txt)
-mcp>=1.28.1,<2.0.0      # MCP server SDK (mcp.server.fastmcp.FastMCP; 2.0.0 dropped fastmcp)
+mcp>=2.0.0,<3.0.0      # MCP server SDK (mcp.server.fastmcp.FastMCP; 2.0.0 dropped fastmcp)
 httpx>=0.28.1    # HTTP client for the local Ollama backend and (indirectly) Claude usage probe

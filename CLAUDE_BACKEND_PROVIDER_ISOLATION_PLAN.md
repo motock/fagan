@@ -1,5 +1,18 @@
 # Claude Backend Provider Isolation — Fix Plan
 
+**PLAN CLOSED (2026-07-30).** T1, T2, T3, and T4 are all live in `backend.py`
+today — `_first_party_claude_env()` strips the redirect vars from all three
+`ClaudeCliDriver` subprocess calls (with the `PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV`
+escape hatch), `ProviderIdentityMismatch` + `_CLAUDE_TIER_MODEL_PREFIXES`
+implement the served-vs-requested-tier check, `verify_identity()` feeds the
+fail-closed preflight into `resource_status()`, and `record_token_usage`
+records `served_model`. T5 (docs) is done too — see `REFERENCE.md`'s
+"Claude backend provider isolation" section and its env-var table entry for
+`PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV`. This header was simply never updated
+after the work landed; verified against the actual code, not assumed from the
+stale status below. Closed per `MATURITY_AND_UNIQUENESS_PLANS.md` A1's
+"decide the remaining plan docs' fate" item.
+
 **Source:** 2026-07-16 investigation, prompted by a user report: launching the
 interactive Claude Code session against a different (non-Anthropic) cloud
 model left Anthropic usage flat while the alternate provider's usage climbed,

@@ -1120,16 +1120,22 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
         # Fix #1: if the story carries an `acceptance` block, materialize the
         # oracle files into the worktree BEFORE the backend launches so the local
-        # harness can grade against them. On a resumed story skip the write —
-        # the oracle may already be in a committed WIP, and overwriting would
-        # discard whatever test evolution happened mid-run.
+        # harness can grade against them. The plan's acceptance source is
+        # AUTHORITATIVE on a fresh dispatch and must always win — even when the
+        # fixture path collides with a file a prior story already merged to the
+        # base branch (the worktree inherits that file; failing to overwrite it
+        # silently grades the stale, already-satisfied file and produces a false
+        # green with zero implementation). Only a RESUMED run skips the write:
+        # the oracle may have evolved the fixture mid-run into a committed WIP,
+        # and overwriting would discard that evolution.
         acceptance = story.get("acceptance") or []
         acceptance_paths = _acceptance_rel_paths(story)
         for entry in acceptance:
             target = worktree_path / entry["path"]
-            if not target.exists():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(entry["source"])
+            if resuming and target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(entry["source"])
 
         # TDD_SPLIT_PRODUCTION_PLAN.md: an ALWAYS-ON pre-executor
         # test-authoring dispatch (a full agent-loop, BLOCKING until it

@@ -35,7 +35,7 @@ devstral intermittently leaks well-formed calls as text even with clean tools.
 
 Config is read from the environment (set by backend.OllamaDriver.dispatch):
 LOCAL_AGENT_SYSTEM, LOCAL_AGENT_TASK, LOCAL_AGENT_MODEL, LOCAL_AGENT_ENDPOINT,
-LOCAL_AGENT_NUM_CTX, LOCAL_AGENT_TIMEOUT, LOCAL_AGENT_MAX_STEPS,
+PIPELINE_TRANSPORT_NUM_CTX, LOCAL_AGENT_TIMEOUT, LOCAL_AGENT_MAX_STEPS,
 LOCAL_AGENT_TEMPERATURE, LOCAL_AGENT_PROVIDER (default "ollama"; "lmstudio"/
 "mlx" route chat() through inference_providers instead of Ollama's streaming
 /api/chat — see PROVIDER/_provider_chat_turn below). The process CWD is the

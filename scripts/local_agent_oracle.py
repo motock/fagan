@@ -204,9 +204,10 @@ ENDPOINT = os.environ.get("LOCAL_AGENT_ENDPOINT", "http://localhost:11434").rstr
 # unchanged; any other registered provider (lmstudio, mlx) routes through
 # _provider_chat_turn's blocking inference_providers call instead.
 PROVIDER = os.environ.get("LOCAL_AGENT_PROVIDER", "ollama").strip().lower()
-NUM_CTX = int(os.environ.get("PIPELINE_TRANSPORT_NUM_CTX", "16384"))
+NUM_CTX = int(os.environ.get("LOCAL_AGENT_NUM_CTX", "16384"))
 TIMEOUT = float(os.environ.get("LOCAL_AGENT_TIMEOUT", "900"))
-MAX_STEPS = int(os.environ.get("PIPELINE_TRANSPORT_MAX_STEPS", "30"))
+MAX_STEPS = int(os.environ.get("LOCAL_AGENT_MAX_STEPS", "30"))
+# Cap consecutive assistant turns that emit no tool call. A weak model stuck
 # on a self-inflicted phantom failure — its own test asserts non-standard
 # behavior the correct implementation can never satisfy — will narrate its
 # "next step" as prose indefinitely; the generic "call a tool" nudge cannot
@@ -216,7 +217,7 @@ NO_TOOL_CAP = int(os.environ.get("LOCAL_AGENT_NO_TOOL_CAP", "5"))
 # Mirror local_agent.py: park a rework round after this many full-suite
 # done-rejections so a model that cannot green the suite stops burning budget.
 REWORK_SUITE_REJECT_CAP = int(os.environ.get("LOCAL_AGENT_REWORK_SUITE_REJECT_CAP", "3"))
-TEMPERATURE = float(os.environ.get("PIPELINE_TRANSPORT_TEMPERATURE", "0.3"))
+TEMPERATURE = float(os.environ.get("LOCAL_AGENT_TEMPERATURE", "0.3"))
 
 
 _COMPLETION_PHRASES = ("all done", "i'm done", "i am done", "all finished", "finished")

@@ -96,10 +96,10 @@ def main(arm: str) -> None:
         "LOCAL_AGENT_ENDPOINT": "http://localhost:11434",
         "LOCAL_AGENT_TASK": spec["task"],
         "LOCAL_AGENT_SYSTEM": persona_body() if spec["persona"] else "",
-        "LOCAL_AGENT_NUM_CTX": "16384",
+        "PIPELINE_TRANSPORT_NUM_CTX": "16384",
         "LOCAL_AGENT_TIMEOUT": "900",
-        "LOCAL_AGENT_MAX_STEPS": "30",
-        "LOCAL_AGENT_TEMPERATURE": "0.3",
+        "PIPELINE_TRANSPORT_MAX_STEPS": "30",
+        "PIPELINE_TRANSPORT_TEMPERATURE": "0.3",
         "LOCAL_AGENT_ACCEPTANCE": json.dumps(["test_acceptance.py"]),
         "LOCAL_AGENT_MODE": "oracle",
     })

@@ -27,6 +27,7 @@ def _run_reviewer(
     plan_role_config: dict | None = None,
     since_sha: str | None = None,
     risk: str = "low",
+    prior_feedback: str | None = None,
 ) -> str:
     """Run the code-reviewer persona over a branch and return its raw output.
 
@@ -62,6 +63,16 @@ def _run_reviewer(
     risk (and diff size, and the full suite) before honoring the verdict, so
     a reviewer that ignores this instruction and emits APPROVE_WITH_FIX
     anyway on a high-risk story still can't get it applied.
+
+    prior_feedback (Mode 47, 2026-07-30) carries the previous cycle's
+    REQUEST_CHANGES output into a re-review so each prior Blocking finding
+    can be verified individually. The existing Mode 24/28 finding-target
+    guard in review_story only asks "was the flagged file touched since the
+    last review" - a PARTIAL fix touches the file and sails through it. Live:
+    TRANSPORT-ALIAS-READERS #200 was told to migrate two env-var keys, moved
+    one, and got APPROVEd because the suite was green and the file had been
+    touched. Only per-finding verification catches that, and only the
+    reviewer can do it - no suite-gate can, since nothing fails.
     """
     body = _persona_body("code-reviewer")
     # Provider/model fall through role_registry (PIPELINE_BACKEND_REVIEW /
@@ -157,9 +168,33 @@ def _run_reviewer(
         )
     else:
         auto_fix_note = ""
+    # Mode 47: on a re-review, make the reviewer discharge its OWN prior
+    # findings one at a time. A green suite is not evidence a finding was
+    # resolved - the finding may name work no test grades at all, which is
+    # exactly how the live green-but-incomplete merge happened.
+    if prior_feedback and prior_feedback.strip():
+        prior_findings_note = (
+            f"\n\n--- Your prior Blocking findings on this branch ---\n"
+            f"{prior_feedback.strip()}\n\n"
+            f"Before any verdict, walk these one at a time and state for EACH "
+            f"whether it is now fully resolved, quoting the specific diff hunk "
+            f"that resolves it. Do not batch them into a single 'addressed' "
+            f"claim. A finding is resolved only when EVERYTHING it asked for "
+            f"landed - if it named two changes and only one was made, it is "
+            f"PARTIALLY addressed, which is NOT resolved: re-raise it as "
+            f"Blocking and REQUEST_CHANGES, naming the specific part still "
+            f"missing. The test suite being green does NOT prove a finding is "
+            f"resolved: a finding about a rename, a dead leftover name, or a "
+            f"docstring typically has no test grading it at all, so a passing "
+            f"suite says nothing about it. Verify against the diff itself, "
+            f"not against the test results.\n\n"
+        )
+    else:
+        prior_findings_note = ""
     prompt = (
         f"{lead}"
         f"{auto_fix_note}"
+        f"{prior_findings_note}"
         f"Report EVERY Blocking finding you notice in this single "
         f"pass, not just the first one - the implementer is a weak local "
         f"model and each REQUEST_CHANGES cycle is a full rework redispatch, "

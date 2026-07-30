@@ -1,4 +1,12 @@
 [tool.pytest.ini_options]
+# tests/unit/ has no __init__.py, so pytest's own rootdir-insertion only
+# ever adds tests/unit/ itself to sys.path - not the repo root two levels
+# up, where the app/ and pipeline/ packages live. `python -m pytest`
+# masks this (the -m flag adds cwd to sys.path itself), but the bare
+# `pytest` entrypoint CI actually runs does not, so tests/unit/*.py's
+# `from app import backend` etc. raised ModuleNotFoundError in CI despite
+# passing locally. This is the standard pytest>=7 fix.
+pythonpath = ["."]
 # pytest discovery defaults to walking the cwd and collecting every file
 # matching test_*.py / *_test.py. The experiment rig under
 # tests/experiments/local_oracle/ intentionally drops a `test_acceptance.py`

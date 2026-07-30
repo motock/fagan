@@ -15,8 +15,9 @@ On current master this file fails at collection/first-test: neither
 scripts/generate_launchd_plists.sh nor the launchd/*.plist.template files
 exist yet. That is the expected starting state.
 """
-import json
 import os
+import plistlib
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -32,17 +33,19 @@ _KINDS = ("advance-scheduler", "usage-poller", "mlx-supervisor")
 
 _REAL_HOME_PATH_FRAGMENT = "/Users/jessecarroll"
 
+_XML_COMMENT_RE = re.compile(rb"<!--.*?-->", re.DOTALL)
+
 
 def _plutil_load(path):
-    """Parse a plist via plutil (tolerates `--` in XML comments; plistlib does not)."""
-    result = subprocess.run(
-        ["plutil", "-convert", "json", "-o", "-", str(path)],
-        capture_output=True, text=True, check=False,
-    )
-    assert result.returncode == 0, (
-        f"plutil failed to parse {path}: {result.stderr.strip()}"
-    )
-    return json.loads(result.stdout)
+    """Parse a plist with plistlib, stripping XML comments first.
+
+    plistlib (expat-backed) rejects `--` inside XML comments - and the
+    committed mlx-supervisor.plist's header comment contains "uv venv
+    --python". Stripping comments before parsing sidesteps that without
+    depending on the macOS-only `plutil` binary (unavailable on Linux CI).
+    """
+    raw = Path(path).read_bytes()
+    return plistlib.loads(_XML_COMMENT_RE.sub(b"", raw))
 
 
 def _run_generator(args, env=None, check=True):

@@ -211,7 +211,7 @@ def dispatch(prompt: str, model: str, backend_env: dict, cwd: Path,
     for k, v in backend_env.items():
         os.environ[k] = v
     sys.path.insert(0, str(REPO))
-    import backend
+    from app import backend
     driver = backend.get_backend("dispatch")
     h = driver.dispatch(
         prompt, system=SYSTEM, model=model,

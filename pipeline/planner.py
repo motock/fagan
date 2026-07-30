@@ -21,8 +21,7 @@ import signal
 import time
 from pathlib import Path
 
-import backend
-import role_registry
+from app import backend, role_registry
 
 from .config import DEFAULT_MODEL
 from .git_ops import _worktree_has_new_commits

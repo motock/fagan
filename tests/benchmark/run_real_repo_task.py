@@ -225,7 +225,7 @@ def main() -> int:
     os.environ["WORKTREE_ROOT"] = str(paths["worktrees"])
     os.environ["REPO_ROOT"] = str(paths["repo"])
 
-    import pipeline_mcp_server as p
+    from app import pipeline_mcp_server as p
     install_merge_stubs(p, paths["repo"])
 
     story_key = task["name"].upper().replace("_", "-")

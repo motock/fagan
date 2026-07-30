@@ -10,8 +10,7 @@ import os
 import shlex
 from pathlib import Path
 
-import backend
-import role_registry
+from app import backend, role_registry
 
 from .config import (
     _LOCAL_BACKEND_NAMES,

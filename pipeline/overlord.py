@@ -12,8 +12,7 @@ server call site (request_decision) uses the bare name, which resolves
 through the re-export to the patched binding.
 """
 
-import backend
-import role_registry
+from app import backend, role_registry
 
 from .persona import _persona_body, _persona_default_model
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Start / stop / status for the read-only monitoring dashboard (dashboard.py).
+# Start / stop / status for the read-only monitoring dashboard (app/dashboard.py).
 #
 #   scripts/dashboard.sh start    # run uvicorn in the background
 #   scripts/dashboard.sh stop     # SIGTERM the recorded pid
@@ -48,7 +48,7 @@ usage() {
   cat <<EOF
 Usage: scripts/dashboard.sh <start|stop|restart|status>
 
-Start, stop, restart, or report on the monitoring dashboard (dashboard.py)
+Start, stop, restart, or report on the monitoring dashboard (app/dashboard.py)
 running via uvicorn.
 
 Env:
@@ -137,7 +137,7 @@ os.dup2(log_fd, 1)
 os.dup2(log_fd, 2)
 devnull = os.open(os.devnull, os.O_RDONLY)
 os.dup2(devnull, 0)
-args = [sys.executable, "-m", "uvicorn", "dashboard:app",
+args = [sys.executable, "-m", "uvicorn", "app.dashboard:app",
         "--host", host, "--port", port]
 if reload_flag:
     args.append("--reload")

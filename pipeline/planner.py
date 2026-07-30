@@ -534,6 +534,7 @@ def _test_author_prompt(agent_instructions: str) -> str:
 def _rework_test_author_prompt(
     review_feedback: str,
     fix_checklist: str | None,
+    acceptance_paths: list[str] | None = None,
 ) -> str:
     """Build the rework test-authoring dispatch's prompt: write ONLY the
     new regression test(s) the review feedback demands, never the fix.
@@ -547,6 +548,29 @@ def _rework_test_author_prompt(
         if fix_checklist
         else ""
     )
+    # Oracle-conflict guard (live failure 2026-07-29,
+    # TRANSPORT-ALIAS-DEPRECATION): given only the reviewer's prose, the
+    # test-author "fixed" a regression by asserting the OPPOSITE of the
+    # read-only acceptance fixture. Both tests then could not pass at once,
+    # the rework done-bar became unreachable, and the executor spun to its
+    # step cap. The fixtures are the spec; the reviewer's prose is not.
+    oracle_block = (
+        (
+            "\n\n--- The acceptance fixtures are the authoritative spec ---\n"
+            "These files are the story's read-only acceptance oracle: "
+            + ", ".join(acceptance_paths)
+            + ".\nThey define the REQUIRED behavior and you must not edit "
+            "them. Read them BEFORE writing anything. Your new test(s) must "
+            "not contradict any assertion they make - if the reviewer's "
+            "feedback appears to ask for behavior these fixtures forbid, the "
+            "fixtures win: write the test to match the fixtures and note the "
+            "conflict in your final message instead of encoding the "
+            "reviewer's version. A test that cannot pass at the same time as "
+            "the oracle makes the story unwinnable."
+        )
+        if acceptance_paths
+        else ""
+    )
     return (
         "The code reviewer REQUESTED CHANGES on this branch. Your ONLY "
         "job on this dispatch is to write the NEW regression test(s) "
@@ -554,7 +578,8 @@ def _rework_test_author_prompt(
         "itself. A separate, later dispatch (a different, weaker "
         f"engineer) will implement the fix against your test(s) next.\n\n"
         f"Review feedback:\n{review_feedback}"
-        f"{checklist_block}\n\n"
+        f"{checklist_block}"
+        f"{oracle_block}\n\n"
         "--- Test-authoring scope for THIS dispatch ---\n"
         "Write ONLY the new test(s) needed to reproduce the bug(s) "
         "named above - do NOT edit the implementation file(s). Add "
@@ -714,7 +739,13 @@ def _run_rework_test_author_phase(
     log_path = worktree_path / "rework_test_author.log"
     try:
         handle = backend.get_backend("dispatch", name=test_author_backend).dispatch(
-            prompt=_rework_test_author_prompt(review_feedback, fix_checklist),
+            prompt=_rework_test_author_prompt(
+                review_feedback,
+                fix_checklist,
+                acceptance_paths=[
+                    entry["path"] for entry in (story.get("acceptance") or [])
+                ],
+            ),
             system=_TEST_AUTHOR_SYSTEM,
             model=test_author_model,
             allowed_tools=_TEST_AUTHOR_ALLOWED_TOOLS,

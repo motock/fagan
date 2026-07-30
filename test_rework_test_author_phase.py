@@ -197,6 +197,41 @@ def test_rework_test_author_prompt_omits_checklist_block_when_none():
     assert "fix checklist" not in prompt.lower()
 
 
+# Oracle-conflict gap (found live 2026-07-29 on TRANSPORT-ALIAS-DEPRECATION):
+# the rework test-author was handed ONLY the reviewer's prose. Acting on a
+# finding that said "the rename broke a test that sets LOCAL_AGENT_NUM_CTX",
+# it authored a test asserting the legacy var must still be HONORED - the
+# exact opposite of the read-only acceptance fixture's "old var is inert"
+# assertion. The two could not both pass, so the rework done-bar became
+# unreachable and the executor looped to its step cap. The prompt must name
+# the acceptance fixtures as authoritative and read-only.
+
+
+def test_rework_test_author_prompt_names_acceptance_paths_as_authoritative():
+    """When the story carries acceptance fixtures, the rework test-author must
+    be told which files they are and that they are the authoritative spec -
+    a new test may never contradict them."""
+    prompt = p._rework_test_author_prompt(
+        "The rename broke the NUM_CTX override.",
+        fix_checklist=None,
+        acceptance_paths=["test_acceptance_transport_alias.py"],
+    )
+    assert "test_acceptance_transport_alias.py" in prompt
+    lowered = prompt.lower()
+    assert "contradict" in lowered
+    assert "read-only" in lowered or "read only" in lowered
+
+
+def test_rework_test_author_prompt_omits_acceptance_block_when_no_fixtures():
+    """A story with no acceptance block must get a byte-for-byte unchanged
+    prompt - the oracle-conflict warning is scoped to oracle-graded stories."""
+    prompt = p._rework_test_author_prompt("feedback", fix_checklist=None)
+    assert "contradict" not in prompt.lower()
+    assert prompt == p._rework_test_author_prompt(
+        "feedback", fix_checklist=None, acceptance_paths=[]
+    )
+
+
 # ---------- _run_rework_test_author_phase ----------
 
 

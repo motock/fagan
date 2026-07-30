@@ -811,6 +811,28 @@ def _full_suite_result() -> tuple[bool, str]:
     return True, ""
 
 
+# Full-suite rejections recorded by finish_if_green. The `done` handler keeps
+# its own local counter for the path the model drives; this one bounds the
+# AUTOMATIC path, which fires after every mutating tool call and so can spin
+# far faster. Module-level (not a main() local) because finish_if_green is a
+# module function called from the loop and directly by tests.
+_SUITE_REJECTIONS = 0
+
+
+def _reset_suite_rejections() -> None:
+    """Clear the automatic-path rejection count (suite went green, or a fresh
+    run is starting)."""
+    global _SUITE_REJECTIONS
+    _SUITE_REJECTIONS = 0
+
+
+def suite_reject_cap_reached() -> bool:
+    """Whether finish_if_green has rejected `done` for a red full suite
+    REWORK_SUITE_REJECT_CAP times in a row - the signal for main() to park
+    instead of continuing to burn steps on an unwinnable done-bar."""
+    return _SUITE_REJECTIONS >= REWORK_SUITE_REJECT_CAP
+
+
 def finish_if_green(step: int, messages: list | None = None) -> bool:
     """If the oracle passes, auto-commit and return True to terminate the loop.
 
@@ -825,12 +847,24 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
     no commit happens on a failure. Cold-start dispatches never set
     REWORK_FULL_SUITE, so their oracle-green done-bar is unchanged.
     """
+    global _SUITE_REJECTIONS
     ok, _ = oracle_result()
     if not ok:
         return False
     if REWORK_FULL_SUITE:
         full_ok, full_tail = _full_suite_result()
         if not full_ok:
+            _SUITE_REJECTIONS += 1
+            if suite_reject_cap_reached():
+                # Unwinnable done-bar (e.g. a rework-authored test that
+                # contradicts the read-only oracle). Stop re-prompting: WIP-
+                # commit and let main() park, exactly as the `done` path does.
+                if worktree_dirty():
+                    auto_commit("wip: rework suite-reject cap")
+                print(f"[step {step}] rework suite-reject cap "
+                      f"({REWORK_SUITE_REJECT_CAP}) reached; agent cannot green "
+                      f"the full suite — parking", flush=True)
+                return False
             if messages is not None:
                 messages.append({"role": "user", "content": (
                     "The acceptance oracle passes but the FULL test suite still "
@@ -844,6 +878,7 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
             print(f"[step {step}] ORACLE GREEN but full suite still fails - "
                   f"rework done-bar not met; continuing.", flush=True)
             return False
+    _reset_suite_rejections()
     if worktree_dirty():
         auto_commit("feat: implement task (acceptance oracle green)")
     print(f"[step {step}] ORACLE GREEN — acceptance tests pass; committed & done.", flush=True)
@@ -1482,6 +1517,7 @@ def main() -> int:
     # a model that cannot green the suite parks rather than burning the whole
     # budget alternating `done` with narration. See REWORK_SUITE_REJECT_CAP.
     suite_rejections = 0
+    _reset_suite_rejections()
     # Failing-str_replace loop guard: str_replace is excluded from the
     # per-target repetition guard (each old_str differs), so a no-match loop
     # on one file runs uncaught. Track consecutive FAILED str_replace per
@@ -1819,11 +1855,14 @@ def main() -> int:
             # independent oracle is green, auto-commit and exit. This fires
             # *during* the model's iteration so a correct first attempt
             # finishes in a single step.
-            if (
-                ACCEPTANCE_PATHS and fn in ("create_file", "str_replace", "bash")
-                and finish_if_green(step, messages)
-            ):
-                return 0
+            if ACCEPTANCE_PATHS and fn in ("create_file", "str_replace", "bash"):
+                if finish_if_green(step, messages):
+                    return 0
+                # The automatic done-bar is unwinnable (oracle green, full
+                # suite red CAP times running). Park rather than spend the
+                # remaining steps re-running a suite that cannot go green.
+                if suite_reject_cap_reached():
+                    return 2
 
     print("[ended without oracle green — step cap reached]", flush=True)
     if worktree_dirty():

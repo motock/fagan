@@ -2779,6 +2779,12 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     if skip_llm_reviewer:
         reviewer_output = _synthesize_test_failure_feedback(last_test_check)
     else:
+        # Mode 47: carry the prior cycle's findings into a RE-review so the
+        # reviewer must discharge each one individually. Passed as a kwarg
+        # only when there is actually prior feedback (a first review has
+        # none), so the common path's call signature is unchanged.
+        _prior_fb = story.get("review_feedback")
+        prior_kw = {"prior_feedback": _prior_fb} if _prior_fb else {}
         try:
             # Once a story is escalated (see _escalate_review_to_claude below),
             # every subsequent review must go to Claude regardless of the global
@@ -2793,6 +2799,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_role_config=plan_role_config,
                     since_sha=story.get("last_reviewed_sha"),
                     risk=story.get("risk", "low"),
+                    **prior_kw,
                 )
                 if story.get("escalated")
                 else _run_reviewer(
@@ -2801,6 +2808,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_role_config=plan_role_config,
                     since_sha=story.get("last_reviewed_sha"),
                     risk=story.get("risk", "low"),
+                    **prior_kw,
                 )
             )
         except backend.RateLimitedError:
@@ -2858,6 +2866,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
+                **prior_kw,
             )
             verdict = _parse_verdict(reviewer_output)
             # Fall through into the normal verdict-handling code below —
@@ -2888,6 +2897,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
+                **prior_kw,
             )
             if story.get("escalated")
             else _run_reviewer(
@@ -2896,6 +2906,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
+                **prior_kw,
             )
         )
         verdict = _parse_verdict(reviewer_output)

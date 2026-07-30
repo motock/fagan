@@ -75,10 +75,22 @@ Reference comparables:
 - [ ] **Implement token-context optimization**, measuring cache hits first
       (per the plan's own caveat). Dead `PIPELINE_REVIEW_MAX_TOKENS`,
       duplicated uncached system prompts.
-- [ ] **Decide the remaining plan docs' fate**
-      (`MODEL_PROVIDER_ABSTRACTION` S3, `TICKETING_ABSTRACTION`,
-      `CLAUDE_BACKEND_PROVIDER_ISOLATION` residual, `MODE_20_CORRECT_BUT_REJECTED`).
-      Each is a committed-then-superseded retro or an open task — close the loop.
+- [x] **Decide the remaining plan docs' fate** (2026-07-30). All four —
+      `MODEL_PROVIDER_ABSTRACTION_PLAN.md`, `TICKETING_ABSTRACTION_PLAN.md`,
+      `MODE_20_CORRECT_BUT_REJECTED_PLAN.md`, and
+      `CLAUDE_BACKEND_PROVIDER_ISOLATION_PLAN.md` — turned out to be fully
+      shipped already; each is now marked **PLAN CLOSED**.
+      `CLAUDE_BACKEND_PROVIDER_ISOLATION_PLAN.md` was the interesting case: its
+      header still said **"Mode: Not yet started"**, but `backend.py` already
+      has `_first_party_claude_env()`, `ProviderIdentityMismatch`, and
+      `verify_identity()` fully implemented and tested (T1-T4), documented in
+      `REFERENCE.md` (T5) — the header was simply never updated after the
+      work landed. Verified against the live code, not the doc text, before
+      concluding this — worth flagging as its own small lesson: **this doc
+      corpus has real staleness risk in the opposite direction from usual**
+      (docs claiming *less* progress than the code has, not more), likely
+      because implementers merge real fixes without circling back to update
+      the planning doc that spawned them.
 
 ### A2. Shrink the config surface
 
@@ -113,7 +125,31 @@ Reference comparables:
       a stability signal — not done, and the discovery rate argues this is
       more urgent than when first written. **Update 2026-07-27: the count
       has plateaued at 32 — no new modes since 2026-07-22 — but no gate
-      enforces it, so this is luck rather than a measured signal.**
+      enforces it, so this is luck rather than a measured signal. Update
+      2026-07-29: the plateau broke — Mode 42 (2026-07-24) and Mode 43
+      (2026-07-29, below) both found live, count now 33. Neither was found
+      by a benchmark run; both came from dispatching real maturity-plan
+      stories, which argues the "no new modes for N benchmark runs" gate
+      as originally scoped would not have caught either.**
+- [x] **Mode 43 (2026-07-29, FIXED PR #196, `5236334`) — module-level
+      variable deletion slips both orphan guards.** A `replace_lines` edit on
+      `scripts/local_agent.py` deleted the top-level assignment
+      `TIMEOUT = float(os.environ.get(...))` while duplicating the adjacent
+      line. The module still imported (no `SyntaxError`), and the 12
+      surviving reads of `TIMEOUT` elsewhere in the file went undetected
+      until a runtime `NameError` surfaced across 39 downstream test
+      failures. Root cause: `_newly_undefined_names` (Mode 39's guard) only
+      tracks names assigned/read *inside a function body*
+      (`_function_name_scopes` walks `FunctionDef`/`AsyncFunctionDef` only);
+      `_newly_undefined_module_defs` (Mode 38's fix) only covers deleted
+      module-level `def`/`class` names, not deleted module-level *variable*
+      assignments. Fix: a third guard, `_newly_undefined_module_vars`, diffs
+      top-level `ast.Assign`/`ast.AnnAssign` target names between old and new
+      trees and flags any that vanish while a load of that name survives
+      anywhere in the new tree — wired into both `local_agent.py` and
+      `local_agent_oracle.py`. Regression-tested: a deleting edit is now
+      rejected and the file left unchanged; a legitimate refactor removing
+      both the assignment and all its uses still passes.
 - [ ] **Mode 31 (2026-07-22, NOT fixed) — confident off-task drift.** A
       correctly-scoped, narrowly-instructed dispatch (verified via its own
       transcript) abandoned the assigned task and invented an unrelated one

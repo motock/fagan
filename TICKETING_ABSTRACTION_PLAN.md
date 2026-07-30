@@ -1,5 +1,13 @@
 # Plan: Abstract the ticketing layer (Plane default, pluggable, optional)
 
+> **PLAN CLOSED (2026-07-30).** S1-S5 shipped 2026-07-09; the only open
+> follow-up (a real `JiraTicketProvider` implementation) is explicitly blocked
+> on having an actual Jira instance + API token to validate against — not
+> actionable now, and not urgent (the stub raises a clear `NotImplementedError`
+> in the meantime). No further action needed unless a Jira instance becomes
+> available. Closed per `MATURITY_AND_UNIQUENESS_PLANS.md` A1's "decide the
+> remaining plan docs' fate" item.
+
 > Status: **Implemented 2026-07-09** (S1-S5, executed directly, not through the
 > pipeline). `LogicalState`, `TicketProvider`, `NullTicketProvider`,
 > `PlaneTicketProvider`, `JiraTicketProvider` (stub), and `get_ticket_provider()`

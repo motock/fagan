@@ -1,5 +1,14 @@
 # Plan: Abstract the local model-inference layer (Ollama default, pluggable)
 
+> **PLAN CLOSED (2026-07-30).** S1-S4 shipped and live-validated (below); every
+> `Follow-up` item is either done (struck through) or an explicitly-deferred,
+> non-blocking nice-to-have (streaming SSE for non-Ollama providers; an
+> optional `OpenAICompatProvider` base-class refactor once a third
+> OpenAI-compatible server exists). No further action needed unless one of
+> those follow-ups becomes load-bearing. Closed per
+> `MATURITY_AND_UNIQUENESS_PLANS.md` A1's "decide the remaining plan docs'
+> fate" item.
+
 > Status: **All four stories implemented 2026-07-09/10; all three registered providers
 > (Ollama, MLX, LM Studio) are real, live-validated implementations** — none are stubs
 > anymore. `inference_providers.py` holds `LocalInferenceProvider`, `OllamaProvider`,

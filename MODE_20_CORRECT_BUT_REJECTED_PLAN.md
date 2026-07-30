@@ -1,5 +1,12 @@
 # Mode 20: "Correct-but-rejected" — reviewer blocks on the agent's own buggy test, rework destroys correct code
 
+**PLAN CLOSED (2026-07-30).** Fixes 1/3/7 shipped and live-verified; Fixes
+2/5/6 are explicitly deferred with reasons in "Explicitly out of scope" below
+(each needs its own design/validation cycle against shared prompts/control-flow
+every story depends on). No further action needed unless a later run shows
+Fix 1 doesn't fully close the gap. Closed per `MATURITY_AND_UNIQUENESS_PLANS.md`
+A1's "decide the remaining plan docs' fate" item.
+
 Status: **VERIFIED LIVE END-TO-END, 2026-07-17.** Fixes 1, 3, 7 done (Fix 7
 required no code change — see below); Fixes 2, 5, 6 deliberately deferred (see
 "Explicitly out of scope"). Direct-implemented, no pipeline story — this fixes

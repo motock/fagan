@@ -34,7 +34,14 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Run tests
-        run: pytest -q
+        # Run the real full suite. `--override-ini=testpaths=` defeats the
+        # pyproject.toml testpaths allowlist, which is a pinned file list that
+        # silently skips any new test_*.py added to the repo root. Without this
+        # override, CI (and the merge gate that requires green CI) never run
+        # new files, so an incomplete change whose only failing tests are in a
+        # new file merges red to master (PR #197). `--ignore=tests` keeps the
+        # benchmark/experiments dir out of collection.
+        run: pytest -q --override-ini=testpaths=. --ignore=tests
 
   lint:
     name: Lint (ruff)

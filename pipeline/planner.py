@@ -25,6 +25,7 @@ from app import backend, role_registry
 
 from .config import DEFAULT_MODEL
 from .git_ops import _worktree_has_new_commits
+from .persistence import _notify_user
 from .persona import _persona_body, _persona_default_model
 
 # ---------- Guided-decomposition planner ----------
@@ -488,6 +489,48 @@ def _resolve_test_author_backend(
     return resolution.provider, resolution.model
 
 
+def _scaffolding_provider_mismatch_warning(
+    *,
+    dispatch_backend: str,
+    role_config: dict | None,
+    registry_roles: dict | None,
+) -> str | None:
+    """Non-blocking heuristic: warn when a plan dispatches to a local model
+    but its "test_author"/"planner" scaffolding roles resolve to a DIFFERENT
+    provider.
+
+    Why this exists: exactly that configuration silently removed the
+    TDD-split and tech-lead-checklist crutches from two stories on
+    2026-07-30 (both plans overrode only "review", leaving test_author/
+    planner on the registry default), and both then parked. The scaffolding
+    exists for the weak local executor - see _resolve_test_author_backend -
+    so a Claude executor needs no warning here.
+
+    Returns None when `dispatch_backend` is "claude", or when neither role
+    resolves to a provider that differs from it. Purely advisory - never
+    blocks ingest.
+    """
+    if dispatch_backend == "claude":
+        return None
+    role_config = role_config or {}
+    registry_roles = registry_roles or {}
+    mismatched = []
+    for role in ("test_author", "planner"):
+        provider = (
+            role_config.get(role, {}).get("provider")
+            or registry_roles.get(role, {}).get("provider")
+        )
+        if provider is not None and provider != dispatch_backend:
+            mismatched.append((role, provider))
+    if not mismatched:
+        return None
+    detail = ", ".join(f"{role} resolves to {provider!r}" for role, provider in mismatched)
+    return (
+        f"local dispatch on {dispatch_backend!r} but {detail}: the test-first "
+        f"split will not run on the same family as the executor"
+    )
+
+
 _TEST_AUTHOR_SYSTEM = (
     "You are a senior tech lead. Your ONLY job on this dispatch is to write "
     "the test suite for the task below - never the implementation. A "
@@ -650,6 +693,7 @@ def _run_test_author_phase(
     worktree_path: Path,
     dispatch_backend: str,
     local_model: str,
+    plan_name: str,
     plan_role_config: dict | None = None,
     timeout: float | None = None,
 ) -> bool:
@@ -663,6 +707,12 @@ def _run_test_author_phase(
     callers MUST treat False as "fall back to today's monolithic dispatch,
     agent_instructions unmodified" per the fail-open contract that is this
     feature's single most safety-critical property. Never raises.
+
+    Every False return also calls _notify_user: the fail-open silently
+    dropped the weak-executor's TDD-split crutch with no operator-visible
+    signal (observed live 2026-07-30 on two stories whose plan left
+    test_author on a different provider than dispatch - both then parked).
+    The fail-open itself is unchanged; only the silence is fixed.
     """
     test_author_backend, test_author_model = _resolve_test_author_backend(
         dispatch_backend,
@@ -670,6 +720,12 @@ def _run_test_author_phase(
         plan_role_config=plan_role_config,
     )
     if not test_author_backend:
+        _notify_user(
+            plan_name,
+            f"{story_key} test-author phase fell open (role unconfigured or "
+            "resolves to the same backend as dispatch); dispatching "
+            "monolithically without a test-first split",
+        )
         return False
     log_path = worktree_path / "test_author.log"
     try:
@@ -687,6 +743,11 @@ def _run_test_author_phase(
             f"test-author dispatch failed to start for {story_key}; "
             "falling back to monolithic dispatch"
         )
+        _notify_user(
+            plan_name,
+            f"{story_key} test-author phase fell open (dispatch failed to "
+            "start); dispatching monolithically without a test-first split",
+        )
         return False
     exited = _wait_for_agent_exit(
         handle.pid,
@@ -699,6 +760,11 @@ def _run_test_author_phase(
             f"test-author dispatch timed out for {story_key}; "
             "falling back to monolithic dispatch"
         )
+        _notify_user(
+            plan_name,
+            f"{story_key} test-author phase fell open (dispatch timed out); "
+            "dispatching monolithically without a test-first split",
+        )
         return False
     # Lazy import: _default_branch lives in the server module (reads
     # REPO_ROOT, patched by tests via p.REPO_ROOT); the server imports this
@@ -706,12 +772,24 @@ def _run_test_author_phase(
     from .server import _default_branch
 
     try:
-        return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
+        has_commits = _worktree_has_new_commits(worktree_path, story_key, _default_branch())
     except Exception as exc:  # noqa: BLE001 (already logged below; git-detection failures are unpredictable and must not raise past this function)
         logging.getLogger("pipeline").warning(
             f"test-author dispatch failed to detect commits for {story_key}: {exc}"
         )
+        _notify_user(
+            plan_name,
+            f"{story_key} test-author phase fell open (commit detection "
+            "failed); dispatching monolithically without a test-first split",
+        )
         return False
+    if not has_commits:
+        _notify_user(
+            plan_name,
+            f"{story_key} test-author phase fell open (no commit produced); "
+            "dispatching monolithically without a test-first split",
+        )
+    return has_commits
 
 
 def _run_rework_test_author_phase(

@@ -15,12 +15,26 @@ permissions:
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (Python ${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
         python-version: ["3.12", "3.13", "3.14"]
+        # Dispatch, the check_story_status done-bar, and the merge-gate
+        # reverify all run on macOS, but CI previously ran ubuntu-latest
+        # only - so a macOS-only fixture dependency (e.g. `plutil`) passed
+        # every local gate and failed only after the PR was open (observed
+        # live 2026-07-30). Restrict the macOS leg to one Python version to
+        # keep the runner budget reasonable; ubuntu keeps full coverage.
+        exclude:
+          - os: macos-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.13"
     env:
       # Point AGENTS_DIR at the repo's checked-in personas (agents/*.md) so
       # tests that load a persona (e.g. code-reviewer) resolve without a

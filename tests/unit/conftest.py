@@ -29,3 +29,31 @@ def _isolate_environ():
     yield
     os.environ.clear()
     os.environ.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_plan_dir(tmp_path_factory, monkeypatch):
+    """Redirect pipeline.persistence.PLAN_DIR away from the operator's real
+    ~/.claude/plans/ for every test in this suite by default.
+
+    pipeline/persistence.py reads its own module-level PLAN_DIR binding
+    (imported from pipeline.paths at module load), separate from
+    pipeline.server's own binding. A test that patches only p.PLAN_DIR (the
+    server's copy) therefore leaves _append_journal/_notify_user writing
+    into the real plans directory - observed live: 344 step-cap journal
+    records accumulated in ~/.claude/plans/cap1.S1.journal.json from
+    test_check_story_status_lint_gate.py alone. Tests that need a specific
+    shared PLAN_DIR (e.g. the `plan_dir` fixture, which also patches
+    pipeline.server.PLAN_DIR/pipeline.concurrency.PLAN_DIR to the same
+    directory) simply monkeypatch persistence.PLAN_DIR again afterward,
+    which composes fine with this default.
+
+    Uses tmp_path_factory (a directory tree independent of this test's own
+    tmp_path) rather than tmp_path itself: several existing test files
+    define their own `plan_dir` fixture that does `(tmp_path /
+    "plans").mkdir()`, and pre-creating that same path here would collide
+    with it (FileExistsError).
+    """
+    from pipeline import persistence
+    default_plan_dir = tmp_path_factory.mktemp("default_plan_dir")
+    monkeypatch.setattr(persistence, "PLAN_DIR", default_plan_dir)

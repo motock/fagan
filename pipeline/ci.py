@@ -6,6 +6,7 @@ The three env-var gates (``PIPELINE_MERGE_CI_GATE``, ``PIPELINE_MERGE_CI_TIMEOUT
 directly.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -216,6 +217,26 @@ def _ci_rerun(sha: str) -> bool:
     return rerun.returncode == 0
 
 
+def _acceptance_tampered(story: dict[str, Any], worktree: str) -> list[str]:
+    """Return the sorted list of acceptance fixture paths whose worktree
+    content no longer matches the sha256 digest recorded at dispatch (see
+    pipeline.oracle_gate.acceptance_digests). A path missing from the
+    worktree counts as tampered — deleting the oracle must not pass the
+    gate. Returns [] when the story carries no recorded digests (a story
+    dispatched before this existed, or one without acceptance fixtures)."""
+    digests = story.get("acceptance_digests") or {}
+    tampered = []
+    for path, expected in digests.items():
+        target = Path(worktree) / path
+        if not target.is_file():
+            tampered.append(path)
+            continue
+        actual = hashlib.sha256(target.read_bytes()).hexdigest()
+        if actual != expected:
+            tampered.append(path)
+    return sorted(tampered)
+
+
 def _reverify_acceptance(
     story: dict[str, Any], worktree: str, story_key: str = ""
 ) -> dict[str, str]:
@@ -242,6 +263,19 @@ def _reverify_acceptance(
     acceptance = story.get("acceptance") or []
     if not worktree or not Path(worktree).is_dir():
         return {"state": "none", "error": ""}
+
+    # The read-only oracle is described as read-only in prompt text only;
+    # this is the mechanism behind it. A worktree whose acceptance fixture no
+    # longer matches its dispatch-time digest must be refused WITHOUT running
+    # it — a rewritten grader is not a trustworthy gate (observed live
+    # 2026-07-30, LAUNCHD-PLIST-PORTABILITY: two hand commits rewrote the
+    # oracle and the merge gate re-verified against the rewrite).
+    tampered = _acceptance_tampered(story, worktree)
+    if tampered:
+        return {
+            "state": "fail",
+            "error": "acceptance fixture modified since dispatch: " + ", ".join(tampered),
+        }
 
     test_dir, test_cmd = detect_test_command(Path(worktree))
     scoped = None
@@ -329,6 +363,7 @@ __all__ = [
     "PIPELINE_MERGE_BUILD_GATE",
     "PIPELINE_MERGE_CI_GATE",
     "PIPELINE_MERGE_CI_TIMEOUT",
+    "_acceptance_tampered",
     "_ci_rerun",
     "_ci_status",
     "_repo_has_ci_configured",

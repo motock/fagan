@@ -31,6 +31,7 @@ from pipeline import ci as pci
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import persona as pper
+from pipeline import planner as pplanner
 from pipeline import server as p
 from pipeline import ticketing as pt
 from pipeline import usage as pusage
@@ -9894,7 +9895,16 @@ def test_dispatch_story_passes_rework_full_suite_when_ci_rework_set(
     captured: dict = {}
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    # The story below carries an `acceptance` block, so dispatch_story's
+    # pre-dispatch oracle gate also calls subprocess.run (unlike the
+    # fire-and-forget git calls elsewhere in dispatch_story, it reads
+    # .returncode/.stdout) - give it a real CompletedProcess so the gate
+    # classifies this as an ordinary not-yet-implemented failure rather than
+    # a broken oracle.
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "assert 0", ""),
+    )
     monkeypatch.setattr(
         backend.subprocess, "Popen",
         lambda argv, cwd, env, stdout, stderr:
@@ -9925,7 +9935,13 @@ def test_dispatch_story_omits_rework_full_suite_without_ci_rework(
     captured: dict = {}
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
     monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    # See the sibling test above: this story also carries an `acceptance`
+    # block, so the pre-dispatch oracle gate needs a real CompletedProcess
+    # from subprocess.run, not None.
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "assert 0", ""),
+    )
     monkeypatch.setattr(
         backend.subprocess, "Popen",
         lambda argv, cwd, env, stdout, stderr:
@@ -11304,7 +11320,12 @@ def test_dispatch_story_forwards_acceptance_paths_to_local_driver(
         popen_calls.append({"cmd": cmd, "env": env})
         return _FakeProc(7777)
 
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    # This story carries an `acceptance` block, so the pre-dispatch oracle
+    # gate needs a real CompletedProcess from subprocess.run, not None.
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "assert 0", ""),
+    )
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
@@ -11345,7 +11366,12 @@ def test_dispatch_story_forwards_acceptance_paths_under_explicit_provider_name(
         popen_calls.append({"cmd": cmd, "env": env})
         return _FakeProc(7778)
 
-    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    # This story carries an `acceptance` block, so the pre-dispatch oracle
+    # gate needs a real CompletedProcess from subprocess.run, not None.
+    monkeypatch.setattr(
+        p.subprocess, "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "assert 0", ""),
+    )
     monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
@@ -13807,6 +13833,7 @@ def test_test_author_prompt_instructs_committing_the_test_file():
 
 def test_run_test_author_phase_skips_when_role_unconfigured(monkeypatch, tmp_path):
     monkeypatch.delenv("PIPELINE_BACKEND_TEST_AUTHOR", raising=False)
+    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
 
     def _boom(*a, **k):
         raise AssertionError("dispatch must not be reached when unconfigured")
@@ -13815,6 +13842,7 @@ def test_run_test_author_phase_skips_when_role_unconfigured(monkeypatch, tmp_pat
     result = p._run_test_author_phase(
         {"agent_instructions": "Build it."}, story_key="S1",
         worktree_path=tmp_path, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_name="plan",
     )
     assert result is False
 
@@ -13833,10 +13861,12 @@ def test_run_test_author_phase_returns_true_on_successful_commit(monkeypatch, tm
     fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
 
     result = p._run_test_author_phase(
         {"agent_instructions": "Build it."}, story_key="S1",
         worktree_path=wt, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_name="plan",
         plan_role_config={"test_author": {"model": "qwen"}},
     )
     assert result is True
@@ -13854,10 +13884,12 @@ def test_run_test_author_phase_returns_false_when_no_new_commit(monkeypatch, tmp
     fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
 
     result = p._run_test_author_phase(
         {"agent_instructions": "Build it."}, story_key="S1",
         worktree_path=wt, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_name="plan",
         plan_role_config={"test_author": {"model": "qwen"}},
     )
     assert result is False
@@ -13867,10 +13899,12 @@ def test_run_test_author_phase_returns_false_when_dispatch_raises(monkeypatch, t
     monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
     fake = _FakeTestAuthorBackend(pid=0, raises=RuntimeError("endpoint unreachable"))
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
+    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
 
     result = p._run_test_author_phase(
         {"agent_instructions": "Build it."}, story_key="S1",
         worktree_path=tmp_path, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_name="plan",
         plan_role_config={"test_author": {"model": "qwen"}},
     )
     assert result is False
@@ -13881,6 +13915,7 @@ def test_run_test_author_phase_returns_false_on_timeout(monkeypatch, tmp_path):
     fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
     monkeypatch.setattr(p, "_wait_for_agent_exit", lambda *a, **k: False)
+    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
 
     def _boom(*a, **k):
         raise AssertionError("must not check for commits when the dispatch timed out")
@@ -13890,6 +13925,7 @@ def test_run_test_author_phase_returns_false_on_timeout(monkeypatch, tmp_path):
     result = p._run_test_author_phase(
         {"agent_instructions": "Build it."}, story_key="S1",
         worktree_path=tmp_path, dispatch_backend="ollama", local_model="gpt-oss:20b",
+        plan_name="plan",
         plan_role_config={"test_author": {"model": "qwen"}},
     )
     assert result is False

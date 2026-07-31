@@ -5,7 +5,8 @@ _escalate_to_claude flips a failed local story to Claude and starts clean
 same but stays on the local backend with a different model (plan-scoped
 opt-in). _escalate_review_to_claude escalates a local-review-convergence
 failure to Claude without wiping the worktree (the code is often already
-correct). _auto_escalation_enabled reports whether PIPELINE_BACKEND_DISPATCH=auto.
+correct). _auto_escalation_enabled reports whether escalation is enabled -
+PIPELINE_AUTO_ESCALATE if set, else PIPELINE_BACKEND_DISPATCH=="auto".
 
 All read REPO_ROOT / PLAN_DIR via lazy imports from the server (tests patch
 p.<name>; circular-avoidance). _atomic_write_json comes from pipeline_parsers,
@@ -19,6 +20,11 @@ from typing import Any
 
 from .parsers import _atomic_write_json
 from .persistence import _notify_user
+from .rebrief import (
+    collect_failure_evidence,
+    compose_rebriefed_instructions,
+    diagnose_failure,
+)
 
 
 def _escalate_to_claude(
@@ -40,6 +46,16 @@ def _escalate_to_claude(
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
+    # CLAUDE.md Step 9: encode the diagnosis into the next attempt's
+    # instructions rather than an open-ended retry. Must run BEFORE the
+    # worktree is removed below - the evidence (agent.log) lives there.
+    # diagnose_failure fails open (returns None) on any error, in which case
+    # compose_rebriefed_instructions is a no-op and this is a plain blind
+    # retry exactly as before this existed.
+    evidence = collect_failure_evidence(worktree, story)
+    diagnosis = diagnose_failure(evidence, story)
+    story["agent_instructions"] = compose_rebriefed_instructions(
+        story.get("agent_instructions", ""), diagnosis)
     # Remove worktree and branch — best-effort (may already be gone).
     if worktree:
         subprocess.run(["git", "worktree", "remove", "--force", worktree],
@@ -82,6 +98,16 @@ def _escalate_to_local_fallback_model(
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
+    # CLAUDE.md Step 9: encode the diagnosis into the next attempt's
+    # instructions rather than an open-ended retry. Must run BEFORE the
+    # worktree is removed below - the evidence (agent.log) lives there.
+    # diagnose_failure fails open (returns None) on any error, in which case
+    # compose_rebriefed_instructions is a no-op and this is a plain blind
+    # retry exactly as before this existed.
+    evidence = collect_failure_evidence(worktree, story)
+    diagnosis = diagnose_failure(evidence, story)
+    story["agent_instructions"] = compose_rebriefed_instructions(
+        story.get("agent_instructions", ""), diagnosis)
     # Remove worktree and branch — best-effort (may already be gone).
     if worktree:
         subprocess.run(["git", "worktree", "remove", "--force", worktree],
@@ -133,6 +159,23 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
 
 
 def _auto_escalation_enabled() -> bool:
+    """Whether escalation (dispatch-failure, step-cap-streak, and review
+    exhaustion escalation to Claude / a local fallback model) is enabled.
+
+    Historically this was exactly `PIPELINE_BACKEND_DISPATCH == "auto"` -
+    welding two unrelated decisions (how a story is routed vs. whether a
+    stuck story escalates) onto one variable, so an operator running
+    PIPELINE_BACKEND_DISPATCH=local could not turn on escalation without also
+    changing dispatch routing. PIPELINE_AUTO_ESCALATE now lets an operator set
+    escalation independently; when unset (or unrecognized), behavior falls
+    back to the original PIPELINE_BACKEND_DISPATCH=="auto" rule so existing
+    deployments see no change.
+    """
+    override = os.environ.get("PIPELINE_AUTO_ESCALATE", "").strip().lower()
+    if override in ("1", "true", "yes", "on"):
+        return True
+    if override in ("0", "false", "no", "off"):
+        return False
     return os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower() == "auto"
 
 

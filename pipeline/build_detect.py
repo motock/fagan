@@ -374,6 +374,37 @@ def _isolation_only_acceptance_warning(story: dict[str, Any]) -> str | None:
     )
 
 
+# macOS-only tooling an acceptance fixture might shell out to or hardcode a
+# path for. Dispatch, the check_story_status done-bar, and the merge-gate
+# reverify all run on macOS, but CI runs ubuntu-latest only - so a fixture
+# depending on any of these passes every local gate and fails only after the
+# PR is open (observed live 2026-07-30 via `plutil`).
+_MACOS_ONLY_MARKERS = ("plutil", "sw_vers", "osascript", "/System/Library", "defaults read")
+
+
+def _platform_locked_fixture_warning(story: dict[str, Any]) -> str | None:
+    """Non-blocking heuristic: return a warning message when a story's
+    acceptance fixture depends on macOS-only tooling.
+
+    Returns ``None`` when the story has no acceptance fixtures or none of
+    them reference a known macOS-only marker. Purely advisory — never blocks
+    ingest.
+    """
+    acceptance = story.get("acceptance") or []
+    if not acceptance:
+        return None
+    sources = "\n".join(entry.get("source", "") for entry in acceptance)
+    matched = [marker for marker in _MACOS_ONLY_MARKERS if marker in sources]
+    if not matched:
+        return None
+    summary = story.get("summary", "?")
+    return (
+        f"acceptance fixture for {summary!r} depends on macOS-only tooling "
+        f"({', '.join(matched)}): dispatch grades on macOS but CI runs "
+        f"ubuntu-latest, so this fixture cannot pass in CI"
+    )
+
+
 def _is_pytest_cmd(cmd: list[str]) -> bool:
     """True when `cmd` invokes pytest and can accept path arguments for scoping.
 

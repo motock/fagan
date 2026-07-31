@@ -39,6 +39,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -55,6 +56,7 @@ from .build_detect import (  # noqa: F401
     _build_command_for,
     _is_pytest_cmd,
     _isolation_only_acceptance_warning,
+    _platform_locked_fixture_warning,
     _provision_worktree_venv,
     _scope_test_cmd_to_acceptance,
     _test_command_for,
@@ -82,6 +84,7 @@ from .ci import (  # noqa: F401
     PIPELINE_MERGE_BUILD_GATE,
     PIPELINE_MERGE_CI_GATE,
     PIPELINE_MERGE_CI_TIMEOUT,
+    _acceptance_tampered,
     _ci_rerun,
     _ci_status,
     _repo_has_ci_configured,
@@ -158,6 +161,11 @@ from .git_ops import (
     _test_names_in_file,
     _worktree_has_new_commits,
 )
+
+# Pre-dispatch acceptance-oracle validation (a broken oracle costs an
+# implementer its whole step budget; see the module docstring in
+# pipeline/oracle_gate.py).
+from .oracle_gate import acceptance_digests, validate_acceptance_fixtures
 
 # Overlord / decision helpers. _load_policy reads POLICY_PATH / REPO_ROOT via
 # lazy imports from this module (tests patch p.<name>; the lazy import sees
@@ -257,6 +265,7 @@ from .planner import (  # noqa: F401
     _run_rework_planner,
     _run_rework_test_author_phase,
     _run_test_author_phase,
+    _scaffolding_provider_mismatch_warning,
     _test_author_prompt,
     _wait_for_agent_exit,
 )
@@ -861,6 +870,31 @@ def ingest_plan(
             if msg is not None:
                 _notify_user(plan_name, f"{key}: {msg}")
                 logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {msg}")
+            # Non-blocking authoring nudge: flag acceptance fixtures that
+            # depend on macOS-only tooling. Dispatch, the done-bar and the
+            # merge-gate reverify all run on macOS, but CI runs ubuntu-latest
+            # only, so such a fixture passes every local gate and fails only
+            # after the PR is open (observed live 2026-07-30). Advisory only.
+            platform_msg = _platform_locked_fixture_warning(story)
+            if platform_msg is not None:
+                _notify_user(plan_name, f"{key}: {platform_msg}")
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {platform_msg}")
+            # Non-blocking authoring nudge: flag a local-dispatch story whose
+            # test_author/planner scaffolding roles resolve to a DIFFERENT
+            # provider - exactly the configuration that silently dropped the
+            # TDD-split crutch from two stories on 2026-07-30 (both parked).
+            # Advisory only.
+            story_backend = story.get("backend") or os.environ.get(
+                "PIPELINE_BACKEND_DISPATCH", "claude"
+            ).strip().lower()
+            role_msg = _scaffolding_provider_mismatch_warning(
+                dispatch_backend=story_backend,
+                role_config=final_manifest.get("role_config"),
+                registry_roles=role_registry.load_registry().get("roles", {}),
+            )
+            if role_msg is not None:
+                _notify_user(plan_name, f"{key}: {role_msg}")
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {role_msg}")
 
     return {"ok": True, "manifest_path": str(manifest_path), **final_manifest}
 
@@ -1138,6 +1172,38 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(entry["source"])
 
+        # Record a digest of each fixture's AUTHORITATIVE manifest source
+        # (never the worktree file, which could already be rewritten) so a
+        # later gate can prove the read-only oracle was not rewritten - see
+        # pipeline.ci._acceptance_tampered. Recorded on EVERY dispatch,
+        # including a resumed one, since the authoritative source hasn't
+        # changed and re-recording also repairs a story dispatched before
+        # this existed.
+        story["acceptance_digests"] = acceptance_digests(story)
+
+        # Pre-dispatch oracle gate: a fixture that cannot pass no matter what
+        # is implemented (a broken helper, a bad CLI invocation) or that is
+        # already satisfied with zero implementation burns an implementer's
+        # entire step budget for no signal (observed live 2026-07-30,
+        # LAUNCHD-PLIST-PORTABILITY). Skipped on a resumed run: the oracle
+        # was already validated on the fresh dispatch, and the worktree may
+        # legitimately carry WIP that changes the outcome.
+        if not resuming:
+            oracle_check = validate_acceptance_fixtures(story, worktree_path)
+            if oracle_check["state"] in ("errors", "passes", "empty"):
+                story["status"] = "blocked_oracle"
+                story["oracle_gate"] = oracle_check
+                _notify_user(
+                    plan_name,
+                    f"{story_key} not dispatched: acceptance oracle is "
+                    f"unusable ({oracle_check['state']}) - {oracle_check['detail']}",
+                )
+                _atomic_write_json(manifest_path, manifest)
+                return {
+                    "status": "blocked_oracle",
+                    "oracle_gate": oracle_check,
+                }
+
         # TDD_SPLIT_PRODUCTION_PLAN.md: an ALWAYS-ON pre-executor
         # test-authoring dispatch (a full agent-loop, BLOCKING until it
         # exits - unlike the planner checklist above, this produces a real
@@ -1169,6 +1235,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
             worktree_path=worktree_path,
             dispatch_backend=dispatch_backend,
             local_model=spec["model"],
+            plan_name=plan_name,
             plan_role_config=_plan_role_config(plan_name),
         ):
             test_author_marker.write_text("ok\n")
@@ -1883,6 +1950,26 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 }
         _atomic_write_json(manifest_path, manifest)
         return {"status": "interrupted", "pid": pid, "reason": "step_cap_reached"}
+
+    # The read-only oracle is described as read-only in prompt text only;
+    # this is the mechanism behind it. Refuse tests_passed on a worktree whose
+    # acceptance fixture no longer matches its dispatch-time digest, so a
+    # rewritten grader is caught at the done-bar rather than only much later
+    # at the merge gate (see pipeline.ci._acceptance_tampered).
+    tampered = _acceptance_tampered(story, str(worktree))
+    if tampered:
+        story["status"] = "changes_requested"
+        _notify_user(
+            plan_name,
+            f"{story_key} acceptance fixture modified since dispatch: "
+            f"{', '.join(tampered)} - refusing tests_passed",
+        )
+        _atomic_write_json(manifest_path, manifest)
+        return {
+            "status": "changes_requested",
+            "reason": "acceptance_tampered",
+            "tampered": tampered,
+        }
 
     test_dir, test_cmd = detect_test_command(worktree)
 
@@ -2830,8 +2917,18 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             # tool-call shape, a malformed backend response, ...) must not crash
             # the pipeline process. Fail safe into the same UNKNOWN-verdict path
             # a genuinely inconclusive review already takes below - never treat
-            # this as an APPROVE (fail-closed). Log only the exception type, not
-            # its text, which could carry sensitive detail.
+            # this as an APPROVE (fail-closed). The user-facing notification
+            # names only the exception TYPE, not its text, which could carry
+            # sensitive detail - but that also made the failure permanently
+            # undiagnosable (observed live 2026-07-30: a RuntimeError here
+            # could never be root-caused). Log a full traceback server-side
+            # instead, at ERROR (never INFO/below - see Observability &
+            # Logging), so it's available for investigation without exposing
+            # exception text to the operator-facing notification.
+            logging.getLogger("pipeline").error(
+                f"{plan_name}/{story_key} review raised {type(e).__name__}:\n"
+                f"{traceback.format_exc()}"
+            )
             _notify_user(
                 plan_name,
                 f"{story_key} review failed with an unexpected "

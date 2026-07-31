@@ -48,15 +48,19 @@ mkdir -p "$OUT_DIR"
 
 TEMPLATE_DIR="${SCRIPT_DIR}/launchd"
 
-declare -A KINDS=(
-    [advance-scheduler]=com.claude.pipeline.advance-scheduler.plist
-    [usage-poller]=com.claude.pipeline.usage-poller.plist
-    [mlx-supervisor]=com.claude.pipeline.mlx-supervisor.plist
-)
+# Parallel array (not `declare -A`) on purpose: associative arrays require
+# bash 4+, but macOS ships bash 3.2 as its system /bin/bash (frozen there
+# for GPLv2-licensing reasons) - and that is what `#!/usr/bin/env bash`
+# resolves to on a stock macOS box, including GitHub's macos-latest CI
+# runner. `declare -A` silently misbehaves under 3.2 rather than erroring
+# cleanly, corrupting the loop below into a `set -u` "unbound variable"
+# crash. A script whose whole purpose is portability must itself run on
+# bash 3.2, not just bash 4+.
+KINDS="advance-scheduler usage-poller mlx-supervisor"
 
-for kind in "${!KINDS[@]}"; do
+for kind in $KINDS; do
     src="${TEMPLATE_DIR}/com.claude.pipeline.${kind}.plist.template"
-    dst="${OUT_DIR}/${KINDS[$kind]}"
+    dst="${OUT_DIR}/com.claude.pipeline.${kind}.plist"
     sed -e "s|{{REPO_ROOT}}|${REPO_ROOT}|g" \
         -e "s|{{HOME}}|${HOME}|g" \
         ${MLX_MODEL_PATH:+-e "s|{{MLX_MODEL_PATH}}|${MLX_MODEL_PATH}|g"} \

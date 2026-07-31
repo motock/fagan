@@ -3991,7 +3991,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                 mcp_touched = _mcp_self_source_touched(
                     worktree, f"origin/{_default_branch()}"
                 )
-                _merge_pr(story.get("worktree", "+"), story_key)
+                _merge_pr(story.get("worktree", ""), story_key)
         except Exception as e:  # noqa: BLE001 (surface the gh/git failure to the human, don't raise)
             return {"ok": False, "error": str(e), "story_key": story_key}
         # Final write INSIDE the lock, using the manifest re-read inside the
@@ -4000,6 +4000,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
         story.pop("parked_reason", None)
         story.pop("ci_rerun_attempted", None)
         _atomic_write_json(manifest_path, manifest)
+    _mark_plane_done(story_key, plan_name)
     if mcp_touched:
         _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
     return {"ok": True, "story_key": story_key, "status": "done"}

@@ -8,8 +8,6 @@ Run with the project venv:
 
 import subprocess
 
-import pytest
-
 from pipeline import self_modification as sm
 
 
@@ -167,7 +165,7 @@ def test_invokes_git_diff_with_triple_dot_base_ref_range(monkeypatch, tmp_path):
     monkeypatch.setattr(sm, "subprocess", fake)
     sm._mcp_self_source_touched(str(tmp_path), "origin/master")
     assert len(fake.calls) == 1
-    cmd, kwargs = fake.calls[0]
+    cmd, _kwargs = fake.calls[0]
     assert cmd == ["git", "diff", "--name-only", "origin/master...HEAD"]
 
 

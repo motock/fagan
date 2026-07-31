@@ -63,4 +63,6 @@ def _mcp_restart_notice(touched: list[str]) -> str:
         f"This merge changed the MCP server's own source ({paths}). The running pipeline MCP server is a long-lived stdio child of the claude CLI and does NOT hot-reload - it is still executing pre-merge code. Run `/mcp reconnect` in Claude Code (or restart it) before dispatching, reviewing, or merging any further story."
     )
 
-__all__ = ["MCP_SELF_SOURCE_FILES", "_mcp_self_source_touched", "_mcp_restart_notice"]
+# Declaration order groups the constant before the two functions that use it,
+# not alphabetically; kept as-is rather than isort-sorted.
+__all__ = ["MCP_SELF_SOURCE_FILES", "_mcp_self_source_touched", "_mcp_restart_notice"]  # noqa: RUF022

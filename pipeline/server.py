@@ -293,6 +293,14 @@ from .review import (
     _run_security_reviewer,
 )
 
+# MCP self-modification detection. The running MCP server does not hot-reload
+# its own source, so a merge that changes it needs an explicit operator notice.
+from .self_modification import (  # noqa: F401
+    MCP_SELF_SOURCE_FILES,
+    _mcp_restart_notice,
+    _mcp_self_source_touched,
+)
+
 # Ticketing backend. Tests patch the pipeline_ticketing module directly
 # (monkeypatch.setattr(pt, "plane_request", ...), monkeypatch.setattr(pt,
 # "PLANE_API_KEY", ...), etc.) - this is the Option B pattern from
@@ -3978,7 +3986,12 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
                         "error": f"build reverify fail: {build['error']}",
                         "story_key": story_key,
                     }
-                _merge_pr(story.get("worktree", ""), story_key)
+                # _merge_pr removes the worktree and deletes the branch, so the
+                # self-source diff must be taken BEFORE the merge, not after.
+                mcp_touched = _mcp_self_source_touched(
+                    worktree, f"origin/{_default_branch()}"
+                )
+                _merge_pr(story.get("worktree", "+"), story_key)
         except Exception as e:  # noqa: BLE001 (surface the gh/git failure to the human, don't raise)
             return {"ok": False, "error": str(e), "story_key": story_key}
         # Final write INSIDE the lock, using the manifest re-read inside the
@@ -3987,7 +4000,8 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
         story.pop("parked_reason", None)
         story.pop("ci_rerun_attempted", None)
         _atomic_write_json(manifest_path, manifest)
-    _mark_plane_done(story_key, plan_name)
+    if mcp_touched:
+        _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
     return {"ok": True, "story_key": story_key, "status": "done"}
 
 

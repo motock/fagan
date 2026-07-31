@@ -148,17 +148,22 @@ class TestGolangci:
 
 
 class TestLivePipelineRepo:
-    """This repo's own shape: no ruff.toml/[tool.ruff], ruff pinned only in
-    requirements-dev.txt, CI runs bare `ruff check .`. detect_lint_command
-    must find it -- this doubles as the live proof the story's original
-    premise was checking for and got wrong."""
+    """This repo's own shape: no standalone ruff.toml/.ruff.toml, only a
+    narrow [tool.ruff.lint.per-file-ignores] section in pyproject.toml (an
+    exemption for read-only acceptance fixtures, which can't be edited to
+    fix style nits without failing the merge gate's tamper check), plus
+    ruff pinned in requirements-dev.txt. CI runs bare `ruff check .` either
+    way -- detect_lint_command's command shape doesn't change based on
+    whether detection came from the config-file signal or the
+    declared-dependency signal, so this still doubles as the live proof
+    the story's original premise was checking for and got wrong."""
 
     def test_detects_this_repos_own_lint_setup(self):
         repo_root = Path(__file__).resolve().parent.parent.parent
         assert not (repo_root / "ruff.toml").exists()
         assert not (repo_root / ".ruff.toml").exists()
         pyproject_text = (repo_root / "pyproject.toml").read_text()
-        assert "[tool.ruff" not in pyproject_text
+        assert "[tool.ruff.lint.per-file-ignores]" in pyproject_text
         result = detect_lint_command(repo_root)
         assert result is not None
         _, cmd = result

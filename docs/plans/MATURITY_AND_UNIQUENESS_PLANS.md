@@ -235,7 +235,7 @@ Reference comparables:
       — the one immediately before it would park — to a configured stronger
       provider+model. Depends on the P0 finding-target storage above (PR
       #158), which shipped first.
-- [ ] **P1 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
+- [x] **P1 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
       — when a story changes `pipeline/server.py` or `pipeline_mcp_server.py`
       itself, make "restart + reconnect the MCP server" an explicit, checked
       step.** The running MCP server is a long-lived stdio child of the
@@ -244,6 +244,12 @@ Reference comparables:
       code until manually killed — and killing it does not auto-reconnect the
       session's tools. Discovered by manually testing the new
       `mark_story_done` behavior and getting the stale result.
+      Shipped: `pipeline/self_modification.py` detects whether a merged
+      branch's diff touched `pipeline/server.py` or
+      `app/pipeline_mcp_server.py`, and both merge paths (`approve_merge` and
+      `advance_pipeline`'s merge gate) then `_notify_user` the operator to run
+      `/mcp reconnect` before dispatching or reviewing further work. Detection
+      fails open, so a git error skips the notice rather than blocking a merge.
 - [x] **Fix the test-isolation leak** (2026-07-18, PR #131) —
       `load_oracle_module_with_env`/`load_module_with_env` mutating
       `os.environ` without cleanup; fixed with an `autouse` environ-snapshot

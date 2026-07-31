@@ -239,17 +239,11 @@ Reference comparables:
       — when a story changes `pipeline/server.py` or `pipeline_mcp_server.py`
       itself, make "restart + reconnect the MCP server" an explicit, checked
       step.** The running MCP server is a long-lived stdio child of the
-      `claude` CLI (not launchd-supervised, unlike the scheduler/usage-poller)
+      `claude` CLI (not launchd-supervised, unlike the scheduler/usage-poller
       jobs which get a fresh process per tick) and keeps executing pre-merge
       code until manually killed — and killing it does not auto-reconnect the
       session's tools. Discovered by manually testing the new
       `mark_story_done` behavior and getting the stale result.
-      Shipped: `pipeline/self_modification.py` detects whether a merged
-      branch's diff touched `pipeline/server.py` or
-      `app/pipeline_mcp_server.py`, and both merge paths (`approve_merge` and
-      `advance_pipeline`'s merge gate) then `_notify_user` the operator to run
-      `/mcp reconnect` before dispatching or reviewing further work. Detection
-      fails open, so a git error skips the notice rather than blocking a merge.
       Shipped: `pipeline/self_modification.py` detects whether a merged
       branch's diff touched `pipeline/server.py` or
       `app/pipeline_mcp_server.py`, and both merge paths (`approve_merge` and

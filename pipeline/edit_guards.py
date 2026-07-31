@@ -14,7 +14,6 @@ performed, keeping the module safe to import in any context.
 
 import collections
 import difflib
-from typing import Optional
 
 # Public API -----------------------------------------------------------------
 
@@ -91,7 +90,7 @@ _MAX_CHARS_PER_SECTION = 1500
 _TRUNCATION_MARKER = "... (truncated, more lines omitted)"
 
 
-def _render_section(lines: list[str], header: Optional[str] = None) -> str:
+def _render_section(lines: list[str], header: str | None = None) -> str:
     """Render a section of the report with caps and truncation.
 
     Parameters

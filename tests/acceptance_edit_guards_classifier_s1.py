@@ -12,7 +12,6 @@ import difflib
 
 from pipeline import edit_guards
 
-
 OLD = [
     '    story = _load(story_key)\n',
     '    worktree = story.get("worktree", "")\n',

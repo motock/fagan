@@ -3830,6 +3830,11 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                 summary["notify"].append(key)
                 continue
 
+            # _merge_pr removes the worktree and deletes the branch, so the
+            # self-source diff must be taken BEFORE the merge, not after.
+            mcp_touched = _mcp_self_source_touched(
+                worktree, f"origin/{_default_branch()}"
+            )
             try:
                 _merge_pr(story.get("worktree", ""), key)
             except Exception as e:  # noqa: BLE001 (gh/git transient failure - see MERGE_MAX_ATTEMPTS)
@@ -3859,6 +3864,9 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             story.pop("ci_rerun_attempted", None)
             story.pop("ci_rework", None)  # L1: clear the rework flag on done
             _mark_plane_done(key, plan_name)
+            if mcp_touched:
+                _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
+                summary["notify"].append(key)
             summary["merged"].append(key)
         _atomic_write_json(manifest_path, manifest)
 

@@ -51,5 +51,7 @@ def test_agent_script_oracle_exists_on_disk():
     assert b.OllamaDriver._AGENT_SCRIPT_ORACLE.exists()
 
 
-def test_venv_python_exists_on_disk():
-    assert b.OllamaDriver._VENV_PYTHON.exists()
+# No on-disk exists() check for _VENV_PYTHON: .venv/ is gitignored and never
+# created in a fresh CI checkout (CI installs deps into the setup-python
+# interpreter directly). The equality tests above already pin the correct
+# structural path.

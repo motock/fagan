@@ -8,21 +8,19 @@ original `_removed_lines_echo` helper in `scripts/local_agent.py`, but exposes i
 as reusable public API.
 
 The functions are intentionally lightweight: only the standard library is
-used (``difflib``, ``collections`` and ``typing``).  No I/O or subprocesses
-are performed, keeping the module safe to import in any context.
+used (``difflib``, ``collections``).  No file I/O or child processes are
+performed, keeping the module safe to import in any context.
 """
 
-from __future__ import annotations
-
-import difflib
 import collections
-from typing import List, Tuple
+import difflib
+from typing import Optional
 
 # Public API -----------------------------------------------------------------
 
 def classify_removed_lines(
-    old_lines: List[str], new_str: str
-) -> Tuple[List[str], List[Tuple[str, str, float]]]:
+    old_lines: list[str], new_str: str
+) -> tuple[list[str], list[tuple[str, str, float]]]:
     """Classify lines that are being removed by a replace operation.
 
     Parameters
@@ -55,8 +53,8 @@ def classify_removed_lines(
     candidates = new_str.splitlines(keepends=True)
     counter = collections.Counter(candidates)
 
-    deletions: List[str] = []
-    rewrites: List[Tuple[str, str, float]] = []
+    deletions: list[str] = []
+    rewrites: list[tuple[str, str, float]] = []
 
     for old_line in list(old_lines):  # copy to avoid accidental mutation
         if not old_line.strip():
@@ -87,14 +85,13 @@ def classify_removed_lines(
 
     return deletions, rewrites
 
-
 # Helper constants for rendering -------------------------------------------------
 _MAX_LINES_PER_SECTION = 15
 _MAX_CHARS_PER_SECTION = 1500
 _TRUNCATION_MARKER = "... (truncated, more lines omitted)"
 
 
-def _render_section(lines: List[str], header: str | None = None) -> str:
+def _render_section(lines: list[str], header: Optional[str] = None) -> str:
     """Render a section of the report with caps and truncation.
 
     Parameters
@@ -108,11 +105,10 @@ def _render_section(lines: List[str], header: str | None = None) -> str:
     if not lines:
         return ""
 
-    rendered = []
+    rendered: list[str] = []
     total_chars = 0
     count = 0
     for line in lines:
-        # Stop before exceeding char cap; we still need to add marker later.
         projected_len = len(line) + (1 if rendered else 0)
         if total_chars + projected_len > _MAX_CHARS_PER_SECTION or count >= _MAX_LINES_PER_SECTION:
             break
@@ -123,7 +119,6 @@ def _render_section(lines: List[str], header: str | None = None) -> str:
     section_text = "\n".join(rendered)
     # Add truncation marker if we didn't include all lines.
     if len(lines) > count or len(section_text) >= _MAX_CHARS_PER_SECTION:
-        # Ensure marker fits within char cap.
         remaining_space = _MAX_CHARS_PER_SECTION - total_chars
         marker = _TRUNCATION_MARKER[:remaining_space]
         section_text += ("\n" if section_text else "") + marker
@@ -131,11 +126,10 @@ def _render_section(lines: List[str], header: str | None = None) -> str:
         return f"{header}\n{section_text}"
     return section_text
 
-
 # Public API -----------------------------------------------------------------
 
 def render_removal_report(
-    deletions: List[str], rewrites: List[Tuple[str, str, float]]
+    deletions: list[str], rewrites: list[tuple[str, str, float]]
 ) -> str:
     """Render a human‑readable report of deletions and rewrites.
 
@@ -164,15 +158,14 @@ def render_removal_report(
     deletion_section = _render_section(deletions)
 
     # Rewrites section – use character‑level diff markers
-    rewrite_lines: List[str] = []
+    rewrite_lines: list[str] = []
     for old, new, ratio in rewrites:
-        # Simple diff representation: prefix with '-' and '+'.
         rewrite_lines.append(f"- {old.rstrip()}\n")
         rewrite_lines.append(f"+ {new.rstrip()}\n")
 
     rewrite_section = _render_section(rewrite_lines)
 
-    parts = []
+    parts: list[str] = []
     if deletion_section:
         parts.append(deletion_section)
     if rewrite_section:

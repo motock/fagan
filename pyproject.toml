@@ -36,3 +36,12 @@ testpaths = [
     "tests/unit/test_local_agent_5xx_recovery.py",
     "tests/unit/test_local_agent_5xx_recovery_oracle.py",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Acceptance fixtures are read-only oracle content: their worktree bytes are
+# hashed against a dispatch-time digest (pipeline.oracle_gate.acceptance_digests)
+# and any edit - even a pure lint fix - fails the merge gate's tamper check
+# (pipeline.ci._acceptance_tampered). Style nits in these files can't be fixed
+# in place without breaking that guarantee, so import-sort/format is exempted
+# here instead. Only I001; other rules (undefined names, syntax) still apply.
+"tests/acceptance_*.py" = ["I001"]

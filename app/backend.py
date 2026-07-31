@@ -1062,9 +1062,9 @@ class OllamaDriver:
     # The local agent loop lives in a standalone script so it can run as a
     # pollable subprocess; run it with this project's venv python (which has
     # httpx and can import pipeline_mcp_server for in-process checkpointing).
-    _AGENT_SCRIPT = Path(__file__).resolve().parent / "scripts" / "local_agent.py"
-    _AGENT_SCRIPT_ORACLE = Path(__file__).resolve().parent / "scripts" / "local_agent_oracle.py"
-    _VENV_PYTHON = Path(__file__).resolve().parent / ".venv" / "bin" / "python3"
+    _AGENT_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "local_agent.py"
+    _AGENT_SCRIPT_ORACLE = Path(__file__).resolve().parent.parent / "scripts" / "local_agent_oracle.py"
+    _VENV_PYTHON = Path(__file__).resolve().parent.parent / ".venv" / "bin" / "python3"
 
     def record_token_usage(
         self, usage: dict, *, cell_dir: str | None = None,

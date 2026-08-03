@@ -283,14 +283,18 @@ class TestRenderRemovalReportPurity:
 # ---------------------------------------------------------------------------
 
 class TestModuleContract:
-    def test_module_exposes_exactly_the_two_required_public_functions(self):
+    def test_module_exposes_exactly_the_three_required_public_functions(self):
         public_functions = {
             name for name, obj in vars(edit_guards).items()
             if not name.startswith('_')
             and inspect.isfunction(obj)
             and getattr(obj, '__module__', None) == edit_guards.__name__
         }
-        assert public_functions == {'classify_removed_lines', 'render_removal_report'}
+        assert public_functions == {
+            'classify_removed_lines',
+            'render_removal_report',
+            'duplicated_block_warning',
+        }
 
     def test_module_imports_nothing_beyond_difflib_collections_typing(self):
         tree = ast.parse(MODULE_PATH.read_text())
@@ -311,3 +315,215 @@ class TestModuleContract:
         source = MODULE_PATH.read_text()
         for forbidden in ('open(', 'subprocess', 'os.system', 'Path('):
             assert forbidden not in source, f"found forbidden call: {forbidden}"
+
+
+# ---------------------------------------------------------------------------
+# duplicated_block_warning
+#
+# A live replace_lines edit on a markdown doc inserted a verbatim duplicate
+# of a paragraph that already existed nearby. classify_removed_lines cannot
+# see this because nothing was removed. For non-.py files the removal report
+# is the only guard that exists, so this function adds a pure check for a run
+# of >= min_lines consecutive lines in new_str that also appears verbatim as a
+# consecutive run in surrounding_text (the file content outside the replaced
+# range).
+# ---------------------------------------------------------------------------
+
+# The real regression shape: a two-line 'Shipped: ...' paragraph that appears
+# both inside the inserted new_str and in the surrounding (untouched) text.
+SHIPPED_BLOCK = (
+    "Shipped: the replace_lines guard now blocks collateral deletions.\n"
+    "Shipped: the report quotes the exact removed line verbatim.\n"
+)
+
+
+class TestDuplicatedBlockWarningSignature:
+    def test_function_exists_and_is_callable(self):
+        assert hasattr(edit_guards, 'duplicated_block_warning')
+        assert callable(edit_guards.duplicated_block_warning)
+
+    def test_min_lines_keyword_only(self):
+        # min_lines must be keyword-only: passing it positionally should raise.
+        with pytest.raises(TypeError):
+            edit_guards.duplicated_block_warning("a\n", "a\n", 2)  # type: ignore[misc]
+
+    def test_return_type_is_str(self):
+        result = edit_guards.duplicated_block_warning("", "")
+        assert isinstance(result, str)
+
+    def test_is_pure_no_io(self):
+        # The function must not touch the filesystem or spawn subprocesses.
+        source = MODULE_PATH.read_text()
+        # The new function body is added after the existing ones; the whole
+        # module must remain free of I/O calls (already asserted by the
+        # contract test above, but assert it again for clarity).
+        for forbidden in ('open(', 'subprocess', 'os.system', 'Path('):
+            assert forbidden not in source, f"found forbidden call: {forbidden}"
+
+
+class TestDuplicatedBlockWarningNegativeAndBoundary:
+    def test_empty_new_str_returns_empty(self):
+        assert edit_guards.duplicated_block_warning("", "some\nsurrounding\n") == ""
+
+    def test_empty_surrounding_text_returns_empty(self):
+        assert edit_guards.duplicated_block_warning("some\nlines\n", "") == ""
+
+    def test_both_empty_returns_empty(self):
+        assert edit_guards.duplicated_block_warning("", "") == ""
+
+    def test_single_duplicated_line_below_min_lines_returns_empty(self):
+        # A single duplicated line is below the default min_lines=2.
+        assert edit_guards.duplicated_block_warning("only line\n", "only line\n") == ""
+
+    def test_single_duplicated_line_below_explicit_min_lines_returns_empty(self):
+        assert edit_guards.duplicated_block_warning(
+            "only line\n", "only line\n", min_lines=2
+        ) == ""
+
+    def test_exactly_min_lines_duplicated_returns_warning(self):
+        block = "line one\nline two\n"
+        result = edit_guards.duplicated_block_warning(block, block, min_lines=2)
+        assert result != ""
+        assert isinstance(result, str)
+
+    def test_duplicated_run_of_blank_lines_only_returns_empty(self):
+        # A run consisting entirely of blank/whitespace lines must not warn.
+        blanks = "\n\n\n"
+        result = edit_guards.duplicated_block_warning(blanks, blanks, min_lines=2)
+        assert result == ""
+
+    def test_duplicated_run_of_whitespace_only_lines_returns_empty(self):
+        ws = "   \n\t\n  \n"
+        result = edit_guards.duplicated_block_warning(ws, ws, min_lines=2)
+        assert result == ""
+
+    def test_near_but_not_exact_duplicate_returns_empty(self):
+        # This function is verbatim-only by design; a near miss must not warn.
+        new_str = "Shipped: the guard blocks collateral deletions.\nsecond\n"
+        surrounding = "Shipped: the guard blocks collateral deletion.\nsecond\n"
+        result = edit_guards.duplicated_block_warning(new_str, surrounding, min_lines=2)
+        assert result == ""
+
+    def test_leading_indentation_is_significant(self):
+        # Indented block in new_str vs non-indented in surrounding -> not a match.
+        new_str = "    indented line one\n    indented line two\n"
+        surrounding = "indented line one\nindented line two\n"
+        result = edit_guards.duplicated_block_warning(new_str, surrounding, min_lines=2)
+        assert result == ""
+
+    def test_leading_and_trailing_blank_lines_ignored_when_finding_run(self):
+        # The duplicated run is wrapped in blank lines inside new_str; the
+        # blanks should be ignored and the inner run still detected.
+        inner = "real line one\nreal line two\n"
+        new_str = "\n\n" + inner + "\n\n"
+        surrounding = "prefix\n" + inner + "suffix\n"
+        result = edit_guards.duplicated_block_warning(new_str, surrounding, min_lines=2)
+        assert result != ""
+
+
+class TestDuplicatedBlockWarningContent:
+    def test_warning_names_number_of_duplicated_lines(self):
+        block = "line one\nline two\nline three\n"
+        result = edit_guards.duplicated_block_warning(block, block, min_lines=2)
+        assert result != ""
+        # The warning must name the number of duplicated lines (3 here).
+        assert "3" in result
+
+    def test_warning_quotes_the_block(self):
+        block = "line one\nline two\n"
+        result = edit_guards.duplicated_block_warning(block, block, min_lines=2)
+        assert result != ""
+        # The block text must appear (verbatim) in the warning.
+        assert "line one" in result
+        assert "line two" in result
+
+    def test_real_regression_shape_shipped_paragraph(self):
+        # The actual live regression: a two-line 'Shipped: ...' paragraph
+        # appearing in both new_str and surrounding_text.
+        new_str = SHIPPED_BLOCK
+        surrounding = "Some intro text.\n" + SHIPPED_BLOCK + "Some trailing text.\n"
+        result = edit_guards.duplicated_block_warning(new_str, surrounding, min_lines=2)
+        assert result != ""
+        assert "2" in result
+        assert "Shipped: the replace_lines guard now blocks collateral deletions." in result
+
+    def test_run_must_be_consecutive_in_surrounding_text(self):
+        # The same lines exist in surrounding_text but NOT consecutively.
+        new_str = "alpha\nbeta\n"
+        surrounding = "alpha\nsomething in between\nbeta\n"
+        result = edit_guards.duplicated_block_warning(new_str, surrounding, min_lines=2)
+        assert result == ""
+
+    def test_run_must_be_consecutive_in_new_str(self):
+        # The same lines exist in new_str but not consecutively.
+        new_str = "alpha\nsomething in between\nbeta\n"
+        surrounding = "alpha\nbeta\n"
+        result = edit_guards.duplicated_block_warning(new_str, surrounding, min_lines=2)
+        assert result == ""
+
+    def test_trailing_newlines_normalised_in_comparison(self):
+        # One side has a trailing blank line, the other doesn't, but the
+        # meaningful run still matches after newline normalisation.
+        block = "line one\nline two\n"
+        new_str = block
+        surrounding = "prefix\n" + block.rstrip("\n") + "\nsuffix\n"
+        result = edit_guards.duplicated_block_warning(new_str, surrounding, min_lines=2)
+        assert result != ""
+
+
+class TestDuplicatedBlockWarningCaps:
+    def _long_block(self, n: int) -> str:
+        return "".join(f"line number {i}\n" for i in range(n))
+
+    def test_long_block_truncation_marker_present(self):
+        block = self._long_block(50)
+        result = edit_guards.duplicated_block_warning(block, block, min_lines=2)
+        assert result != ""
+        # A truncation marker must be present (consistent with render_removal_report).
+        assert "truncated" in result.lower()
+
+    def test_long_block_under_char_cap(self):
+        block = self._long_block(50)
+        result = edit_guards.duplicated_block_warning(block, block, min_lines=2)
+        assert result != ""
+        # The whole warning must stay under the 1500 character cap.
+        assert len(result) <= 1500
+
+    def test_long_block_line_cap_at_fifteen(self):
+        # The quoted block portion is capped at 15 lines.
+        block = self._long_block(50)
+        result = edit_guards.duplicated_block_warning(block, block, min_lines=2)
+        assert result != ""
+        # Count quoted content lines (lines that look like the duplicated data,
+        # excluding the header/truncation marker). At most 15 of the data lines
+        # should appear.
+        data_lines = [ln for ln in result.splitlines() if ln.startswith("line number ")]
+        assert len(data_lines) <= 15
+
+    def test_warning_under_cap_when_block_small(self):
+        block = "line one\nline two\n"
+        result = edit_guards.duplicated_block_warning(block, block, min_lines=2)
+        assert len(result) <= 1500
+
+
+class TestDuplicatedBlockWarningMinLinesParameter:
+    def test_min_lines_three_requires_three_lines(self):
+        block = "a\nb\n"
+        # Only 2 lines but min_lines=3 -> no warning.
+        assert edit_guards.duplicated_block_warning(block, block, min_lines=3) == ""
+
+    def test_min_lines_three_warns_at_three(self):
+        block = "a\nb\nc\n"
+        result = edit_guards.duplicated_block_warning(block, block, min_lines=3)
+        assert result != ""
+        assert "3" in result
+
+    def test_min_lines_one_warns_on_single_line(self):
+        # With min_lines=1 a single duplicated (non-blank) line should warn.
+        result = edit_guards.duplicated_block_warning("lonely\n", "lonely\n", min_lines=1)
+        assert result != ""
+        assert "1" in result
+
+    def test_min_lines_one_still_ignores_blank_only_runs(self):
+        result = edit_guards.duplicated_block_warning("\n\n", "\n\n", min_lines=1)
+        assert result == ""

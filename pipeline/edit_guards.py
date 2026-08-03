@@ -172,4 +172,102 @@ def render_removal_report(
 
     return "\n".join(parts).strip()
 
+# -----------------------------------------------------------------------------
+# New function – duplicated block warning
+# -----------------------------------------------------------------------------
+
+def duplicated_block_warning(
+    new_str: str,
+    surrounding_text: str,
+    *,
+    min_lines: int = 2,
+) -> str:
+    """Return a warning if ``new_str`` contains a verbatim block that also
+    appears in ``surrounding_text``.
+
+    Parameters
+    ----------
+    new_str:
+        The replacement text that will be inserted.  It may contain zero or more
+        lines.
+    surrounding_text:
+        The file content *outside* the replaced range (the caller passes the
+        untouched prefix plus suffix).
+    min_lines:
+        Minimum number of consecutive non‑blank lines required to trigger a
+        warning.  Defaults to ``2``.
+
+    Returns
+    -------
+    str
+        An empty string if no duplicated block is found; otherwise a short
+        warning that names the number of duplicated lines and quotes the block.
+        The quoted block is capped at 15 lines or 1500 characters, whichever
+        limit is hit first.  A truncation marker consistent with
+        :func:`_render_section` is appended if the block exceeds the cap.
+    """
+
+    # Normalise line breaks and split into lists
+    new_lines = new_str.splitlines()
+    surrounding_lines = surrounding_text.splitlines()
+
+    # Strip leading/trailing blank lines from new_lines only
+    def _strip_blank(lines: list[str]) -> list[str]:
+        start, end = 0, len(lines)
+        while start < end and not lines[start].strip():
+            start += 1
+        while end > start and not lines[end - 1].strip():
+            end -= 1
+        return lines[start:end]
+
+    stripped_new = _strip_blank(new_lines)
+
+    # Early exit if too few lines or no surrounding content
+    if len(stripped_new) < min_lines or not surrounding_lines:
+        return ""
+
+    # Helper to check if a run of lines appears consecutively in another list
+    def _run_in(lines: list[str], target: list[str]) -> bool:
+        n = len(lines)
+        for i in range(len(target) - n + 1):
+            if target[i : i + n] == lines:
+                return True
+        return False
+
+    # Search for the longest run that meets criteria, starting from full length
+    best_run: list[str] | None = None
+    for size in range(len(stripped_new), min_lines - 1, -1):
+        # Skip runs that are all whitespace
+        if all(not line.strip() for line in stripped_new[:size]):
+            continue
+        run = stripped_new[:size]
+        if _run_in(run, surrounding_lines):
+            best_run = run
+            break
+    if not best_run:
+        return ""
+
+    # Build warning string
+    num_lines = len(best_run)
+    header = f"{num_lines} duplicated line{'s' if num_lines != 1 else ''} detected."
+    
+    # Apply caps similar to _render_section logic
+    lines_to_show: list[str] = []
+    total_chars = 0
+    for line in best_run:
+        projected_len = len(line) + (1 if lines_to_show else 0)
+        if total_chars + projected_len > _MAX_CHARS_PER_SECTION or len(lines_to_show) >= _MAX_LINES_PER_SECTION:
+            break
+        lines_to_show.append(line)
+        total_chars += projected_len
+    truncated = len(best_run) != len(lines_to_show)
+
+    block_text = "\n".join(lines_to_show)
+    if truncated:
+        remaining_space = _MAX_CHARS_PER_SECTION - total_chars
+        marker = _TRUNCATION_MARKER[:remaining_space]
+        block_text += ("\n" if block_text else "") + marker
+
+    return f"{header}\n{block_text}".strip()
+
 # End of module.

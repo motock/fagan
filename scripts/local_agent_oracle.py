@@ -42,7 +42,7 @@ import shlex
 import subprocess
 import sys
 import time
-from collections import Counter, deque
+from collections import deque
 from pathlib import Path
 
 import httpx
@@ -195,6 +195,7 @@ class PersistingList(list):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import inference_providers
 from app import pipeline_mcp_server as p
+from pipeline import edit_guards
 
 CWD = Path.cwd()
 MODEL = os.environ["LOCAL_AGENT_MODEL"]
@@ -474,7 +475,8 @@ TOOLS = [
         "name": "replace_lines", "description": "Replace lines start..end (1-indexed, inclusive) in an existing file with new_str. Use this when str_replace's old_str will not match (e.g. whitespace differences): give the exact line numbers from `nl -ba <file> | sed -n '<start>,<end>p'` and the new content; no byte-exact old_str is required.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "start": {"type": "integer"},
-            "end": {"type": "integer"}, "new_str": {"type": "string"}},
+            "end": {"type": "integer"}, "new_str": {"type": "string"},
+            "confirm_removals": {"type": "boolean", "description": "Set true to confirm you intend to delete the lines the previous attempt reported. Only needed after a rejected edit."}},
             "required": ["path", "start", "end", "new_str"]}}},
     {"type": "function", "function": {
         "name": "view_file",
@@ -1251,33 +1253,6 @@ def _record_syntax_rejection(path_str: str, err: str, existing_line_count: int |
     return err
 
 
-def _removed_lines_echo(old_lines: list[str], new_str: str) -> str:
-    """Mode 41 (D): ported verbatim from local_agent.py; keep both copies
-    in sync. Echo of lines a replace_lines call genuinely removed (present
-    in the old range, absent anywhere in the replacement block), or "" if
-    nothing was truly dropped."""
-    new_lines = new_str.splitlines(keepends=True) if new_str else []
-    remaining = Counter(new_lines)
-    removed: list[str] = []
-    for line in old_lines:
-        if remaining.get(line, 0) > 0:
-            remaining[line] -= 1
-        else:
-            removed.append(line)
-    if not removed:
-        return ""
-    MAX_ECHO_LINES = 15
-    MAX_ECHO_CHARS = 1500
-    shown = removed[:MAX_ECHO_LINES]
-    body = "".join(shown)
-    if len(body) > MAX_ECHO_CHARS:
-        body = body[:MAX_ECHO_CHARS] + "\n... [truncated]"
-    elif len(removed) > MAX_ECHO_LINES:
-        body += f"... [{len(removed) - MAX_ECHO_LINES} more line(s) truncated]\n"
-    return (f"\n\n[removed {len(removed)} line(s) not present in your replacement - "
-            f"verify this wasn't unintentional collateral:]\n{body}")
-
-
 def _lint_feedback_for(path_str: str) -> str:
     """Mode 40: ported verbatim from local_agent.py; keep both copies in
     sync. After a successful write, run a fast, single-file-scoped lint
@@ -1401,9 +1376,19 @@ def run_tool(fn, args) -> str:
                 f"assignment, remove the surviving use too, or replace it with an "
                 f"equivalent. The edit was NOT applied."
             )
+        deletions, rewrites = edit_guards.classify_removed_lines(lines[start - 1:end], new_str)
+        if deletions and not args.get("confirm_removals"):
+            report = edit_guards.render_removal_report(deletions, rewrites)
+            return (
+                f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
+                f"that don't appear to survive (as-is or rewritten) in your replacement:"
+                f"{report}\n\nRevise new_str to preserve these lines, or if the deletion "
+                f"is intentional, repeat this exact call with confirm_removals=true. "
+                f"The edit was NOT applied."
+            )
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
-        removed_echo = _removed_lines_echo(lines[start - 1:end], new_str)
+        removed_echo = edit_guards.render_removal_report([], rewrites)
         return (f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")
                 + removed_echo + _lint_feedback_for(args['path']))
     if fn == "view_file":

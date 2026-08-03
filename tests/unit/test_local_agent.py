@@ -3121,7 +3121,10 @@ def test_replace_lines_appends_lint_feedback_when_ruff_finds_issues(tmp_path, mo
 
     monkeypatch.setattr(la.subprocess, "run", lambda *a, **k: _R())
 
-    result = la.run_tool("replace_lines", {"path": "foo.py", "start": 1, "end": 1, "new_str": "l = 1\n"})
+    # Replacing "x = 1" with "l = 1" is a true deletion (no near-survivor),
+    # so the edit-guards gate rejects it unless confirm_removals opts in.
+    # This test grades the lint-feedback suffix, not the gate, so opt in.
+    result = la.run_tool("replace_lines", {"path": "foo.py", "start": 1, "end": 1, "new_str": "l = 1\n", "confirm_removals": True})
     assert "edited foo.py" in result
     assert "E741" in result
 
@@ -3166,18 +3169,25 @@ def test_lint_feedback_skipped_when_lint_not_detected(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Mode 41 follow-up (D): replace_lines echoes the lines it actually removed
-# back in the tool result. Neither _newly_undefined_names nor
+# Mode 41 follow-up (D) -> S2 edit-guards wiring: replace_lines used to
+# merely ECHO the lines it actually removed back in the tool result (a
+# message the model was free to ignore). Neither _newly_undefined_names nor
 # _newly_undefined_module_defs catches a silently-dropped statement with no
 # surviving reference to orphan (e.g. a bare `time.sleep(10)` call, or a
 # `story["x"] = x` write nothing else reads) - the exact shape of the live
 # MODE40-CI-ERROR-DETAIL-V2/MODE40-LINT-GATE-WIRING regressions (a deleted
 # time.sleep(10) causing a busy-loop; a deleted story["interrupted_at"]
-# assignment breaking dashboard staleness). An always-on echo lets the
-# model self-catch this the moment it happens instead of only at review.
+# assignment breaking dashboard staleness). S2 upgrades the echo into a hard
+# BLOCK, via pipeline.edit_guards.classify_removed_lines/render_removal_report
+# (see tests/unit/test_edit_guards.py for the classifier itself - these
+# tests grade the wiring: the import, the tool schema, and the run_tool gate).
 # ---------------------------------------------------------------------------
 
-def test_replace_lines_echoes_removed_lines_in_result(tmp_path, monkeypatch):
+def test_replace_lines_rejects_true_deletion_by_default(tmp_path, monkeypatch):
+    """Supersedes the old echo-only assertion (test_replace_lines_echoes_
+    removed_lines_in_result): this exact scenario - a bare time.sleep(10)
+    with no exact-or-near survivor in new_str - is now a hard rejection,
+    not just a heads-up echo. The file must be left byte-identical."""
     monkeypatch.setattr(la, "CWD", tmp_path)
     original = (
         "def f():\n"
@@ -3194,11 +3204,156 @@ def test_replace_lines_echoes_removed_lines_in_result(tmp_path, monkeypatch):
         "new_str": "    do_thing()\n",
     })
 
-    assert result.startswith("edited mod.py (lines 2-3)")
-    assert "removed" in result.lower()
     assert "time.sleep(10)" in result
-    removed_section = result.split("removed", 1)[1]
-    assert "do_thing()" not in removed_section  # the kept line isn't echoed as removed
+    assert "The edit was NOT applied." in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+
+def test_replace_lines_confirm_removals_true_writes_the_rejected_edit(tmp_path, monkeypatch):
+    """The escape hatch: repeating the identical call with
+    confirm_removals=True must let the same edit through and actually
+    write the file this time."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def f():\n"
+        "    do_thing()\n"
+        "    time.sleep(10)  # keep polling\n"
+        "    return\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 3,
+        "new_str": "    do_thing()\n",
+        "confirm_removals": True,
+    })
+
+    assert "The edit was NOT applied." not in result
+    assert result.startswith("edited mod.py (lines 2-3)")
+    written = (tmp_path / "mod.py").read_text()
+    assert written != original
+    assert "time.sleep(10)" not in written
+
+
+def test_local_agent_imports_edit_guards_module():
+    """CHANGE 1: run_tool's gate must be backed by the real, already-merged
+    pipeline.edit_guards module - not a local reimplementation."""
+    from pipeline import edit_guards
+    assert la.edit_guards is edit_guards
+
+
+def test_replace_lines_confirm_removals_declared_optional_in_tool_schema():
+    """CHANGE 2: the flag is useless if the model is never told it exists,
+    and must stay optional so every pre-existing replace_lines call (which
+    never passes it) keeps validating against the schema."""
+    entry = next(t for t in la.TOOLS if t["function"]["name"] == "replace_lines")
+    params = entry["function"]["parameters"]
+    assert params["properties"]["confirm_removals"]["type"] == "boolean"
+    assert "confirm_removals" not in params.get("required", [])
+
+
+def test_replace_lines_rejection_error_names_the_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text("def f():\n    time.sleep(10)\n    return\n")
+
+    result = la.run_tool("replace_lines", {"path": "mod.py", "start": 2, "end": 2, "new_str": ""})
+
+    assert "mod.py" in result
+
+
+def test_replace_lines_rejection_error_tells_model_how_to_proceed(tmp_path, monkeypatch):
+    """(c) from the story brief: the ERROR must point the model at both
+    escape routes - revise new_str to keep the line, or repeat the
+    identical call with confirm_removals=true."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text("def f():\n    time.sleep(10)\n    return\n")
+
+    result = la.run_tool("replace_lines", {"path": "mod.py", "start": 2, "end": 2, "new_str": ""})
+
+    assert "confirm_removals" in result
+    assert "new_str" in result
+
+
+def test_replace_lines_rejection_error_ends_with_exact_sentence(tmp_path, monkeypatch):
+    """(d) from the story brief: must match the adjacent orphaned-names
+    guard's wording verbatim so the model learns one consistent stop
+    signal instead of two slightly different ones."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text("def f():\n    time.sleep(10)\n    return\n")
+
+    result = la.run_tool("replace_lines", {"path": "mod.py", "start": 2, "end": 2, "new_str": ""})
+
+    assert result.rstrip().endswith("The edit was NOT applied.")
+
+
+def test_replace_lines_rejection_error_embeds_the_real_removal_report(tmp_path, monkeypatch):
+    """Grades the INTEGRATION, not a hand-rolled reimplementation: the
+    ERROR text must contain the exact string edit_guards.render_removal_
+    report produces for this edit's actual deletions/rewrites, proving
+    run_tool calls the real classifier rather than approximating its
+    output inline."""
+    from pipeline import edit_guards
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def f():\n"
+        "    do_thing()\n"
+        "    time.sleep(10)  # keep polling\n"
+        "    return\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    old_lines = original.splitlines(keepends=True)
+    new_str = "    do_thing()\n"
+    deletions, rewrites = edit_guards.classify_removed_lines(old_lines[1:3], new_str)
+    expected_report = edit_guards.render_removal_report(deletions, rewrites)
+
+    result = la.run_tool("replace_lines", {"path": "mod.py", "start": 2, "end": 3, "new_str": new_str})
+
+    assert expected_report
+    assert expected_report in result
+
+
+def test_replace_lines_success_message_uses_char_diff_report_for_rewrites(tmp_path, monkeypatch):
+    """A rewrite-only edit (no true deletions) is NOT blocked and still
+    writes - but its success suffix must now come from edit_guards.
+    render_removal_report's character-level diff markers ('- '/'+ '
+    lines), not the old full-line echo phrasing that hid a single
+    changed character behind a wall of identical-looking text."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "mod.py").write_text('x = cfg.get("k", "")\n')
+
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py", "start": 1, "end": 1,
+        "new_str": 'x = cfg.get("k", "+")\n',
+    })
+
+    assert result.startswith("edited mod.py (lines 1-1)")
+    assert "The edit was NOT applied." not in result
+    assert '- x = cfg.get("k", "")' in result
+    assert '+ x = cfg.get("k", "+")' in result
+    assert "not present in your replacement" not in result  # old echo phrasing is gone
+    assert (tmp_path / "mod.py").read_text() == 'x = cfg.get("k", "+")\n'
+
+
+def test_removed_lines_echo_helper_is_deleted():
+    """CHANGE 4: nothing outside its own file called _removed_lines_echo
+    (verified via `grep -n _removed_lines_echo -R .` before this story
+    shipped - only pipeline/edit_guards.py's docstring and tests/unit/
+    test_edit_guards.py's docstring reference it in prose). Once
+    replace_lines stops calling it, it must be deleted, not left as dead
+    code sitting unused beside its replacement."""
+    assert not hasattr(la, "_removed_lines_echo")
+
+
+def test_counter_import_removed_as_dead_code_but_deque_kept():
+    """Counter was imported from collections solely for
+    _removed_lines_echo's multiset diff; deleting that function without
+    also dropping the now-unused import would fail `ruff check .`
+    (F401 unused import). deque is still used elsewhere (recent_tools)
+    and must stay."""
+    assert not hasattr(la, "Counter")
+    assert hasattr(la, "deque")
 
 
 def test_replace_lines_no_echo_when_old_line_preserved_verbatim(tmp_path, monkeypatch):
@@ -3233,9 +3388,14 @@ def test_replace_lines_echo_capped_for_large_removals(tmp_path, monkeypatch):
         "new_str": "    pass\n",
     })
 
-    assert result.startswith("edited mod.py (lines 2-201)")
-    assert len(result) < 3000  # capped, not a 200-line dump
-    assert "truncated" in result.lower() or "more line" in result.lower()
+    # 200 genuine deletions (line_0..line_199 -> "    pass\n") are now a hard
+    # block, not a capped echo: the edit must be refused and the file left
+    # untouched, with the removal report still capped (not a 200-line dump).
+    assert "The edit was NOT applied." in result
+    assert "deletes 200 line(s)" in result
+    assert (tmp_path / "mod.py").read_text() == original
+    assert len(result) < 3000
+    assert "truncated" in result.lower()
 
 
 def test_str_replace_does_not_echo_removed_lines(tmp_path, monkeypatch):

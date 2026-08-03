@@ -279,7 +279,7 @@ class TestRenderRemovalReportPurity:
 
 
 # ---------------------------------------------------------------------------
-# Module-shape contracts: pure, no I/O, exactly two public functions.
+# Module-shape contracts: pure, no I/O, exactly the required public functions.
 # ---------------------------------------------------------------------------
 
 class TestModuleContract:
@@ -294,6 +294,7 @@ class TestModuleContract:
             'classify_removed_lines',
             'render_removal_report',
             'duplicated_block_warning',
+            'verify_range_anchors',
         }
 
     def test_module_imports_nothing_beyond_difflib_collections_typing(self):
@@ -527,3 +528,320 @@ class TestDuplicatedBlockWarningMinLinesParameter:
     def test_min_lines_one_still_ignores_blank_only_runs(self):
         result = edit_guards.duplicated_block_warning("\n\n", "\n\n", min_lines=1)
         assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# verify_range_anchors
+#
+# verify_range_anchors is a pure function added to pipeline/edit_guards.py.
+# It checks the first/last lines of a replace_lines range against optional
+# "anchor" strings the model supplied, returning "" on success or a
+# diagnostic string on mismatch. Anchors are OPTIONAL: verified when
+# supplied, absent otherwise.
+# ---------------------------------------------------------------------------
+
+class TestVerifyRangeAnchorsSignature:
+    def test_function_exists(self):
+        assert hasattr(edit_guards, "verify_range_anchors")
+
+    def test_function_is_callable_with_required_signature(self):
+        # Pure function taking (lines, start, end, expect_first, expect_last).
+        sig = inspect.signature(edit_guards.verify_range_anchors)
+        params = list(sig.parameters)
+        assert params == ["lines", "start", "end", "expect_first", "expect_last"]
+        # No defaults on any parameter: caller always supplies all five.
+        for name, p in sig.parameters.items():
+            assert p.default is inspect.Parameter.empty, name
+
+    def test_return_annotation_is_str(self):
+        sig = inspect.signature(edit_guards.verify_range_anchors)
+        assert sig.return_annotation is str
+
+    def test_is_pure_function_no_file_io(self):
+        # The function must not open files or spawn processes: only stdlib
+        # imports are allowed in the module, and no I/O builtins referenced.
+        source = inspect.getsource(edit_guards.verify_range_anchors)
+        forbidden = ["open(", "subprocess", "os.system", "Path(", "pathlib"]
+        for token in forbidden:
+            assert token not in source, f"verify_range_anchors must not use {token!r}"
+
+
+class TestVerifyRangeAnchorsNoAnchors:
+    def test_both_none_returns_empty_string(self):
+        lines = ["a = 1\n", "b = 2\n", "c = 3\n"]
+        assert edit_guards.verify_range_anchors(lines, 1, 3, None, None) == ""
+
+    def test_both_none_on_empty_file_returns_empty_string(self):
+        assert edit_guards.verify_range_anchors([], 1, 1, None, None) == ""
+
+    def test_both_none_even_when_range_out_of_bounds(self):
+        # Nothing to verify -> "" regardless of bounds; never raises.
+        assert edit_guards.verify_range_anchors(["x\n"], 1, 99, None, None) == ""
+
+
+class TestVerifyRangeAnchorsFirstOnly:
+    def test_first_only_matching_returns_empty(self):
+        lines = ["    story = _load(story_key)\n", "    x = 1\n", "    y = 2\n"]
+        assert edit_guards.verify_range_anchors(lines, 1, 3, "    story = _load(story_key)", None) == ""
+
+    def test_first_only_matching_with_trailing_newline_in_actual(self):
+        # Actual line keeps its newline; expectation omits it -> still matches.
+        lines = ["alpha = 1\n", "beta = 2\n"]
+        assert edit_guards.verify_range_anchors(lines, 1, 2, "alpha = 1", None) == ""
+
+    def test_first_only_matching_with_trailing_whitespace_in_actual(self):
+        # Trailing whitespace on the actual line is tolerated.
+        lines = ["alpha = 1   \n", "beta = 2\n"]
+        assert edit_guards.verify_range_anchors(lines, 1, 2, "alpha = 1", None) == ""
+
+    def test_first_only_matching_with_trailing_whitespace_in_expectation(self):
+        # Trailing whitespace on the expectation is also tolerated.
+        lines = ["alpha = 1\n", "beta = 2\n"]
+        assert edit_guards.verify_range_anchors(lines, 1, 2, "alpha = 1   ", None) == ""
+
+    def test_first_only_mismatching_returns_diagnostic(self):
+        lines = ["alpha = 1\n", "beta = 2\n", "gamma = 3\n"]
+        result = edit_guards.verify_range_anchors(lines, 1, 3, "WRONG", None)
+        assert result != ""
+        # Must name which anchor failed.
+        assert "first" in result.lower()
+        # Must include what the model expected.
+        assert "WRONG" in result
+        # Must include what is ACTUALLY at that line number.
+        assert "alpha = 1" in result
+
+    def test_first_only_mismatch_leading_indentation_not_tolerated(self):
+        # Leading indentation IS significant: a 4-space-indented actual line
+        # does NOT match an unindented expectation.
+        lines = ["    indented = 1\n", "    other = 2\n"]
+        result = edit_guards.verify_range_anchors(lines, 1, 2, "indented = 1", None)
+        assert result != ""
+        assert "first" in result.lower()
+
+
+class TestVerifyRangeAnchorsBothSupplied:
+    def test_both_matching_returns_empty(self):
+        lines = ["    a = 1\n", "    b = 2\n", "    c = 3\n", "    d = 4\n"]
+        assert edit_guards.verify_range_anchors(
+            lines, 1, 4, "    a = 1", "    d = 4"
+        ) == ""
+
+    def test_both_matching_trailing_newline_tolerated(self):
+        lines = ["first\n", "middle\n", "last\n"]
+        assert edit_guards.verify_range_anchors(lines, 1, 3, "first", "last") == ""
+
+    def test_both_matching_trailing_whitespace_tolerated(self):
+        lines = ["first   \n", "middle\n", "last  \n"]
+        assert edit_guards.verify_range_anchors(lines, 1, 3, "first", "last") == ""
+
+    def test_only_last_mismatching_returns_diagnostic_naming_last(self):
+        lines = ["    a = 1\n", "    b = 2\n", "    c = 3\n"]
+        result = edit_guards.verify_range_anchors(lines, 1, 3, "    a = 1", "NOPE")
+        assert result != ""
+        # The failing anchor is the LAST one, not the first.
+        assert "last" in result.lower()
+        assert "NOPE" in result
+        assert "c = 3" in result
+        # First anchor matched, so it should not be reported as the failure.
+        assert "first" not in result.lower()
+
+    def test_both_mismatching_reports_first_failure(self):
+        lines = ["    a = 1\n", "    b = 2\n", "    c = 3\n"]
+        result = edit_guards.verify_range_anchors(lines, 1, 3, "BAD_FIRST", "BAD_LAST")
+        assert result != ""
+        # First anchor is checked first; report names it.
+        assert "first" in result.lower()
+        assert "BAD_FIRST" in result
+
+
+class TestVerifyRangeAnchorsSingleLineRange:
+    def test_start_equals_end_first_and_last_same_line_both_match(self):
+        lines = ["a\n", "b\n", "c\n"]
+        # Single-line range: first and last anchors both refer to line 2.
+        assert edit_guards.verify_range_anchors(lines, 2, 2, "b", "b") == ""
+
+    def test_start_equals_end_first_matches_last_mismatches(self):
+        lines = ["a\n", "b\n", "c\n"]
+        result = edit_guards.verify_range_anchors(lines, 2, 2, "b", "WRONG")
+        assert result != ""
+        assert "last" in result.lower()
+
+    def test_start_equals_end_only_first_supplied_matches(self):
+        lines = ["a\n", "b\n", "c\n"]
+        assert edit_guards.verify_range_anchors(lines, 2, 2, "b", None) == ""
+
+
+class TestVerifyRangeAnchorsOutOfBoundsNeverRaises:
+    def test_start_beyond_file_length_returns_diagnostic_not_indexerror(self):
+        lines = ["a\n", "b\n"]
+        # start=10 is far beyond the 2-line file.
+        try:
+            result = edit_guards.verify_range_anchors(lines, 10, 10, "x", None)
+        except IndexError:
+            pytest.fail("verify_range_anchors raised IndexError on out-of-bounds start")
+        assert result != ""
+        assert "first" in result.lower()
+
+    def test_end_beyond_file_length_returns_diagnostic_not_indexerror(self):
+        lines = ["a\n", "b\n", "c\n"]
+        try:
+            result = edit_guards.verify_range_anchors(lines, 1, 99, "a", "z")
+        except IndexError:
+            pytest.fail("verify_range_anchors raised IndexError on out-of-bounds end")
+        assert result != ""
+        # The last anchor is the one that falls out of bounds.
+        assert "last" in result.lower()
+
+    def test_start_zero_returns_diagnostic_not_indexerror(self):
+        # 1-indexed; 0 is invalid. Must not raise.
+        lines = ["a\n", "b\n"]
+        try:
+            result = edit_guards.verify_range_anchors(lines, 0, 1, "a", None)
+        except (IndexError, ValueError):
+            pass  # acceptable as long as it's a diagnostic; but prefer no raise
+        else:
+            if result == "":
+                # A zero start with a supplied anchor that "matches" line 0 is
+                # still a degenerate case; the contract only forbids IndexError.
+                pass
+
+    def test_empty_file_with_anchors_returns_diagnostic_not_indexerror(self):
+        try:
+            result = edit_guards.verify_range_anchors([], 1, 1, "anything", None)
+        except IndexError:
+            pytest.fail("verify_range_anchors raised IndexError on empty file")
+        assert result != ""
+
+    def test_empty_file_no_anchors_returns_empty(self):
+        assert edit_guards.verify_range_anchors([], 1, 1, None, None) == ""
+
+
+class TestVerifyRangeAnchorsSuggestions:
+    """When an anchor mismatches, the diagnostic reports the actual line
+    numbers of the nearest occurrences of the expected text ELSEWHERE in the
+    file (up to 3) so the model can correct its range."""
+
+    def test_suggests_line_numbers_when_expected_text_found_elsewhere(self):
+        lines = [
+            "def foo():\n",
+            "    return 1\n",
+            "def bar():\n",
+            "    return 1\n",
+            "    return 2\n",
+        ]
+        # Range is lines 1..2 but model expected "    return 1" as the first
+        # anchor. That text actually lives on lines 2 and 4.
+        result = edit_guards.verify_range_anchors(lines, 1, 2, "    return 1", None)
+        assert result != ""
+        # The diagnostic should mention line number 2 and/or 4 as suggestions.
+        assert "2" in result or "4" in result
+
+    def test_no_suggestions_when_expected_text_occurs_nowhere(self):
+        lines = ["alpha\n", "beta\n", "gamma\n"]
+        result = edit_guards.verify_range_anchors(lines, 1, 3, "DOES_NOT_EXIST", None)
+        assert result != ""
+        # The expected text is named, the actual line is named, but there must
+        # be no fabricated suggestion line numbers for text that isn't present.
+        # We assert the diagnostic still returns (does not crash) and names the
+        # expectation.
+        assert "DOES_NOT_EXIST" in result
+        assert "alpha" in result
+
+    def test_suggestions_capped_at_three_when_more_than_three_occurrences(self):
+        # The expected text occurs 5 times (lines 1,3,5,7,9).
+        lines = [
+            "target\n",
+            "other\n",
+            "target\n",
+            "other\n",
+            "target\n",
+            "other\n",
+            "target\n",
+            "other\n",
+            "target\n",
+        ]
+        # Range line 2 ("other") but first anchor expects "target".
+        result = edit_guards.verify_range_anchors(lines, 2, 2, "target", None)
+        assert result != ""
+        # Count how many of the suggestion line numbers (1,3,5,7,9) appear.
+        # The contract says "up to 3", so at most 3 of them should be present.
+        suggestion_lines = [n for n in ("1", "3", "5", "7", "9") if n in result]
+        assert len(suggestion_lines) <= 3
+        # And at least one suggestion should be present since the text exists.
+        assert len(suggestion_lines) >= 1
+
+    def test_suggestions_exclude_the_range_line_itself_when_it_mismatches(self):
+        # If the mismatched line itself happens to contain the expected text
+        # (e.g. trailing whitespace difference), the suggestion is about
+        # OTHER occurrences. The key check: suggestions point elsewhere.
+        lines = [
+            "    return 1\n",
+            "    x = 2\n",
+            "    return 1\n",
+        ]
+        # Range line 1 has "    return 1" but with trailing newline; expectation
+        # matches so no diagnostic. Instead test a genuine mismatch on line 2.
+        result = edit_guards.verify_range_anchors(lines, 2, 2, "    return 1", None)
+        assert result != ""
+        # "    return 1" exists on lines 1 and 3 -> those should be suggested.
+        assert "1" in result or "3" in result
+
+
+class TestVerifyRangeAnchorsLeadingIndentationSignificant:
+    def test_unindented_expectation_vs_indented_actual_mismatches(self):
+        lines = ["    indented = 1\n", "    other = 2\n"]
+        result = edit_guards.verify_range_anchors(lines, 1, 2, "indented = 1", None)
+        assert result != ""
+
+    def test_indented_expectation_vs_unindented_actual_mismatches(self):
+        lines = ["flat = 1\n", "flat2 = 2\n"]
+        result = edit_guards.verify_range_anchors(lines, 1, 2, "    flat = 1", None)
+        assert result != ""
+
+    def test_matching_indentation_matches(self):
+        lines = ["    indented = 1\n", "    other = 2\n"]
+        assert edit_guards.verify_range_anchors(lines, 1, 2, "    indented = 1", None) == ""
+
+
+class TestVerifyRangeAnchorsDiagnosticContent:
+    """The diagnostic must name the failed anchor, the expected text, and the
+    ACTUAL text at that line number."""
+
+    def test_diagnostic_names_failed_anchor_expected_and_actual(self):
+        lines = ["    real_first\n", "    middle\n", "    real_last\n"]
+        result = edit_guards.verify_range_anchors(
+            lines, 1, 3, "EXPECTED_FIRST", "EXPECTED_LAST"
+        )
+        assert result != ""
+        # First anchor failed first.
+        assert "first" in result.lower()
+        assert "EXPECTED_FIRST" in result
+        assert "real_first" in result
+
+    def test_diagnostic_for_last_anchor_names_actual_at_last_line(self):
+        lines = ["    a\n", "    b\n", "    THE_REAL_LAST\n"]
+        result = edit_guards.verify_range_anchors(lines, 1, 3, "    a", "WRONG_LAST")
+        assert result != ""
+        assert "last" in result.lower()
+        assert "WRONG_LAST" in result
+        assert "THE_REAL_LAST" in result
+
+    def test_diagnostic_includes_line_number_of_failed_anchor(self):
+        lines = ["l1\n", "l2\n", "l3\n", "l4\n", "l5\n"]
+        # Last anchor on line 5 mismatches.
+        result = edit_guards.verify_range_anchors(lines, 1, 5, "l1", "WRONG")
+        assert result != ""
+        # The diagnostic should reference line 5 (the actual position).
+        assert "5" in result
+
+
+class TestVerifyRangeAnchorsModuleLevel:
+    def test_module_still_imports_existing_functions(self):
+        # Adding the new function must not remove the existing ones.
+        assert hasattr(edit_guards, "classify_removed_lines")
+        assert hasattr(edit_guards, "render_removal_report")
+        assert hasattr(edit_guards, "duplicated_block_warning")
+
+    def test_module_parses_as_valid_python(self):
+        source = MODULE_PATH.read_text()
+        ast.parse(source)

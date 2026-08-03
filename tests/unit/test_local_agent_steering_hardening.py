@@ -265,6 +265,7 @@ def test_replace_lines_replaces_inclusive_range(tmp_path, monkeypatch):
     res = la.run_tool("replace_lines", {
         "path": "mod.py", "start": 2, "end": 4,
         "new_str": "B\nC\nD\n",
+        "confirm_removals": True,
     })
     assert res.startswith("edited"), res
     assert (tmp_path / "mod.py").read_text() == "a\nB\nC\nD\ne\n"
@@ -319,6 +320,8 @@ def test_replace_lines_non_py_path_skips_syntax_check(tmp_path, monkeypatch):
     monkeypatch.setattr(la, "CWD", tmp_path)
     (tmp_path / "README.md").write_text("line1\nline2\nline3\n")
     res = la.run_tool("replace_lines", {
-        "path": "README.md", "start": 2, "end": 2, "new_str": "changed\n"})
+        "path": "README.md", "start": 2, "end": 2, "new_str": "changed\n",
+        "confirm_removals": True,
+    })
     assert res.startswith("edited"), res
     assert (tmp_path / "README.md").read_text() == "line1\nchanged\nline3\n"

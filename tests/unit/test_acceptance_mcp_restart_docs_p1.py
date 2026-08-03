@@ -301,7 +301,6 @@ class TestOtherChecklistItemsUntouched:
 
     UNCHECKED_MUST_STAY_UNCHECKED: ClassVar[list[str]] = [
         "Finish the MLX validate re-run.",
-        "P0 (same retro) — stabilize the flaky-under-load",
         "Mode 31 (2026-07-22, NOT fixed)",
         "Mode 32 (2026-07-22, NOT fixed)",
         "Get CI to an enforced green baseline",
@@ -313,6 +312,7 @@ class TestOtherChecklistItemsUntouched:
         "P1 (same retro) — route rework to a stronger model",
         "Fix the test-isolation leak",
         "Split the 74 KB README",
+        "P0 (same retro) — stabilize the flaky-under-load",
     ]
 
     def test_known_unchecked_items_still_unchecked(self):
@@ -363,11 +363,17 @@ class TestOtherChecklistItemsUntouched:
         text = _maturity_text()
         unchecked = len(re.findall(r"^- \[ \]", text, re.MULTILINE))
         checked = len(re.findall(r"^- \[x\]", text, re.MULTILINE))
-        assert unchecked == 29, (
-            f"expected 29 remaining unchecked top-level items "
-            f"(30 originally, minus this one flipped), got {unchecked}"
+        assert unchecked == 28, (
+            f"expected 28 remaining unchecked top-level items "
+            f"(30 originally, minus the P1 flip and the A3 P0 flaky-tests "
+            f"resolution), got {unchecked}"
         )
-        assert checked == 12, (
-            f"expected 12 checked top-level items "
-            f"(11 originally, plus this one flipped), got {checked}"
+        assert checked == 13, (
+            f"expected 13 checked top-level items "
+            f"(11 originally, plus the P1 flip and the A3 P0 flaky-tests "
+            f"resolution), got {checked}"
+        )
+        assert unchecked + checked == 41, (
+            f"expected the top-level checkbox total to stay 41 (no items added "
+            f"or removed, only the A3 P0 flip), got {unchecked + checked}"
         )

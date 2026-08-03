@@ -522,10 +522,12 @@ TOOLS = [
             "path": {"type": "string"}, "old_str": {"type": "string"}, "new_str": {"type": "string"}},
             "required": ["path", "old_str", "new_str"]}}},
     {"type": "function", "function": {
-        "name": "replace_lines", "description": "Replace lines start..end (1-indexed, inclusive) in an existing file with new_str. Use this when str_replace's old_str will not match (e.g. whitespace differences): give the exact line numbers from `nl -ba <file> | sed -n '<start>,<end>p'` and the new content; no byte-exact old_str is required.",
+        "name": "replace_lines", "description": "Replace lines start..end (1-indexed, inclusive) in an existing file with new_str. Use this when str_replace's old_str will not match (e.g. whitespace differences): give the exact line numbers from `nl -ba <file> | sed -n '<start>,<end>p'` and the new content; no byte-exact old_str is required. If the line numbers came from an earlier view_file, supply expect_first/expect_last so stale numbers are caught before the edit is applied.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "start": {"type": "integer"},
             "end": {"type": "integer"}, "new_str": {"type": "string"},
+            "expect_first": {"type": "string", "description": "The exact text the model expects to find at line `start`. Optional but strongly recommended on files over 1000 lines because line numbers from an earlier view_file go stale."},
+            "expect_last": {"type": "string", "description": "The exact text the model expects to find at line `end`. Optional but strongly recommended on files over 1000 lines because line numbers from an earlier view_file go stale."},
             "confirm_removals": {"type": "boolean", "description": "Set true to confirm you intend to delete the lines the previous attempt reported. Only needed after a rejected edit."}},
             "required": ["path", "start", "end", "new_str"]}}},
     {"type": "function", "function": {
@@ -1324,6 +1326,14 @@ def run_tool(fn, args) -> str:
         lines = old_text.splitlines(keepends=True)
         if start > len(lines):
             return f"ERROR: line_start {start} is beyond {args['path']}'s {len(lines)} lines."
+        # Optional stale-range anchors: verified when supplied, absent otherwise.
+        # MUST stay optional - _str_replace_not_found_diag steers the model to
+        # replace_lines when str_replace's old_str won't match; mandatory anchors
+        # would close that escape hatch and strand a weak model with no edit path.
+        anchor_err = edit_guards.verify_range_anchors(
+            lines, start, end, args.get("expect_first"), args.get("expect_last"))
+        if anchor_err:
+            return f"ERROR: {anchor_err}\nThe edit was NOT applied."
         new_str = args.get("new_str", "")
         # Keep the block newline-terminated so we don't fuse the next line on.
         if new_str and not new_str.endswith("\n"):

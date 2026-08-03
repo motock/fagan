@@ -238,7 +238,7 @@ def duplicated_block_warning(
     best_run: list[str] | None = None
     # Iterate over all possible runs of length >= min_lines, starting from longest
     for size in range(len(stripped_new), min_lines - 1, -1):
-        for start in range(0, len(stripped_new) - size + 1):
+        for start in range(len(stripped_new) - size + 1):
             run = stripped_new[start : start + size]
             # Skip runs that are all whitespace
             if all(not line.strip() for line in run):

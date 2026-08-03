@@ -260,7 +260,7 @@ def duplicated_block_warning(
     total_chars = 0
     for line in best_run:
         projected_len = len(line) + (1 if lines_to_show else 0)
-        if total_chars + projected_len > _MAX_CHARS_PER_SECTION or len(lines_to_show) >= __MAX_LINES_PER_SECTION:
+        if total_chars + projected_len > _MAX_CHARS_PER_SECTION or len(lines_to_show) >= _MAX_LINES_PER_SECTION:
             break
         lines_to_show.append(line)
         total_chars += projected_len

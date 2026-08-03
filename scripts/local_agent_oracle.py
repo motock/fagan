@@ -1387,7 +1387,6 @@ def run_tool(fn, args) -> str:
                 f"The edit was NOT applied."
             )
         path.write_text(new_text)
-        path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         removed_echo = edit_guards.render_removal_report([], rewrites)
         # Advisory only: warn if new_str duplicates a block that still lives

@@ -236,13 +236,17 @@ def duplicated_block_warning(
 
     # Search for the longest run that meets criteria, starting from full length
     best_run: list[str] | None = None
+    # Iterate over all possible runs of length >= min_lines, starting from longest
     for size in range(len(stripped_new), min_lines - 1, -1):
-        # Skip runs that are all whitespace
-        if all(not line.strip() for line in stripped_new[:size]):
-            continue
-        run = stripped_new[:size]
-        if _run_in(run, surrounding_lines):
-            best_run = run
+        for start in range(0, len(stripped_new) - size + 1):
+            run = stripped_new[start : start + size]
+            # Skip runs that are all whitespace
+            if all(not line.strip() for line in run):
+                continue
+            if _run_in(run, surrounding_lines):
+                best_run = run
+                break
+        if best_run is not None:
             break
     if not best_run:
         return ""
@@ -256,7 +260,7 @@ def duplicated_block_warning(
     total_chars = 0
     for line in best_run:
         projected_len = len(line) + (1 if lines_to_show else 0)
-        if total_chars + projected_len > _MAX_CHARS_PER_SECTION or len(lines_to_show) >= _MAX_LINES_PER_SECTION:
+        if total_chars + projected_len > _MAX_CHARS_PER_SECTION or len(lines_to_show) >= __MAX_LINES_PER_SECTION:
             break
         lines_to_show.append(line)
         total_chars += projected_len

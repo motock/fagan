@@ -3040,7 +3040,8 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # must APPROVE before the story proceeds to pr_open.
     if verdict == "APPROVE" and story.get("risk") == "high":
         security_output = _run_security_reviewer(
-            worktree, branch, since_sha=story.get("last_reviewed_sha")
+            worktree, branch, since_sha=story.get("last_reviewed_sha"),
+            plan_role_config=plan_role_config,
         )
         security_verdict = _parse_verdict(security_output)
 

@@ -286,6 +286,14 @@ from .rebase import (  # noqa: F401
     _try_auto_resolve_conflict,
 )
 
+# Step-cap struggle diagnosis. Patched via p.<name> by tests; server call sites
+# use bare names -> re-export -> patch lands (mirrors .review / .escalation).
+from .rebrief import (
+    collect_failure_evidence,
+    compose_rebriefed_instructions,
+    diagnose_failure,
+)
+
 # Reviewer dispatch. Patched via p.<name> by tests; server call sites use
 # bare names -> re-export -> patch lands. No server-global free-var reads.
 from .review import (
@@ -1673,6 +1681,26 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
     return dead
 
 
+def _rebrief_step_cap_struggle(
+    story: dict[str, Any], worktree: str, plan_role_config: dict | None = None
+) -> None:
+    """CLAUDE.md Step 9: when an implementer hits the step cap, diagnose where
+    it struggled and fold the root cause into agent_instructions so the resume
+    isn't a blind retry. The resume path (_build_dispatch_command) re-reads
+    agent_instructions, so the folded diagnosis reaches the next attempt.
+
+    Fail-open by construction: a None/errored diagnosis leaves agent_instructions
+    unchanged (compose_rebriefed_instructions is a no-op on None), so this can
+    never block or worsen a retry. compose replaces (not stacks) any prior
+    diagnosis block, so repeated step-caps keep the prompt bounded and refresh
+    with the latest struggle. Must run while the worktree still exists - the
+    evidence is the tail of its agent.log."""
+    evidence = collect_failure_evidence(worktree, story)
+    diagnosis = diagnose_failure(evidence, story, plan_role_config)
+    story["agent_instructions"] = compose_rebriefed_instructions(
+        story.get("agent_instructions", ""), diagnosis)
+
+
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Check whether a dispatched agent has finished. If complete, runs tests
@@ -1892,6 +1920,15 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         story["status"] = "interrupted"
         story["last_commit"] = sha
         story["interrupted_at"] = interrupted_at
+
+        # CLAUDE.md Step 9: diagnose where this implementer struggled and fold
+        # the root cause into agent_instructions so the resume isn't a blind
+        # retry. Runs before any model-switch/escalation below so the diagnosis
+        # uses the model that just ran (the struggling one) and the worktree's
+        # agent.log is still present for evidence. Fail-open: a None/errored
+        # diagnosis leaves agent_instructions untouched (no-op).
+        _rebrief_step_cap_struggle(
+            story, str(worktree), plan_role_config=manifest.get("role_config"))
 
         # See STEP_CAP_FALLBACK_THRESHOLD: track consecutive step-cap
         # interrupts on the current model and, past the threshold, switch to

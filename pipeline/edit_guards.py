@@ -274,4 +274,59 @@ def duplicated_block_warning(
 
     return f"{header}\n{block_text}".strip()
 
+def verify_range_anchors(
+    lines: list[str],
+    start: int,
+    end: int,
+    expect_first: str | None,
+    expect_last: str | None,
+) -> str:
+    """Verify optional boundary expectations for a line range."""
+    # Early exit
+    if expect_first is None and expect_last is None:
+        return ""
+
+    def _norm(s: str) -> str:
+        # Strip trailing newlines and whitespace, preserve leading indentation
+        return s.rstrip("\r\n").rstrip()
+
+    def _nearest(line_num: int, target_norm: str) -> list[int]:
+        matches = []
+        for idx, line in enumerate(lines, start=1):
+            if idx == line_num:
+                continue
+            if _norm(line) == target_norm:
+                matches.append((abs(idx - line_num), idx))
+        matches.sort()
+        return [idx for _, idx in matches[:3]]
+
+    # First anchor
+    if expect_first is not None:
+        if start < 1 or start > len(lines):
+            return f"First anchor at line {start} out of range (file has {len(lines)} lines)."
+        actual = lines[start - 1]
+        if _norm(actual) != _norm(expect_first):
+            suggestions = _nearest(start, _norm(expect_first))
+            sugg_str = ""
+            if suggestions:
+                sugg_str = f" Suggested line(s): {', '.join(map(str, suggestions))}."
+            return (f"First anchor mismatch at line {start}. "
+                    f"Expected '{expect_first}', found '{actual.rstrip()}'."
+                    + sugg_str)
+
+    # Last anchor
+    if expect_last is not None:
+        if end < 1 or end > len(lines):
+            return f"Last anchor at line {end} out of range (file has {len(lines)} lines)."
+        actual = lines[end - 1]
+        if _norm(actual) != _norm(expect_last):
+            suggestions = _nearest(end, _norm(expect_last))
+            sugg_str = ""
+            if suggestions:
+                sugg_str = f" Suggested line(s): {', '.join(map(str, suggestions))}."
+            return (f"Last anchor mismatch at line {end}. "
+                    f"Expected '{expect_last}', found '{actual.rstrip()}'."
+                    + sugg_str)
+
+    return ""
 # End of module.

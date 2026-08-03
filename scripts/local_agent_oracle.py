@@ -1387,10 +1387,18 @@ def run_tool(fn, args) -> str:
                 f"The edit was NOT applied."
             )
         path.write_text(new_text)
+        path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         removed_echo = edit_guards.render_removal_report([], rewrites)
+        # Advisory only: warn if new_str duplicates a block that still lives
+        # outside the replaced range. Computed from the ORIGINAL lines read
+        # (prefix + suffix), so the range's own former content is not
+        # counted as a duplicate. Does not block - the write above has already
+        # landed.
+        surrounding_text = "".join(lines[:start - 1]) + "".join(lines[end:])
+        dup_warn = edit_guards.duplicated_block_warning(new_str, surrounding_text)
         return (f"edited {args['path']} (lines {start}-{end})" + (f" ({note})" if note else "")
-                + removed_echo + _lint_feedback_for(args['path']))
+                + removed_echo + dup_warn + _lint_feedback_for(args['path']))
     if fn == "view_file":
         path = CWD / args["path"]
         if not path.exists():

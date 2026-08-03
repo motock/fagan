@@ -3018,6 +3018,40 @@ def test_run_security_reviewer_incremental_review_scopes_to_since_sha(agents_dir
     assert "Run the test suite" not in prompt
 
 
+def test_run_security_reviewer_routes_via_plan_role_config_security(agents_dir, monkeypatch):
+    """The security-engineer pass is role-routable: a plan's
+    role_config.security overrides the Claude default, so a high-risk
+    story can clear security review on a configured non-Claude backend
+    (e.g. ollama/glm) instead of dead-ending when Claude is unavailable.
+    Unconfigured, it still resolves to Claude (covered by
+    test_run_security_reviewer_always_uses_claude_backend_even_under_local_review)."""
+    (agents_dir / "security-engineer.md").write_text(
+        '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, *, model, **kwargs):
+            captured["model"] = model
+            return "VERDICT: APPROVE"
+
+    def _fake_get_backend(role, name=None):
+        captured["role"] = role
+        captured["name"] = name
+        return _FakeDriver()
+
+    monkeypatch.setattr(p.backend, "get_backend", _fake_get_backend)
+
+    p._run_security_reviewer(
+        "/tmp/some-worktree", "agent/some-branch",
+        plan_role_config={"security": {"provider": "ollama", "model": "glm"}},
+    )
+
+    assert captured["role"] == "review"
+    assert captured["name"] == "ollama"
+    assert captured["model"] == "glm-5.2:cloud"
+
+
 # ---------- Reviewer self-fix (APPROVE_WITH_FIX) ----------
 
 def _init_auto_fix_repo(path):

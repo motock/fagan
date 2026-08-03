@@ -11,6 +11,11 @@ from pipeline import ci
 
 SOURCE = "def test_x():\n    assert True\n"
 DIGEST = hashlib.sha256(SOURCE.encode()).hexdigest()
+# A genuine rewrite of the grader's original assertion (not a pure append) -
+# the PR #210 hole these tests guard against. A pure append is now legitimate
+# for non-TDD-split stories (see test_acceptance_oracle_tamper_append.py); a
+# mid-line rewrite of the original region is and remains tampering.
+REWRITE = SOURCE.replace("assert True", "assert False")
 
 
 def _story():
@@ -26,7 +31,7 @@ def test_untouched_fixture_is_not_reported(tmp_path):
 
 
 def test_modified_fixture_is_reported(tmp_path):
-    (tmp_path / "oracle.py").write_text(SOURCE + "# sneaky\n")
+    (tmp_path / "oracle.py").write_text(REWRITE)
     assert ci._acceptance_tampered(_story(), str(tmp_path)) == ["oracle.py"]
 
 
@@ -39,7 +44,7 @@ def test_story_without_digests_reports_nothing(tmp_path):
 
 
 def test_reverify_fails_a_tampered_worktree_without_running_tests(tmp_path, monkeypatch):
-    (tmp_path / "oracle.py").write_text(SOURCE + "# sneaky\n")
+    (tmp_path / "oracle.py").write_text(REWRITE)
 
     def boom(*a, **k):
         raise AssertionError(

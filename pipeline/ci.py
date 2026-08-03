@@ -223,8 +223,26 @@ def _acceptance_tampered(story: dict[str, Any], worktree: str) -> list[str]:
     pipeline.oracle_gate.acceptance_digests). A path missing from the
     worktree counts as tampered — deleting the oracle must not pass the
     gate. Returns [] when the story carries no recorded digests (a story
-    dispatched before this existed, or one without acceptance fixtures)."""
+    dispatched before this existed, or one without acceptance fixtures).
+
+    In a non-TDD-split story the implementer is instructed "do not modify any
+    existing test; add new tests" and legitimately APPENDS tests to the oracle
+    fixture. A pure append — the original source survives as a byte-exact
+    prefix of the worktree file, with new tests added after — is NOT tampering:
+    the original grader's assertions are untouched, so its authority over the
+    original behavior is preserved; only new (non-authoritative) tests were
+    appended (hit live on edit-guard-enforcement s4, PR #222: a 105a106,241
+    append was refused). TDD-split stories keep the oracle strictly read-only,
+    so any divergence there is tampering.
+    """
     digests = story.get("acceptance_digests") or {}
+    if not digests:
+        return []
+    tdd_split = bool(story.get("tdd_split", False))
+    sources = {
+        entry["path"]: (entry.get("source") or "")
+        for entry in (story.get("acceptance") or [])
+    }
     tampered = []
     for path, expected in digests.items():
         target = Path(worktree) / path
@@ -232,8 +250,15 @@ def _acceptance_tampered(story: dict[str, Any], worktree: str) -> list[str]:
             tampered.append(path)
             continue
         actual = hashlib.sha256(target.read_bytes()).hexdigest()
-        if actual != expected:
-            tampered.append(path)
+        if actual == expected:
+            continue
+        if not tdd_split:
+            original = sources.get(path, "")
+            if original and target.read_bytes().startswith(
+                original.encode("utf-8")
+            ):
+                continue
+        tampered.append(path)
     return sorted(tampered)
 
 

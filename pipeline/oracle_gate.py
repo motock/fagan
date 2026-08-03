@@ -41,6 +41,34 @@ _ORACLE_ERROR_MARKERS = (
     "unrecognized arguments",
 )
 
+# Block signature emitted by scripts/local_agent.py's replace_lines when the
+# confirm_removals deletion gate (PR #219) rejects an edit. Kept in sync with
+# that file's rejection string. Used to detect a BORN-BROKEN oracle: one whose
+# own test edits trip a gate already merged on master, so no implementation can
+# satisfy it (Mode 49: 5 wasted dispatches that looked like model read-loops).
+_CONFIRM_REMOVALS_BLOCK = "repeat this exact call with confirm_removals=true"
+
+
+def _oracle_trips_prior_gate(output: str, story: dict[str, Any]) -> bool:
+    """True when an oracle failure looks like the fixture tripping the already
+    merged ``confirm_removals`` deletion gate rather than testing a missing
+    feature.
+
+    The discriminator: the gate's block signature appears in the failure
+    output AND none of the acceptance fixture sources reference
+    ``confirm_removals``. A fixture that INTENDS to test the gate (e.g. the s2
+    replace_lines_gate oracle, which references ``confirm_removals`` in its own
+    assertions) is a legitimate test of an unimplemented feature, not a
+    born-broken oracle, so it is left as ``fails_correctly``. A fixture entry
+    with no ``source`` cannot prove intent, so it is treated as born-broken.
+    """
+    if _CONFIRM_REMOVALS_BLOCK not in output:
+        return False
+    sources = (
+        entry.get("source") or "" for entry in (story.get("acceptance") or [])
+    )
+    return not any("confirm_removals" in s for s in sources)
+
 
 def classify_oracle_outcome(returncode: int, output: str) -> dict:
     """Classify a test-runner outcome as "passes", "empty", "errors", or
@@ -84,6 +112,23 @@ def validate_acceptance_fixtures(story: dict[str, Any], checkout: Path) -> dict:
         classified = classify_oracle_outcome(
             result.returncode, result.stdout + result.stderr
         )
+        # Born-broken-by-prior-gate: a fixture that "fails correctly" only
+        # because its own edits trip the already-merged confirm_removals gate
+        # is unwinnable for any implementer (Mode 49). Reclassify to errors so
+        # the dispatch path blocks it before an implementer is launched.
+        if (
+            classified["state"] == "fails_correctly"
+            and _oracle_trips_prior_gate(result.stdout + result.stderr, story)
+        ):
+            classified = {
+                "state": "errors",
+                "detail": (
+                    "oracle is born-broken: its own test edits trip the "
+                    "confirm_removals deletion gate (merged in a prior story) "
+                    "but the fixture does not test that gate - no "
+                    "implementation can satisfy it"
+                ),
+            }
     except Exception as exc:  # noqa: BLE001 (must never raise; report as broken)
         return {"state": "errors", "detail": f"{type(exc).__name__}: {exc}", "paths": paths}
 

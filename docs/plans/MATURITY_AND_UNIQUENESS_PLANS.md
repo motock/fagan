@@ -223,12 +223,46 @@ Reference comparables:
       was never touched since. Took 5 dispatch attempts across gemma4:12b-mlx
       and gpt-oss:20b to land (surfacing Modes 31-32 along the way) before
       being implemented directly and merged through the normal review gate.
-- [ ] **P0 (same retro) — stabilize the flaky-under-load read-heavy/
+- [x] **P0 (same retro) — stabilize the flaky-under-load read-heavy/
       repetition-guard tests.** 11 tests pass isolated but fail under
       full-suite load, misleading local-model workers into chasing red
       herrings and tripping the per-target repetition guard. Fix the
       shared-state/order-dependence or mark them non-blocking.
       `test_local_agent.py`, `test_pipeline_mcp_server.py`.
+      **Resolved 2026-08-03 (verified, not re-fixed):** the flakiness was the
+      `LOCAL_AGENT_*` env-leak from the scheduler's launchd plist into the
+      agent's pytest subprocess — module-level constants in
+      `scripts/local_agent.py` (`READ_HEAVY_WINDOW`, `PARK_ENABLED`) read the
+      env once at import time, so a leaked `LOCAL_AGENT_PARK_ENABLED=0` /
+      non-default `LOCAL_AGENT_READ_HEAVY_WINDOW` made every default-asserting
+      guard test fail under load but never in normal CI. The fix —
+      `tests/unit/conftest.py` clearing every `PIPELINE_*`/`LOCAL_AGENT_*` var
+      at conftest's own import time, before test modules import `local_agent`
+      — landed 2026-07-22 (one day after this retro flagged it); the checkbox
+      was simply never updated. Verified empirically: 5 full-suite runs green,
+      and `LOCAL_AGENT_READ_HEAVY_WINDOW=99 LOCAL_AGENT_PARK_ENABLED=0` leaked
+      into the suite env still yields 2163 passed (conftest neutralizes it).
+      Added `tests/unit/test_conftest_env_isolation.py` as a subprocess
+      regression guard that catches removal of those load-bearing conftest
+      lines (normal CI has no leaked vars, so silently deleting them wouldn't
+      otherwise break CI — only the in-agent subprocess scenario).
+
+**2026-08-03 harness fixes (same session, recorded here as a non-checkbox
+note — full detail in memory `project_oracle_gate_harness_fixes_2026_08_03`):
+two harness-side grading fixes for the failure-mode class that kept the Mode
+count climbing (45–49 were almost all harness/oracle bugs, not model bugs).
+(a) Born-broken-by-prior-gate oracle detection (Mode 49, 5 wasted
+dispatches): `pipeline/oracle_gate.py` now blocks dispatch when an acceptance
+oracle's own test edits trip the already-merged `confirm_removals` deletion
+gate — detected via the gate's block signature in the baseline failure output
+when the oracle's source does not itself reference `confirm_removals`.
+(b) Pure-append tamper allowance (s4, PR #222): `pipeline/ci.py`
+`_acceptance_tampered` now treats the original oracle source surviving as a
+byte-exact prefix of the worktree fixture as NOT tampered for non-TDD-split
+stories (TDD-split stays strictly read-only). Tests in
+`test_acceptance_oracle_gate_prior_gate.py` and
+`test_acceptance_oracle_tamper_append.py`.**
+
 - [x] **P1 (same retro) — route rework to a stronger model when remaining
       findings are polish-only** (2026-07-23, PR #164). `final_rework_escalation`
       plan-level config (default off) routes a story's LAST rework redispatch

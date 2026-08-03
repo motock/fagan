@@ -38,7 +38,11 @@ def test_omitting_anchors_leaves_behaviour_unchanged(agent, tmp_path):
     target = tmp_path / "mod.py"
     target.write_text(ORIGINAL)
     result = agent.run_tool("replace_lines", {
-        "path": "mod.py", "start": 2, "end": 2, "new_str": "    a = 42\n",
+        "path": "mod.py", "start": 2, "end": 2,
+        # Insertion-style edit preserves "a = 1" verbatim so the s5
+        # confirm_removals deletion gate isn't tripped; this isolates the
+        # backward-compat behaviour (omitting anchors must not block the edit).
+        "new_str": "    a = 1\n    a = 42\n",
     })
     assert "The edit was NOT applied." not in result
     assert "a = 42" in target.read_text()
@@ -48,7 +52,10 @@ def test_correct_anchor_allows_the_edit(agent, tmp_path):
     target = tmp_path / "mod.py"
     target.write_text(ORIGINAL)
     result = agent.run_tool("replace_lines", {
-        "path": "mod.py", "start": 2, "end": 2, "new_str": "    a = 42\n",
+        "path": "mod.py", "start": 2, "end": 2,
+        # Same non-deleting new_str as above: the anchor check is what's under
+        # test, not the deletion gate.
+        "new_str": "    a = 1\n    a = 42\n",
         "expect_first": "    a = 1",
     })
     assert "The edit was NOT applied." not in result

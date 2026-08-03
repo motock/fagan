@@ -244,6 +244,10 @@ def test_anchor_at_first_line_of_file(agent, tmp_path):
     result = agent.run_tool("replace_lines", {
         "path": "mod.py", "start": 1, "end": 1, "new_str": REPL_LINE1,
         "expect_first": L1,
+        # The rename trips the s5 confirm_removals deletion gate (short-line
+        # rewrite falls below the 0.9 ratio); confirm it so the anchor check
+        # at the first line is what's under test, not the deletion gate.
+        "confirm_removals": True,
     })
     assert "The edit was NOT applied." not in result
     assert "def g():" in target.read_text()
@@ -255,6 +259,9 @@ def test_anchor_at_last_line_of_file(agent, tmp_path):
     result = agent.run_tool("replace_lines", {
         "path": "mod.py", "start": 4, "end": 4, "new_str": REPL_LINE4,
         "expect_last": L4,
+        # See test_anchor_at_first_line_of_file: confirm the rename so the
+        # deletion gate doesn't interfere with the last-line anchor check.
+        "confirm_removals": True,
     })
     assert "The edit was NOT applied." not in result
     assert "return a + 1" in target.read_text()

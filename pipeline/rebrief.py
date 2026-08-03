@@ -63,27 +63,39 @@ def collect_failure_evidence(worktree, story: dict[str, Any], limit: int = 6000)
     return (head + "\n\n" + tail).strip()[:limit] if head else tail[:limit]
 
 
+# Backends that must NOT be silently selected as the diagnosis diagnoser by the
+# story-backend default below: "claude" would spend an operator's Claude budget
+# on a diagnosis they never opted into, and "auto" is not a concrete driver
+# (get_backend rejects it). Anything else (local/ollama/mlx/lmstudio) is a local,
+# free model the story already spent — a safe default diagnoser.
+_CLAUDE_SPEND_BACKENDS = ("claude", "auto")
+
+
 def _run_diagnosis_role(
     evidence: str, story: dict[str, Any], plan_role_config: dict | None = None
 ) -> str | None:
     """Resolve and dispatch the "diagnosis" role, asking for the root cause
-    and minimal fix in a few sentences. Returns None when the role is
-    unconfigured. May raise on backend failure - diagnose_failure is
-    responsible for catching that."""
+    and minimal fix in a few sentences. Returns None when no diagnosis provider
+    can be resolved safely. May raise on backend failure - diagnose_failure is
+    responsible for catching that.
+
+    Resolution priority:
+      1. An explicit "diagnosis" role config (plan_role_config, the
+         PIPELINE_BACKEND_DIAGNOSIS env var, or the registry's roles.diagnosis).
+      2. DEFAULT (when none of the above is set): reuse the story's OWN local
+         backend + the concrete model that ran it (story["backend"] +
+         dispatched_model / declared model). The model that ran the struggle is
+         the cheapest sensible diagnoser, and step-cap / escalation-to-claude
+         only reach this default on local backends, so it never surprises an
+         operator with Claude spend. A claude/auto/absent backend or a missing
+         model fails open (None) - no diagnosis, plain resume, exactly as before
+         this default existed. Operators who want a stronger diagnoser set
+         roles.diagnosis or PIPELINE_BACKEND_DIAGNOSIS."""
     registry = role_registry.load_registry()
     provider_override = (
         (plan_role_config or {}).get("diagnosis", {}).get("provider")
         or os.environ.get("PIPELINE_BACKEND_DIAGNOSIS")
         or registry.get("roles", {}).get("diagnosis", {}).get("provider")
-    )
-    if not provider_override:
-        return None
-
-    resolution = role_registry.resolve_role(
-        "diagnosis",
-        plan_role_config=plan_role_config,
-        registry=registry,
-        model_fallback=lambda: None,
     )
     prompt = (
         "A dispatched coding attempt failed or stalled. Given the evidence "
@@ -91,8 +103,27 @@ def _run_diagnosis_role(
         "sentences. Do not restate the evidence; be specific and actionable.\n\n"
         f"{evidence}"
     )
-    return backend.get_backend("diagnosis", name=resolution.provider).complete(
-        prompt=prompt, system=None, model=resolution.model,
+    if provider_override:
+        resolution = role_registry.resolve_role(
+            "diagnosis",
+            plan_role_config=plan_role_config,
+            registry=registry,
+            model_fallback=lambda: None,
+        )
+        return backend.get_backend("diagnosis", name=resolution.provider).complete(
+            prompt=prompt, system=None, model=resolution.model,
+        )
+
+    # No explicit diagnosis role configured: fall back to the story's own local
+    # backend + the model that ran it. Fail open for claude/auto/absent or a
+    # missing model so this never spends Claude by default and never dispatches
+    # a None model to a driver.
+    provider = (story.get("backend") or "").strip().lower()
+    model = story.get("dispatched_model") or story.get("model")
+    if not provider or provider in _CLAUDE_SPEND_BACKENDS or not model:
+        return None
+    return backend.get_backend("diagnosis", name=provider).complete(
+        prompt=prompt, system=None, model=model,
     )
 
 

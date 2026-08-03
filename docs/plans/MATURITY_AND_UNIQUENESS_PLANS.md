@@ -150,6 +150,30 @@ Reference comparables:
       `local_agent_oracle.py`. Regression-tested: a deleting edit is now
       rejected and the file left unchanged; a legitimate refactor removing
       both the assignment and all its uses still passes.
+- [x] **Born-broken-by-prior-gate oracle detection + pure-append tamper
+      allowance (2026-08-03).** Two harness-side grading fixes for the
+      failure-mode class that kept the Mode count climbing (45–49 were almost
+      all harness/oracle bugs, not model bugs):
+      (a) **Born-broken oracle** (Mode 49, 5 wasted dispatches): an acceptance
+      oracle authored by a local model can trip the already-merged
+      `confirm_removals` deletion gate with its own test edits, making it
+      unwinnable for ANY implementer. `pipeline/oracle_gate.py` now detects
+      this at the pre-dispatch gate — when the oracle's failure output carries
+      the gate's block signature AND none of the acceptance sources reference
+      `confirm_removals` (a fixture intentionally testing the gate mentions it;
+      one accidentally tripping it does not), the outcome is reclassified from
+      `fails_correctly` to `errors`, so dispatch is blocked before an
+      implementer is launched.
+      (b) **Pure-append tamper gap** (s4, PR #222): the merge-gate
+      `_acceptance_tampered` refused ANY divergence, including a legitimate
+      pure append in a non-TDD-split story (implementer instructed "add new
+      tests"). `pipeline/ci.py` now treats the original oracle source
+      surviving as a byte-exact prefix of the worktree fixture as NOT
+      tampered for non-TDD-split stories (the original grader's authority is
+      preserved; only new non-authoritative tests were appended). TDD-split
+      stories stay strictly read-only. Tests:
+      `test_acceptance_oracle_gate_prior_gate.py`,
+      `test_acceptance_oracle_tamper_append.py`.
 - [ ] **Mode 31 (2026-07-22, NOT fixed) — confident off-task drift.** A
       correctly-scoped, narrowly-instructed dispatch (verified via its own
       transcript) abandoned the assigned task and invented an unrelated one
@@ -223,12 +247,29 @@ Reference comparables:
       was never touched since. Took 5 dispatch attempts across gemma4:12b-mlx
       and gpt-oss:20b to land (surfacing Modes 31-32 along the way) before
       being implemented directly and merged through the normal review gate.
-- [ ] **P0 (same retro) — stabilize the flaky-under-load read-heavy/
+- [x] **P0 (same retro) — stabilize the flaky-under-load read-heavy/
       repetition-guard tests.** 11 tests pass isolated but fail under
       full-suite load, misleading local-model workers into chasing red
       herrings and tripping the per-target repetition guard. Fix the
       shared-state/order-dependence or mark them non-blocking.
       `test_local_agent.py`, `test_pipeline_mcp_server.py`.
+      **Resolved 2026-08-03 (verified, not re-fixed):** the flakiness was the
+      `LOCAL_AGENT_*` env-leak from the scheduler's launchd plist into the
+      agent's pytest subprocess — module-level constants in
+      `scripts/local_agent.py` (`READ_HEAVY_WINDOW`, `PARK_ENABLED`) read the
+      env once at import time, so a leaked `LOCAL_AGENT_PARK_ENABLED=0` /
+      non-default `LOCAL_AGENT_READ_HEAVY_WINDOW` made every default-asserting
+      guard test fail under load but never in normal CI. The fix —
+      `tests/unit/conftest.py` clearing every `PIPELINE_*`/`LOCAL_AGENT_*` var
+      at conftest's own import time, before test modules import `local_agent`
+      — landed 2026-07-22 (one day after this retro flagged it); the checkbox
+      was simply never updated. Verified empirically: 5 full-suite runs green,
+      and `LOCAL_AGENT_READ_HEAVY_WINDOW=99 LOCAL_AGENT_PARK_ENABLED=0` leaked
+      into the suite env still yields 2163 passed (conftest neutralizes it).
+      Added `tests/unit/test_conftest_env_isolation.py` as a subprocess
+      regression guard that catches removal of those load-bearing conftest
+      lines (normal CI has no leaked vars, so silently deleting them wouldn't
+      otherwise break CI — only the in-agent subprocess scenario).
 - [x] **P1 (same retro) — route rework to a stronger model when remaining
       findings are polish-only** (2026-07-23, PR #164). `final_rework_escalation`
       plan-level config (default off) routes a story's LAST rework redispatch

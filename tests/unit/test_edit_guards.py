@@ -279,7 +279,7 @@ class TestRenderRemovalReportPurity:
 
 
 # ---------------------------------------------------------------------------
-# Module-shape contracts: pure, no I/O, exactly two public functions.
+# Module-shape contracts: pure, no I/O, exactly the required public functions.
 # ---------------------------------------------------------------------------
 
 class TestModuleContract:
@@ -294,6 +294,7 @@ class TestModuleContract:
             'classify_removed_lines',
             'render_removal_report',
             'duplicated_block_warning',
+            'verify_range_anchors',
         }
 
     def test_module_imports_nothing_beyond_difflib_collections_typing(self):

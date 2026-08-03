@@ -248,11 +248,24 @@ def _run_reviewer(
 
 def _run_security_reviewer(
     worktree: str, branch: str, since_sha: str | None = None,
+    plan_role_config: dict | None = None,
 ) -> str:
     """Run the security-engineer persona over a branch and return its raw output.
 
-    External boundary: delegates to the configured Backend (always Claude -
-    security-engineer is in _LOCAL_SKIP_PERSONAS). Tests mock this function.
+    External boundary: delegates to the configured Backend. Tests mock this
+    function.
+
+    Role-routable (2026-08-03): the security pass resolves a "security" role
+    through role_registry - plan_role_config["security"] ->
+    PIPELINE_BACKEND_SECURITY env -> registry roles["security"] -> Claude
+    (the default_provider fallback), so an unconfigured install resolves to
+    Claude exactly as the prior hardcode did, while a plan that sets
+    role_config.security (e.g. ollama/glm) can clear high-risk security
+    review without Claude. _LOCAL_SKIP_PERSONAS is NOT consulted here: that
+    set governs *dispatch* routing (_persona_requires_claude in persona.py),
+    a separate concern from this review pass; the prior "always Claude" was
+    enforced solely by the hardcoded backend name, now replaced by the
+    resolved provider.
 
     Like the ordinary reviewer, the security reviewer reviews the diff and
     trusts CI (tests_passed already gated entry); it does not re-run the
@@ -260,7 +273,11 @@ def _run_security_reviewer(
     the last review (see _run_reviewer).
     """
     body = _persona_body("security-engineer")
-    model = _persona_default_model("security-engineer") or DEFAULT_MODEL
+    resolution = role_registry.resolve_role(
+        "security", plan_role_config=plan_role_config,
+        model_fallback=lambda: _persona_default_model("security-engineer") or DEFAULT_MODEL,
+    )
+    model = resolution.model
     if since_sha:
         lead = (
             f"Review ONLY the new security-relevant changes pushed since your "
@@ -282,7 +299,7 @@ def _run_security_reviewer(
         cell_dir = str(Path(worktree).resolve().parent)
     else:
         cell_dir = None
-    return backend.get_backend("review", name="claude").complete(
+    return backend.get_backend("review", name=resolution.provider).complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
         max_tokens=int(os.environ.get("PIPELINE_SECURITY_REVIEW_MAX_TOKENS",
                                       os.environ.get("PIPELINE_REVIEW_MAX_TOKENS", "4096"))),

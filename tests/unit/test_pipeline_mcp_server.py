@@ -14098,6 +14098,8 @@ def test_run_decompose_appends_claude_tier_guidance_by_default(agents_dir, monke
     that guidance (not the local/cloud-oss variants) is appended after the
     persona body."""
     fake = _FakePlannerBackend(response='{"epics": []}')
+    registry = {"providers": {}, "roles": {}}
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
 
     p._run_decompose("Build a CLI todo app.")

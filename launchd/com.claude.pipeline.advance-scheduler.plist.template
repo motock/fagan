@@ -25,7 +25,7 @@
 		<key>PIPELINE_LOCAL_MAX_STEPS</key>
 		<string>60</string>
 		<key>PIPELINE_LOCAL_MODEL_DEFAULT</key>
-		<string>gpt-oss:20b</string>
+		<string>gpt-oss-20b-high:latest</string>
 		<key>PIPELINE_LOCAL_NUM_CTX</key>
 		<string>16384</string>
 		<key>PIPELINE_LOCAL_TEMPERATURE</key>

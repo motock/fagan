@@ -1933,3 +1933,204 @@ def test_read_worktree_file_helper_reads_named_artifact(worktree_dir):
     (wt / ".agent_scratchpad.md").write_text("running notes")
     out = d._read_worktree_file({"worktree": str(wt)}, ".agent_scratchpad.md")
     assert out == {"available": True, "text": "running notes"}
+
+
+# ---------------------------------------------------------------------------
+# Per-story progress (Tier 1): _parse_progress helper + endpoint decoration.
+# ---------------------------------------------------------------------------
+
+def test_parse_progress_returns_done_and_total():
+    """Plan with 3 numbered items and a scratchpad PROGRESS: 1/3 line yields
+    {done: 1, total: 3}."""
+    plan = "1. write tests\n2. implement\n3. refactor\n"
+    scratch = "PROGRESS: 1/3\ndone: step 1\nnext: step 2\n"
+    assert d._parse_progress(plan, scratch) == {"done": 1, "total": 3}
+
+
+def test_parse_progress_returns_none_when_no_plan():
+    """No plan text (None or empty) -> None (fail open)."""
+    assert d._parse_progress(None, "PROGRESS: 1/3\n") is None
+    assert d._parse_progress("", "PROGRESS: 1/3\n") is None
+
+
+def test_parse_progress_returns_none_when_no_scratchpad():
+    """No scratchpad text (None or empty) -> None (fail open)."""
+    assert d._parse_progress("1. step\n", None) is None
+    assert d._parse_progress("1. step\n", "") is None
+
+
+def test_parse_progress_returns_none_when_no_progress_line():
+    """A scratchpad without a PROGRESS: line (old format) -> None, never raises."""
+    plan = "1. step\n2. step\n"
+    scratch = "done: step 1\nnext: step 2\n"
+    assert d._parse_progress(plan, scratch) is None
+
+
+def test_parse_progress_returns_none_when_no_numbered_items():
+    """A plan with no numbered items (total == 0) -> None."""
+    plan = "Some prose without numbered items.\nMore prose.\n"
+    scratch = "PROGRESS: 1/3\n"
+    assert d._parse_progress(plan, scratch) is None
+
+
+def test_parse_progress_never_raises_on_garbage():
+    """The helper must fail open — never raise — on malformed inputs."""
+    # Malformed PROGRESS line (missing total) -> None, not an exception.
+    assert d._parse_progress("1. step\n", "PROGRESS: 2/\n") is None
+    # Non-numeric done -> None.
+    assert d._parse_progress("1. step\n", "PROGRESS: x/3\n") is None
+    # PROGRESS line not anchored at line start -> None.
+    assert d._parse_progress("1. step\n", "  PROGRESS: 1/1\n") is None
+
+
+def test_parse_progress_counts_only_numbered_lines():
+    """Total counts only lines starting with a digit followed by a period;
+    prose lines and sub-bullets are ignored."""
+    plan = (
+        "1. first\n"
+        "- a sub bullet\n"
+        "2. second\n"
+        "some prose\n"
+        "3. third\n"
+    )
+    scratch = "PROGRESS: 2/3\n"
+    result = d._parse_progress(plan, scratch)
+    assert result == {"done": 2, "total": 3}
+
+
+def test_checklist_endpoint_includes_progress_field(client, plan_dir, worktree_dir):
+    """End-to-end: a worktree with a 3-item plan and PROGRESS: 1/3 scratchpad
+    returns progress: {done: 1, total: 3} from the /checklist endpoint."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("1. write tests\n2. implement\n3. refactor\n")
+    (wt / ".agent_scratchpad.md").write_text("PROGRESS: 1/3\ndone: step 1\nnext: step 2\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "guided", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["progress"] is not None
+    assert body["progress"]["done"] == 1
+    assert body["progress"]["total"] == 3
+
+
+def test_checklist_endpoint_progress_null_when_no_scratchpad(client, plan_dir, worktree_dir):
+    """Plan present but no scratchpad -> progress: null (fail open)."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("1. step\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "just planned", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["progress"] is None
+
+
+def test_checklist_endpoint_progress_null_when_no_progress_line(client, plan_dir, worktree_dir):
+    """Scratchpad present but without a PROGRESS: line -> progress: null."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("1. step\n")
+    (wt / ".agent_scratchpad.md").write_text("done: step 1\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "old format", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["progress"] is None
+
+
+def test_checklist_endpoint_progress_null_when_no_numbered_items(client, plan_dir, worktree_dir):
+    """Plan present but with no numbered items -> progress: null."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("Some prose without numbered items.\n")
+    (wt / ".agent_scratchpad.md").write_text("PROGRESS: 1/3\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "prose plan", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+
+    body = client.get("/api/plans/demo/stories/S1/checklist").json()
+    assert body["progress"] is None
+
+
+def test_get_plan_decorates_in_progress_story_with_progress(client, plan_dir, worktree_dir):
+    """The /api/plans/{name} endpoint decorates in_progress stories with a
+    progress field when the worktree has parseable plan+scratchpad."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("1. step a\n2. step b\n")
+    (wt / ".agent_scratchpad.md").write_text("PROGRESS: 1/2\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "guided", "status": "in_progress",
+               "worktree": str(wt), "dependencies": []},
+    })
+
+    body = client.get("/api/plans/demo").json()
+    stories = body["stories"]
+    assert "S1" in stories
+    assert stories["S1"].get("progress") is not None
+    assert stories["S1"]["progress"]["done"] == 1
+    assert stories["S1"]["progress"]["total"] == 2
+
+
+def test_get_plan_does_not_decorate_todo_story_with_progress(client, plan_dir, worktree_dir):
+    """A todo story (no worktree) must not get a progress field."""
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "fresh", "status": "todo", "dependencies": []},
+    })
+
+    body = client.get("/api/plans/demo").json()
+    assert "progress" not in body["stories"]["S1"]
+
+
+def test_get_plan_does_not_decorate_done_story_with_progress(client, plan_dir, worktree_dir):
+    """A done story must not get a progress field even if a worktree exists."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("1. step a\n2. step b\n")
+    (wt / ".agent_scratchpad.md").write_text("PROGRESS: 2/2\n")
+    _write_manifest(plan_dir, "demo", {
+        "S1": {"summary": "merged", "status": "done",
+               "worktree": str(wt), "dependencies": []},
+    })
+
+    body = client.get("/api/plans/demo").json()
+    assert "progress" not in body["stories"]["S1"]
+
+
+# ---------------------------------------------------------------------------
+# Scratchpad prompt in pipeline/server.py must require a PROGRESS: line.
+# ---------------------------------------------------------------------------
+
+def test_server_scratchpad_prompt_requires_progress_line():
+    """The scratchpad instruction in pipeline/server.py must instruct the
+    executor to write a PROGRESS: <done>/<total> line as the FIRST line of
+    .agent_scratchpad.md."""
+    import inspect
+
+    import pipeline.server as srv
+
+    # The instruction is built inside a function; inspect the source of the
+    # module so we assert on the literal string content the implementer must
+    # keep in sync with the plan.
+    source = inspect.getsource(srv)
+    assert "PROGRESS: <done>/<total>" in source, (
+        "scratchpad prompt must mention 'PROGRESS: <done>/<total>'"
+    )
+    assert "PROGRESS: 2/5" in source, (
+        "scratchpad prompt must include the 'PROGRESS: 2/5' example"
+    )
+    assert "The FIRST line must be" in source, (
+        "scratchpad prompt must state the PROGRESS line is the FIRST line"
+    )
+    # The old wording that did NOT require a PROGRESS line must be gone.
+    assert "keep a short running summary of what you've" not in source or (
+        "PROGRESS:" in source
+    )

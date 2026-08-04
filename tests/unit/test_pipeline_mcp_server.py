@@ -8993,6 +8993,47 @@ def test_check_story_status_routes_step_cap_to_interrupted(
     assert any(e.get("step") == "step_cap_reached" for e in journal), journal
 
 
+def test_check_story_status_step_cap_adds_cleanup_guidance_even_when_diagnosis_fails(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Worktree-hygiene guidance must be applied UNCONDITIONALLY on every
+    step-cap resume, independent of whether the diagnosis role succeeds -
+    it is wired as a separate, unconditional call, not folded into
+    _rebrief_step_cap_struggle's fail-open diagnosis path. Simulate the
+    diagnosis role failing open (returns None, per diagnose_failure's
+    documented contract) and confirm the cleanup guidance still lands in
+    agent_instructions."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "Working on it...\n"
+        f"{_STEP_CAP_MARKER_LOCAL}\n"
+    )
+    _write_manifest(plan_dir, "cap2", {
+        "S1": {"summary": "thing", "status": "in_progress",
+               "pid": 4243, "worktree": str(worktree),
+               "agent_instructions": "GOAL: build the thing."},
+    })
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "detect_test_command",
+                         lambda *a, **k: (_ for _ in ()).throw(
+                             AssertionError("must not run on a step-cap exit")))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+    # Force the diagnosis role to fail open, exactly as diagnose_failure
+    # does on an unconfigured/erroring role.
+    monkeypatch.setattr(p, "diagnose_failure", lambda *a, **k: None)
+
+    p.check_story_status("cap2", "S1")
+
+    manifest = _read_manifest(plan_dir, "cap2")
+    instructions = manifest["stories"]["S1"]["agent_instructions"]
+    from pipeline import rebrief
+    assert rebrief.CLEANUP_HEADER in instructions
+    assert "GOAL: build the thing." in instructions
+    # No diagnosis block, since diagnose_failure returned None.
+    assert rebrief.DIAGNOSIS_HEADER not in instructions
+
+
 def test_check_story_status_routes_infra_failure_to_interrupted_without_burning_rework(
     plan_dir, tmp_path, monkeypatch,
 ):

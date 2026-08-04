@@ -289,13 +289,11 @@ from .rebase import (  # noqa: F401
 # Step-cap struggle diagnosis. Patched via p.<name> by tests; server call sites
 # use bare names -> re-export -> patch lands (mirrors .review / .escalation).
 from .rebrief import (
+    append_cleanup_guidance,
     collect_failure_evidence,
     compose_rebriefed_instructions,
     diagnose_failure,
 )
-
-# Reviewer dispatch. Patched via p.<name> by tests; server call sites use
-# bare names -> re-export -> patch lands. No server-global free-var reads.
 from .review import (
     _run_reviewer,
     _run_security_reviewer,
@@ -1931,6 +1929,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # diagnosis leaves agent_instructions untouched (no-op).
         _rebrief_step_cap_struggle(
             story, str(worktree), plan_role_config=manifest.get("role_config"))
+
+        # Worktree hygiene: append the cleanup-guidance section so the resumed
+        # agent tidies the worktree before continuing. Unconditional and
+        # idempotent (append_cleanup_guidance is a no-op when its header is
+        # already present), so it composes safely with the diagnosis above.
+        story["agent_instructions"] = append_cleanup_guidance(
+            story.get("agent_instructions", ""))
 
         # See STEP_CAP_FALLBACK_THRESHOLD: track consecutive step-cap
         # interrupts on the current model and, past the threshold, switch to

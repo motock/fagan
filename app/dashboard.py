@@ -363,7 +363,7 @@ def _parse_progress(plan_text: str | None, scratchpad_text: str | None) -> dict 
     if total == 0:
         return None
     for line in scratchpad_text.splitlines():
-        m = re.match(r'^PROGRESS:\s*(\d+)/(\d+)\s*$', line)
+        m = re.match(r'^PROGRESS:\s*(\d{1,6})/(\d{1,6})\s*$', line)
         if m:
             done = int(m.group(1))
             return {"done": done, "total": total}

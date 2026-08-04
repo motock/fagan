@@ -151,3 +151,29 @@ def test_get_plan_does_not_add_progress_to_todo_story(client, plan_dir, worktree
 
     body = client.get("/api/plans/demo").json()
     assert "progress" not in body["stories"]["S1"]
+
+
+def test_checklist_endpoint_does_not_500_on_oversized_progress_digits(client, plan_dir, worktree_dir):
+    """A PROGRESS: line with an absurdly long digit run must not crash the
+    endpoint (CPython's int() has a max digit-string conversion limit) -
+    fail open to progress: null instead of a 500, per _parse_progress's own
+    documented "never raises" contract."""
+    wt = worktree_dir / "S1"
+    wt.mkdir()
+    (wt / ".agent_plan.md").write_text("1. step\n")
+    (wt / ".agent_scratchpad.md").write_text(f"PROGRESS: {'9' * 5000}/2\n")
+    (plan_dir / "demo.manifest.json").write_text(json.dumps({
+        "epics": {},
+        "stories": {
+            "S1": {
+                "summary": "oversized progress",
+                "status": "in_progress",
+                "worktree": str(wt),
+                "dependencies": [],
+            }
+        },
+    }))
+
+    res = client.get("/api/plans/demo/stories/S1/checklist")
+    assert res.status_code == 200, f"expected fail-open 200, got {res.status_code}"
+    assert res.json()["progress"] is None

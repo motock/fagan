@@ -155,21 +155,22 @@ def diagnose_failure(
     if diagnosis is None or not diagnosis.strip():
         return None
     return diagnosis.strip()
+def compose_rebriefed_instructions(agent_instructions: str, diagnosis: str | None) -> str:
+    """Return `agent_instructions` with exactly one PRIOR-ATTEMPT DIAGNOSIS
+    block appended, replacing any existing one rather than stacking. Returns
+    `agent_instructions` unchanged when `diagnosis` is None/empty."""
+    if not diagnosis or not diagnosis.strip():
+        return agent_instructions
 
-    def compose_rebriefed_instructions(agent_instructions: str, diagnosis: str | None) -> str:
-        """Return `agent_instructions` with exactly one PRIOR-ATTEMPT DIAGNOSIS
-        block appended, replacing any existing one rather than stacking. Returns
-        `agent_instructions` unchanged when `diagnosis` is None/empty."""
-        if not diagnosis or not diagnosis.strip():
-            return agent_instructions
+    base = agent_instructions
+    existing = base.find(DIAGNOSIS_HEADER)
+    if existing != -1:
+        base = base[:existing].rstrip()
 
-        base = agent_instructions
-        existing = base.find(DIAGNOSIS_HEADER)
-        if existing != -1:
-            base = base[:existing].rstrip()
-
-        block = f"{DIAGNOSIS_HEADER}\n{diagnosis.strip()}"
-        return f"{base}\n\n{block}" if base else block
+    block = f"{DIAGNOSIS_HEADER}\n{diagnosis.strip()}"
+    return f"{base}\n\n{block}" if base else block
+    block = f"{DIAGNOSIS_HEADER}\n{diagnosis.strip()}"
+    return f"{base}\n\n{block}" if base else block
 def append_cleanup_guidance(agent_instructions: str) -> str:
     """Append or replace a worktree hygiene guidance block.
 
@@ -207,8 +208,8 @@ def append_cleanup_guidance(agent_instructions: str) -> str:
 
 
 __all__ = [
-    "DIAGNOSIS_HEADER",
-    "collect_failure_evidence",
     "CLEANUP_HEADER",
+    "DIAGNOSIS_HEADER",
     "append_cleanup_guidance",
+    "collect_failure_evidence",
 ]

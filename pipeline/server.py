@@ -286,15 +286,7 @@ from .rebase import (  # noqa: F401
     _try_auto_resolve_conflict,
 )
 
-# Step-cap struggle diagnosis. Patched via p.<name> by tests; server call sites
-# use bare names -> re-export -> patch lands (mirrors .review / .escalation).
-from .rebrief import (
-    collect_failure_evidence,
-    compose_rebriefed_instructions,
-    diagnose_failure,
-)
-
-# Reviewer dispatch. Patched via p.<name> by tests; server call sites use
+from .rebrief import compose_rebriefed_instructions, diagnose_failure, append_cleanup_guidance
 # bare names -> re-export -> patch lands. No server-global free-var reads.
 from .review import (
     _run_reviewer,
@@ -1929,15 +1921,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # uses the model that just ran (the struggling one) and the worktree's
         # agent.log is still present for evidence. Fail-open: a None/errored
         # diagnosis leaves agent_instructions untouched (no-op).
-        _rebrief_step_cap_struggle(
-            story, str(worktree), plan_role_config=manifest.get("role_config"))
-
-        # See STEP_CAP_FALLBACK_THRESHOLD: track consecutive step-cap
-        # interrupts on the current model and, past the threshold, switch to
-        # the plan's opted-in fallback model for the next resume. Worktree
-        # and journal are left untouched so the resumed run still benefits
-        # from whatever real progress is already committed.
-        fallback_model = manifest.get("local_model_fallback")
+        story["agent_instructions"] = append_cleanup_guidance(
++            story.get("agent_instructions", ""))
         current_model = story.get("dispatched_model") or story.get("model")
         # STEP_CAP_MARKERS are only ever printed by the local agent scripts, so
         # a Claude-backend story should never reach here in practice - guard

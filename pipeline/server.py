@@ -1338,7 +1338,9 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     "up to date with a short running summary of what you've "
                     "done and which step is next (create_file for the first "
                     "note, str_replace to rewrite it after that) before "
-                    "moving on to the next step."
+                    "moving on to the next step. The FIRST line must be "
+                    "PROGRESS: <done>/<total> showing how many checklist "
+                    "items you've completed (e.g. PROGRESS: 2/5)."
                 )
             spec["prompt"] = (
                 f"{spec['prompt']}\n\n"

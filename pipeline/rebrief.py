@@ -30,6 +30,8 @@ from app import backend, role_registry
 
 DIAGNOSIS_HEADER = "=== PRIOR-ATTEMPT DIAGNOSIS (read this FIRST) ==="
 
+CLEANUP_HEADER = "=== WORKTREE HYGIENE (read this too) ==="
+
 
 def collect_failure_evidence(worktree, story: dict[str, Any], limit: int = 6000) -> str:
     """Gather a bounded summary of why a dispatched attempt on `story` failed,
@@ -154,26 +156,59 @@ def diagnose_failure(
         return None
     return diagnosis.strip()
 
+    def compose_rebriefed_instructions(agent_instructions: str, diagnosis: str | None) -> str:
+        """Return `agent_instructions` with exactly one PRIOR-ATTEMPT DIAGNOSIS
+        block appended, replacing any existing one rather than stacking. Returns
+        `agent_instructions` unchanged when `diagnosis` is None/empty."""
+        if not diagnosis or not diagnosis.strip():
+            return agent_instructions
 
-def compose_rebriefed_instructions(agent_instructions: str, diagnosis: str | None) -> str:
-    """Return `agent_instructions` with exactly one PRIOR-ATTEMPT DIAGNOSIS
-    block appended, replacing any existing one rather than stacking. Returns
-    `agent_instructions` unchanged when `diagnosis` is None/empty."""
-    if not diagnosis or not diagnosis.strip():
-        return agent_instructions
+        base = agent_instructions
+        existing = base.find(DIAGNOSIS_HEADER)
+        if existing != -1:
+            base = base[:existing].rstrip()
 
-    base = agent_instructions
-    existing = base.find(DIAGNOSIS_HEADER)
+        block = f"{DIAGNOSIS_HEADER}\n{diagnosis.strip()}"
+        return f"{base}\n\n{block}" if base else block
+def append_cleanup_guidance(agent_instructions: str) -> str:
+    """Append or replace a worktree hygiene guidance block.
+
+    The block is prefixed by :data:`CLEANUP_HEADER`. If the header already
+    exists in *agent_instructions*, the existing block (including any prior
+    content) is removed and replaced with a fresh one.  This mirrors the
+    behaviour of :func:`compose_rebriefed_instructions`.
+
+    Parameters
+    ----------
+    agent_instructions:
+        The current instruction string to augment.
+
+    Returns
+    -------
+    str
+        The augmented instruction string.
+    """
+    if not agent_instructions:
+        base = ""
+    else:
+        base = agent_instructions
+    existing = base.find(CLEANUP_HEADER)
     if existing != -1:
+        # Remove the old block and any trailing whitespace.
         base = base[:existing].rstrip()
+    guidance = (
+        f"{CLEANUP_HEADER}\n"
+        "This worktree may still contain files from an earlier, interrupted attempt at this story.\n"
+        "The step-cap checkpoint commits whatever was in progress, including off-track experiments;\n"
+        "before finishing, check `git status` / diff against the default branch for anything not needed for this task, and remove or revert stray files (especially stray test files) left over from the earlier attempt, since they can break review even when your own changes are correct."
+    )
+    return f"{base}\n\n{guidance}" if base else guidance
 
-    block = f"{DIAGNOSIS_HEADER}\n{diagnosis.strip()}"
-    return f"{base}\n\n{block}" if base else block
 
 
 __all__ = [
     "DIAGNOSIS_HEADER",
     "collect_failure_evidence",
-    "compose_rebriefed_instructions",
-    "diagnose_failure",
+    "CLEANUP_HEADER",
+    "append_cleanup_guidance",
 ]

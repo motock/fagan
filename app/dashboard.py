@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-import re
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 

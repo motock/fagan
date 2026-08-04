@@ -101,6 +101,13 @@ def _run_diagnosis_role(
         "A dispatched coding attempt failed or stalled. Given the evidence "
         "below, state the ROOT CAUSE and the MINIMAL fix required, in a few "
         "sentences. Do not restate the evidence; be specific and actionable.\n\n"
+        "The next attempt only has targeted line-ranged file reads, search, "
+        "and anchored str_replace/replace_lines-style edits available; it "
+        "does NOT have `git apply` and cannot reliably rewrite a whole file "
+        "at once. The suggested fix MUST be achievable with those tools: "
+        "recommend targeted reads/searches and small anchored edits. NEVER "
+        "recommend `git apply`, a full-file rewrite, or an in-place re-indent "
+        "of a large existing function.\n\n"
         f"{evidence}"
     )
     if provider_override:

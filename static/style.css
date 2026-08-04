@@ -516,7 +516,34 @@ main {
     var(--panel-2) 40%
   );
 }
-
+/* Per-story progress bar on in_progress cards. Shows done/total with a
+   thin filled track using the --c-in_progress status color. Only rendered
+   for stories that have a parsed progress field (guided decomposition). */
+.card-progress {
+  margin-top: var(--sp-2);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.card-progress-track {
+  flex: 1;
+  height: 4px;
+  background: var(--panel-3);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.card-progress-fill {
+  height: 100%;
+  background: var(--c-in_progress);
+  border-radius: var(--radius-pill);
+  transition: width var(--t-base);
+}
+.card-progress-label {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 /* Column count badge: pill in the column header. Uses the status color
    as its background and ensures readable contrast in both themes by
    mixing with a dark foreground in light mode and keeping the dark

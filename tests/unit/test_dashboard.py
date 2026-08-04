@@ -1815,7 +1815,8 @@ def test_checklist_endpoint_no_worktree_field_returns_unavailable(client, plan_d
     })
     body = client.get("/api/plans/demo/stories/S1/checklist").json()
     assert body == {"plan": {"available": False, "text": ""},
-                    "scratchpad": {"available": False, "text": ""}}
+                    "scratchpad": {"available": False, "text": ""},
+                    "progress": None}
 
 
 def test_checklist_endpoint_worktree_dir_gone_returns_unavailable_not_500(client, plan_dir, worktree_dir):
@@ -1829,7 +1830,8 @@ def test_checklist_endpoint_worktree_dir_gone_returns_unavailable_not_500(client
     res = client.get("/api/plans/demo/stories/S1/checklist")
     assert res.status_code == 200
     assert res.json() == {"plan": {"available": False, "text": ""},
-                          "scratchpad": {"available": False, "text": ""}}
+                          "scratchpad": {"available": False, "text": ""},
+                          "progress": None}
 
 
 def test_checklist_endpoint_empty_file_is_available_with_empty_text(client, plan_dir, worktree_dir):

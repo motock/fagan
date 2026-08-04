@@ -362,7 +362,7 @@ def _parse_progress(plan_text: str | None, scratchpad_text: str | None) -> dict 
     if total == 0:
         return None
     for line in scratchpad_text.splitlines():
-        m = re.match(r'^PROGRESS:\s*(\d+)/(\d+)\s*$', line.strip())
+        m = re.match(r'^PROGRESS:\s*(\d+)/(\d+)\s*$', line)
         if m:
             done = int(m.group(1))
             return {"done": done, "total": total}
@@ -704,11 +704,6 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         last_activity = _story_last_activity(plan_name, story_key, story)
         # Parse progress for in_progress stories with a worktree
         progress = None
-        if story.get("status") == "in_progress":
-            plan_file = _read_worktree_file(story, ".agent_plan.md")
-            scratch_file = _read_worktree_file(story, ".agent_scratchpad.md")
-            if plan_file["available"] and scratch_file["available"]:
-                progress = _parse_progress(plan_file["text"], scratch_file["text"])
         if story.get("status") == "in_progress":
             plan_file = _read_worktree_file(story, ".agent_plan.md")
             scratch_file = _read_worktree_file(story, ".agent_scratchpad.md")

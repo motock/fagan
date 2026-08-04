@@ -169,8 +169,8 @@ def compose_rebriefed_instructions(agent_instructions: str, diagnosis: str | Non
 
     block = f"{DIAGNOSIS_HEADER}\n{diagnosis.strip()}"
     return f"{base}\n\n{block}" if base else block
-    block = f"{DIAGNOSIS_HEADER}\n{diagnosis.strip()}"
-    return f"{base}\n\n{block}" if base else block
+
+
 def append_cleanup_guidance(agent_instructions: str) -> str:
     """Append or replace a worktree hygiene guidance block.
 

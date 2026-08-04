@@ -16,6 +16,8 @@
 		<string>full</string>
 		<key>PIPELINE_BACKEND_DISPATCH</key>
 		<string>local</string>
+		<key>PIPELINE_BACKEND_PLANNER</key>
+		<string>ollama</string>
 		<key>PIPELINE_BACKEND_REVIEW</key>
 		<string>ollama</string>
 		<key>PIPELINE_DECOMPOSE_SCRATCHPAD</key>

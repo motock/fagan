@@ -2,23 +2,41 @@
   "providers": {
     "claude": {
       "models": {
-        "opus": {"tag": "opus"},
-        "sonnet": {"tag": "sonnet"},
-        "haiku": {"tag": "haiku"}
+        "opus": {
+          "tag": "opus"
+        },
+        "sonnet": {
+          "tag": "sonnet"
+        },
+        "haiku": {
+          "tag": "haiku"
+        }
       }
     },
     "ollama": {
       "models": {
-        "gpt-oss": {"tag": "gpt-oss:20b"},
-        "gpt-oss-coder-high": {"tag": "gpt-oss-coder-high:latest"},
-        "gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"},
-        "glm": {"tag": "glm-5.2:cloud"},
-        "devstral": {"tag": "devstral:24b"}
+        "gpt-oss": {
+          "tag": "gpt-oss:20b"
+        },
+        "gpt-oss-coder-high": {
+          "tag": "gpt-oss-coder-high:latest"
+        },
+        "gpt-oss-20b-high": {
+          "tag": "gpt-oss-20b-high:latest"
+        },
+        "glm": {
+          "tag": "glm-5.2:cloud"
+        },
+        "devstral": {
+          "tag": "devstral:24b"
+        }
       }
     },
     "mlx": {
       "models": {
-        "qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}
+        "qwen": {
+          "tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+        }
       }
     },
     "lmstudio": {
@@ -26,9 +44,21 @@
     }
   },
   "roles": {
-    "dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"},
-    "test_author": {"provider": "claude", "model": "sonnet"},
-    "planner": {"provider": "claude", "model": "sonnet"},
-    "review": {"provider": "claude", "model": "sonnet"}
+    "dispatch": {
+      "provider": "ollama",
+      "model": "gpt-oss-20b-high"
+    },
+    "test_author": {
+      "provider": "ollama",
+      "model": "glm"
+    },
+    "planner": {
+      "provider": "claude",
+      "model": "sonnet"
+    },
+    "review": {
+      "provider": "ollama",
+      "model": "glm"
+    }
   }
 }

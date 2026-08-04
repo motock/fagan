@@ -1417,6 +1417,180 @@ def test_render_board_card_click_wires_show_story_modal():
     assert data.get("status") == "in_progress", data
 
 
+# === Per-story progress bar (Tier 1) ================================
+# An in_progress story carrying a parsed `progress` field (from guided
+# decomposition) renders a thin progress bar on its card face. The bar is
+# only for in_progress stories that actually have progress data; every
+# other case (no progress field, non-in_progress status, zero-total
+# progress) must render nothing.
+
+def test_render_board_progress_bar_on_in_progress_story():
+    """An in_progress story with progress {done:1,total:3} renders a
+    .card-progress element whose label reads '1/3' and whose fill width
+    is the rounded percentage (33%)."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['in_progress'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'k1':{status:'in_progress', summary:'a',"
+        "        progress:{done:1, total:3}}"
+        " });"
+        " })()"
+    )
+    html = _run_app_js(expr)
+    # the progress container is present
+    assert 'class="card-progress"' in html, html
+    # the track + fill sub-elements are present
+    assert 'class="card-progress-track"' in html, html
+    assert 'class="card-progress-fill"' in html, html
+    # the label shows done/total
+    assert 'class="card-progress-label"' in html, html
+    assert "1/3" in html, html
+    # the fill width is the rounded percentage: round(1/3*100) = 33
+    assert 'width: 33%' in html, html
+
+
+def test_render_board_progress_bar_fill_width_rounds_percentage():
+    """Boundary: progress {done:2,total:3} -> round(66.66) = 67% width.
+    Pins the rounding behavior so a truncation bug (66%) is caught."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['in_progress'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'k1':{status:'in_progress', summary:'a',"
+        "        progress:{done:2, total:3}}"
+        " });"
+        " })()"
+    )
+    html = _run_app_js(expr)
+    assert 'class="card-progress"' in html, html
+    assert "2/3" in html, html
+    assert 'width: 67%' in html, html
+
+
+def test_render_board_progress_bar_full_when_all_done():
+    """Boundary: progress {done:3,total:3} -> 100% width, label '3/3'."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['in_progress'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'k1':{status:'in_progress', summary:'a',"
+        "        progress:{done:3, total:3}}"
+        " });"
+        " })()"
+    )
+    html = _run_app_js(expr)
+    assert 'class="card-progress"' in html, html
+    assert "3/3" in html, html
+    assert 'width: 100%' in html, html
+
+
+def test_render_board_no_progress_bar_when_no_progress_field():
+    """An in_progress story WITHOUT a progress field must NOT render a
+    .card-progress element (the bar is opt-in via parsed progress data)."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['in_progress'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'k1':{status:'in_progress', summary:'a'}"
+        " });"
+        " })()"
+    )
+    html = _run_app_js(expr)
+    assert 'class="card-progress"' not in html, html
+    assert "card-progress" not in html, html
+
+
+def test_render_board_no_progress_bar_when_progress_total_zero():
+    """Boundary: progress {done:0,total:0} has total <= 0, so no bar —
+    avoids a divide-by-zero and a meaningless '0/0' label."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['in_progress'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'k1':{status:'in_progress', summary:'a',"
+        "        progress:{done:0, total:0}}"
+        " });"
+        " })()"
+    )
+    html = _run_app_js(expr)
+    assert 'class="card-progress"' not in html, html
+
+
+def test_render_board_no_progress_bar_on_done_story():
+    """A done story WITH a progress field must NOT render a progress bar —
+    the bar is in_progress-only (done cards already signal completion via
+    their status stripe and the done-column completion hint)."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['done'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'k1':{status:'done', summary:'a',"
+        "        progress:{done:3, total:3}}"
+        " });"
+        " })()"
+    )
+    html = _run_app_js(expr)
+    assert 'class="card-progress"' not in html, html
+    assert "card-progress" not in html, html
+
+
+def test_render_board_no_progress_bar_on_todo_story():
+    """A todo story WITH a progress field must NOT render a progress bar —
+    only in_progress cards get the bar."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['todo'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'k1':{status:'todo', summary:'a',"
+        "        progress:{done:0, total:3}}"
+        " });"
+        " })()"
+    )
+    html = _run_app_js(expr)
+    assert 'class="card-progress"' not in html, html
+
+
+def test_render_board_progress_bar_only_on_in_progress_card_in_mixed_board():
+    """In a board with multiple statuses, only the in_progress card with
+    progress data gets a .card-progress; a done card with progress data
+    in the same render does not."""
+    expr = (
+        "(() => {"
+        " state.filters.statuses = ['in_progress','done'];"
+        " state.filters.personas = []; state.filters.risks = [];"
+        " return renderBoard({"
+        "  'ip':{status:'in_progress', summary:'a',"
+        "        progress:{done:1, total:2}},"
+        "  'dn':{status:'done', summary:'b',"
+        "        progress:{done:2, total:2}}"
+        " });"
+        " })()"
+    )
+    html = _run_app_js(expr)
+    # exactly one progress bar (the in_progress card)
+    assert html.count('class="card-progress"') == 1, html
+    assert "1/2" in html, html
+
+
+def test_style_css_defines_progress_bar_classes():
+    """The CSS classes referenced by the progress bar markup must exist
+    in static/style.css so the bar is actually styled (not unstyled divs)."""
+    with open(os.path.join(os.path.dirname(APP_JS), "style.css")) as fh:
+        css = fh.read()
+    assert ".card-progress" in css
+    assert ".card-progress-track" in css
+    assert ".card-progress-fill" in css
+    assert ".card-progress-label" in css
+
+
 def test_apply_filters_persona_filter_excludes_non_matching_stories():
     """applyFilters still filters on persona — the column count must
     reflect the persona-filtered subset."""

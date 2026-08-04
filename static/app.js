@@ -506,19 +506,24 @@ function renderBoard(stories) {
         const badgesHtml = badges.length
           ? `<div class="card-badges">${badges.join("")}</div>`
           : "";
+        // Progress bar for in_progress stories with checklist data
+        const pct = (s.status === "in_progress" && s.progress && s.progress.total > 0)
+          ? Math.round(s.progress.done / s.progress.total * 100) : 0;
+        const progressHtml = (s.status === "in_progress" && s.progress && s.progress.total > 0)
+          ? `<div class="card-progress">
+               <div class="card-progress-track"><div class="card-progress-fill" style="width: ${pct}%"></div></div>
+               <span class="card-progress-label">${s.progress.done}/${s.progress.total}</span>
+             </div>`
+          : "";
         return `
         <div class="${classes.join(" ")}" style="--badge-color: var(--c-${status})" data-key="${escapeHtml(key)}">
           <div class="card-key">${escapeHtml(key)}</div>
           <div class="card-summary">${escapeHtml(s.summary || "(no summary)")}</div>
-          ${badgesHtml}
+          ${badgesHtml}${progressHtml}
           ${ageLabel ? `<div class="card-age${stale ? " stale" : ""}">${escapeHtml(ageLabel)}</div>` : ""}
         </div>
-      `;
+`;
       }).join("");
-      // Thin completion hint for the done column: shows done / plan-total
-      // so the user sees plan-wide progress at a glance. We use planTotal
-      // (not entries.length) so the fraction stays meaningful even when
-      // persona/risk filters narrow the visible cards. Hidden when the
       // plan has no stories yet to avoid "0/0".
       const completion = (status === "done" && planTotal > 0)
         ? `<div class="column-completion">${entries.length}/${planTotal}</div>`

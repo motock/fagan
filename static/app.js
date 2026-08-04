@@ -524,6 +524,10 @@ function renderBoard(stories) {
         </div>
 `;
       }).join("");
+      // Thin completion hint for the done column: shows done / plan-total
+      // so the user sees plan-wide progress at a glance. We use planTotal
+      // (not entries.length) so the fraction stays meaningful even when
+      // persona/risk filters narrow the visible cards. Hidden when the
       // plan has no stories yet to avoid "0/0".
       const completion = (status === "done" && planTotal > 0)
         ? `<div class="column-completion">${entries.length}/${planTotal}</div>`

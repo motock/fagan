@@ -289,10 +289,10 @@ from .rebase import (  # noqa: F401
 # Step-cap struggle diagnosis. Patched via p.<name> by tests; server call sites
 # use bare names -> re-export -> patch lands (mirrors .review / .escalation).
 from .rebrief import (
+    append_cleanup_guidance,
     collect_failure_evidence,
     compose_rebriefed_instructions,
     diagnose_failure,
-    append_cleanup_guidance,
 )
 from .review import (
     _run_reviewer,

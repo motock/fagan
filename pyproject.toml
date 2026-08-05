@@ -35,7 +35,7 @@ testpaths = [
     "tests/unit/test_rework_test_author_phase.py",
     "tests/unit/test_local_agent_5xx_recovery.py",
     "tests/unit/test_local_agent_5xx_recovery_oracle.py",
-]
+    "tests/unit/test_acceptance_ollama_chat_retry.py",
 
 [tool.ruff.lint.per-file-ignores]
 # Acceptance fixtures are read-only oracle content: their worktree bytes are

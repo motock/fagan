@@ -188,7 +188,7 @@ Reference comparables:
       `local_agent_oracle.py`. Regression-tested: a deleting edit is now
       rejected and the file left unchanged; a legitimate refactor removing
       both the assignment and all its uses still passes.
-- [x] **Mode 31 (2026-07-22, FIXED 2026-08-05, PR #234/#235) — confident
+- [ ] **Mode 31 (2026-07-22, NOT fixed) — confident
       off-task drift.** A correctly-scoped, narrowly-instructed dispatch
       (verified via its own transcript) abandoned the assigned task and
       invented an unrelated one instead — 20+ steps of real, coherent-looking

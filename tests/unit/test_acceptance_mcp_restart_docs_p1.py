@@ -302,7 +302,6 @@ class TestOtherChecklistItemsUntouched:
     UNCHECKED_MUST_STAY_UNCHECKED: ClassVar[list[str]] = [
         "Finish the MLX validate re-run.",
         "Mode 31 (2026-07-22, NOT fixed)",
-        "Mode 32 (2026-07-22, NOT fixed)",
         "Get CI to an enforced green baseline",
         "One-command install story",
     ]
@@ -363,17 +362,19 @@ class TestOtherChecklistItemsUntouched:
         text = _maturity_text()
         unchecked = len(re.findall(r"^- \[ \]", text, re.MULTILINE))
         checked = len(re.findall(r"^- \[x\]", text, re.MULTILINE))
-        assert unchecked == 28, (
-            f"expected 28 remaining unchecked top-level items "
-            f"(30 originally, minus the P1 flip and the A3 P0 flaky-tests "
-            f"resolution), got {unchecked}"
+        assert unchecked == 27, (
+            f"expected 27 remaining unchecked top-level items "
+            f"(30 originally, minus the P1 flip, the A3 P0 flaky-tests "
+            f"resolution, and Mode 32 moving to a partial '[~]' state), "
+            f"got {unchecked}"
         )
         assert checked == 13, (
             f"expected 13 checked top-level items "
             f"(11 originally, plus the P1 flip and the A3 P0 flaky-tests "
             f"resolution), got {checked}"
         )
-        assert unchecked + checked == 41, (
-            f"expected the top-level checkbox total to stay 41 (no items added "
-            f"or removed, only the A3 P0 flip), got {unchecked + checked}"
+        assert unchecked + checked == 40, (
+            f"expected the top-level [ ]/[x] checkbox total to be 40 (41 "
+            f"minus Mode 32, which now uses a partial '[~]' state not "
+            f"counted by either regex), got {unchecked + checked}"
         )

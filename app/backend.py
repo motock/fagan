@@ -1182,9 +1182,8 @@ class OllamaDriver:
         max_steps = int(
             os.environ.get("PIPELINE_LOCAL_MAX_STEPS", str(self.max_steps))
         )
-        env["PIPELINE_TRANSPORT_MAX_STEPS"] = str(max_steps)
+        env["PIPELINE_TRANSPORT_MAX_STEPS"] = str(max_steps)        
 
-        # PIPELINE_LOCAL_MAX_STEPS above) so an env edit takes effect without
         # restarting the MCP server. Only the exact tokens "true"/"false" opt
         # in; anything else leaves LOCAL_AGENT_THINK unset and local_agent.py
         # omits the `think` key from the /api/chat body entirely (no-op for

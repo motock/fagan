@@ -1167,8 +1167,6 @@ class OllamaDriver:
             temp_str = temp_env
         else:
             temp_str = str(_tuned_temperature(resolved_model, self.temperature))
-        env["LOCAL_AGENT_NUM_CTX"] = str(num_ctx)
-        env["LOCAL_AGENT_TEMPERATURE"] = temp_str
         env["PIPELINE_TRANSPORT_NUM_CTX"]     = str(num_ctx)
         env["PIPELINE_TRANSPORT_TEMPERATURE"] = temp_str
         # PIPELINE_LOCAL_MAX_STEPS is the real, plist-honored step-cap knob
@@ -1185,7 +1183,7 @@ class OllamaDriver:
             os.environ.get("PIPELINE_LOCAL_MAX_STEPS", str(self.max_steps))
         )
         env["PIPELINE_TRANSPORT_MAX_STEPS"] = str(max_steps)
-        env["LOCAL_AGENT_MAX_STEPS"] = str(max_steps)
+
         # PIPELINE_LOCAL_MAX_STEPS above) so an env edit takes effect without
         # restarting the MCP server. Only the exact tokens "true"/"false" opt
         # in; anything else leaves LOCAL_AGENT_THINK unset and local_agent.py

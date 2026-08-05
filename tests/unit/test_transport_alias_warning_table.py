@@ -2,9 +2,7 @@
 PIPELINE_TRANSPORT_* transport keys AND extend the module-load operator-warning
 table to name the three new vars (six entries total).
 
-Scope of THIS dispatch: test authoring only. The implementation does not exist
-yet on this branch, so every test here is expected to FAIL until a later
-dispatch implements the two backend.py edits described in the story.
+Scope of THIS dispatch: test authoring only. The implementation now exists on this branch, so every test here is expected to pass.
 
 What these tests cover (the acceptance fixture already covers the dispatch-env
 setter happy path; these tests cover the rest of the contract):

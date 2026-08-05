@@ -1182,9 +1182,9 @@ class OllamaDriver:
         max_steps = int(
             os.environ.get("PIPELINE_LOCAL_MAX_STEPS", str(self.max_steps))
         )
-        env["PIPELINE_TRANSPORT_MAX_STEPS"] = str(max_steps)        
+        env["PIPELINE_TRANSPORT_MAX_STEPS"] = str(max_steps)
 
-        # restarting the MCP server. Only the exact tokens "true"/"false" opt
+        # Restart the MCP server so the new max-steps env var takes effect.
         # in; anything else leaves LOCAL_AGENT_THINK unset and local_agent.py
         # omits the `think` key from the /api/chat body entirely (no-op for
         # non-Qwen3 models like devstral/gpt-oss/qwen3-coder). See

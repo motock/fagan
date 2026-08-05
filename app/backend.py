@@ -732,6 +732,8 @@ class OllamaDriver:
         self.max_steps = int(os.environ.get("PIPELINE_LOCAL_MAX_STEPS", "40"))
         self.temperature = float(os.environ.get("PIPELINE_LOCAL_TEMPERATURE", "0.3"))
         self.review_max_steps = int(os.environ.get("PIPELINE_LOCAL_REVIEW_MAX_STEPS", "20"))
+        self.chat_max_attempts = int(os.environ.get("PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS", "3"))
+        self.chat_retry_backoff = float(os.environ.get("PIPELINE_LOCAL_CHAT_RETRY_BACKOFF", "2"))
 
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,

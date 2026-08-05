@@ -14,7 +14,28 @@ pythonpath = ["."]
 # pytest then tries to import it and fails the whole run. Pin the testpaths
 # to the real test files so experiment artifacts can never affect CI again.
 testpaths = [
-    "tests/unit",
+    "tests/unit/test_backend.py",
+    "tests/unit/test_inference_providers.py",
+    "tests/unit/test_role_registry.py",
+    "tests/unit/test_pipeline_mcp_server.py",
+    "tests/unit/test_dashboard.py",
+    "tests/unit/test_local_agent.py",
+    "tests/unit/test_local_agent_oracle.py",
+    "tests/unit/test_local_agent_persistence.py",
+    "tests/unit/test_dashboard_script.py",
+    "tests/unit/test_mlx_server_supervisor.py",
+    "tests/unit/test_review_story_same_sha.py",
+    "tests/unit/test_ci_sha_scoping.py",
+    "tests/unit/test_test_collection_gate.py",
+    "tests/unit/test_local_agent_steering_hardening.py",
+    "tests/unit/test_tdd_split_always_on.py",
+    "tests/unit/test_code_reviewer_persona_blocking_format.py",
+    "tests/unit/test_mode30_resolution_docs.py",
+    "tests/unit/test_rework_test_author_wiring_acceptance.py",
+    "tests/unit/test_rework_test_author_phase.py",
+    "tests/unit/test_local_agent_5xx_recovery.py",
+    "tests/unit/test_local_agent_5xx_recovery_oracle.py",
+    "tests/unit/test_acceptance_ollama_chat_retry.py",
 ]
 
 [tool.ruff.lint.per-file-ignores]

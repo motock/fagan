@@ -1592,6 +1592,7 @@ def main() -> int:
     )
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
+    expected_paths = _expected_task_paths(task) # noqa: F841
     # Initialize messages list with optional persistence support.
     # Resume path: if LOCAL_AGENT_RESUME_TRANSCRIPT_PATH points at a valid
     # transcript, load it instead of building the fresh system/task pair (the
@@ -1649,6 +1650,13 @@ def main() -> int:
     nudged_sr_fail: set[str] = set()
     last_progress_step = 0
     start_time = time.monotonic()
+    # Off-task-drift guard (Mode 31): a dispatched agent once abandoned its
+    # assigned task and spent 20+ steps of real, coherent tool calls on a
+    # completely unrelated subject. off_task_targets tracks every distinct
+    # mutated path that _is_off_task_path flags; the first one gets a
+    # corrective nudge, a second DIFFERENT one after the nudge parks the run.
+    off_task_targets: set[str] = set() # noqa: F841
+    nudged_off_task = False # noqa: F841
 
     for step in range(MAX_STEPS):
         if time.monotonic() - start_time > TIMEOUT:
@@ -1921,6 +1929,27 @@ def main() -> int:
                     if fn not in ("str_replace", "replace_lines"):
                         seen[sig] = current
                     last_progress_step = step
+
+                    path_arg = args.get("path", "")
+                    if path_arg and _is_off_task_path(path_arg, expected_paths):
+                        already_seen = path_arg in off_task_targets
+                        off_task_targets.add(path_arg)
+                        if not already_seen:
+                            if not nudged_off_task:
+                                nudged_off_task = True
+                                print(f"   [off-task nudge: {path_arg} not in assigned scope]", flush=True)
+                                messages.append({"role": "user", "content": (
+                                    f"You just edited {path_arg}, which was not named anywhere "
+                                    f"in your assigned task. If this file is genuinely required "
+                                    f"to complete the task, explain why in your next message and "
+                                    f"continue. Otherwise STOP editing unrelated files and refocus "
+                                    f"on the files named in your instructions.")})
+                            else:
+                                print(f"   [parking: off-task drift onto {path_arg} after nudge]", flush=True)
+                                if worktree_dirty():
+                                    auto_wip_commit("parked on off-task drift")
+                                if PARK_ENABLED:
+                                    return 3
 
             # Failing-str_replace loop guard. str_replace is excluded from the
             # per-target repetition guard above, so a no-match loop on one file

@@ -276,19 +276,30 @@ def detect_lint_command(cwd: Path) -> tuple[Path, list[str]] | None:
 def _apply_pytest_collection_overrides(cmd: list[str]) -> list[str]:
     """When cmd invokes pytest, override an explicit `testpaths` allowlist
     (e.g. pyproject.toml's `[tool.pytest.ini_options] testpaths = [...]`) so
-    the gate collects every real root test_*.py, while excluding tests/ - the
-    separate benchmark/experiment harness that was never part of the graded
-    CI suite (its own test_harness_*.py files are red by design/require
-    fixtures CI doesn't set up, and tests/benchmark/_runs, _matrixtest,
-    _realtest, _repro etc. hold per-run experiment artifacts pytest can't
-    even import). This mirrors the allowlist's actual scope: every currently
-    allowlisted file lives at the repo root, none under tests/.
+    the gate collects every real test_*.py, while excluding tests/benchmark
+    and tests/experiments - the benchmark/experiment harness that was never
+    part of the graded CI suite (its own test_harness_*.py files are red by
+    design/require fixtures CI doesn't set up, and tests/benchmark/_runs,
+    _matrixtest, _realtest, _repro etc. hold per-run experiment artifacts
+    pytest can't even import). This mirrors .github/workflows/ci.yml's own
+    `--ignore=tests/benchmark --ignore=tests/experiments` exactly.
 
-    Without this, a pinned testpaths allowlist silently drops any NEW
-    standalone root test_*.py an agent creates - the gate then runs only the
-    allowlisted tests, they pass, and the story is marked tests_passed even
-    though the agent's own new test file is broken or empty (a false
-    positive observed live, story 93fdc371, 2026-07-20).
+    A blanket `--ignore=tests` (this function's behavior before this fix)
+    excludes the WHOLE tests/ directory - which, after this repo's own
+    root-reorg (docs/tests/core source moved under top-level dirs), is where
+    every real test file now lives, under tests/unit/. That made this
+    override collect zero tests ("no tests ran", pytest exit code 5),
+    silently treated as a full-suite failure by every caller (the acceptance
+    oracle and the rework "full suite must pass" done-bar in
+    scripts/local_agent_oracle.py's _full_suite_result), even when nothing
+    was actually broken - discovered live blocking story MODE32-CHAT-RETRY.
+
+    Without this override at all, a pinned testpaths allowlist would also
+    silently drop any NEW standalone test_*.py an agent creates - the gate
+    would then run only the allowlisted tests, they'd pass, and the story
+    would be marked tests_passed even though the agent's own new test file
+    is broken or empty (a false positive observed live, story 93fdc371,
+    2026-07-20).
 
     `--override-ini` is a CLI flag pytest applies regardless of which
     directory it's invoked from or what config file is present, unlike a
@@ -296,11 +307,15 @@ def _apply_pytest_collection_overrides(cmd: list[str]) -> list[str]:
     rooted at that exact directory and would do nothing for, e.g., a nested
     temp worktree with its own pyproject.toml). `--ignore` on a
     non-existent path is a no-op, not an error, so this is safe to apply
-    unconditionally even when tests/ doesn't exist.
+    unconditionally even when tests/benchmark or tests/experiments doesn't
+    exist.
     """
     if not _is_pytest_cmd(cmd):
         return cmd
-    return [*cmd, "--override-ini=testpaths=.", "--ignore=tests"]
+    return [
+        *cmd, "--override-ini=testpaths=.",
+        "--ignore=tests/benchmark", "--ignore=tests/experiments",
+    ]
 
 
 def _acceptance_rel_paths(story: dict[str, Any]) -> list[str]:

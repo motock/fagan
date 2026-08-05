@@ -381,6 +381,40 @@ def test_build_plan_with_acceptance_file_still_emits_one_fixture(tmp_path, monke
     assert story["acceptance"][0]["source"] == body
 
 
+def test_build_plan_preserves_sibling_story_keys(tmp_path, monkeypatch):
+    """Regression guard: the acceptance-optional edit must not delete the
+    story dict's other keys. A prior local-model str_replace ate
+    agent_instructions/persona/model while rewriting the acceptance line,
+    and the acceptance-only assertions above stayed green because they
+    never checked those keys -- so build_plan silently shipped stories
+    with no implementation brief. Assert all sibling keys survive in
+    BOTH the with-acceptance and no-acceptance paths."""
+    import tempfile
+    cases = [
+        ("no_acc", False),
+        ("with_acc", True),
+    ]
+    for name, with_acc in cases:
+        monkeypatch.setattr(harness, "TASKS_DIR", tmp_path)
+        _make_task_dir(
+            tmp_path, f"sibling_{name}",
+            with_acceptance=with_acc,
+            acceptance_body="# oracle\n" if with_acc else None,
+        )
+        task = harness.load_task(f"sibling_{name}")
+        repo = Path(tempfile.mkdtemp())
+        story = harness.build_plan(repo, task)["epics"][0]["stories"][0]
+        # The three sibling keys a wide str_replace previously deleted:
+        assert "agent_instructions" in story, f"agent_instructions missing ({name})"
+        assert story["agent_instructions"] == task["agent_instructions"]
+        assert "persona" in story, f"persona missing ({name})"
+        assert story["persona"] == "software-engineer"
+        assert "model" in story, f"model missing ({name})"
+        assert story["model"] == "sonnet"
+        assert "risk" in story, f"risk missing ({name})"
+        assert story["risk"] == "low"
+
+
 def test_load_task_empty_acceptance_file_reads_as_empty_string(tmp_path, monkeypatch):
     """Boundary: an acceptance.py that EXISTS but is EMPTY must read as
     "" (current behavior preserved), NOT be treated as missing. The

@@ -583,10 +583,13 @@ def build_plan(repo: Path, task: dict) -> dict:
             "stories": [{
                 "key": task["name"].upper().replace("_", "-"),
                 "summary": task["summary"],
-    "acceptance": [] if task["acceptance_source"] is None else [
-        {"path": acceptance_path, "source": task["acceptance_source"]}
-    ],
+                "agent_instructions": task["agent_instructions"],
+                "persona": task.get("persona", "software-engineer"),
+                "model": task.get("model", "sonnet"),
                 "risk": task.get("risk", "low"),
+                "acceptance": [] if task["acceptance_source"] is None else [
+                    {"path": acceptance_path, "source": task["acceptance_source"]}
+                ],
             }],
         }],
     }

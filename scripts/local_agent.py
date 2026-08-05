@@ -1592,7 +1592,7 @@ def main() -> int:
     )
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
-    expected_paths = _expected_task_paths(task) # noqa: F841
+    expected_paths = _expected_task_paths(task)
     # Initialize messages list with optional persistence support.
     # Resume path: if LOCAL_AGENT_RESUME_TRANSCRIPT_PATH points at a valid
     # transcript, load it instead of building the fresh system/task pair (the
@@ -1655,8 +1655,8 @@ def main() -> int:
     # completely unrelated subject. off_task_targets tracks every distinct
     # mutated path that _is_off_task_path flags; the first one gets a
     # corrective nudge, a second DIFFERENT one after the nudge parks the run.
-    off_task_targets: set[str] = set() # noqa: F841
-    nudged_off_task = False # noqa: F841
+    off_task_targets: set[str] = set()
+    nudged_off_task = False
 
     for step in range(MAX_STEPS):
         if time.monotonic() - start_time > TIMEOUT:

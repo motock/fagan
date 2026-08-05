@@ -188,7 +188,7 @@ def test_detect_test_command_pyproject_uses_venv_python_when_present(tmp_path):
     assert test_dir == tmp_path
     assert cmd == [
         str(tmp_path / ".venv" / "bin" / "python"), "-m", "pytest",
-        "--override-ini=testpaths=.", "--ignore=tests",
+        "--override-ini=testpaths=.", "--ignore=tests/benchmark", "--ignore=tests/experiments",
     ]
 
 
@@ -198,7 +198,7 @@ def test_detect_test_command_pyproject_falls_back_to_bare_pytest_without_venv(tm
     test_dir, cmd = p.detect_test_command(tmp_path)
     assert test_dir == tmp_path
     assert cmd == [
-        "pytest", "--override-ini=testpaths=.", "--ignore=tests",
+        "pytest", "--override-ini=testpaths=.", "--ignore=tests/benchmark", "--ignore=tests/experiments",
     ]
 
 
@@ -236,8 +236,31 @@ def test_detect_test_command_worktree_uses_main_repo_venv_via_git_common_dir(tmp
     assert test_dir == worktree
     assert cmd == [
         str(repo / ".venv" / "bin" / "python"), "-m", "pytest",
-        "--override-ini=testpaths=.", "--ignore=tests",
+        "--override-ini=testpaths=.", "--ignore=tests/benchmark", "--ignore=tests/experiments",
     ]
+
+
+def test_detect_test_command_override_does_not_exclude_tests_unit(tmp_path):
+    # Regression guard for the real bug: this repo's own reorg moved every
+    # real test file under tests/unit/, so a blanket `--ignore=tests` (which
+    # excludes the whole tests/ directory, tests/unit included) makes the
+    # override collect ZERO tests ("no tests ran", exit code 5) - silently
+    # treated as a full-suite failure by the rework done-bar
+    # (scripts/local_agent_oracle.py:_full_suite_result) even though nothing
+    # is actually broken. The override must only exclude the benchmark/
+    # experiment harness directories, matching .github/workflows/ci.yml's
+    # own `--ignore=tests/benchmark --ignore=tests/experiments`.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    unit_dir = tmp_path / "tests" / "unit"
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "test_sample.py").write_text("def test_ok():\n    assert True\n")
+
+    test_dir, cmd = p.detect_test_command(tmp_path)
+    result = subprocess.run(
+        cmd, cwd=test_dir, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
 
 
 # ---------- _scope_test_cmd_to_acceptance (FM-A non-pytest scoping) ----------

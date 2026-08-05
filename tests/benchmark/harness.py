@@ -425,8 +425,15 @@ def load_task(name: str) -> dict:
     seed_files: dict[str, str] = {}
     if seed_dir.is_dir():
         for path in seed_dir.rglob("*"):
+            # Skip __pycache__ directories
+            if "__pycache__" in path.parts:
+                continue
             if path.is_file():
-                seed_files[str(path.relative_to(seed_dir))] = path.read_text()
+                try:
+                    seed_files[str(path.relative_to(seed_dir))] = path.read_text()
+                except UnicodeDecodeError:
+                    # Skip non-UTF-8 files (e.g., compiled bytecode)
+                    continue
     spec["seed_files"] = seed_files
     return spec
 

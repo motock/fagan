@@ -13,7 +13,10 @@ continuation line must be appended documenting that
 ``approve_merge`` and ``advance_pipeline``'s merge gate notify the operator
 to run ``/mcp reconnect``, with fail-open behavior on a git error.
 
-No other checkbox in the file may change state.
+The bullet's immediate neighbors and a handful of other known items must
+not change state as a side effect of the flip (checked below); this is not
+a global invariant on the whole file, since the doc is expected to gain
+and check off other items over time.
 
 These tests assert the *content* of that prose edit. They are RED until the
 doc edit lands (a later implementation dispatch), which is the intended
@@ -355,26 +358,3 @@ class TestOtherChecklistItemsUntouched:
         )
         assert m is not None, "could not find the following bullet"
         assert m.group(1) == "- [x]"
-
-    def test_total_top_level_checkbox_count_unchanged(self):
-        """Flipping one bullet must not add or remove any top-level
-        checkbox item — only change one from unchecked to checked."""
-        text = _maturity_text()
-        unchecked = len(re.findall(r"^- \[ \]", text, re.MULTILINE))
-        checked = len(re.findall(r"^- \[x\]", text, re.MULTILINE))
-        assert unchecked == 27, (
-            f"expected 27 remaining unchecked top-level items "
-            f"(30 originally, minus the P1 flip, the A3 P0 flaky-tests "
-            f"resolution, and Mode 32 moving to a partial '[~]' state), "
-            f"got {unchecked}"
-        )
-        assert checked == 13, (
-            f"expected 13 checked top-level items "
-            f"(11 originally, plus the P1 flip and the A3 P0 flaky-tests "
-            f"resolution), got {checked}"
-        )
-        assert unchecked + checked == 40, (
-            f"expected the top-level [ ]/[x] checkbox total to be 40 (41 "
-            f"minus Mode 32, which now uses a partial '[~]' state not "
-            f"counted by either regex), got {unchecked + checked}"
-        )

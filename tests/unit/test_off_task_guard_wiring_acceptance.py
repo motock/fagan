@@ -40,7 +40,7 @@ def test_off_task_edit_nudges_once_and_does_not_park_on_a_single_file(tmp_path, 
         ("create_file", {"path": "unrelated_thing.py", "content": "x = 1\n"}),
         ("done", {"summary": "done"}),
     ]
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
 
     rc = la.main()
@@ -58,7 +58,7 @@ def test_off_task_edits_on_two_distinct_paths_park_after_the_nudge(tmp_path, mon
         ("create_file", {"path": "unrelated_two.py", "content": "y = 2\n"}),
         ("done", {"summary": "done"}),
     ]
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
 
     rc = la.main()
@@ -78,7 +78,7 @@ def test_on_task_edits_never_nudge(tmp_path, monkeypatch, capsys):
         ("str_replace", {"path": "pipeline/server.py", "old_str": "x = 1", "new_str": "x = 2"}),
         ("done", {"summary": "done"}),
     ]
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
 
     rc = la.main()
@@ -95,7 +95,7 @@ def test_brief_naming_no_paths_never_nudges(tmp_path, monkeypatch, capsys):
         ("create_file", {"path": "anything.py", "content": "x = 1\n"}),
         ("done", {"summary": "done"}),
     ]
-    fake, calls = _sequence_chat(responses)
+    fake, _calls = _sequence_chat(responses)
     monkeypatch.setattr(la, "chat", fake)
 
     rc = la.main()

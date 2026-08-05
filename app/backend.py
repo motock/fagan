@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -733,6 +734,8 @@ class OllamaDriver:
         self.max_steps = int(os.environ.get("PIPELINE_LOCAL_MAX_STEPS", "40"))
         self.temperature = float(os.environ.get("PIPELINE_LOCAL_TEMPERATURE", "0.3"))
         self.review_max_steps = int(os.environ.get("PIPELINE_LOCAL_REVIEW_MAX_STEPS", "20"))
+        self.chat_max_attempts = int(os.environ.get("PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS", "3"))
+        self.chat_retry_backoff = float(os.environ.get("PIPELINE_LOCAL_CHAT_RETRY_BACKOFF", "2"))
 
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
@@ -800,10 +803,22 @@ class OllamaDriver:
         # token-cost sidecar) can extract it. The single-shot complete()
         # path peels off ["message"] itself; the review loop peels off
         # both the message and the usage fields.
-        return self.provider.chat(
-            messages, model=model, num_ctx=num_ctx, temperature=temperature,
-            tools=tools, endpoint=self.endpoint, timeout=self.timeout,
-        )
+        last_exc: Exception | None = None
+        for attempt in range(1, self.chat_max_attempts + 1):
+            try:
+                return self.provider.chat(
+                    messages, model=model, num_ctx=num_ctx, temperature=temperature,
+                    tools=tools, endpoint=self.endpoint, timeout=self.timeout,
+                )
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code < 500:
+                    raise  # 4xx - bad request, retrying is pointless
+                last_exc = e
+            except httpx.TransportError as e:
+                last_exc = e  # connect/read/timeout stall - transient, retry
+            if attempt < self.chat_max_attempts:
+                time.sleep(self.chat_retry_backoff * attempt)
+        raise last_exc
 
     # Read-only tools for the review loop. No create/edit — review must not
     # modify the tree (the "review does not merge / does not edit" guarantee).

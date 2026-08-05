@@ -280,6 +280,148 @@ def test_complete_raises_clear_runtime_error_when_endpoint_unreachable(monkeypat
         b.OllamaDriver().complete("p", model="opus")
 
 
+# ---------- OllamaDriver._chat() retry-with-backoff for transient httpx failures ----------
+# These cover the retry loop added to _chat(): transient connect errors and
+# 5xx responses are retried (with linear backoff), 4xx raises immediately, and
+# a 429 (RateLimitedError) is never caught by the loop and propagates on the
+# first attempt so pipeline/server.py's `except backend.RateLimitedError`
+# deferral contract is preserved. b.time.sleep is mocked to a no-op so the
+# tests run fast (the established pattern in tests/unit/test_local_agent.py).
+def test_chat_retries_transient_connect_error_then_succeeds(monkeypatch):
+    """A transient httpx.TransportError (ConnectError) on the first _chat
+    attempt must be retried and the second attempt's content returned."""
+    monkeypatch.setattr(b.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _fake_post(url, json, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise b.httpx.ConnectError("connection refused")
+        return _FakeResponse({"message": {"content": "ok"}})
+
+    monkeypatch.setattr(b.httpx, "post", _fake_post)
+
+    result = b.OllamaDriver().complete("p", model="gpt-oss:20b")
+    assert result == "ok"
+    assert calls["n"] == 2
+
+
+def test_chat_retries_5xx_then_succeeds(monkeypatch):
+    """A 5xx HTTPStatusError on the first _chat attempt must be retried and
+    the second attempt's content returned."""
+    monkeypatch.setattr(b.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _fake_post(url, json, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _FakeStatusResponse(503)
+        return _FakeResponse({"message": {"content": "ok"}})
+
+    monkeypatch.setattr(b.httpx, "post", _fake_post)
+
+    result = b.OllamaDriver().complete("p", model="gpt-oss:20b")
+    assert result == "ok"
+    assert calls["n"] == 2
+
+
+def test_chat_does_not_retry_4xx(monkeypatch):
+    """A 4xx HTTPStatusError must NOT be retried -- retrying a bad request is
+    pointless. complete() must raise the existing RuntimeError wrap and post
+    must be called exactly once."""
+    monkeypatch.setattr(b.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _fake_post(url, json, timeout):
+        calls["n"] += 1
+        return _FakeStatusResponse(400)
+
+    monkeypatch.setattr(b.httpx, "post", _fake_post)
+
+    with pytest.raises(RuntimeError, match="unreachable"):
+        b.OllamaDriver().complete("p", model="gpt-oss:20b")
+    assert calls["n"] == 1
+
+
+def test_chat_raises_after_exhausting_all_attempts(monkeypatch):
+    """Exhausting all retry attempts must still raise the SAME
+    RuntimeError('unreachable') contract callers depend on, and post must be
+    called exactly chat_max_attempts times (3 here)."""
+    monkeypatch.setenv("PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS", "3")
+    monkeypatch.setattr(b.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _boom(url, json, timeout):
+        calls["n"] += 1
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(b.httpx, "post", _boom)
+
+    with pytest.raises(RuntimeError, match="unreachable"):
+        b.OllamaDriver().complete("p", model="gpt-oss:20b")
+    assert calls["n"] == 3
+
+
+def test_chat_rate_limited_still_propagates_on_first_attempt(monkeypatch):
+    """A 429 (RateLimitedError) must NEVER be caught by the new retry loop --
+    not even once -- so pipeline/server.py's `except backend.RateLimitedError`
+    deferral branch fires instead of burning a rework cycle. complete() must
+    raise RateLimitedError (not a generic RuntimeError) and post must be
+    called exactly once."""
+    monkeypatch.setattr(b.time, "sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def _fake_post(url, json, timeout):
+        calls["n"] += 1
+        return _FakeStatusResponse(429)
+
+    monkeypatch.setattr(b.httpx, "post", _fake_post)
+
+    with pytest.raises(b.RateLimitedError):
+        b.OllamaDriver().complete("p", model="gpt-oss:20b")
+    assert calls["n"] == 1
+
+
+def test_chat_retry_attrs_read_in_process_env_vars(monkeypatch):
+    """OllamaDriver must expose chat_max_attempts / chat_retry_backoff as
+    instance attributes read in-process from PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS
+    / PIPELINE_LOCAL_CHAT_RETRY_BACKOFF (NOT the LOCAL_AGENT_* subprocess
+    vars -- conflating the two namespaces is the alias-trap bug class)."""
+    monkeypatch.setenv("PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS", "5")
+    monkeypatch.setenv("PIPELINE_LOCAL_CHAT_RETRY_BACKOFF", "1.5")
+    driver = b.OllamaDriver()
+    assert driver.chat_max_attempts == 5
+    assert driver.chat_retry_backoff == 1.5
+
+
+def test_chat_retry_attrs_default_when_env_unset(monkeypatch):
+    """Defaults: chat_max_attempts=3, chat_retry_backoff=2.0 when the env
+    vars are unset."""
+    monkeypatch.delenv("PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_CHAT_RETRY_BACKOFF", raising=False)
+    driver = b.OllamaDriver()
+    assert driver.chat_max_attempts == 3
+    assert driver.chat_retry_backoff == 2.0
+
+
+def test_backend_imports_time_module():
+    """backend.py must `import time` (stdlib) for the retry backoff sleep."""
+    assert hasattr(b, "time"), "backend.py must import the time module"
+
+
+def test_backend_uses_distinct_chat_retry_env_var_names(monkeypatch):
+    """The new retry knobs must read PIPELINE_LOCAL_CHAT_* (in-process), NOT
+    the LOCAL_AGENT_CHAT_* subprocess vars -- setting LOCAL_AGENT_CHAT_* must
+    NOT influence OllamaDriver's in-process retry config."""
+    monkeypatch.delenv("PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_CHAT_RETRY_BACKOFF", raising=False)
+    monkeypatch.setenv("LOCAL_AGENT_CHAT_MAX_ATTEMPTS", "9")
+    monkeypatch.setenv("LOCAL_AGENT_CHAT_RETRY_BACKOFF", "9")
+    driver = b.OllamaDriver()
+    assert driver.chat_max_attempts == 3  # default, NOT 9
+    assert driver.chat_retry_backoff == 2.0  # default, NOT 9
+
+
 def test_usage_probe_text_raises_not_implemented():
     with pytest.raises(NotImplementedError):
         b.OllamaDriver().usage_probe_text()

@@ -1277,6 +1277,95 @@ def test_recover_tool_calls_returns_none_on_non_toolcall_prose():
     assert la.recover_tool_calls("I think the tests pass now, nothing to do.") is None
 
 
+# ---------------------------------------------------------------------------
+# _expected_task_paths / _is_off_task_path - pure helpers for the off-task
+# drift guard. These extract file paths named in a task brief (backtick-quoted
+# or bold-markdown spans) and decide whether a mutating tool call's target
+# matches one of them. A brief that names no files must fail open (never flag).
+# ---------------------------------------------------------------------------
+
+def test_expected_task_paths_extracts_backtick_quoted_paths():
+    """Backtick-quoted `path/to/file.py` spans are the first naming convention
+    agent_instructions use; both named paths must come back, leading './'
+    stripped."""
+    task = "Edit `pipeline/server.py` and `utils/helpers.py` to add logging."
+    assert la._expected_task_paths(task) == {"pipeline/server.py", "utils/helpers.py"}
+
+
+def test_expected_task_paths_extracts_bold_markdown_paths():
+    """Bold-markdown **path/to/file.py** spans are the numbered-list convention
+    this repo's real agent_instructions use; both named paths must come back."""
+    task = "1. **pipeline/server.py**\n2. **utils/helpers.py**\n3. Run the tests."
+    assert la._expected_task_paths(task) == {"pipeline/server.py", "utils/helpers.py"}
+
+
+def test_expected_task_paths_returns_empty_set_for_no_paths_named():
+    """A task string with no path-like tokens yields an empty set - the guard
+    must then fail open rather than flag every edit as off-task."""
+    assert la._expected_task_paths("Refactor the logging module for clarity.") == set()
+
+
+def test_expected_task_paths_returns_empty_set_for_empty_task():
+    """An empty task string yields an empty set (boundary: empty input)."""
+    assert la._expected_task_paths("") == set()
+
+
+def test_expected_task_paths_strips_leading_dot_slash():
+    """A backtick-quoted `./pipeline/server.py` is normalized to
+    `pipeline/server.py` so suffix/basename matching is consistent."""
+    assert la._expected_task_paths("Edit `./pipeline/server.py`") == {"pipeline/server.py"}
+
+
+def test_expected_task_paths_returns_a_set():
+    """The return type is a set (dedupes repeated mentions); assert the type
+    explicitly so a list/tuple return fails loudly."""
+    out = la._expected_task_paths("Edit `a.py` then `a.py` again")
+    assert isinstance(out, set)
+    assert out == {"a.py"}
+
+
+def test_is_off_task_path_false_for_exact_match():
+    """An exact match against an expected path is on-task -> False."""
+    assert la._is_off_task_path("pipeline/server.py", {"pipeline/server.py"}) is False
+
+
+def test_is_off_task_path_false_for_dot_slash_prefixed_relative_form():
+    """A './'-prefixed relative form of an expected path is still on-task
+    (path-suffix containment) -> False."""
+    assert la._is_off_task_path("./pipeline/server.py", {"pipeline/server.py"}) is False
+
+
+def test_is_off_task_path_false_for_shared_basename():
+    """A differently-rooted file sharing only the basename with an expected
+    path is treated as on-task -> False (basename is the reliable signal)."""
+    assert la._is_off_task_path("src/server.py", {"pipeline/server.py"}) is False
+
+
+def test_is_off_task_path_true_for_unrelated_file():
+    """A path sharing no basename or suffix with any expected path is off-task
+    -> True."""
+    assert la._is_off_task_path("scripts/unrelated.py", {"pipeline/server.py"}) is True
+
+
+def test_is_off_task_path_fails_open_when_expected_is_empty():
+    """A brief that names no files gives the guard nothing to compare against;
+    any path against an empty expected set must fail open -> False."""
+    assert la._is_off_task_path("scripts/anything.py", set()) is False
+
+
+def test_is_off_task_path_false_for_empty_path():
+    """An empty path string is never flagged -> False regardless of expected."""
+    assert la._is_off_task_path("", {"pipeline/server.py"}) is False
+
+
+def test_is_off_task_path_returns_bool_not_truthy_value():
+    """The contract is a real bool (not e.g. None/0/1); assert the type so a
+    truthy-but-wrong-typed return fails loudly on both branches."""
+    assert la._is_off_task_path("scripts/unrelated.py", {"pipeline/server.py"}) is True
+    assert isinstance(la._is_off_task_path("scripts/unrelated.py", {"pipeline/server.py"}), bool)
+    assert isinstance(la._is_off_task_path("pipeline/server.py", {"pipeline/server.py"}), bool)
+
+
 def test_local_agent_main_writes_boot_line_before_first_chat(tmp_path, monkeypatch, capsys):
     """The startup heartbeat in main() must flush to stdout *before* the
     first LLM call. check_story_status relies on this: a 0-byte agent.log

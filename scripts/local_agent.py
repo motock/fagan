@@ -448,6 +448,42 @@ NET_PROGRESS_MAX_STEPS = int(os.environ.get("LOCAL_AGENT_NET_PROGRESS_MAX_STEPS"
 # budget); this one prevents most 500s from happening at all once a real
 # measurement exists.
 PROACTIVE_TRIM_THRESHOLD = float(os.environ.get("LOCAL_AGENT_PROACTIVE_TRIM_THRESHOLD", "0.85"))
+
+_TASK_PATH_RE = re.compile(r"""`([\w./-]+\.\w+)`|\*\*([\w./-]+\.\w+)\*\*""")
+
+def _expected_task_paths(task: str) -> set[str]:
+    """Extract file paths the task brief explicitly names, from backtick-quoted
+    (`path/to/file.py`) or bold-markdown (**path/to/file.py**) spans - the two
+    conventions this pipeline's agent_instructions consistently use to name
+    files. An empty result means the brief named no files, in which case the
+    off-task-drift guard that consumes this must fail open (see
+    _is_off_task_path) rather than flag every edit as off-task."""
+    paths: set[str] = set()
+    for m in _TASK_PATH_RE.finditer(task or ""):
+        p = m.group(1) or m.group(2)
+        if p:
+            paths.add(p.lstrip("./"))
+    return paths
+
+
+def _is_off_task_path(path: str, expected: set[str]) -> bool:
+    """True if `path` (a mutating tool call's target) matches none of the
+    paths named in the task brief - by exact match, path-suffix containment
+    (handles './'-prefixed or differently-rooted relative forms), or shared
+    basename. Returns False (never flags) when `expected` is empty or `path`
+    is empty: a brief that names no files gives the guard nothing reliable to
+    compare against, and failing open there is safer than flagging every
+    edit as off-task."""
+    if not expected or not path:
+        return False
+    norm = path.lstrip("./")
+    name = norm.rsplit("/", 1)[-1]
+    for e in expected:
+        if norm == e or norm.endswith("/" + e) or e.endswith("/" + norm):
+            return False
+        if name == e.rsplit("/", 1)[-1]:
+            return False
+    return True
 # Mutating tools: any that produce new code in the worktree. Anything else
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior

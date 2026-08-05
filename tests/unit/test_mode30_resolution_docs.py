@@ -263,7 +263,6 @@ class TestMaturityOtherChecklistItemsUntouched:
     UNCHECKED_MUST_STAY_UNCHECKED: ClassVar[list[str]] = [
         "Bound the failure-mode discovery rate",
         "Mode 31 (2026-07-22, NOT fixed)",
-        "Mode 32 (2026-07-22, NOT fixed)",
         "Get CI to an enforced green baseline",
         "One-command install story",
     ]

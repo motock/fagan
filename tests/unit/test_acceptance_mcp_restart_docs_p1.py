@@ -303,8 +303,6 @@ class TestOtherChecklistItemsUntouched:
     item's state, including its immediate neighbors in section A3."""
 
     UNCHECKED_MUST_STAY_UNCHECKED: ClassVar[list[str]] = [
-        "Finish the MLX validate re-run.",
-        "Mode 31 (2026-07-22, NOT fixed)",
         "Get CI to an enforced green baseline",
         "One-command install story",
     ]
@@ -315,6 +313,8 @@ class TestOtherChecklistItemsUntouched:
         "Fix the test-isolation leak",
         "Split the 74 KB README",
         "P0 (same retro) — stabilize the flaky-under-load",
+        "Finish the MLX validate re-run.",
+        "Mode 31 (2026-07-22, FIXED 2026-08-05",
     ]
 
     def test_known_unchecked_items_still_unchecked(self):

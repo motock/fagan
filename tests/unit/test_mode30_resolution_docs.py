@@ -262,7 +262,6 @@ class TestMaturityOtherChecklistItemsUntouched:
 
     UNCHECKED_MUST_STAY_UNCHECKED: ClassVar[list[str]] = [
         "Bound the failure-mode discovery rate",
-        "Mode 31 (2026-07-22, NOT fixed)",
         "Get CI to an enforced green baseline",
         "One-command install story",
     ]
@@ -272,6 +271,7 @@ class TestMaturityOtherChecklistItemsUntouched:
         "Ship or kill guided decomposition",
         "Split the 74 KB README",
         "Fix the test-isolation leak",
+        "Mode 31 (2026-07-22, FIXED 2026-08-05",
     ]
 
     def test_known_unchecked_items_still_unchecked(self):

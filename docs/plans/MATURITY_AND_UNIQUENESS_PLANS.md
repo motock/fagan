@@ -66,9 +66,32 @@ Reference comparables:
       written/run — this is a pragmatic ship call, not that plan's original
       bar. Modes 22-24 are the real next work, not further guided-decomposition
       validation.
-- [ ] **Finish the MLX validate re-run.** Stopped at 5/9; `lru_cache_rs`
-      gt=True-not-merged (memory pressure) still open. Re-verify, then commit
-      the 3 fixes or record why they're parked.
+- [ ] **Finish the MLX validate re-run.** Stopped at 5/9
+      (`full_matrix_mlx_validate_20260717_115340`, model
+      `qwen2.5_coder_14b_manual` — the manually-downloaded/served
+      `Qwen2.5-Coder-14B-Instruct-4bit`, the only MLX tier validated stable
+      on this 24GB host per `project_mlx_24gb_footprint_ceiling` memory);
+      `lru_cache_rs` had groundtruth pass + reviewer APPROVE but the merge
+      gate failed 3x on a real Rust compile error (`no method named size
+      found for struct LruCache`) — a genuine gt=True-not-merged gap, not a
+      grading bug. **Correction (2026-08-05): the "3 fixes" this bullet
+      referred to already landed** — commit `dc02b38` (2026-07-17,
+      "fix(grading): acceptance scoping, decorator-dedent, review-on-fail")
+      shipped the same day as this run and its own message says it was
+      validated by it; nothing is uncommitted or parked on a branch. What's
+      actually still open: a follow-up re-verification the next day
+      (`full_matrix_mlx_validate_20260718_085820` /
+      `full_matrix_mlx_rework_20260718_092326`) silently fell back to the
+      harness's tiny default MLX tag (`Qwen2.5-1.5B-Instruct-4bit`,
+      documented as known-weak in `tests/benchmark/models.py`'s own
+      docstring) instead of the 14B config the 07-17 run used, and both runs
+      were then killed mid-flight (`Terminated: 15`, exit 143 — cause not
+      confirmed, do not assume memory pressure without re-checking). Under
+      the weaker model, `lru_cache_rs` regressed to a different failure
+      (`.remove(&key)` type mismatch) and two previously-passing cells
+      (`cron_field`, `lru_cache`) also flipped to failed. Re-run the full
+      9-cell matrix with the 14B model explicitly configured (not the
+      harness default) to completion, and confirm `lru_cache_rs` converges.
 - [x] **Implement the reviewer-escalation plan L1** (2026-07-22/23, Mode 40
       series — PRs #166/#168/#171/#172). L1 shipped: `_ci_status` now
       populates the failing-check names, the merge gate synthesizes
@@ -156,15 +179,23 @@ Reference comparables:
       `local_agent_oracle.py`. Regression-tested: a deleting edit is now
       rejected and the file left unchanged; a legitimate refactor removing
       both the assignment and all its uses still passes.
-- [ ] **Mode 31 (2026-07-22, NOT fixed) — confident off-task drift.** A
-      correctly-scoped, narrowly-instructed dispatch (verified via its own
-      transcript) abandoned the assigned task and invented an unrelated one
-      instead — 20+ steps of real, coherent-looking tool calls (greps, file
-      reads, a genuine `create_file`, a real `pytest` run) on a completely
-      different subject. Distinct from a read-loop park: it looks
-      productive to any "did it call tools / did it write files" health
-      check, so only a content/on-topic diff catches it. No guard exists
-      for this today.
+- [x] **Mode 31 (2026-07-22, FIXED 2026-08-05, PR #234/#235) — confident
+      off-task drift.** A correctly-scoped, narrowly-instructed dispatch
+      (verified via its own transcript) abandoned the assigned task and
+      invented an unrelated one instead — 20+ steps of real, coherent-looking
+      tool calls (greps, file reads, a genuine `create_file`, a real `pytest`
+      run) on a completely different subject. Distinct from a read-loop park:
+      it looks productive to any "did it call tools / did it write files"
+      health check, so only a content/on-topic diff catches it. Fixed via the
+      `mode31-off-task-drift-guard` plan's two stories:
+      `_expected_task_paths`/`_is_off_task_path` helpers (PR #234) extract the
+      file paths a task brief names and flag a mutating tool call's target as
+      off-task when it matches none of them (failing open when the brief
+      names no files), then wired into `scripts/local_agent.py`'s `main()`
+      mutating-tool handling (PR #235) with an acceptance fixture that
+      exercises the wiring itself, not just the unit — avoiding the
+      isolation-only-fixture trap this same doc's story-schema rule warns
+      about.
 - [~] **Mode 32 (2026-07-22, PARTIALLY fixed 2026-08-05, PR #232) — local-model
       content corruption + stall past the configured timeout.** `gemma4:12b-mlx`
       (a custom MLX-imported Ollama model) produced a truncated file ending in a

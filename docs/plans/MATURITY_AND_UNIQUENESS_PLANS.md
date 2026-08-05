@@ -66,7 +66,7 @@ Reference comparables:
       written/run — this is a pragmatic ship call, not that plan's original
       bar. Modes 22-24 are the real next work, not further guided-decomposition
       validation.
-- [ ] **Finish the MLX validate re-run.** Stopped at 5/9
+- [x] **Finish the MLX validate re-run.** (2026-08-05) Stopped at 5/9
       (`full_matrix_mlx_validate_20260717_115340`, model
       `qwen2.5_coder_14b_manual` — the manually-downloaded/served
       `Qwen2.5-Coder-14B-Instruct-4bit`, the only MLX tier validated stable
@@ -89,9 +89,18 @@ Reference comparables:
       confirmed, do not assume memory pressure without re-checking). Under
       the weaker model, `lru_cache_rs` regressed to a different failure
       (`.remove(&key)` type mismatch) and two previously-passing cells
-      (`cron_field`, `lru_cache`) also flipped to failed. Re-run the full
-      9-cell matrix with the 14B model explicitly configured (not the
-      harness default) to completion, and confirm `lru_cache_rs` converges.
+      (`cron_field`, `lru_cache`) also flipped to failed. **Done 2026-08-05:**
+      re-ran the full 9-cell matrix with the 14B model explicitly configured
+      (`BENCH_MLX_TAG=qwen2.5_coder_14b_manual`) to completion (~78 min, exit
+      0). `lru_cache_rs` converged — gt-passed and done in 136s; `lru_cache`
+      also gt-passed. Overall 2/9 success (22%), 4/9 merged, 2
+      merged-but-wrong. Two cells (`ratelimiter_bugfix`,
+      `review_story_lock_guard`) `harness_error` at 0s — distinct harness
+      bugs in `load_task`, not model failures: (1) it `read_text()`s
+      `__pycache__/*.pyc` binaries in `seed/` → `UnicodeDecodeError`; (2) it
+      unconditionally reads `acceptance.{ext}` but `review_story_lock_guard`
+      has none (its groundtruth declares `"acceptance": []`). File a
+      harness-fix story for both before counting those two cells.
 - [x] **Implement the reviewer-escalation plan L1** (2026-07-22/23, Mode 40
       series — PRs #166/#168/#171/#172). L1 shipped: `_ci_status` now
       populates the failing-check names, the merge gate synthesizes

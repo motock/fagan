@@ -159,33 +159,20 @@ Reference comparables:
       productive to any "did it call tools / did it write files" health
       check, so only a content/on-topic diff catches it. No guard exists
       for this today.
-- [~] **Mode 32 (2026-07-22, PARTIALLY fixed 2026-08-05, PR #232) — local-model
-      content corruption + stall past the configured timeout.** `gemma4:12b-mlx`
-      (a custom MLX-imported Ollama model) produced a truncated file ending in a
+- [ ] **Mode 32 (2026-07-22, NOT fixed) — local-model content corruption +
+      stall past the configured timeout.** `gemma4:12b-mlx` (a custom
+      MLX-imported Ollama model) produced a truncated file ending in a
       literal `# ... (rest of file remains same)` artifact and deleted
       still-imported functions, then later hung 15+ minutes in a live
       `sock_recv`/`poll` with zero progress — well past
       `READ_SILENCE_SECONDS=180`'s supposed bound — while Ollama itself
-      stayed responsive to other requests. The original gemma4:12b-mlx
-      incident's exact root cause is still not sanity-checked in isolation
-      (still worth doing before drawing a capability conclusion — `/api/ps`
-      shows no `family`/`quantization_level`, consistent with a serving/
-      plumbing gap rather than a weights problem). What IS now fixed: the
-      general class of "some LLM call path isn't covered by the streaming/
-      silence-timeout protection" this mode named — `app/backend.py`'s
-      `OllamaDriver._chat` (the review/planner/overlord/decompose path, now
-      the DEFAULT path for review since `test_author`/`review` route to
-      ollama/glm) was a single blocking, non-streaming httpx call with a flat
-      timeout and ZERO retry, unlike `scripts/local_agent.py`'s dispatch path
-      which streams + retries. `_chat` now retries transient httpx failures
-      (`TransportError`, 5xx) up to `PIPELINE_LOCAL_CHAT_MAX_ATTEMPTS` with
-      linear backoff; a 4xx or `RateLimitedError` still propagates
-      immediately, unchanged. Landing this took ~2 hours of dispatch churn
-      unrelated to the fix itself — see memory `project_dispatch_failure_modes`
-      Mode 50 for the harness-bug tangent this surfaced (a `pipeline/
-      build_detect.py` pytest-collection bug, unrelated to Mode 32, that made
-      local rework verification structurally impossible after this repo's own
-      reorg; fixed separately, PR #233).
+      stayed responsive to other requests. Suggests some LLM call path
+      isn't covered by the streaming/silence-timeout protection. Sanity-check
+      this model outside the harness (bare chat completion) before drawing
+      any capability conclusion — `/api/ps` shows no `family`/
+      `quantization_level`, consistent with a serving/plumbing gap rather
+      than a weights problem (same lesson as the earlier MLX tool-format
+      investigation).
 - [x] **P0 (from `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`)
       — Mode 29: guard `review_story`/the scheduler against dispatching a
       review pass on an already-`done`/merged story.** Fixed 2026-07-22/23

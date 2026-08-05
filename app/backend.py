@@ -799,10 +799,22 @@ class OllamaDriver:
         # token-cost sidecar) can extract it. The single-shot complete()
         # path peels off ["message"] itself; the review loop peels off
         # both the message and the usage fields.
-        return self.provider.chat(
-            messages, model=model, num_ctx=num_ctx, temperature=temperature,
-            tools=tools, endpoint=self.endpoint, timeout=self.timeout,
-        )
+        last_exc: Exception | None = None
+        for attempt in range(1, self.chat_max_attempts + 1):
+            try:
+                return self.provider.chat(
+                    messages, model=model, num_ctx=num_ctx, temperature=temperature,
+                    tools=tools, endpoint=self.endpoint, timeout=self.timeout,
+                )
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code < 500:
+                    raise  # 4xx - bad request, retrying is pointless
+                last_exc = e
+            except httpx.TransportError as e:
+                last_exc = e  # connect/read/timeout stall - transient, retry
+            if attempt < self.chat_max_attempts:
+                time.sleep(self.chat_retry_backoff * attempt)
+        raise last_exc
 
     # Read-only tools for the review loop. No create/edit — review must not
     # modify the tree (the "review does not merge / does not edit" guarantee).

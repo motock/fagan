@@ -8,6 +8,12 @@ A self-assessment TODO list, not a specification. Two halves:
 
 Each item is a TODO with a *why* and a rough priority — no design detail yet.
 
+> **See also:** `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (2026-08-05) carries the
+> design detail for A2, B1's remote-exec, B3, and B4, and adds a service-extraction
+> workstream this doc has no item for. Overlaps, disagreements, and an unresolved
+> ordering conflict are mapped in that doc's "Relationship to
+> MATURITY_AND_UNIQUENESS_PLANS.md" section.
+
 ---
 
 ## Baseline assessment (static review, 2026-07-17)
@@ -325,10 +331,19 @@ stories (TDD-split stays strictly read-only). Tests in
       access. Table stakes for any multi-user or untrusted-input story.
 - [ ] **Remote execution backend** (a server mode, not just local subprocess).
       Lets dispatch/review run on a GPU box while the orchestrator stays local.
-- [ ] **Abstract the agent runner.** Currently hardcoded to `claude -p` + a
-      hand-rolled Ollama/MLX/LM Studio loop. A runner interface (Claude Code /
-      Codex / Aider / Goose) enables the multi-harness breadth Agent
-      Orchestrator has.
+- [x] **Abstract the *inference provider*.** Done ahead of this doc: the
+      `Backend` protocol in `app/backend.py` already sits between orchestration
+      and execution, with `ClaudeCliDriver` and `OllamaDriver` (Ollama/LM Studio/
+      MLX via `inference_providers.py`) behind it, selected per role through
+      `app/role_registry.py`. Originally bundled into the bullet below; split
+      out 2026-08-05 because the two axes are different seams and only one is
+      still open.
+- [ ] **Abstract the *agent harness*.** The still-open half. `claude -p` and the
+      hand-rolled local tool-calling loop are two bespoke harnesses, not one
+      interface — there is no seam at which Codex / Aider / Goose could be
+      dropped in. This is the axis that would give the multi-harness breadth
+      Agent Orchestrator has, and it is independent of which model serves the
+      tokens.
 
 ### B2. Model breadth
 
@@ -341,6 +356,22 @@ stories (TDD-split stays strictly read-only). Tests in
 
 ### B3. Scale & multi-tenancy
 
+> **Prerequisite (added 2026-08-05):** every item below needs a service seam
+> that does not exist yet — the `@mcp.tool()` entrypoints and the state machine
+> are the same 4,132-line `pipeline/server.py`, with no `PipelineService` a
+> non-MCP caller could drive and no `Store` abstraction over the `PLAN_DIR`
+> JSON files. Treat B3 as *refactor-then-feature*, not a feature. Design detail
+> and sequencing in `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (W1, W4).
+>
+> Also note the single-host assumption is load-bearing in ~6 places, not one:
+> `fcntl.flock` plan locking, `os.kill(pid, 0)` slot accounting, the single
+> non-elected 60s launchd scheduler, local worktrees under `WORKTREE_ROOT`,
+> read-modify-write on the shared decision/journal JSON, and the local GPU. The
+> binding throughput limit today is the last of these — `MAX_CONCURRENT_AGENTS=1`
+> is a 24 GB memory ceiling, not caution, so orchestration-side scaling work
+> changes nothing until the inference tier is separated (see B1's remote
+> execution backend).
+
 - [ ] **Multi-repo fleet as a first-class concept.** `advance_all_plans`
       exists but is plan-per-repo glued. A fleet manager with per-repo
       backends, quotas, and isolation is the scale story.
@@ -352,6 +383,22 @@ stories (TDD-split stays strictly read-only). Tests in
 
 ### B4. Observability & control surfaces
 
+> **Prerequisite (added 2026-08-05):** the writable dashboard is a
+> refactor-plus-UI task, not a UI task. `app/dashboard.py` is deliberately
+> import-decoupled from the orchestrator but re-parses the `PLAN_DIR` file
+> layout itself — so the manifest's on-disk shape is a de facto public API with
+> two independent parsers. Adding writes on top of that second parser entrenches
+> it. The dashboard should read/write through the same service API every other
+> client uses. See `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (W1, W3b).
+
+- [ ] **Structured logs + a correlation ID carried across the whole story
+      lifecycle** (dispatch → review → rework → merge, including into the agent
+      subprocess so `agent.log` joins up with orchestrator lines). Today: text
+      files with no join key (`dashboard.log` 9.5 MB, `mlx-server.log` 7 MB),
+      so every retro is hand-reconstructed from five separate logs. This is
+      also the tooling A3's "bound the failure-mode discovery rate" needs to
+      become measurable rather than archaeological — and `CLAUDE.md` already
+      mandates it, so the orchestrator currently fails its own standard.
 - [ ] **Writable dashboard / control plane.** Current dashboard is read-only
       by design (good safety instinct). Add an explicit, audit-logged action
       surface (pause/resume/approve/reroute) so overlord decisions are
@@ -393,6 +440,17 @@ stories (TDD-split stays strictly read-only). Tests in
 
 A1 → A3 (fix-isolation) → A2 → B1 (sandbox) → B5 (export the moat) → B2 →
 B4 → B6.
+
+> **Unresolved conflict (2026-08-05).** This ordering puts B4 second-to-last and
+> omits B3 entirely. That is defensible on its own terms — land what's half-done,
+> export the distinctive ideas before building breadth. But it defers the
+> "UI is the entry point, not Claude Code" goal in
+> `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` behind six other workstreams, and that
+> plan's own sequence front-loads the service extraction because B3/B4 both queue
+> behind it. **Two docs, two implied priorities — pick one deliberately.** The
+> cheap move that satisfies both: the read-only *effective-config + provenance*
+> view (that plan's W3a) has no prerequisites, directly serves A2, and can land
+> inside the current ordering without disturbing it.
 
 Land what's half-done before building new; export the distinctive ideas
 before they get further buried; sandbox before any multi-user push.

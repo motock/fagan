@@ -123,7 +123,6 @@ def test_dispatch_sets_new_transport_max_steps(tmp_path, monkeypatch):
         allowed_tools="Bash,Edit,Write,Read", cwd=tmp_path,
         log_path=tmp_path / "agent.log", append=False)
     assert captured["env"]["PIPELINE_TRANSPORT_MAX_STEPS"] == "12"
-    # back-compat: the old name is still set so existing capture tests stay green
 
 
 def test_dispatch_sets_new_transport_num_ctx_and_temperature(tmp_path, monkeypatch):

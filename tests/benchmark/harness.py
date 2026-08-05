@@ -412,7 +412,11 @@ def load_task(name: str) -> dict:
         )
     ext = ext_map[ecosystem]
     spec["ecosystem"] = ecosystem
-    spec["acceptance_source"] = (TASKS_DIR / name / f"acceptance.{ext}").read_text()
+    acceptance_file = TASKS_DIR / name / f"acceptance.{ext}"
+    if acceptance_file.is_file():
+        spec["acceptance_source"] = acceptance_file.read_text()
+    else:
+        spec["acceptance_source"] = None
     spec["groundtruth_source"] = (TASKS_DIR / name / f"groundtruth.{ext}").read_text()
     # Tier 2+ tasks ("modify existing code", vs. Tier 1's greenfield katas)
     # seed the repo with an existing, already-committed codebase via
@@ -583,7 +587,7 @@ def build_plan(repo: Path, task: dict) -> dict:
                 "persona": task.get("persona", "software-engineer"),
                 "model": task.get("model", "sonnet"),
                 "risk": task.get("risk", "low"),
-                "acceptance": [
+                "acceptance": [] if task["acceptance_source"] is None else [
                     {"path": acceptance_path, "source": task["acceptance_source"]}
                 ],
             }],

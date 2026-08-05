@@ -297,6 +297,148 @@ def test_run_groundtruth_reports_failed_cargo_build(tmp_path, monkeypatch):
     assert "E0433" in gt["tail"]
 
 
+# ---------- missing acceptance.{ext} (review_story_lock_guard) ----------
+def _make_task_dir(tmp_path, name, *, with_acceptance, acceptance_body=None):
+    """Scaffold a minimal pytest task dir under tmp_path: spec.json +
+    groundtruth.py, and (optionally) acceptance.py. Returns the dir."""
+    d = tmp_path / name
+    d.mkdir(parents=True)
+    (d / "spec.json").write_text(json.dumps({
+        "name": name,
+        "summary": f"task {name}",
+        "impl_file": "impl.py",
+        "agent_instructions": "do the thing",
+    }))
+    (d / "groundtruth.py").write_text(
+        "# groundtruth\n"
+        f"def test_{name}_ok():\n    assert True\n"
+    )
+    if with_acceptance:
+        (d / "acceptance.py").write_text(acceptance_body if acceptance_body is not None else "# acceptance oracle\n")
+    return d
+
+
+def test_load_task_missing_acceptance_file_does_not_crash(tmp_path, monkeypatch):
+    """review_story_lock_guard is the only benchmark task with NO
+    acceptance.{ext} file (its groundtruth.py declares acceptance=[]).
+    load_task must NOT raise FileNotFoundError on the missing file;
+    it must set acceptance_source=None so build_plan can emit an empty
+    acceptance list (the supported base-harness bar)."""
+    monkeypatch.setattr(harness, "TASKS_DIR", tmp_path)
+    _make_task_dir(tmp_path, "no_acceptance_task", with_acceptance=False)
+    # (a) does NOT raise.
+    task = harness.load_task("no_acceptance_task")
+    # (b) acceptance_source is None (not a crash, not "").
+    assert task["acceptance_source"] is None
+    # groundtruth_source is still read normally.
+    assert task["groundtruth_source"] is not None
+    assert "def test_" in task["groundtruth_source"]
+
+
+def test_build_plan_missing_acceptance_emits_empty_list(tmp_path, monkeypatch):
+    """When acceptance_source is None, build_plan must emit
+    "acceptance": [] (empty list - no fixture), NOT a one-fixture list
+    with a None source. This is the supported base-harness bar per
+    .claude/rules/pipeline-story-schema.md."""
+    import tempfile
+    monkeypatch.setattr(harness, "TASKS_DIR", tmp_path)
+    _make_task_dir(tmp_path, "no_acceptance_task", with_acceptance=False)
+    task = harness.load_task("no_acceptance_task")
+    repo = Path(tempfile.mkdtemp())
+    plan = harness.build_plan(repo, task)
+    story = plan["epics"][0]["stories"][0]
+    # Empty list, not a list containing a {path, source} dict.
+    assert story["acceptance"] == []
+    assert story["acceptance"] is not None
+
+
+def test_load_task_with_acceptance_file_still_reads_contents(tmp_path, monkeypatch):
+    """Regression guard: a task WITH an acceptance.py must still get
+    acceptance_source set to the file's contents (the fix must not
+    over-broadly nuke the existing fixture path)."""
+    monkeypatch.setattr(harness, "TASKS_DIR", tmp_path)
+    body = "# THE ORACLE\nassert 1 + 1 == 2\n"
+    _make_task_dir(tmp_path, "with_acceptance_task", with_acceptance=True, acceptance_body=body)
+    task = harness.load_task("with_acceptance_task")
+    assert task["acceptance_source"] == body
+    assert task["acceptance_source"] is not None
+
+
+def test_build_plan_with_acceptance_file_still_emits_one_fixture(tmp_path, monkeypatch):
+    """Regression guard: a task WITH an acceptance.py must still get a
+    one-fixture acceptance list from build_plan (path + source), not an
+    empty list."""
+    import tempfile
+    monkeypatch.setattr(harness, "TASKS_DIR", tmp_path)
+    body = "# THE ORACLE\nassert 1 + 1 == 2\n"
+    _make_task_dir(tmp_path, "with_acceptance_task", with_acceptance=True, acceptance_body=body)
+    task = harness.load_task("with_acceptance_task")
+    repo = Path(tempfile.mkdtemp())
+    plan = harness.build_plan(repo, task)
+    story = plan["epics"][0]["stories"][0]
+    assert len(story["acceptance"]) == 1
+    assert story["acceptance"][0]["path"] == "test_acceptance.py"
+    assert story["acceptance"][0]["source"] == body
+
+
+def test_build_plan_preserves_sibling_story_keys(tmp_path, monkeypatch):
+    """Regression guard: the acceptance-optional edit must not delete the
+    story dict's other keys. A prior local-model str_replace ate
+    agent_instructions/persona/model while rewriting the acceptance line,
+    and the acceptance-only assertions above stayed green because they
+    never checked those keys -- so build_plan silently shipped stories
+    with no implementation brief. Assert all sibling keys survive in
+    BOTH the with-acceptance and no-acceptance paths."""
+    import tempfile
+    cases = [
+        ("no_acc", False),
+        ("with_acc", True),
+    ]
+    for name, with_acc in cases:
+        monkeypatch.setattr(harness, "TASKS_DIR", tmp_path)
+        _make_task_dir(
+            tmp_path, f"sibling_{name}",
+            with_acceptance=with_acc,
+            acceptance_body="# oracle\n" if with_acc else None,
+        )
+        task = harness.load_task(f"sibling_{name}")
+        repo = Path(tempfile.mkdtemp())
+        story = harness.build_plan(repo, task)["epics"][0]["stories"][0]
+        # The three sibling keys a wide str_replace previously deleted:
+        assert "agent_instructions" in story, f"agent_instructions missing ({name})"
+        assert story["agent_instructions"] == task["agent_instructions"]
+        assert "persona" in story, f"persona missing ({name})"
+        assert story["persona"] == "software-engineer"
+        assert "model" in story, f"model missing ({name})"
+        assert story["model"] == "sonnet"
+        assert "risk" in story, f"risk missing ({name})"
+        assert story["risk"] == "low"
+
+
+def test_load_task_empty_acceptance_file_reads_as_empty_string(tmp_path, monkeypatch):
+    """Boundary: an acceptance.py that EXISTS but is EMPTY must read as
+    "" (current behavior preserved), NOT be treated as missing. The
+    is_file() guard distinguishes 'absent' from 'present-but-empty'."""
+    monkeypatch.setattr(harness, "TASKS_DIR", tmp_path)
+    _make_task_dir(tmp_path, "empty_acceptance_task", with_acceptance=True, acceptance_body="")
+    task = harness.load_task("empty_acceptance_task")
+    assert task["acceptance_source"] == ""
+    assert task["acceptance_source"] is not None
+
+
+def test_real_review_story_lock_guard_task_loads_with_no_acceptance():
+    """The actual review_story_lock_guard benchmark task (the one that
+    harness_error'd at 0s) must now load without raising and report
+    acceptance_source=None, and build_plan must emit acceptance=[]."""
+    import tempfile
+    task = harness.load_task("review_story_lock_guard")
+    assert task["acceptance_source"] is None
+    repo = Path(tempfile.mkdtemp())
+    plan = harness.build_plan(repo, task)
+    story = plan["epics"][0]["stories"][0]
+    assert story["acceptance"] == []
+
+
 # ---------- end-to-end with the mock backend ----------
 def _run_mock_ecosystem(task_name, workdir):
     """Run harness.py with --model mock against a non-pytest task.

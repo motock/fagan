@@ -1493,6 +1493,132 @@ def test_local_agent_read_heavy_loop_nudges_once_then_parks(tmp_path, monkeypatc
     )
 
 
+# ---------------------------------------------------------------------------
+# Off-task-drift guard (Mode 31) wiring tests.
+#
+# These drive the real la.main() entrypoint end-to-end with chat() mocked at
+# its true external boundary (the _sequence_chat fake), exactly like the
+# read-heavy/repetition-guard tests above. The helpers _expected_task_paths
+# and _is_off_task_path already exist in scripts/local_agent.py (added by a
+# prior story); these tests verify they are actually WIRED INTO main()'s
+# step loop — a single off-task mutating edit nudges once and does not park,
+# a second DIFFERENT off-task edit after the nudge parks (return 3), editing
+# only files named in the brief never nudges, and a brief naming no files at
+# all fails open (never nudges).
+# ---------------------------------------------------------------------------
+
+_OFF_TASK_BRIEF = "Refactor `pipeline/server.py` to add a health-check endpoint."
+
+
+def test_off_task_edit_nudges_once_and_does_not_park_on_a_single_file(
+    tmp_path, monkeypatch, capsys
+):
+    """A single off-task mutating edit prints exactly one `[off-task nudge:`
+    line and does NOT park (rc == 0). A single stray file must not terminate
+    the run — the guard nudges once and lets the agent explain itself."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setenv("LOCAL_AGENT_TASK", _OFF_TASK_BRIEF)
+    responses = [
+        ("create_file", {"path": "totally/unrelated/scratch.py", "content": "x = 1\n"}),
+        ("done", {"summary": "done"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert out.count("[off-task nudge:") == 1, (
+        f"expected exactly one off-task nudge, output: {out!r}"
+    )
+    assert rc == 0, f"a single stray file must not park; got rc={rc}\noutput: {out!r}"
+    assert "[parking: off-task drift" not in out, (
+        f"a single off-task edit must not park; output: {out!r}"
+    )
+
+
+def test_off_task_edits_on_two_distinct_paths_park_after_the_nudge(
+    tmp_path, monkeypatch, capsys
+):
+    """Two off-task mutating edits on two DIFFERENT unrelated paths: the first
+    nudges, the second (a distinct target after the nudge) parks the run with
+    exit code 3. This is the Mode 31 failure mode — a dispatched agent that
+    abandons its task and drifts onto unrelated files."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setenv("LOCAL_AGENT_TASK", _OFF_TASK_BRIEF)
+    responses = [
+        ("create_file", {"path": "totally/unrelated/scratch.py", "content": "x = 1\n"}),
+        ("create_file", {"path": "elsewhere/other.py", "content": "y = 2\n"}),
+        ("done", {"summary": "done"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert out.count("[off-task nudge:") == 1, (
+        f"expected exactly one nudge (only the first distinct target nudges), "
+        f"output: {out!r}"
+    )
+    assert "[parking: off-task drift" in out, (
+        f"expected a parking line for the second distinct off-task target, "
+        f"output: {out!r}"
+    )
+    assert rc == 3, f"expected parking exit 3, got rc={rc}\noutput: {out!r}"
+
+
+def test_on_task_edits_never_nudge(tmp_path, monkeypatch, capsys):
+    """Editing a file named in the brief must never trip the off-task guard.
+    Create the named file with real content, then a str_replace that actually
+    matches and edits it — no nudge, clean finish (rc == 0)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setenv("LOCAL_AGENT_TASK", _OFF_TASK_BRIEF)
+    # Pre-create the on-task file so str_replace has something to match.
+    (tmp_path / "pipeline" / "server.py").parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "pipeline" / "server.py").write_text("OLD = 1\n")
+    responses = [
+        ("str_replace", {
+            "path": "pipeline/server.py",
+            "old_str": "OLD = 1",
+            "new_str": "NEW = 2",
+        }),
+        ("done", {"summary": "done"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert "[off-task nudge:" not in out, (
+        f"on-task edit must never nudge; output: {out!r}"
+    )
+    assert rc == 0, f"expected clean finish, got rc={rc}\noutput: {out!r}"
+
+
+def test_brief_naming_no_paths_never_nudges(tmp_path, monkeypatch, capsys):
+    """A brief that names no files at all (plain prose, no backtick/bold paths)
+    must fail open: the off-task guard never nudges, because there is nothing
+    reliable to compare against. Editing any path is allowed."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setenv("LOCAL_AGENT_TASK", "Make the service more robust and add tests.")
+    responses = [
+        ("create_file", {"path": "any/random/path.py", "content": "z = 3\n"}),
+        ("done", {"summary": "done"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert "[off-task nudge:" not in out, (
+        f"a brief naming no paths must fail open and never nudge; output: {out!r}"
+    )
+    assert rc == 0, f"expected clean finish, got rc={rc}\noutput: {out!r}"
+
+
 def test_local_agent_park_disabled_continues_past_strict_park(tmp_path, monkeypatch, capsys):
     """PARK_ENABLED=False is the kill-switch for a capable model that re-reads
     aggressively (e.g. minimax-m3:cloud re-viewing a file before editing): the

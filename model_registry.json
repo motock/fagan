@@ -59,6 +59,10 @@
     "review": {
       "provider": "ollama",
       "model": "glm"
+    },
+    "diagnosis": {
+      "provider": "ollama",
+      "model": "glm"
     }
   }
 }

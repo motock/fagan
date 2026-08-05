@@ -78,6 +78,43 @@ non-blocking heuristic on this at `ingest_plan` and posts a notification
 when it looks isolation-only — treat that notification as a prompt to
 re-check the fixture, not noise to ignore.
 
+## Lint-check hand-authored acceptance fixtures before ingesting
+
+`acceptance` fixture source is plan-authored content that bypasses every
+pipeline role. `test_author` (the always-on-for-local-family pre-executor
+phase, see README's TDD-split section) only authors the agent's own
+"Tests to write" unit tests named in `agent_instructions` — it never
+touches or reviews `acceptance` fixtures. No review persona or
+`ingest_plan`-time check verifies fixture lint hygiene either
+(`_isolation_only_acceptance_warning` only checks for isolation-only
+fixtures, a different failure class — see the section above). A fixture
+with a lint violation becomes a read-only oracle the dispatched agent is
+forbidden from touching, so CI's repo-wide lint gate fails every rework
+attempt with no way for the agent to ever fix it — a variant of the
+born-broken-oracle class, caused by the plan author rather than a prior
+merged gate.
+
+This happened live 2026-08-05 on `mode31-off-task-drift-guard` story 2
+(PR #235): the plan author dry-ran both acceptance fixtures with pytest
+and a full-suite regression check before ingesting, which caught
+functional bugs but missed lint hygiene. 4 of 7 CI lint errors traced to
+the plan author's own fixture: four `fake, calls = _sequence_chat(...)`
+lines where `calls` was never used (ruff `RUF059`). The dispatched local
+agent burned a full rework cycle unable to resolve it, since 4 of the 7
+errors were in a file it could not edit.
+
+Before `save_plan`/`ingest_plan` (or `patch_story` to edit an existing
+`acceptance` field), materialize any hand-authored fixture source into a
+scratch copy of the repo (or a throwaway worktree) and run BOTH the
+project's test command AND its lint command against it — pytest alone is
+not enough. Fix any violation (e.g. prefix an unused unpacked variable
+with `_`) before the fixture is ever embedded as the read-only oracle. If
+a fixture needs correcting after a story has already been dispatched, use
+`patch_story` to update the plan's authoritative `acceptance` source (this
+also fixes what `acceptance_digests` recomputes to on the next dispatch —
+see `pipeline/server.py`'s dispatch path) and hand-fix the same content in
+the story's live worktree so the two stay identical before resuming.
+
 ### Local (non-Claude) dispatch — hard-won rules
 
 These rules come from live dispatch failures on weak/local executors; follow them when the dispatch backend is not `claude`:

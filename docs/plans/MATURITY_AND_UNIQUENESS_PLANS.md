@@ -587,19 +587,23 @@ stories (TDD-split stays strictly read-only). Tests in
 
 ## Suggested ordering
 
-A1 → A3 (fix-isolation) → A2 → B1 (sandbox) → B5 (export the moat) → B2 →
-B4 → B6.
+~~A1 → A3 (fix-isolation) → A2 → B1 (sandbox) → B5 (export the moat) → B2 →
+B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 
-> **Unresolved conflict (2026-08-05).** This ordering puts B4 second-to-last and
-> omits B3 entirely. That is defensible on its own terms — land what's half-done,
-> export the distinctive ideas before building breadth. But it defers the
-> "UI is the entry point, not Claude Code" goal in
-> `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` behind six other workstreams, and that
-> plan's own sequence front-loads the service extraction because B3/B4 both queue
-> behind it. **Two docs, two implied priorities — pick one deliberately.** The
-> cheap move that satisfies both: the read-only *effective-config + provenance*
-> view (that plan's W3a) has no prerequisites, directly serves A2, and can land
-> inside the current ordering without disturbing it.
+> **Ordering conflict — RESOLVED 2026-08-06.** This doc's original ordering put
+> B4 second-to-last and omitted B3 entirely — defensible as "land what's
+> half-done, export the distinctive ideas before building breadth," but it
+> deferred the "UI is the entry point, not Claude Code" goal in
+> `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` behind six other workstreams, while
+> that plan's own sequence front-loads the service extraction because B3/B4
+> both queue behind it. **Decision: `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`'s
+> sequencing now governs post-A3 work.** With A1/A2 closed, the path is: W3a
+> (effective-config+provenance view, no prerequisites, serves A2) → W1 (extract
+> `PipelineService` — the keystone both B3 and B4 depend on) → W1b/W1c → W2
+> (chat entry point) → W3b (writable dashboard, closes B4) → W4 (multi-tenant,
+> closes B3). B1 (sandbox) and B5 (export the moat) are picked up once the
+> service seam exists, not before — see that doc's own "Ordering conflict"
+> section for the full rationale.
 
-Land what's half-done before building new; export the distinctive ideas
-before they get further buried; sandbox before any multi-user push.
+Land what's half-done before building new; then extract the service seam
+that everything else — sandboxing included — is cheaper to build behind.

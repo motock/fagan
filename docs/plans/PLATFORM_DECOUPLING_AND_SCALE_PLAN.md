@@ -414,13 +414,20 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   provider* axis is already abstracted (`Backend` protocol; Claude/Ollama/
   LM Studio/MLX). The *harness* axis (Claude Code vs. Codex vs. Aider vs.
   Goose) is not, and lives in a different seam. Split into two bullets there.
-- **Ordering conflict.** The maturity plan's suggested order
-  (A1 → A3 → A2 → B1 → B5 → B2 → B4 → B6) puts B4 second-to-last and omits B3
-  from the sequence. That is a defensible "land what's half-done, export the
-  moat first" strategy — but it defers the UI-entry-point goal behind six other
-  workstreams. Either the UI goal moves up in that ordering, or this plan waits.
-  **Decide explicitly; do not let the two docs drift into implying different
-  priorities.**
+- **Ordering conflict — RESOLVED 2026-08-06.** The maturity plan's suggested
+  order (A1 → A3 → A2 → B1 → B5 → B2 → B4 → B6) puts B4 second-to-last and
+  omits B3 from the sequence, deferring the UI-entry-point goal behind six
+  other workstreams. **Decision: this plan's own sequencing governs.** With
+  A1/A2 closed and A3 wound down to two items that are either tabled (CI-green
+  release tag, blocked on the GHA billing cap) or themselves blocked on this
+  plan's W4 structured logging, the next work after A3 is **this doc's
+  sequence**: W3a (effective-config+provenance view, no prerequisites) → W1
+  (extract `PipelineService`, the keystone) → W1b/W1c → W2 (chat entry point)
+  → W3b (writable dashboard) → W4 (multi-tenant), with B1 (sandboxing) and B5
+  (export the moat) picked up after the service seam exists rather than
+  before it. Rationale: B1/B5 don't unblock anything else, while W1 is the
+  single prerequisite blocking B3, B4, and the UI-entry-point goal
+  simultaneously — front-loading it retires the most dependent work fastest.
 
 ### Items each doc has that the other should borrow
 

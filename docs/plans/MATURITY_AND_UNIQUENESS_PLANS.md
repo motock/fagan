@@ -110,9 +110,21 @@ Reference comparables:
       purely oracle-green on CI-fail rework. **L2/L3 (reviewer-escalation
       tiers above L1) remain unimplemented** — see
       `REVIEWER_ESCALATION_PLAN.md`.
-- [ ] **Implement token-context optimization**, measuring cache hits first
-      (per the plan's own caveat). Dead `PIPELINE_REVIEW_MAX_TOKENS`,
-      duplicated uncached system prompts.
+- [x] **Implement token-context optimization** (2026-08-06, plan `token-context-a1`,
+      PRs #243/#244/#245). Step 0 measurement was answered from existing
+      production data (reviewer sidecar logs already showed heavy cache hits,
+      hundreds-of-thousands of `cache_read_input_tokens` vs. 10-58 fresh —
+      no probe call needed), which deprioritized the original Step 1
+      (marking `cache_control` breakpoints). Landed: `role` passthrough on
+      `Backend.complete()` (#243); `cell_dir`/`role` wired into the
+      planner/rework-planner calls so they now get the same cache-hit
+      sidecar data the reviewer role already had (#245); dead
+      `PIPELINE_REVIEW_MAX_TOKENS`/`PIPELINE_SECURITY_REVIEW_MAX_TOKENS`
+      knobs retired (#244). Deferred, not ingested: prompt-caching the
+      static system blocks (pending confirmation the planner role shows the
+      same cache-hit pattern now that its sidecar data exists) and a Claude
+      reviewer input-context cap (no clear enforcement mechanism found).
+      See `TOKEN_CONTEXT_OPTIMIZATION_PLAN.md`'s status footer.
 - [x] **Decide the remaining plan docs' fate** (2026-07-30). All four —
       `MODEL_PROVIDER_ABSTRACTION_PLAN.md`, `TICKETING_ABSTRACTION_PLAN.md`,
       `MODE_20_CORRECT_BUT_REJECTED_PLAN.md`, and

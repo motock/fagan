@@ -1,7 +1,9 @@
 # Plan: Trim token waste in the planner and reviewer roles
 
-**Status:** NOT YET IMPLEMENTED. Plan only, 2026-07-17. Awaiting user review.
-The first step is a measurement, not a change — see Step 0.
+**Status:** Step 0 (measurement) and the two ready-to-implement stories it
+gated are DONE, merged 2026-08-06 as plan `token-context-a1` (PRs #243,
+#244, #245 — see the status footer at the end of this doc). Step 1
+(prompt-caching) and the input-cap story remain DEFERRED, not ingested.
 **Origin:** 2026-07-17 exploration (user question): are the decompose/tech-lead
 planner and the reviewer carrying full context that leads to unnecessary token
 usage? Investigation found the **user-prompt** side of both roles is already
@@ -178,3 +180,36 @@ doesn't prove the CLI isn't auto-caching — only the measurement does.)
   are per-call static-prefix duplication, so they scale with N stories ×
   (1 planner + 1-3 reviewer) calls — modest per call but consistent across
   every run.
+
+---
+
+## Status footer (2026-08-06)
+
+Step 0 was answered without a probe call: `pipeline/review.py`'s
+`_run_reviewer`/`_run_security_reviewer` already wrote
+`cache_read_input_tokens`/`cache_creation_input_tokens` to
+`~/.claude/worktrees/review_token_costs.jsonl` on every live Claude-backend
+reviewer call, and the last 8 real production records (2026-08-04) showed
+`cache_read_input_tokens` in the hundreds-of-thousands to ~1.8M per call vs.
+10-58 fresh `input_tokens` — the reviewer role's system-prompt duplication
+is already overwhelmingly cache-hit in production today. That answers the
+plan's go/no-go gate: **deprioritize Step 1** (marking `cache_control`
+breakpoints), at least for the reviewer role.
+
+The planner role had zero equivalent data (`_run_planner`/`_run_rework_planner`
+never passed `cell_dir` to `complete()`), so plan `token-context-a1` (3
+stories, rescoped from the JSON above to fit the local-dispatch ≤2-file cap)
+closed that gap instead of re-running the original Step 0/1/2/4 story split:
+
+1. Add a `role: str = "complete"` passthrough param to `Backend.complete()`
+   (Protocol + both drivers) — PR #243, merged.
+2. Wire `cell_dir`/`role` into `_run_planner`/`_run_rework_planner` the same
+   way `review.py` already does — PR #245, merged.
+3. Retire (not truncate-and-wire) the dead `PIPELINE_REVIEW_MAX_TOKENS` /
+   `PIPELINE_SECURITY_REVIEW_MAX_TOKENS` knobs — PR #244, merged.
+
+**Still deferred, not ingested:** Step 1 (prompt-cache the static system
+blocks) now has a path to re-evaluate — the planner role has cache-hit data
+going forward — but hasn't been re-run; and the Claude-reviewer input-context
+cap (original Step 4), which never had a clear enforcement mechanism
+identified. Both remain candidates for a future plan, not scheduled.

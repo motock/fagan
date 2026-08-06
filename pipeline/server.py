@@ -30,23 +30,22 @@ Per-project overrides (set in project .mcp.json env block):
   PIPELINE_MAX_CONCURRENT_AGENTS  cap on agents dispatched/running at once
     across all plans in this session (default: 3; <=0 disables the cap)
 """
-# ruff: noqa
-import contextlib
-from contextlib import contextmanager
-from datetime import datetime, timezone
+
+import ast
 import fcntl
 import json
 import logging
 import os
-import pathlib
 import subprocess
 import sys
 import time
 import traceback
 import uuid
-import typing
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
 from mcp.server.fastmcp import FastMCP
 
 from app import backend, role_registry
@@ -179,18 +178,25 @@ from .overlord import (
 )
 from .parsers import (  # noqa: F401
     _AUTO_RESOLVE_IMPORT_PATTERN,
-    _atomic_write_json,
-    _completed_dep_ids,
-    _extract_blocking_finding_files,
-    _extract_suggested_commit_message,
-    _extract_json_block,
-    _git_show_stage,
-    _has_review_findings,
-    _is_test_file_path,
     _GIVE_UP_PHRASES,
     _KEY_RE,
     _RATE_LIMIT_PATTERNS,
     _TRANSIENT_BACKEND_PATTERNS,
+    _atomic_write_json,
+    _completed_dep_ids,
+    _extract_blocking_finding_files,
+    _extract_json_block,
+    _extract_suggested_commit_message,
+    _git_show_stage,
+    _has_review_findings,
+    _is_give_up_summary,
+    _is_pure_additive_import_diff,
+    _is_rate_limited,
+    _is_test_file_path,
+    _is_transient_backend_error,
+    _parse_conflict_blocks,
+    _parse_ruling,
+    _parse_verdict,
     _resolve_conflict_blocks,
     _synthesize_test_failure_feedback,
     _validate_key,
@@ -2836,7 +2842,8 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)
     if not story:
-        return {"ok": False}
+        return {"ok": False, "error": f"No such story {story_key}"}
+
     branch = f"agent/{story_key.lower()}"
     worktree = story.get("worktree", "")
     # Guard: skip if story is not in tests_passed state
@@ -2875,51 +2882,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     }
             except (subprocess.CalledProcessError, OSError):
                 pass
-                if (
-                    verdict == "REQUEST_CHANGES"
-                    and not story["last_review_findings"]
-                    and story.get("commit_hygiene_autofix_attempts", 0) < 2
-                ):
-                    _suggested = _extract_suggested_commit_message(reviewer_output)
-                    if _suggested is not None:
-                        _wt = story.get("worktree")
-                        if _wt and os.path.isdir(_wt):
-                            try:
-                                _status_r = subprocess.run(
-                                    ["git", "status", "--porcelain"],
-                                    cwd=_wt,
-                                    capture_output=True,
-                                    text=True,
-                                    check=True,
-                                )
-                                if _status_r.stdout.strip() == "":
-                                    try:
-                                        subprocess.run(
-                                            ["git", "commit", "--amend", "-m", _suggested],
-                                            cwd=_wt,
-                                            check=True,
-                                            capture_output=True,
-                                            text=True,
-                                        )
-                                        story["commit_hygiene_autofix_attempts"] = (
-                                            story.get("commit_hygiene_autofix_attempts", 0) + 1
-                                        )
-                                        story["status"] = "tests_passed"
-                                        _notify_user(
-                                            plan_name,
-                                            f"{story_key}: reviewer's only blocking finding was commit-message format; auto-amended HEAD commit without spending a rework attempt.",
-                                        )
-                                        _atomic_write_json(manifest_path, manifest)
-                                        return {
-                                            "ok": True,
-                                            "verdict": verdict,
-                                            "status": story["status"],
-                                            "auto_fixed_commit_message": True,
-                                        }
-                                    except (subprocess.CalledProcessError, OSError):
-                                        pass
-                            except (subprocess.CalledProcessError, OSError):
-                                pass
+
     plan_role_config = _plan_role_config(plan_name)
     # Reviewer self-fix (2026-07-29): captured before invoking the reviewer
     # so a later APPROVE_WITH_FIX can be mechanically verified against what
@@ -3373,6 +3336,51 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 ).stdout.strip()
             except (subprocess.CalledProcessError, OSError):
                 pass
+        if (
+            verdict == "REQUEST_CHANGES"
+            and not story["last_review_findings"]
+            and story.get("commit_hygiene_autofix_attempts", 0) < 2
+        ):
+            _suggested = _extract_suggested_commit_message(reviewer_output)
+            if _suggested is not None and worktree and os.path.isdir(worktree):
+                try:
+                    _status_r = subprocess.run(
+                        ["git", "status", "--porcelain"],
+                        cwd=worktree,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    if _status_r.stdout.strip() == "":
+                        try:
+                            subprocess.run(
+                                ["git", "commit", "--amend", "-m", _suggested],
+                                cwd=worktree,
+                                check=True,
+                                capture_output=True,
+                                text=True,
+                            )
+                            story["commit_hygiene_autofix_attempts"] = (
+                                story.get("commit_hygiene_autofix_attempts", 0) + 1
+                            )
+                            story["status"] = "tests_passed"
+                            _notify_user(
+                                plan_name,
+                                f"{story_key}: reviewer's only blocking finding was "
+                                f"commit-message format; auto-amended HEAD commit "
+                                f"without spending a rework attempt.",
+                            )
+                            _atomic_write_json(manifest_path, manifest)
+                            return {
+                                "ok": True,
+                                "verdict": verdict,
+                                "status": story["status"],
+                                "auto_fixed_commit_message": True,
+                            }
+                        except (subprocess.CalledProcessError, OSError):
+                            pass
+                except (subprocess.CalledProcessError, OSError):
+                    pass
         attempts = story.get("rework_attempts", 0) + 1
         story["rework_attempts"] = attempts
         if story.get("escalated"):

@@ -31,10 +31,6 @@ def _extract_json_block(text: str) -> str:
     m = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
     return m.group(1).strip() if m else stripped
 
-_SUGGESTED_COMMIT_MESSAGE_RE = re.compile(
-    r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
-    r"(?:\([^)]*\))?!?:\s+\S[^`\n]*)`"
-)
 def _parse_ruling(text: str) -> dict[str, Any]:
     """Parse the overlord's output contract into a structured ruling."""
     fields: dict[str, str] = {}
@@ -299,6 +295,12 @@ def _extract_blocking_finding_files(text: str) -> list[str]:
     return result
 
 
+_SUGGESTED_COMMIT_MESSAGE_RE = re.compile(
+    r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
+    r"(?:\([^)]*\))?!?:[ \t]+\S[^`\n]*)`"
+)
+
+
 def _extract_suggested_commit_message(text: str) -> str | None:
     """Return the first backtick-quoted Conventional Commit header in text, or None."""
     m = _SUGGESTED_COMMIT_MESSAGE_RE.search(text)
@@ -353,10 +355,7 @@ def _synthesize_test_failure_feedback(last_test_check: dict) -> str:
                       "exited non-zero; see the failing test output above")
     lines += ["", "VERDICT: REQUEST_CHANGES"]
     return "\n".join(lines)
-_SUGGESTED_COMMIT_MESSAGE_RE = re.compile(
-    r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
-    r"(?:\([^)]*\))?!?:\s+\S[^`\n]*)`"
-)
+
 
 __all__ = [
     "_AUTO_RESOLVE_IMPORT_PATTERN",

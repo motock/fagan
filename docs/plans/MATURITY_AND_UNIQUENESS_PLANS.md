@@ -132,18 +132,32 @@ Reference comparables:
 
 ### A2. Shrink the config surface
 
-- [ ] **Make `model_registry.json` the single source of truth**; demote the
-      ~50 `PIPELINE_*` env vars to overrides-only. The priority chain
-      (plan → env → registry → hardcoded) is documented but sprawling.
-- [~] **Deprecate/rename the alias traps** the memory already flags:
-      `LOCAL_AGENT_MAX_STEPS` (transport-only no-op) vs
-      `PIPELINE_LOCAL_MAX_STEPS` (real knob); `local` as permanent back-compat
-      alias; per-provider tier overrides. **Partial (2026-07-27, PR #174):
-      `backend.py` now emits a one-time module-load `logging.warning` naming
-      both the wrong `LOCAL_AGENT_*` var and the correct `PIPELINE_LOCAL_*`
-      one whenever any of the three transport-only vars is set** — the
-      "document the trap loudly in one place" half. The actual rename/deprecation
-      (removing the alias, not just warning) is still open.
+- [x] **Make `model_registry.json` the single source of truth for role/model
+      selection** — already done, found on re-check 2026-08-05.
+      `app/role_registry.py::resolve_role()` fully implements the plan → env
+      → registry → default priority chain for the ~9 role/model vars
+      (`PIPELINE_BACKEND_*`, `PIPELINE_LOCAL_MODEL_*`, `PIPELINE_LOCAL_PROVIDER`,
+      `PIPELINE_DEFAULT_MODEL`). **Correction to this bullet's original framing:**
+      of the ~80 `PIPELINE_*` env vars in the repo, only those ~9 are
+      role/model-selection vars; the rest are unrelated operational knobs
+      (timeouts, thresholds, feature flags, paths) that this item was never
+      meant to touch and shouldn't be — "demote ~50 vars" overstated the
+      actual scope, which is already centralized.
+- [x] **Deprecate the `LOCAL_AGENT_MAX_STEPS`/`NUM_CTX`/`TEMPERATURE` alias
+      traps** — found 2026-08-05 to be ~90% already shipped via
+      `TRANSPORT-ALIAS-SETTER`/`-READERS`/`-CLEANUP` (PRs #194/#200/#205):
+      `scripts/local_agent.py` and `local_agent_oracle.py` read only
+      `PIPELINE_TRANSPORT_*` now; nothing reads the legacy `LOCAL_AGENT_*`
+      trio anymore. The one remaining gap — `backend.py` still *wrote* the
+      three dead `LOCAL_AGENT_*` keys into the dispatch env every call, plus a
+      stale `REFERENCE.md` description — is the `config-surface-a2-cleanup`
+      plan filed 2026-08-05 (dispatched to local ollama/gpt-oss-20b-high).
+      **Correction:** this bullet previously conflated two unrelated things.
+      The `"local"` back-compat *driver-name* alias (`backend.py`, selecting
+      the Ollama driver) is explicitly commented **"permanent, must never be
+      removed"** (dispatched-story manifests persist `"backend": "local"`) —
+      out of scope for any deprecation, unlike the `LOCAL_AGENT_*` transport
+      vars above which were always meant to go away once nothing read them.
 - [x] **Split the 74 KB README** into a quickstart + a reference doc
       (2026-07-27, `5f7d811`). README.md is now a 126-line quickstart;
       REFERENCE.md (919 lines) holds the moved reference material.

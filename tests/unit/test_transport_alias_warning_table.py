@@ -2,9 +2,7 @@
 PIPELINE_TRANSPORT_* transport keys AND extend the module-load operator-warning
 table to name the three new vars (six entries total).
 
-Scope of THIS dispatch: test authoring only. The implementation does not exist
-yet on this branch, so every test here is expected to FAIL until a later
-dispatch implements the two backend.py edits described in the story.
+Scope of THIS dispatch: test authoring only. The implementation now exists on this branch, so every test here is expected to pass.
 
 What these tests cover (the acceptance fixture already covers the dispatch-env
 setter happy path; these tests cover the rest of the contract):
@@ -14,9 +12,8 @@ setter happy path; these tests cover the rest of the contract):
      PIPELINE_TRANSPORT_*).
   2. Each warning message points the operator at the correct real knob
      (PIPELINE_LOCAL_*).
-  3. The dispatch env build writes BOTH the old and the new keys for all three
-     transports, including the boundary case where the real knobs are unset
-     (defaults flow through).
+  3. The dispatch env build writes ONLY the new PIPELINE_TRANSPORT_* keys; the
+     legacy LOCAL_AGENT_* keys are no longer written.
   4. Setting a new PIPELINE_TRANSPORT_* var triggers the warning (negative:
      operators who set the new transport name are also warned, because it is
      still a transport-only channel, not a knob).
@@ -141,7 +138,8 @@ def test_warning_table_silent_when_no_transport_var_set(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Dispatch env build: both old AND new keys present, defaults flow through.
+# Dispatch env build: ONLY the new PIPELINE_TRANSPORT_* keys are written; the
+# legacy LOCAL_AGENT_* keys are no longer written.
 # ---------------------------------------------------------------------------
 
 def _dispatch_capture(monkeypatch, tmp_path, env_overrides):
@@ -159,60 +157,167 @@ def _dispatch_capture(monkeypatch, tmp_path, env_overrides):
     return captured["env"]
 
 
-def test_dispatch_writes_both_old_and_new_keys_for_all_three(monkeypatch, tmp_path):
-    """All three transports must be written under BOTH the legacy LOCAL_AGENT_*
-    and the new PIPELINE_TRANSPORT_* names, with identical values."""
+def test_dispatch_writes_only_new_transport_keys_not_legacy(monkeypatch, tmp_path):
+    """The dead legacy LOCAL_AGENT_* writes were removed; the dispatch env must
+    carry only the PIPELINE_TRANSPORT_* names, never the old LOCAL_AGENT_* ones."""
     env = _dispatch_capture(monkeypatch, tmp_path, {
         "PIPELINE_LOCAL_MAX_STEPS": "7",
         "PIPELINE_LOCAL_NUM_CTX": "4096",
         "PIPELINE_LOCAL_TEMPERATURE": "0.2",
     })
-    pairs = [
-        ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_TRANSPORT_MAX_STEPS"),
-        ("LOCAL_AGENT_NUM_CTX", "PIPELINE_TRANSPORT_NUM_CTX"),
-        ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_TRANSPORT_TEMPERATURE"),
-    ]
-    for old, new in pairs:
-        assert old in env, f"missing legacy key {old}"
+    for old in _TRANSPORT_OLD:
+        assert old not in env, f"legacy key {old} should no longer be written"
+    for new in _TRANSPORT_NEW:
         assert new in env, f"missing new transport key {new}"
-        assert env[old] == env[new], (
-            f"{old}={env[old]!r} != {new}={env[new]!r}"
-        )
 
 
 def test_dispatch_defaults_flow_through_when_real_knobs_unset(monkeypatch, tmp_path):
     """Boundary: when no PIPELINE_LOCAL_* knob is set, the dispatch env must
-    still carry both old and new keys, populated from the constructor defaults
-    (max_steps default 40, num_ctx default 16384, temperature default 0.3)."""
+    still carry the new PIPELINE_TRANSPORT_* keys, populated from the
+    constructor defaults (max_steps default 40, num_ctx default 16384,
+    temperature default 0.3), and must not carry the legacy LOCAL_AGENT_* keys."""
     env = _dispatch_capture(monkeypatch, tmp_path, {})
-    # Both names present and equal even on the default path.
-    assert env["LOCAL_AGENT_MAX_STEPS"] == env["PIPELINE_TRANSPORT_MAX_STEPS"]
-    assert env["LOCAL_AGENT_NUM_CTX"] == env["PIPELINE_TRANSPORT_NUM_CTX"]
-    assert env["LOCAL_AGENT_TEMPERATURE"] == env["PIPELINE_TRANSPORT_TEMPERATURE"]
-    # The default max_steps is 40 (see OllamaDriver.__init__).
+    for old in _TRANSPORT_OLD:
+        assert old not in env, f"legacy key {old} should no longer be written"
     assert env["PIPELINE_TRANSPORT_MAX_STEPS"] == "40"
-    assert env["LOCAL_AGENT_MAX_STEPS"] == "40"
 
 
 def test_dispatch_max_steps_boundary_one(monkeypatch, tmp_path):
     """Boundary value: max_steps of 1 (minimum meaningful step cap) must round
-    trip through both transport names as the string '1'."""
+    trip through the new transport name as the string '1'."""
     env = _dispatch_capture(monkeypatch, tmp_path, {"PIPELINE_LOCAL_MAX_STEPS": "1"})
     assert env["PIPELINE_TRANSPORT_MAX_STEPS"] == "1"
-    assert env["LOCAL_AGENT_MAX_STEPS"] == "1"
+    assert "LOCAL_AGENT_MAX_STEPS" not in env
 
 
 def test_dispatch_temperature_zero(monkeypatch, tmp_path):
-    """Boundary value: temperature 0.0 must round trip through both names. Zero
-    is a valid (greedy) temperature and must not be dropped or coerced."""
+    """Boundary value: temperature 0.0 must round trip through the new
+    transport name. Zero is a valid (greedy) temperature and must not be
+    dropped or coerced."""
     env = _dispatch_capture(monkeypatch, tmp_path, {"PIPELINE_LOCAL_TEMPERATURE": "0"})
     assert env["PIPELINE_TRANSPORT_TEMPERATURE"] == "0"
-    assert env["LOCAL_AGENT_TEMPERATURE"] == "0"
+    assert "LOCAL_AGENT_TEMPERATURE" not in env
 
 
 def test_dispatch_num_ctx_large(monkeypatch, tmp_path):
-    """Boundary value: a large num_ctx must round trip through both names
-    unchanged (no truncation / int reformatting that loses the value)."""
+    """Boundary value: a large num_ctx must round trip through the new
+    transport name unchanged (no truncation / int reformatting that loses the
+    value)."""
     env = _dispatch_capture(monkeypatch, tmp_path, {"PIPELINE_LOCAL_NUM_CTX": "200000"})
     assert env["PIPELINE_TRANSPORT_NUM_CTX"] == "200000"
-    assert env["LOCAL_AGENT_NUM_CTX"] == "200000"
+    assert "LOCAL_AGENT_NUM_CTX" not in env
+
+
+# ---------------------------------------------------------------------------
+# Out-of-scope guards: the story forbids touching unrelated LOCAL_AGENT_*
+# keys (MODEL, SYSTEM, THINK) and the module-load warning table. These tests
+# pin those so the implementer cannot accidentally remove them.
+# ---------------------------------------------------------------------------
+
+def test_dispatch_still_writes_other_local_agent_keys(monkeypatch, tmp_path):
+    """The story removes ONLY the three transport legacy keys (MAX_STEPS,
+    NUM_CTX, TEMPERATURE). The unrelated, still-real LOCAL_AGENT_* keys
+    (MODEL, SYSTEM, THINK) must remain in the dispatch env untouched."""
+    env = _dispatch_capture(
+        monkeypatch, tmp_path, {"PIPELINE_LOCAL_THINK": "true"}
+    )
+    assert "LOCAL_AGENT_MODEL" in env, (
+        "LOCAL_AGENT_MODEL is out of scope and must still be written"
+    )
+    assert "LOCAL_AGENT_SYSTEM" in env, (
+        "LOCAL_AGENT_SYSTEM is out of scope and must still be written"
+    )
+    assert "LOCAL_AGENT_THINK" in env, (
+        "LOCAL_AGENT_THINK is out of scope and must still be written"
+    )
+
+
+def test_warning_table_still_names_legacy_transport_vars(monkeypatch):
+    """The module-load operator-warning table (a list of (old_name, real_name)
+    pairs) is explicitly OUT OF SCOPE and must not be removed or altered. It
+    must still warn when a legacy LOCAL_AGENT_* transport var is set directly
+    in the environment, naming the real knob."""
+    for old, real in (
+        ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+        ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+        ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ):
+        _mod, records = _reload_backend_with_env(monkeypatch, {old: "x"})
+        msg = next((m for m in records if old in m), None)
+        assert msg is not None, (
+            f"warning table must still warn for {old}; got {records}"
+        )
+        assert real in msg, (
+            f"warning for {old} must still name real knob {real}; got {msg}"
+        )
+
+
+def test_backend_source_has_no_legacy_transport_env_writes():
+    """Source-level guard: app/backend.py must no longer assign the three dead
+    legacy transport keys into the dispatch env. This catches a partial revert
+    or a copy-paste reintroduction directly in the source, independent of
+    runtime behavior."""
+    src = _backend_source()
+    for old in _TRANSPORT_OLD:
+        needle = f'env["{old}"]'
+        assert needle not in src, (
+            f"app/backend.py must not write the dead legacy key {old} into the "
+            f"dispatch env; found {needle!r}"
+        )
+
+
+def test_backend_source_still_writes_new_transport_env_keys():
+    """Source-level guard: app/backend.py must still assign the three
+    PIPELINE_TRANSPORT_* keys into the dispatch env (the story removes only the
+    legacy duplicates, not the real writes)."""
+    src = _backend_source()
+    for new in _TRANSPORT_NEW:
+        needle = f'env["{new}"]'
+        assert needle in src, (
+            f"app/backend.py must still write {new} into the dispatch env; "
+            f"missing {needle!r}"
+        )
+
+
+def test_backend_source_still_writes_other_local_agent_env_keys():
+    """Source-level guard: the out-of-scope LOCAL_AGENT_* keys (MODEL, SYSTEM,
+    THINK) must still be assigned into the dispatch env in app/backend.py.
+    MODEL and SYSTEM are written via a dict literal; THINK via env[...]."""
+    src = _backend_source()
+    assert '"LOCAL_AGENT_MODEL":' in src, (
+        "app/backend.py must still write LOCAL_AGENT_MODEL into the dispatch env"
+    )
+    assert '"LOCAL_AGENT_SYSTEM":' in src, (
+        "app/backend.py must still write LOCAL_AGENT_SYSTEM into the dispatch env"
+    )
+    assert 'env["LOCAL_AGENT_THINK"]' in src, (
+        "app/backend.py must still write LOCAL_AGENT_THINK into the dispatch env"
+    )
+
+
+def test_backend_source_warning_table_still_lists_legacy_pairs():
+    """Source-level guard: the module-load operator-warning table near the top
+    of app/backend.py must still contain the three (legacy, real) pairs. The
+    story is explicit that this table is separate, still valid, and must not be
+    touched or removed."""
+    src = _backend_source()
+    for old, real in (
+        ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+        ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+        ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ):
+        assert f'"{old}"' in src, (
+            f"warning table must still list legacy var {old}"
+        )
+        assert f'"{real}"' in src, (
+            f"warning table must still list real knob {real}"
+        )
+
+
+def _backend_source():
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    # tests/unit/<file> -> repo root / app / backend.py
+    backend = here.parents[2] / "app" / "backend.py"
+    return backend.read_text()

@@ -232,19 +232,30 @@ Reference comparables:
       deliberately NOT backfilled (the 3-cell-fixture / 1-nonexistent-file
       spot-check above means a careless mapping would just add fabricated
       data); that per-mode verification pass is the next actionable step.
-- [ ] **Replace the count with two signals that are actually actionable**
-      (guard-liveness half still blocked on the regression-guard-path
-      backfill noted above; recurrence is unblocked now that status is
-      structured).
+- [x] **Guard-path backfill.** Done 2026-08-06, same day as the dataset
+      prerequisite. Read all 50 modes' full write-ups (not just the
+      frontmatter blob) and, for each cited test name/symbol, grepped the
+      live repo to confirm the file exists under `tests/unit/` and actually
+      covers that mode — rather than trusting the log's own prose, which the
+      earlier audit had already shown drifts (3 benchmark-fixture mislabels,
+      1 nonexistent file among 17 prior citations). Result: **25 of 51
+      entries have a confirmed guard**; the rest are honestly marked "none
+      identified" — either genuinely un-fixed/operational (no guard
+      expected) or a plausible-sounding file that couldn't be tied to the
+      specific mode with a symbol match. Guard-liveness (does the cited test
+      still exist and get collected) is now checkable by re-running the same
+      grep pattern periodically; recurrence detection is unblocked by the
+      Mode/Status columns from the prior step.
+- [ ] **Replace the count with two signals that are actually actionable.**
       - **Recurrence, not discovery.** A *new* mode is the system working as
         intended; a *fixed* mode reappearing is the real failure. Precedent
         for guards silently disarming exists: Mode 46 shipped a regression
         file CI never collected, and `tests/unit/test_conftest_env_isolation.py`
         was written precisely because deleting the load-bearing conftest lines
         would not otherwise break CI.
-      - **Guard liveness.** Every entry marked fixed must name a regression
-        test that (a) exists and (b) is actually collected by the full-suite
-        command. Cheap to automate once the log is structured.
+      - **Guard liveness.** Data now exists (25/51 confirmed paths above);
+        turning the periodic re-check into an actual automated gate (vs. a
+        one-off manual pass) is the remaining step.
       - **Cost per merged story** (wasted dispatches, rework cycles, direct
         repairs) is the metric that would actually show maturity improving,
         and it is blocked on B4's structured-logs + correlation-ID item. The

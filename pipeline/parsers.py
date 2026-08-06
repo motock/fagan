@@ -296,8 +296,7 @@ def _extract_blocking_finding_files(text: str) -> list[str]:
 
 
 _SUGGESTED_COMMIT_MESSAGE_RE = re.compile(
-    r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
-    r"(?:\([^)]*\))?!?:[ \t]+\S[^`\n]*)`"
+    r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)(?:\([^)]*\))?!?:[ \t]+\S[^`\n]*)`"
 )
 
 

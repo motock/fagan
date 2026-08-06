@@ -1995,8 +1995,8 @@ def test_dispatch_resolves_model_tier_and_passes_runtime_knobs(tmp_path, monkeyp
     # Logical tier resolves to a concrete local model, knobs pass through.
     assert captured["env"]["LOCAL_AGENT_MODEL"] == "qwen2.5-coder:14b"
     assert captured["env"]["LOCAL_AGENT_SYSTEM"] == ""
-    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "8192"
-    assert captured["env"]["LOCAL_AGENT_MAX_STEPS"] == "12"
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "8192"
+    assert captured["env"]["PIPELINE_TRANSPORT_MAX_STEPS"] == "12"
 
 
 def test_dispatch_passes_think_flag_to_subprocess(tmp_path, monkeypatch):
@@ -2323,13 +2323,13 @@ def test_dispatch_rereads_pipeline_local_max_steps_on_each_call(
     )
 
     assert len(captures) == 2
-    assert captures[0]["env"]["LOCAL_AGENT_MAX_STEPS"] == "12"
-    assert captures[1]["env"]["LOCAL_AGENT_MAX_STEPS"] == "7"
+    assert captures[0]["env"]["PIPELINE_TRANSPORT_MAX_STEPS"] == "12"
+    assert captures[1]["env"]["PIPELINE_TRANSPORT_MAX_STEPS"] == "7"
 
 
 def test_dispatch_falls_back_to_init_default_when_env_unset(tmp_path, monkeypatch):
     """Negative/boundary: with PIPELINE_LOCAL_MAX_STEPS unset, the subprocess
-    sees LOCAL_AGENT_MAX_STEPS equal to the __init__ default (40) — proving
+    sees PIPELINE_TRANSPORT_MAX_STEPS equal to the __init__ default (40) — proving
     self.max_steps remains the fallback when the env var is absent."""
     monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
     monkeypatch.delenv("PIPELINE_LOCAL_MAX_STEPS", raising=False)
@@ -2349,7 +2349,7 @@ def test_dispatch_falls_back_to_init_default_when_env_unset(tmp_path, monkeypatc
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    assert captured["env"]["LOCAL_AGENT_MAX_STEPS"] == "40"
+    assert captured["env"]["PIPELINE_TRANSPORT_MAX_STEPS"] == "40"
 
 
 def test_scheduler_plist_sets_pipeline_local_max_steps():
@@ -2410,8 +2410,8 @@ def test_dispatch_rereads_num_ctx_and_temperature_on_each_call(tmp_path, monkeyp
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "32768"
-    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "1.0"
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "32768"
+    assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "1.0"
 
 
 def test_dispatch_falls_back_to_init_defaults_for_num_ctx_and_temperature(
@@ -2435,8 +2435,8 @@ def test_dispatch_falls_back_to_init_defaults_for_num_ctx_and_temperature(
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "16384"
-    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.3"
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "16384"
+    assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "0.3"
 
 
 def test_dispatch_malformed_num_ctx_raises_value_error_like_max_steps(
@@ -2582,8 +2582,8 @@ def test_dispatch_uses_tuned_table_values_when_present_and_no_env_override(
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "8192"
-    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.5"
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "8192"
+    assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "0.5"
 
 
 def test_chat_env_override_wins_over_tuned_table(monkeypatch):
@@ -2634,8 +2634,8 @@ def test_dispatch_env_override_wins_over_tuned_table(tmp_path, monkeypatch):
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "32768"
-    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "1.0"
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "32768"
+    assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "1.0"
 
 
 def test_gptoss_20b_tuned_to_low_temperature_from_ab_experiment():
@@ -2700,8 +2700,8 @@ def test_dispatch_falls_back_to_init_defaults_when_model_tag_absent_from_table(
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "16384"
-    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.3"
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "16384"
+    assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "0.3"
 
 
 def test_chat_partial_table_entry_only_overrides_the_key_present(monkeypatch):
@@ -2754,8 +2754,8 @@ def test_dispatch_partial_table_entry_only_overrides_the_key_present(
         cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
     )
 
-    assert captured["env"]["LOCAL_AGENT_NUM_CTX"] == "8192"
-    assert captured["env"]["LOCAL_AGENT_TEMPERATURE"] == "0.3"
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "8192"
+    assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "0.3"
 
 
 # ---------- ClaudeCliDriver.dispatch() ----------

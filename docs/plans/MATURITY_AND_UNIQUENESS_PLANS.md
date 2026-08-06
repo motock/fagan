@@ -176,25 +176,78 @@ Reference comparables:
 
 ### A3. Stabilize the active bug surface
 
-- [ ] **Bound the failure-mode discovery rate — trending the wrong way.**
-      19 modes at this doc's 2026-07-17 baseline; now **32** (Modes 22-24
-      found 2026-07-19/20; Mode 28 found 2026-07-21 shipping the always-on
-      TDD-split story — see `retros/tdd-split-always-on_2026-07-21.md`; Modes
-      29-30 found the same day fixing TDD-split's own opt-in gap — see
-      `retros/tdd-split-unconditional-and-review-race_2026-07-21.md`; Mode 30
-      is a scheduler-vs-manual-git race that corrupted a source file on
-      disk, the most severe of the three; Modes 31-32 found 2026-07-22
-      dispatching the Mode 24/28 fix itself — see `project_dispatch_failure_modes.md`
-      for full writeups). Add a "no new modes for N benchmark runs" gate as
-      a stability signal — not done, and the discovery rate argues this is
-      more urgent than when first written. **Update 2026-07-27: the count
-      has plateaued at 32 — no new modes since 2026-07-22 — but no gate
-      enforces it, so this is luck rather than a measured signal. Update
-      2026-07-29: the plateau broke — Mode 42 (2026-07-24) and Mode 43
-      (2026-07-29, below) both found live, count now 33. Neither was found
-      by a benchmark run; both came from dispatching real maturity-plan
-      stories, which argues the "no new modes for N benchmark runs" gate
-      as originally scoped would not have caught either.**
+- [ ] **Bound the failure-mode discovery rate — REFRAMED 2026-08-06. The
+      original metric is the wrong instrument, and is not measurable today.**
+      History: 19 modes at this doc's 2026-07-17 baseline, 32 by 2026-07-22,
+      **50 named as of 2026-08-06**. The original prescription — "add a 'no
+      new modes for N benchmark runs' gate" — should be retired, for three
+      reasons that are now evidenced rather than argued:
+      1. **It measures the wrong thing.** A raw discovered-mode count rises
+         with dispatch volume and with honest logging, so "the number went
+         up" cannot distinguish a degrading system from a well-instrumented
+         one. Held as a target, it penalizes recording a mode at all.
+      2. **The proposed instrument would not have fired.** Modes 42
+         (2026-07-24), 43 (2026-07-29) and 50 (2026-08-05) were each found by
+         dispatching real production stories, not benchmark cells. A
+         benchmark-run-scoped gate stays green through all three.
+      3. **These are not one population.** They fall into at least three
+         classes with unrelated fixes: **harness defects** (Modes 44/46/50 —
+         real bugs in dispatch/grading code, each fixable and regression-
+         testable); **plan-authoring defects** (born-broken oracle,
+         isolation-only fixture, lint-dirty fixture, an acceptance assertion
+         on a gitignored path — operator error, addressed by pre-ingest gates
+         like `pipeline/oracle_gate.py` and `_isolation_only_acceptance_warning`,
+         not by harness fixes); and **model capability limits** (Modes
+         22/31/32/42 — no code change closes these; they belong in the
+         local-dispatch splitting rules as known-unsafe task shapes, not in a
+         bug backlog). The class label must stay *revisable*: Mode 49 was
+         reframed from model weakness to unwinnable-task once the
+         born-broken-oracle cause was found, and Mode 34 from bug to
+         not-a-bug. Class is an attribute of an entry, never a separate
+         counter to defend.
+- [ ] **Prerequisite — make the failure-mode log a dataset instead of prose.**
+      Verified 2026-08-06: none of the above is measurable today, because the
+      log is not machine-readable. Of the 50 modes named in
+      `project_dispatch_failure_modes.md`, only **37 have a body section** —
+      the other 13 (29-32, 38-43, 47-49) exist *only* inside a single
+      48,591-character frontmatter `description` blob. Status vocabulary is
+      free text and inconsistent (`FIXED`, `NOT fixed`, `MITIGATED`,
+      `PARTIALLY fixed`, `operational, not a code bug`, and one
+      "observability gap FIXED … CORRECTION — not actually a bug"). Of the 17
+      `test_*.py` filenames the log names, 3 are benchmark *cell fixtures*
+      rather than regression guards, and 1
+      (`test_transport_alias_readers_regression.py`) does not exist in the
+      repo at all — legitimately, it was reverted with PR #197 and superseded
+      by `test_transport_alias_cleanup_spec.py`, but nothing in the log says
+      so. Any gate built on grepping this file today would emit noise. Fix:
+      one structured entry per mode (id, date, class, status, fix PR,
+      regression-guard path); the checks below then become trivial.
+- [ ] **Replace the count with two signals that are actually actionable**
+      (blocked on the dataset item above).
+      - **Recurrence, not discovery.** A *new* mode is the system working as
+        intended; a *fixed* mode reappearing is the real failure. Precedent
+        for guards silently disarming exists: Mode 46 shipped a regression
+        file CI never collected, and `tests/unit/test_conftest_env_isolation.py`
+        was written precisely because deleting the load-bearing conftest lines
+        would not otherwise break CI.
+      - **Guard liveness.** Every entry marked fixed must name a regression
+        test that (a) exists and (b) is actually collected by the full-suite
+        command. Cheap to automate once the log is structured.
+      - **Cost per merged story** (wasted dispatches, rework cycles, direct
+        repairs) is the metric that would actually show maturity improving,
+        and it is blocked on B4's structured-logs + correlation-ID item. The
+        two should be sequenced together, not tracked as independent work.
+- [ ] **Latent, found while auditing the above (2026-08-06): the `testpaths`
+      allowlist is badly stale.** `pyproject.toml` pins **23** files while
+      `tests/unit/` holds **104** — a bare `pytest` collects ~22% of the
+      suite. The gates themselves are currently safe: CI
+      (`.github/workflows/ci.yml`) and `pipeline/build_detect.py` both apply
+      `--override-ini=testpaths=. --ignore=tests/benchmark
+      --ignore=tests/experiments`, and the two have matched exactly since
+      Mode 50's fix. But this is the same shape as Mode 46 with a far larger
+      gap than when Mode 46 was found, and it silently misleads any human or
+      agent who runs bare `pytest`. Either regenerate the allowlist or drop it
+      in favour of the override flags the real gates already use.
 - [x] **Mode 43 (2026-07-29, FIXED PR #196, `5236334`) — module-level
       variable deletion slips both orphan guards.** A `replace_lines` edit on
       `scripts/local_agent.py` deleted the top-level assignment

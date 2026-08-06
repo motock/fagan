@@ -205,25 +205,37 @@ Reference comparables:
          born-broken-oracle cause was found, and Mode 34 from bug to
          not-a-bug. Class is an attribute of an entry, never a separate
          counter to defend.
-- [ ] **Prerequisite — make the failure-mode log a dataset instead of prose.**
-      Verified 2026-08-06: none of the above is measurable today, because the
-      log is not machine-readable. Of the 50 modes named in
-      `project_dispatch_failure_modes.md`, only **37 have a body section** —
-      the other 13 (29-32, 38-43, 47-49) exist *only* inside a single
-      48,591-character frontmatter `description` blob. Status vocabulary is
+- [x] **Prerequisite — make the failure-mode log a dataset instead of prose.**
+      Verified 2026-08-06: none of the above was measurable, because the log
+      was not machine-readable. Of the 50 modes named in
+      `project_dispatch_failure_modes.md`, only **37 had a body section** —
+      the other 13 (29-32, 38-43, 47-49) existed *only* inside a single
+      48,591-character frontmatter `description` blob. Status vocabulary was
       free text and inconsistent (`FIXED`, `NOT fixed`, `MITIGATED`,
       `PARTIALLY fixed`, `operational, not a code bug`, and one
       "observability gap FIXED … CORRECTION — not actually a bug"). Of the 17
-      `test_*.py` filenames the log names, 3 are benchmark *cell fixtures*
+      `test_*.py` filenames the log named, 3 were benchmark *cell fixtures*
       rather than regression guards, and 1
       (`test_transport_alias_readers_regression.py`) does not exist in the
       repo at all — legitimately, it was reverted with PR #197 and superseded
-      by `test_transport_alias_cleanup_spec.py`, but nothing in the log says
-      so. Any gate built on grepping this file today would emit noise. Fix:
-      one structured entry per mode (id, date, class, status, fix PR,
-      regression-guard path); the checks below then become trivial.
+      by `test_transport_alias_cleanup_spec.py`, but nothing in the log said
+      so. **Done same day**: added a `Mode | Date | Class | Status | Fix ref`
+      table to the top of `project_dispatch_failure_modes.md` (51 rows —
+      Modes 1-50 plus the historical 16b/16-recurrence sub-entries), each
+      status drawn from that mode's *most recent* write-up rather than its
+      original header (several modes were reframed after first landing, e.g.
+      34 bug→not-a-bug, 49 model-weakness→unwinnable-task). Class split:
+      **42 harness-bug, 5 model-capability, 3 operational, 1 plan-authoring,
+      1 not-a-bug** — most of the raw count growth that looked alarming
+      under the old framing is harness bugs being found-and-fixed, not
+      capability debt accumulating. The regression-guard-path column was
+      deliberately NOT backfilled (the 3-cell-fixture / 1-nonexistent-file
+      spot-check above means a careless mapping would just add fabricated
+      data); that per-mode verification pass is the next actionable step.
 - [ ] **Replace the count with two signals that are actually actionable**
-      (blocked on the dataset item above).
+      (guard-liveness half still blocked on the regression-guard-path
+      backfill noted above; recurrence is unblocked now that status is
+      structured).
       - **Recurrence, not discovery.** A *new* mode is the system working as
         intended; a *fixed* mode reappearing is the real failure. Precedent
         for guards silently disarming exists: Mode 46 shipped a regression

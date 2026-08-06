@@ -260,17 +260,24 @@ Reference comparables:
         repairs) is the metric that would actually show maturity improving,
         and it is blocked on B4's structured-logs + correlation-ID item. The
         two should be sequenced together, not tracked as independent work.
-- [ ] **Latent, found while auditing the above (2026-08-06): the `testpaths`
+- [x] **Latent, found while auditing the above (2026-08-06): the `testpaths`
       allowlist is badly stale.** `pyproject.toml` pins **23** files while
       `tests/unit/` holds **104** — a bare `pytest` collects ~22% of the
-      suite. The gates themselves are currently safe: CI
+      suite. The gates themselves were already safe: CI
       (`.github/workflows/ci.yml`) and `pipeline/build_detect.py` both apply
       `--override-ini=testpaths=. --ignore=tests/benchmark
       --ignore=tests/experiments`, and the two have matched exactly since
-      Mode 50's fix. But this is the same shape as Mode 46 with a far larger
-      gap than when Mode 46 was found, and it silently misleads any human or
-      agent who runs bare `pytest`. Either regenerate the allowlist or drop it
-      in favour of the override flags the real gates already use.
+      Mode 50's fix. But this was the same shape as Mode 46 with a far larger
+      gap than when Mode 46 was found, and it silently misled any human or
+      agent who ran bare `pytest`. **Fixed same day, PR #246** (dispatched
+      through the pipeline to local `gpt-oss-20b-high`, one production file,
+      merged autonomously by the scheduler): dropped the stale file list and
+      replaced it with `addopts = "--ignore=tests/benchmark
+      --ignore=tests/experiments"`, mirroring the override flags the real
+      gates already used instead of a hand-maintained allowlist that rots.
+      Regression-tested in `tests/unit/test_pytest_collection_allowlist.py`
+      (asserts a previously-unlisted file is now collected by bare `pytest`,
+      while `tests/experiments`/`tests/benchmark` stay excluded).
 - [x] **Mode 43 (2026-07-29, FIXED PR #196, `5236334`) — module-level
       variable deletion slips both orphan guards.** A `replace_lines` edit on
       `scripts/local_agent.py` deleted the top-level assignment

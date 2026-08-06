@@ -241,7 +241,6 @@ def _run_reviewer(
         cell_dir = None
     return backend.get_backend("review", name=name_for_get_backend).complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
-        max_tokens=int(os.environ.get("PIPELINE_REVIEW_MAX_TOKENS", "4096")),
         cell_dir=cell_dir,
     )
 
@@ -301,8 +300,6 @@ def _run_security_reviewer(
         cell_dir = None
     return backend.get_backend("review", name=resolution.provider).complete(
         prompt, system=body, model=model, allowed_tools="Bash,Read", cwd=worktree,
-        max_tokens=int(os.environ.get("PIPELINE_SECURITY_REVIEW_MAX_TOKENS",
-                                      os.environ.get("PIPELINE_REVIEW_MAX_TOKENS", "4096"))),
         cell_dir=cell_dir,
     )
 

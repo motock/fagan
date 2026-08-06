@@ -1317,6 +1317,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_role_config=_plan_role_config(plan_name),
                 tests_already_authored=test_author_marker.exists(),
                 authored_test_files=authored_test_files,
+                worktree=str(worktree_path),
             )
             if plan_text:
                 plan_path.write_text(plan_text)
@@ -1416,6 +1417,7 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     dispatch_backend=dispatch_backend,
                     local_model=spec["model"],
                     plan_role_config=_plan_role_config(plan_name),
+                    worktree=str(worktree_path),
                 )
             # Rework test-author phase: when the reviewer's feedback itself
             # calls for NEW test(s) (e.g. a regression test reproducing a

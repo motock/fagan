@@ -188,6 +188,7 @@ from .parsers import (  # noqa: F401
     _extract_json_block,
     _git_show_stage,
     _has_review_findings,
+    _extract_suggested_commit_message,
     _is_give_up_summary,
     _is_pure_additive_import_diff,
     _is_rate_limited,

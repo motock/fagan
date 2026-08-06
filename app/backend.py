@@ -50,7 +50,6 @@ for _var, _real in (
             f"{_var} is set in the environment but is a transport-only value that backend.py overwrites on every dispatch - it has no effect as an input; "
             f"set {_real} instead."
         )
-_logger = logging.getLogger("pipeline")
 @dataclass
 class AgentHandle:
     """A non-blocking agentic run (dispatch/review-style), identified by pid."""
@@ -70,6 +69,7 @@ class Backend(Protocol):
         allowed_tools: str | None = None, cwd: str | None = None,
         max_tokens: int | None = None,
         cell_dir: str | None = None,
+        role: str = "complete",
     ) -> str:
         """Run a blocking, single invocation and return its captured output.
 
@@ -193,6 +193,7 @@ class ClaudeCliDriver:
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: str | None = None,
         max_tokens: int | None = None, cell_dir: str | None = None,
+        role: str = "complete",
     ) -> str:
         cmd = ["claude", "-p", prompt, "--model", model]
         if system:
@@ -259,7 +260,7 @@ class ClaudeCliDriver:
                 "model": model,
                 "served_model": payload.get("model"),
             },
-            cell_dir=cell_dir, role="complete",
+            cell_dir=cell_dir, role=role,
         )
         expected_prefix = _CLAUDE_TIER_MODEL_PREFIXES.get(model)
         served_model = payload.get("model")
@@ -742,6 +743,7 @@ class OllamaDriver:
         allowed_tools: str | None = None, cwd: str | None = None,
         max_tokens: int | None = None,
         cell_dir: str | None = None,
+        role: str = "complete",
     ) -> str:
         # max_tokens is not honored by either driver now (see
         # ClaudeCliDriver.complete); Ollama caps the response via the model's
@@ -781,7 +783,7 @@ class OllamaDriver:
                     "duration_ns": envelope.get("total_duration"),
                     "model": resolved_model,
                 },
-                cell_dir=cell_dir, role="complete",
+                cell_dir=cell_dir, role=role,
             )
         return envelope["message"]["content"]
 

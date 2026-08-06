@@ -186,6 +186,7 @@ from .parsers import (  # noqa: F401
     _completed_dep_ids,
     _extract_blocking_finding_files,
     _extract_json_block,
+    _extract_suggested_commit_message,
     _git_show_stage,
     _has_review_findings,
     _is_give_up_summary,
@@ -3335,6 +3336,51 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 ).stdout.strip()
             except (subprocess.CalledProcessError, OSError):
                 pass
+        if (
+            verdict == "REQUEST_CHANGES"
+            and not story["last_review_findings"]
+            and story.get("commit_hygiene_autofix_attempts", 0) < 2
+        ):
+            _suggested = _extract_suggested_commit_message(reviewer_output)
+            if _suggested is not None and worktree and os.path.isdir(worktree):
+                try:
+                    _status_r = subprocess.run(
+                        ["git", "status", "--porcelain"],
+                        cwd=worktree,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    if _status_r.stdout.strip() == "":
+                        try:
+                            subprocess.run(
+                                ["git", "commit", "--amend", "-m", _suggested],
+                                cwd=worktree,
+                                check=True,
+                                capture_output=True,
+                                text=True,
+                            )
+                            story["commit_hygiene_autofix_attempts"] = (
+                                story.get("commit_hygiene_autofix_attempts", 0) + 1
+                            )
+                            story["status"] = "tests_passed"
+                            _notify_user(
+                                plan_name,
+                                f"{story_key}: reviewer's only blocking finding was "
+                                f"commit-message format; auto-amended HEAD commit "
+                                f"without spending a rework attempt.",
+                            )
+                            _atomic_write_json(manifest_path, manifest)
+                            return {
+                                "ok": True,
+                                "verdict": verdict,
+                                "status": story["status"],
+                                "auto_fixed_commit_message": True,
+                            }
+                        except (subprocess.CalledProcessError, OSError):
+                            pass
+                except (subprocess.CalledProcessError, OSError):
+                    pass
         attempts = story.get("rework_attempts", 0) + 1
         story["rework_attempts"] = attempts
         if story.get("escalated"):

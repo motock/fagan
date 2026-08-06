@@ -21,8 +21,6 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-# ---------- JSON / overlord / verdict / rate-limit parsing ----------
-
 def _extract_json_block(text: str) -> str:
     """Strip a ```json ... ``` / ``` ... ``` fence around a JSON payload, if
     present, else return the text unchanged (trimmed). Models routinely wrap
@@ -33,7 +31,10 @@ def _extract_json_block(text: str) -> str:
     m = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
     return m.group(1).strip() if m else stripped
 
-
+_SUGGESTED_COMMIT_MESSAGE_RE = re.compile(
+    r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
+    r"(?:\([^)]*\))?!?:\s+\S[^`\n]*)`" # noqa: I001
+)
 def _parse_ruling(text: str) -> dict[str, Any]:
     """Parse the overlord's output contract into a structured ruling."""
     fields: dict[str, str] = {}
@@ -346,7 +347,10 @@ def _synthesize_test_failure_feedback(last_test_check: dict) -> str:
                       "exited non-zero; see the failing test output above")
     lines += ["", "VERDICT: REQUEST_CHANGES"]
     return "\n".join(lines)
-
+_SUGGESTED_COMMIT_MESSAGE_RE = re.compile(
+    r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
+    r"(?:\([^)]*\))?!?:\s+\S[^`\n]*)`" # noqa: I001
+)
 
 __all__ = [
     "_AUTO_RESOLVE_IMPORT_PATTERN",

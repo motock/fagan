@@ -261,6 +261,7 @@ def _run_planner(
     plan_role_config: dict | None = None,
     tests_already_authored: bool = False,
     authored_test_files: list[tuple[str, list[str]]] | None = None,
+    worktree: str | None = None,
 ) -> str | None:
     """Call a bounded, single-turn LLM to produce an ordered sub-step
     checklist for agent_instructions.
@@ -294,6 +295,12 @@ def _run_planner(
             local_model,
             plan_role_config=plan_role_config,
         )
+        # Compute cell_dir for cache sidecar recording
+        if worktree is not None and Path(worktree).parent.name == "worktrees":
+            cell_dir = str(Path(worktree).resolve().parent)
+        else:
+            cell_dir = None
+
         text = backend.get_backend("planner", name=backend_name).complete(
             agent_instructions,
             system=_planner_system(
@@ -302,6 +309,8 @@ def _run_planner(
                 authored_test_files=authored_test_files,
             ),
             model=model,
+            cell_dir=cell_dir,
+            role="planner",
         )
     except Exception:  # noqa: BLE001 (broad and intentional: this call must never be a gate, per the comment below)
         # Broad and intentional: this call must never be a gate. Mirrors
@@ -372,6 +381,7 @@ def _run_rework_planner(
     dispatch_backend: str,
     local_model: str,
     plan_role_config: dict | None = None,
+    worktree: str | None = None,
 ) -> str | None:
     """Like _run_planner, but translates code-review feedback into an
     ordered fix-checklist instead of translating a coarse task into an
@@ -384,10 +394,18 @@ def _run_rework_planner(
             local_model,
             plan_role_config=plan_role_config,
         )
+        # Compute cell_dir for cache sidecar recording
+        if worktree is not None and Path(worktree).parent.name == "worktrees":
+            cell_dir = str(Path(worktree).resolve().parent)
+        else:
+            cell_dir = None
+
         text = backend.get_backend("planner", name=backend_name).complete(
             review_feedback,
             system=_REWORK_PLANNER_SYSTEM,
             model=model,
+            cell_dir=cell_dir,
+            role="rework_planner",
         )
     except Exception:  # noqa: BLE001 (deliberate fail-open-to-None contract, per this function's docstring)
         return None

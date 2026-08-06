@@ -12,7 +12,6 @@ server's _append_journal / _append_decision / _write_usage_state callers stay
 in the server module and call it as a free variable, so the patch lands on
 the re-exported binding as long as those callers don't move with it.
 """
-
 import difflib
 import json
 import os
@@ -20,6 +19,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any
+
 
 def _extract_json_block(text: str) -> str:
     """Strip a ```json ... ``` / ``` ... ``` fence around a JSON payload, if
@@ -33,7 +33,7 @@ def _extract_json_block(text: str) -> str:
 
 _SUGGESTED_COMMIT_MESSAGE_RE = re.compile(
     r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
-    r"(?:\([^)]*\))?!?:\s+\S[^`\n]*)`" # noqa: I001
+    r"(?:\([^)]*\))?!?:\s+\S[^`\n]*)`"
 )
 def _parse_ruling(text: str) -> dict[str, Any]:
     """Parse the overlord's output contract into a structured ruling."""
@@ -299,6 +299,12 @@ def _extract_blocking_finding_files(text: str) -> list[str]:
     return result
 
 
+def _extract_suggested_commit_message(text: str) -> str | None:
+    """Return the first backtick-quoted Conventional Commit header in text, or None."""
+    m = _SUGGESTED_COMMIT_MESSAGE_RE.search(text)
+    return m.group(1) if m else None
+
+
 _PYTEST_FAILED_RE = re.compile(r"^FAILED\s+(\S+?)(?:::\S+)?(?:\s|$)", re.MULTILINE)
 
 
@@ -349,19 +355,18 @@ def _synthesize_test_failure_feedback(last_test_check: dict) -> str:
     return "\n".join(lines)
 _SUGGESTED_COMMIT_MESSAGE_RE = re.compile(
     r"`((?:feat|fix|chore|refactor|test|docs|ci|perf|style|build)"
-    r"(?:\([^)]*\))?!?:\s+\S[^`\n]*)`" # noqa: I001
+    r"(?:\([^)]*\))?!?:\s+\S[^`\n]*)`"
 )
 
 __all__ = [
     "_AUTO_RESOLVE_IMPORT_PATTERN",
-    "_GIVE_UP_PHRASES",
-    "_KEY_RE",
     "_RATE_LIMIT_PATTERNS",
     "_TRANSIENT_BACKEND_PATTERNS",
     "_atomic_write_json",
     "_completed_dep_ids",
     "_extract_blocking_finding_files",
     "_extract_json_block",
+    "_extract_suggested_commit_message",
     "_git_show_stage",
     "_has_review_findings",
     "_is_give_up_summary",

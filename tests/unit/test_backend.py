@@ -3251,3 +3251,266 @@ def test_transport_warning_fires_for_all_three_independently(monkeypatch, caplog
     assert any("LOCAL_AGENT_MAX_STEPS" in m and "PIPELINE_LOCAL_MAX_STEPS" in m for m in msgs), msgs
     assert any("LOCAL_AGENT_NUM_CTX" in m and "PIPELINE_LOCAL_NUM_CTX" in m for m in msgs), msgs
     assert any("LOCAL_AGENT_TEMPERATURE" in m and "PIPELINE_LOCAL_TEMPERATURE" in m for m in msgs), msgs
+
+
+# ---------- complete() role= passthrough into review_token_costs.jsonl ----
+# Step 0 of TOKEN_CONTEXT_OPTIMIZATION_PLAN: complete() on the Backend
+# Protocol, ClaudeCliDriver, and OllamaDriver must accept an optional
+# role: str = "complete" kwarg and thread it into the internal
+# record_token_usage(...) call so a complete()-originated sidecar record
+# is labeled with the caller's role (planner/reviewer/...) instead of
+# being indistinguishably hardcoded to "complete". Default "complete"
+# preserves byte-for-byte behavior for every existing caller.
+
+def _claude_usage_payload():
+    """A minimal but realistic claude --output-format json envelope that
+    exercises the structured (cell_dir) path of ClaudeCliDriver.complete()."""
+    return {
+        "result": "the answer",
+        "model": "claude-sonnet-4-5-20260101",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "total_cost_usd": 0.01,
+        "duration_ms": 123,
+    }
+
+
+def _claude_complete_monkeypatch(monkeypatch, payload):
+    monkeypatch.setattr(
+        b.subprocess, "run",
+        lambda cmd, cwd, capture_output, text, env=None: _FakeCompletedProcess(
+            stdout=json.dumps(payload)
+        ),
+    )
+
+
+def test_claude_complete_role_kwarg_threads_into_sidecar(tmp_path, monkeypatch):
+    """ClaudeCliDriver.complete(..., role='planner') must write a
+    review_token_costs.jsonl record whose 'role' field is 'planner', not
+    the hardcoded 'complete'."""
+    _claude_complete_monkeypatch(monkeypatch, _claude_usage_payload())
+
+    b.ClaudeCliDriver().complete(
+        "hi", model="sonnet", cell_dir=str(tmp_path), role="planner",
+    )
+
+    record = json.loads(
+        (tmp_path / "review_token_costs.jsonl").read_text().splitlines()[0]
+    )
+    assert record["role"] == "planner"
+
+
+def test_claude_complete_default_role_is_complete(tmp_path, monkeypatch):
+    """Regression guard: when role= is not passed, the sidecar record must
+    still read 'role': 'complete' (the documented default). This must pass
+    both before and after the signature-widening change."""
+    _claude_complete_monkeypatch(monkeypatch, _claude_usage_payload())
+
+    b.ClaudeCliDriver().complete(
+        "hi", model="sonnet", cell_dir=str(tmp_path),
+    )
+
+    record = json.loads(
+        (tmp_path / "review_token_costs.jsonl").read_text().splitlines()[0]
+    )
+    assert record["role"] == "complete"
+
+
+def test_claude_complete_role_kwarg_is_keyword_only(tmp_path, monkeypatch):
+    """role must be a keyword-only parameter (it sits after the existing
+    keyword-only *, system/model/... block). Passing it positionally must
+    raise TypeError, proving it was added to the keyword-only block and
+    not accidentally as a positional param."""
+    _claude_complete_monkeypatch(monkeypatch, _claude_usage_payload())
+
+    with pytest.raises(TypeError):
+        # positional role must be rejected
+        b.ClaudeCliDriver().complete(
+            "hi", "be careful", "sonnet", None, None, None, str(tmp_path), "planner",
+        )
+
+
+def _ollama_complete_driver(monkeypatch, envelope):
+    """Build an OllamaDriver wired to a fake provider whose .chat() returns
+    the given full /api/chat envelope (with prompt_eval_count/eval_count
+    usage fields), mirroring the single-shot complete() path."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+
+    class _FakeProvider:
+        name = "ollama"
+
+        def chat(self, messages, *, model, **kwargs):
+            return envelope
+
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "provider", _FakeProvider())
+    return driver
+
+
+def _ollama_usage_envelope():
+    """A full /api/chat envelope carrying the usage fields
+    OllamaDriver.complete() reads (prompt_eval_count/eval_count/
+    total_duration) for the sidecar record."""
+    return {
+        "message": {"content": "RULING: ok"},
+        "prompt_eval_count": 7,
+        "eval_count": 3,
+        "total_duration": 123456789,
+    }
+
+
+def test_ollama_complete_role_kwarg_threads_into_sidecar(tmp_path, monkeypatch):
+    """OllamaDriver.complete(..., role='reviewer') must write a
+    review_token_costs.jsonl record whose 'role' field is 'reviewer', not
+    the hardcoded 'complete'."""
+    driver = _ollama_complete_driver(monkeypatch, _ollama_usage_envelope())
+
+    driver.complete(
+        "do the thing", model="opus", cell_dir=str(tmp_path), role="reviewer",
+    )
+
+    record = json.loads(
+        (tmp_path / "review_token_costs.jsonl").read_text().splitlines()[0]
+    )
+    assert record["role"] == "reviewer"
+
+
+def test_ollama_complete_default_role_is_complete(tmp_path, monkeypatch):
+    """Regression guard: when role= is not passed, the sidecar record must
+    still read 'role': 'complete'. Must pass both before and after the
+    signature-widening change."""
+    driver = _ollama_complete_driver(monkeypatch, _ollama_usage_envelope())
+
+    driver.complete(
+        "do the thing", model="opus", cell_dir=str(tmp_path),
+    )
+
+    record = json.loads(
+        (tmp_path / "review_token_costs.jsonl").read_text().splitlines()[0]
+    )
+    assert record["role"] == "complete"
+
+
+def test_ollama_complete_role_kwarg_is_keyword_only(tmp_path, monkeypatch):
+    """role must be keyword-only on OllamaDriver.complete() too."""
+    driver = _ollama_complete_driver(monkeypatch, _ollama_usage_envelope())
+
+    with pytest.raises(TypeError):
+        # positional role must be rejected
+        driver.complete(
+            "do the thing", None, "opus", None, None, None, str(tmp_path), "reviewer",
+        )
+
+
+def test_backend_protocol_complete_declares_role_kwarg():
+    """The Backend Protocol's complete() declaration must also carry the
+    role: str = 'complete' parameter so every driver shares one widened
+    contract. Inspect the signature directly (the Protocol body is just
+    `...`, so we assert on the parameter list, not behavior)."""
+    import inspect
+
+    sig = inspect.signature(b.Backend.complete)
+    assert "role" in sig.parameters, (
+        "Backend.complete must declare a 'role' parameter"
+    )
+    param = sig.parameters["role"]
+    assert param.default == "complete", (
+        f"Backend.complete role default must be 'complete', got {param.default!r}"
+    )
+    assert param.kind in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    ), f"Backend.complete role must be keyword-only, got {param.kind}"
+
+
+def test_claude_complete_signature_declares_role_kwarg_with_default():
+    """ClaudeCliDriver.complete()'s signature must declare role: str =
+    'complete' (default preserved)."""
+    import inspect
+
+    sig = inspect.signature(b.ClaudeCliDriver.complete)
+    assert "role" in sig.parameters
+    param = sig.parameters["role"]
+    assert param.default == "complete"
+    assert param.kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_ollama_complete_signature_declares_role_kwarg_with_default():
+    """OllamaDriver.complete()'s signature must declare role: str =
+    'complete' (default preserved)."""
+    import inspect
+
+    sig = inspect.signature(b.OllamaDriver.complete)
+    assert "role" in sig.parameters
+    param = sig.parameters["role"]
+    assert param.default == "complete"
+    assert param.kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_claude_complete_role_empty_string_threads_through(tmp_path, monkeypatch):
+    """Boundary: an empty-string role is a valid str and must be threaded
+    through verbatim (the driver does not validate role semantics). This
+    guards against an implementation that special-cases falsy roles."""
+    _claude_complete_monkeypatch(monkeypatch, _claude_usage_payload())
+
+    b.ClaudeCliDriver().complete(
+        "hi", model="sonnet", cell_dir=str(tmp_path), role="",
+    )
+
+    record = json.loads(
+        (tmp_path / "review_token_costs.jsonl").read_text().splitlines()[0]
+    )
+    assert record["role"] == ""
+
+
+def test_ollama_complete_role_empty_string_threads_through(tmp_path, monkeypatch):
+    """Boundary: an empty-string role must thread through verbatim on
+    OllamaDriver too."""
+    driver = _ollama_complete_driver(monkeypatch, _ollama_usage_envelope())
+
+    driver.complete(
+        "do the thing", model="opus", cell_dir=str(tmp_path), role="",
+    )
+
+    record = json.loads(
+        (tmp_path / "review_token_costs.jsonl").read_text().splitlines()[0]
+    )
+    assert record["role"] == ""
+
+
+def test_claude_complete_role_none_not_accepted(tmp_path, monkeypatch):
+    """Negative: role is typed str, so passing role=None must be rejected
+    by the type contract at call time is not enforceable at runtime here,
+    but the parameter annotation must be str (not Optional[str]) so a
+    future type-checker catches None callers."""
+    import inspect
+
+    # eval_str=True resolves the string form `from __future__ import
+    # annotations` produces back to the real type object, so this assertion
+    # holds regardless of that module-level import's presence.
+    sig = inspect.signature(b.ClaudeCliDriver.complete, eval_str=True)
+    param = sig.parameters["role"]
+    assert param.annotation is str, (
+        f"role annotation must be str (not Optional), got {param.annotation!r}"
+    )
+
+
+def test_ollama_complete_role_annotation_is_str():
+    """Negative: OllamaDriver.complete() role annotation must be str."""
+    import inspect
+
+    sig = inspect.signature(b.OllamaDriver.complete, eval_str=True)
+    param = sig.parameters["role"]
+    assert param.annotation is str, (
+        f"role annotation must be str (not Optional), got {param.annotation!r}"
+    )
+
+
+def test_backend_protocol_role_annotation_is_str():
+    """Negative: Backend.complete role annotation must be str."""
+    import inspect
+
+    sig = inspect.signature(b.Backend.complete, eval_str=True)
+    param = sig.parameters["role"]
+    assert param.annotation is str, (
+        f"role annotation must be str (not Optional), got {param.annotation!r}"
+    )

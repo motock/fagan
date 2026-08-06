@@ -178,25 +178,18 @@ from .overlord import (
 )
 from .parsers import (  # noqa: F401
     _AUTO_RESOLVE_IMPORT_PATTERN,
-    _GIVE_UP_PHRASES,
-    _KEY_RE,
-    _RATE_LIMIT_PATTERNS,
-    _TRANSIENT_BACKEND_PATTERNS,
     _atomic_write_json,
     _completed_dep_ids,
     _extract_blocking_finding_files,
     _extract_json_block,
+    _extract_suggested_commit_message,
     _git_show_stage,
     _has_review_findings,
-    _extract_suggested_commit_message,
-    _is_give_up_summary,
-    _is_pure_additive_import_diff,
-    _is_rate_limited,
     _is_test_file_path,
-    _is_transient_backend_error,
-    _parse_conflict_blocks,
-    _parse_ruling,
-    _parse_verdict,
+    _GIVE_UP_PHRASES,
+    _KEY_RE,
+    _RATE_LIMIT_PATTERNS,
+    _TRANSIENT_BACKEND_PATTERNS,
     _resolve_conflict_blocks,
     _synthesize_test_failure_feedback,
     _validate_key,
@@ -2842,8 +2835,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)
     if not story:
-        return {"ok": False, "error": f"No such story {story_key}"}
-
+        return {"ok": False}
     branch = f"agent/{story_key.lower()}"
     worktree = story.get("worktree", "")
     # Guard: skip if story is not in tests_passed state

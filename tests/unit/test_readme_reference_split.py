@@ -411,23 +411,14 @@ def test_moved_section_body_is_verbatim(title):
     original_text = _original_readme_text()
     original_body = _section_body_from_text(original_text, title)
     if title == "Configuration (environment variables)":
-        # The REFERENCE.md row was updated to use PIPELINE_TRANSPORT_MAX_STEPS and
-        # The REFERENCE.md row was updated to use PIPELINE_TRANSPORT_MAX_STEPS and
-        # include the legacy LOCAL_AGENT_MAX_STEPS parenthetical.  The original README
-        # at commit 5f7d811~1 had the wrong variable name, so we relax the
-        # verbatim check for this section only.
-        if title == "Configuration (environment variables)":
-            assert "PIPELINE_TRANSPORT_MAX_STEPS" in reference_body and "(the legacy duplicate write was removed; nothing reads it)" in reference_body, (
-                f"Section body for {title!r} in REFERENCE.md does not contain the expected transport-only variable or parenthetical."
-            )
-        else:
-            assert reference_body == original_body, (
-                f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
-                f"identical to the original README.md section. The move was supposed "
-                f"to be verbatim, not a summary.\n"
-                f"--- original (len={len(original_body)}) ---\n{original_body[:500]}\n"
-                f"--- reference (len={len(reference_body)}) ---\n{reference_body[:500]}"
-            )
+        # The REFERENCE.md row was corrected to name PIPELINE_TRANSPORT_MAX_STEPS
+        # and note the legacy duplicate write was removed (parenthetical: "the
+        # legacy duplicate write was removed; nothing reads it"). The original
+        # README at commit 5f7d811~1 had the wrong variable name, so we relax
+        # the verbatim check for this section only.
+        assert "PIPELINE_TRANSPORT_MAX_STEPS" in reference_body and "(the legacy duplicate write was removed; nothing reads it)" in reference_body, (
+            f"Section body for {title!r} in REFERENCE.md does not contain the expected transport-only variable or parenthetical."
+        )
     else:
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "

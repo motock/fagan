@@ -86,6 +86,17 @@ def _build_dispatch_command(
             f"step=<short id>, summary=<what you did>, next_hint=<what to do "
             f"next>) so your progress is resumable if you are interrupted.\n\n"
         )
+    no_wakeup_instruction = (
+        "You are running as a one-shot headless session: there is no external "
+        "harness that will ever revisit a ScheduleWakeup or resume you after a "
+        "background task finishes. Do not call ScheduleWakeup (it is disabled) "
+        "and do not launch a long-running command in the background and end "
+        "your turn to \"wait for it to notify you\" — that notification will "
+        "never arrive, the command gets killed when this process exits, and "
+        "your work is lost uncommitted. Run commands synchronously (wait for "
+        "them to finish in this same turn) and do not end your turn until your "
+        "work is committed.\n\n"
+    )
     rework_instruction = ""
     if review_feedback:
         rework_instruction = (
@@ -105,6 +116,7 @@ def _build_dispatch_command(
             f"Continue from here: {next_hint}\n\n"
             f"{rework_instruction}"
             f"{checkpoint_instruction}"
+            f"{no_wakeup_instruction}"
             f"When finished, commit your work, push the branch, and exit."
         )
     else:
@@ -113,6 +125,7 @@ def _build_dispatch_command(
             f"{story.get('agent_instructions', '')}\n\n"
             f"{rework_instruction}"
             f"{checkpoint_instruction}"
+            f"{no_wakeup_instruction}"
             f"When finished, commit your work, push the branch, and exit."
         )
     model = (

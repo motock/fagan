@@ -323,6 +323,15 @@ class ClaudeCliDriver:
             cmd += ["--append-system-prompt", system]
         if allowed_tools:
             cmd += ["--allowedTools", allowed_tools]
+        # This is a one-shot headless subprocess with no external harness to
+        # ever revisit a scheduled wakeup - ScheduleWakeup's "the harness
+        # re-invokes you later" contract is meaningless here and, if the
+        # agent defers to it and ends its turn, the process just exits and
+        # any pending background task is orphaned/killed with no commit ever
+        # landing (observed live 2026-08-07, 4 identical rework parks on
+        # story 4bfcc3b4). Block it outright rather than relying on the
+        # prompt alone.
+        cmd += ["--disallowedTools", "ScheduleWakeup"]
         with open(log_path, "a" if append else "w") as log_file:
             proc = subprocess.Popen(
                 cmd, cwd=cwd, env=_first_party_claude_env(),

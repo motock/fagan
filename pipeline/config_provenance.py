@@ -249,16 +249,18 @@ def resolve_env_var(
         conflict = plist_val != mcp_val
 
     if env_val is not None:
-        source = "process_env"
-    elif plist_val is not None:
-        source = "launchd_plist"
-    elif mcp_val is not None:
-        source = "mcp_server_env"
-    else:
-        source = "code_default"
+        # Resolve source priority: launchd_plist > process_env > mcp_server_env > code_default
+        if plist_val is not None and plist_val == effective:
+            source = "launchd_plist"
+        elif env_val is not None and env_val == effective:
+            source = "process_env"
+        elif mcp_val is not None and mcp_val == effective:
+            source = "mcp_server_env"
+        else:
+            source = "code_default"
 
     restart_required = source != "code_default"
-    effective = env_val if env_val is not None else plist_val if plist_val is not None else mcp_val if mcp_val is not None else default
+    effective = plist_val if plist_val is not None else env_val if env_val is not None else mcp_val if mcp_val is not None else default
     masked = _is_secret(name) and effective is not None
     value_to_use = "***" if masked else effective
 

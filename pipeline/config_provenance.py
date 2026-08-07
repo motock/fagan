@@ -16,12 +16,12 @@ view, so there is exactly one definition - a second copy would drift.
 
 from __future__ import annotations
 
+from dataclasses import dataclass  # noqa: I001
 import json
 import os
 import pathlib
 import plistlib
 import xml.parsers.expat
-
 Path = pathlib.Path
 
 # The six transport-only env vars that backend.py overwrites on every dispatch.
@@ -177,3 +177,130 @@ def read_mcp_server_env(path: Path | None = None, server_name: str = "pipeline")
     return {k: str(v) for k, v in env_block.items()}
 
 # End of module.
+
+
+@dataclass(frozen=True)
+class EnvVarSpec:
+    name: str
+    default: str | None
+
+ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
+    # Config file env vars
+    EnvVarSpec("PIPELINE_AUTONOMY", "gated"),
+    EnvVarSpec("PIPELINE_RISK_THRESHOLD", "low"),
+    EnvVarSpec("PIPELINE_DEFAULT_MODEL", "sonnet"),
+    EnvVarSpec("PIPELINE_PAUSE_THRESHOLD", "90"),
+    EnvVarSpec("PIPELINE_RESUME_THRESHOLD", "70"),
+    EnvVarSpec("PIPELINE_WEEK_PAUSE_THRESHOLD", "90"),
+    EnvVarSpec("PIPELINE_WEEK_RESUME_THRESHOLD", "70"),
+    EnvVarSpec("PIPELINE_USAGE_STALE_AFTER_SECONDS", "1800"),
+    EnvVarSpec("PIPELINE_DAILY_REQUEST_THRESHOLD", "3000"),
+    EnvVarSpec("PIPELINE_WEEKLY_REQUEST_THRESHOLD", "15000"),
+    EnvVarSpec("USAGE_BLIND_PAUSE_AFTER_SECONDS", None),
+    EnvVarSpec("USAGE_BLIND_LOG_INTERVAL", "60"),
+    EnvVarSpec("MAX_CONCURRENT_AGENTS", "3"),
+    EnvVarSpec("MERGE_MAX_ATTEMPTS", "3"),
+    EnvVarSpec("DISPATCH_MAX_ATTEMPTS", "3"),
+    EnvVarSpec("PIPELINE_DISPATCH_STARTUP_GRACE_SECONDS", "90"),
+    EnvVarSpec("PIPELINE_DISPATCH_WATCHDOG_SECONDS", "3600"),
+    EnvVarSpec("PIPELINE_STEP_CAP_FALLBACK_THRESHOLD", "3"),
+    EnvVarSpec("PIPELINE_INFRA_FAILURE_FALLBACK_THRESHOLD", "3"),
+    EnvVarSpec("PIPELINE_LOCAL_MAX_RISK", "low"),
+    EnvVarSpec("REWORK_MAX_ATTEMPTS", "3"),
+    EnvVarSpec("REWORK_MAX_ATTEMPTS_ORACLE", "1"),
+    EnvVarSpec("REWORK_MAX_ATTEMPTS_ESCALATED", "3"),
+    EnvVarSpec("REVIEW_INCONCLUSIVE_MAX", "2"),
+    EnvVarSpec("PLANE_MAX_ATTEMPTS", "3"),
+    EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX", "0"),
+    EnvVarSpec("REVIEWER_AUTO_FIX_MAX_FILES", "1"),
+    EnvVarSpec("REVIEWER_AUTO_FIX_MAX_LINES", "40"),
+    # Extra transport-only env vars
+    EnvVarSpec("PIPELINE_BACKEND_DISPATCH", "claude"),
+    EnvVarSpec("PIPELINE_LOCAL_PROVIDER", "ollama"),
+    EnvVarSpec("PIPELINE_LOCAL_MAX_STEPS", "40"),
+    EnvVarSpec("PIPELINE_LOCAL_NUM_CTX", "16384"),
+    EnvVarSpec("PIPELINE_LOCAL_TEMPERATURE", "0.3"),
+    EnvVarSpec("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b"),
+)
+
+def _is_secret(name: str) -> bool:
+    return any(sub in name for sub in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))
+
+def resolve_env_var(
+    name: str,
+    default: str | None = None,
+    *,
+    environ: dict[str, str] | None = None,
+    plist_env: dict[str, str] | None = None,
+    mcp_env: dict[str, str] | None = None,
+) -> dict[str, object]:
+    if environ is None:
+        environ = os.environ
+    if plist_env is None:
+        plist_env = read_plist_env()
+    if mcp_env is None:
+        mcp_env = read_mcp_server_env()
+    env_val = environ.get(name)
+    plist_val = plist_env.get(name)
+    mcp_val = mcp_env.get(name)
+
+    conflict = False
+    if plist_val is not None and mcp_val is not None:
+        conflict = plist_val != mcp_val
+
+    if env_val is not None:
+        if (plist_val is not None and env_val != plist_val) or (mcp_val is not None and env_val != mcp_val):
+            source = "process_env"
+        else:
+            source = "launchd_plist"
+    elif plist_val is not None:
+        source = "launchd_plist"
+    elif mcp_val is not None:
+        source = "mcp_server_env"
+    else:
+        source = "code_default"
+
+    restart_required = source != "code_default"
+    effective = env_val if env_val is not None else plist_val if plist_val is not None else mcp_val if mcp_val is not None else default
+    masked = _is_secret(name) and effective is not None
+    value_to_use = "***" if masked else effective
+
+    layers: list[dict[str, object]] = []
+    if env_val is not None:
+        layers.append({"layer": "process_env", "value": ("***" if masked else env_val), "restart_required": True})
+    if plist_val is not None:
+        layers.append({"layer": "launchd_plist", "value": ("***" if masked else plist_val), "restart_required": True})
+    if mcp_val is not None:
+        layers.append({"layer": "mcp_server_env", "value": ("***" if masked else mcp_val), "restart_required": True})
+    layers.append({"layer": "code_default", "value": ("***" if masked else default), "restart_required": False})
+
+    return {
+        "name": name,
+        "effective": value_to_use,
+        "source": source,
+        "restart_required": restart_required,
+        "conflict": conflict,
+        "masked": masked,
+        "layers": layers,
+    }
+
+def effective_env_config(
+    *,
+    environ: dict[str, str] | None = None,
+    plist_env: dict[str, str] | None = None,
+    mcp_env: dict[str, str] | None = None,
+) -> list[dict[str, object]]:
+    if environ is None:
+        environ = os.environ
+    if plist_env is None:
+        plist_env = read_plist_env()
+    if mcp_env is None:
+        mcp_env = read_mcp_server_env()
+    return sorted(
+        [
+            resolve_env_var(spec.name, spec.default, environ=environ, plist_env=plist_env, mcp_env=mcp_env)
+            for spec in ENV_VAR_CATALOG
+        ],
+        key=lambda r: r["name"],
+    )
+

@@ -127,24 +127,190 @@ def _message_char_len(m: dict) -> int:
     return n
 
 
-def _trim_resumed_transcript(messages: list, max_chars: int) -> list:
-    """Bound a resumed transcript to max_chars, dropping the oldest middle
-    content when it would otherwise overflow the model's context window.
+def _total_chars(messages) -> int:
+    """Total character weight of a transcript. The trim path compares this
+    rather than len(messages): the tool-output eviction tier shrinks a
+    transcript substantially without changing its message count, so a
+    length-based "did the trim help?" test silently discards its result."""
+    return sum(_message_char_len(m) for m in messages)
 
-    Always preserves the original system+task head (messages[:2] - the
-    resumed transcript's first two entries) and works backward from the end
-    to keep as much recent activity as fits, so the model still has its most
-    recent progress to continue from. Content is dropped in whole blocks (an
-    assistant message plus any tool-role messages immediately following it,
-    which are that call's results) so a tool_calls message is never split
-    from its own tool response - either both survive or both are dropped.
-    When anything is dropped, a synthetic user note is inserted between the
-    head and the surviving tail explaining what happened, so the model isn't
-    confused by a discontinuity in its own history.
+
+# Tool-output eviction (tier 1 of the trim). Nearly all of a transcript's
+# bytes are tool-role output (a `git diff`, a file view, a test log) while
+# nearly all of its MEANING is in the short assistant turns that decided to
+# make those calls. Dropping whole blocks therefore throws away the agent's
+# decision history to reclaim bytes that were mostly log noise. Claude Code's
+# /compact does the same thing in the same order ("clears older tool outputs
+# first, then summarizes the conversation if needed").
+#
+# _EVICT_HEAD_CHARS keeps each evicted output's opening span rather than
+# blanking it: the signal in a tool result is at the FRONT ("ERROR: content
+# for rate_limiter.py has invalid Python syntax at line 106"), and that one
+# line is the difference between an agent that retries the write correctly
+# and one that re-derives the failure from scratch.
+_EVICT_HEAD_CHARS = int(os.environ.get("LOCAL_AGENT_EVICT_HEAD_CHARS", "240"))
+# The newest outputs are what the model is actually acting on this turn;
+# evicting those would break the very next decision. Eviction runs oldest-first
+# and never touches this many trailing tool messages.
+_EVICT_KEEP_RECENT = int(os.environ.get("LOCAL_AGENT_EVICT_KEEP_RECENT", "4"))
+
+# Static allowlist of test-runner command prefixes, used only to locate the
+# last test result in a span being dropped. Deliberately a fixed list rather
+# than runtime language detection, matching the rest of the harness.
+# Hard cap on the digest note; it must never cost more than the span it
+# replaces, or the trim becomes a net expansion and is discarded.
+_DIGEST_MAX_CHARS = int(os.environ.get("LOCAL_AGENT_DIGEST_MAX_CHARS", "600"))
+
+_TEST_COMMAND_MARKERS = (
+    "pytest", "npm test", "yarn test", "cargo test", "go test",
+    "mvn test", "gradlew test", "gradle test", "make test", "unittest",
+)
+
+
+def _evict_tool_outputs(messages: list, max_chars: int) -> list:
+    """Shrink `messages` toward max_chars by truncating tool-role content,
+    oldest first, without removing any message. Returns a new list; the
+    original dicts are never mutated (they are the live, persisted
+    transcript). Stops as soon as the total fits."""
+    total = sum(_message_char_len(m) for m in messages)
+    if total <= max_chars:
+        return messages
+
+    tool_idxs = [i for i, m in enumerate(messages)
+                 if i >= 2 and m.get("role") == "tool"]
+    # _EVICT_KEEP_RECENT is a SOFT preference, not a floor: pass 1 spares the
+    # newest outputs, and pass 2 reaches them only if the budget still isn't
+    # met. A hard floor would hand control to the block-dropping tier while
+    # recoverable bytes were still sitting in tool output - and a truncated
+    # recent result is strictly better than a dropped assistant decision,
+    # since eviction keeps the result's leading span either way.
+    older = tool_idxs[:-_EVICT_KEEP_RECENT] if _EVICT_KEEP_RECENT else tool_idxs
+    recent = tool_idxs[len(older):]
+
+    out = list(messages)
+    for i in list(older) + list(recent):
+        if total <= max_chars:
+            break
+        original = str(out[i].get("content") or "")
+        if len(original) <= _EVICT_HEAD_CHARS:
+            continue
+        replacement = (
+            original[:_EVICT_HEAD_CHARS]
+            + f"\n[... {len(original) - _EVICT_HEAD_CHARS} chars of this tool "
+              "output evicted to fit the context window ...]"
+        )
+        out[i] = {**out[i], "content": replacement}
+        total -= len(original) - len(replacement)
+    return out
+
+
+def _tool_call_pairs(message: dict):
+    """Yield (tool_name, args_dict) for each well-formed call on `message`."""
+    for tc in (message.get("tool_calls") or []):
+        fn = tc.get("function") or {}
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        if isinstance(args, dict) and fn.get("name"):
+            yield fn["name"], args
+
+
+def _strip_eviction_marker(text: str) -> str:
+    """Drop the trailing "[... N chars ... evicted ...]" note left by
+    _evict_tool_outputs. The digest reads blocks AFTER eviction has run, so
+    without this the last-test-result line reports the marker itself instead
+    of the failure summary it is supposed to surface."""
+    head, sep, tail = text.rpartition("\n[... ")
+    if sep and "evicted to fit the context window" in tail:
+        return head.strip()
+    return text.strip()
+
+
+def _dropped_span_digest(blocks: list) -> str:
+    """A factual digest of what happened in the blocks being dropped.
+
+    Deterministic and evidence-only: every line is read straight off the
+    span's own tool calls and results, so unlike an LLM summary it cannot
+    invent a file or claim a passing suite that actually errored. A live
+    comparison on 2026-08-07 had a local model assert "0 errors (all tests
+    pass)" for a span whose test run had in fact failed to collect and whose
+    file writes had all been rejected for invalid syntax - which is why this
+    tier is mechanical rather than generated. Sections with no evidence are
+    omitted entirely rather than filled with a guess.
+    """
+    written: list[str] = []
+    commands: list[str] = []
+    last_test: str | None = None
+
+    flat = [m for block in blocks for m in block]
+    for idx, m in enumerate(flat):
+        for name, args in _tool_call_pairs(m):
+            path = args.get("path")
+            if name in ("create_file", "str_replace", "replace_lines") and path:
+                if path not in written:
+                    written.append(path)
+            elif name == "bash" and args.get("command"):
+                command = str(args["command"])
+                commands.append(command)
+                if any(marker in command for marker in _TEST_COMMAND_MARKERS):
+                    for follower in flat[idx + 1:]:
+                        if follower.get("role") != "tool":
+                            break
+                        last_test = _strip_eviction_marker(
+                            str(follower.get("content") or ""))[-200:]
+                        break
+
+    lines = []
+    if written:
+        lines.append("Files already modified in the dropped span: "
+                     + ", ".join(written))
+    if commands:
+        lines.append(f"Shell commands already run there: {len(commands)}"
+                     f" (most recent: {commands[-1][:120]})")
+    if last_test:
+        lines.append(f"Last test result seen there: {last_test}")
+    digest = "\n".join(lines)
+    return digest[:_DIGEST_MAX_CHARS]
+
+
+def _trim_resumed_transcript(messages: list, max_chars: int) -> list:
+    """Bound a resumed transcript to max_chars when it would otherwise
+    overflow the model's context window.
+
+    Two tiers, cheapest first (see _evict_tool_outputs for why this order):
+
+    1. Evict older tool-role OUTPUT down to its leading span, keeping every
+       assistant decision intact. Most transcripts fit again after this, and
+       the agent keeps its full history of what it chose to do and why.
+    2. Only if that is still not enough, drop whole blocks from the oldest.
+
+    Tier 2 always preserves the original system+task head (messages[:2]) and
+    works backward from the end to keep as much recent activity as fits.
+    Content is dropped in whole blocks (an assistant message plus any
+    tool-role messages immediately following it, which are that call's
+    results) so a tool_calls message is never split from its own tool
+    response - either both survive or both are dropped. When anything is
+    dropped, a synthetic user note carrying _dropped_span_digest's factual
+    summary of the dropped span is inserted between the head and the
+    surviving tail, so the model isn't confused by a discontinuity in its own
+    history and doesn't re-derive facts that were already established.
     """
     total = sum(_message_char_len(m) for m in messages)
     if total <= max_chars:
         return messages
+
+    evicted = _evict_tool_outputs(messages, max_chars)
+    evicted_total = sum(_message_char_len(m) for m in evicted)
+    if evicted_total <= max_chars:
+        print(f"[local_agent] CONTEXT EVICTED: truncated older tool output "
+              f"({total} -> {evicted_total} chars); all assistant turns kept",
+              flush=True)
+        return evicted
+    messages = evicted
+    total = evicted_total
 
     head_len = min(2, len(messages))
     head = messages[:head_len]
@@ -175,17 +341,21 @@ def _trim_resumed_transcript(messages: list, max_chars: int) -> list:
     if dropped == 0:
         return messages
 
-    note = {
-        "role": "user",
-        "content": (
-            f"[{dropped} earlier turn(s) were dropped from this transcript to "
-            "fit the model's context window. Continue the task using only "
-            "the history below - do not assume anything happened that isn't "
-            "shown here.]"
-        ),
-    }
+    digest = _dropped_span_digest(blocks[:len(blocks) - len(kept)])
+    note_text = (
+        f"[{dropped} earlier turn(s) were dropped from this transcript to "
+        "fit the model's context window. Continue the task using only "
+        "the history below - do not assume anything happened that isn't "
+        "shown here.]"
+    )
+    if digest:
+        note_text += (
+            "\n[Established facts from the dropped turns, recorded directly "
+            "from what was run - treat these as already done:\n" + digest + "]"
+        )
+    note = {"role": "user", "content": note_text}
     print(f"[local_agent] RESUME TRIMMED: dropped {dropped} block(s) "
-          f"({total} -> {head_chars + kept_chars + len(note['content'])} chars) "
+          f"({total} -> {head_chars + kept_chars + len(note_text)} chars) "
           "to fit the context budget", flush=True)
     return head + [note] + [m for block in kept for m in block]
 
@@ -833,11 +1003,33 @@ def _provider_chat_turn(messages):
     dispatch wall-clock budget) rather than a per-chunk silence timeout.
     Returns just the assembled message dict — the same shape
     _stream_one_turn returns — so chat()/main() work unchanged regardless of
-    which provider is active."""
+    which provider is active.
+
+    Records prompt_eval_count/calibration the same way _stream_one_turn does.
+    This return shape stays the bare message, but the usage fields must NOT be
+    discarded: both LMStudioProvider.chat and MLXProvider.chat already map the
+    OpenAI `usage` block into prompt_eval_count, and dropping it left
+    _last_prompt_eval_count permanently None on those providers — which is the
+    condition main()'s proactive trim is gated on, so the primary overflow
+    defense never fired at all outside Ollama (2026-08-07 audit).
+    """
+    global _measured_chars_per_token, _last_prompt_eval_count
     envelope = inference_providers.get_local_provider().chat(
         messages, model=MODEL, num_ctx=NUM_CTX, temperature=TEMPERATURE,
         tools=TOOLS, endpoint=ENDPOINT, timeout=TIMEOUT,
     )
+    prompt_eval_count = envelope.get("prompt_eval_count")
+    if prompt_eval_count:
+        _last_prompt_eval_count = prompt_eval_count
+        # Same numerator as _stream_one_turn: the tools schema is part of
+        # every prompt and is counted in prompt_eval_count, so it belongs in
+        # the chars total too.
+        sent_chars = (
+            sum(_message_char_len(m) for m in messages)
+            + len(json.dumps(TOOLS))
+        )
+        if sent_chars > 0:
+            _measured_chars_per_token = sent_chars / prompt_eval_count
     return envelope["message"]
 
 
@@ -1733,27 +1925,98 @@ def safe_run_tool(fn, args) -> str:
         return msg
 
 
+# Substrings that identify a context-overflow rejection in an error body.
+# Ollama/llama.cpp signal overflow with a bare 500 (no useful body), but the
+# OpenAI-compatible servers reject it as a 400 with one of these: LM Studio
+# emits the prose form ("Trying to keep the first N tokens when context the
+# overflows. However, the model is loaded with context length of only ..."),
+# while the standard OpenAI error shape uses the `context_length_exceeded`
+# code. Both were being swallowed by the `status_code < 500` fast path, which
+# treats every 4xx as an unretryable bad request - so on LM Studio the one
+# remedy that would actually have worked (trimming) was skipped precisely
+# because the server reported the problem accurately.
+_OVERFLOW_BODY_MARKERS = (
+    "context_length_exceeded",
+    "context length",
+    "context window",
+    "context the overflows",
+    "maximum context",
+    "too many tokens",
+    "prompt is too long",
+)
+
+
+def _is_context_overflow_error(exc) -> bool:
+    """True when `exc` looks like a context-window overflow rather than a
+    malformed request. Any 5xx qualifies (Ollama/llama.cpp return 500 for
+    overflow and give no body to inspect); a 4xx qualifies only when its body
+    carries an explicit overflow marker, so a genuinely bad request still
+    fails fast instead of burning the escalation budget."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return False
+    status = response.status_code
+    if status >= 500:
+        return True
+    if status not in (400, 413, 422):
+        return False
+    try:
+        body = (response.text or "").lower()
+    except Exception:  # noqa: BLE001 (a streamed/unread body is simply unavailable here)
+        return False
+    return any(marker in body for marker in _OVERFLOW_BODY_MARKERS)
+
+
+# Backoff between escalation rounds. The pre-2026-08-07 helper fired all its
+# rounds back-to-back with no pause at all, which is the worst possible
+# response when the 500 is load-induced (memory pressure, a model reload,
+# concurrent agents) rather than an overflow.
+RECOVERY_BACKOFF_SECONDS = float(
+    os.environ.get("LOCAL_AGENT_RECOVERY_BACKOFF_SECONDS", "2"))
+# (context fraction, backoff multiplier) per round, in order.
+_RECOVERY_ROUNDS = ((0.75, 1), (0.50, 3), (0.30, 6))
+
+
 def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
-    """Recover from a 5xx on an oversized transcript by retrying with an
-    escalating (shrinking) context budget before giving up. A single trim-retry
-    can also 500 on a still-oversized payload, so shrink harder each round.
-    Returns the assistant message dict on success, or None if every round fails
-    (caller gives up). Mutates ``messages`` in place. Bounded: 3 budgets."""
-    print(f"[step {step}] 5xx after {CHAT_MAX_ATTEMPTS} attempts with an "
-          f"oversized transcript; escalating trim and retrying", flush=True)
-    for fraction in (0.75, 0.50, 0.30):
+    """Recover from a backend error on an oversized transcript by retrying
+    with an escalating (shrinking) context budget before giving up. A single
+    trim-retry can also fail on a still-oversized payload, so shrink harder
+    each round, and pause between rounds so a load-induced failure gets time
+    to clear. Returns the assistant message dict on success, or None if every
+    round fails (caller gives up). Mutates ``messages`` in place. Bounded:
+    3 rounds.
+
+    When the trim cannot shrink the payload the request is retried UNCHANGED
+    rather than abandoned. An unshrinkable payload is positive evidence that
+    the failure was not an overflow at all - which is exactly the case where
+    waiting works. The old code returned None here, which is how a transient
+    Ollama 500 killed a ~95%-complete converging run on 2026-07-30.
+    """
+    print(f"[step {step}] backend error after {CHAT_MAX_ATTEMPTS} attempts on a "
+          f"large transcript; escalating trim and retrying (with backoff)",
+          flush=True)
+    for fraction, backoff_mult in _RECOVERY_ROUNDS:
         budget_chars = int(NUM_CTX * _effective_chars_per_token() * fraction)
         trimmed = _trim_resumed_transcript(messages, budget_chars)
-        if len(trimmed) == len(messages):
-            return None  # trim could not shrink the payload; nothing more to do
-        messages[:] = trimmed
+        # Compare CHARS, not message count: the eviction tier shrinks payload
+        # without removing any message, so a length test reports "no change"
+        # for a trim that in fact reclaimed most of the transcript.
+        if _total_chars(trimmed) < _total_chars(messages):
+            messages[:] = trimmed
+        else:
+            # Could not shrink - so this very likely isn't an overflow. Wait
+            # it out instead of giving up; the payload goes back unchanged.
+            print(f"[step {step}] transcript could not be shrunk further; "
+                  f"treating as a transient fault and retrying after backoff",
+                  flush=True)
+        time.sleep(RECOVERY_BACKOFF_SECONDS * backoff_mult)
         try:
             return chat_fn(messages)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code < 500:
-                raise  # only 5xx is escalation-worthy; propagate 4xx and others
-            continue  # 5xx: shrink harder on the next smaller budget
-    return None  # all budgets exhausted on a persistent 5xx
+            if not _is_context_overflow_error(e):
+                raise  # a real bad request - propagate rather than retry
+            continue  # overflow-shaped: shrink harder on the next round
+    return None  # all rounds exhausted on a persistent failure
 
 
 def _answer_orphaned_calls(tcs: list, from_idx: int, messages: list) -> None:
@@ -1897,11 +2160,16 @@ def main() -> int:
         try:
             m = chat(messages)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code < 500:
+            if not _is_context_overflow_error(e):
                 print(f"[step {step}] LLM call failed: {e}", flush=True)
                 if worktree_dirty():
                     auto_wip_commit("llm error")
                 return 1
+            # Classified by BODY, not just status: LM Studio rejects an
+            # oversized prompt with a 400, which the old `status_code < 500`
+            # test treated as an unretryable bad request and died on - skipping
+            # the trim escalation that is the actual remedy. Ollama/llama.cpp
+            # 500s still route here exactly as before.
             # A 5xx that survived chat()'s own CHAT_MAX_ATTEMPTS retries is
             # very likely a context-window overflow (Ollama/llama.cpp returns
             # 500 rather than a clean 4xx for this), not a transient fault.
@@ -1952,7 +2220,7 @@ def main() -> int:
         ):
             budget_chars = int(NUM_CTX * _effective_chars_per_token() * 0.75)
             trimmed = _trim_resumed_transcript(messages, budget_chars)
-            if len(trimmed) != len(messages):
+            if _total_chars(trimmed) < _total_chars(messages):
                 print(f"[step {step}] measured prompt_eval_count="
                       f"{_last_prompt_eval_count} >= {PROACTIVE_TRIM_THRESHOLD:.0%} of "
                       f"NUM_CTX={NUM_CTX}; trimming proactively", flush=True)

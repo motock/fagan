@@ -14,14 +14,15 @@ by the backend at import time (to warn operators) and by the effective-config
 view, so there is exactly one definition - a second copy would drift.
 """
 
-from __future__ import annotations
-
-from dataclasses import dataclass  # noqa: I001
 import json
 import os
 import pathlib
 import plistlib
 import xml.parsers.expat
+
+
+from dataclasses import dataclass
+
 Path = pathlib.Path
 
 # The six transport-only env vars that backend.py overwrites on every dispatch.
@@ -249,10 +250,7 @@ def resolve_env_var(
         conflict = plist_val != mcp_val
 
     if env_val is not None:
-        if (plist_val is not None and env_val != plist_val) or (mcp_val is not None and env_val != mcp_val):
-            source = "process_env"
-        else:
-            source = "launchd_plist"
+        source = "process_env"
     elif plist_val is not None:
         source = "launchd_plist"
     elif mcp_val is not None:

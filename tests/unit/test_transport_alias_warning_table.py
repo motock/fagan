@@ -296,21 +296,23 @@ def test_backend_source_still_writes_other_local_agent_env_keys():
 
 
 def test_backend_source_warning_table_still_lists_legacy_pairs():
-    """Source-level guard: the module-load operator-warning table near the top
-    of app/backend.py must still contain the three (legacy, real) pairs. The
-    story is explicit that this table is separate, still valid, and must not be
-    touched or removed."""
-    src = _backend_source()
+    """Semantic guard: the module-load operator-warning table must still cover
+    the three legacy (old, real) pairs, wherever the canonical list now lives.
+    Originally a source-level grep of app/backend.py's own text; updated
+    2026-08-07 (w3a-effective-config-provenance, story f7fd39c4) when the
+    canonical (legacy, real) pairs moved to a single shared definition,
+    `pipeline.config_provenance.IGNORED_ENV_VARS`, imported by app/backend.py
+    rather than duplicated inline - the guard's real intent (don't lose these
+    pairs) is preserved by checking the pairs are still present on the
+    object app/backend.py actually iterates, not by grepping raw source text
+    that no longer contains them by design."""
     for old, real in (
         ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
         ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
         ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
     ):
-        assert f'"{old}"' in src, (
-            f"warning table must still list legacy var {old}"
-        )
-        assert f'"{real}"' in src, (
-            f"warning table must still list real knob {real}"
+        assert (old, real) in b.IGNORED_ENV_VARS, (
+            f"warning table must still cover legacy pair ({old}, {real})"
         )
 
 

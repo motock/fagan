@@ -14,12 +14,12 @@ by the backend at import time (to warn operators) and by the effective-config
 view, so there is exactly one definition - a second copy would drift.
 """
 
-from dataclasses import dataclass
 import json
 import os
 import pathlib
 import plistlib
 import xml.parsers.expat
+from dataclasses import dataclass
 
 Path = pathlib.Path
 
@@ -195,44 +195,26 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     EnvVarSpec("PIPELINE_USAGE_STALE_AFTER_SECONDS", "1800"),
     EnvVarSpec("PIPELINE_DAILY_REQUEST_THRESHOLD", "3000"),
     EnvVarSpec("PIPELINE_WEEKLY_REQUEST_THRESHOLD", "15000"),
-    EnvVarSpec("USAGE_BLIND_PAUSE_AFTER_SECONDS", None),
+    EnvVarSpec("USAGE_BLIND_PAUSE_AFTER_SECONDS", "21600"),
     EnvVarSpec("USAGE_BLIND_LOG_INTERVAL", "60"),
-    EnvVarSpec("MAX_CONCURRENT_AGENTS", "3"),
-    EnvVarSpec("MERGE_MAX_ATTEMPTS", "3"),
-    EnvVarSpec("DISPATCH_MAX_ATTEMPTS", "3"),
+    EnvVarSpec("PIPELINE_MAX_CONCURRENT_AGENTS", "3"),
+    EnvVarSpec("PIPELINE_MERGE_MAX_ATTEMPTS", "3"),
+    EnvVarSpec("PIPELINE_DISPATCH_MAX_ATTEMPTS", "3"),
     EnvVarSpec("PIPELINE_DISPATCH_STARTUP_GRACE_SECONDS", "90"),
     EnvVarSpec("PIPELINE_DISPATCH_WATCHDOG_SECONDS", "3600"),
     EnvVarSpec("PIPELINE_STEP_CAP_FALLBACK_THRESHOLD", "3"),
     EnvVarSpec("PIPELINE_INFRA_FAILURE_FALLBACK_THRESHOLD", "3"),
     EnvVarSpec("PIPELINE_LOCAL_MAX_RISK", "low"),
-    EnvVarSpec("REWORK_MAX_ATTEMPTS", "3"),
-    EnvVarSpec("REWORK_MAX_ATTEMPTS_ORACLE", "1"),
-    EnvVarSpec("REWORK_MAX_ATTEMPTS_ESCALATED", "3"),
-    EnvVarSpec("REVIEW_INCONCLUSIVE_MAX", "2"),
-    EnvVarSpec("PLANE_MAX_ATTEMPTS", "3"),
-    EnvVarSpec("PIPELINE_AUTONOMY", "gated"),
-    EnvVarSpec("PIPELINE_RISK_THRESHOLD", "low"),
-    EnvVarSpec("DEFAULT_MODEL", "sonnet"),
-    EnvVarSpec("SESSION_PAUSE_THRESHOLD", "90"),
-    EnvVarSpec("SESSION_RESUME_THRESHOLD", "70"),
-    EnvVarSpec("WEEK_PAUSE_THRESHOLD", "90"),
-    EnvVarSpec("WEEK_RESUME_THRESHOLD", "70"),
-    EnvVarSpec("USAGE_STALE_AFTER_SECONDS", "1800"),
-    EnvVarSpec("DAILY_REQUEST_THRESHOLD", "3000"),
-    EnvVarSpec("WEEKLY_REQUEST_THRESHOLD", "15000"),
-    EnvVarSpec("USAGE_BLIND_PAUSE_AFTER_SECONDS", "21600"),
-    EnvVarSpec("USAGE_BLIND_LOG_INTERVAL", "60"),
-    EnvVarSpec("MAX_CONCURRENT_AGENTS", "3"),
-    EnvVarSpec("MERGE_MAX_ATTEMPTS", "3"),
-    EnvVarSpec("DISPATCH_MAX_ATTEMPTS", "3"),
-    EnvVarSpec("DISPATCH_STARTUP_GRACE_SECONDS", "90"),
-    EnvVarSpec("DISPATCH_WATCHDOG_SECONDS", "3600"),
-    EnvVarSpec("INFRA_FAILURE_FALLBACK_THRESHOLD", "3"),
-    EnvVarSpec("PIPELINE_LOCAL_MAX_RISK", "low"),
-    EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX", "False"),
-    EnvVarSpec("REVIEWER_AUTO_FIX_MAX_FILES", "1"),
-    EnvVarSpec("REVIEWER_AUTO_FIX_MAX_LINES", "40"),
-    # Extra transport-only env vars
+    EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS", "3"),
+    EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE", "1"),
+    EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED", "3"),
+    EnvVarSpec("PIPELINE_REVIEW_INCONCLUSIVE_MAX", "2"),
+    EnvVarSpec("PIPELINE_PLANE_MAX_ATTEMPTS", "3"),
+    # Reviewer auto-fix vars
+    EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX", "0"),
+    EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX_MAX_FILES", "1"),
+    EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX_MAX_LINES", "40"),
+    # Extra vars
     EnvVarSpec("PIPELINE_BACKEND_DISPATCH", "claude"),
     EnvVarSpec("PIPELINE_LOCAL_PROVIDER", "ollama"),
     EnvVarSpec("PIPELINE_LOCAL_MAX_STEPS", "40"),

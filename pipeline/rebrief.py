@@ -40,9 +40,14 @@ def collect_failure_evidence(worktree, story: dict[str, Any], limit: int = 6000)
     yield a valid (possibly minimal) string."""
     sections = [f"STORY: {story.get('summary', '?')}"]
 
-    last_error = (story.get("last_test_check") or {}).get("error")
+    last_test_check = story.get("last_test_check") or {}
+    last_error = last_test_check.get("error")
     if last_error:
         sections.append(f"LAST TEST FAILURE:\n{last_error}")
+    elif last_test_check.get("returncode") not in (None, 0):
+        tail = (last_test_check.get("stdout_tail") or "") + (last_test_check.get("stderr_tail") or "")
+        if tail.strip():
+            sections.append(f"LAST TEST FAILURE (rc={last_test_check['returncode']}):\n{tail}")
 
     try:
         log_path = Path(worktree) / "agent.log"

@@ -45,3 +45,58 @@ def test_last_test_output_is_included_when_present(tmp_path):
     wt = _worktree(tmp_path, "boom")
     story = {"summary": "s", "last_test_check": {"error": "E   assert 3 == 4"}}
     assert "assert 3 == 4" in collect_failure_evidence(wt, story)
+
+
+def test_last_test_failure_falls_back_to_stdout_stderr_tail_when_no_error_key(tmp_path):
+    wt = _worktree(tmp_path, "boom")
+    story = {
+        "summary": "s",
+        "last_test_check": {
+            "returncode": 1,
+            "stdout_tail": "FAILED tests/test_x.py::test_y - AssertionError: expected 3 got 4",
+            "stderr_tail": "",
+        },
+    }
+    assert "AssertionError: expected 3 got 4" in collect_failure_evidence(wt, story)
+
+
+def test_passing_last_test_check_is_not_reported_as_a_failure(tmp_path):
+    wt = _worktree(tmp_path, "boom")
+    story = {
+        "summary": "s",
+        "last_test_check": {"returncode": 0, "stdout_tail": "5 passed", "stderr_tail": ""},
+    }
+    evidence = collect_failure_evidence(wt, story)
+    assert "5 passed" not in evidence
+    assert "LAST TEST FAILURE" not in evidence
+
+
+def test_last_test_check_with_no_returncode_does_not_raise(tmp_path):
+    wt = _worktree(tmp_path, "boom")
+    story = {"summary": "s", "last_test_check": {"returncode": None}}
+    evidence = collect_failure_evidence(wt, story)
+    assert isinstance(evidence, str)
+    assert "LAST TEST FAILURE" not in evidence
+
+
+def test_last_test_check_missing_entirely_does_not_raise(tmp_path):
+    wt = _worktree(tmp_path, "boom")
+    story = {"summary": "s"}
+    evidence = collect_failure_evidence(wt, story)
+    assert isinstance(evidence, str)
+    assert "LAST TEST FAILURE" not in evidence
+
+
+def test_error_key_takes_priority_over_stdout_stderr_tail(tmp_path):
+    wt = _worktree(tmp_path, "boom")
+    story = {
+        "summary": "s",
+        "last_test_check": {
+            "error": "explicit-error-text",
+            "returncode": 1,
+            "stdout_tail": "other-text",
+        },
+    }
+    evidence = collect_failure_evidence(wt, story)
+    assert "explicit-error-text" in evidence
+    assert "other-text" not in evidence

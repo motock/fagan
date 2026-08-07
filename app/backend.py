@@ -1,5 +1,4 @@
 """LLM backend abstraction — the seam between orchestration and execution.
-
 pipeline_mcp_server.py owns the *why* (state machine, gating, decisions). This
 module owns the *how* (spawning a model to do the work). ClaudeCliDriver wraps
 today's `claude` CLI subprocess calls with identical mechanics to what it
@@ -34,17 +33,11 @@ from app import inference_providers
 from app.inference_providers import (
     RateLimitedError,  # noqa: F401 (re-exported: backend.RateLimitedError)
 )
+from pipeline.config_provenance import IGNORED_ENV_VARS
 
 # Warn if operator mistakenly set transport-only env vars
 _logger = logging.getLogger("pipeline")
-for _var, _real in (
-    ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
-    ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
-    ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
-    ("PIPELINE_TRANSPORT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
-    ("PIPELINE_TRANSPORT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
-    ("PIPELINE_TRANSPORT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
-):
+for _var, _real in IGNORED_ENV_VARS:
     if _var in os.environ:
         _logger.warning(
             f"{_var} is set in the environment but is a transport-only value that backend.py overwrites on every dispatch - it has no effect as an input; "

@@ -6,6 +6,12 @@ Module providing read‑only accessors for configuration values from three sourc
 * Code defaults (not implemented here – this module only reads files).
 
 The module is intentionally lightweight and imports only standard‑library modules. It must not import any of the orchestrator or dashboard code to avoid import cycles.
+
+It also defines the list of transport-only environment variables that are
+overwritten by :mod:`app.backend` on every dispatch, and a helper function to
+report which ones are present in a given environment. These are consumed both
+by the backend at import time (to warn operators) and by the effective-config
+view, so there is exactly one definition - a second copy would drift.
 """
 
 from __future__ import annotations
@@ -17,6 +23,54 @@ import plistlib
 import xml.parsers.expat
 
 Path = pathlib.Path
+
+# The six transport-only env vars that backend.py overwrites on every dispatch.
+# These must be kept in sync with the warning loop in app/backend.py.
+IGNORED_ENV_VARS: tuple[tuple[str, str], ...] = (
+    ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+    ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ("PIPELINE_TRANSPORT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("PIPELINE_TRANSPORT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ("PIPELINE_TRANSPORT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+)
+
+# The exact reason string used in the warning message.
+_REASON = (
+    "transport-only value backend.py overwrites on every dispatch "
+    "- it has no effect as an input"
+)
+
+
+def ignored_env_vars_present(environ: dict | None = None) -> list[dict]:
+    """Return a list of dicts describing transport-only env vars present.
+
+    Parameters
+    ----------
+    environ:
+        Mapping of environment variable names to values.  If ``None`` the
+        function reads :data:`os.environ`.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains ``name``, ``use_instead`` and ``reason`` keys.
+    """
+    if environ is None:
+        environ = os.environ
+    result: list[dict] = []
+    for name, replacement in IGNORED_ENV_VARS:
+        if name in environ:
+            result.append(
+                {
+                    "name": name,
+                    "use_instead": replacement,
+                    "reason": _REASON,
+                }
+            )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Path helpers – lazily resolve env overrides so that tests can monkeypatch the
 # environment or ``Path.home`` without affecting module import time.

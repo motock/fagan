@@ -1995,9 +1995,14 @@ def test_oracle_main_trims_transcript_and_retries_once_on_persistent_5xx(
 
 
 def test_oracle_main_gives_up_when_trim_retry_also_fails(tmp_path, monkeypatch, capsys):
-    """The trim-retry is exactly one extra attempt, not another open-ended
-    loop: if chat() still fails after the trim, main() must give up (return 1)
-    rather than retrying indefinitely."""
+    """Escalation is bounded, not an open-ended loop: if chat() still fails
+    after every escalation round, main() must give up (return 1) rather
+    than retrying indefinitely.
+
+    Call count relaxed from 4 to the bounded round count on 2026-08-07:
+    an unshrinkable payload now retries unchanged after a backoff instead
+    of bailing on the first round (see recover_from_oversized_5xx). The
+    property under test - terminates, returns 1 - is unchanged."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
     (tmp_path / "a.txt").write_text("hello\n")
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", [])
@@ -2012,14 +2017,15 @@ def test_oracle_main_gives_up_when_trim_retry_also_fails(tmp_path, monkeypatch, 
         raise _status_error(500)
 
     monkeypatch.setattr(lao, "chat", _fake_chat)
+    monkeypatch.setattr(lao.time, "sleep", lambda _s: None)
 
     rc = lao.main()
     out = capsys.readouterr().out
 
     assert rc == 1, f"expected give-up after the trim-retry also fails, got rc={rc}\noutput: {out!r}"
-    assert calls["n"] == 4, (
-        f"expected exactly 4 chat() calls (2 reads + original failure + one "
-        f"trim-retry), got {calls['n']}\noutput: {out!r}"
+    assert 4 <= calls["n"] <= 6, (
+        f"expected the 2 reads plus a bounded escalation (<=3 rounds), "
+        f"got {calls['n']}\noutput: {out!r}"
     )
 
 

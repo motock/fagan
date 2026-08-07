@@ -36,6 +36,15 @@ def _m(role, content):
     return {"role": role, "content": content}
 
 
+
+@pytest.fixture(autouse=True)
+def _no_real_backoff(monkeypatch):
+    """recover_from_oversized_5xx now sleeps between escalation rounds (2s/6s/
+    12s) so a load-induced failure gets time to clear. Real sleeps cost this
+    file ~20s per test; the pause itself is asserted explicitly where it
+    matters, so stub it everywhere else."""
+    monkeypatch.setattr(local_agent.time, "sleep", lambda _s: None)
+
 @pytest.fixture
 def always_shrinkable(monkeypatch):
     """Force _trim_resumed_transcript to report a shrinkage each call so the
@@ -81,9 +90,16 @@ def test_persistent_5xx_gives_up_after_bounded_rounds(always_shrinkable):
     assert calls["n"] <= 5
 
 
-def test_untrimmable_payload_gives_up_without_calling_chat(monkeypatch):
-    """If a trim cannot shrink the transcript at all, the helper must give up
-    immediately rather than retry an identical (still-oversized) payload."""
+def test_untrimmable_payload_retries_unchanged_after_backoff(monkeypatch):
+    """A transcript the trim cannot shrink is positive evidence the failure
+    was NOT a context overflow - which is exactly when backing off and
+    retrying the same payload is the right remedy.
+
+    Superseded the original assertion (give up immediately, chat never
+    called) on 2026-08-07: that contract is what let a single transient
+    Ollama 500 end a ~95%-complete converging run on 2026-07-30. The bound
+    it was really protecting - never retry forever - is asserted below and
+    in test_persistent_5xx_gives_up_after_bounded_rounds."""
 
     def no_shrink(messages, max_chars):
         return list(messages)  # unchanged
@@ -93,12 +109,14 @@ def test_untrimmable_payload_gives_up_without_calling_chat(monkeypatch):
 
     def chat_fn(messages):
         calls["n"] += 1
-        return _m("assistant", "should-not-happen")
+        if calls["n"] < 2:
+            raise _5xx()
+        return _m("assistant", "recovered")
 
     messages = [_m("system", "s"), _m("user", "u")]
     result = local_agent.recover_from_oversized_5xx(messages, chat_fn)
-    assert result is None
-    assert calls["n"] == 0
+    assert result == _m("assistant", "recovered")
+    assert 1 < calls["n"] <= 3, "must retry, but stay bounded"
 
 
 def test_4xx_is_not_swallowed_it_propagates(always_shrinkable):

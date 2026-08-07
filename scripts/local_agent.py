@@ -551,7 +551,9 @@ TOOLS = [
     {"type": "function", "function": {
         "name": "create_file", "description": "Create a new file, or overwrite one with its full corrected contents. To overwrite a file that already exists on disk, view_file it first, then create_file with the complete new contents. Prefer str_replace or replace_lines for targeted edits to existing files; only use create_file for files under 200 lines or brand-new files — never create_file a file over 200 lines, a full rewrite drops unrelated content.",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+            "path": {"type": "string"}, "content": {"type": "string"},
+            "confirm_removals": {"type": "boolean", "description": "Set true to confirm you intend to delete the top-level def/class the previous attempt reported as missing from your new content. Only needed after a rejected overwrite."}},
+            "required": ["path", "content"]}}},
     {"type": "function", "function": {
         "name": "str_replace", "description": "Replace the single unique occurrence of old_str with new_str in an existing file.",
         "parameters": {"type": "object", "properties": {
@@ -1064,6 +1066,39 @@ def _newly_undefined_module_defs(old_content: str, new_content: str) -> list[str
     ]
 
 
+def _dropped_top_level_defs(old_content: str, new_content: str) -> list[str]:
+    """Return names of module-level `def`/`class` statements present in
+    `old_content` but absent from `new_content` - unlike
+    `_newly_undefined_module_defs`, this does NOT require the name to still
+    be referenced somewhere in `new_content`. It exists for create_file's
+    whole-file-overwrite path specifically: `_newly_undefined_module_defs`
+    only catches a removed def that's still CALLED (a NameError), but a
+    create_file rewrite that silently drops a function nobody in THIS file
+    calls - because it's a public API consumed elsewhere (imported by
+    another module, exercised only by tests) - produces no such call site to
+    catch. Observed live 2026-08-07 (w3a-effective-config-provenance,
+    story f7fd39c4): a create_file rewrite of pipeline/config_provenance.py
+    dropped 4 of 5 functions (read_plist_env, read_mcp_server_env,
+    _scheduler_plist_path, _claude_json_path) that story 1 had already
+    landed - none of them called from within config_provenance.py itself,
+    so _newly_undefined_module_defs's reference check never fires. Returns
+    [] (never raises) on a non-.py path or when either side fails to parse."""
+    try:
+        old_tree = ast.parse(old_content)
+        new_tree = ast.parse(new_content)
+    except SyntaxError:
+        return []
+    old_top_defs = {
+        n.name for n in old_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    new_top_defs = {
+        n.name for n in new_tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    return sorted(old_top_defs - new_top_defs)
+
+
 def _newly_undefined_module_vars(old_content: str, new_content: str) -> list[str]:
     """Return names of module-level VARIABLE assignments (top-level
     ast.Assign / ast.AnnAssign targets) present in `old_content` but deleted by
@@ -1292,7 +1327,8 @@ def _lint_feedback_for(path_str: str) -> str:
 def run_tool(fn, args) -> str:
     if fn == "create_file":
         path = CWD / args["path"]
-        if (path.exists() and path.read_text().strip()
+        preexisting = path.exists() and path.read_text().strip()
+        if (preexisting
                 and args["path"] not in _CREATED_THIS_RUN
                 and args["path"] not in _VIEWED_THIS_RUN):
             return (
@@ -1308,6 +1344,20 @@ def run_tool(fn, args) -> str:
             if repair is None:
                 return _record_syntax_rejection(args["path"], err)
             content, note = repair
+        if preexisting:
+            dropped = _dropped_top_level_defs(path.read_text(), content)
+            if dropped and not args.get("confirm_removals"):
+                return (
+                    f"ERROR: this create_file overwrite of {args['path']} would "
+                    f"silently drop {len(dropped)} top-level def/class that exist "
+                    f"in the current file but not in your new content: "
+                    f"{', '.join(dropped)}. If this is unintentional, view_file "
+                    f"the current contents and include these definitions in your "
+                    f"rewrite (use str_replace/replace_lines for a small targeted "
+                    f"change instead of a full rewrite). If the removal is "
+                    f"intentional, repeat this exact call with "
+                    f"confirm_removals=true. The file was NOT overwritten."
+                )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)

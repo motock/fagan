@@ -755,3 +755,164 @@ class TestNoImportCycle:
                 assert not (node.module or "").startswith("app"), (
                     "config_provenance must not import from app (no import cycle)"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Story 2 (W3a): env-var provenance catalog, resolution, and effective config.
+# These tests target the NEW API added in story 2:
+#   EnvVarSpec, ENV_VAR_CATALOG, _is_secret, resolve_env_var, effective_env_config.
+# The implementation does not exist yet on this branch, so these tests are
+# intentionally RED until a follow-up dispatch implements them.
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+# The six extra vars (read in other modules) that the catalog must include
+# with these exact string defaults.
+_EXTRA_CATALOG_VARS = {
+    "PIPELINE_BACKEND_DISPATCH": "claude",
+    "PIPELINE_LOCAL_PROVIDER": "ollama",
+    "PIPELINE_LOCAL_MAX_STEPS": "40",
+    "PIPELINE_LOCAL_NUM_CTX": "16384",
+    "PIPELINE_LOCAL_TEMPERATURE": "0.3",
+    "PIPELINE_LOCAL_MODEL_DEFAULT": "devstral:24b",
+}
+
+
+class TestEnvVarSpec:
+    def test_is_frozen_dataclass(self):
+        import dataclasses
+
+        mod = _import_module()
+        EnvVarSpec = mod.EnvVarSpec
+        assert dataclasses.is_dataclass(EnvVarSpec)
+        # frozen=True: assigning should raise FrozenInstanceError.
+        spec = EnvVarSpec(name="X", default="40")
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            spec.name = "Y"  # type: ignore[misc]
+
+    def test_fields_are_name_and_default(self):
+        import dataclasses
+
+        mod = _import_module()
+        EnvVarSpec = mod.EnvVarSpec
+        names = [f.name for f in dataclasses.fields(EnvVarSpec)]
+        assert names == ["name", "default"]
+
+    def test_default_may_be_none(self):
+        mod = _import_module()
+        EnvVarSpec = mod.EnvVarSpec
+        spec = EnvVarSpec(name="X", default=None)
+        assert spec.name == "X"
+        assert spec.default is None
+
+
+class TestEnvVarCatalog:
+    def test_is_tuple_of_envvarspec(self):
+        mod = _import_module()
+        catalog = mod.ENV_VAR_CATALOG
+        assert isinstance(catalog, tuple)
+        assert len(catalog) > 0
+        for spec in catalog:
+            assert isinstance(spec, mod.EnvVarSpec)
+
+    def test_names_are_unique(self):
+        mod = _import_module()
+        names = [s.name for s in mod.ENV_VAR_CATALOG]
+        assert len(names) == len(set(names)), "duplicate names in catalog"
+
+    def test_six_extra_vars_present_with_exact_defaults(self):
+        mod = _import_module()
+        by_name = {s.name: s.default for s in mod.ENV_VAR_CATALOG}
+        for name, default in _EXTRA_CATALOG_VARS.items():
+            assert name in by_name, f"{name} missing from catalog"
+            assert by_name[name] == default, (
+                f"{name} default mismatch: expected {default!r}, got {by_name[name]!r}"
+            )
+
+    def test_defaults_are_strings_or_none_not_coerced(self):
+        mod = _import_module()
+        for spec in mod.ENV_VAR_CATALOG:
+            assert spec.default is None or isinstance(spec.default, str), (
+                f"{spec.name} default must be str|None, got {type(spec.default).__name__}"
+            )
+            # Specifically the numeric-looking ones must remain strings.
+            if spec.name in {
+                "PIPELINE_LOCAL_MAX_STEPS",
+                "PIPELINE_LOCAL_NUM_CTX",
+                "PIPELINE_PAUSE_THRESHOLD",
+                "PIPELINE_MAX_CONCURRENT_AGENTS",
+            }:
+                assert isinstance(spec.default, str), (
+                    f"{spec.name} default must stay a string, not int"
+                )
+
+    def test_anti_drift_every_config_py_env_var_in_catalog(self):
+        """Success criterion #1: anti-drift against pipeline/config.py."""
+        mod = _import_module()
+        src = Path("pipeline/config.py").read_text(encoding="utf-8")
+        names = set(_re.findall(r'os\.environ\.get\("([A-Z_]+)"', src))
+        assert names, "sanity: expected to find env vars in config.py"
+        catalog_names = {s.name for s in mod.ENV_VAR_CATALOG}
+        missing = names - catalog_names
+        assert not missing, (
+            f"env vars read in pipeline/config.py but missing from catalog: {sorted(missing)}"
+        )
+
+    def test_anti_drift_defaults_match_config_py_literals(self):
+        """Each config.py env var's catalog default must equal the literal in config.py."""
+        mod = _import_module()
+        src = Path("pipeline/config.py").read_text(encoding="utf-8")
+        # os.environ.get("NAME", "DEFAULT") -> capture name and default literal.
+        pattern = r'os\.environ\.get\("([A-Z_]+)",\s*("([^"\\]*(?:\\.[^"\\]*)*)"|\'([^\']*)\'|([^)]+?))\)'
+        by_name = {s.name: s.default for s in mod.ENV_VAR_CATALOG}
+        for m in _re.finditer(pattern, src):
+            name = m.group(1)
+            # Determine the literal default value.
+            if m.group(3) is not None:
+                default = m.group(3)
+            elif m.group(4) is not None:
+                default = m.group(4)
+            else:
+                # non-string literal (e.g. str(6*3600) or a bare int) - skip exact
+                # match; the catalog stores strings, so we only assert presence.
+                assert name in by_name, f"{name} missing from catalog"
+                continue
+            assert name in by_name, f"{name} missing from catalog"
+            assert by_name[name] == default, (
+                f"{name}: catalog default {by_name[name]!r} != config.py literal {default!r}"
+            )
+
+
+class TestIsSecret:
+    def test_key(self):
+        mod = _import_module()
+        assert mod._is_secret("PLANE_API_KEY") is True
+
+    def test_token(self):
+        mod = _import_module()
+        assert mod._is_secret("SOME_TOKEN") is True
+
+    def test_secret(self):
+        mod = _import_module()
+        assert mod._is_secret("MY_SECRET") is True
+
+    def test_password(self):
+        mod = _import_module()
+        assert mod._is_secret("DB_PASSWORD") is True
+
+    def test_credential(self):
+        mod = _import_module()
+        assert mod._is_secret("USER_CREDENTIAL") is True
+
+    def test_non_secret(self):
+        mod = _import_module()
+        assert mod._is_secret("PIPELINE_LOCAL_MAX_STEPS") is False
+
+    def test_case_sensitive_substring(self):
+        # Spec says "contains any of KEY, TOKEN, ...". Substring match.
+        mod = _import_module()
+        assert mod._is_secret("MONKEY_VALUE") is True  # contains KEY
+        assert mod._is_secret("PIPELINE_BACKEND_DISPATCH") is False
+
+

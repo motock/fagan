@@ -74,8 +74,7 @@ def read_plist_env(path: Path | None = None) -> dict[str, str]:
     try:
         data_bytes = path.read_bytes()
         data = plistlib.loads(data_bytes)
-    except (OSError, plistlib.InvalidFileException, xml.parsers.expat.ExpatError):
-        return {}
+    except (OSError, plistlib.InvalidFileException, xml.parsers.expat.ExpatError, ValueError):
         return {}
     # ``data`` should be a dict; if not, bail.
     if not isinstance(data, dict):
@@ -106,9 +105,8 @@ def read_mcp_server_env(path: Path | None = None, server_name: str = "pipeline")
     if path is None:
         path = _claude_json_path()
     try:
-        text = path.read_text(encoding="utf-8")
-        payload = json.loads(text)
-    except (OSError, json.JSONDecodeError):
+        payload = json.loads(path.read_bytes())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
     # Validate structure step by step.
     if not isinstance(payload, dict):

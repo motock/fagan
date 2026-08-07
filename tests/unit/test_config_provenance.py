@@ -248,6 +248,13 @@ class TestReadMcpServerEnv:
         result = mod.read_mcp_server_env(d)
         assert result == {}
 
+    def test_non_utf8_bytes_returns_empty_without_raising(self, tmp_path):
+        p = tmp_path / "claude.json"
+        p.write_bytes(b"\xc3(\xc3(")
+        mod = _import_module()
+        result = mod.read_mcp_server_env(p)
+        assert result == {}
+
     def test_empty_env_returns_empty(self, tmp_path):
         p = _write_json(tmp_path, {"mcpServers": {"pipeline": {"env": {}}}})
         mod = _import_module()

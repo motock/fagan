@@ -484,6 +484,142 @@ def _is_off_task_path(path: str, expected: set[str]) -> bool:
         if name == e.rsplit("/", 1)[-1]:
             return False
     return True
+
+
+def _off_task_step(path_arg: str, expected: set[str], off_task_targets: set,
+                    already_nudged: bool) -> tuple[str, bool]:
+    """One state transition of the off-task-drift guard for a single flagged
+    mutation. Returns (action, new_already_nudged):
+
+    - ("none", already_nudged) if `path_arg` is not off-task at all.
+    - ("nudge", True) on the first-ever off-task mutation this run.
+    - ("escalate", True) on EVERY off-task mutation after that first nudge —
+      whether it's a further touch of the SAME path or a different one.
+
+    Mode 31 follow-up (2026-08-07): the original guard only escalated on a
+    second DISTINCT off-task path (`already_seen = path_arg in
+    off_task_targets`), so a model that fixated on the ONE off-task file it
+    was already nudged about — the actual live failure (W3a story 2:
+    env_var_catalog.py nudged once at step 21, then mutated 8 more times
+    through step 36 with zero further guard action) — passed every
+    subsequent mutation of that same path through unguarded. Escalation no
+    longer depends on distinctness; `off_task_targets` is now purely
+    informational (kept for logging/tests)."""
+    if not (path_arg and _is_off_task_path(path_arg, expected)):
+        return "none", already_nudged
+    off_task_targets.add(path_arg)
+    if not already_nudged:
+        return "nudge", True
+    return "escalate", True
+
+
+def _apply_off_task_action(action: str, path_arg: str, messages: list) -> bool:
+    """Perform the off-task-drift guard's side effects for `action` (as
+    returned by _off_task_step). Returns True if the caller should treat
+    this as a parkable escalation (WIP-committing a dirty tree is done here;
+    whether to actually terminate the run is a PARK_ENABLED decision left to
+    the caller, exactly like every other guard's kill-switch handling)."""
+    if action == "nudge":
+        print(f"   [off-task nudge: {path_arg} not in assigned scope]", flush=True)
+        messages.append({"role": "user", "content": (
+            f"You just touched {path_arg}, which was not named anywhere "
+            f"in your assigned task. If this file is genuinely required "
+            f"to complete the task, explain why in your next message and "
+            f"continue. Otherwise STOP editing unrelated files and refocus "
+            f"on the files named in your instructions.")})
+        return False
+    if action == "escalate":
+        print(f"   [parking: off-task drift onto {path_arg} after nudge]", flush=True)
+        if worktree_dirty():
+            auto_wip_commit("parked on off-task drift")
+        return True
+    return False
+
+
+# Best-effort detection of a bash command that mutates a file directly,
+# bypassing the file-editing tools the off-task-drift guard otherwise
+# watches — a formatter/linter --fix flag, sed/perl -i, or shell
+# redirection. Live 2026-08-07 (W3a story 2): `ruff check
+# pipeline/env_var_catalog.py --fix` mutated the off-task file through
+# `bash`, invisible to the off-task guard (which only inspected
+# create_file/str_replace/replace_lines `path` args) and to MUTATING_TOOLS
+# (bash is not a member). Deliberately conservative: a command with no
+# recognized mutating marker is never flagged, so ordinary read-only
+# commands (pytest, grep, cat) never trip this.
+_BASH_MUTATION_MARKERS = re.compile(
+    r"--fix\b|--write\b|\bsed\s+[^|;&\n]*-i\b|\bperl\s+[^|;&\n]*-i\b|"
+    r"\bblack\s|\bisort\s|\bautopep8\b|\bprettier\b|>>?\s*[\w./-]+\.\w+"
+)
+_BASH_PATH_TOKEN_RE = re.compile(r"[\w./-]+\.\w+")
+
+
+def _bash_off_task_path(cmd: str, expected: set[str]) -> str | None:
+    """Return the first off-task path a mutation-looking `bash` command
+    appears to write to, or None if the command has no recognized mutating
+    marker or names no off-task path."""
+    if not cmd or not _BASH_MUTATION_MARKERS.search(cmd):
+        return None
+    for token in _BASH_PATH_TOKEN_RE.findall(cmd):
+        candidate = token.lstrip("./")
+        if _is_off_task_path(candidate, expected):
+            return candidate
+    return None
+
+
+# Same-path edit-churn guard (Mode 31 follow-up, 2026-08-07): the off-task,
+# repetition, and read-heavy guards all key on FAILURE or INACTION — a model
+# that keeps making SUCCESSFUL edits to the same file without ever running
+# its tests defeats every one of them (each success resets `seen` and
+# `last_progress_step`, and keeps the read-heavy window from ever filling
+# with non-mutating calls, since the mutating call itself lands in that
+# window). Live 2026-08-07 (W3a story 2): 22 consecutive successful
+# replace_lines/create_file calls to config_provenance.py — the ON-task
+# file — zero test runs in between, tripped no existing guard, and the run
+# step-capped with no `done`. Tracks consecutive successful mutations to the
+# SAME path with no intervening test run: first breach nudges toward
+# running the tests, a second breach after that parks (or re-nudges under
+# PARK_ENABLED=0, matching every other guard's shape).
+CHURN_SAME_PATH_MAX_EDITS = int(os.environ.get("LOCAL_AGENT_CHURN_MAX_EDITS", "12"))
+# How many MORE consecutive failed str_replace calls on a path, after the
+# one-time nudge, before the failing-str_replace guard escalates to a park.
+STR_REPLACE_FAIL_ESCALATE_AFTER = int(
+    os.environ.get("LOCAL_AGENT_STR_REPLACE_FAIL_ESCALATE_AFTER", "2"))
+_CHURN_TEST_RUN_RE = re.compile(r"\bpytest\b")
+
+
+def _churn_step(path_arg: str, churn_state: dict) -> str:
+    """Returns "none", "nudge" (the first time CHURN_SAME_PATH_MAX_EDITS
+    consecutive same-path successful edits happen with no test run between
+    them), or "escalate" (every time after that). `churn_state` is a dict
+    with keys "path"/"count"/"nudged", mutated in place across calls. A
+    successful mutation to a DIFFERENT path resets the streak — this guard
+    is about fixating on one file, not the total edit count."""
+    if not path_arg:
+        return "none"
+    if path_arg == churn_state["path"]:
+        churn_state["count"] += 1
+    else:
+        churn_state["path"] = path_arg
+        churn_state["count"] = 1
+        churn_state["nudged"] = False
+    if churn_state["count"] < CHURN_SAME_PATH_MAX_EDITS:
+        return "none"
+    if not churn_state["nudged"]:
+        churn_state["nudged"] = True
+        churn_state["count"] = 0
+        return "nudge"
+    churn_state["count"] = 0
+    return "escalate"
+
+
+def _churn_note_test_run(cmd: str, churn_state: dict) -> None:
+    """A bash command that runs pytest is a real verification step, not
+    blind churn — reset the same-path edit streak so the churn guard doesn't
+    fire on a model that IS checking its work between edits."""
+    if cmd and _CHURN_TEST_RUN_RE.search(cmd):
+        churn_state["count"] = 0
+
+
 # Mutating tools: any that produce new code in the worktree. Anything else
 # (view_file, bash, checkpoint) is read-only — including checkpoint, which
 # commits existing WIP but doesn't add new code; checkpointing without prior
@@ -1620,6 +1756,25 @@ def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
     return None  # all budgets exhausted on a persistent 5xx
 
 
+def _answer_orphaned_calls(tcs: list, from_idx: int, messages: list) -> None:
+    """Append a stub tool-role response for every tool_calls entry from
+    `from_idx` onward. A loop guard's `break` out of the per-call loop ends
+    that turn early — any of THIS turn's tool_calls entries at or after
+    `from_idx` that haven't been answered yet would otherwise be sent back
+    to the model on the next turn with no matching tool-role reply. Mode 33
+    (2026-07-22) traced exactly this shape (an orphaned tool_calls entry, in
+    that case from the per-target repetition guard before it was fixed to
+    always answer the triggering call) directly to gpt-oss:20b's
+    Harmony-format output degrading into leaked special tokens a few turns
+    later. Only ever observed with multiple tool_calls in one turn — not
+    reproduced live, since this harness's models issue one call per turn in
+    practice — but the fix is cheap and closes the class outright."""
+    for _ in tcs[from_idx:]:
+        messages.append({"role": "tool", "content": (
+            "(skipped — a loop guard interrupted this turn before this "
+            "call could run)")})
+
+
 def main() -> int:
     # A fresh dispatch has no calibration data yet - clear any value left
     # over from a prior dispatch that shared this process (or, in-process,
@@ -1696,17 +1851,25 @@ def main() -> int:
     # on one file runs uncaught. Track consecutive FAILED str_replace per
     # path; after 2, steer to replace_lines. Reset on a successful str_replace
     # to that path (and re-arm the nudge so a second stall is caught too).
+    # sr_fail_since_nudge counts further failures AFTER the nudge so a model
+    # that ignores it and keeps retrying str_replace on the same path parks
+    # instead of getting the one nudge for the rest of the run (Mode 31
+    # follow-up: this guard previously had no escalation at all).
     failed_sr: dict[str, int] = {}
     nudged_sr_fail: set[str] = set()
+    sr_fail_since_nudge: dict[str, int] = {}
     last_progress_step = 0
     start_time = time.monotonic()
     # Off-task-drift guard (Mode 31): a dispatched agent once abandoned its
     # assigned task and spent 20+ steps of real, coherent tool calls on a
     # completely unrelated subject. off_task_targets tracks every distinct
-    # mutated path that _is_off_task_path flags; the first one gets a
-    # corrective nudge, a second DIFFERENT one after the nudge parks the run.
+    # mutated path that _is_off_task_path flags (informational — see
+    # _off_task_step for the actual escalation rule, which no longer
+    # requires distinctness).
     off_task_targets: set[str] = set()
     nudged_off_task = False
+    # Same-path edit-churn guard state (see _churn_step above main()).
+    churn_state = {"path": "", "count": 0, "nudged": False}
 
     for step in range(MAX_STEPS):
         if time.monotonic() - start_time > TIMEOUT:
@@ -1812,7 +1975,7 @@ def main() -> int:
             continue
         consecutive_no_tool = 0
 
-        for tc in tcs:
+        for tc_idx, tc in enumerate(tcs):
             fn = tc["function"]["name"]
             args = tc["function"]["arguments"]
             if isinstance(args, str):
@@ -1847,6 +2010,7 @@ def main() -> int:
                                           f"cannot green the full suite — parking", flush=True)
                                     return 2
                                 _reject_done_for_suite(messages, step, suite_tail)
+                                _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                                 break
                         auto_wip_commit("commit enforcement")
                         print(f"[step {step}] DONE with auto-WIP-commit (agent left tree dirty): "
@@ -1856,6 +2020,7 @@ def main() -> int:
                     messages.append({"role": "user", "content": (
                         "You have uncommitted changes. Commit your work with git "
                         "(git add -A && git commit -m ...) before calling done.")})
+                    _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                     break
                 # L1: on a CI-fail-rework round, the reviewer was acceptance-
                 # scoped and never saw the agent's own test - so a clean
@@ -1875,6 +2040,7 @@ def main() -> int:
                                   f"cannot green the full suite — parking", flush=True)
                             return 2
                         _reject_done_for_suite(messages, step, suite_tail)
+                        _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                         break
                 print(f"[step {step}] DONE: {args.get('summary', '')}", flush=True)
                 return 0
@@ -1929,12 +2095,14 @@ def main() -> int:
                 # self-correct instead of going silent after one warning.
                 messages.append({"role": "tool", "content": _repetition_nudge()})
                 if first_trip:
+                    _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                     break
                 if worktree_dirty():
                     auto_wip_commit("parked on repetition")
                 if not PARK_ENABLED:
                     # Suppressed: let the nudge steer and continue to the next
                     # step instead of terminating. The step cap bounds the run.
+                    _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                     break
                 return 3
 
@@ -1979,27 +2147,56 @@ def main() -> int:
                     if fn not in ("str_replace", "replace_lines"):
                         seen[sig] = current
                     last_progress_step = step
+                    # A genuinely successful mutation invalidates the staleness
+                    # that armed these guards too, not just `seen` — without
+                    # this, a run that already made real progress since its
+                    # first repetition/read-heavy nudge would skip straight to
+                    # parking on its NEXT trip instead of getting a fresh
+                    # nudge, even though the underlying `seen`/`recent_tools`
+                    # signal it's reacting to has already been invalidated by
+                    # that same progress.
+                    nudged_repeat = False
+                    nudged_read_heavy = False
+                    distinct_windows = 0
 
                     path_arg = args.get("path", "")
-                    if path_arg and _is_off_task_path(path_arg, expected_paths):
-                        already_seen = path_arg in off_task_targets
-                        off_task_targets.add(path_arg)
-                        if not already_seen:
-                            if not nudged_off_task:
-                                nudged_off_task = True
-                                print(f"   [off-task nudge: {path_arg} not in assigned scope]", flush=True)
-                                messages.append({"role": "user", "content": (
-                                    f"You just edited {path_arg}, which was not named anywhere "
-                                    f"in your assigned task. If this file is genuinely required "
-                                    f"to complete the task, explain why in your next message and "
-                                    f"continue. Otherwise STOP editing unrelated files and refocus "
-                                    f"on the files named in your instructions.")})
-                            else:
-                                print(f"   [parking: off-task drift onto {path_arg} after nudge]", flush=True)
-                                if worktree_dirty():
-                                    auto_wip_commit("parked on off-task drift")
+                    if path_arg:
+                        off_action, nudged_off_task = _off_task_step(
+                            path_arg, expected_paths, off_task_targets, nudged_off_task)
+                        if off_action != "none":
+                            escalated = _apply_off_task_action(off_action, path_arg, messages)
+                            if escalated:
                                 if PARK_ENABLED:
                                     return 3
+                                messages.append({"role": "user", "content": (
+                                    f"You are still touching {path_arg}, outside your "
+                                    f"assigned scope, after already being told to stop. "
+                                    f"Refocus on the files named in your instructions "
+                                    f"now.")})
+
+                        churn_action = _churn_step(path_arg, churn_state)
+                        if churn_action == "nudge":
+                            print(f"   [churn nudge: {CHURN_SAME_PATH_MAX_EDITS}+ edits to "
+                                  f"{path_arg} with no test run]", flush=True)
+                            messages.append({"role": "user", "content": (
+                                f"You've made {CHURN_SAME_PATH_MAX_EDITS} edits to "
+                                f"{path_arg} in a row without running its tests. Run "
+                                f"`pytest -q <the test file for {path_arg}>` (or the "
+                                f"project's full test command) now to check whether "
+                                f"your changes actually work, before making another "
+                                f"edit.")})
+                        elif churn_action == "escalate":
+                            print(f"   [parking: churn on {path_arg} continues with "
+                                  f"no test run]", flush=True)
+                            if worktree_dirty():
+                                auto_wip_commit("parked on edit churn")
+                            if PARK_ENABLED:
+                                return 3
+                            messages.append({"role": "user", "content": (
+                                f"You are still editing {path_arg} without running its "
+                                f"tests. STOP editing and run the tests now — if they "
+                                f"fail, read the failure and fix the ROOT cause; if "
+                                f"they pass, call done.")})
 
             # Failing-str_replace loop guard. str_replace is excluded from the
             # per-target repetition guard above, so a no-match loop on one file
@@ -2008,24 +2205,74 @@ def main() -> int:
             # uncaught. After 2 consecutive FAILED str_replace on the same path,
             # steer to replace_lines (line numbers, no byte-exact match). A
             # successful str_replace resets the counter and re-arms the nudge.
+            # If the model ignores the nudge and keeps failing on the same
+            # path, escalate to a park after STR_REPLACE_FAIL_ESCALATE_AFTER
+            # more failures (Mode 31 follow-up: this guard previously had no
+            # escalation at all past the one nudge — a model that kept
+            # retrying str_replace forever after being told to switch to
+            # replace_lines got no further guard action for the rest of the
+            # run).
             if fn == "str_replace":
                 sr_path = args.get("path", "")
                 if isinstance(tool_result, str) and tool_result.startswith("ERROR"):
                     failed_sr[sr_path] = failed_sr.get(sr_path, 0) + 1
-                    if failed_sr[sr_path] >= 2 and sr_path not in nudged_sr_fail:
-                        nudged_sr_fail.add(sr_path)
-                        print(f"   [str_replace-fail nudge: {failed_sr[sr_path]} "
-                              f"failed matches on {sr_path}]", flush=True)
-                        messages.append({"role": "user", "content": (
-                            f"Your last {failed_sr[sr_path]} str_replace calls on {sr_path} "
-                            f"did not match — you cannot construct a matching old_str (likely "
-                            f"a whitespace difference). STOP retrying str_replace on this file. "
-                            f"Run `nl -ba {sr_path} | sed -n '<start>,<end>p'` to get exact line "
-                            f"numbers, then use replace_lines(path, start, end, new_str) which "
-                            f"needs no byte-exact old_str.")})
+                    if failed_sr[sr_path] >= 2:
+                        if sr_path not in nudged_sr_fail:
+                            nudged_sr_fail.add(sr_path)
+                            print(f"   [str_replace-fail nudge: {failed_sr[sr_path]} "
+                                  f"failed matches on {sr_path}]", flush=True)
+                            messages.append({"role": "user", "content": (
+                                f"Your last {failed_sr[sr_path]} str_replace calls on {sr_path} "
+                                f"did not match — you cannot construct a matching old_str (likely "
+                                f"a whitespace difference). STOP retrying str_replace on this file. "
+                                f"Run `nl -ba {sr_path} | sed -n '<start>,<end>p'` to get exact line "
+                                f"numbers, then use replace_lines(path, start, end, new_str) which "
+                                f"needs no byte-exact old_str.")})
+                        else:
+                            sr_fail_since_nudge[sr_path] = sr_fail_since_nudge.get(sr_path, 0) + 1
+                            if sr_fail_since_nudge[sr_path] >= STR_REPLACE_FAIL_ESCALATE_AFTER:
+                                sr_fail_since_nudge[sr_path] = 0
+                                print(f"   [parking: str_replace still failing on {sr_path} "
+                                      f"after nudge]", flush=True)
+                                if worktree_dirty():
+                                    auto_wip_commit("parked on failing str_replace")
+                                if PARK_ENABLED:
+                                    return 3
+                                messages.append({"role": "user", "content": (
+                                    f"You are still retrying str_replace on {sr_path} after "
+                                    f"being told to switch. Use replace_lines(path, start, "
+                                    f"end, new_str) now — do not attempt str_replace on this "
+                                    f"file again.")})
                 else:
                     failed_sr[sr_path] = 0
                     nudged_sr_fail.discard(sr_path)
+                    sr_fail_since_nudge.pop(sr_path, None)
+
+            # Bash-mutation off-task detection (Mode 31 follow-up): a
+            # formatter/linter --fix, sed/perl -i, or shell redirection can
+            # mutate a file directly through `bash`, bypassing the
+            # create_file/str_replace/replace_lines path the guard above
+            # watches. Route any detected off-task write through the same
+            # escalation as a direct file-tool edit. Also: a `pytest` bash
+            # call is the churn guard's own "the model IS checking its work"
+            # signal, independent of whether this call named an off-task path.
+            if fn == "bash":
+                cmd = args.get("command", "")
+                _churn_note_test_run(cmd, churn_state)
+                off_path = _bash_off_task_path(cmd, expected_paths)
+                if off_path:
+                    off_action, nudged_off_task = _off_task_step(
+                        off_path, expected_paths, off_task_targets, nudged_off_task)
+                    if off_action != "none":
+                        escalated = _apply_off_task_action(off_action, off_path, messages)
+                        if escalated:
+                            if PARK_ENABLED:
+                                return 3
+                            messages.append({"role": "user", "content": (
+                                f"You are still touching {off_path}, outside your "
+                                f"assigned scope, after already being told to stop. "
+                                f"Refocus on the files named in your instructions "
+                                f"now.")})
 
             # Read-heavy-pattern guard. Tracked separately from the per-target
             # repetition guard: the per-target one misses this case because
@@ -2074,6 +2321,7 @@ def main() -> int:
                             "edit (create_file, str_replace, or checkpoint) "
                             "now.")})
                         recent_tools.clear()
+                        _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                         break
                     return 3
                 else:
@@ -2099,6 +2347,7 @@ def main() -> int:
                                 "edit (create_file, str_replace, or "
                                 "checkpoint) now.")})
                             recent_tools.clear()
+                            _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                             break
                         return 3
                     recent_tools.clear()

@@ -3659,3 +3659,358 @@ def test_str_replace_does_not_echo_removed_lines(tmp_path, monkeypatch):
     result = la.run_tool("str_replace", {"path": "mod.py", "old_str": "x = 1\n", "new_str": "x = 2\n"})
     assert result == "edited mod.py"
     assert "removed" not in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# Mode 31 follow-up (2026-08-07): a live dispatch (W3a story 2) exposed that
+# the off-task-drift guard's escalation depended on DISTINCT paths, so a
+# model that fixated on the SAME off-task file after the one nudge got no
+# further guard action for the rest of the run (9 more mutations, 0 further
+# nudges). The same investigation found four more real gaps in the guard
+# suite: the failing-str_replace guard had no escalation past its one nudge;
+# no guard caught successful-but-non-converging edit churn on ONE file (the
+# actual biggest cost in that live incident — 22 edits, 0 test runs); `bash`
+# could mutate a file directly (ruff --fix, sed -i) invisible to every
+# path-based guard; and two guards' "nudged" flags never re-armed after real
+# progress, so a run that legitimately recovered would over-eagerly park on
+# its next (unrelated) trip instead of getting a fresh nudge. This section
+# covers all five fixes.
+# ---------------------------------------------------------------------------
+
+def test_off_task_step_first_flag_nudges():
+    action, nudged = la._off_task_step("x.py", {"y.py"}, set(), False)
+    assert action == "nudge"
+    assert nudged is True
+
+
+def test_off_task_step_on_task_path_is_none_and_leaves_nudged_unchanged():
+    action, nudged = la._off_task_step("y.py", {"y.py"}, set(), False)
+    assert action == "none"
+    assert nudged is False
+
+
+def test_off_task_step_second_flag_on_the_same_path_escalates():
+    """The Mode 31 follow-up bug precisely: a SECOND mutation of the SAME
+    already-nudged path must escalate, not silently pass through."""
+    targets = {"x.py"}
+    action, nudged = la._off_task_step("x.py", {"y.py"}, targets, True)
+    assert action == "escalate"
+    assert nudged is True
+
+
+def test_off_task_step_second_flag_on_a_different_path_still_escalates():
+    """Unchanged from before the fix — a second DISTINCT off-task path after
+    the nudge must still escalate."""
+    targets = {"x.py"}
+    action, nudged = la._off_task_step("z.py", {"y.py"}, targets, True)
+    assert action == "escalate"
+    assert nudged is True
+
+
+def test_off_task_same_path_repeated_mutation_parks_after_nudge(tmp_path, monkeypatch, capsys):
+    """The exact live failure: create_file on an off-task path nudges once,
+    a SECOND mutation of that SAME path must now park (rc=3) — previously
+    it passed through with no further guard action at all."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setenv("LOCAL_AGENT_TASK", _OFF_TASK_BRIEF)
+    responses = [
+        ("create_file", {"path": "totally/unrelated/scratch.py", "content": "x = 1\n"}),
+        ("str_replace", {
+            "path": "totally/unrelated/scratch.py",
+            "old_str": "x = 1", "new_str": "x = 2",
+        }),
+        ("done", {"summary": "done"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert out.count("[off-task nudge:") == 1, out
+    assert "[parking: off-task drift onto totally/unrelated/scratch.py after nudge]" in out, out
+    assert rc == 3, f"expected parking exit 3, got {rc}\noutput: {out!r}"
+
+
+def test_off_task_park_disabled_renudges_on_repeated_mutation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    monkeypatch.setenv("LOCAL_AGENT_TASK", _OFF_TASK_BRIEF)
+    responses = [
+        ("create_file", {"path": "totally/unrelated/scratch.py", "content": "x = 1\n"}),
+        ("str_replace", {
+            "path": "totally/unrelated/scratch.py",
+            "old_str": "x = 1", "new_str": "x = 2",
+        }),
+        ("done", {"summary": "done"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc != 3, f"PARK_ENABLED=False must not terminate; got rc={rc}\noutput: {out!r}"
+    assert out.count("[off-task nudge:") == 1, out
+    assert "[parking: off-task drift onto totally/unrelated/scratch.py after nudge]" in out, (
+        f"detection must still fire, output: {out!r}"
+    )
+    assert len(calls) > 2, f"disabled parking should let the run continue, got {len(calls)}"
+
+
+def test_bash_off_task_path_detects_ruff_fix():
+    """The live incident's exact bypass: `ruff check <off-task file> --fix`
+    mutates the file through bash, invisible to the file-tool-only check."""
+    expected = {"pipeline/server.py"}
+    assert la._bash_off_task_path(
+        "ruff check pipeline/env_var_catalog.py --fix", expected
+    ) == "pipeline/env_var_catalog.py"
+
+
+def test_bash_off_task_path_ignores_non_mutating_commands():
+    expected = {"pipeline/server.py"}
+    assert la._bash_off_task_path(
+        "pytest tests/unit/test_env_var_catalog.py", expected
+    ) is None
+
+
+def test_bash_off_task_path_ignores_on_task_paths():
+    expected = {"pipeline/server.py"}
+    assert la._bash_off_task_path("black pipeline/server.py", expected) is None
+
+
+def test_bash_off_task_path_ignores_commands_with_no_mutating_marker():
+    expected = {"pipeline/server.py"}
+    assert la._bash_off_task_path("cat pipeline/env_var_catalog.py", expected) is None
+
+
+def test_bash_ruff_fix_on_off_task_path_nudges(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setenv("LOCAL_AGENT_TASK", _OFF_TASK_BRIEF)
+    (tmp_path / "totally").mkdir()
+    (tmp_path / "totally" / "unrelated.py").write_text("x=1\n")
+    responses = [
+        ("bash", {"command": "ruff check totally/unrelated.py --fix"}),
+        ("done", {"summary": "done"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert "[off-task nudge: totally/unrelated.py not in assigned scope]" in out, out
+    assert rc == 0, f"a single off-task bash mutation must not park; got rc={rc}\n{out!r}"
+
+
+def test_str_replace_fail_escalates_to_park_after_continued_failures(tmp_path, monkeypatch, capsys):
+    """The failing-str_replace guard previously nudged once and then did
+    nothing else for the rest of the run, no matter how many more times the
+    model kept retrying str_replace on the same path. It must now escalate
+    to a park after STR_REPLACE_FAIL_ESCALATE_AFTER more failures."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "f.py").write_text("x = 1\n")
+    responses = [
+        ("str_replace", {"path": "f.py", "old_str": "NOPE", "new_str": "y"})
+        for _ in range(6)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert out.count("[str_replace-fail nudge:") == 1, out
+    assert "[parking: str_replace still failing on f.py after nudge]" in out, out
+    assert rc == 3, f"expected parking exit 3, got {rc}\noutput: {out!r}"
+    assert len(calls) == 4, f"expected to park at the 4th failure, took {len(calls)} calls"
+
+
+def test_str_replace_fail_park_disabled_renudges_instead_of_terminating(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "PARK_ENABLED", False)
+    (tmp_path / "f.py").write_text("x = 1\n")
+    responses = [
+        ("str_replace", {"path": "f.py", "old_str": "NOPE", "new_str": "y"})
+        for _ in range(5)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc != 3, f"PARK_ENABLED=False must not terminate; got rc={rc}\noutput: {out!r}"
+    assert out.count("[str_replace-fail nudge:") == 1, out
+    assert "[parking: str_replace still failing on f.py after nudge]" in out, out
+    assert len(calls) > 4, f"disabled parking should let the run continue, got {len(calls)}"
+
+
+def test_churn_step_resets_on_path_change():
+    state = {"path": "", "count": 0, "nudged": False}
+    assert la._churn_step("a.py", state) == "none"
+    assert la._churn_step("a.py", state) == "none"
+    assert state["path"] == "a.py"
+    assert state["count"] == 2
+    assert la._churn_step("b.py", state) == "none"
+    assert state["path"] == "b.py"
+    assert state["count"] == 1
+
+
+def test_churn_guard_nudges_then_parks_on_same_path_edits_with_no_test_run(
+    tmp_path, monkeypatch, capsys
+):
+    """The biggest single cost in the live incident: 22 consecutive
+    SUCCESSFUL edits to one ON-task file, zero test runs, and no existing
+    guard ever fired (each success resets every other guard's state). This
+    is a new guard - not present before this fix at all."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "CHURN_SAME_PATH_MAX_EDITS", 3)
+    (tmp_path / "pow.rs").write_text("// stub\nfn x() {}\n")
+    responses = [
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub", "new_str": "// stub 1"}),
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub 1", "new_str": "// stub 2"}),
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub 2", "new_str": "// stub 3"}),
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub 3", "new_str": "// stub 4"}),
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub 4", "new_str": "// stub 5"}),
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub 5", "new_str": "// stub 6"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert out.count("[churn nudge:") == 1, out
+    assert "[parking: churn on pow.rs continues with no test run]" in out, out
+    assert rc == 3, f"expected parking exit 3, got {rc}\noutput: {out!r}"
+    assert len(calls) == 6, f"expected to park at the 6th edit, took {len(calls)} calls"
+
+
+def test_churn_guard_does_not_fire_when_pytest_runs_between_edits(tmp_path, monkeypatch, capsys):
+    """A model that DOES verify its work between edits (runs pytest) must
+    not be treated as blind churn — the streak resets on a pytest call."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "CHURN_SAME_PATH_MAX_EDITS", 3)
+    (tmp_path / "pow.rs").write_text("// stub\nfn x() {}\n")
+    responses = [
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub", "new_str": "// stub 1"}),
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub 1", "new_str": "// stub 2"}),
+        ("bash", {"command": "pytest -q"}),
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub 2", "new_str": "// stub 3"}),
+        ("str_replace", {"path": "pow.rs", "old_str": "// stub 3", "new_str": "// stub 4"}),
+        ("done", {"summary": "done"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert "[churn nudge:" not in out, out
+    assert rc == 0, f"expected clean finish, got {rc}\noutput: {out!r}"
+
+
+def test_repetition_guard_rearms_after_a_successful_mutation(tmp_path, monkeypatch, capsys):
+    """Before this fix, `nudged_repeat` never reset, so a run that tripped
+    the guard once, then made genuine progress, then LATER hit a fresh,
+    unrelated repeat pattern would skip straight to parking on that later
+    trip instead of getting the same one-nudge-first treatment every other
+    first-time trip gets. A real edit invalidates the staleness this guard
+    reacts to (the underlying `seen` counter is already reset on success);
+    the "nudged" flag must be too."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    responses = [
+        ("view_file", {"path": "a.txt"}),
+        ("view_file", {"path": "a.txt"}),
+        ("view_file", {"path": "a.txt"}),  # 1st trip -> nudge
+        ("create_file", {"path": "new.py", "content": "x = 1\n"}),  # real progress
+        ("view_file", {"path": "b.txt"}),
+        ("view_file", {"path": "b.txt"}),
+        ("view_file", {"path": "b.txt"}),  # unrelated repeat -> should nudge again
+        ("done", {"summary": "done"}),
+    ]
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert out.count("[repetition nudge]") == 2, out
+    assert "[parking: repeated action after nudge]" not in out, out
+    assert rc == 0, f"expected clean finish, got {rc}\noutput: {out!r}"
+
+
+def test_read_heavy_guard_rearms_after_a_successful_mutation(tmp_path, monkeypatch, capsys):
+    """Same class of fix as the repetition-guard re-arm, for `nudged_read_heavy`
+    / `distinct_windows`. Two separate 6-distinct-read windows, with a real
+    edit in between, must each get their own fresh nudge — not have the
+    second window silently treated as post-nudge exploration."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    responses = (
+        [("bash", {"command": f"cat {c}"}) for c in "abcdef"]
+        + [("create_file", {"path": "new.py", "content": "x = 1\n"})]
+        + [("bash", {"command": f"cat {c}"}) for c in "ghijkl"]
+        + [("done", {"summary": "done"})]
+    )
+    fake, _ = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert out.count("[read-heavy nudge:") == 2, out
+    assert "[parking: read-heavy" not in out, out
+    assert rc == 0, f"expected clean finish, got {rc}\noutput: {out!r}"
+
+
+def test_repetition_guard_answers_all_orphaned_calls_in_a_multi_call_turn(
+    tmp_path, monkeypatch, capsys
+):
+    """A single assistant turn that bundles multiple tool_calls, where a
+    guard trips mid-batch (break), must not leave any LATER tool_calls entry
+    from that same turn unanswered — Mode 33 traced exactly this shape to
+    gpt-oss:20b's Harmony-format output degrading a few turns later. Only
+    reproducible with a custom multi-call fake, since this harness's real
+    models issue one tool call per turn in practice."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    (tmp_path / "x.txt").write_text("hi\n")
+    turn = {"n": 0}
+    calls: list = []
+
+    def fake_chat(messages):
+        calls.append(messages)
+        turn["n"] += 1
+        if turn["n"] == 1:
+            return {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "view_file", "arguments": {"path": "x.txt"}}},
+                {"function": {"name": "view_file", "arguments": {"path": "x.txt"}}},
+                {"function": {"name": "view_file", "arguments": {"path": "x.txt"}}},
+                {"function": {"name": "bash", "arguments": {"command": "echo late"}}},
+            ]}
+        return {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "done", "arguments": {"summary": "done"}}}]}
+
+    monkeypatch.setattr(la, "chat", fake_chat)
+
+    la.main()
+    capsys.readouterr()
+
+    messages = calls[-1]
+    for i, m in enumerate(messages[:-1]):
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            nxt = messages[i + 1]
+            assert nxt.get("role") == "tool", (
+                f"assistant tool_calls at index {i} has no tool-role answer "
+                f"(orphaned tool call); next message is {nxt!r}"
+            )
+    orphan_stubs = [
+        m for m in messages
+        if m.get("role") == "tool" and "skipped" in (m.get("content") or "")
+    ]
+    assert len(orphan_stubs) == 1, (
+        f"expected exactly 1 stub answer for the orphaned 4th call, "
+        f"got {len(orphan_stubs)}: {messages!r}"
+    )

@@ -811,6 +811,42 @@ def test_create_file_overwrites_a_pre_existing_file_after_view_file(tmp_path, mo
     assert (tmp_path / "mod.py").read_text() == "def merge():\n    return []\n"
 
 
+def test_create_file_rejects_overwrite_that_silently_drops_top_level_defs(tmp_path, monkeypatch):
+    """Regression for the live 2026-08-07 incident (w3a-effective-config-
+    provenance, story f7fd39c4): a create_file rewrite of a 5-function file
+    kept only 1 function, silently dropping the other 4 - all public API
+    consumed from OTHER modules, so nothing in the file's own body still
+    called them and _newly_undefined_module_defs's reference check never
+    fired. Once the agent has view_file'd a pre-existing file (eligible for
+    overwrite), a create_file that would drop top-level def/class present in
+    the old content but missing from the new content must be rejected unless
+    confirm_removals=true, mirroring replace_lines's confirm_removals gate."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "_CREATED_THIS_RUN", set())
+    monkeypatch.setattr(la, "_VIEWED_THIS_RUN", set())
+    original = (
+        "def ignored_env_vars_present():\n    return []\n\n\n"
+        "def read_plist_env():\n    return {}\n\n\n"
+        "def read_mcp_server_env():\n    return {}\n\n\n"
+        "def _scheduler_plist_path():\n    return None\n\n\n"
+        "def _claude_json_path():\n    return None\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    la.run_tool("view_file", {"path": "mod.py"})
+    truncated = "def ignored_env_vars_present():\n    return []\n"
+    result = la.run_tool("create_file", {"path": "mod.py", "content": truncated})
+    assert result.startswith("ERROR: this create_file overwrite of mod.py would silently drop")
+    for name in ("read_plist_env", "read_mcp_server_env", "_scheduler_plist_path", "_claude_json_path"):
+        assert name in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+    confirmed = la.run_tool(
+        "create_file", {"path": "mod.py", "content": truncated, "confirm_removals": True}
+    )
+    assert confirmed == "created mod.py"
+    assert (tmp_path / "mod.py").read_text() == truncated
+
+
 def test_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monkeypatch):
     """SYNTAX-NUDGE: the rejection must name the exact line and quote the
     offending line plus up to 2 lines of context either side, verbatim from

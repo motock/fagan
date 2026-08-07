@@ -456,6 +456,37 @@ def test_oracle_create_file_overwrites_a_pre_existing_file_after_view_file(tmp_p
     assert (tmp_path / "mod.py").read_text() == "def merge():\n    return []\n"
 
 
+def test_oracle_create_file_rejects_overwrite_that_silently_drops_top_level_defs(tmp_path, monkeypatch):
+    """Mirrors test_local_agent.test_create_file_rejects_overwrite_that_silently_drops_top_level_defs.
+    A create_file rewrite of a pre-existing multi-function file that would
+    drop top-level def/class not present in the new content must be
+    rejected unless confirm_removals=true."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "_CREATED_THIS_RUN", set())
+    monkeypatch.setattr(lao, "_VIEWED_THIS_RUN", set())
+    original = (
+        "def ignored_env_vars_present():\n    return []\n\n\n"
+        "def read_plist_env():\n    return {}\n\n\n"
+        "def read_mcp_server_env():\n    return {}\n\n\n"
+        "def _scheduler_plist_path():\n    return None\n\n\n"
+        "def _claude_json_path():\n    return None\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    lao.run_tool("view_file", {"path": "mod.py"})
+    truncated = "def ignored_env_vars_present():\n    return []\n"
+    result = lao.run_tool("create_file", {"path": "mod.py", "content": truncated})
+    assert result.startswith("ERROR: this create_file overwrite of mod.py would silently drop")
+    for name in ("read_plist_env", "read_mcp_server_env", "_scheduler_plist_path", "_claude_json_path"):
+        assert name in result
+    assert (tmp_path / "mod.py").read_text() == original
+
+    confirmed = lao.run_tool(
+        "create_file", {"path": "mod.py", "content": truncated, "confirm_removals": True}
+    )
+    assert confirmed == "created mod.py"
+    assert (tmp_path / "mod.py").read_text() == truncated
+
+
 def test_oracle_search_tool_returns_actionable_steering_message(tmp_path, monkeypatch):
     """Mirrors test_local_agent.test_search_tool_returns_actionable_steering_message.
     There is no 'search' tool; steer toward bash + grep/rg instead of the

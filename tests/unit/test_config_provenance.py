@@ -755,3 +755,533 @@ class TestNoImportCycle:
                 assert not (node.module or "").startswith("app"), (
                     "config_provenance must not import from app (no import cycle)"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Story 2 (W3a): env-var provenance catalog, resolution, and effective config.
+# These tests target the NEW API added in story 2:
+#   EnvVarSpec, ENV_VAR_CATALOG, _is_secret, resolve_env_var, effective_env_config.
+# The implementation does not exist yet on this branch, so these tests are
+# intentionally RED until a follow-up dispatch implements them.
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+# The six extra vars (read in other modules) that the catalog must include
+# with these exact string defaults.
+_EXTRA_CATALOG_VARS = {
+    "PIPELINE_BACKEND_DISPATCH": "claude",
+    "PIPELINE_LOCAL_PROVIDER": "ollama",
+    "PIPELINE_LOCAL_MAX_STEPS": "40",
+    "PIPELINE_LOCAL_NUM_CTX": "16384",
+    "PIPELINE_LOCAL_TEMPERATURE": "0.3",
+    "PIPELINE_LOCAL_MODEL_DEFAULT": "devstral:24b",
+}
+
+
+class TestEnvVarSpec:
+    def test_is_frozen_dataclass(self):
+        import dataclasses
+
+        mod = _import_module()
+        EnvVarSpec = mod.EnvVarSpec
+        assert dataclasses.is_dataclass(EnvVarSpec)
+        # frozen=True: assigning should raise FrozenInstanceError.
+        spec = EnvVarSpec(name="X", default="40")
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            spec.name = "Y"  # type: ignore[misc]
+
+    def test_fields_are_name_and_default(self):
+        import dataclasses
+
+        mod = _import_module()
+        EnvVarSpec = mod.EnvVarSpec
+        names = [f.name for f in dataclasses.fields(EnvVarSpec)]
+        assert names == ["name", "default"]
+
+    def test_default_may_be_none(self):
+        mod = _import_module()
+        EnvVarSpec = mod.EnvVarSpec
+        spec = EnvVarSpec(name="X", default=None)
+        assert spec.name == "X"
+        assert spec.default is None
+
+
+class TestEnvVarCatalog:
+    def test_is_tuple_of_envvarspec(self):
+        mod = _import_module()
+        catalog = mod.ENV_VAR_CATALOG
+        assert isinstance(catalog, tuple)
+        assert len(catalog) > 0
+        for spec in catalog:
+            assert isinstance(spec, mod.EnvVarSpec)
+
+    def test_names_are_unique(self):
+        mod = _import_module()
+        names = [s.name for s in mod.ENV_VAR_CATALOG]
+        assert len(names) == len(set(names)), "duplicate names in catalog"
+
+    def test_six_extra_vars_present_with_exact_defaults(self):
+        mod = _import_module()
+        by_name = {s.name: s.default for s in mod.ENV_VAR_CATALOG}
+        for name, default in _EXTRA_CATALOG_VARS.items():
+            assert name in by_name, f"{name} missing from catalog"
+            assert by_name[name] == default, (
+                f"{name} default mismatch: expected {default!r}, got {by_name[name]!r}"
+            )
+
+    def test_defaults_are_strings_or_none_not_coerced(self):
+        mod = _import_module()
+        for spec in mod.ENV_VAR_CATALOG:
+            assert spec.default is None or isinstance(spec.default, str), (
+                f"{spec.name} default must be str|None, got {type(spec.default).__name__}"
+            )
+            # Specifically the numeric-looking ones must remain strings.
+            if spec.name in {
+                "PIPELINE_LOCAL_MAX_STEPS",
+                "PIPELINE_LOCAL_NUM_CTX",
+                "PIPELINE_PAUSE_THRESHOLD",
+                "PIPELINE_MAX_CONCURRENT_AGENTS",
+            }:
+                assert isinstance(spec.default, str), (
+                    f"{spec.name} default must stay a string, not int"
+                )
+
+    def test_anti_drift_every_config_py_env_var_in_catalog(self):
+        """Success criterion #1: anti-drift against pipeline/config.py."""
+        mod = _import_module()
+        src = Path("pipeline/config.py").read_text(encoding="utf-8")
+        names = set(_re.findall(r'os\.environ\.get\("([A-Z_]+)"', src))
+        assert names, "sanity: expected to find env vars in config.py"
+        catalog_names = {s.name for s in mod.ENV_VAR_CATALOG}
+        missing = names - catalog_names
+        assert not missing, (
+            f"env vars read in pipeline/config.py but missing from catalog: {sorted(missing)}"
+        )
+
+    def test_anti_drift_defaults_match_config_py_literals(self):
+        """Each config.py env var's catalog default must equal the literal in config.py."""
+        mod = _import_module()
+        src = Path("pipeline/config.py").read_text(encoding="utf-8")
+        # os.environ.get("NAME", "DEFAULT") -> capture name and default literal.
+        pattern = r'os\.environ\.get\("([A-Z_]+)",\s*("([^"\\]*(?:\\.[^"\\]*)*)"|\'([^\']*)\'|([^)]+?))\)'
+        by_name = {s.name: s.default for s in mod.ENV_VAR_CATALOG}
+        for m in _re.finditer(pattern, src):
+            name = m.group(1)
+            # Determine the literal default value.
+            if m.group(3) is not None:
+                default = m.group(3)
+            elif m.group(4) is not None:
+                default = m.group(4)
+            else:
+                # non-string literal (e.g. str(6*3600) or a bare int) - skip exact
+                # match; the catalog stores strings, so we only assert presence.
+                assert name in by_name, f"{name} missing from catalog"
+                continue
+            assert name in by_name, f"{name} missing from catalog"
+            assert by_name[name] == default, (
+                f"{name}: catalog default {by_name[name]!r} != config.py literal {default!r}"
+            )
+
+
+class TestIsSecret:
+    def test_key(self):
+        mod = _import_module()
+        assert mod._is_secret("PLANE_API_KEY") is True
+
+    def test_token(self):
+        mod = _import_module()
+        assert mod._is_secret("SOME_TOKEN") is True
+
+    def test_secret(self):
+        mod = _import_module()
+        assert mod._is_secret("MY_SECRET") is True
+
+    def test_password(self):
+        mod = _import_module()
+        assert mod._is_secret("DB_PASSWORD") is True
+
+    def test_credential(self):
+        mod = _import_module()
+        assert mod._is_secret("USER_CREDENTIAL") is True
+
+    def test_non_secret(self):
+        mod = _import_module()
+        assert mod._is_secret("PIPELINE_LOCAL_MAX_STEPS") is False
+
+    def test_case_sensitive_substring(self):
+        # Spec says "contains any of KEY, TOKEN, ...". Substring match.
+        mod = _import_module()
+        assert mod._is_secret("MONKEY_VALUE") is True  # contains KEY
+        assert mod._is_secret("PIPELINE_BACKEND_DISPATCH") is False
+
+
+class TestResolveEnvVar:
+    def test_plist_overrides_code_default(self):
+        """Success criterion #2."""
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={"X": "60"}, mcp_env={}
+        )
+        assert r["name"] == "X"
+        assert r["effective"] == "60"
+        assert r["source"] == "launchd_plist"
+        assert r["restart_required"] is True
+        assert r["conflict"] is False
+        layers = r["layers"]
+        # layers must include a code_default entry with value "40".
+        code_default = [l for l in layers if l["layer"] == "code_default"]
+        assert len(code_default) == 1
+        assert code_default[0]["value"] == "40"
+        assert code_default[0]["restart_required"] is False
+
+    def test_conflict_when_plist_and_mcp_differ(self):
+        """Success criterion #3."""
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "99"},
+        )
+        assert r["conflict"] is True
+
+    def test_no_conflict_when_plist_and_mcp_same(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "60"},
+        )
+        assert r["conflict"] is False
+
+    def test_absent_from_all_layers_uses_code_default(self):
+        """Success criterion #4: negative/boundary."""
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default="40", environ={}, plist_env={}, mcp_env={}
+        )
+        assert r["effective"] == "40"
+        assert r["source"] == "code_default"
+        assert r["restart_required"] is False
+        assert r["conflict"] is False
+
+    def test_absent_with_none_default(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default=None, environ={}, plist_env={}, mcp_env={}
+        )
+        assert r["effective"] is None
+        assert r["source"] == "code_default"
+        assert r["restart_required"] is False
+
+    def test_in_environ_no_layer_declares_it(self):
+        """Success criterion #5."""
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={}, mcp_env={}
+        )
+        assert r["source"] == "process_env"
+        assert r["restart_required"] is True
+        assert r["effective"] == "60"
+
+    def test_mcp_source_when_environ_matches_mcp_only(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={}, mcp_env={"X": "60"}
+        )
+        assert r["source"] == "mcp_server_env"
+        assert r["restart_required"] is True
+
+    def test_plist_takes_priority_over_mcp_for_source(self):
+        # When both plist and mcp declare the same value as environ, plist wins
+        # for the source label (per the ordered if/elif in the spec).
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "60"},
+        )
+        assert r["source"] == "launchd_plist"
+
+    def test_source_is_process_env_when_environ_value_differs_from_layers(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "77"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "60"},
+        )
+        assert r["source"] == "process_env"
+
+    def test_layers_order_and_restart_flags(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "99"},
+        )
+        layers = r["layers"]
+        order = [l["layer"] for l in layers]
+        # Every layer that supplies a value, in this fixed order.
+        expected_order = ["process_env", "launchd_plist", "mcp_server_env", "code_default"]
+        assert order == expected_order
+        for l in layers:
+            if l["layer"] == "code_default":
+                assert l["restart_required"] is False
+            else:
+                assert l["restart_required"] is True
+        # Values per layer.
+        by_layer = {l["layer"]: l["value"] for l in layers}
+        assert by_layer["process_env"] == "60"
+        assert by_layer["launchd_plist"] == "60"
+        assert by_layer["mcp_server_env"] == "99"
+        assert by_layer["code_default"] == "40"
+
+    def test_layers_omit_layers_that_supply_nothing(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={}, mcp_env={}
+        )
+        layers = r["layers"]
+        present = {l["layer"] for l in layers}
+        # process_env and code_default supply values; plist/mcp do not.
+        assert "process_env" in present
+        assert "code_default" in present
+        assert "launchd_plist" not in present
+        assert "mcp_server_env" not in present
+
+    def test_layers_always_include_code_default(self):
+        # code_default always supplies a value (the default), even if None.
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default=None, environ={"X": "60"}, plist_env={}, mcp_env={}
+        )
+        layers = r["layers"]
+        code_default = [l for l in layers if l["layer"] == "code_default"]
+        assert len(code_default) == 1
+        assert code_default[0]["value"] is None
+
+    def test_returned_keys(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={}, mcp_env={}
+        )
+        assert set(r.keys()) == {
+            "name",
+            "effective",
+            "source",
+            "restart_required",
+            "conflict",
+            "masked",
+            "layers",
+        }
+
+    def test_masked_default_false_for_non_secret(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={}, mcp_env={}
+        )
+        assert r["masked"] is False
+
+    def test_secret_masks_all_values(self):
+        """Success criterion #6."""
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "PLANE_API_KEY",
+            environ={"PLANE_API_KEY": "sk-live-abc"},
+            plist_env={"PLANE_API_KEY": "sk-live-abc"},
+            mcp_env={},
+        )
+        assert r["masked"] is True
+        assert "sk-live-abc" not in repr(r)
+        assert r["effective"] == "***"
+        for l in r["layers"]:
+            assert l["value"] == "***"
+
+    def test_secret_with_default_masked(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "SOME_TOKEN",
+            default="secret-default",
+            environ={},
+            plist_env={},
+            mcp_env={},
+        )
+        assert r["masked"] is True
+        assert r["effective"] == "***"
+        assert "secret-default" not in repr(r)
+
+    def test_secret_conflict_still_masked(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "API_KEY",
+            default="d",
+            environ={"API_KEY": "v1"},
+            plist_env={"API_KEY": "v1"},
+            mcp_env={"API_KEY": "v2"},
+        )
+        assert r["conflict"] is True
+        assert r["masked"] is True
+        assert "v1" not in repr(r)
+        assert "v2" not in repr(r)
+
+    def test_default_environ_is_os_environ(self):
+        """environ defaults to os.environ."""
+        mod = _import_module()
+        import os
+
+        # Use a var unlikely to collide; set it in os.environ and don't pass environ.
+        name = "PIPELINE_PROVENANCE_TEST_VAR_XYZ"
+        os.environ[name] = "from-os-environ"
+        try:
+            r = mod.resolve_env_var(name, default="d", plist_env={}, mcp_env={})
+            assert r["effective"] == "from-os-environ"
+            assert r["source"] == "process_env"
+        finally:
+            del os.environ[name]
+
+
+class TestEffectiveEnvConfig:
+    def test_returns_one_entry_per_catalog_var_sorted_by_name(self):
+        """Success criterion #7."""
+        mod = _import_module()
+        result = mod.effective_env_config(
+            environ={}, plist_env={}, mcp_env={}
+        )
+        assert isinstance(result, list)
+        catalog_names = [s.name for s in mod.ENV_VAR_CATALOG]
+        result_names = [r["name"] for r in result]
+        assert result_names == sorted(catalog_names)
+        assert len(result) == len(mod.ENV_VAR_CATALOG)
+        # No duplicates.
+        assert len(result_names) == len(set(result_names))
+
+    def test_raises_nothing_when_files_missing(self, tmp_path, monkeypatch):
+        """Success criterion #7: nonexistent plist / claude.json raise nothing."""
+        mod = _import_module()
+        missing_plist = tmp_path / "does-not-exist.plist"
+        missing_json = tmp_path / "does-not-exist.json"
+        monkeypatch.setenv("PIPELINE_SCHEDULER_PLIST_PATH", str(missing_plist))
+        monkeypatch.setenv("PIPELINE_CLAUDE_JSON_PATH", str(missing_json))
+        # Use a clean environ so no real env var interferes.
+        result = mod.effective_env_config(environ={})
+        assert isinstance(result, list)
+        assert len(result) == len(mod.ENV_VAR_CATALOG)
+        for r in result:
+            assert r["source"] == "code_default"
+            assert r["conflict"] is False
+
+    def test_reads_source_files_once(self, tmp_path, monkeypatch):
+        """Spec: reads the source files ONCE, not once per var."""
+        mod = _import_module()
+        plist_path = _write_plist(tmp_path, {"PIPELINE_LOCAL_MAX_STEPS": "60"})
+        json_path = _write_json(
+            tmp_path,
+            {"mcpServers": {"pipeline": {"env": {"PIPELINE_LOCAL_MAX_STEPS": "60"}}}},
+        )
+        monkeypatch.setenv("PIPELINE_SCHEDULER_PLIST_PATH", str(plist_path))
+        monkeypatch.setenv("PIPELINE_CLAUDE_JSON_PATH", str(json_path))
+
+        call_count = {"plist": 0, "mcp": 0}
+        orig_plist = mod.read_plist_env
+        orig_mcp = mod.read_mcp_server_env
+
+        def counting_plist(path=None):
+            call_count["plist"] += 1
+            return orig_plist(path)
+
+        def counting_mcp(path=None, server_name="pipeline"):
+            call_count["mcp"] += 1
+            return orig_mcp(path, server_name)
+
+        monkeypatch.setattr(mod, "read_plist_env", counting_plist)
+        monkeypatch.setattr(mod, "read_mcp_server_env", counting_mcp)
+
+        result = mod.effective_env_config(environ={})
+        assert len(result) == len(mod.ENV_VAR_CATALOG)
+        assert call_count["plist"] == 1, "plist should be read exactly once"
+        assert call_count["mcp"] == 1, "mcp json should be read exactly once"
+
+    def test_passes_resolved_plist_and_mcp_down(self, tmp_path, monkeypatch):
+        """When plist_env/mcp_env are passed explicitly, the file readers are not called."""
+        mod = _import_module()
+        call_count = {"plist": 0, "mcp": 0}
+        monkeypatch.setattr(
+            mod,
+            "read_plist_env",
+            lambda *a, **k: call_count.__setitem__("plist", call_count["plist"] + 1) or {},
+        )
+        monkeypatch.setattr(
+            mod,
+            "read_mcp_server_env",
+            lambda *a, **k: call_count.__setitem__("mcp", call_count["mcp"] + 1) or {},
+        )
+        result = mod.effective_env_config(
+            environ={},
+            plist_env={"PIPELINE_LOCAL_MAX_STEPS": "60"},
+            mcp_env={},
+        )
+        assert call_count["plist"] == 0
+        assert call_count["mcp"] == 0
+        # The passed plist value should be reflected.
+        steps = next(r for r in result if r["name"] == "PIPELINE_LOCAL_MAX_STEPS")
+        # environ is empty so effective == default ("40"); but layers should
+        # include the plist layer with value "60".
+        layers = {l["layer"]: l["value"] for l in steps["layers"]}
+        assert layers.get("launchd_plist") == "60"
+
+    def test_each_entry_is_a_resolve_env_var_result(self):
+        mod = _import_module()
+        result = mod.effective_env_config(environ={}, plist_env={}, mcp_env={})
+        for r in result:
+            assert set(r.keys()) == {
+                "name",
+                "effective",
+                "source",
+                "restart_required",
+                "conflict",
+                "masked",
+                "layers",
+            }
+
+    def test_uses_catalog_defaults(self):
+        mod = _import_module()
+        result = mod.effective_env_config(environ={}, plist_env={}, mcp_env={})
+        by_name = {r["name"]: r for r in result}
+        # A catalog var with a known default should surface that default.
+        assert by_name["PIPELINE_LOCAL_MAX_STEPS"]["effective"] == "40"
+        assert by_name["PIPELINE_LOCAL_MAX_STEPS"]["source"] == "code_default"
+
+
+class TestReportFormat:
+    """The plan doc asks for a human report like:
+    `PIPELINE_LOCAL_MAX_STEPS = 60 (from launchd plist, overriding code default 40)`.
+    The module need not produce that exact string, but the data needed to build
+    it must be present and consistent. This guards the data contract.
+    """
+
+    def test_report_data_contract(self):
+        mod = _import_module()
+        r = mod.resolve_env_var(
+            "PIPELINE_LOCAL_MAX_STEPS",
+            default="40",
+            environ={"PIPELINE_LOCAL_MAX_STEPS": "60"},
+            plist_env={"PIPELINE_LOCAL_MAX_STEPS": "60"},
+            mcp_env={},
+        )
+        # effective value
+        assert r["effective"] == "60"
+        # source label
+        assert r["source"] == "launchd_plist"
+        # the overridden code default is recoverable from layers
+        code_default = next(l for l in r["layers"] if l["layer"] == "code_default")
+        assert code_default["value"] == "40"

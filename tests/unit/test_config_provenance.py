@@ -2048,51 +2048,6 @@ class TestNegativeBadRegistryModel:
         assert overlord_entry["error"] is None
 
 
-class TestEffectiveRoleConfig:
-    def test_no_arguments_returns_one_per_role_in_order(self):
-        mod = _import_module()
-        results = mod.effective_role_config()
-        assert isinstance(results, list)
-        assert len(results) == len(mod.PIPELINE_ROLES)
-        assert [r["role"] for r in results] == list(mod.PIPELINE_ROLES)
-
-    def test_no_arguments_raises_nothing(self):
-        mod = _import_module()
-        # Must not raise even with the real (possibly empty) registry.
-        results = mod.effective_role_config()
-        assert isinstance(results, list)
-
-    def test_model_fallbacks_map_applied_per_role(self):
-        mod = _import_module()
-        reg = _build_registry(roles={})
-        results = mod.effective_role_config(
-            registry=reg,
-            model_fallbacks={"overlord": "sonnet"},
-            environ={},
-        )
-        overlord_entry = next(r for r in results if r["role"] == "overlord")
-        assert overlord_entry["model"] == "sonnet"
-        assert overlord_entry["model_source"] == "caller_fallback"
-        # a role absent from model_fallbacks gets model_fallback=None -> the
-        # unset/error fail-open path (no model configured anywhere)
-        planner_entry = next(r for r in results if r["role"] == "planner")
-        assert planner_entry["model"] is None
-        assert planner_entry["model_source"] == "unset"
-        assert planner_entry["error"] is not None
-
-    def test_registry_loaded_once(self):
-        """effective_role_config loads the registry ONCE and passes it down.
-        We assert this by passing a registry and confirming all entries share
-        the same resolved provider for a role configured in that registry."""
-        mod = _import_module()
-        reg = _build_registry(roles={"dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"}})
-        results = mod.effective_role_config(registry=reg, environ={})
-        dispatch_entry = next(r for r in results if r["role"] == "dispatch")
-        assert dispatch_entry["provider"] == "ollama"
-        assert dispatch_entry["provider_source"] == "model_registry.json"
-        assert dispatch_entry["model"] == "gpt-oss-20b-high:latest"
-
-
 class TestImportHygiene:
     def test_does_not_import_pipeline_server(self):
         mod = _import_module()

@@ -10,9 +10,9 @@ code base; no server or backend modules are touched.
 from __future__ import annotations
 
 import os
+import plistlib
 from dataclasses import dataclass
 from app import role_registry
-
 PIPELINE_ROLES: tuple[str, ...] = (
     "overlord",
     "planner",
@@ -32,10 +32,10 @@ class EnvVarSpec:
 IGNORED_ENV_VARS: tuple[tuple[str, str], ...] = (
     ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
     ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
-    ("LOCAL_PAUSE_THRESHOLD", "PIPELINE_PAUSE_THRESHOLD"),
-    ("MAX_CONCURRENT_AGENTS", "PIPELINE_MAX_CONCURRENT_AGENTS"),
-    ("DISPATCH_BACKEND", "PIPELINE_BACKEND_DISPATCH"),
-    ("REVIEW_BACKEND", "PIPELINE_BACKEND_REVIEW"),
+    ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ("PIPELINE_TRANSPORT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("PIPELINE_TRANSPORT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ("PIPELINE_TRANSPORT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
 )
 
 
@@ -301,8 +301,54 @@ def effective_role_config(
                 environ=environ,
             )
         )
-    return results
-
 # ---------------------------------------------------------------------------
+# Plist helpers
+
+
+def read_plist_env(path: Path | None = None):
+    if path is None:
+        return {}
+    try:
+        with open(str(path), "rb") as f:
+            data = plistlib.load(f)
+    except Exception:
+        return {}
+    if isinstance(data, dict) and "EnvironmentVariables" in data:
+        env = data["EnvironmentVariables"]
+        if isinstance(env, dict):
+            return {k: str(v) for k, v in env.items()}
+    return {}
+
+
+def read_mcp_server_env(path: Path):
+    try:
+        with open(str(path), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    try:
+        env = data["mcpServers"]["pipeline"]["env"]
+        if isinstance(env, dict):
+            return {k: str(v) for k, v in env.items()}
+    except Exception:
+        pass
+    return {}
+# End of module.
+# ---------------------------------------------------------------------------
+
+
+def read_mcp_server_env(path: Path):
+    try:
+        with open(str(path), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    try:
+        env = data["mcpServers"]["pipeline"]["env"]
+        if isinstance(env, dict):
+            return {k: str(v) for k, v in env.items()}
+    except Exception:
+        pass
+    return {}
 # End of module.
 # ---------------------------------------------------------------------------

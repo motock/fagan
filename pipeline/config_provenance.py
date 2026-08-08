@@ -291,3 +291,37 @@ def resolve_env_var(name, default=None, *, environ=None, plist_env=None, mcp_env
         "layers": layers,
     }
 
+
+def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
+    """Return a diagnostic list for all catalog environment variables.
+
+    Parameters
+    ----------
+    environ : Mapping[str, str] | None
+        Environment mapping to use.  If ``None`` defaults to ``os.environ``.
+    plist_env : dict[str,str] | None
+        Pre‑read launchd plist values.  If ``None`` the module will read from
+        the default plist file once.
+    mcp_env : dict[str,str] | None
+        Pre‑read MCP server env block.  If ``None`` the module will read from
+        the default JSON file once.
+
+    Returns
+    -------
+    list[dict]
+        One dictionary per catalog entry, sorted by variable name.
+    """
+    if environ is None:
+        environ = os.environ
+    if plist_env is None:
+        plist_env = read_plist_env()
+    if mcp_env is None:
+        mcp_env = read_mcp_server_env()
+    # Resolve each catalog entry using the same env snapshots.
+    results: list[dict] = []
+    for spec in sorted(ENV_VAR_CATALOG, key=lambda s: s.name):
+        results.append(
+            resolve_env_var(spec.name, default=spec.default,
+                            environ=environ, plist_env=plist_env, mcp_env=mcp_env)
+        )
+    return results

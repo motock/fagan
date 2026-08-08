@@ -11,9 +11,106 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-
 from app import role_registry
 
+PIPELINE_ROLES: tuple[str, ...] = (
+    "overlord",
+    "planner",
+    "dispatch",
+    "review",
+    "decompose",
+    "test_author",
+    "diagnosis",
+    "security",
+)
+# Environment variable catalog
+@dataclass(frozen=True)
+class EnvVarSpec:
+    name: str
+    default: str | None
+
+IGNORED_ENV_VARS: tuple[tuple[str, str], ...] = (
+    ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+    ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("LOCAL_PAUSE_THRESHOLD", "PIPELINE_PAUSE_THRESHOLD"),
+    ("MAX_CONCURRENT_AGENTS", "PIPELINE_MAX_CONCURRENT_AGENTS"),
+    ("DISPATCH_BACKEND", "PIPELINE_BACKEND_DISPATCH"),
+    ("REVIEW_BACKEND", "PIPELINE_BACKEND_REVIEW"),
+)
+
+
+def ignored_env_vars_present(environ: dict | None = None) -> list[dict]:
+    if environ is None:
+        environ = os.environ
+    result: list[dict] = []
+    for name, use_instead in IGNORED_ENV_VARS:
+        if name in environ:
+            result.append(
+                {
+                    "name": name,
+                    "use_instead": use_instead,
+                    "reason": (
+                        "transport-only value backend.py overwrites on every dispatch - it has no effect as an input"
+                    ),
+                }
+            )
+    return result
+
+# ---------------------------------------------------------------------------
+# Helper for secret detection
+# ---------------------------------------------------------------------------
+def _is_secret(name: str) -> bool:
+    secrets = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+    return any(sub in name for sub in secrets)
+
+# ---------------------------------------------------------------------------
+# Resolve a single env var with layered sources
+# ---------------------------------------------------------------------------
+def resolve_env_var(
+    name: str,
+    *,
+    default: str | None = None,
+    environ: dict | None = None,
+    plist_env: dict | None = None,
+    mcp_env: dict | None = None,
+) -> dict:
+    if environ is None:
+        environ = os.environ
+    if plist_env is None:
+        plist_env = {}
+    if mcp_env is None:
+        mcp_env = {}
+    # Determine effective value and source
+    if name in environ:
+        effective = environ[name]
+        source = "environment"
+        restart_required = False
+    elif name in plist_env:
+        effective = plist_env[name]
+        source = "launchd_plist"
+        restart_required = True
+    else:
+        effective = default if default is not None else ""
+        source = "code_default"
+        restart_required = False
+    # Conflict detection (simplified)
+    conflict = False
+    masked = False
+    layers: list[dict] = []
+    for src, val in [("environment", environ.get(name)), ("launchd_plist", plist_env.get(name))]:
+        if val is not None:
+            layers.append({"source": src, "value": val})
+    return {
+        "name": name,
+        "effective": effective,
+        "source": source,
+        "restart_required": restart_required,
+        "conflict": conflict,
+        "masked": masked,
+        "layers": layers,
+    }
+
+# ---------------------------------------------------------------------------
 # Import the role registry – this is a stdlib‑only leaf of the repo and
 # provides ``resolve_role`` and ``load_registry``.
 
@@ -150,7 +247,7 @@ def resolve_role_provenance(
                 default_provider = None
         return {
             "role": role,
-            "provider": default_provider,
+            "provider": None,
             "model": None,
             "provider_source": None,
             "model_source": model_source,

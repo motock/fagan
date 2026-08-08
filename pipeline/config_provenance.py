@@ -84,7 +84,7 @@ def resolve_role_provenance(
     provider = (
         plan_role_config.get("provider")
         or environ.get(f"PIPELINE_BACKEND_{role.upper()}_PROVIDER")
-        or registry.get("providers", {}).get(role, {}).get("default_provider")
+        or registry.get("roles", {}).get(role, {}).get("provider")
     )
     if not provider:
         provider = "claude"

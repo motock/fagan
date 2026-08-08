@@ -649,6 +649,8 @@ time the active local model changes. Currently populated:
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` | `3` | Rework budget for a story that has already been escalated to Claude (`story["escalated"]`), taking priority over `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` regardless of whether the story also carries an acceptance oracle. `_ORACLE`'s tight cap exists to converge *local* review fast; once escalation has already paid its cost (real Claude usage, and per 2026-07-04's benchmark validation, sometimes real wall-clock time if the Claude reviewer gets rate-limited), reusing that same cap just throttles Claude's shot at the same feedback for no benefit — 6 of 11 escalated cells in that run parked after exactly one post-escalation cycle. |
 | `PIPELINE_LOCAL_MAX_RISK` | `low` | Highest story risk the `auto` router sends to the local agent: `low` \| `medium` \| `high`. Stories above this threshold go straight to Claude. Security-persona stories always go to Claude regardless of this setting. |
 | `PIPELINE_STEP_CAP_FALLBACK_THRESHOLD` | `3` | Consecutive same-model step-cap interrupts before a story's `model` is switched to the plan's `local_model_fallback` (see below). Only takes effect on plans that set that manifest field. On a plan with **no** `local_model_fallback` set, the same threshold instead gates escalation **to Claude** under `PIPELINE_BACKEND_DISPATCH=auto` (see routing item 2 below) — a story with no fallback configured no longer hits the step cap indefinitely on the same model under `auto`; outside `auto` (explicit `local`/`claude`), behavior is unchanged. |
+| `PIPELINE_BACKEND_DIAGNOSIS` | *(unset)* | Backend for the **diagnosis** role, which turns a step-capped or failed attempt's evidence into a root-cause statement folded into the next attempt's `agent_instructions` (see "Step-cap rebrief" below): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Resolution priority: a plan's `role_config.diagnosis` → this env var → `model_registry.json`'s `roles.diagnosis` → **the story's own local backend and model**. That last default never selects `claude`/`auto`, so an unconfigured diagnosis role can't quietly spend Claude budget; set this to give a struggling local story a stronger diagnoser than the model that got stuck. |
+| `PIPELINE_REBRIEF_TEST_RERUN` | `1` | Whether the rebrief re-runs the specific tests the last recorded run reported failing (up to 3 node ids, 180s cap, pytest-style runners only) to capture a real traceback for the next attempt. The stored `last_test_check.stdout_tail` is only the last 2000 characters of test output, which on a multi-failure run is the `FAILED <name>` summary and nothing else — the tracebacks scrolled past long before, so the diagnosis role and the resumed agent never saw the actual failing line. Set `0` to skip the re-run (the rest of the measured-facts block still applies). |
 
 **Backend routing:** dispatch, review, and overlord each resolve independently
 via `backend.get_backend(role)` (see `backend.py`) — moving one role off Claude
@@ -739,6 +741,33 @@ enables a layered routing strategy:
      starting over. Once a story is already running on the fallback model,
      further step-cap hits are a no-op (there is no fallback past the
      fallback), and this path only ever applies to a `local`-backend story.
+
+   **Step-cap rebrief (what the next attempt is told).** Whichever of those
+   paths a stalled attempt takes, `pipeline/rebrief.py` folds two blocks into
+   the story's `agent_instructions` before it is re-dispatched, so the resume
+   is not a blind retry (CLAUDE.md Step 9):
+
+   - A `PRIOR-ATTEMPT FACTS` block — **measured**, not inferred, and therefore
+     present even when no diagnosis model is configured at all. It reports the
+     attempt's diff against its base commit (including a `NO CODE CHANGE`
+     callout when nothing landed and a `POSSIBLE CLOBBER` callout when a file's
+     diff has the shape of a whole-file rewrite), how the attempt spent its
+     steps (tool histogram, plus explicit callouts when it never called an edit
+     tool or never ran the tests), which harness guards fired on it
+     (read-heavy/repetition/parking/`str_replace`-fail/churn nudges), how often
+     its context was trimmed, and — unless `PIPELINE_REBRIEF_TEST_RERUN=0` — a
+     fresh re-run of the previously-failing tests with a full traceback. Only
+     the last attempt is measured: `agent.log` is appended across resumes, so
+     the log is sliced at its final `[boot]` line first. The block is bounded
+     (3000 characters) and replaced, never stacked, on each new attempt — a
+     facts block describing an attempt that has since been superseded would
+     point the next one at evidence that is no longer true.
+   - A `PRIOR-ATTEMPT DIAGNOSIS` block — the **diagnosis** role's root-cause
+     statement (see `PIPELINE_BACKEND_DIAGNOSIS`). Optional and fail-open: an
+     unconfigured or erroring diagnosis role leaves this block out entirely
+     and never blocks the redispatch. The measured facts are fed to it as
+     evidence and it is instructed to ground its answer in them, so it cannot
+     invent a code defect for a branch git reports as having no diff.
 
    On a plan that has **not** set `local_model_fallback`, a repeated
    step-cap streak takes a different path entirely: under

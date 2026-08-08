@@ -21,7 +21,9 @@ from typing import Any
 from .parsers import _atomic_write_json
 from .persistence import _notify_user
 from .rebrief import (
+    collect_attempt_facts,
     collect_failure_evidence,
+    compose_attempt_facts,
     compose_rebriefed_instructions,
     diagnose_failure,
 )
@@ -52,10 +54,13 @@ def _escalate_to_claude(
     # diagnose_failure fails open (returns None) on any error, in which case
     # compose_rebriefed_instructions is a no-op and this is a plain blind
     # retry exactly as before this existed.
-    evidence = collect_failure_evidence(worktree, story)
+    facts = collect_attempt_facts(worktree, story)
+    evidence = collect_failure_evidence(worktree, story, facts=facts)
     diagnosis = diagnose_failure(evidence, story)
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
+    story["agent_instructions"] = compose_attempt_facts(
+        story.get("agent_instructions", ""), facts)
     # Remove worktree and branch — best-effort (may already be gone).
     if worktree:
         subprocess.run(["git", "worktree", "remove", "--force", worktree],
@@ -104,10 +109,13 @@ def _escalate_to_local_fallback_model(
     # diagnose_failure fails open (returns None) on any error, in which case
     # compose_rebriefed_instructions is a no-op and this is a plain blind
     # retry exactly as before this existed.
-    evidence = collect_failure_evidence(worktree, story)
+    facts = collect_attempt_facts(worktree, story)
+    evidence = collect_failure_evidence(worktree, story, facts=facts)
     diagnosis = diagnose_failure(evidence, story)
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
+    story["agent_instructions"] = compose_attempt_facts(
+        story.get("agent_instructions", ""), facts)
     # Remove worktree and branch — best-effort (may already be gone).
     if worktree:
         subprocess.run(["git", "worktree", "remove", "--force", worktree],

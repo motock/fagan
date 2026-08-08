@@ -291,7 +291,9 @@ from .rebase import (  # noqa: F401
 # use bare names -> re-export -> patch lands (mirrors .review / .escalation).
 from .rebrief import (
     append_cleanup_guidance,
+    collect_attempt_facts,
     collect_failure_evidence,
+    compose_attempt_facts,
     compose_rebriefed_instructions,
     diagnose_failure,
 )
@@ -1698,10 +1700,16 @@ def _rebrief_step_cap_struggle(
     diagnosis block, so repeated step-caps keep the prompt bounded and refresh
     with the latest struggle. Must run while the worktree still exists - the
     evidence is the tail of its agent.log."""
-    evidence = collect_failure_evidence(worktree, story)
+    facts = collect_attempt_facts(worktree, story)
+    evidence = collect_failure_evidence(worktree, story, facts=facts)
     diagnosis = diagnose_failure(evidence, story, plan_role_config)
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
+    # After the diagnosis, never before: composing a diagnosis truncates the
+    # brief at DIAGNOSIS_HEADER, which would take a facts block appended ahead
+    # of it with no replacement.
+    story["agent_instructions"] = compose_attempt_facts(
+        story.get("agent_instructions", ""), facts)
 
 
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:

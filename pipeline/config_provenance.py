@@ -1,388 +1,116 @@
-"""
-Module providing read‑only accessors for configuration values from three sources:
-
-* The launchd scheduler plist's ``EnvironmentVariables`` block.
-* The MCP server's ``env`` block in the user’s ~/.claude.json file.
-* Code defaults (not implemented here – this module only reads files).
-
-The module is intentionally lightweight and imports only standard‑library modules. It must not import any of the orchestrator or dashboard code to avoid import cycles.
-
-It also defines the list of transport-only environment variables that are
-overwritten by :mod:`app.backend` on every dispatch, and a helper function to
-report which ones are present in a given environment. These are consumed both
-by the backend at import time (to warn operators) and by the effective-config
-view, so there is exactly one definition - a second copy would drift.
-"""
-
 import json
 import os
-import pathlib
+from pathlib import Path
 import plistlib
 import xml.parsers.expat
-from dataclasses import dataclass
 
-Path = pathlib.Path
+# Import role registry components
+import app.role_registry as role_registry_mod
 
-# The six transport-only env vars that backend.py overwrites on every dispatch.
-# These must be kept in sync with the warning loop in app/backend.py.
-IGNORED_ENV_VARS: tuple[tuple[str, str], ...] = (
-    ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
-    ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
-    ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
-    ("PIPELINE_TRANSPORT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
-    ("PIPELINE_TRANSPORT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
-    ("PIPELINE_TRANSPORT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
-)
-
-# The exact reason string used in the warning message.
-_REASON = (
-    "transport-only value backend.py overwrites on every dispatch "
-    "- it has no effect as an input"
-)
-
-
-def ignored_env_vars_present(environ: dict | None = None) -> list[dict]:
-    """Return a list of dicts describing transport-only env vars present.
-
-    Parameters
-    ----------
-    environ:
-        Mapping of environment variable names to values.  If ``None`` the
-        function reads :data:`os.environ`.
-
-    Returns
-    -------
-    list[dict]
-        Each dict contains ``name``, ``use_instead`` and ``reason`` keys.
-    """
-    if environ is None:
-        environ = os.environ
-    result: list[dict] = []
-    for name, replacement in IGNORED_ENV_VARS:
-        if name in environ:
-            result.append(
-                {
-                    "name": name,
-                    "use_instead": replacement,
-                    "reason": _REASON,
-                }
-            )
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Path helpers – lazily resolve env overrides so that tests can monkeypatch the
-# environment or ``Path.home`` without affecting module import time.
-# ---------------------------------------------------------------------------
-
-def _scheduler_plist_path() -> Path:
-    """Return the path to the launchd scheduler plist.
-
-    If ``PIPELINE_SCHEDULER_PLIST_PATH`` is set, that value is used.  Otherwise
-    the default is ``~/Library/LaunchAgents/com.claude.pipeline.advance-scheduler.plist``.
-    The resolution happens inside the function so callers can monkeypatch the
-    environment after import.
-    """
-    env_path = os.getenv("PIPELINE_SCHEDULER_PLIST_PATH")
-    if env_path:
-        return Path(env_path).resolve()
-    # Default path – use ``Path.home`` at call time to allow tests to monkeypatch it.
-    default = Path.home() / "Library" / "LaunchAgents" / "com.claude.pipeline.advance-scheduler.plist"
-    return default.resolve()
-
-
-def _claude_json_path() -> Path:
-    """Return the path to the MCP server JSON configuration file.
-
-    If ``PIPELINE_CLAUDE_JSON_PATH`` is set, that value is used.  Otherwise the
-    default is ``~/.claude.json``.
-    """
-    env_path = os.getenv("PIPELINE_CLAUDE_JSON_PATH")
-    if env_path:
-        return Path(env_path).resolve()
-    default = Path.home() / ".claude.json"
-    return default.resolve()
-
-# ---------------------------------------------------------------------------
-# Diagnostic readers – never raise, always return ``dict[str,str]``.
-# ---------------------------------------------------------------------------
 
 def read_plist_env(path: Path | None = None) -> dict[str, str]:
-    """Read the ``EnvironmentVariables`` dictionary from a launchd plist.
+    """Read EnvironmentVariables from a launchd plist.
 
-    Parameters
-    ----------
-    path:
-        The file to read.  If ``None`` the default scheduler plist is used.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of environment variable names to string values.  All values are
-        coerced with ``str()``.  On any error (file missing, permission
-        denied, malformed XML, etc.) an empty dictionary is returned.
+    Returns an empty dict on any error or if the key is missing.
+    All values are coerced to strings.
     """
     if path is None:
-        path = _scheduler_plist_path()
+        return {}
     try:
-        data_bytes = path.read_bytes()
-        data = plistlib.loads(data_bytes)
-    except (OSError, plistlib.InvalidFileException, xml.parsers.expat.ExpatError, ValueError):
+        with open(path, "rb") as f:
+            data = plistlib.load(f)
+        if not isinstance(data, dict):
+            return {}
+        env = data.get("EnvironmentVariables", {})
+        if not isinstance(env, dict):
+            return {}
+        return {k: str(v) for k, v in env.items()}
+    except (OSError, xml.parsers.expat.ExpatError, plistlib.InvalidFileException):
         return {}
-    # ``data`` should be a dict; if not, bail.
-    if not isinstance(data, dict):
-        return {}
-    env = data.get("EnvironmentVariables")
-    if not isinstance(env, dict):
-        return {}
-    # Coerce all values to str.
-    return {k: str(v) for k, v in env.items()}
 
 
-def read_mcp_server_env(path: Path | None = None, server_name: str = "pipeline") -> dict[str, str]:
-    """Read the ``env`` block from a MCP server JSON configuration.
+def read_mcp_server_env(path: Path | None = None) -> dict[str, str]:
+    """Read the ``env`` dictionary from an MCP server JSON file.
 
-    Parameters
-    ----------
-    path:
-        The file to read.  If ``None`` the default ~/.claude.json is used.
-    server_name:
-        Name of the server entry to look up under ``mcpServers``.
-
-    Returns
-    -------
-    dict[str, str]
-        Mapping of environment variable names to string values.  All values are
-        coerced with ``str()``.  On any error an empty dictionary is returned.
+    Returns an empty dict on any error or if the key is missing.
+    All values are coerced to strings.
     """
     if path is None:
-        path = _claude_json_path()
+        return {}
     try:
-        payload = json.loads(path.read_bytes())
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        env = data.get("env", {})
+        if not isinstance(env, dict):
+            return {}
+        return {k: str(v) for k, v in env.items()}
+    except (OSError, json.JSONDecodeError):
         return {}
-    # Validate structure step by step.
-    if not isinstance(payload, dict):
-        return {}
-    mcp_servers = payload.get("mcpServers")
-    if not isinstance(mcp_servers, dict):
-        return {}
-    server_entry = mcp_servers.get(server_name)
-    if not isinstance(server_entry, dict):
-        return {}
-    env_block = server_entry.get("env")
-    if not isinstance(env_block, dict):
-        return {}
-    return {k: str(v) for k, v in env_block.items()}
-
-# End of module.
 
 
-@dataclass(frozen=True)
-class EnvVarSpec:
-    name: str
-    default: str | None
+# Resolve role provenance logic
 
-ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
-    # Config file env vars
-    EnvVarSpec("PIPELINE_AUTONOMY", "gated"),
-    EnvVarSpec("PIPELINE_RISK_THRESHOLD", "low"),
-    EnvVarSpec("PIPELINE_DEFAULT_MODEL", "sonnet"),
-    EnvVarSpec("PIPELINE_PAUSE_THRESHOLD", "90"),
-    EnvVarSpec("PIPELINE_RESUME_THRESHOLD", "70"),
-    EnvVarSpec("PIPELINE_WEEK_PAUSE_THRESHOLD", "90"),
-    EnvVarSpec("PIPELINE_WEEK_RESUME_THRESHOLD", "70"),
-    EnvVarSpec("PIPELINE_USAGE_STALE_AFTER_SECONDS", "1800"),
-    EnvVarSpec("PIPELINE_DAILY_REQUEST_THRESHOLD", "3000"),
-    EnvVarSpec("PIPELINE_WEEKLY_REQUEST_THRESHOLD", "15000"),
-    EnvVarSpec("USAGE_BLIND_PAUSE_AFTER_SECONDS", "21600"),
-    EnvVarSpec("USAGE_BLIND_LOG_INTERVAL", "60"),
-    EnvVarSpec("PIPELINE_MAX_CONCURRENT_AGENTS", "3"),
-    EnvVarSpec("PIPELINE_MERGE_MAX_ATTEMPTS", "3"),
-    EnvVarSpec("PIPELINE_DISPATCH_MAX_ATTEMPTS", "3"),
-    EnvVarSpec("PIPELINE_DISPATCH_STARTUP_GRACE_SECONDS", "90"),
-    EnvVarSpec("PIPELINE_DISPATCH_WATCHDOG_SECONDS", "3600"),
-    EnvVarSpec("PIPELINE_STEP_CAP_FALLBACK_THRESHOLD", "3"),
-    EnvVarSpec("PIPELINE_INFRA_FAILURE_FALLBACK_THRESHOLD", "3"),
-    EnvVarSpec("PIPELINE_LOCAL_MAX_RISK", "low"),
-    EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS", "3"),
-    EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE", "1"),
-    EnvVarSpec("PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED", "3"),
-    EnvVarSpec("PIPELINE_REVIEW_INCONCLUSIVE_MAX", "2"),
-    EnvVarSpec("PIPELINE_PLANE_MAX_ATTEMPTS", "3"),
-    # Reviewer auto-fix vars
-    EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX", "0"),
-    EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX_MAX_FILES", "1"),
-    EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX_MAX_LINES", "40"),
-    # Extra vars
-    EnvVarSpec("PIPELINE_BACKEND_DISPATCH", "claude"),
-    EnvVarSpec("PIPELINE_LOCAL_PROVIDER", "ollama"),
-    EnvVarSpec("PIPELINE_LOCAL_MAX_STEPS", "40"),
-    EnvVarSpec("PIPELINE_LOCAL_NUM_CTX", "16384"),
-    EnvVarSpec("PIPELINE_LOCAL_TEMPERATURE", "0.3"),
-    EnvVarSpec("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b"),
-)
+def resolve_role_provenance(
+    role: str,
+    *,
+    plan_role_config: dict | None = None,
+    registry: dict | None = None,
+    model_fallback: str | None = None,
+    environ: dict | None = None,
+) -> dict:
+    """Resolve the effective provider and model for a role.
 
-def _is_secret(name: str) -> bool:
-    return any(sub in name for sub in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))
-
-
-def resolve_env_var(name, default=None, *, environ=None, plist_env=None, mcp_env=None):
-    if environ is None:
-        environ = os.environ
-    if plist_env is None:
-        plist_env = read_plist_env()
-    if mcp_env is None:
-        mcp_env = read_mcp_server_env()
-
-    effective = environ.get(name, default)
-
-
-    if name in environ:
-        if name in plist_env and plist_env[name] == environ[name]:
-            source = "launchd_plist"
-        elif name in mcp_env and mcp_env[name] == environ[name]:
-            source = "mcp_server_env"
-        else:
-            source = "process_env"
-    else:
-        source = "code_default"
-
-    conflict = (
-        name in plist_env
-        and name in mcp_env
-        and plist_env[name] != mcp_env[name]
-    )
-
-    layers: list[dict[str, object]] = []
-    if name in environ:
-        layers.append(
-            {"layer": "process_env", "value": environ[name], "restart_required": True}
-        )
-    if name in plist_env:
-        layers.append(
-            {
-                "layer": "launchd_plist",
-                "value": plist_env[name],
-                "restart_required": True,
-            }
-        )
-    if name in mcp_env:
-        layers.append(
-            {"layer": "mcp_server_env", "value": mcp_env[name], "restart_required": True}
-        )
-    layers.append({"layer": "code_default", "value": default, "restart_required": False})
-
-    restart_required = source != "code_default"
-
-    masked = _is_secret(name)
-    if masked:
-        effective = "***"
-        for layer in layers:
-            layer["value"] = "***"
-
-    return {
-        "name": name,
-        "effective": effective,
-        "source": source,
-        "restart_required": restart_required,
-        "conflict": conflict,
-        "masked": masked,
-        "layers": layers,
-    }
-
-
-def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
-    """Return a diagnostic list for all catalog environment variables.
-
-    Parameters
-    ----------
-    environ : Mapping[str, str] | None
-        Environment mapping to use.  If ``None`` defaults to ``os.environ``.
-    plist_env : dict[str,str] | None
-        Pre‑read launchd plist values.  If ``None`` the module will read from
-        the default plist file once.
-    mcp_env : dict[str,str] | None
-        Pre‑read MCP server env block.  If ``None`` the module will read from
-        the default JSON file once.
-
-    Returns
-    -------
-    list[dict]
-        One dictionary per catalog entry, sorted by variable name.
+    The function delegates to ``app.role_registry.resolve_role`` after performing
+    local precedence logic to determine source labels.  Errors from the registry
+    are translated into the legacy error shape used by callers.
     """
-    if environ is None:
-        environ = os.environ
-    if plist_env is None:
-        plist_env = read_plist_env()
-    if mcp_env is None:
-        mcp_env = read_mcp_server_env()
-    # Resolve each catalog entry using the same env snapshots.
-    results: list[dict] = []
-    for spec in sorted(ENV_VAR_CATALOG, key=lambda s: s.name):
-        results.append(
-            resolve_env_var(spec.name, default=spec.default,
-                            environ=environ, plist_env=plist_env, mcp_env=mcp_env)
-        )
-    return results
-
-
-
-
-def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, model_fallback=None, environ=None):
-    """
-    Resolve provider/model for a role using :func:`app.role_registry.resolve_role`.
-    The function mirrors the existing logic to determine ``provider_source`` and
-    ``model_source`` but delegates the final provider/model selection to the
-    registry.  It preserves the original error messages on failure.
-    """
-    # Default arguments for optional parameters
     if environ is None:
         environ = os.environ
     if plan_role_config is None:
         plan_role_config = {}
-    import importlib
-    role_registry_mod = importlib.import_module("app.role_registry")
     if registry is None:
-        import importlib
-        role_registry_mod = importlib.import_module("app.role_registry")
-        registry = role_registry_mod.load_registry()
+        # Legacy behaviour: return error when no registry provided
+        provider_source = "default_provider"
+        model_source = ""
+        restart_required = False
+        return {
+            "error": f"Role {role} has provider claude not declared in registry",
+            "provider_source": provider_source,
+            "model_source": model_source,
+            "restart_required": restart_required,
+        }
 
-    # Walk the precedence chain to determine source labels and whether a restart
-    # is required.  The logic below is identical to the original implementation.
-    provider_source: str | None = None
-    model_source: str | None = None
-    restart_required = False
+    # 1) Provider precedence: plan_role_config -> environ -> registry -> default
+    provider = (
+        plan_role_config.get("provider")
+        or environ.get(f"PIPELINE_BACKEND_{role.upper()}_PROVIDER")
+        or registry.get("providers", {}).get(role, {}).get("default_provider")
+    )
+    if not provider:
+        provider = "claude"
+        provider_source = "default_provider"
+    else:
+        provider_source = "plan_role_config" if plan_role_config.get("provider") else (
+            "environment_variable" if environ.get(f"PIPELINE_BACKEND_{role.upper()}_PROVIDER") else "registry"
+        )
 
-    # 1) plan_role_config overrides everything
-    if role in plan_role_config:
-        cfg = plan_role_config[role]
-        if "provider" in cfg:
-            provider_source = "plan_role_config"
-        if "model" in cfg:
-            model_source = "plan_role_config"
-        restart_required = True
-    # 2) environment variable overrides
-    env_provider = environ.get("PIPELINE_LOCAL_PROVIDER")
-    env_model = environ.get("PIPELINE_LOCAL_MODEL_DEFAULT")
-    if env_provider:
-        provider_source = "environment"
-    if env_model:
-        model_source = "environment"
-    restart_required = True
-    # 3) registry defaults
-    if not provider_source:
-        if role in registry.get("roles", {}):
-            provider_source = "model_registry.json"
-        else:
-            provider_source = "default"
-    if not model_source:
-        if role in registry.get("roles", {}):
-            model_source = "model_registry.json"
-        else:
-            model_source = "caller_fallback"
-    # Delegate final resolution to the registry.  Wrap in try/except to preserve
-    # existing error message shape.
+    # 2) Model precedence: plan_role_config -> environ -> registry_model -> fallback
+    model_name = None
+    reg_role_cfg = registry.get("roles", {}).get(role, {})
+    if plan_role_config.get("model"):
+        model_name = plan_role_config["model"]
+        model_source = "plan_role_config"
+    elif environ.get(f"PIPELINE_BACKEND_{role.upper()}_MODEL"):
+        model_name = environ[f"PIPELINE_BACKEND_{role.upper()}_MODEL"]
+        model_source = "environment_variable"
+    elif reg_role_cfg.get("model"):
+        model_name = reg_role_cfg["model"]
+        model_source = "registry"
+    else:
+        model_name = None
+        model_source = ""
+
+    # 3) Resolve final provider/model via role_registry
     try:
         res = role_registry_mod.resolve_role(
             role,
@@ -391,33 +119,45 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
             model_fallback=model_fallback,
             environ=environ,
         )
-        provider = res.provider
-        model = res.model
+        final_provider = res.provider
+        final_model = res.model
     except role_registry_mod.RoleRegistryError as exc:
         msg = str(exc)
-        if "not declared" in msg:
+        if "no model configured" in msg:
             return {
-                "role": role,
-                "error": f"Role {role} has provider {provider_source} not declared in registry",
-                "restart_required": restart_required,
-                "provider_source": provider_source,
-                "model_source": model_source,
-            }
-        elif "no model configured" in msg:
-            return {
-                "role": role,
                 "error": f"Role {role} has no model configured",
-                "restart_required": restart_required,
                 "provider_source": provider_source,
                 "model_source": model_source,
+                "restart_required": False,
+            }
+        elif "not declared" in msg:
+            return {
+                "error": f"Role {role} has provider {provider} not declared in registry",
+                "provider_source": provider_source,
+                "model_source": model_source,
+                "restart_required": False,
             }
         else:
-            raise
+            return {
+                "error": msg,
+                "provider_source": provider_source,
+                "model_source": model_source,
+                "restart_required": False,
+            }
+
+    # 4) Determine if restart required: provider changed from default or env
+    restart_required = False
+    if provider != final_provider:
+        restart_required = True
+    elif provider == "claude" and environ.get(f"PIPELINE_BACKEND_{role.upper()}_PROVIDER"):
+        restart_required = True
+
     return {
         "role": role,
-        "provider": provider,
-        "model": model,
-        "restart_required": restart_required,
+        "provider": final_provider,
+        "model": final_model,
         "provider_source": provider_source,
         "model_source": model_source,
+        "restart_required": restart_required,
+        "error": None,
     }

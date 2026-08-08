@@ -244,12 +244,12 @@ def resolve_role_provenance(
             try:
                 default_provider = role_registry.load_registry().get("default_provider")
             except role_registry.RoleRegistryError:
-                default_provider = None
+                default_provider = "claude"
         return {
             "role": role,
-            "provider": None,
+            "provider": "claude",
             "model": None,
-            "provider_source": None,
+            "provider_source": "default",
             "model_source": model_source,
             "restart_required": False,
             "error": str(e),

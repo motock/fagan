@@ -4,7 +4,38 @@ from pathlib import Path
 import plistlib
 import xml.parsers.expat
 
-# Import role registry components
+IGNORED_ENV_VARS: tuple[tuple[str, str], ...] = (
+    ("LOCAL_AGENT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+    ("LOCAL_AGENT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("LOCAL_AGENT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ("PIPELINE_TRANSPORT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
+    ("PIPELINE_TRANSPORT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
+    ("PIPELINE_TRANSPORT_MAX_STEPS", "PIPELINE_LOCAL_MAX_STEPS"),
+)
+
+# Reason string used for ignored env vars warnings.
+_IGNORED_ENV_REASON = (
+    "transport-only value backend.py overwrites on every dispatch "
+    "- it has no effect as an input"
+)
+
+
+def ignored_env_vars_present(env: dict[str, str]) -> list[dict[str, str]]:
+    """Return a list of transport‑only env vars that are present.
+
+    Each entry contains the original variable name, the real variable it
+    should be replaced with, and a human‑readable reason.
+    """
+    result: list[dict[str, str]] = []
+    for old, new in IGNORED_ENV_VARS:
+        if old in env:
+            result.append({
+                "name": old,
+                "use_instead": new,
+                "reason": _IGNORED_ENV_REASON,
+            })
+    return result
+
 import app.role_registry as role_registry_mod
 
 
@@ -29,7 +60,7 @@ def read_plist_env(path: Path | None = None) -> dict[str, str]:
         return {}
 
 
-def read_mcp_server_env(path: Path | None = None) -> dict[str, str]:
+def read_mcp_server_env(path: Path | None = None, *, server_name: str = "pipeline") -> dict[str, str]:
     """Read the ``env`` dictionary from an MCP server JSON file.
 
     Returns an empty dict on any error or if the key is missing.
@@ -40,16 +71,21 @@ def read_mcp_server_env(path: Path | None = None) -> dict[str, str]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        env = data.get("env", {})
+        if not isinstance(data, dict):
+            return {}
+        mcp_servers = data.get("mcpServers", {})
+        if not isinstance(mcp_servers, dict):
+            return {}
+        server_cfg = mcp_servers.get(server_name, {})
+        if not isinstance(server_cfg, dict):
+            return {}
+        env = server_cfg.get("env", {})
         if not isinstance(env, dict):
             return {}
         return {k: str(v) for k, v in env.items()}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
-
-
-# Resolve role provenance logic
-
+        return {}
 def resolve_role_provenance(
     role: str,
     *,
@@ -95,19 +131,19 @@ def resolve_role_provenance(
         )
 
     # 2) Model precedence: plan_role_config -> environ -> registry_model -> fallback
-    model_name = None
-    reg_role_cfg = registry.get("roles", {}).get(role, {})
+        # model_name placeholder removed
+        reg_role_cfg = registry.get("roles", {}).get(role, {})
     if plan_role_config.get("model"):
-        model_name = plan_role_config["model"]
+        # model_name set to plan_role_config value
         model_source = "plan_role_config"
     elif environ.get(f"PIPELINE_BACKEND_{role.upper()}_MODEL"):
-        model_name = environ[f"PIPELINE_BACKEND_{role.upper()}_MODEL"]
+        # model_name set to environ value
         model_source = f"env:{environ.get(f'PIPELINE_BACKEND_{role.upper()}_MODEL')}"
     elif reg_role_cfg.get("model"):
-        model_name = reg_role_cfg["model"]
+        # model_name set to reg_role_cfg["model"]
         model_source = "model_registry.json"
     else:
-        model_name = None
+        # model_name set to None when no model found
         model_source = ""
 
     # 3) Resolve final provider/model via role_registry
@@ -158,6 +194,5 @@ def resolve_role_provenance(
         "model": final_model,
         "provider_source": provider_source,
         "model_source": model_source,
-        "restart_required": restart_required,
-        "error": None,
+        "restart_required": restart_required
     }

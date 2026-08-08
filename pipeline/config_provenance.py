@@ -360,45 +360,18 @@ PIPELINE_ROLES: tuple[str, ...] = (
 )
 
 def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, model_fallback=None, environ=None) -> dict:
-    """Resolve role provider and model provenance.
-
-    Parameters
-    ----------
-    role : str
-        The role name to resolve.
-    plan_role_config : dict | None, optional
-        Mapping of role to a dict containing ``provider`` and/or ``model`` keys.
-    registry : dict | None, optional
-        Parsed model‑registry JSON.  If ``None`` an empty mapping is used.
-    model_fallback : str | callable | None, optional
-        Value or zero‑argument callable providing a fallback model when no
-        other layer supplies one.
-    environ : dict | None, optional
-        Environment variables to consult for the env‑var provider layer.  If
-        ``None`` defaults to ``os.environ``.
-
-    Returns
-    -------
-    dict
-        Keys: ``role``, ``provider``, ``model``, ``provider_source``,
-        ``model_source``, ``restart_required``, ``error``.
-    """
+    """Resolve role provider and model provenance."""
     import os
 
     if plan_role_config is None:
         plan_role_config = {}
     if registry is None:
-        registry = {}
+        from app import role_registry
+        registry = role_registry.load_registry()
     if environ is None:
         environ = dict(os.environ)
 
-    def _resolve_tag(provider: str, name: str):
-        try:
-            return registry["providers"][provider]["models"][name]["tag"]
-        except KeyError:
-            return None
-
-    # Provider source determination
+    # Determine provider source
     provider_source = "default"
     provider_value = "claude"
 
@@ -414,19 +387,21 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
         if env_key in environ:
             provider_value = environ[env_key]
             provider_source = f"env:{env_key}"
-        elif "roles" in registry and role in registry.get("roles", {}):
-            reg_role = registry["roles"][role]
-            if isinstance(reg_role, dict) and "provider" in reg_role:
-                provider_value = reg_role["provider"]
-                provider_source = "model_registry.json"
+        elif (
+            "roles" in registry
+            and (reg_role := registry.get("roles", {}).get(role))
+            and isinstance(reg_role, dict)
+            and "provider" in reg_role
+        ):
+            provider_value = reg_role["provider"]
+            provider_source = "model_registry.json"
 
     provider_value = provider_value.strip().lower()
     restart_required = provider_source.startswith("env:")
 
-    # Model source determination
-    model_source = None
+    # Determine model source
     raw_model_name = None
-
+    model_source = "unset"
     if (
         role in plan_role_config
         and isinstance(plan_role_config[role], dict)
@@ -439,7 +414,6 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
         and (reg_role := registry.get("roles", {}).get(role))
         and isinstance(reg_role, dict)
         and "model" in reg_role
-        and (reg_role.get("provider") is None or reg_role["provider"].startswith(provider_value))
     ):
         raw_model_name = reg_role["model"]
         model_source = "model_registry.json"
@@ -448,15 +422,14 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
         raw_model_name = model_fallback() if callable(model_fallback) else model_fallback
         model_source = "caller_fallback"
 
-    if raw_model_name is None:
-        model_source = "unset"
+    def _resolve_tag(provider: str, name: str):
+        try:
+            return registry["providers"][provider]["models"][name]["tag"]
+        except (KeyError, TypeError):
+            return None
 
     resolved_model = None
     error_msg = None
-
-    resolved_model = None
-    error_msg = None
-
     if raw_model_name is not None:
         if model_source == "caller_fallback":
             resolved_model = raw_model_name
@@ -466,7 +439,6 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
                 provider_value = None
                 resolved_model = None
                 error_msg = f"Role {role} has provider {provider_value} and model {raw_model_name} not declared in registry"
-                # On error, clear provenance sources
                 provider_source = None
                 model_source = None
                 restart_required = False

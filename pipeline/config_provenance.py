@@ -289,8 +289,8 @@ def resolve_env_var(name, default=None, *, environ=None, plist_env=None, mcp_env
         "restart_required": restart_required,
         "conflict": conflict,
         "masked": masked,
-        "layers": layers,
-    },
+        "layers": layers
+}
 
 PIPELINE_ROLES: tuple[str, ...] = (
     "overlord",

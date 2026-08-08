@@ -9,17 +9,13 @@ code base; no server or backend modules are touched.
 
 from __future__ import annotations
 
-import json
 import os
-import pathlib
-import plistlib
-import xml.parsers.expat
-
 from dataclasses import dataclass
+
+from app import role_registry
 
 # Import the role registry – this is a stdlib‑only leaf of the repo and
 # provides ``resolve_role`` and ``load_registry``.
-from app import role_registry
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -141,12 +137,23 @@ def resolve_role_provenance(
         # Fail‑open – return diagnostic information.
         os.environ.clear()
         os.environ.update(original_environ)
+        # Determine default provider from registry if available
+        if registry is not None:
+            default_provider = registry.get("default_provider")
+        else:
+            default_provider = role_registry.load_registry().get("default_provider")
+
+        if default_provider is None:
+            try:
+                default_provider = role_registry.load_registry().get("default_provider")
+            except role_registry.RoleRegistryError:
+                default_provider = None
         return {
             "role": role,
-            "provider": None,
+            "provider": default_provider,
             "model": None,
             "provider_source": None,
-            "model_source": None,
+            "model_source": model_source,
             "restart_required": False,
             "error": str(e),
         }

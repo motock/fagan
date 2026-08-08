@@ -20,6 +20,7 @@ import pathlib
 import plistlib
 import xml.parsers.expat
 from dataclasses import dataclass
+
 from app import role_registry
 
 Path = pathlib.Path
@@ -369,13 +370,15 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
     restart_required = True
     # 3) registry defaults
     if not provider_source:
-        provider_source = "registry"
+        if role in registry.get("roles", {}):
+            provider_source = "model_registry.json"
+        else:
+            provider_source = "default"
     if not model_source:
-        model_source = "registry"
-    # 4) default provider fallback
-    if not provider_source and model_fallback is None:
-        provider_source = "default_provider"
-
+        if role in registry.get("roles", {}):
+            model_source = "model_registry.json"
+        else:
+            model_source = "caller_fallback"
     # Delegate final resolution to the registry.  Wrap in try/except to preserve
     # existing error message shape.
     try:

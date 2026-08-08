@@ -396,9 +396,13 @@ class TestImportGraph:
         # Every imported module must resolve to a stdlib module (no
         # third-party, no other pipeline/app submodule besides the module's
         # own package). The story allows: json, os, plistlib, pathlib,
-        # xml.parsers.expat.
+        # xml.parsers.expat. A later story explicitly authorizes importing
+        # app.role_registry (a stdlib-only leaf) for role provenance.
         tree = ast.parse(self._source())
-        allowed = {"json", "os", "plistlib", "pathlib", "xml.parsers.expat"}
+        allowed = {
+            "json", "os", "plistlib", "pathlib", "xml.parsers.expat",
+            "app.role_registry",
+        }
         imported = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -743,16 +747,23 @@ class TestBackendWarningEmission:
 
 class TestNoImportCycle:
     def test_config_provenance_imports_nothing_from_app(self):
+        # A later story explicitly authorizes importing app.role_registry
+        # (a stdlib-only leaf) for role provenance - that one module is
+        # exempt. Any other app.* import would risk the real import cycle
+        # this test exists to catch (e.g. app.backend, app.dashboard).
         src = Path("pipeline/config_provenance.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert not alias.name.startswith("app"), (
+                    assert alias.name == "app.role_registry" or not alias.name.startswith("app"), (
                         "config_provenance must not import from app (no import cycle)"
                     )
             elif isinstance(node, ast.ImportFrom):
-                assert not (node.module or "").startswith("app"), (
+                module = node.module or ""
+                assert module == "app" and any(
+                    a.name == "role_registry" for a in node.names
+                ) or not module.startswith("app"), (
                     "config_provenance must not import from app (no import cycle)"
                 )
 
@@ -1749,3 +1760,308 @@ class TestEffectiveEnvConfigBoundary:
         assert not isinstance(result, (tuple, dict))
 
 
+
+
+# ===========================================================================
+# Role provenance (W3a): resolve_role_provenance / effective_role_config
+#
+# These tests target the NEW provenance API described in the story. The
+# module under test does not implement them yet on this branch, so this
+# section is intentionally RED until a follow-up dispatch adds it.
+# ===========================================================================
+
+# `re` is already imported as `_re` earlier in this file (line ~768).
+
+
+def _build_registry(roles=None, providers=None):
+    """Build a self-contained registry dict. Never touches the real
+    model_registry.json on disk."""
+    providers = providers or {
+        "claude": {"models": {"sonnet": {"tag": "sonnet"}, "opus": {"tag": "opus"}}},
+        "ollama": {
+            "models": {
+                "gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"},
+                "glm": {"tag": "glm-5.2:cloud"},
+            }
+        },
+        "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}},
+    }
+    roles = roles or {
+        "dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"},
+    }
+    return {"providers": providers, "roles": roles}
+
+
+class TestPipelineRolesConstant:
+    def test_roles_constant_value_and_type(self):
+        mod = _import_module()
+        assert hasattr(mod, "PIPELINE_ROLES")
+        assert isinstance(mod.PIPELINE_ROLES, tuple)
+        assert mod.PIPELINE_ROLES == (
+            "overlord",
+            "planner",
+            "dispatch",
+            "review",
+            "decompose",
+            "test_author",
+            "diagnosis",
+            "security",
+        )
+        # all elements are str
+        assert all(isinstance(r, str) for r in mod.PIPELINE_ROLES)
+
+    def test_anti_drift_roles_used_in_pipeline_are_in_constant(self):
+        """Every role name passed to resolve_role across pipeline/*.py must
+        appear in PIPELINE_ROLES (anti-drift)."""
+        mod = _import_module()
+        repo = Path(__file__).resolve().parent.parent.parent
+        used = set()
+        for src in (repo / "pipeline").glob("*.py"):
+            text = src.read_text()
+            used.update(_re.findall(r'resolve_role\(\s*["\']([a-z_]+)["\']', text))
+        assert used, "expected at least one resolve_role call in pipeline/*.py"
+        for role in used:
+            assert role in mod.PIPELINE_ROLES, (
+                f"role {role!r} used in pipeline but missing from PIPELINE_ROLES"
+            )
+
+    def test_anti_drift_registry_roles_in_constant(self):
+        """Every key under `roles` in the repo's real model_registry.json must
+        be in PIPELINE_ROLES. This test only READS the real file."""
+        mod = _import_module()
+        repo = Path(__file__).resolve().parent.parent.parent
+        reg_path = repo / "model_registry.json"
+        data = json.loads(reg_path.read_text())
+        for role_name in data.get("roles", {}):
+            assert role_name in mod.PIPELINE_ROLES, (
+                f"registry role {role_name!r} not in PIPELINE_ROLES"
+            )
+
+
+class TestResolveRoleProvenanceSignature:
+    def test_returns_dict_with_required_keys(self):
+        mod = _import_module()
+        reg = _build_registry()
+        result = mod.resolve_role_provenance(
+            "review", registry=reg, model_fallback="sonnet", environ={}
+        )
+        assert isinstance(result, dict)
+        for key in (
+            "role",
+            "provider",
+            "model",
+            "provider_source",
+            "model_source",
+            "restart_required",
+            "error",
+        ):
+            assert key in result, f"missing key {key!r}"
+
+    def test_error_is_none_on_success(self):
+        mod = _import_module()
+        reg = _build_registry()
+        result = mod.resolve_role_provenance(
+            "review", registry=reg, model_fallback="sonnet", environ={}
+        )
+        assert result["error"] is None
+
+
+class TestPlanRoleConfigWins:
+    def test_plan_role_config_provider_and_model(self):
+        mod = _import_module()
+        reg = _build_registry()
+        result = mod.resolve_role_provenance(
+            "review",
+            plan_role_config={"review": {"provider": "mlx", "model": "qwen"}},
+            registry=reg,
+            environ={},
+        )
+        assert result["provider"] == "mlx"
+        assert result["provider_source"] == "plan_role_config"
+        assert result["model_source"] == "plan_role_config"
+        assert result["restart_required"] is False
+        assert result["error"] is None
+        # model is the resolved tag for qwen under mlx
+        assert result["model"] == "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+
+
+class TestEnvVarProvider:
+    def test_env_var_provider_source_and_restart(self):
+        mod = _import_module()
+        reg = _build_registry()
+        result = mod.resolve_role_provenance(
+            "review",
+            registry=reg,
+            environ={"PIPELINE_BACKEND_REVIEW": "ollama"},
+            model_fallback="glm",
+        )
+        assert result["provider"] == "ollama"
+        assert result["provider_source"] == "env:PIPELINE_BACKEND_REVIEW"
+        assert result["restart_required"] is True
+        assert result["error"] is None
+
+    def test_env_var_role_uppercased(self):
+        """The env var name uses the UPPERCASED role."""
+        mod = _import_module()
+        reg = _build_registry()
+        # test_author -> PIPELINE_BACKEND_TEST_AUTHOR
+        result = mod.resolve_role_provenance(
+            "test_author",
+            registry=reg,
+            environ={"PIPELINE_BACKEND_TEST_AUTHOR": "ollama"},
+            model_fallback="glm",
+        )
+        assert result["provider"] == "ollama"
+        assert result["provider_source"] == "env:PIPELINE_BACKEND_TEST_AUTHOR"
+        assert result["restart_required"] is True
+
+
+class TestRegistryProviderSource:
+    def test_registry_provider_source_and_tag_resolution(self):
+        """Nothing set except a registry supplying `dispatch` -> provider from
+        registry, model is the resolved TAG."""
+        mod = _import_module()
+        reg = _build_registry(roles={"dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"}})
+        result = mod.resolve_role_provenance(
+            "dispatch", registry=reg, environ={}
+        )
+        assert result["provider_source"] == "model_registry.json"
+        assert result["restart_required"] is False
+        assert result["model"] == "gpt-oss-20b-high:latest"
+        assert result["error"] is None
+
+    def test_registry_model_source_label(self):
+        mod = _import_module()
+        reg = _build_registry(roles={"dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"}})
+        result = mod.resolve_role_provenance("dispatch", registry=reg, environ={})
+        assert result["model_source"] == "model_registry.json"
+
+
+class TestDefaultProvider:
+    def test_no_layer_supplies_provider_falls_to_default(self):
+        mod = _import_module()
+        reg = _build_registry(roles={})
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="sonnet", environ={}
+        )
+        assert result["provider"] == "claude"
+        assert result["provider_source"] == "default"
+        assert result["restart_required"] is False
+        assert result["error"] is None
+
+
+class TestModelFallback:
+    def test_model_fallback_used_when_no_other_model(self):
+        mod = _import_module()
+        reg = _build_registry(roles={})
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="sonnet", environ={}
+        )
+        assert result["model"] == "sonnet"
+        assert result["model_source"] == "caller_fallback"
+
+    def test_model_fallback_callable(self):
+        mod = _import_module()
+        reg = _build_registry(roles={})
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback=lambda: "opus", environ={}
+        )
+        assert result["model"] == "opus"
+        assert result["model_source"] == "caller_fallback"
+
+
+class TestBoundaryNoModel:
+    def test_no_model_and_no_fallback_returns_unset_not_raise(self):
+        """No layer supplies a model and model_fallback is None -> model is None,
+        model_source == 'unset', no exception (resolve_role raises
+        RoleRegistryError here; the fail-open path must convert it)."""
+        mod = _import_module()
+        reg = _build_registry(roles={})
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback=None, environ={}
+        )
+        assert result["model"] is None
+        assert result["model_source"] == "unset"
+        assert result["error"] is not None
+        assert isinstance(result["error"], str)
+        # provider still resolved to default
+        assert result["provider"] == "claude"
+        assert result["provider_source"] == "default"
+        assert result["restart_required"] is False
+
+    def test_fail_open_shape_on_error(self):
+        """On a genuine misconfiguration (a role naming a model not declared
+        under providers.<provider>.models) the fail-open dict has exactly
+        these fields, all blanked except role/error. This is deliberately a
+        different fixture from test_no_model_and_no_fallback_returns_unset_not_raise
+        above: that test's scenario (no model configured anywhere, no
+        fallback) is a normal, gracefully-degraded boundary case, not an
+        error - it must NOT hit this all-None shape. Reusing that fixture
+        here previously made these two tests assert contradictory results
+        for identical inputs, which no implementation could satisfy."""
+        mod = _import_module()
+        reg = {
+            "providers": {
+                "ollama": {"models": {"gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"}}},
+            },
+            "roles": {
+                "overlord": {"provider": "ollama", "model": "nonexistent-model"},
+            },
+        }
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback=None, environ={}
+        )
+        assert set(result.keys()) == {
+            "role", "provider", "model", "provider_source",
+            "model_source", "restart_required", "error",
+        }
+        assert result["role"] == "overlord"
+        assert result["provider"] is None
+        assert result["model"] is None
+        assert result["provider_source"] is None
+        assert result["model_source"] is None
+        assert result["restart_required"] is False
+        assert result["error"] is not None
+        assert isinstance(result["error"], str)
+
+
+class TestNegativeBadRegistryModel:
+    def test_role_naming_undeclared_model_reports_error(self):
+        """A registry whose role names a model not declared under
+        providers.<provider>.models -> that role's entry has a non-None error
+        string and provider/model None."""
+        mod = _import_module()
+        reg = {
+            "providers": {
+                "ollama": {"models": {"gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"}}},
+            },
+            "roles": {
+                "dispatch": {"provider": "ollama", "model": "nonexistent-model"},
+            },
+        }
+        result = mod.resolve_role_provenance("dispatch", registry=reg, environ={})
+        assert result["error"] is not None
+        assert isinstance(result["error"], str)
+        assert result["provider"] is None
+        assert result["model"] is None
+
+
+class TestImportHygiene:
+    def test_does_not_import_pipeline_server(self):
+        mod = _import_module()
+        src = Path(mod.__file__).read_text()
+        assert "import pipeline.server" not in src
+        assert "from pipeline.server" not in src
+        assert "import pipeline import server" not in src
+
+    def test_does_not_import_app_backend(self):
+        mod = _import_module()
+        src = Path(mod.__file__).read_text()
+        assert "import app.backend" not in src
+        assert "from app.backend" not in src
+
+    def test_may_import_role_registry(self):
+        """The story explicitly permits `from app import role_registry`."""
+        # This is permissive, not required; just ensure no assertion breaks.
+        mod = _import_module()
+        assert mod is not None

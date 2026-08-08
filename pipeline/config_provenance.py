@@ -21,8 +21,6 @@ import plistlib
 import xml.parsers.expat
 from dataclasses import dataclass
 
-from app import role_registry
-
 Path = pathlib.Path
 
 # The six transport-only env vars that backend.py overwrites on every dispatch.
@@ -343,8 +341,12 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
         environ = os.environ
     if plan_role_config is None:
         plan_role_config = {}
+    import importlib
+    role_registry_mod = importlib.import_module("app.role_registry")
     if registry is None:
-        registry = role_registry.load_registry()
+        import importlib
+        role_registry_mod = importlib.import_module("app.role_registry")
+        registry = role_registry_mod.load_registry()
 
     # Walk the precedence chain to determine source labels and whether a restart
     # is required.  The logic below is identical to the original implementation.
@@ -382,7 +384,7 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
     # Delegate final resolution to the registry.  Wrap in try/except to preserve
     # existing error message shape.
     try:
-        res = role_registry.resolve_role(
+        res = role_registry_mod.resolve_role(
             role,
             plan_role_config=plan_role_config,
             registry=registry,
@@ -391,7 +393,7 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
         )
         provider = res.provider
         model = res.model
-    except role_registry.RoleRegistryError as exc:
+    except role_registry_mod.RoleRegistryError as exc:
         msg = str(exc)
         if "not declared" in msg:
             return {

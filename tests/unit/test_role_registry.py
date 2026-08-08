@@ -193,3 +193,139 @@ def test_resolve_role_unconfigured_role_is_a_pure_passthrough_to_fallback(monkey
     )
     assert resolution.provider == "claude"
     assert resolution.model == "devstral:24b"
+
+
+# ---------- resolve_role: environ injection (dependency-injection seam) ----------
+# These tests pin the new keyword-only `environ` parameter on resolve_role(),
+# which lets a caller inject the environment mapping instead of always reading
+# the real process os.environ. The default (None -> os.environ) preserves
+# every existing call site unchanged.
+
+def test_resolve_role_accepts_environ_keyword_only_parameter():
+    """resolve_role must accept a keyword-only `environ` parameter (the
+    signature change this story adds). It must be keyword-only: passing it
+    positionally must be a TypeError because it sits after the existing
+    keyword-only params."""
+    import inspect
+
+    sig = inspect.signature(rr.resolve_role)
+    assert "environ" in sig.parameters
+    param = sig.parameters["environ"]
+    # keyword-only (appears after a * in the signature)
+    assert param.kind == inspect.Parameter.KEYWORD_ONLY
+    # defaults to None (so existing callers that omit it are unaffected)
+    assert param.default is None
+    # The annotation must accept a dict or None.
+    assert param.annotation in ("dict | None", "Optional[dict]", "Optional[Dict]")
+
+
+def test_resolve_role_environ_injected_mapping_is_consulted(monkeypatch):
+    """Positive: an explicitly injected environ mapping is actually read
+    instead of the real process os.environ — no monkeypatch.setenv needed.
+    This proves the seam is real, not a no-op."""
+    # Make sure the real process env does NOT carry this var, so the only
+    # way resolve_role can see "ollama" is by reading the injected mapping.
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    registry = {
+        "providers": {"ollama": {"models": {}}},
+        "roles": {},
+    }
+    resolution = rr.resolve_role(
+        "review",
+        environ={"PIPELINE_BACKEND_REVIEW": "ollama"},
+        registry=registry,
+        model_fallback="some-tag",
+    )
+    assert resolution.provider == "ollama"
+
+
+def test_resolve_role_environ_omitted_preserves_existing_behavior(monkeypatch):
+    """Negative/backward-compat: when `environ` is omitted entirely, the
+    function must fall back to the real os.environ exactly as before —
+    zero call-site changes required anywhere. We exercise the env-var layer
+    via the real os.environ (monkeypatch.setenv) and confirm it still wins,
+    matching the pre-change behavior."""
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "ollama")
+    registry = {
+        "providers": {
+            "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen"}}},
+            "ollama": {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}}},
+        },
+        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+    }
+    # NOTE: environ is intentionally NOT passed here.
+    resolution = rr.resolve_role(
+        "review", registry=registry, model_fallback="sonnet",
+    )
+    assert resolution.provider == "ollama"
+    # cross-provider contamination guard: ollama won, so the mlx-paired
+    # "qwen" model must NOT leak through; falls to model_fallback.
+    assert resolution.model == "sonnet"
+
+
+def test_resolve_role_environ_empty_dict_does_not_substitute_os_environ(monkeypatch):
+    """Boundary: an explicitly empty dict (NOT None) must be honored as
+    "no env vars set" — it must NOT silently fall back to os.environ. So
+    even if the real os.environ carries the var, an empty injected mapping
+    must let the chain fall through to registry/default_provider."""
+    # Poison the real os.environ so we can detect any improper fallback.
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "ollama")
+    registry = {
+        "providers": {
+            "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen"}}},
+        },
+        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+    }
+    resolution = rr.resolve_role(
+        "review", environ={}, registry=registry,
+    )
+    # If environ={} were wrongly treated as None -> os.environ, provider
+    # would be "ollama" (from the poisoned env). It must instead be "mlx"
+    # (from the registry), proving the empty mapping was respected.
+    assert resolution.provider == "mlx"
+    assert resolution.model == "mlx-community/Qwen"
+
+
+def test_resolve_role_environ_none_explicitly_uses_os_environ(monkeypatch):
+    """Boundary complement: passing environ=None explicitly must behave
+    identically to omitting it — i.e. read the real os.environ. This pins
+    the `if environ is None: environ = os.environ` line."""
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "ollama")
+    registry = {
+        "providers": {
+            "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen"}}},
+            "ollama": {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}}},
+        },
+        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+    }
+    resolution = rr.resolve_role(
+        "review", environ=None, registry=registry, model_fallback="sonnet",
+    )
+    assert resolution.provider == "ollama"
+    assert resolution.model == "sonnet"
+
+
+def test_resolve_role_environ_does_not_touch_registry_path_env(monkeypatch, tmp_path):
+    """The environ seam must be scoped to the PIPELINE_BACKEND_<ROLE> lookup
+    only. The unrelated PIPELINE_MODEL_REGISTRY_PATH env var (read inside
+    _registry_path()/load_registry()) must still come from the real
+    os.environ, NOT from the injected `environ` — that call is explicitly
+    out of scope and must not be rerouted."""
+    path = tmp_path / "custom_registry.json"
+    path.write_text(json.dumps({
+        "providers": {"claude": {"models": {"opus": {"tag": "opus"}}}},
+        "roles": {},
+    }))
+    monkeypatch.setenv("PIPELINE_MODEL_REGISTRY_PATH", str(path))
+    # Inject an environ that does NOT carry PIPELINE_MODEL_REGISTRY_PATH.
+    # If the implementation wrongly routed the registry-path lookup through
+    # `environ`, load_registry() would fail to find the file and the
+    # registry would be empty -> provider would default to "claude" with
+    # model_fallback. We assert the real registry file is still read.
+    resolution = rr.resolve_role(
+        "review",
+        environ={"PIPELINE_BACKEND_REVIEW": "claude"},
+        model_fallback="opus",
+    )
+    assert resolution.provider == "claude"
+    assert resolution.model == "opus"

@@ -92,7 +92,7 @@ def resolve_role(
     plan_role_config: dict | None = None,
     model_fallback: str | Callable[[], str | None] | None = None,
     registry: dict | None = None,
-    default_provider: str = "claude",
+    default_provider: str = "claude", environ: dict | None = None,
 ) -> RoleResolution:
     """Resolve (provider, model) for `role`.
 
@@ -117,13 +117,15 @@ def resolve_role(
     ignored in favor of model_fallback, rather than raising against a
     provider it was never paired with.
     """
+    if environ is None:
+        environ = os.environ
     reg = registry if registry is not None else load_registry()
     plan_cfg = (plan_role_config or {}).get(role, {})
     reg_role_cfg = reg.get("roles", {}).get(role, {})
 
     provider = (
         plan_cfg.get("provider")
-        or os.environ.get(f"PIPELINE_BACKEND_{role.upper()}")
+        or environ.get(f"PIPELINE_BACKEND_{role.upper()}")
         or reg_role_cfg.get("provider")
         or default_provider
     ).strip().lower()

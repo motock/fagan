@@ -102,10 +102,10 @@ def resolve_role_provenance(
         model_source = "plan_role_config"
     elif environ.get(f"PIPELINE_BACKEND_{role.upper()}_MODEL"):
         model_name = environ[f"PIPELINE_BACKEND_{role.upper()}_MODEL"]
-        model_source = "environment_variable"
+        model_source = f"env:{environ.get(f'PIPELINE_BACKEND_{role.upper()}_MODEL')}"
     elif reg_role_cfg.get("model"):
         model_name = reg_role_cfg["model"]
-        model_source = "registry"
+        model_source = "model_registry.json"
     else:
         model_name = None
         model_source = ""

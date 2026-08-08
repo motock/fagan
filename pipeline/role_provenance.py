@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import app.role_registry
 
 PIPELINE_ROLES = (

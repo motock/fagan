@@ -20,6 +20,7 @@ import pathlib
 import plistlib
 import xml.parsers.expat
 from dataclasses import dataclass
+from app import role_registry
 
 Path = pathlib.Path
 
@@ -325,3 +326,91 @@ def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
                             environ=environ, plist_env=plist_env, mcp_env=mcp_env)
         )
     return results
+
+
+def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, model_fallback=None, environ=None):
+    """
+    Resolve provider/model for a role using :func:`app.role_registry.resolve_role`.
+    The function mirrors the existing logic to determine ``provider_source`` and
+    ``model_source`` but delegates the final provider/model selection to the
+    registry.  It preserves the original error messages on failure.
+    """
+    # Default arguments for optional parameters
+    if environ is None:
+        environ = os.environ
+    if plan_role_config is None:
+        plan_role_config = {}
+    if registry is None:
+        registry = role_registry.load_registry()
+
+    # Walk the precedence chain to determine source labels and whether a restart
+    # is required.  The logic below is identical to the original implementation.
+    provider_source: str | None = None
+    model_source: str | None = None
+    restart_required = False
+
+    # 1) plan_role_config overrides everything
+    if role in plan_role_config:
+        cfg = plan_role_config[role]
+        if "provider" in cfg:
+            provider_source = "plan_role_config"
+        if "model" in cfg:
+            model_source = "plan_role_config"
+        restart_required = True
+    # 2) environment variable overrides
+    env_provider = environ.get("PIPELINE_LOCAL_PROVIDER")
+    env_model = environ.get("PIPELINE_LOCAL_MODEL_DEFAULT")
+    if env_provider:
+        provider_source = "environment"
+    if env_model:
+        model_source = "environment"
+    restart_required = True
+    # 3) registry defaults
+    if not provider_source:
+        provider_source = "registry"
+    if not model_source:
+        model_source = "registry"
+    # 4) default provider fallback
+    if not provider_source and model_fallback is None:
+        provider_source = "default_provider"
+
+    # Delegate final resolution to the registry.  Wrap in try/except to preserve
+    # existing error message shape.
+    try:
+        res = role_registry.resolve_role(
+            role,
+            plan_role_config=plan_role_config,
+            registry=registry,
+            model_fallback=model_fallback,
+            environ=environ,
+        )
+        provider = res.provider
+        model = res.model
+    except role_registry.RoleRegistryError as exc:
+        msg = str(exc)
+        if "not declared" in msg:
+            return {
+                "role": role,
+                "error": f"Role {role} has provider {provider_source} not declared in registry",
+                "restart_required": restart_required,
+                "provider_source": provider_source,
+                "model_source": model_source,
+            }
+        elif "no model configured" in msg:
+            return {
+                "role": role,
+                "error": f"Role {role} has no model configured",
+                "restart_required": restart_required,
+                "provider_source": provider_source,
+                "model_source": model_source,
+            }
+        else:
+            raise
+    return {
+        "role": role,
+        "provider": provider,
+        "model": model,
+        "restart_required": restart_required,
+        "provider_source": provider_source,
+        "model_source": model_source,
+    }

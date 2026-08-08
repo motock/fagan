@@ -225,3 +225,69 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
 
 def _is_secret(name: str) -> bool:
     return any(sub in name for sub in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))
+
+
+def resolve_env_var(name, default=None, *, environ=None, plist_env=None, mcp_env=None):
+    if environ is None:
+        environ = os.environ
+    if plist_env is None:
+        plist_env = read_plist_env()
+    if mcp_env is None:
+        mcp_env = read_mcp_server_env()
+
+    effective = environ.get(name, default)
+
+
+    if name in environ:
+        if name in plist_env and plist_env[name] == environ[name]:
+            source = "launchd_plist"
+        elif name in mcp_env and mcp_env[name] == environ[name]:
+            source = "mcp_server_env"
+        else:
+            source = "process_env"
+    else:
+        source = "code_default"
+
+    conflict = (
+        name in plist_env
+        and name in mcp_env
+        and plist_env[name] != mcp_env[name]
+    )
+
+    layers: list[dict[str, object]] = []
+    if name in environ:
+        layers.append(
+            {"layer": "process_env", "value": environ[name], "restart_required": True}
+        )
+    if name in plist_env:
+        layers.append(
+            {
+                "layer": "launchd_plist",
+                "value": plist_env[name],
+                "restart_required": True,
+            }
+        )
+    if name in mcp_env:
+        layers.append(
+            {"layer": "mcp_server_env", "value": mcp_env[name], "restart_required": True}
+        )
+    layers.append({"layer": "code_default", "value": default, "restart_required": False})
+
+    restart_required = source != "code_default"
+
+    masked = _is_secret(name)
+    if masked:
+        effective = "***"
+        for layer in layers:
+            layer["value"] = "***"
+
+    return {
+        "name": name,
+        "effective": effective,
+        "source": source,
+        "restart_required": restart_required,
+        "conflict": conflict,
+        "masked": masked,
+        "layers": layers,
+    }
+

@@ -328,6 +328,8 @@ def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
     return results
 
 
+
+
 def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, model_fallback=None, environ=None):
     """
     Resolve provider/model for a role using :func:`app.role_registry.resolve_role`.

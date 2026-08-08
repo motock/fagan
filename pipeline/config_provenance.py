@@ -290,8 +290,18 @@ def resolve_env_var(name, default=None, *, environ=None, plist_env=None, mcp_env
         "conflict": conflict,
         "masked": masked,
         "layers": layers,
-    }
+    },
 
+PIPELINE_ROLES: tuple[str, ...] = (
+    "overlord",
+    "planner",
+    "dispatch",
+    "review",
+    "decompose",
+    "test_author",
+    "diagnosis",
+    "security",
+)
 
 def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
     """Return a diagnostic list for all catalog environment variables.
@@ -459,11 +469,7 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
                 # On error, clear provenance sources
                 provider_source = None
                 model_source = None
-            else:
-                resolved_model = tag
-    elif raw_model_name is None and model_fallback is None:
-        error_msg = f"Role {role} has no model configured"
-        error_msg = f"Role {role} has no model configured"
+                restart_required = False
 
     return {
         "role": role,
@@ -474,3 +480,24 @@ def resolve_role_provenance(role: str, *, plan_role_config=None, registry=None, 
         "restart_required": restart_required,
         "error": error_msg,
     }
+
+PIPELINE_ROLES: tuple[str, ...] = (
+    "overlord",
+    "planner",
+    "dispatch",
+    "review",
+    "decompose",
+    "test_author",
+    "diagnosis",
+    "security",
+)
+PIPELINE_ROLES: tuple[str, ...] = (
+    "overlord",
+    "planner",
+    "dispatch",
+    "review",
+    "decompose",
+    "test_author",
+    "diagnosis",
+    "security",
+)

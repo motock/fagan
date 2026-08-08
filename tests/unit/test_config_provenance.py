@@ -916,3 +916,461 @@ class TestIsSecret:
         assert mod._is_secret("PIPELINE_BACKEND_DISPATCH") is False
 
 
+# ---------------------------------------------------------------------------
+# resolve_env_var
+#
+# These tests target the single-env-var resolution report added by this story.
+# They are intentionally RED until a follow-up dispatch implements
+# ``resolve_env_var`` in pipeline.config_provenance.
+# ---------------------------------------------------------------------------
+
+
+class TestResolveEnvVarSignature:
+    def test_function_exists(self):
+        mod = _import_module()
+        assert hasattr(mod, "resolve_env_var"), "resolve_env_var must be defined"
+
+    def test_returns_dict(self):
+        mod = _import_module()
+        result = mod.resolve_env_var("X", default="40", environ={}, plist_env={}, mcp_env={})
+        assert isinstance(result, dict)
+
+    def test_result_keys(self):
+        mod = _import_module()
+        result = mod.resolve_env_var("X", default="40", environ={}, plist_env={}, mcp_env={})
+        expected_keys = {
+            "name",
+            "effective",
+            "source",
+            "restart_required",
+            "conflict",
+            "masked",
+            "layers",
+        }
+        assert set(result.keys()) == expected_keys
+
+    def test_name_echoed(self):
+        mod = _import_module()
+        result = mod.resolve_env_var("MY_VAR", default="40", environ={}, plist_env={}, mcp_env={})
+        assert result["name"] == "MY_VAR"
+
+
+class TestResolveEnvVarLaunchdPlist:
+    def test_success_criteria_1(self):
+        """Success criteria 1: launchd plist overrides code default."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={},
+        )
+        assert result["effective"] == "60"
+        assert result["source"] == "launchd_plist"
+        assert result["restart_required"] is True
+        assert result["conflict"] is False
+
+    def test_layers_include_code_default(self):
+        """The layers list includes a code_default entry with the default value."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={},
+        )
+        layers = result["layers"]
+        assert isinstance(layers, list)
+        code_default_entries = [l for l in layers if l["layer"] == "code_default"]
+        assert len(code_default_entries) == 1
+        assert code_default_entries[0]["value"] == "40"
+        assert code_default_entries[0]["restart_required"] is False
+
+    def test_layers_include_process_env_and_plist(self):
+        """Layers that supply a value appear in the ordered list."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={},
+        )
+        layers = result["layers"]
+        layer_names = [l["layer"] for l in layers]
+        assert "process_env" in layer_names
+        assert "launchd_plist" in layer_names
+        # process_env value is the environ value
+        proc = next(l for l in layers if l["layer"] == "process_env")
+        assert proc["value"] == "60"
+        assert proc["restart_required"] is True
+        # plist value
+        plist = next(l for l in layers if l["layer"] == "launchd_plist")
+        assert plist["value"] == "60"
+        assert plist["restart_required"] is True
+
+    def test_layers_ordered(self):
+        """Layers appear in order process_env, launchd_plist, mcp_server_env, code_default."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "60"},
+        )
+        layer_names = [l["layer"] for l in result["layers"]]
+        expected_order = ["process_env", "launchd_plist", "mcp_server_env", "code_default"]
+        # Filter to only those present, preserving order.
+        present_in_order = [n for n in expected_order if n in layer_names]
+        assert present_in_order == layer_names
+
+
+class TestResolveEnvVarConflict:
+    def test_success_criteria_2(self):
+        """Success criteria 2: plist and mcp declare different values -> conflict."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "99"},
+        )
+        assert result["conflict"] is True
+
+    def test_no_conflict_when_only_plist_declares(self):
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={},
+        )
+        assert result["conflict"] is False
+
+    def test_no_conflict_when_both_declare_same_value(self):
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "60"},
+        )
+        assert result["conflict"] is False
+
+    def test_conflict_when_neither_in_environ(self):
+        """Conflict is about plist vs mcp, independent of environ presence."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={},
+            plist_env={"X": "60"},
+            mcp_env={"X": "99"},
+        )
+        assert result["conflict"] is True
+
+
+class TestResolveEnvVarCodeDefault:
+    def test_success_criteria_3(self):
+        """Success criteria 3: name absent from all layers -> code default."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={},
+            plist_env={},
+            mcp_env={},
+        )
+        assert result["effective"] == "40"
+        assert result["source"] == "code_default"
+        assert result["restart_required"] is False
+        assert result["conflict"] is False
+
+    def test_code_default_only_layer(self):
+        """When nothing declares the var, only code_default appears in layers."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={},
+            plist_env={},
+            mcp_env={},
+        )
+        layer_names = [l["layer"] for l in result["layers"]]
+        assert layer_names == ["code_default"]
+
+    def test_default_none(self):
+        """Boundary: default=None and name absent -> effective is None."""
+        mod = _import_module()
+        result = mod.resolve_env_var("X", default=None, environ={}, plist_env={}, mcp_env={})
+        assert result["effective"] is None
+        assert result["source"] == "code_default"
+        assert result["restart_required"] is False
+
+    def test_default_none_layer_value(self):
+        """code_default layer value reflects None default."""
+        mod = _import_module()
+        result = mod.resolve_env_var("X", default=None, environ={}, plist_env={}, mcp_env={})
+        code_default = next(l for l in result["layers"] if l["layer"] == "code_default")
+        assert code_default["value"] is None
+
+
+class TestResolveEnvVarProcessEnv:
+    def test_success_criteria_4(self):
+        """Success criteria 4: in environ, declared by no layer -> process_env."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={},
+            mcp_env={},
+        )
+        assert result["source"] == "process_env"
+        assert result["restart_required"] is True
+
+    def test_process_env_when_plist_value_differs(self):
+        """environ present but plist declares a different value -> process_env."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "70"},
+            mcp_env={},
+        )
+        assert result["source"] == "process_env"
+
+    def test_process_env_when_mcp_value_differs(self):
+        """environ present but mcp declares a different value -> process_env."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={},
+            mcp_env={"X": "70"},
+        )
+        assert result["source"] == "process_env"
+
+    def test_mcp_server_env_source(self):
+        """environ present and mcp declares same value (plist absent) -> mcp_server_env."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={},
+            mcp_env={"X": "60"},
+        )
+        assert result["source"] == "mcp_server_env"
+        assert result["restart_required"] is True
+
+    def test_plist_takes_precedence_over_mcp_for_source(self):
+        """When both plist and mcp declare the same value as environ, source is launchd_plist."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "60"},
+        )
+        assert result["source"] == "launchd_plist"
+
+
+class TestResolveEnvVarSecretMasking:
+    def test_success_criteria_5(self):
+        """Success criteria 5: secret value is masked everywhere."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "PLANE_API_KEY",
+            environ={"PLANE_API_KEY": "sk-live-abc"},
+            plist_env={"PLANE_API_KEY": "sk-live-abc"},
+            mcp_env={},
+        )
+        assert result["masked"] is True
+        assert "sk-live-abc" not in repr(result)
+
+    def test_masked_effective_value(self):
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "PLANE_API_KEY",
+            environ={"PLANE_API_KEY": "sk-live-abc"},
+            plist_env={"PLANE_API_KEY": "sk-live-abc"},
+            mcp_env={},
+        )
+        assert result["effective"] == "***"
+
+    def test_masked_layer_values(self):
+        """Every layer value is replaced with '***' for secrets."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "DB_PASSWORD",
+            default="fallback",
+            environ={"DB_PASSWORD": "secret123"},
+            plist_env={"DB_PASSWORD": "secret123"},
+            mcp_env={"DB_PASSWORD": "secret123"},
+        )
+        for layer in result["layers"]:
+            assert layer["value"] == "***"
+        assert "secret123" not in repr(result)
+        assert "fallback" not in repr(result)
+
+    def test_non_secret_not_masked(self):
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "PIPELINE_LOCAL_MAX_STEPS",
+            default="40",
+            environ={"PIPELINE_LOCAL_MAX_STEPS": "60"},
+            plist_env={"PIPELINE_LOCAL_MAX_STEPS": "60"},
+            mcp_env={},
+        )
+        assert result["masked"] is False
+        assert result["effective"] == "60"
+
+    def test_masked_flag_false_for_non_secret(self):
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={},
+        )
+        assert result["masked"] is False
+
+
+class TestResolveEnvVarDefaults:
+    def test_environ_defaults_to_os_environ(self):
+        """When environ is None, os.environ is used."""
+        mod = _import_module()
+        # Use a name unlikely to be set; default applies.
+        result = mod.resolve_env_var(
+            "X_VERY_UNLIKELY_NAME_12345", default="40", plist_env={}, mcp_env={}
+        )
+        # environ defaults to os.environ; this name is not set there.
+        assert result["effective"] == "40"
+        assert result["source"] == "code_default"
+        # Confirm os.environ is the default source by checking a real var if present.
+        # (Sanity: function did not raise with environ=None.)
+        assert "environ" not in result  # environ itself not echoed
+
+    def test_plist_env_defaults_to_read_plist_env(self):
+        """plist_env=None resolves via read_plist_env (returns {} in test env)."""
+        mod = _import_module()
+        # In the test environment the default plist path does not exist, so
+        # read_plist_env() returns {}.
+        result = mod.resolve_env_var(
+            "X", default="40", environ={}, mcp_env={}
+        )
+        assert result["source"] == "code_default"
+
+    def test_mcp_env_defaults_to_read_mcp_server_env(self):
+        """mcp_env=None resolves via read_mcp_server_env (returns {} in test env)."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X", default="40", environ={}, plist_env={}
+        )
+        assert result["source"] == "code_default"
+
+    def test_all_defaults_callable(self):
+        """Calling with only name and default does not raise."""
+        mod = _import_module()
+        result = mod.resolve_env_var("X_VERY_UNLIKELY_NAME_67890", default="40")
+        assert result["effective"] == "40"
+        assert result["source"] == "code_default"
+
+
+class TestResolveEnvVarLayerShape:
+    def test_layer_dict_keys(self):
+        """Each layer entry has layer, value, restart_required."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={"X": "60"}, mcp_env={}
+        )
+        for layer in result["layers"]:
+            assert set(layer.keys()) == {"layer", "value", "restart_required"}
+
+    def test_env_layers_restart_required_true(self):
+        """process_env, launchd_plist, mcp_server_env all have restart_required True."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X",
+            default="40",
+            environ={"X": "60"},
+            plist_env={"X": "60"},
+            mcp_env={"X": "60"},
+        )
+        for layer in result["layers"]:
+            if layer["layer"] != "code_default":
+                assert layer["restart_required"] is True
+
+    def test_code_default_restart_required_false(self):
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={"X": "60"}, mcp_env={}
+        )
+        code_default = next(l for l in result["layers"] if l["layer"] == "code_default")
+        assert code_default["restart_required"] is False
+
+    def test_top_level_restart_required_matches_winning_source(self):
+        """Top-level restart_required equals the flag of the winning source's layer."""
+        mod = _import_module()
+        # code_default wins -> False
+        result = mod.resolve_env_var("X", default="40", environ={}, plist_env={}, mcp_env={})
+        assert result["restart_required"] is False
+        # process_env wins -> True
+        result = mod.resolve_env_var(
+            "X", default="40", environ={"X": "60"}, plist_env={}, mcp_env={}
+        )
+        assert result["restart_required"] is True
+
+
+class TestResolveEnvVarBoundary:
+    def test_empty_string_value(self):
+        """Boundary: empty string is a valid value."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X", default="40", environ={"X": ""}, plist_env={"X": ""}, mcp_env={}
+        )
+        assert result["effective"] == ""
+        assert result["source"] == "launchd_plist"
+
+    def test_zero_value(self):
+        """Boundary: '0' is a valid value, not falsy-skipped."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X", default="40", environ={"X": "0"}, plist_env={"X": "0"}, mcp_env={}
+        )
+        assert result["effective"] == "0"
+        assert result["source"] == "launchd_plist"
+
+    def test_empty_environ_mapping(self):
+        """Boundary: empty environ dict."""
+        mod = _import_module()
+        result = mod.resolve_env_var("X", default="1", environ={}, plist_env={}, mcp_env={})
+        assert result["source"] == "code_default"
+
+    def test_value_present_in_environ_not_in_layers(self):
+        """environ value present but neither plist nor mcp declare it."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "X", default="40", environ={"X": "77"}, plist_env={}, mcp_env={}
+        )
+        assert result["source"] == "process_env"
+        assert result["conflict"] is False
+        # layers: process_env and code_default only
+        layer_names = [l["layer"] for l in result["layers"]]
+        assert "process_env" in layer_names
+        assert "code_default" in layer_names
+        assert "launchd_plist" not in layer_names
+        assert "mcp_server_env" not in layer_names
+
+

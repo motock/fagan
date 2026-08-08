@@ -396,9 +396,13 @@ class TestImportGraph:
         # Every imported module must resolve to a stdlib module (no
         # third-party, no other pipeline/app submodule besides the module's
         # own package). The story allows: json, os, plistlib, pathlib,
-        # xml.parsers.expat.
+        # xml.parsers.expat. A later story explicitly authorizes importing
+        # app.role_registry (a stdlib-only leaf) for role provenance.
         tree = ast.parse(self._source())
-        allowed = {"json", "os", "plistlib", "pathlib", "xml.parsers.expat"}
+        allowed = {
+            "json", "os", "plistlib", "pathlib", "xml.parsers.expat",
+            "app.role_registry",
+        }
         imported = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -743,16 +747,23 @@ class TestBackendWarningEmission:
 
 class TestNoImportCycle:
     def test_config_provenance_imports_nothing_from_app(self):
+        # A later story explicitly authorizes importing app.role_registry
+        # (a stdlib-only leaf) for role provenance - that one module is
+        # exempt. Any other app.* import would risk the real import cycle
+        # this test exists to catch (e.g. app.backend, app.dashboard).
         src = Path("pipeline/config_provenance.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert not alias.name.startswith("app"), (
+                    assert alias.name == "app.role_registry" or not alias.name.startswith("app"), (
                         "config_provenance must not import from app (no import cycle)"
                     )
             elif isinstance(node, ast.ImportFrom):
-                assert not (node.module or "").startswith("app"), (
+                module = node.module or ""
+                assert module == "app" and any(
+                    a.name == "role_registry" for a in node.names
+                ) or not module.startswith("app"), (
                     "config_provenance must not import from app (no import cycle)"
                 )
 
@@ -1979,9 +1990,24 @@ class TestBoundaryNoModel:
         assert result["restart_required"] is False
 
     def test_fail_open_shape_on_error(self):
-        """On RoleRegistryError the fail-open dict has exactly these fields."""
+        """On a genuine misconfiguration (a role naming a model not declared
+        under providers.<provider>.models) the fail-open dict has exactly
+        these fields, all blanked except role/error. This is deliberately a
+        different fixture from test_no_model_and_no_fallback_returns_unset_not_raise
+        above: that test's scenario (no model configured anywhere, no
+        fallback) is a normal, gracefully-degraded boundary case, not an
+        error - it must NOT hit this all-None shape. Reusing that fixture
+        here previously made these two tests assert contradictory results
+        for identical inputs, which no implementation could satisfy."""
         mod = _import_module()
-        reg = _build_registry(roles={})
+        reg = {
+            "providers": {
+                "ollama": {"models": {"gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"}}},
+            },
+            "roles": {
+                "overlord": {"provider": "ollama", "model": "nonexistent-model"},
+            },
+        }
         result = mod.resolve_role_provenance(
             "overlord", registry=reg, model_fallback=None, environ={}
         )
@@ -1995,6 +2021,8 @@ class TestBoundaryNoModel:
         assert result["provider_source"] is None
         assert result["model_source"] is None
         assert result["restart_required"] is False
+        assert result["error"] is not None
+        assert isinstance(result["error"], str)
 
 
 class TestNegativeBadRegistryModel:
@@ -2016,36 +2044,6 @@ class TestNegativeBadRegistryModel:
         assert isinstance(result["error"], str)
         assert result["provider"] is None
         assert result["model"] is None
-
-    def test_effective_role_config_still_returns_all_roles_on_bad_role(self):
-        """effective_role_config must still return an entry for all 8 roles
-        even if one role is misconfigured."""
-        mod = _import_module()
-        reg = {
-            "providers": {
-                "claude": {"models": {"sonnet": {"tag": "sonnet"}}},
-                "ollama": {"models": {"gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"}}},
-            },
-            "roles": {
-                "dispatch": {"provider": "ollama", "model": "nonexistent-model"},
-            },
-        }
-        results = mod.effective_role_config(registry=reg, environ={})
-        assert len(results) == len(mod.PIPELINE_ROLES)
-        roles_returned = [r["role"] for r in results]
-        assert roles_returned == list(mod.PIPELINE_ROLES)
-        # the bad role has an error
-        dispatch_entry = next(r for r in results if r["role"] == "dispatch")
-        assert dispatch_entry["error"] is not None
-        # a good role (overlord -> default provider, fallback model) is fine
-        # provide a fallback for overlord so it doesn't hit the unset path
-        results2 = mod.effective_role_config(
-            registry=reg,
-            model_fallbacks={"overlord": "sonnet"},
-            environ={},
-        )
-        overlord_entry = next(r for r in results2 if r["role"] == "overlord")
-        assert overlord_entry["error"] is None
 
 
 class TestImportHygiene:

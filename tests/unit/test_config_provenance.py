@@ -17,6 +17,25 @@ from pathlib import Path
 
 import pytest
 
+# Lazily imported inside tests so collection does not hard-fail before the
+# first test runs (the implementation does not exist yet on this branch).
+RoleResolution = None
+RoleRegistryError = None
+
+
+def _ensure_role_registry_imports():
+    """Import RoleResolution / RoleRegistryError from app.role_registry.
+
+    Done lazily so the suite stays RED (per-test import errors) rather than
+    failing at collection time before the implementation exists.
+    """
+    global RoleResolution, RoleRegistryError
+    from app import role_registry
+
+    RoleResolution = role_registry.RoleResolution
+    RoleRegistryError = role_registry.RoleRegistryError
+    return role_registry
+
 # The module is imported lazily inside fixtures/tests so that collection of
 # this file itself does not hard-fail before the first test runs: we want the
 # RED state to surface as per-test import errors, not a collection error that

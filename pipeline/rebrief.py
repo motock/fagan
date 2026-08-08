@@ -23,6 +23,9 @@ prompt defeats the point.
 
 import logging
 import os
+import re
+import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -32,13 +35,52 @@ DIAGNOSIS_HEADER = "=== PRIOR-ATTEMPT DIAGNOSIS (read this FIRST) ==="
 
 CLEANUP_HEADER = "=== WORKTREE HYGIENE (read this too) ==="
 
+FACTS_HEADER = "=== PRIOR-ATTEMPT FACTS (measured from the worktree, not guessed) ==="
 
-def collect_failure_evidence(worktree, story: dict[str, Any], limit: int = 6000) -> str:
+# Tool names the local agent prints in its `[step N] <tool>: ...` log lines.
+_EDIT_TOOLS = frozenset({"create_file", "str_replace", "replace_lines", "restore_file"})
+
+# Static allowlist of test-runner tokens (never runtime language detection):
+# a bash command containing one of these counts as "the agent ran the tests".
+_TEST_COMMAND_TOKENS = (
+    "pytest", "py.test", "npm test", "yarn test", "cargo test",
+    "go test", "mvn test", "gradlew test", "make test",
+)
+
+# Facts are prepended to the next dispatch's prompt alongside the diagnosis, so
+# they compete for the same context budget the rebrief exists to save.
+_FACTS_LIMIT = 3000
+
+# A file whose diff deletes at least this many lines, and deletes at least this
+# many times more than it adds, is very likely a whole-file rewrite that
+# dropped unrelated code rather than a targeted edit (seen live 2026-08-06:
+# pipeline/config_provenance.py gutted from 327 lines to 107 by one
+# create_file). Thresholds are deliberately loose - this is a prompt to look,
+# not a gate.
+_CLOBBER_MIN_DELETIONS = 40
+_CLOBBER_DELETE_RATIO = 3
+
+_RERUN_MAX_NODES = 3
+_RERUN_TIMEOUT_SECONDS = 180
+
+
+def collect_failure_evidence(
+    worktree, story: dict[str, Any], limit: int = 6000, facts: str | None = None
+) -> str:
     """Gather a bounded summary of why a dispatched attempt on `story` failed,
     from `worktree`'s agent.log and the story's own recorded state. Never
     raises - a missing worktree, missing agent.log, or unreadable file all
-    yield a valid (possibly minimal) string."""
+    yield a valid (possibly minimal) string.
+
+    `facts` is the measured-fact block from collect_attempt_facts; it is
+    computed here when not supplied, and placed ahead of the log tail so the
+    over-budget trim below sacrifices raw log text rather than measurement."""
     sections = [f"STORY: {story.get('summary', '?')}"]
+
+    if facts is None:
+        facts = collect_attempt_facts(worktree, story)
+    if facts:
+        sections.append(f"MEASURED FACTS ABOUT THE LAST ATTEMPT:\n{facts}")
 
     last_test_check = story.get("last_test_check") or {}
     last_error = last_test_check.get("error")
@@ -68,6 +110,245 @@ def collect_failure_evidence(worktree, story: dict[str, Any], limit: int = 6000)
     remaining = max(limit - len(head) - 2, 0)
     tail = sections[-1][-remaining:] if remaining else ""
     return (head + "\n\n" + tail).strip()[:limit] if head else tail[:limit]
+
+
+def _git(worktree, args: list[str], timeout: int = 15) -> str | None:
+    """Run a read-only git command in `worktree`. Returns None on any failure -
+    a missing worktree, a non-repo directory, git absent, or a non-zero exit."""
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(worktree),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _base_commit(worktree) -> str | None:
+    """The commit this attempt's branch diverged from, so the diff below
+    describes the ATTEMPT rather than the whole branch history. Candidates are
+    tried in order because the pipeline operates across repos that differ on
+    default-branch naming and on whether a remote exists at all."""
+    for candidate in ("origin/HEAD", "origin/main", "origin/master", "main", "master"):
+        merge_base = _git(worktree, ["merge-base", "HEAD", candidate])
+        if merge_base and merge_base.strip():
+            return merge_base.strip()
+    return None
+
+
+def _diff_facts(worktree) -> list[str]:
+    """What this attempt actually changed, measured against its base commit."""
+    base = _base_commit(worktree)
+    if base is None:
+        return []
+    numstat = _git(worktree, ["diff", "--numstat", base, "HEAD"])
+    if numstat is None:
+        return []
+
+    rows = []
+    for line in numstat.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3 or parts[0] == "-" or parts[1] == "-":
+            continue  # malformed, or a binary file with no line counts
+        rows.append((int(parts[0]), int(parts[1]), parts[2]))
+
+    if not rows:
+        return [(
+            "NO CODE CHANGE: this attempt's branch is identical to its base "
+            "commit - not one edit has landed. Whatever the log narrates, "
+            "nothing was written. Stop reading and make the smallest edit that "
+            "moves the task forward, then run the tests."
+        )]
+
+    facts = [
+        "FILES CHANGED so far (+added/-removed vs base): "
+        + ", ".join(f"{path} (+{added}/-{removed})" for added, removed, path in rows[:12])
+    ]
+    for added, removed, path in rows:
+        if removed >= _CLOBBER_MIN_DELETIONS and removed >= _CLOBBER_DELETE_RATIO * max(added, 1):
+            facts.append(
+                f"POSSIBLE CLOBBER: {path} lost {removed} lines and added only "
+                f"{added}. That shape means a whole-file rewrite dropped code "
+                "unrelated to this task. Read `git diff` on that file and "
+                "restore what was deleted before making any further edit."
+            )
+
+    status = _git(worktree, ["status", "--porcelain"])
+    if status:
+        stray = [
+            line for line in status.splitlines()
+            if line.strip() and not line.rstrip().endswith("agent.log")
+        ]
+        if stray:
+            facts.append(
+                f"UNCOMMITTED CHANGES: {len(stray)} path(s) are still "
+                "uncommitted in the worktree."
+            )
+    return facts
+
+
+def _current_attempt_log(worktree) -> str | None:
+    """The agent.log text for the LAST attempt only. agent.log is appended
+    across resumes, so counting the whole file reports dozens of attempts'
+    nudges as if they happened in the last few dozen steps."""
+    try:
+        log_path = Path(worktree) / "agent.log"
+        if not log_path.is_file():
+            return None
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return None
+    boot = text.rfind("[boot]")
+    return text[boot:] if boot != -1 else text
+
+
+def _log_facts(worktree) -> list[str]:
+    """How the last attempt spent its steps, from the markers the local agent
+    prints: which tools it called, and which guards fired on it."""
+    text = _current_attempt_log(worktree)
+    if not text:
+        return []
+
+    tool_calls = re.findall(r"^\[step (\d+)\] ([a-z_]+):", text, re.MULTILINE)
+    bash_commands = re.findall(r"^\[step \d+\] bash: (.*)$", text, re.MULTILINE)
+    steps = {step for step, _ in tool_calls}
+    facts = []
+
+    if steps:
+        counts = Counter(tool for _, tool in tool_calls)
+        facts.append(
+            f"LAST ATTEMPT USED {len(steps)} step(s): "
+            + ", ".join(f"{tool} x{n}" for tool, n in counts.most_common(8))
+        )
+        if not counts.keys() & _EDIT_TOOLS:
+            facts.append(
+                "NO EDIT TOOL WAS CALLED in the whole attempt - it only looked "
+                "at the code. Reading more will not finish this story; the next "
+                "step must be an edit."
+            )
+        if not any(
+            token in command for command in bash_commands for token in _TEST_COMMAND_TOKENS
+        ):
+            facts.append(
+                "NEVER RAN THE TESTS during the attempt, so none of its edits "
+                "were ever verified. Run the story's test command after each edit."
+            )
+
+    guards = Counter(
+        line.strip() for line in text.splitlines()
+        if line.strip().startswith("[") and line.strip().endswith("]")
+        and ("nudge" in line or "parking" in line)
+    )
+    if guards:
+        facts.append(
+            "GUARDS THAT FIRED on the attempt (the harness already told it this): "
+            + "; ".join(
+                f"{marker} x{n}" if n > 1 else marker for marker, n in guards.most_common(6)
+            )
+        )
+
+    trims = text.count("RESUME TRIMMED") + text.count("CONTEXT EVICTED")
+    if trims:
+        facts.append(
+            f"CONTEXT WAS TRIMMED {trims} time(s) during the attempt: earlier "
+            "tool output was dropped, so any line number or file content read "
+            "early is likely stale. Re-read a span immediately before editing "
+            "it, and prefer anchored str_replace over line numbers."
+        )
+    return facts
+
+
+def _rerun_failing_tests(worktree, story: dict[str, Any]) -> list[str]:
+    """Re-run the specific tests the last recorded run reported as failing.
+
+    The stored stdout_tail is only the last 2000 characters of pytest output,
+    which on a multi-failure run is the `FAILED name` summary and nothing
+    else - the tracebacks scrolled past long before. Re-running just those node
+    ids with a full traceback turns "some test failed" into the exact failing
+    line, which is what the next attempt actually needs. Bounded on both
+    axes (node count and wall clock), and skipped entirely for runners whose
+    output this cannot parse."""
+    if os.environ.get("PIPELINE_REBRIEF_TEST_RERUN", "").strip().lower() in (
+        "0", "false", "no", "off",
+    ):
+        return []
+    last_test_check = story.get("last_test_check") or {}
+    cmd = last_test_check.get("cmd") or []
+    if not any("pytest" in str(part) or "py.test" in str(part) for part in cmd):
+        return []
+
+    tail = (last_test_check.get("stdout_tail") or "") + "\n" + (
+        last_test_check.get("stderr_tail") or "")
+    nodes: list[str] = []
+    for line in tail.splitlines():
+        line = line.strip()
+        if not line.startswith("FAILED "):
+            continue
+        node = line.split(None, 1)[1].split(" ", 1)[0].strip()
+        if "::" in node and node not in nodes:
+            nodes.append(node)
+    if not nodes:
+        return []
+    nodes = nodes[:_RERUN_MAX_NODES]
+
+    prefix: list[str] = []
+    for part in cmd:
+        prefix.append(part)
+        if "pytest" in str(part) or "py.test" in str(part):
+            break
+    try:
+        result = subprocess.run(
+            [*prefix, "-vv", "--tb=long", "--no-header", "-p", "no:cacheprovider", *nodes],
+            cwd=last_test_check.get("cwd") or str(worktree),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_RERUN_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    if result.returncode == 0:
+        return [(
+            f"RE-RAN the {len(nodes)} previously-failing test(s) against the "
+            f"current worktree ({', '.join(nodes)}): they now PASS. The recorded "
+            "failure is stale - do not spend steps on it."
+        )]
+    output = ((result.stdout or "") + (result.stderr or ""))[-1500:]
+    return [(
+        f"RE-RAN the previously-failing test(s) against the current worktree "
+        f"({', '.join(nodes)}) - they STILL FAIL. Full traceback:\n{output}"
+    )]
+
+
+def collect_attempt_facts(worktree, story: dict[str, Any]) -> str:
+    """A bounded, MEASURED description of what the last attempt did, gathered
+    from git and the agent.log markers rather than from a model's narrative.
+
+    This exists because the diagnosis role is optional and fails open: when no
+    diagnosis provider is configured (or it errors), these facts are still
+    folded into the next attempt's brief. When one IS configured, the facts
+    ground it - a model cannot invent a code defect for a branch git says has
+    no diff. Never raises; an unusable worktree simply yields ""."""
+    facts: list[str] = []
+    for collector in (_diff_facts, _log_facts):
+        try:
+            facts.extend(collector(worktree))
+        except Exception:  # noqa: BLE001 (fail-open by design; facts are never a gate)
+            logging.getLogger("pipeline").warning(
+                f"attempt-fact collector {collector.__name__} failed; continuing")
+    try:
+        facts.extend(_rerun_failing_tests(worktree, story))
+    except Exception:  # noqa: BLE001 (fail-open by design)
+        logging.getLogger("pipeline").warning("attempt-fact test re-run failed; continuing")
+    if not facts:
+        return ""
+    return "\n".join(f"- {fact}" for fact in facts)[:_FACTS_LIMIT]
 
 
 # Backends that must NOT be silently selected as the diagnosis diagnoser by the
@@ -115,6 +396,14 @@ def _run_diagnosis_role(
         "recommend targeted reads/searches and small anchored edits. NEVER "
         "recommend `git apply`, a full-file rewrite, or an in-place re-indent "
         "of a large existing function.\n\n"
+        "Ground every claim in the MEASURED FACTS section: those are read from "
+        "git and the harness's own guard markers, and they outrank anything "
+        "the log narrates. If the facts report NO CODE CHANGE, the root cause "
+        "is that no edit ever landed - say exactly that and name the one edit "
+        "to make; do not invent a defect in code that was never written. If "
+        "they report a possible clobber, the minimal fix is restoring the "
+        "deleted code. If they carry a traceback, name the exact file and line "
+        "it points at. Do not speculate beyond the evidence.\n\n"
         f"{evidence}"
     )
     if provider_override:
@@ -176,6 +465,28 @@ def compose_rebriefed_instructions(agent_instructions: str, diagnosis: str | Non
     return f"{base}\n\n{block}" if base else block
 
 
+def compose_attempt_facts(agent_instructions: str, facts: str | None) -> str:
+    """Return `agent_instructions` carrying exactly one measured-facts block.
+
+    Unlike compose_rebriefed_instructions, empty `facts` is not a plain no-op:
+    any existing block is still removed. A facts block describes ONE attempt,
+    so one left behind by a previous attempt would point the next one at
+    evidence that is no longer true - worse than no facts at all.
+
+    Call this AFTER compose_rebriefed_instructions: a later diagnosis truncates
+    the brief at DIAGNOSIS_HEADER, which would otherwise take a facts block
+    appended before it along with no replacement."""
+    base = agent_instructions or ""
+    existing = base.find(FACTS_HEADER)
+    if existing != -1:
+        base = base[:existing].rstrip()
+    if not facts or not facts.strip():
+        return base
+
+    block = f"{FACTS_HEADER}\n{facts.strip()}"
+    return f"{base}\n\n{block}" if base else block
+
+
 def append_cleanup_guidance(agent_instructions: str) -> str:
     """Append or replace a worktree hygiene guidance block.
 
@@ -215,6 +526,11 @@ def append_cleanup_guidance(agent_instructions: str) -> str:
 __all__ = [
     "CLEANUP_HEADER",
     "DIAGNOSIS_HEADER",
+    "FACTS_HEADER",
     "append_cleanup_guidance",
+    "collect_attempt_facts",
     "collect_failure_evidence",
+    "compose_attempt_facts",
+    "compose_rebriefed_instructions",
+    "diagnose_failure",
 ]

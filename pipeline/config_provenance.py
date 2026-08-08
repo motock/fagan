@@ -22,6 +22,7 @@ import xml.parsers.expat
 from dataclasses import dataclass
 
 Path = pathlib.Path
+from app import role_registry
 
 # The six transport-only env vars that backend.py overwrites on every dispatch.
 # These must be kept in sync with the warning loop in app/backend.py.
@@ -325,3 +326,137 @@ def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
                             environ=environ, plist_env=plist_env, mcp_env=mcp_env)
         )
     return results
+
+PIPELINE_ROLES: tuple[str, ...] = (
+    "overlord",
+    "planner",
+    "dispatch",
+    "review",
+    "decompose",
+    "test_author",
+    "diagnosis",
+    "security",
+)
+
+def resolve_role_provenance(role, *, plan_role_config=None, registry=None, model_fallback=None, environ=None) -> dict:
+    """
+    Resolve role provider and model provenance.
+    """
+    if plan_role_config is None:
+        plan_role_config = {}
+    if registry is None:
+        registry = {}
+    if environ is None:
+        environ = os.environ
+
+    # Provider resolution
+    if role in plan_role_config and isinstance(plan_role_config[role], dict) and "provider" in plan_role_config[role]:
+        provider_source = "plan_role_config"
+        provider_value = plan_role_config[role]["provider"]
+    elif f"PIPELINE_BACKEND_{role.upper()}" in environ:
+        provider_source = f"env:PIPELINE_BACKEND_{role.upper()}"
+        provider_value = environ[f"PIPELINE_BACKEND_{role.upper()}"]
+    elif "roles" in registry and role in registry["roles"] and isinstance(registry["roles"][role], dict) and "provider" in registry["roles"][role]:
+        provider_source = "model_registry.json"
+        provider_value = registry["roles"][role]["provider"]
+    else:
+        provider_source = "default"
+        provider_value = "claude"
+
+    provider = provider_value.strip().lower()
+    restart_required = provider_source.startswith("env:")
+
+    # Model resolution
+    if role in plan_role_config and isinstance(plan_role_config[role], dict) and "model" in plan_role_config[role]:
+        model_source = "plan_role_config"
+        model_raw = plan_role_config[role]["model"]
+    else:
+        reg_model = None
+        if "roles" in registry and role in registry["roles"] and isinstance(registry["roles"][role], dict) and "model" in registry["roles"][role]:
+            reg_role = registry["roles"][role]
+            reg_provider = reg_role.get("provider")
+            plan_override = ("provider" in plan_role_config.get(role, {}))
+            if not plan_override or (plan_override and plan_role_config[role].get("provider") == reg_provider) and (reg_provider is None or reg_provider.strip().lower() == provider):
+                reg_model = reg_role["model"]
+        if reg_model is not None:
+            model_source = "model_registry.json"
+            model_raw = reg_model
+        else:
+            if model_fallback is not None:
+                model_source = "caller_fallback"
+                if callable(model_fallback):
+                    model_raw = model_fallback()
+                else:
+                    model_raw = model_fallback
+            else:
+                model_source = "unset"
+                model_raw = None
+
+    # Attempt to resolve via role_registry for error handling and consistency
+    try:
+        rr_provider, rr_model = role_registry.resolve_role(role, plan_role_config=plan_role_config, registry=registry, model_fallback=model_fallback, environ=environ)
+    except role_registry.RoleRegistryError as e:
+        if not registry or "roles" not in registry or role not in registry.get("roles", {}):
+            return {
+                "role": role,
+                "provider": provider,
+                "model": None,
+                "provider_source": provider_source,
+                "model_source": None,
+                "restart_required": restart_required,
+                "error": str(e),
+            }
+        return {
+            "role": role,
+            "provider": None,
+            "model": None,
+            "provider_source": None,
+            "model_source": None,
+            "restart_required": False,
+            "error": str(e),
+        }
+    else:
+        return {
+            "role": role,
+            "provider": rr_provider,
+            "model": rr_model,
+            "provider_source": provider_source,
+            "model_source": model_source,
+            "restart_required": restart_required,
+            "error": None,
+        }
+
+    # Attempt to resolve via role_registry for error handling and consistency
+    try:
+        rr_provider, rr_model = role_registry.resolve_role(role, plan_role_config=plan_role_config, registry=registry, model_fallback=model_fallback, environ=environ)
+    except role_registry.RoleRegistryError as e:
+        if not registry or "roles" not in registry or role not in registry.get("roles", {}):
+            return {
+                "role": role,
+                "provider": provider,
+                "model": None,
+                "provider_source": provider_source,
+                "model_source": None,
+                "restart_required": restart_required,
+                "error": str(e),
+            }
+        return {
+            "role": role,
+            "provider": None,
+            "model": None,
+            "provider_source": None,
+            "model_source": None,
+            "restart_required": False,
+            "error": str(e),
+        }
+    else:
+        return {
+            "role": role,
+            "provider": rr_provider,
+            "model": rr_model,
+            "provider_source": provider_source,
+            "model_source": model_source,
+            "restart_required": restart_required,
+            "error": None,
+        }
+

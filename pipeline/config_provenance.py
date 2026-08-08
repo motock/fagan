@@ -91,7 +91,7 @@ def resolve_role_provenance(
         provider_source = "default_provider"
     else:
         provider_source = "plan_role_config" if plan_role_config.get("provider") else (
-            "environment_variable" if environ.get(f"PIPELINE_BACKEND_{role.upper()}_PROVIDER") else "registry"
+            f"env:{environ.get(f'PIPELINE_BACKEND_{role.upper()}_PROVIDER')}" if environ.get(f'PIPELINE_BACKEND_{role.upper()}_PROVIDER') else "model_registry.json"
         )
 
     # 2) Model precedence: plan_role_config -> environ -> registry_model -> fallback

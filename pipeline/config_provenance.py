@@ -337,28 +337,6 @@ def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):
         )
     return results
 
-PIPELINE_ROLES: tuple[str, ...] = (
-    "overlord",
-    "planner",
-    "dispatch",
-    "review",
-    "decompose",
-    "test_author",
-    "diagnosis",
-    "security",
-)
-
-PIPELINE_ROLES: tuple[str, ...] = (
-    "overlord",
-    "planner",
-    "dispatch",
-    "review",
-    "decompose",
-    "test_author",
-    "diagnosis",
-    "security",
-)
-
 def resolve_role_provenance(
     role,
     *,

@@ -36,6 +36,17 @@ def _ensure_role_registry_imports():
     RoleRegistryError = role_registry.RoleRegistryError
     return role_registry
 
+
+@pytest.fixture(autouse=True)
+def _load_role_registry_imports():
+    """Ensure RoleResolution / RoleRegistryError are imported before any test
+    in this module runs, so bare-name references resolve."""
+    try:
+        _ensure_role_registry_imports()
+    except Exception:
+        # Stay RED: the import failure surfaces as per-test errors below.
+        pass
+
 # The module is imported lazily inside fixtures/tests so that collection of
 # this file itself does not hard-fail before the first test runs: we want the
 # RED state to surface as per-test import errors, not a collection error that

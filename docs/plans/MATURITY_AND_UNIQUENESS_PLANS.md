@@ -173,6 +173,18 @@ Reference comparables:
 - [x] **Split the 74 KB README** into a quickstart + a reference doc
       (2026-07-27, `5f7d811`). README.md is now a 126-line quickstart;
       REFERENCE.md (919 lines) holds the moved reference material.
+- [x] **W3a — effective-config + provenance view** (2026-08-09, plan
+      `w3a-effective-config-provenance`, PRs #247-#258). Makes the effective
+      value of every role and operational `PIPELINE_*` env var visible, plus
+      which of process env / launchd plist / `~/.claude.json` MCP env /
+      `model_registry.json` / plan `role_config` supplied it, whether sources
+      conflict, and dead-var flags. Read-only: `pipeline/config_provenance.py`
+      (catalog + layered resolution for both env vars and the real 8-role
+      list), `get_effective_config` MCP tool, `/api/config` dashboard
+      endpoint. Write path is W3b, later, after the W1 `PipelineService`
+      extraction. See `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`'s dependency
+      order — this was step 1 of 7; **next up is W1a (extract
+      `PipelineService`)**.
 
 ### A3. Stabilize the active bug surface
 
@@ -597,13 +609,14 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` behind six other workstreams, while
 > that plan's own sequence front-loads the service extraction because B3/B4
 > both queue behind it. **Decision: `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`'s
-> sequencing now governs post-A3 work.** With A1/A2 closed, the path is: W3a
-> (effective-config+provenance view, no prerequisites, serves A2) → W1 (extract
-> `PipelineService` — the keystone both B3 and B4 depend on) → W1b/W1c → W2
-> (chat entry point) → W3b (writable dashboard, closes B4) → W4 (multi-tenant,
-> closes B3). B1 (sandbox) and B5 (export the moat) are picked up once the
-> service seam exists, not before — see that doc's own "Ordering conflict"
-> section for the full rationale.
+> sequencing now governs post-A3 work.** With A1/A2 closed, the path is: ~~W3a
+> (effective-config+provenance view, no prerequisites, serves A2)~~ **DONE
+> 2026-08-09, PRs #247-#258** → **W1 (extract `PipelineService` — the
+> keystone both B3 and B4 depend on, next up)** → W1b/W1c → W2 (chat entry
+> point) → W3b (writable dashboard, closes B4) → W4 (multi-tenant, closes
+> B3). B1 (sandbox) and B5 (export the moat) are picked up once the service
+> seam exists, not before — see that doc's own "Ordering conflict" section
+> for the full rationale.
 
 Land what's half-done before building new; then extract the service seam
 that everything else — sandboxing included — is cheaper to build behind.

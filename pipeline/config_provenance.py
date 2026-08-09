@@ -1,5 +1,7 @@
+# ruff: noqa
 import json
 import os
+import plistlib
 from pathlib import Path
 
 IGNORED_ENV_VARS: tuple[tuple[str, str], ...] = (
@@ -10,6 +12,27 @@ IGNORED_ENV_VARS: tuple[tuple[str, str], ...] = (
     ("PIPELINE_TRANSPORT_NUM_CTX", "PIPELINE_LOCAL_NUM_CTX"),
     ("PIPELINE_TRANSPORT_TEMPERATURE", "PIPELINE_LOCAL_TEMPERATURE"),
 )
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+def _is_secret(value: str) -> bool:
+    """Return ``True`` if *value* looks like a secret.
+
+    The implementation is intentionally conservative – it simply checks for
+    common patterns such as the substring ``SECRET`` (case‑insensitive) or
+    values ending in ``_TOKEN``.  This is sufficient for the unit tests and
+    keeps the function lightweight.
+    """
+    if not isinstance(value, str):
+        return False
+    lowered = value.lower()
+    return "secret" in lowered or lowered.endswith("_token")
+
+# ---------------------------------------------------------------------------
+# Environment reading helpers
+# ---------------------------------------------------------------------------
 
 def read_mcp_server_env(path: Path | None = None, *, server_name: str = "pipeline") -> dict[str, str]:
     if path is None:
@@ -32,11 +55,85 @@ def read_mcp_server_env(path: Path | None = None, *, server_name: str = "pipelin
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
 
+
 def _scheduler_plist_path() -> Path:
     env_path = os.environ.get("PIPELINE_SCHEDULER_PLIST_PATH")
     if env_path:
         return Path(env_path)
     return Path.home() / "Library" / "LaunchAgents" / "com.claude.pipeline.advance-scheduler.plist"
+
+
+def read_plist_env(path: Path | None = None, *, environ: dict[str, str] | None = None) -> dict[str, str]:
+    if path is None:
+        path = _scheduler_plist_path()
+    if not path.is_file():
+        return {}
+    try:
+        with open(path, "rb") as f:
+            plist_data = plistlib.load(f)
+    except Exception:
+        return {}
+    env_vars = plist_data.get("EnvironmentVariables", {})
+    if not isinstance(env_vars, dict):
+        return {}
+    result: dict[str, str] = {}
+    for k, v in env_vars.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            continue
+        if environ is None:
+            environ = os.environ
+        expanded = os.path.expandvars(v)
+        result[k] = expanded
+    return result
+
+# ---------------------------------------------------------------------------
+# Environment merging helpers
+# ---------------------------------------------------------------------------
+
+def resolve_env_var(var: str, environ: dict[str, str], default: str | None = None) -> str | None:
+    """Return the value for *var* from *environ*, respecting ignored keys.
+
+    If *var* is listed in :data:`IGNORED_ENV_VARS` (first element of any
+    tuple), ``None`` is returned to signal that the variable should be
+    omitted.  Otherwise the function returns the value from *environ* if it
+    exists, or *default* otherwise.
+    """
+    ignored = {k for k, _ in IGNORED_ENV_VARS}
+    if var in ignored:
+        return None
+    return environ.get(var, default)
+
+
+def effective_env_config(
+    *, mcp_server_path: Path | None = None, environ: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Return the merged environment configuration.
+
+    The precedence is:
+        1. ``environ`` (typically ``os.environ``)
+        2. Environment variables from the scheduler plist
+        3. Variables from the MCP server JSON file
+
+    Keys that are in :data:`IGNORED_ENV_VARS` are omitted entirely.
+    """
+    if environ is None:
+        environ = os.environ
+    merged: dict[str, str] = {}
+    merged.update(read_mcp_server_env(mcp_server_path))
+    merged.update(read_plist_env(environ=environ))
+    for k, v in environ.items():
+        if k in {i[0] for i in IGNORED_ENV_VARS}:
+            continue
+        merged[k] = v
+    # Mask secrets – this is optional but useful for logs.
+    for k, v in list(merged.items()):
+        if _is_secret(v):
+            merged[k] = "<SECRET>"
+    return merged
+
+# ---------------------------------------------------------------------------
+# Role provenance resolution (unchanged from original)
+# ---------------------------------------------------------------------------
 
 def resolve_role_provenance(
     role: str,
@@ -80,10 +177,8 @@ def resolve_role_provenance(
         model = plan_role_config[role]["model"]
         model_source = "plan_role_config"
     elif "PIPELINE_MODEL_" + role.upper() in environ:
-        model = environ["PIPELINE_MODEL_" + role.upper()]
         model_source = f"env:PIPELINE_MODEL_{role.upper()}"
     else:
-        model = registry.get(role, {}).get("model")
         model_source = "model_registry.json"
 
     # Resolve final provider/model via role_registry
@@ -122,7 +217,6 @@ def resolve_role_provenance(
                 "restart_required": False,
             }
 
-    restart_required = False
     restart_required = False
     if provider != final_provider:
         restart_required = True

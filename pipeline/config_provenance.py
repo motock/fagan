@@ -416,7 +416,7 @@ def resolve_role_provenance(
     model_source = "unset"
     if role in plan_role_config and isinstance(plan_role_config[role], dict) and "model" in plan_role_config[role]:
         model_source = "plan_role_config"
-    elif role in registry_roles and isinstance(registry_roles[role], dict):
+    if role in registry_roles and isinstance(registry_roles[role], dict):
         reg_entry = registry_roles[role]
         reg_provider = reg_entry.get("provider")
         if (reg_provider is None or reg_provider == provider_value) and "model" in reg_entry:

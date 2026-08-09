@@ -50,6 +50,7 @@ from mcp.server.fastmcp import FastMCP
 
 from app import backend, role_registry
 
+from . import config_provenance
 from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,
     _added_pytest_test_paths,
@@ -613,6 +614,75 @@ def get_role_config(plan_name: str | None = None) -> dict[str, Any]:
         )
         roles[role] = {"provider": resolution.provider, "model": resolution.model}
     return {"ok": True, "roles": roles}
+
+
+@mcp.tool()
+def get_effective_config(plan_name: str | None = None) -> dict[str, Any]:
+    """
+    Read-only diagnostic snapshot of the pipeline's effective configuration:
+    every role in config_provenance.PIPELINE_ROLES with its resolved
+    (provider, model) and provenance, every cataloged env var's resolved
+    value and provenance, any unrecognized/ignored env vars present, and
+    which config-source files were actually consulted (and whether each
+    exists). Pure read - makes no changes and writes nothing.
+
+    "restart_required" on a role/env entry means that entry's winning value
+    came from an env var or the launchd plist/mcp_server_env layer, so a
+    change there only takes effect after the scheduler/MCP server is
+    restarted. By contrast, a plan's role_config and model_registry.json
+    are both read fresh on every call, so edits to either are live
+    immediately with no restart needed.
+
+    A role entry carrying a non-None "error" key is misconfigured (e.g. no
+    model configured for it anywhere, or its provider/model pairing isn't
+    declared in model_registry.json) - never raises for this; the bad role
+    just reports its error inline while the rest of the roles resolve
+    normally.
+
+    Pass plan_name to additionally layer in that plan's role_config
+    overrides (same effect as get_role_config's plan_name); a plan_name
+    whose manifest doesn't exist degrades to "no plan overrides" rather
+    than raising.
+    """
+    plan_role_config = _plan_role_config(plan_name) if plan_name else None
+    model_fallbacks = {
+        "overlord": lambda: _persona_default_model("overlord") or "opus",
+        "planner": lambda: DEFAULT_MODEL,
+        "dispatch": lambda: DEFAULT_MODEL,
+        "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
+        "decompose": lambda: _persona_default_model("product-analyst") or "opus",
+        "security": lambda: _persona_default_model("security-engineer") or DEFAULT_MODEL,
+    }
+    try:
+        registry = role_registry.load_registry()
+    except role_registry.RoleRegistryError:
+        registry = {}
+
+    roles = config_provenance.effective_role_config(
+        plan_role_config=plan_role_config,
+        registry=registry,
+        model_fallbacks=model_fallbacks,
+    )
+    env = config_provenance.effective_env_config()
+    ignored_env_vars = config_provenance.ignored_env_vars_present()
+
+    plist_path = config_provenance._scheduler_plist_path()
+    mcp_env_path = config_provenance._claude_json_path()
+    registry_path = role_registry._registry_path()
+
+    sources = {
+        "launchd_plist": {"path": str(plist_path), "exists": plist_path.exists()},
+        "mcp_server_env": {"path": str(mcp_env_path), "exists": mcp_env_path.exists()},
+        "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
+    }
+
+    return {
+        "ok": True,
+        "roles": roles,
+        "env": env,
+        "ignored_env_vars": ignored_env_vars,
+        "sources": sources,
+    }
 
 
 @mcp.tool()

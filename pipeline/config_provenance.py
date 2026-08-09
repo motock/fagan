@@ -13,6 +13,7 @@ report which ones are present in a given environment. These are consumed both
 by the backend at import time (to warn operators) and by the effective-config
 view, so there is exactly one definition - a second copy would drift.
 """
+from __future__ import annotations
 
 import json
 import os
@@ -470,3 +471,41 @@ def resolve_role_provenance(
         "restart_required": restart_required,
         "error": None,
     }
+
+
+def effective_role_config(*, plan_role_config=None, registry=None, model_fallbacks=None, environ=None):
+    """
+    Return a diagnostic list for all roles in PIPELINE_ROLES.
+
+    Parameters
+    ----------
+    plan_role_config : Mapping[str, Mapping[str, str]] | None
+        Optional per‑role configuration from the launch plan.
+    registry : Mapping[str, Any] | None
+        Optional model registry data structure.  If ``None`` a fresh registry is loaded once.
+    model_fallbacks : Mapping[str, str | Callable[[], str]] | None
+        Per‑role fallback value or callable used when no other source supplies a model.
+    environ : Mapping[str, str] | None
+        Environment dictionary.  If ``None`` the real :data:`os.environ` is used.
+
+    Returns
+    -------
+    list[dict]
+        One dictionary per role in ``PIPELINE_ROLES``.
+    """
+    if registry is None:
+        registry = {}
+    results: list[dict] = []
+    for role_name in PIPELINE_ROLES:
+        fallback = None
+        if model_fallbacks and role_name in model_fallbacks:
+            fallback = model_fallbacks[role_name]
+        result = resolve_role_provenance(
+            role_name,
+            plan_role_config=plan_role_config,
+            registry=registry,
+            model_fallback=fallback,
+            environ=environ,
+        )
+        results.append(result)
+    return results

@@ -18,7 +18,6 @@ import pytest
 
 from pipeline import server as p
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures (mirror the ones in test_pipeline_mcp_server.py so this
 # file is fully self-contained).

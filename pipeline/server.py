@@ -296,6 +296,7 @@ from .rebrief import (
     collect_failure_evidence,
     compose_attempt_facts,
     compose_rebriefed_instructions,
+    detect_unsatisfiable_signal,
     diagnose_failure,
 )
 from .review import (
@@ -1757,7 +1758,8 @@ def _find_dead_new_functions(worktree: Path, base_branch: str) -> list[str]:
 
 
 def _rebrief_step_cap_struggle(
-    story: dict[str, Any], worktree: str, plan_role_config: dict | None = None
+    story: dict[str, Any], worktree: str, plan_role_config: dict | None = None,
+    plan_name: str | None = None, story_key: str | None = None
 ) -> None:
     """CLAUDE.md Step 9: when an implementer hits the step cap, diagnose where
     it struggled and fold the root cause into agent_instructions so the resume
@@ -1772,6 +1774,17 @@ def _rebrief_step_cap_struggle(
     evidence is the tail of its agent.log."""
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
+    try:
+        unsat_reason = detect_unsatisfiable_signal(evidence)
+        if unsat_reason is not None:
+            _notify_user(
+                plan_name,
+                f"Story may be unsatisfiable as specified: {unsat_reason}. Story {story_key} may need re-planning rather than another retry.",
+            )
+    except Exception:
+        logging.getLogger("pipeline").debug(
+            "detect_unsatisfiable_signal/_notify_user failed during step-cap rebrief",
+            exc_info=True)
     diagnosis = diagnose_failure(evidence, story, plan_role_config)
     story["agent_instructions"] = compose_rebriefed_instructions(
         story.get("agent_instructions", ""), diagnosis)
@@ -2009,8 +2022,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # agent.log is still present for evidence. Fail-open: a None/errored
         # diagnosis leaves agent_instructions untouched (no-op).
         _rebrief_step_cap_struggle(
-            story, str(worktree), plan_role_config=manifest.get("role_config"))
-
+            story, str(worktree), plan_role_config=manifest.get("role_config"),
+            plan_name=plan_name,
+            story_key=story_key)
         # Worktree hygiene: append the cleanup-guidance section so the resumed
         # agent tidies the worktree before continuing. Unconditional and
         # idempotent (append_cleanup_guidance is a no-op when its header is

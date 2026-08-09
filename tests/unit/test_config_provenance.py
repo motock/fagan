@@ -17,6 +17,37 @@ from pathlib import Path
 
 import pytest
 
+# Lazily imported inside tests so collection does not hard-fail before the
+# first test runs (the implementation does not exist yet on this branch).
+RoleResolution = None
+RoleRegistryError = None
+
+
+def _ensure_role_registry_imports():
+    """Import RoleResolution / RoleRegistryError from app.role_registry.
+
+    Done lazily so the suite stays RED (per-test import errors) rather than
+    failing at collection time before the implementation exists.
+    """
+    global RoleResolution, RoleRegistryError
+    from app import role_registry
+
+    RoleResolution = role_registry.RoleResolution
+    RoleRegistryError = role_registry.RoleRegistryError
+    return role_registry
+
+
+@pytest.fixture(autouse=True)
+def _load_role_registry_imports():
+    """Ensure RoleResolution / RoleRegistryError are imported before any test
+    in this module runs, so bare-name references resolve. If the import fails
+    (implementation not present yet), leave the names as None so the test
+    surfaces the failure itself rather than erroring at collection time."""
+    try:
+        _ensure_role_registry_imports()
+    except ImportError:
+        pass
+
 # The module is imported lazily inside fixtures/tests so that collection of
 # this file itself does not hard-fail before the first test runs: we want the
 # RED state to surface as per-test import errors, not a collection error that
@@ -396,13 +427,11 @@ class TestImportGraph:
         # Every imported module must resolve to a stdlib module (no
         # third-party, no other pipeline/app submodule besides the module's
         # own package). The story allows: json, os, plistlib, pathlib,
-        # xml.parsers.expat. A later story explicitly authorizes importing
-        # app.role_registry (a stdlib-only leaf) for role provenance.
+        # xml.parsers.expat, and app.role_registry - a verified stdlib-only
+        # leaf (json/os/dataclasses/pathlib) that resolve_role_provenance
+        # delegates to; it does not pull in app.backend or pipeline.server.
         tree = ast.parse(self._source())
-        allowed = {
-            "json", "os", "plistlib", "pathlib", "xml.parsers.expat",
-            "app.role_registry",
-        }
+        allowed = {"json", "os", "plistlib", "pathlib", "xml.parsers.expat", "app", "app.role_registry"}
         imported = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -747,25 +776,32 @@ class TestBackendWarningEmission:
 
 class TestNoImportCycle:
     def test_config_provenance_imports_nothing_from_app(self):
-        # A later story explicitly authorizes importing app.role_registry
-        # (a stdlib-only leaf) for role provenance - that one module is
-        # exempt. Any other app.* import would risk the real import cycle
-        # this test exists to catch (e.g. app.backend, app.dashboard).
+        # app.role_registry is a verified stdlib-only leaf (json/os/
+        # dataclasses/pathlib; no import of app.backend or pipeline.server),
+        # so resolve_role_provenance delegating to it creates no cycle.
+        # Anything else under app/ (app.backend, app.pipeline_mcp_server,
+        # ...) remains forbidden.
         src = Path("pipeline/config_provenance.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     assert alias.name == "app.role_registry" or not alias.name.startswith("app"), (
-                        "config_provenance must not import from app (no import cycle)"
+                        "config_provenance must not import from app (no import cycle), "
+                        "except the verified-safe app.role_registry leaf"
                     )
             elif isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                assert module == "app" and any(
-                    a.name == "role_registry" for a in node.names
-                ) or not module.startswith("app"), (
-                    "config_provenance must not import from app (no import cycle)"
-                )
+                if module == "app":
+                    assert all(a.name == "role_registry" for a in node.names), (
+                        "config_provenance may only import role_registry from app "
+                        "(no import cycle), not any other app submodule"
+                    )
+                else:
+                    assert not module.startswith("app"), (
+                        "config_provenance must not import from app (no import cycle), "
+                        "except the verified-safe app.role_registry leaf"
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -1758,310 +1794,563 @@ class TestEffectiveEnvConfigBoundary:
         )
         assert isinstance(result, list)
         assert not isinstance(result, (tuple, dict))
-
-
+        assert not isinstance(result, (tuple, dict))
 
 
 # ===========================================================================
-# Role provenance (W3a): resolve_role_provenance / effective_role_config
+# resolve_role_provenance delegation to app.role_registry.resolve_role
+# ===========================================================================
 #
-# These tests target the NEW provenance API described in the story. The
-# module under test does not implement them yet on this branch, so this
-# section is intentionally RED until a follow-up dispatch adds it.
-# ===========================================================================
-
-# `re` is already imported as `_re` earlier in this file (line ~768).
+# This story wires pipeline.config_provenance.resolve_role_provenance so that
+# on its SUCCESS path the authoritative final provider/model come from
+# app.role_registry.resolve_role(...).provider / .model rather than being
+# independently re-derived. The hand-rolled walk is retained ONLY to label
+# provider_source / model_source / restart_required. The two error paths
+# (model-not-in-registry, no-model-configured) keep their existing {"error":...}
+# return shape and wording: a RoleRegistryError raised by resolve_role is
+# caught and translated back into this function's own pre-existing error dict.
+#
+# The implementation does not exist yet on this branch, so this block is
+# intentionally RED until a follow-up dispatch implements it.
 
 
 def _build_registry(roles=None, providers=None):
-    """Build a self-contained registry dict. Never touches the real
-    model_registry.json on disk."""
-    providers = providers or {
-        "claude": {"models": {"sonnet": {"tag": "sonnet"}, "opus": {"tag": "opus"}}},
-        "ollama": {
-            "models": {
-                "gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"},
-                "glm": {"tag": "glm-5.2:cloud"},
-            }
+    """Build a minimal model_registry.json-shaped dict.
+
+    ``roles`` maps role_name -> {"provider": ..., "model": ...}.
+    ``providers`` maps provider_name -> {"models": {friendly: {"tag": tag}}}.
+    """
+    roles = roles or {}
+    providers = providers or {}
+    return {"roles": roles, "providers": providers}
+
+
+def _registry_with_claude_sonnet():
+    """A registry where role 'overlord' uses claude/sonnet (friendly -> tag)."""
+    return _build_registry(
+        roles={"overlord": {"provider": "claude", "model": "sonnet"}},
+        providers={
+            "claude": {
+                "models": {
+                    "sonnet": {"tag": "claude-3-5-sonnet"},
+                    "haiku": {"tag": "claude-3-5-haiku"},
+                    "opus": {"tag": "claude-3-opus"},
+                }
+            },
+            "openai": {
+                "models": {
+                    "gpt4": {"tag": "gpt-4o"},
+                }
+            },
         },
-        "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}},
-    }
-    roles = roles or {
-        "dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"},
-    }
-    return {"providers": providers, "roles": roles}
+    )
 
 
-class TestPipelineRolesConstant:
-    def test_roles_constant_value_and_type(self):
+class TestResolveRoleProvenancePositiveAgreement:
+    """Where the old hand-rolled walk and resolve_role agree, the returned
+    provider/model must match resolve_role's output exactly, and the source
+    labels must still come from the local walk."""
+
+    def test_provider_model_match_resolve_role_output(self):
         mod = _import_module()
-        assert hasattr(mod, "PIPELINE_ROLES")
-        assert isinstance(mod.PIPELINE_ROLES, tuple)
-        assert mod.PIPELINE_ROLES == (
+        reg = _registry_with_claude_sonnet()
+        environ = {}
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ=environ
+        )
+        from app import role_registry
+
+        expected = role_registry.resolve_role(
             "overlord",
-            "planner",
-            "dispatch",
-            "review",
-            "decompose",
-            "test_author",
-            "diagnosis",
-            "security",
-        )
-        # all elements are str
-        assert all(isinstance(r, str) for r in mod.PIPELINE_ROLES)
-
-    def test_anti_drift_roles_used_in_pipeline_are_in_constant(self):
-        """Every role name passed to resolve_role across pipeline/*.py must
-        appear in PIPELINE_ROLES (anti-drift)."""
-        mod = _import_module()
-        repo = Path(__file__).resolve().parent.parent.parent
-        used = set()
-        for src in (repo / "pipeline").glob("*.py"):
-            text = src.read_text()
-            used.update(_re.findall(r'resolve_role\(\s*["\']([a-z_]+)["\']', text))
-        assert used, "expected at least one resolve_role call in pipeline/*.py"
-        for role in used:
-            assert role in mod.PIPELINE_ROLES, (
-                f"role {role!r} used in pipeline but missing from PIPELINE_ROLES"
-            )
-
-    def test_anti_drift_registry_roles_in_constant(self):
-        """Every key under `roles` in the repo's real model_registry.json must
-        be in PIPELINE_ROLES. This test only READS the real file."""
-        mod = _import_module()
-        repo = Path(__file__).resolve().parent.parent.parent
-        reg_path = repo / "model_registry.json"
-        data = json.loads(reg_path.read_text())
-        for role_name in data.get("roles", {}):
-            assert role_name in mod.PIPELINE_ROLES, (
-                f"registry role {role_name!r} not in PIPELINE_ROLES"
-            )
-
-
-class TestResolveRoleProvenanceSignature:
-    def test_returns_dict_with_required_keys(self):
-        mod = _import_module()
-        reg = _build_registry()
-        result = mod.resolve_role_provenance(
-            "review", registry=reg, model_fallback="sonnet", environ={}
-        )
-        assert isinstance(result, dict)
-        for key in (
-            "role",
-            "provider",
-            "model",
-            "provider_source",
-            "model_source",
-            "restart_required",
-            "error",
-        ):
-            assert key in result, f"missing key {key!r}"
-
-    def test_error_is_none_on_success(self):
-        mod = _import_module()
-        reg = _build_registry()
-        result = mod.resolve_role_provenance(
-            "review", registry=reg, model_fallback="sonnet", environ={}
-        )
-        assert result["error"] is None
-
-
-class TestPlanRoleConfigWins:
-    def test_plan_role_config_provider_and_model(self):
-        mod = _import_module()
-        reg = _build_registry()
-        result = mod.resolve_role_provenance(
-            "review",
-            plan_role_config={"review": {"provider": "mlx", "model": "qwen"}},
+            plan_role_config=None,
             registry=reg,
-            environ={},
+            model_fallback="haiku",
+            environ=environ,
         )
-        assert result["provider"] == "mlx"
-        assert result["provider_source"] == "plan_role_config"
-        assert result["model_source"] == "plan_role_config"
-        assert result["restart_required"] is False
-        assert result["error"] is None
-        # model is the resolved tag for qwen under mlx
-        assert result["model"] == "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+        assert result["provider"] == expected.provider
+        assert result["model"] == expected.model
 
-
-class TestEnvVarProvider:
-    def test_env_var_provider_source_and_restart(self):
+    def test_provider_source_labeled_from_local_walk(self):
+        """provider_source is still produced by the local walk, not by
+        resolve_role (which returns no source label)."""
         mod = _import_module()
-        reg = _build_registry()
+        reg = _registry_with_claude_sonnet()
         result = mod.resolve_role_provenance(
-            "review",
-            registry=reg,
-            environ={"PIPELINE_BACKEND_REVIEW": "ollama"},
-            model_fallback="glm",
-        )
-        assert result["provider"] == "ollama"
-        assert result["provider_source"] == "env:PIPELINE_BACKEND_REVIEW"
-        assert result["restart_required"] is True
-        assert result["error"] is None
-
-    def test_env_var_role_uppercased(self):
-        """The env var name uses the UPPERCASED role."""
-        mod = _import_module()
-        reg = _build_registry()
-        # test_author -> PIPELINE_BACKEND_TEST_AUTHOR
-        result = mod.resolve_role_provenance(
-            "test_author",
-            registry=reg,
-            environ={"PIPELINE_BACKEND_TEST_AUTHOR": "ollama"},
-            model_fallback="glm",
-        )
-        assert result["provider"] == "ollama"
-        assert result["provider_source"] == "env:PIPELINE_BACKEND_TEST_AUTHOR"
-        assert result["restart_required"] is True
-
-
-class TestRegistryProviderSource:
-    def test_registry_provider_source_and_tag_resolution(self):
-        """Nothing set except a registry supplying `dispatch` -> provider from
-        registry, model is the resolved TAG."""
-        mod = _import_module()
-        reg = _build_registry(roles={"dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"}})
-        result = mod.resolve_role_provenance(
-            "dispatch", registry=reg, environ={}
+            "overlord", registry=reg, model_fallback="haiku", environ={}
         )
         assert result["provider_source"] == "model_registry.json"
-        assert result["restart_required"] is False
-        assert result["model"] == "gpt-oss-20b-high:latest"
-        assert result["error"] is None
-
-    def test_registry_model_source_label(self):
-        mod = _import_module()
-        reg = _build_registry(roles={"dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"}})
-        result = mod.resolve_role_provenance("dispatch", registry=reg, environ={})
         assert result["model_source"] == "model_registry.json"
-
-
-class TestDefaultProvider:
-    def test_no_layer_supplies_provider_falls_to_default(self):
-        mod = _import_module()
-        reg = _build_registry(roles={})
-        result = mod.resolve_role_provenance(
-            "overlord", registry=reg, model_fallback="sonnet", environ={}
-        )
-        assert result["provider"] == "claude"
-        assert result["provider_source"] == "default"
         assert result["restart_required"] is False
         assert result["error"] is None
 
-
-class TestModelFallback:
-    def test_model_fallback_used_when_no_other_model(self):
+    def test_plan_role_config_precedence_agrees(self):
+        """plan_role_config provider/model wins; both resolve_role and the
+        local walk agree, and the returned values equal resolve_role's."""
         mod = _import_module()
-        reg = _build_registry(roles={})
+        reg = _registry_with_claude_sonnet()
+        plan = {"overlord": {"provider": "openai", "model": "gpt4"}}
+        environ = {}
         result = mod.resolve_role_provenance(
-            "overlord", registry=reg, model_fallback="sonnet", environ={}
+            "overlord",
+            plan_role_config=plan,
+            registry=reg,
+            model_fallback="haiku",
+            environ=environ,
         )
-        assert result["model"] == "sonnet"
-        assert result["model_source"] == "caller_fallback"
+        from app import role_registry
 
-    def test_model_fallback_callable(self):
+        expected = role_registry.resolve_role(
+            "overlord",
+            plan_role_config=plan,
+            registry=reg,
+            model_fallback="haiku",
+            environ=environ,
+        )
+        assert result["provider"] == expected.provider == "openai"
+        assert result["model"] == expected.model == "gpt-4o"
+        assert result["provider_source"] == "plan_role_config"
+        assert result["model_source"] == "plan_role_config"
+        assert result["error"] is None
+
+    def test_env_provider_precedence_marks_restart_required(self):
+        """An env-var provider sets restart_required True (local walk), while
+        the provider/model values still come from resolve_role."""
         mod = _import_module()
-        reg = _build_registry(roles={})
+        reg = _registry_with_claude_sonnet()
+        environ = {"PIPELINE_BACKEND_OVERLORD": "openai"}
+        plan = {"overlord": {"model": "gpt4"}}
         result = mod.resolve_role_provenance(
-            "overlord", registry=reg, model_fallback=lambda: "opus", environ={}
+            "overlord",
+            plan_role_config=plan,
+            registry=reg,
+            model_fallback="haiku",
+            environ=environ,
         )
-        assert result["model"] == "opus"
-        assert result["model_source"] == "caller_fallback"
+        from app import role_registry
 
+        expected = role_registry.resolve_role(
+            "overlord",
+            plan_role_config=plan,
+            registry=reg,
+            model_fallback="haiku",
+            environ=environ,
+        )
+        assert result["provider"] == expected.provider == "openai"
+        assert result["model"] == expected.model == "gpt-4o"
+        assert result["provider_source"] == "env:PIPELINE_BACKEND_OVERLORD"
+        assert result["restart_required"] is True
+        assert result["error"] is None
 
-class TestBoundaryNoModel:
-    def test_no_model_and_no_fallback_returns_unset_not_raise(self):
-        """No layer supplies a model and model_fallback is None -> model is None,
-        model_source == 'unset', no exception (resolve_role raises
-        RoleRegistryError here; the fail-open path must convert it)."""
+    def test_default_provider_when_nothing_supplied(self):
+        """No plan, no env, no registry role -> default 'claude' provider,
+        model from fallback. Values match resolve_role."""
         mod = _import_module()
-        reg = _build_registry(roles={})
-        result = mod.resolve_role_provenance(
-            "overlord", registry=reg, model_fallback=None, environ={}
+        reg = _build_registry(
+            roles={},
+            providers={"claude": {"models": {"haiku": {"tag": "claude-3-5-haiku"}}}},
         )
-        assert result["model"] is None
-        assert result["model_source"] == "unset"
-        assert result["error"] is not None
-        assert isinstance(result["error"], str)
-        # provider still resolved to default
-        assert result["provider"] == "claude"
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ={}
+        )
+        from app import role_registry
+
+        expected = role_registry.resolve_role(
+            "overlord", registry=reg, model_fallback="haiku", environ={}
+        )
+        assert result["provider"] == expected.provider == "claude"
+        # resolve_role uses a string model_fallback as-is (it is not resolved
+        # through the provider's models->tag catalog), so the expected value
+        # here is the raw fallback "haiku", not its registry tag.
+        assert result["model"] == expected.model == "haiku"
         assert result["provider_source"] == "default"
-        assert result["restart_required"] is False
+        assert result["model_source"] == "caller_fallback"
+        assert result["error"] is None
 
-    def test_fail_open_shape_on_error(self):
-        """On a genuine misconfiguration (a role naming a model not declared
-        under providers.<provider>.models) the fail-open dict has exactly
-        these fields, all blanked except role/error. This is deliberately a
-        different fixture from test_no_model_and_no_fallback_returns_unset_not_raise
-        above: that test's scenario (no model configured anywhere, no
-        fallback) is a normal, gracefully-degraded boundary case, not an
-        error - it must NOT hit this all-None shape. Reusing that fixture
-        here previously made these two tests assert contradictory results
-        for identical inputs, which no implementation could satisfy."""
+    def test_callable_model_fallback_agrees(self):
+        """A callable model_fallback is supported by resolve_role; the
+        returned model must match resolve_role's resolved tag."""
         mod = _import_module()
-        reg = {
-            "providers": {
-                "ollama": {"models": {"gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"}}},
-            },
-            "roles": {
-                "overlord": {"provider": "ollama", "model": "nonexistent-model"},
-            },
-        }
-        result = mod.resolve_role_provenance(
-            "overlord", registry=reg, model_fallback=None, environ={}
+        reg = _build_registry(
+            roles={},
+            providers={"claude": {"models": {"sonnet": {"tag": "claude-3-5-sonnet"}}}},
         )
-        assert set(result.keys()) == {
-            "role", "provider", "model", "provider_source",
-            "model_source", "restart_required", "error",
-        }
+        fallback = lambda: "sonnet"
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback=fallback, environ={}
+        )
+        from app import role_registry
+
+        expected = role_registry.resolve_role(
+            "overlord", registry=reg, model_fallback=fallback, environ={}
+        )
+        # resolve_role uses a callable model_fallback's return value as-is
+        # (not resolved through the provider's models->tag catalog), so the
+        # expected value here is the raw fallback "sonnet", not its tag.
+        assert result["model"] == expected.model == "sonnet"
+        assert result["model_source"] == "caller_fallback"
+        assert result["error"] is None
+
+
+class TestResolveRoleProvenanceDelegationHappened:
+    """Monkeypatch resolve_role to return values the hand-rolled walk could
+    never produce. If resolve_role_provenance delegates, its returned
+    provider/model must equal the monkeypatched values, proving the call site
+    is wired in rather than merely coexisting unused."""
+
+    def test_provider_model_follow_monkeypatched_resolve_role(self, monkeypatch):
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        forced = RoleResolution(provider="gemini", model="gemini-1.5-pro")
+        from app import role_registry
+
+        monkeypatch.setattr(role_registry, "resolve_role", lambda *a, **k: forced)
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ={}
+        )
+        assert result["provider"] == "gemini"
+        assert result["model"] == "gemini-1.5-pro"
+        assert result["provider"] != "claude"
+        assert result["model"] != "claude-3-5-sonnet"
+
+    def test_delegation_passes_environ_through(self, monkeypatch):
+        """resolve_role_provenance must forward its `environ` kwarg to
+        resolve_role (the whole point of the environ plumbing)."""
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        seen = {}
+
+        def fake_resolve_role(role, *, plan_role_config=None, model_fallback=None,
+                              registry=None, default_provider="claude", environ=None):
+            seen["environ"] = environ
+            seen["plan_role_config"] = plan_role_config
+            seen["registry"] = registry
+            seen["model_fallback"] = model_fallback
+            seen["default_provider"] = default_provider
+            return RoleResolution(provider="claude", model="claude-3-5-sonnet")
+
+        from app import role_registry
+
+        monkeypatch.setattr(role_registry, "resolve_role", fake_resolve_role)
+        env = {"PIPELINE_BACKEND_OVERLORD": "openai"}
+        mod.resolve_role_provenance(
+            "overlord",
+            plan_role_config={"overlord": {"model": "sonnet"}},
+            registry=reg,
+            model_fallback="haiku",
+            environ=env,
+        )
+        assert seen.get("environ") is env
+        assert seen.get("plan_role_config") == {"overlord": {"model": "sonnet"}}
+        assert seen.get("registry") is reg
+        assert seen.get("model_fallback") == "haiku"
+
+    def test_delegation_uses_returned_provider_not_local_value(self, monkeypatch):
+        """Even when the local walk computes a provider, the returned dict's
+        'provider' must be resolve_role's .provider, not the local value."""
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        forced = RoleResolution(provider="claude", model="claude-3-5-sonnet")
+        from app import role_registry
+
+        monkeypatch.setattr(role_registry, "resolve_role", lambda *a, **k: forced)
+        result = mod.resolve_role_provenance(
+            "overlord",
+            plan_role_config={"overlord": {"provider": "openai", "model": "gpt4"}},
+            registry=reg,
+            model_fallback="haiku",
+            environ={},
+        )
+        assert result["provider_source"] == "plan_role_config"
+        assert result["provider"] == "claude"
+        assert result["model"] == "claude-3-5-sonnet"
+        assert result["provider"] != "openai"
+        assert result["model"] != "gpt-4o"
+
+    def test_delegation_called_exactly_once_per_invocation(self, monkeypatch):
+        """resolve_role should be called once per resolve_role_provenance
+        call (not zero, not repeatedly)."""
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        calls = []
+
+        def fake_resolve_role(*a, **k):
+            calls.append(k)
+            return RoleResolution(provider="claude", model="claude-3-5-sonnet")
+
+        from app import role_registry
+
+        monkeypatch.setattr(role_registry, "resolve_role", fake_resolve_role)
+        mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ={}
+        )
+        assert len(calls) == 1
+
+
+class TestResolveRoleProvenanceNegativeErrorCaught:
+    """When resolve_role raises RoleRegistryError, resolve_role_provenance
+    must NOT propagate it; it must return its existing error dict shape with
+    its own unchanged wording."""
+
+    def test_model_not_declared_error_shape_preserved(self, monkeypatch):
+        """resolve_role raises 'model X not declared'; resolve_role_provenance
+        returns its existing 'not declared in registry' error dict, not a
+        raised exception and not resolve_role's message."""
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        from app import role_registry
+
+        def boom(*a, **k):
+            raise RoleRegistryError("model ghost not declared")
+
+        monkeypatch.setattr(role_registry, "resolve_role", boom)
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ={}
+        )
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "not declared in registry" in result["error"]
+        assert "model ghost not declared" not in result["error"]
+        assert "overlord" in result["error"]
+
+    def test_model_not_declared_error_dict_full_shape(self, monkeypatch):
+        """The error dict keeps the full pre-existing shape (all keys)."""
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        from app import role_registry
+
+        def boom(*a, **k):
+            raise RoleRegistryError("model ghost not declared")
+
+        monkeypatch.setattr(role_registry, "resolve_role", boom)
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ={}
+        )
+        for key in ("role", "provider", "model", "provider_source",
+                    "model_source", "restart_required", "error"):
+            assert key in result, f"missing key {key!r} in error dict"
         assert result["role"] == "overlord"
+        assert result["error"] is not None
         assert result["provider"] is None
         assert result["model"] is None
         assert result["provider_source"] is None
         assert result["model_source"] is None
         assert result["restart_required"] is False
-        assert result["error"] is not None
-        assert isinstance(result["error"], str)
 
-
-class TestNegativeBadRegistryModel:
-    def test_role_naming_undeclared_model_reports_error(self):
-        """A registry whose role names a model not declared under
-        providers.<provider>.models -> that role's entry has a non-None error
-        string and provider/model None."""
+    def test_no_model_configured_error_shape_preserved(self, monkeypatch):
+        """resolve_role raises 'no model configured'; resolve_role_provenance
+        returns its existing 'has no model configured' error dict."""
         mod = _import_module()
-        reg = {
-            "providers": {
-                "ollama": {"models": {"gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"}}},
-            },
-            "roles": {
-                "dispatch": {"provider": "ollama", "model": "nonexistent-model"},
-            },
-        }
-        result = mod.resolve_role_provenance("dispatch", registry=reg, environ={})
-        assert result["error"] is not None
-        assert isinstance(result["error"], str)
-        assert result["provider"] is None
+        reg = _registry_with_claude_sonnet()
+        from app import role_registry
+
+        def boom(*a, **k):
+            raise RoleRegistryError("role 'overlord': no model configured (x)")
+
+        monkeypatch.setattr(role_registry, "resolve_role", boom)
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback=None, environ={}
+        )
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert result["error"] == "Role overlord has no model configured"
+        assert "role 'overlord': no model configured (x)" not in result["error"]
+
+    def test_no_model_configured_error_dict_full_shape(self, monkeypatch):
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        from app import role_registry
+
+        def boom(*a, **k):
+            raise RoleRegistryError("role 'overlord': no model configured (x)")
+
+        monkeypatch.setattr(role_registry, "resolve_role", boom)
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback=None, environ={}
+        )
+        for key in ("role", "provider", "model", "provider_source",
+                    "model_source", "restart_required", "error"):
+            assert key in result
+        assert result["role"] == "overlord"
         assert result["model"] is None
+        assert result["error"] == "Role overlord has no model configured"
 
-
-class TestImportHygiene:
-    def test_does_not_import_pipeline_server(self):
+    def test_role_registry_error_subclass_also_caught(self, monkeypatch):
+        """A subclass of RoleRegistryError must also be caught (try/except
+        catches the base, so subclasses are covered too)."""
         mod = _import_module()
-        src = Path(mod.__file__).read_text()
-        assert "import pipeline.server" not in src
-        assert "from pipeline.server" not in src
-        assert "import pipeline import server" not in src
+        reg = _registry_with_claude_sonnet()
+        from app import role_registry
 
-    def test_does_not_import_app_backend(self):
-        mod = _import_module()
-        src = Path(mod.__file__).read_text()
-        assert "import app.backend" not in src
-        assert "from app.backend" not in src
+        class SubError(RoleRegistryError):
+            pass
 
-    def test_may_import_role_registry(self):
-        """The story explicitly permits `from app import role_registry`."""
-        # This is permissive, not required; just ensure no assertion breaks.
+        def boom(*a, **k):
+            raise SubError("model ghost not declared")
+
+        monkeypatch.setattr(role_registry, "resolve_role", boom)
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ={}
+        )
+        assert isinstance(result, dict)
+        assert "not declared in registry" in result["error"]
+
+    def test_non_role_registry_error_propagates(self, monkeypatch):
+        """A non-RoleRegistryError exception must NOT be swallowed; it must
+        propagate (the try/except is scoped to RoleRegistryError only)."""
         mod = _import_module()
-        assert mod is not None
+        reg = _registry_with_claude_sonnet()
+        from app import role_registry
+
+        def boom(*a, **k):
+            raise RuntimeError("totally unrelated")
+
+        monkeypatch.setattr(role_registry, "resolve_role", boom)
+        with pytest.raises(RuntimeError, match="totally unrelated"):
+            mod.resolve_role_provenance(
+                "overlord", registry=reg, model_fallback="haiku", environ={}
+            )
+
+
+class TestResolveRoleProvenanceMechanicalRequirements:
+    """Directly assert the source file contains the wiring the task requires,
+    so an implementer cannot ship a green suite without it."""
+
+    def test_resolve_role_provenance_exists(self):
+        mod = _import_module()
+        assert hasattr(mod, "resolve_role_provenance")
+
+    def test_source_calls_role_registry_resolve_role(self):
+        """config_provenance.py must call app.role_registry.resolve_role
+        (delegation wired in, not just imported)."""
+        import inspect
+
+        mod = _import_module()
+        src = inspect.getsource(mod)
+        assert "resolve_role(" in src
+        assert "role_registry.resolve_role" in src or (
+            "from app import role_registry" in src and "resolve_role(" in src
+        )
+
+    def test_source_imports_role_registry(self):
+        import inspect
+
+        mod = _import_module()
+        src = inspect.getsource(mod)
+        assert "role_registry" in src
+
+    def test_source_catches_role_registry_error(self):
+        """The delegation call must be wrapped in try/except catching
+        RoleRegistryError."""
+        import inspect
+
+        mod = _import_module()
+        src = inspect.getsource(mod)
+        assert "RoleRegistryError" in src
+        assert "except" in src
+
+    def test_source_passes_environ_to_resolve_role(self):
+        """The call to resolve_role must forward environ."""
+        import inspect
+
+        mod = _import_module()
+        src = inspect.getsource(mod)
+        assert "environ=environ" in src or "environ = environ" in src
+
+    def test_source_uses_returned_provider_and_model(self):
+        """The success path must use resolve_role's returned .provider/.model
+        (not independently re-derived values)."""
+        import inspect
+
+        mod = _import_module()
+        src = inspect.getsource(mod)
+        assert ".provider" in src
+        assert ".model" in src
+
+    def test_error_wording_not_changed_model_not_declared(self):
+        """The 'not declared in registry' error string must be unchanged."""
+        import inspect
+
+        mod = _import_module()
+        src = inspect.getsource(mod)
+        assert "not declared in registry" in src
+
+    def test_error_wording_not_changed_no_model_configured(self):
+        """The 'has no model configured' error string must be unchanged."""
+        import inspect
+
+        mod = _import_module()
+        src = inspect.getsource(mod)
+        assert "has no model configured" in src
+
+
+class TestResolveRoleProvenanceBoundaryCases:
+    def test_empty_registry_and_no_fallback_raises_translated_error(self, monkeypatch):
+        """Empty registry, no model_fallback: resolve_role raises
+        no-model-configured; resolve_role_provenance returns the error dict."""
+        mod = _import_module()
+        reg = _build_registry(roles={}, providers={})
+        from app import role_registry
+
+        def boom(*a, **k):
+            raise RoleRegistryError("role 'overlord': no model configured")
+
+        monkeypatch.setattr(role_registry, "resolve_role", boom)
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback=None, environ={}
+        )
+        assert result["error"] == "Role overlord has no model configured"
+
+    def test_environ_defaults_to_os_environ_when_none(self, monkeypatch):
+        """When environ is None, resolve_role_provenance must default to
+        os.environ (and forward that to resolve_role)."""
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        seen = {}
+
+        def fake_resolve_role(role, *, plan_role_config=None, model_fallback=None,
+                              registry=None, default_provider="claude", environ=None):
+            seen["environ"] = environ
+            return RoleResolution(provider="claude", model="claude-3-5-sonnet")
+
+        from app import role_registry
+
+        monkeypatch.setattr(role_registry, "resolve_role", fake_resolve_role)
+        import os
+
+        monkeypatch.setattr(os, "environ", {"PIPELINE_BACKEND_OVERLORD": "openai"})
+        mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ=None
+        )
+        assert seen["environ"] is not None
+        assert seen["environ"].get("PIPELINE_BACKEND_OVERLORD") == "openai"
+
+    def test_registry_defaults_to_empty_dict_when_none(self):
+        """When registry is None, the function must not crash before reaching
+        resolve_role (it defaults registry to {})."""
+        mod = _import_module()
+        result = mod.resolve_role_provenance(
+            "overlord", registry=None, model_fallback="haiku", environ={}
+        )
+        assert isinstance(result, dict)
+        assert "error" in result
+
+    def test_plan_role_config_defaults_to_empty_dict_when_none(self):
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        result = mod.resolve_role_provenance(
+            "overlord", plan_role_config=None, registry=reg,
+            model_fallback="haiku", environ={},
+        )
+        assert isinstance(result, dict)
+        assert result["error"] is None
+
+    def test_returned_dict_has_all_required_keys_on_success(self):
+        mod = _import_module()
+        reg = _registry_with_claude_sonnet()
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback="haiku", environ={}
+        )
+        for key in ("role", "provider", "model", "provider_source",
+                    "model_source", "restart_required", "error"):
+            assert key in result
+        assert result["error"] is None

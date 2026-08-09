@@ -23,6 +23,13 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
+# config_provenance is a read-only leaf: its only non-stdlib import is
+# app.role_registry (see both modules' docstrings), so pulling it in does
+# NOT drag the orchestrator's write surface (pipeline.server /
+# app.pipeline_mcp_server / app.backend) into the dashboard's import graph.
+from app import role_registry
+from pipeline import config_provenance
+
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
 USAGE_STATE_PATH = Path(
     os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_state.json")
@@ -833,6 +840,66 @@ def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
         "plan": plan_file,
         "scratchpad": scratch_file,
         "progress": progress,
+    }
+
+
+@app.get("/api/config")
+def effective_config(plan: str | None = None) -> dict[str, Any]:
+    """Read-only effective-configuration snapshot, mirroring
+    pipeline.server.get_effective_config's MCP tool for the dashboard: every
+    role in config_provenance.PIPELINE_ROLES with its resolved
+    (provider, model) and provenance, every cataloged env var's resolved
+    value and provenance, any transport-only env vars present that have no
+    effect as input, and which config-source files were consulted (with an
+    exists flag each). Pure read - makes no changes and writes nothing.
+
+    The dashboard carries no persona knowledge (agents/*.md model defaults),
+    so no model_fallbacks are supplied here - a role with nothing else
+    configured honestly reports model_source == "unset" rather than
+    guessing a persona-specific default.
+
+    Pass ?plan=<name> to layer in that plan's manifest role_config
+    overrides. Reuses the module's existing _read_manifest helper rather
+    than a second reader; a missing manifest (_read_manifest returns None)
+    or a malformed one (invalid JSON) both degrade to "no plan overrides"
+    rather than a 404 or 500 - _read_manifest itself is left unchanged, the
+    tolerance for malformed JSON lives here.
+    """
+    plan_role_config = None
+    if plan:
+        try:
+            manifest = _read_manifest(plan)
+        except (json.JSONDecodeError, OSError):
+            manifest = None
+        plan_role_config = (manifest or {}).get("role_config") or None
+
+    try:
+        registry = role_registry.load_registry()
+    except role_registry.RoleRegistryError:
+        registry = {}
+
+    roles = config_provenance.effective_role_config(
+        plan_role_config=plan_role_config,
+        registry=registry,
+    )
+    env = config_provenance.effective_env_config()
+    ignored_env_vars = config_provenance.ignored_env_vars_present()
+
+    plist_path = config_provenance._scheduler_plist_path()
+    mcp_env_path = config_provenance._claude_json_path()
+    registry_path = role_registry._registry_path()
+
+    sources = {
+        "launchd_plist": {"path": str(plist_path), "exists": plist_path.exists()},
+        "mcp_server_env": {"path": str(mcp_env_path), "exists": mcp_env_path.exists()},
+        "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
+    }
+
+    return {
+        "roles": roles,
+        "env": env,
+        "ignored_env_vars": ignored_env_vars,
+        "sources": sources,
     }
 
 

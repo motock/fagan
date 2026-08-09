@@ -5,11 +5,13 @@ same manifest/notifications/decisions files pipeline_mcp_server.py writes.
 The dashboard never writes to PLAN_DIR itself, so these only assert reads.
 """
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import dashboard as d
+from pipeline import config_provenance
 
 
 @pytest.fixture
@@ -2310,3 +2312,125 @@ def test_server_scratchpad_prompt_requires_progress_line():
     assert "keep a short running summary of what you've" not in source or (
         "PROGRESS:" in source
     )
+
+
+# ---------- /api/config (effective configuration snapshot) ----------
+
+
+@pytest.fixture
+def isolated_config_sources(monkeypatch, tmp_path):
+    """Point config_provenance's source files at nonexistent paths under
+    tmp_path so /api/config tests never read this machine's real
+    ~/.claude.json or launchd plist (which may hold real secrets)."""
+    monkeypatch.setenv("PIPELINE_SCHEDULER_PLIST_PATH", str(tmp_path / "no-scheduler.plist"))
+    monkeypatch.setenv("PIPELINE_CLAUDE_JSON_PATH", str(tmp_path / "no-claude.json"))
+    return tmp_path
+
+
+@pytest.fixture
+def known_registry(monkeypatch):
+    """A small, deterministic model_registry.json substitute (mirrors the
+    fixture in tests/unit/test_get_effective_config.py) so the plan-override
+    test doesn't depend on the real repo's model_registry.json contents."""
+    registry = {
+        "providers": {
+            "claude": {"models": {"sonnet": {"tag": "sonnet"}}},
+            "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}},
+        },
+        "roles": {},
+    }
+    monkeypatch.setattr(d.role_registry, "load_registry", lambda *a, **k: registry)
+    return registry
+
+
+def test_effective_config_wiring_returns_all_roles(client, plan_dir, isolated_config_sources):
+    res = client.get("/api/config")
+    assert res.status_code == 200
+    body = res.json()
+    assert set(body.keys()) == {"roles", "env", "ignored_env_vars", "sources"}
+    role_names = {entry["role"] for entry in body["roles"]}
+    assert role_names == set(config_provenance.PIPELINE_ROLES)
+
+
+def test_effective_config_plan_override_reports_provider_and_source(
+    client, plan_dir, isolated_config_sources, known_registry
+):
+    (plan_dir / "cfgplan.manifest.json").write_text(json.dumps({
+        "epics": {}, "stories": {}, "repo_root": "/tmp",
+        "role_config": {"review": {"provider": "mlx", "model": "qwen"}},
+    }))
+
+    res = client.get("/api/config?plan=cfgplan")
+
+    assert res.status_code == 200
+    roles_by_name = {entry["role"]: entry for entry in res.json()["roles"]}
+    review = roles_by_name["review"]
+    assert review["provider"] == "mlx"
+    assert review["provider_source"] == "plan_role_config"
+
+
+def test_effective_config_nonexistent_plan_resolves_with_no_overrides(
+    client, plan_dir, isolated_config_sources
+):
+    res = client.get("/api/config?plan=nope")
+
+    assert res.status_code == 200
+    roles_by_name = {entry["role"]: entry for entry in res.json()["roles"]}
+    for entry in roles_by_name.values():
+        assert entry["provider_source"] != "plan_role_config"
+
+
+def test_effective_config_malformed_manifest_resolves_with_no_overrides(
+    client, plan_dir, isolated_config_sources
+):
+    (plan_dir / "broken.manifest.json").write_text("{not valid json")
+
+    res = client.get("/api/config?plan=broken")
+
+    assert res.status_code == 200
+    roles_by_name = {entry["role"]: entry for entry in res.json()["roles"]}
+    for entry in roles_by_name.values():
+        assert entry["provider_source"] != "plan_role_config"
+
+
+def test_effective_config_never_leaks_secret_value(
+    client, plan_dir, isolated_config_sources, monkeypatch
+):
+    secret = "sk-super-secret-token-value-12345"
+    monkeypatch.setenv("PIPELINE_TEST_API_KEY", secret)
+
+    res = client.get("/api/config")
+
+    assert res.status_code == 200
+    assert secret not in res.text
+
+
+def test_dashboard_module_does_not_import_orchestrator_write_surface():
+    import ast
+
+    source = Path("app/dashboard.py").read_text()
+    tree = ast.parse(source)
+    imported_modules = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.append(node.module)
+
+    forbidden = {"pipeline.server", "app.pipeline_mcp_server", "app.backend"}
+    assert not (forbidden & set(imported_modules)), imported_modules
+
+
+def test_effective_config_endpoint_performs_no_writes(client, plan_dir, isolated_config_sources):
+    _write_manifest(plan_dir, "untouched", {"S1": {"summary": "x", "status": "todo"}})
+    before = {
+        p.name: p.read_bytes() for p in sorted(plan_dir.iterdir())
+    }
+
+    res = client.get("/api/config?plan=untouched")
+
+    assert res.status_code == 200
+    after = {
+        p.name: p.read_bytes() for p in sorted(plan_dir.iterdir())
+    }
+    assert after == before

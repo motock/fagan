@@ -370,10 +370,13 @@ six places, and all six are listed above.
 
 The dependency order is fairly rigid:
 
-1. **W3a — effective-config view (read-only, with provenance).** No prerequisites,
-   immediate payoff, retires a live class of incident.
-2. **W1a — extract `PipelineService`**, MCP tools become delegations. The
-   keystone; nothing else is cheap before it.
+1. ~~**W3a — effective-config view (read-only, with provenance).** No
+   prerequisites, immediate payoff, retires a live class of incident.~~
+   **DONE 2026-08-09** — plan `w3a-effective-config-provenance`, PRs
+   #247-#258 (`pipeline/config_provenance.py`, `get_effective_config` MCP
+   tool, `/api/config` dashboard endpoint).
+2. **W1a — extract `PipelineService`** (next up), MCP tools become
+   delegations. The keystone; nothing else is cheap before it.
 3. **W1b — `Store` protocol** with `FileStore` as the only implementation.
 4. **W1c — HTTP adapter + event stream.**
 5. **W2 — chat entry point** on the HTTP API.
@@ -421,13 +424,14 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   A1/A2 closed and A3 wound down to two items that are either tabled (CI-green
   release tag, blocked on the GHA billing cap) or themselves blocked on this
   plan's W4 structured logging, the next work after A3 is **this doc's
-  sequence**: W3a (effective-config+provenance view, no prerequisites) → W1
-  (extract `PipelineService`, the keystone) → W1b/W1c → W2 (chat entry point)
-  → W3b (writable dashboard) → W4 (multi-tenant), with B1 (sandboxing) and B5
-  (export the moat) picked up after the service seam exists rather than
-  before it. Rationale: B1/B5 don't unblock anything else, while W1 is the
-  single prerequisite blocking B3, B4, and the UI-entry-point goal
-  simultaneously — front-loading it retires the most dependent work fastest.
+  sequence**: ~~W3a (effective-config+provenance view, no prerequisites)~~
+  **DONE 2026-08-09, PRs #247-#258** → **W1 (extract `PipelineService`, the
+  keystone — next up)** → W1b/W1c → W2 (chat entry point) → W3b (writable
+  dashboard) → W4 (multi-tenant), with B1 (sandboxing) and B5 (export the
+  moat) picked up after the service seam exists rather than before it.
+  Rationale: B1/B5 don't unblock anything else, while W1 is the single
+  prerequisite blocking B3, B4, and the UI-entry-point goal simultaneously —
+  front-loading it retires the most dependent work fastest.
 
 ### Items each doc has that the other should borrow
 

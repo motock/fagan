@@ -2354,3 +2354,61 @@ class TestResolveRoleProvenanceBoundaryCases:
                     "model_source", "restart_required", "error"):
             assert key in result
         assert result["error"] is None
+
+
+class TestResolveRoleProvenanceNoModelConfiguredShape:
+    """The no-model-configured error path keeps the provider and its source
+    label, reporting model_source as the string "unset" rather than None.
+
+    This is a distinct diagnostic state from "nothing resolved": the role's
+    provider DID resolve, only the model is absent, so a caller can still
+    report where the provider came from. The downstream effective_role_config
+    aggregator relies on this shape to distinguish an unconfigured-model role
+    from one whose provider/model pairing is invalid.
+    """
+
+    def test_no_model_configured_keeps_provider_and_marks_model_unset(self):
+        mod = _import_module()
+        reg = _build_registry(roles={}, providers={})
+        result = mod.resolve_role_provenance(
+            "test_author", registry=reg, model_fallback=None, environ={}
+        )
+        assert result["provider"] == "claude"
+        assert result["provider_source"] == "default"
+        assert result["model"] is None
+        assert result["model_source"] == "unset"
+        assert result["error"] == "Role test_author has no model configured"
+
+    def test_no_model_configured_preserves_env_provider_source(self):
+        """An env-sourced provider keeps its label and restart_required even
+        when the model is unresolvable."""
+        mod = _import_module()
+        reg = _build_registry(roles={}, providers={})
+        result = mod.resolve_role_provenance(
+            "overlord",
+            registry=reg,
+            model_fallback=None,
+            environ={"PIPELINE_BACKEND_OVERLORD": "ollama"},
+        )
+        assert result["provider"] == "ollama"
+        assert result["provider_source"] == "env:PIPELINE_BACKEND_OVERLORD"
+        assert result["restart_required"] is True
+        assert result["model_source"] == "unset"
+        assert result["error"] is not None
+
+    def test_model_not_declared_still_reports_no_sources(self):
+        """The OTHER error path is unchanged: when a named model is not
+        declared for the resolved provider, nothing resolved cleanly, so all
+        source labels stay None."""
+        mod = _import_module()
+        reg = _build_registry(
+            roles={"overlord": {"provider": "claude", "model": "ghost"}},
+            providers={"claude": {"models": {}}},
+        )
+        result = mod.resolve_role_provenance(
+            "overlord", registry=reg, model_fallback=None, environ={}
+        )
+        assert result["provider"] is None
+        assert result["provider_source"] is None
+        assert result["model_source"] is None
+        assert "not declared in registry" in result["error"]

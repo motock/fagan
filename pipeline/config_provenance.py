@@ -434,11 +434,23 @@ def resolve_role_provenance(
             environ=environ,
         )
     except role_registry.RoleRegistryError as exc:
-        msg = str(exc)
-        if "no model configured" in msg:
-            error = f"Role {role} has no model configured"
-        else:
-            error = f"Role {role} has provider {provider_value!r} not declared in registry"
+        if "no model configured" in str(exc):
+            # The role resolved to a provider fine; only the model is absent.
+            # Keep the provider and its source label so a caller can still
+            # report WHERE the provider came from, and mark the model "unset"
+            # rather than null - a role with no model configured is a
+            # reportable diagnostic state, not an unresolvable one.
+            return {
+                "role": role,
+                "provider": provider_value,
+                "model": None,
+                "provider_source": provider_source,
+                "model_source": "unset",
+                "restart_required": restart_required,
+                "error": f"Role {role} has no model configured",
+            }
+        # A model was named but is not declared for the resolved provider:
+        # nothing about this role resolved cleanly, so report no sources.
         return {
             "role": role,
             "provider": None,
@@ -446,7 +458,7 @@ def resolve_role_provenance(
             "provider_source": None,
             "model_source": None,
             "restart_required": False,
-            "error": error,
+            "error": f"Role {role} has provider {provider_value!r} not declared in registry",
         }
 
     return {

@@ -580,6 +580,30 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
 # Legacy format (Claude Code ≤ ~Jun 2026): "Current session: N% used · resets …"
 
 
+class PipelineService:
+    """Transport-agnostic pipeline operations.
+
+    The ``@mcp.tool()`` functions below are one-line delegations to these
+    methods, so a future HTTP adapter can drive the same logic without MCP
+    (see docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md, W1a).
+
+    Methods deliberately read this module's globals (``PLAN_DIR``,
+    ``PIPELINE_AUTONOMY``, ``_plan_lock``, ...) as free variables rather than
+    holding copies, so the test suite's ``monkeypatch.setattr(pipeline.server,
+    ...)`` targets keep landing exactly as they did before the extraction.
+    """
+
+    def pause_plan(self, plan_name: str) -> dict[str, Any]:
+        _validate_key(plan_name)
+        return _set_plan_paused(plan_name, True)
+
+    def resume_plan(self, plan_name: str) -> dict[str, Any]:
+        _validate_key(plan_name)
+        return _set_plan_paused(plan_name, False)
+
+
+_service = PipelineService()
+
 # ---------- Tools ----------
 @mcp.tool()
 def get_role_config(plan_name: str | None = None) -> dict[str, Any]:
@@ -4225,16 +4249,14 @@ def pause_plan(plan_name: str) -> dict[str, Any]:
     interrupted (checkpointed and left resumable) so a paused plan isn't
     quietly burning usage in the background. Resume with resume_plan.
     """
-    _validate_key(plan_name)
-    return _set_plan_paused(plan_name, True)
+    return _service.pause_plan(plan_name)
 
 
 @mcp.tool()
 def resume_plan(plan_name: str) -> dict[str, Any]:
     """Clear a pause set by pause_plan so this plan's stories are eligible
     for dispatch/review/merge on the next advance_pipeline tick again."""
-    _validate_key(plan_name)
-    return _set_plan_paused(plan_name, False)
+    return _service.resume_plan(plan_name)
 
 
 @mcp.tool()

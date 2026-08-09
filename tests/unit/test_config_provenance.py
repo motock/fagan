@@ -2843,3 +2843,173 @@ class TestEffectiveRoleConfigBoundary:
         monkeypatch.setattr(mod, "PIPELINE_ROLES", reversed_roles)
         result = mod.effective_role_config(environ={})
         assert [e["role"] for e in result] == list(reversed_roles)
+
+
+# ---------------------------------------------------------------------------
+# model_source labeling chain: provider-mismatch fallthrough (PR #255 fix).
+#
+# The model_source chain is a single if/elif/elif. When a role HAS a registry
+# entry but that entry's provider does NOT match the winning provider (e.g.
+# the registry says "ollama" but an env var overrides the provider to
+# "local"), the registry branch consumes the elif chain, its inner if fails,
+# and the model_fallback branch becomes unreachable - so the label stays
+# "unset" even though resolve_role correctly fell through and returned the
+# fallback model. These tests pin the fix: when the registry branch does not
+# actually supply a model, evaluation must continue on to model_fallback.
+# ---------------------------------------------------------------------------
+
+
+def _registry_with_ollama_dispatch():
+    """A registry where role 'dispatch' uses ollama/gpt-oss-20b-high.
+
+    The friendly model name maps to a tag, mirroring the real registry shape.
+    """
+    return _build_registry(
+        roles={"dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"}},
+        providers={
+            "ollama": {
+                "models": {
+                    "gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"},
+                }
+            },
+        },
+    )
+
+
+class TestModelSourceProviderMismatchFallthrough:
+    """The model_source chain must fall through to model_fallback when the
+    registry entry's provider does not match the winning provider."""
+
+    def test_registry_provider_mismatch_env_override_uses_caller_fallback(self):
+        """POSITIVE (the bug): registry role provider is 'ollama', env
+        overrides the provider to 'local', and model_fallback='sonnet'.
+        resolve_role falls through to the fallback model, so model_source
+        must be 'caller_fallback' (not 'unset')."""
+        mod = _import_module()
+        reg = _registry_with_ollama_dispatch()
+        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+        result = mod.resolve_role_provenance(
+            "dispatch", registry=reg, model_fallback="sonnet", environ=environ
+        )
+        assert result["model"] == "sonnet"
+        assert result["model_source"] == "caller_fallback"
+        # The provider was overridden by env, so provider_source reflects that.
+        assert result["provider_source"] == "env:PIPELINE_BACKEND_DISPATCH"
+        assert result["provider"] == "local"
+        assert result["error"] is None
+
+    def test_registry_provider_matches_winning_provider_uses_registry(self):
+        """NO REGRESSION: when the registry role's provider matches the
+        winning provider (no env override), model_source is
+        'model_registry.json' and the tag-resolved model is returned."""
+        mod = _import_module()
+        reg = _registry_with_ollama_dispatch()
+        result = mod.resolve_role_provenance(
+            "dispatch", registry=reg, model_fallback="sonnet", environ={}
+        )
+        assert result["model_source"] == "model_registry.json"
+        assert result["provider_source"] == "model_registry.json"
+        assert result["provider"] == "ollama"
+        # The tag-resolved model (friendly -> tag) is returned.
+        assert result["model"] == "gpt-oss-20b-high:latest"
+        assert result["error"] is None
+
+    def test_plan_role_config_model_wins_over_registry(self):
+        """NO REGRESSION: plan_role_config supplies a model, so model_source
+        is 'plan_role_config' regardless of the registry entry (even when the
+        registry entry's provider would mismatch). The plan model must be
+        declared under the winning provider so resolve_role succeeds."""
+        mod = _import_module()
+        # Registry role entry says ollama, but env overrides provider to
+        # 'local'; the plan model is declared under 'local' so resolve_role
+        # succeeds while the registry entry's provider mismatches.
+        reg = _build_registry(
+            roles={"dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"}},
+            providers={
+                "ollama": {
+                    "models": {
+                        "gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"},
+                    }
+                },
+                "local": {
+                    "models": {
+                        "custom-plan-model": {"tag": "custom-plan-model:tag"},
+                    }
+                },
+            },
+        )
+        plan = {"dispatch": {"model": "custom-plan-model"}}
+        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+        result = mod.resolve_role_provenance(
+            "dispatch",
+            plan_role_config=plan,
+            registry=reg,
+            model_fallback="sonnet",
+            environ=environ,
+        )
+        assert result["model_source"] == "plan_role_config"
+        assert result["model"] == "custom-plan-model:tag"
+        assert result["error"] is None
+
+    def test_registry_provider_mismatch_and_no_fallback_is_unset(self):
+        """BOUNDARY: registry provider mismatch AND model_fallback=None ->
+        model is None and model_source == 'unset'."""
+        mod = _import_module()
+        reg = _registry_with_ollama_dispatch()
+        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+        result = mod.resolve_role_provenance(
+            "dispatch", registry=reg, model_fallback=None, environ=environ
+        )
+        assert result["model"] is None
+        assert result["model_source"] == "unset"
+        # Provider still resolved from env; not blanked.
+        assert result["provider"] == "local"
+        assert result["provider_source"] == "env:PIPELINE_BACKEND_DISPATCH"
+
+    def test_no_model_configured_keeps_provider_and_sets_error(self, monkeypatch):
+        """NO REGRESSION (guards PR #255): a role with no model configured
+        anywhere still returns its resolved provider and provider_source with
+        model_source == 'unset' and a non-None error. Provider fields must NOT
+        be blanked."""
+        mod = _import_module()
+        reg = _registry_with_ollama_dispatch()
+        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+        # Force resolve_role to raise the no-model-configured error path.
+        from app import role_registry
+
+        def boom(*a, **k):
+            raise RoleRegistryError("role 'dispatch': no model configured")
+
+        monkeypatch.setattr(role_registry, "resolve_role", boom)
+        result = mod.resolve_role_provenance(
+            "dispatch", registry=reg, model_fallback=None, environ=environ
+        )
+        assert result["error"] is not None
+        assert result["error"] == "Role dispatch has no model configured"
+        assert result["model_source"] == "unset"
+        assert result["model"] is None
+        # Provider fields must NOT be blanked in this error path.
+        assert result["provider"] is not None
+        assert result["provider"] == "local"
+        assert result["provider_source"] is not None
+        assert result["provider_source"] == "env:PIPELINE_BACKEND_DISPATCH"
+
+    def test_model_fallback_callable_is_called_and_labelled_caller_fallback(self):
+        """model_fallback passed as a zero-argument callable is still called
+        and still labelled 'caller_fallback' (even under provider mismatch)."""
+        mod = _import_module()
+        reg = _registry_with_ollama_dispatch()
+        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+
+        called = {"n": 0}
+
+        def fallback():
+            called["n"] += 1
+            return "sonnet-via-callable"
+
+        result = mod.resolve_role_provenance(
+            "dispatch", registry=reg, model_fallback=fallback, environ=environ
+        )
+        assert result["model"] == "sonnet-via-callable"
+        assert result["model_source"] == "caller_fallback"
+        assert result["error"] is None

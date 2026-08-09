@@ -222,6 +222,7 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     EnvVarSpec("PIPELINE_LOCAL_NUM_CTX", "16384"),
     EnvVarSpec("PIPELINE_LOCAL_TEMPERATURE", "0.3"),
     EnvVarSpec("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b"),
+    EnvVarSpec("PIPELINE_AUTO_ESCALATE", None),
 )
 
 def _is_secret(name: str) -> bool:

@@ -895,15 +895,18 @@ class TestEnvVarCatalog:
                 )
 
     def test_anti_drift_every_config_py_env_var_in_catalog(self):
-        """Success criterion #1: anti-drift against pipeline/config.py."""
+        """Success criterion #1: anti-drift against pipeline/config.py and
+        pipeline/escalation.py."""
         mod = _import_module()
-        src = Path("pipeline/config.py").read_text(encoding="utf-8")
-        names = set(_re.findall(r'os\.environ\.get\("([A-Z_]+)"', src))
-        assert names, "sanity: expected to find env vars in config.py"
+        names: set[str] = set()
+        for rel in ("pipeline/config.py", "pipeline/escalation.py"):
+            src = Path(rel).read_text(encoding="utf-8")
+            names |= set(_re.findall(r'os\.environ\.get\("([A-Z_]+)"', src))
+        assert names, "sanity: expected to find env vars in config.py/escalation.py"
         catalog_names = {s.name for s in mod.ENV_VAR_CATALOG}
         missing = names - catalog_names
         assert not missing, (
-            f"env vars read in pipeline/config.py but missing from catalog: {sorted(missing)}"
+            f"env vars read in pipeline/config.py/escalation.py but missing from catalog: {sorted(missing)}"
         )
 
     def test_anti_drift_defaults_match_config_py_literals(self):
@@ -929,6 +932,105 @@ class TestEnvVarCatalog:
             assert by_name[name] == default, (
                 f"{name}: catalog default {by_name[name]!r} != config.py literal {default!r}"
             )
+
+
+class TestPipelineAutoEscalateCataloged:
+    """Story: PIPELINE_AUTO_ESCALATE must be visible in the config view."""
+
+    def test_name_present_in_catalog(self):
+        """The headline requirement: PIPELINE_AUTO_ESCALATE is cataloged."""
+        mod = _import_module()
+        names = {s.name for s in mod.ENV_VAR_CATALOG}
+        assert "PIPELINE_AUTO_ESCALATE" in names, (
+            "PIPELINE_AUTO_ESCALATE must be added to ENV_VAR_CATALOG"
+        )
+
+    def test_spec_is_envvarspec_instance(self):
+        """The entry must follow the shape of its neighbours: an EnvVarSpec."""
+        mod = _import_module()
+        by_name = {s.name: s for s in mod.ENV_VAR_CATALOG}
+        assert "PIPELINE_AUTO_ESCALATE" in by_name, "entry missing"
+        spec = by_name["PIPELINE_AUTO_ESCALATE"]
+        assert isinstance(spec, mod.EnvVarSpec), (
+            "PIPELINE_AUTO_ESCALATE entry must be an EnvVarSpec, like its neighbours"
+        )
+
+    def test_default_is_empty_or_unset_state(self):
+        """Code default is the empty/unset state (None or empty string)."""
+        mod = _import_module()
+        by_name = {s.name: s for s in mod.ENV_VAR_CATALOG}
+        spec = by_name["PIPELINE_AUTO_ESCALATE"]
+        assert spec.default is None or spec.default == "", (
+            f"PIPELINE_AUTO_ESCALATE code default must be the empty/unset state, "
+            f"got {spec.default!r}"
+        )
+
+    def test_not_a_secret(self):
+        """The var is not a secret: _is_secret must return False for it."""
+        mod = _import_module()
+        assert mod._is_secret("PIPELINE_AUTO_ESCALATE") is False, (
+            "PIPELINE_AUTO_ESCALATE must not be treated as a secret"
+        )
+
+    def test_no_extra_fields_invented(self):
+        """EnvVarSpec has exactly the fields its neighbours use (name, default).
+
+        Guards against an implementer inventing new fields on the dataclass.
+        """
+        mod = _import_module()
+        import dataclasses
+        field_names = {f.name for f in dataclasses.fields(mod.EnvVarSpec)}
+        assert field_names == {"name", "default"}, (
+            f"EnvVarSpec must keep the existing field shape, got {field_names}"
+        )
+
+
+class TestResolveEnvVarPipelineAutoEscalate:
+    """resolve_env_var behaviour for PIPELINE_AUTO_ESCALATE."""
+
+    def test_unset_reports_default_state_without_raising(self):
+        """With an empty environ, resolve_env_var reports the unset/default
+        state and does not raise."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "PIPELINE_AUTO_ESCALATE", environ={}, plist_env={}, mcp_env={}
+        )
+        assert isinstance(result, dict)
+        # Unset -> source is the code_default layer.
+        assert result["source"] == "code_default", (
+            f"unset var should report code_default source, got {result['source']!r}"
+        )
+        # No restart required when falling back to the code default.
+        assert result["restart_required"] is False
+        # Not a secret -> not masked.
+        assert result["masked"] is False
+        # The effective value reflects the empty/unset default.
+        assert result["effective"] in (None, ""), (
+            f"unset effective should be empty/None, got {result['effective']!r}"
+        )
+
+    def test_set_to_one_reports_process_env_as_winning_source(self):
+        """With environ={'PIPELINE_AUTO_ESCALATE': '1'} the process-env layer
+        is the winning source."""
+        mod = _import_module()
+        result = mod.resolve_env_var(
+            "PIPELINE_AUTO_ESCALATE",
+            environ={"PIPELINE_AUTO_ESCALATE": "1"},
+            plist_env={},
+            mcp_env={},
+        )
+        assert isinstance(result, dict)
+        assert result["source"] == "process_env", (
+            f"set var should report process_env as winning source, got {result['source']!r}"
+        )
+        assert result["effective"] == "1"
+        assert result["restart_required"] is True
+        # The process_env layer must be present in the layers list.
+        layers = {layer["layer"]: layer for layer in result["layers"]}
+        assert "process_env" in layers, (
+            f"process_env layer must be present, got layers {sorted(layers)}"
+        )
+        assert layers["process_env"]["value"] == "1"
 
 
 class TestIsSecret:

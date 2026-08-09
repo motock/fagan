@@ -487,6 +487,26 @@ def compose_attempt_facts(agent_instructions: str, facts: str | None) -> str:
     return f"{base}\n\n{block}" if base else block
 
 
+def detect_unsatisfiable_signal(evidence: str) -> str | None:
+    """Detect unsatisfiable-as-specified signals in failure evidence."""
+    if not isinstance(evidence, str):
+        return None
+    if not evidence or not evidence.strip():
+        return None
+    signals = [
+        ("got an unexpected keyword argument", "unexpected keyword argument - the callee may not accept the injection the tests pass"),
+        ("takes no keyword arguments", "takes no keyword arguments - the function does not accept keyword args"),
+        ("cannot import name", "cannot import name - the module or symbol is missing"),
+        ("has no attribute", "has no attribute - the object lacks the referenced attribute"),
+        ("is not defined", "is not defined - the identifier is undefined"),
+    ]
+    lower = evidence.lower()
+    for sig, reason in signals:
+        if sig.lower() in lower:
+            return reason
+    return None
+
+
 def append_cleanup_guidance(agent_instructions: str) -> str:
     """Append or replace a worktree hygiene guidance block.
 

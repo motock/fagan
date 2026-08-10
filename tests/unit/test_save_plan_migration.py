@@ -22,7 +22,6 @@ import textwrap
 
 from pipeline import server as p
 
-
 # ---------- C1: PipelineService.save_plan method exists with right shape ----
 
 
@@ -31,7 +30,7 @@ def test_pipeline_service_has_save_plan_method():
     assert hasattr(p.PipelineService, "save_plan"), (
         "PipelineService must define a `save_plan` method after the migration"
     )
-    assert callable(getattr(p.PipelineService, "save_plan"))
+    assert callable(p.PipelineService.save_plan)
 
 
 def test_save_plan_method_takes_self_plus_original_params():

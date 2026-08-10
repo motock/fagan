@@ -719,6 +719,34 @@ class PipelineService:
             }
         return {"ok": True, "plan": plan}
 
+    def set_story_status(self, plan_name: str, story_key: str, status: str) -> dict[str, Any]:
+        _validate_key(plan_name)
+        _validate_key(story_key)
+        if status not in _VALID_STORY_STATUSES:
+            return {
+                "ok": False,
+                "error": f"invalid status {status!r}: "
+                f"must be one of {sorted(_VALID_STORY_STATUSES)}",
+            }
+
+        with _plan_lock(plan_name) as acquired:
+            if not acquired:
+                return {
+                    "ok": True,
+                    "skipped": "locked",
+                    "reason": "another dispatch/ingest/interrupt is in progress for this plan",
+                }
+            manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            story = manifest["stories"].get(story_key)
+            if story is None:
+                return {"ok": False, "error": f"No such story {story_key!r}"}
+            story["status"] = status
+            if status != "parked":
+                story.pop("parked_reason", None)
+            _atomic_write_json(manifest_path, manifest)
+            return {"ok": True, "story_key": story_key, "status": status}
+    
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -2679,32 +2707,7 @@ def set_story_status(plan_name: str, story_key: str, status: str) -> dict[str, A
     changes_requested/parked/done) - this is a sanctioned status change, not
     a way to invent pipeline state the rest of the code doesn't expect.
     """
-    _validate_key(plan_name)
-    _validate_key(story_key)
-    if status not in _VALID_STORY_STATUSES:
-        return {
-            "ok": False,
-            "error": f"invalid status {status!r}: "
-            f"must be one of {sorted(_VALID_STORY_STATUSES)}",
-        }
-
-    with _plan_lock(plan_name) as acquired:
-        if not acquired:
-            return {
-                "ok": True,
-                "skipped": "locked",
-                "reason": "another dispatch/ingest/interrupt is in progress for this plan",
-            }
-        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-        manifest = json.loads(manifest_path.read_text())
-        story = manifest["stories"].get(story_key)
-        if story is None:
-            return {"ok": False, "error": f"No such story {story_key!r}"}
-        story["status"] = status
-        if status != "parked":
-            story.pop("parked_reason", None)
-        _atomic_write_json(manifest_path, manifest)
-        return {"ok": True, "story_key": story_key, "status": status}
+    return _service.set_story_status(plan_name, story_key, status)
 
 
 @mcp.tool()

@@ -633,6 +633,9 @@ class PipelineService:
         return _checkpoint_impl(plan_name, story_key, step, summary, next_hint)
 
     
+    def list_ready_stories(self, plan_name: str) -> list[dict]:
+        return list_ready_stories(plan_name)
+
 _service = PipelineService()
 
 # ---------- Tools ----------

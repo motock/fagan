@@ -788,11 +788,9 @@ def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
 
 @mcp.tool()
 def list_plans() -> list[str]:
-    """
-    List saved plans available for ingestion.
-    """
-    return _service.list_plans()
 
+    return _service.list_plans()
+list_plans.__doc__ = "List saved plans available for ingestion."
 
 # Story fields the plan authors and that a re-ingest should refresh. Every
 # other field on an already-tracked story (status, pr_url, worktree,

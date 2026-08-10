@@ -113,9 +113,7 @@ def test_module_level_save_plan_body_is_single_delegation():
     # Strip the def line + docstring; the remaining body must be a single
     # return delegation.
     # The docstring is the first triple-quoted block; everything after it.
-    after_doc = src.split('"""', 4)
     # src looks like: def ...\n    """..."""\n    <body>\n
-    # split on triple-quote gives: ['def ...', 'docstring', 'body...']
     # Find the body after the closing triple-quote of the docstring.
     # Robust: take text after the last occurrence of the closing docstring.
     idx = src.rfind('"""')

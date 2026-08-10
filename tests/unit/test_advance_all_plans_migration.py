@@ -291,7 +291,6 @@ def test_method_reads_patched_plan_dir_global(plan_dir, monkeypatch):
     _write_manifest(plan_dir, "g1", {})
 
     seen_plan_dir = []
-    real_advance = p.advance_pipeline
 
     def _spy(plan_name):
         seen_plan_dir.append(p.PLAN_DIR)

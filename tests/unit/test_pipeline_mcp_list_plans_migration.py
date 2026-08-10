@@ -105,7 +105,7 @@ def test_module_level_list_plans_body_is_single_delegation():
             continue
         if stripped.startswith("def list_plans"):
             continue
-        if stripped.startswith('"""') or stripped.startswith("'''"):
+        if stripped.startswith(('"""', "'''")):
             seen_docstring = not seen_docstring if not seen_docstring else seen_docstring
             continue
         if seen_docstring:

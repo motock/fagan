@@ -95,12 +95,6 @@ def test_module_level_save_plan_signature_unchanged():
 
 def test_module_level_save_plan_docstring_unchanged():
     """C2/R3: the module-level tool keeps its full docstring byte-for-byte."""
-    expected = (
-        "Save a generated project plan to disk. Plan should be JSON matching the\n"
-        "    schema: { \"epics\": [ { \"summary\", \"stories\": [...] } ] }.\n"
-        "    Call this after generating a plan so the user can review before ingestion.\n"
-        "    "
-    )
     assert p.save_plan.__doc__ is not None
     # Compare on the meaningful content (the original docstring).
     assert "Save a generated project plan to disk." in p.save_plan.__doc__

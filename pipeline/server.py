@@ -651,7 +651,26 @@ class PipelineService:
             if deps_met:
                 ready.append({"key": key, "summary": story["summary"]})
         return ready
+    def save_plan(self, plan_name: str, plan_json: str) -> dict[str, Any]:
+        _validate_key(plan_name)
+        try:
+            plan = json.loads(plan_json)
+        except json.JSONDecodeError as e:
+            return {"ok": False, "error": f"Invalid JSON: {e}"}
 
+        if "epics" not in plan:
+            return {"ok": False, "error": "Plan must contain 'epics' key"}
+
+        path = PLAN_DIR / f"{plan_name}.json"
+        _atomic_write_json(path, plan)
+
+        story_count = sum(len(e.get("stories", [])) for e in plan["epics"])
+        return {
+            "ok": True,
+            "path": str(path),
+            "epic_count": len(plan["epics"]),
+            "story_count": story_count,
+        }
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -806,25 +825,7 @@ def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
     schema: { "epics": [ { "summary", "stories": [...] } ] }.
     Call this after generating a plan so the user can review before ingestion.
     """
-    _validate_key(plan_name)
-    try:
-        plan = json.loads(plan_json)
-    except json.JSONDecodeError as e:
-        return {"ok": False, "error": f"Invalid JSON: {e}"}
-
-    if "epics" not in plan:
-        return {"ok": False, "error": "Plan must contain 'epics' key"}
-
-    path = PLAN_DIR / f"{plan_name}.json"
-    _atomic_write_json(path, plan)
-
-    story_count = sum(len(e.get("stories", [])) for e in plan["epics"])
-    return {
-        "ok": True,
-        "path": str(path),
-        "epic_count": len(plan["epics"]),
-        "story_count": story_count,
-    }
+    return _service.save_plan(plan_name, plan_json)
 
 
 @mcp.tool()

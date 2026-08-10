@@ -683,6 +683,25 @@ class PipelineService:
                 plans[plan_name] = {"ok": False, "error": str(e)}
         return {"ok": True, "plans": plans}
 
+    def get_role_config(self, plan_name: str | None = None) -> dict[str, Any]:
+        plan_role_config = _plan_role_config(plan_name) if plan_name else None
+        role_fallbacks = {
+            "overlord": lambda: _persona_default_model("overlord") or "opus",
+            "planner": lambda: DEFAULT_MODEL,
+            "dispatch": lambda: DEFAULT_MODEL,
+            "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
+            "decompose": lambda: _persona_default_model("product-analyst") or "opus",
+        }
+        roles = {}
+        for role, fallback in role_fallbacks.items():
+            resolution = role_registry.resolve_role(
+                role,
+                plan_role_config=plan_role_config,
+                model_fallback=fallback,
+            )
+            roles[role] = {"provider": resolution.provider, "model": resolution.model}
+        return {"ok": True, "roles": roles}
+
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -703,23 +722,7 @@ def get_role_config(plan_name: str | None = None) -> dict[str, Any]:
     depends on a specific story's already-resolved dispatch backend, which
     doesn't exist outside of a real dispatch call).
     """
-    plan_role_config = _plan_role_config(plan_name) if plan_name else None
-    role_fallbacks = {
-        "overlord": lambda: _persona_default_model("overlord") or "opus",
-        "planner": lambda: DEFAULT_MODEL,
-        "dispatch": lambda: DEFAULT_MODEL,
-        "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
-        "decompose": lambda: _persona_default_model("product-analyst") or "opus",
-    }
-    roles = {}
-    for role, fallback in role_fallbacks.items():
-        resolution = role_registry.resolve_role(
-            role,
-            plan_role_config=plan_role_config,
-            model_fallback=fallback,
-        )
-        roles[role] = {"provider": resolution.provider, "model": resolution.model}
-    return {"ok": True, "roles": roles}
+    return _service.get_role_config(plan_name)
 
 
 @mcp.tool()

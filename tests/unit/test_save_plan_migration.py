@@ -22,9 +22,9 @@ import textwrap
 
 import pytest
 
-from pipeline import server as p
-from pipeline import persistence as ppers
 from pipeline import concurrency as pcon
+from pipeline import persistence as ppers
+from pipeline import server as p
 
 
 @pytest.fixture

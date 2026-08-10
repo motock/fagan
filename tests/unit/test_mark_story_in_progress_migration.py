@@ -192,7 +192,7 @@ def test_validate_key_calls_are_first_statements_of_method():
             continue
         if not stripped:
             continue
-        if stripped.startswith('"""') or stripped.startswith("'''"):
+        if stripped.startswith(('"""', "'''")):
             in_docstring = not in_docstring
             continue
         if in_docstring:

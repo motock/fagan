@@ -31,7 +31,6 @@ import pytest
 
 from pipeline import server as p
 
-
 # ---------- shared helpers (local copies so this file is self-contained) ----------
 
 def _write_manifest(plan_dir, plan_name, stories):

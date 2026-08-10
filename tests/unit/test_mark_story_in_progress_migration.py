@@ -18,16 +18,18 @@ import textwrap
 import pytest
 
 from pipeline import server as p
+from pipeline import ticketing as pt
 
 
 # ---------- C1: the method exists on PipelineService with the right shape ----
+
 
 def test_pipelineservice_has_mark_story_in_progress_method():
     """C1: PipelineService must define mark_story_in_progress as a method."""
     assert hasattr(p.PipelineService, "mark_story_in_progress"), (
         "PipelineService must define a mark_story_in_progress method"
     )
-    assert callable(getattr(p.PipelineService, "mark_story_in_progress"))
+    assert callable(p.PipelineService.mark_story_in_progress)
 
 
 def test_method_takes_self_plus_original_params():
@@ -67,6 +69,7 @@ def test_method_has_no_docstring():
 
 # ---------- C2: the module-level tool is a one-line delegation ---------------
 
+
 def test_module_level_tool_function_still_exists():
     """C2: the module-level @mcp.tool() def mark_story_in_progress still exists."""
     assert hasattr(p, "mark_story_in_progress"), (
@@ -101,7 +104,6 @@ def test_module_level_tool_body_is_single_delegation():
     """C2: the tool function's executable body is exactly one statement:
     return _service.mark_story_in_progress(plan_name, story_key)."""
     src = inspect.getsource(p.mark_story_in_progress)
-    # Strip the decorator line(s) and signature/docstring to isolate the body.
     # The body must contain exactly one return statement delegating to _service.
     assert "return _service.mark_story_in_progress(plan_name, story_key)" in src, (
         "tool body must delegate via: return _service.mark_story_in_progress("
@@ -128,9 +130,11 @@ def test_module_level_tool_body_is_single_delegation():
 
 # ---------- C3: exactly two definitions --------------------------------------
 
+
 def test_exactly_two_definitions_of_mark_story_in_progress():
     """C3: grep -c 'def mark_story_in_progress' pipeline/server.py == 2."""
     import pipeline.server as ps
+
     src = inspect.getsource(ps)
     count = src.count("def mark_story_in_progress")
     assert count == 2, (
@@ -140,6 +144,7 @@ def test_exactly_two_definitions_of_mark_story_in_progress():
 
 
 # ---------- C4: still MCP-registered ----------------------------------------
+
 
 def test_tool_still_mcp_registered():
     """C4: the tool is still registered with FastMCP (R3 guard -- fails if the
@@ -152,6 +157,7 @@ def test_tool_still_mcp_registered():
 
 
 # ---------- C5: no self.<global/helper> inside the method --------------------
+
 
 def test_method_body_uses_no_self_attribute_access_for_globals():
     """C5/R1: inside the method, no module global or helper is accessed via
@@ -191,6 +197,7 @@ def test_method_body_keeps_globals_as_free_names():
 
 # ---------- R4: entry validation stays first --------------------------------
 
+
 def test_validate_key_calls_are_first_statements_of_method():
     """R4: _validate_key(plan_name) and _validate_key(story_key) must be the
     FIRST statements of the moved method, before any lock/fs read/setup."""
@@ -226,6 +233,7 @@ def test_validate_key_calls_are_first_statements_of_method():
 
 # ---------- R2: internal calls stay module-level (no self.<tool>) -----------
 
+
 def test_method_does_not_route_other_tools_through_self():
     """R2: no other tool function is rewritten to self.<tool>(...)."""
     src = inspect.getsource(p.PipelineService.mark_story_in_progress)
@@ -242,57 +250,61 @@ def test_method_does_not_route_other_tools_through_self():
 
 # ---------- Behaviour preservation: happy path + negatives ------------------
 
-def test_tool_delegates_to_service_and_sets_in_progress(plan_dir, monkeypatch):
+
+@pytest.fixture
+def _null_provider(monkeypatch):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+
+
+def test_tool_delegates_to_service_and_sets_in_progress(plan_dir, _null_provider):
     """Happy path through the module-level tool still flips status to
     in_progress (exercises the delegation _service.mark_story_in_progress)."""
-    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
-    (plan_dir / "happy.manifest.json").write_text(json.dumps(
-        {"stories": {"S1": {"status": "todo"}}}))
+    (plan_dir / "happy.manifest.json").write_text(
+        json.dumps({"stories": {"S1": {"status": "todo"}}})
+    )
     result = p.mark_story_in_progress("happy", "S1")
     assert result == {"ok": True}
     manifest = json.loads((plan_dir / "happy.manifest.json").read_text())
     assert manifest["stories"]["S1"]["status"] == "in_progress"
 
 
-def test_service_method_sets_in_progress_directly(plan_dir, monkeypatch):
+def test_service_method_sets_in_progress_directly(plan_dir, _null_provider):
     """Happy path calling the service method directly."""
-    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
-    (plan_dir / "svc.manifest.json").write_text(json.dumps(
-        {"stories": {"S1": {"status": "todo"}}}))
+    (plan_dir / "svc.manifest.json").write_text(
+        json.dumps({"stories": {"S1": {"status": "todo"}}})
+    )
     result = p._service.mark_story_in_progress("svc", "S1")
     assert result == {"ok": True}
     manifest = json.loads((plan_dir / "svc.manifest.json").read_text())
     assert manifest["stories"]["S1"]["status"] == "in_progress"
 
 
-def test_unknown_story_returns_error(plan_dir, monkeypatch):
+def test_unknown_story_returns_error(plan_dir, _null_provider):
     """N3: unknown-story error shape is byte-identical to before."""
-    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
-    (plan_dir / "unk.manifest.json").write_text(json.dumps(
-        {"stories": {"S1": {"status": "todo"}}}))
+    (plan_dir / "unk.manifest.json").write_text(
+        json.dumps({"stories": {"S1": {"status": "todo"}}})
+    )
     result = p.mark_story_in_progress("unk", "NOPE")
     assert result == {"ok": False, "error": "No such story NOPE"}
 
 
-def test_missing_manifest_raises_filenotfound(plan_dir, monkeypatch):
+def test_missing_manifest_raises_filenotfound(plan_dir, _null_provider):
     """N3: missing manifest still raises (json read of a missing file)."""
-    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
     with pytest.raises(FileNotFoundError):
         p.mark_story_in_progress("no-such-plan", "S1")
 
 
-def test_rejects_traversal_plan_name(plan_dir, monkeypatch):
+def test_rejects_traversal_plan_name(plan_dir, _null_provider):
     """N1: path-traversal rejection still fires FIRST for plan_name."""
-    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
     with pytest.raises(ValueError, match="invalid"):
         p.mark_story_in_progress("../evil", "S1")
 
 
-def test_rejects_traversal_story_key(plan_dir, monkeypatch):
+def test_rejects_traversal_story_key(plan_dir, _null_provider):
     """N1: path-traversal rejection still fires FIRST for story_key."""
-    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
-    (plan_dir / "trav.manifest.json").write_text(json.dumps(
-        {"stories": {"S1": {"status": "todo"}}}))
+    (plan_dir / "trav.manifest.json").write_text(
+        json.dumps({"stories": {"S1": {"status": "todo"}}})
+    )
     with pytest.raises(ValueError, match="invalid"):
         p.mark_story_in_progress("trav", "../evil")
 
@@ -308,8 +320,9 @@ def test_monkeypatched_global_takes_effect_through_method(plan_dir, monkeypatch)
             return True
 
     monkeypatch.setattr(p, "get_ticket_provider", lambda: _FakeProvider())
-    (plan_dir / "patch.manifest.json").write_text(json.dumps(
-        {"stories": {"S1": {"status": "todo"}}}))
+    (plan_dir / "patch.manifest.json").write_text(
+        json.dumps({"stories": {"S1": {"status": "todo"}}})
+    )
     result = p.mark_story_in_progress("patch", "S1")
     assert result == {"ok": True}
     assert calls == [("S1", p.LogicalState.IN_PROGRESS, "patch")]
@@ -321,8 +334,9 @@ def test_monkeypatched_plan_dir_takes_effect_through_method(tmp_path, monkeypatc
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
-    (d / "alt.manifest.json").write_text(json.dumps(
-        {"stories": {"S1": {"status": "todo"}}}))
+    (d / "alt.manifest.json").write_text(
+        json.dumps({"stories": {"S1": {"status": "todo"}}})
+    )
     result = p.mark_story_in_progress("alt", "S1")
     assert result == {"ok": True}
     manifest = json.loads((d / "alt.manifest.json").read_text())
@@ -331,6 +345,7 @@ def test_monkeypatched_plan_dir_takes_effect_through_method(tmp_path, monkeypatc
 
 # ---------- R8: only pipeline/server.py changed (no new files in prod) -------
 
+
 def test_service_singleton_is_pipeline_service_instance():
     """The module-level _service is a PipelineService instance (delegation
     target exists)."""
@@ -338,6 +353,7 @@ def test_service_singleton_is_pipeline_service_instance():
 
 
 # ---------- helpers ---------------------------------------------------------
+
 
 class _NullSetStateProvider:
     """A ticket provider whose set_state is a no-op, so the manifest write is

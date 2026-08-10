@@ -32,18 +32,16 @@ def test_pipelineservice_has_mark_story_in_progress_method():
 
 
 def test_method_takes_self_plus_original_params():
-    """C1: the method signature is (self, plan_name: str, story_key: str) -> dict[str, Any]."""
+    """C1: the method signature is (self, plan_name: str, story_key: str)."""
     sig = inspect.signature(p.PipelineService.mark_story_in_progress)
     params = list(sig.parameters.keys())
     assert params == ["self", "plan_name", "story_key"], (
         f"method params must be [self, plan_name, story_key], got {params}"
     )
-    # Original type hints preserved.
     plan_hint = sig.parameters["plan_name"].annotation
     story_hint = sig.parameters["story_key"].annotation
     assert plan_hint is str, f"plan_name annotation must be str, got {plan_hint!r}"
     assert story_hint is str, f"story_key annotation must be str, got {story_hint!r}"
-    # No extra defaults introduced.
     assert sig.parameters["plan_name"].default is inspect.Parameter.empty
     assert sig.parameters["story_key"].default is inspect.Parameter.empty
 
@@ -52,7 +50,6 @@ def test_method_return_annotation_is_dict_of_str_any():
     """C1: return annotation is dict[str, Any]."""
     sig = inspect.signature(p.PipelineService.mark_story_in_progress)
     ret = sig.return_annotation
-    # dict[str, Any] stringifies to "dict[str, Any]".
     assert str(ret) == "dict[str, Any]", f"return annotation wrong: {ret!r}"
 
 
@@ -70,7 +67,7 @@ def test_method_has_no_docstring():
 
 
 def test_module_level_tool_function_still_exists():
-    """C2: the module-level @mcp.tool() def mark_story_in_progress still exists."""
+    """C2: the module-level @mcp.tool() def mark_story_in_progress exists."""
     assert hasattr(p, "mark_story_in_progress"), (
         "module-level mark_story_in_progress must still exist"
     )
@@ -94,23 +91,17 @@ def test_module_level_tool_docstring_unchanged():
     """R3: the tool function's full docstring is preserved verbatim."""
     doc = p.mark_story_in_progress.__doc__
     assert doc is not None, "tool function must keep its docstring"
-    # The original docstring text (must be present byte-for-byte).
     assert "Transition the ticket to In Progress" in doc
     assert "Use this before writing any code for a story." in doc
 
 
 def test_module_level_tool_body_is_single_delegation():
-    """C2: the tool function's executable body is exactly one statement:
-    return _service.mark_story_in_progress(plan_name, story_key)."""
+    """C2: the tool function's executable body is exactly one statement."""
     src = inspect.getsource(p.mark_story_in_progress)
-    # The body must contain exactly one return statement delegating to _service.
     assert "return _service.mark_story_in_progress(plan_name, story_key)" in src, (
         "tool body must delegate via: return _service.mark_story_in_progress("
         "plan_name, story_key)"
     )
-    # No executable statement other than the single delegation return. The
-    # original body had _validate_key calls, get_ticket_provider(), json.loads,
-    # _atomic_write_json, etc. -- none of those may remain in the tool body.
     forbidden_in_tool = [
         "_validate_key(",
         "get_ticket_provider(",
@@ -132,9 +123,7 @@ def test_module_level_tool_body_is_single_delegation():
 
 def test_exactly_two_definitions_of_mark_story_in_progress():
     """C3: grep -c 'def mark_story_in_progress' pipeline/server.py == 2."""
-    import pipeline.server as ps
-
-    src = inspect.getsource(ps)
+    src = inspect.getsource(p)
     count = src.count("def mark_story_in_progress")
     assert count == 2, (
         f"expected exactly 2 'def mark_story_in_progress' (method + tool), "
@@ -146,8 +135,7 @@ def test_exactly_two_definitions_of_mark_story_in_progress():
 
 
 def test_tool_still_mcp_registered():
-    """C4: the tool is still registered with FastMCP (R3 guard -- fails if the
-    @mcp.tool() decorator moved onto the method)."""
+    """C4: the tool is still registered with FastMCP (R3 guard)."""
     tool_names = {t.name for t in p.mcp._tool_manager.list_tools()}
     assert "mark_story_in_progress" in tool_names, (
         "mark_story_in_progress must remain registered as an MCP tool; the "
@@ -162,13 +150,9 @@ def test_method_body_uses_no_self_attribute_access_for_globals():
     """C5/R1: inside the method, no module global or helper is accessed via
     self. (self may appear only as the receiver parameter.)"""
     src = inspect.getsource(p.PipelineService.mark_story_in_progress)
-    # Remove the def line (which contains 'self' as the receiver param) so we
-    # only inspect the body.
     lines = src.splitlines()
     body_lines = [ln for ln in lines if "def mark_story_in_progress" not in ln]
     body = "\n".join(body_lines)
-    # The only legitimate 'self' is the receiver in the signature, already
-    # excluded. Any remaining 'self.' is a violation (self.PLAN_DIR, etc.).
     assert "self." not in body, (
         "method body must not access any module global/helper through self; "
         f"found 'self.' in:\n{body}"
@@ -176,7 +160,7 @@ def test_method_body_uses_no_self_attribute_access_for_globals():
 
 
 def test_method_body_keeps_validate_key_as_free_name():
-    """R1: _validate_key stays a bare module-level name (not self._validate_key)."""
+    """R1: _validate_key stays a bare module-level name."""
     src = inspect.getsource(p.PipelineService.mark_story_in_progress)
     assert "_validate_key(plan_name)" in src
     assert "_validate_key(story_key)" in src
@@ -189,7 +173,6 @@ def test_method_body_keeps_globals_as_free_names():
     assert "PLAN_DIR" in src
     assert "get_ticket_provider()" in src
     assert "_atomic_write_json" in src
-    # None of these may be routed through self.
     for g in ["self.PLAN_DIR", "self.get_ticket_provider", "self._atomic_write_json"]:
         assert g not in src, f"{g!r} must not appear in the method body"
 
@@ -198,12 +181,9 @@ def test_method_body_keeps_globals_as_free_names():
 
 
 def test_validate_key_calls_are_first_statements_of_method():
-    """R4: _validate_key(plan_name) and _validate_key(story_key) must be the
-    FIRST statements of the moved method, before any lock/fs read/setup."""
+    """R4: _validate_key calls must be the FIRST statements of the method."""
     src = inspect.getsource(p.PipelineService.mark_story_in_progress)
-    # Collect the non-empty, non-comment, non-docstring body lines (dedented).
     lines = textwrap.dedent(src).splitlines()
-    # Drop the def line and any blank/docstring lines.
     body_stmts = []
     in_docstring = False
     for ln in lines:
@@ -220,7 +200,6 @@ def test_validate_key_calls_are_first_statements_of_method():
         if stripped.startswith("#"):
             continue
         body_stmts.append(stripped)
-    # The first two executable statements must be the two _validate_key calls.
     assert len(body_stmts) >= 2, f"expected at least 2 body statements, got {body_stmts}"
     assert body_stmts[0] == "_validate_key(plan_name)", (
         f"first statement must be _validate_key(plan_name), got {body_stmts[0]!r}"

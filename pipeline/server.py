@@ -602,6 +602,12 @@ class PipelineService:
         return _set_plan_paused(plan_name, False)
 
 
+    def list_decisions(self, plan_name: str) -> list[dict]:
+        """Return the overlord decision log for a plan (audit trail)."""
+        _validate_key(plan_name)
+        path = _decisions_path(plan_name)
+        return json.loads(path.read_text()) if path.exists() else []
+
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -2821,9 +2827,7 @@ def request_decision(
 @mcp.tool()
 def list_decisions(plan_name: str) -> list[dict]:
     """Return the overlord decision log for a plan (audit trail)."""
-    _validate_key(plan_name)
-    path = _decisions_path(plan_name)
-    return json.loads(path.read_text()) if path.exists() else []
+    return _service.list_decisions(plan_name)
 
 
 def _verify_reviewer_auto_fix(

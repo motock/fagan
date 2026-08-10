@@ -671,6 +671,18 @@ class PipelineService:
             "epic_count": len(plan["epics"]),
             "story_count": story_count,
         }
+    def advance_all_plans(self) -> dict[str, Any]:
+        plans = {}
+        for manifest_path in sorted(PLAN_DIR.glob("*.manifest.json")):
+            plan_name = manifest_path.name.removesuffix(".manifest.json")
+            try:
+                plans[plan_name] = advance_pipeline(plan_name)
+            except Exception as e:  # noqa: BLE001 (one plan's failure must not stop every other plan's tick, per the comment below)
+                # One plan's failure (bad repo_root, missing tool, transient git
+                # error, ...) must not stop every other plan from getting its tick.
+                plans[plan_name] = {"ok": False, "error": str(e)}
+        return {"ok": True, "plans": plans}
+
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -4285,16 +4297,7 @@ def advance_all_plans() -> dict[str, Any]:
     _reap_zombie_in_progress_stories is kept for callers that need a
     one-shot cleanup (e.g. tests, ops CLI) but is NOT wired in here.
     """
-    plans = {}
-    for manifest_path in sorted(PLAN_DIR.glob("*.manifest.json")):
-        plan_name = manifest_path.name.removesuffix(".manifest.json")
-        try:
-            plans[plan_name] = advance_pipeline(plan_name)
-        except Exception as e:  # noqa: BLE001 (one plan's failure must not stop every other plan's tick, per the comment below)
-            # One plan's failure (bad repo_root, missing tool, transient git
-            # error, ...) must not stop every other plan from getting its tick.
-            plans[plan_name] = {"ok": False, "error": str(e)}
-    return {"ok": True, "plans": plans}
+    return _service.advance_all_plans()
 
 
 if __name__ == "__main__":

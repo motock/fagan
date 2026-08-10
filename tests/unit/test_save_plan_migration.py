@@ -191,7 +191,7 @@ def test_save_plan_method_validates_before_anything_else():
             if stripped.startswith("def save_plan"):
                 seen_def = True
             continue
-        if stripped.startswith('"""') or stripped.startswith("'''"):
+        if stripped.startswith(('"""', "'''")):
             if in_docstring:
                 in_docstring = False
             else:

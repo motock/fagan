@@ -60,7 +60,9 @@ def _checkpoint_impl(
     calls this in-process for its `checkpoint` tool) without exposing this
     whole server's orchestration toolset (dispatch_story, approve_merge,
     advance_pipeline, ...) to a dispatched agent."""
-    from .server import PLAN_DIR
+    from .server import PLAN_DIR, _validate_key
+    _validate_key(plan_name)
+    _validate_key(story_key)
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     manifest = json.loads(manifest_path.read_text())
     story = manifest["stories"].get(story_key)

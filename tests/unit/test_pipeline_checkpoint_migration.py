@@ -156,7 +156,8 @@ def test_module_level_checkpoint_body_is_single_delegation():
 def test_exactly_two_checkpoint_definitions():
     """C3: exactly two `def checkpoint` definitions (method + tool)."""
     import re
-    text = open(p.__file__).read()
+    with open(p.__file__) as fh:
+        text = fh.read()
     count = len(re.findall(r"\bdef checkpoint\b", text))
     assert count == 2, (
         f"expected exactly 2 `def checkpoint` definitions, found {count}"

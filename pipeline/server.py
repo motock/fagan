@@ -608,6 +608,9 @@ class PipelineService:
         path = _decisions_path(plan_name)
         return json.loads(path.read_text()) if path.exists() else []
 
+    def list_plans(self) -> list[str]:
+        return [p.stem for p in PLAN_DIR.glob("*.json")]
+
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -785,9 +788,9 @@ def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
 
 @mcp.tool()
 def list_plans() -> list[str]:
-    """List saved plans available for ingestion."""
-    return [p.stem for p in PLAN_DIR.glob("*.json")]
 
+    return _service.list_plans()
+list_plans.__doc__ = "List saved plans available for ingestion."
 
 # Story fields the plan authors and that a re-ingest should refresh. Every
 # other field on an already-tracked story (status, pr_url, worktree,

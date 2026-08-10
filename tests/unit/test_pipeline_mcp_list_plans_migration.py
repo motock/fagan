@@ -13,7 +13,24 @@ one-line delegation.
 
 import inspect
 
+import pytest
+
+from pipeline import concurrency as pcon
+from pipeline import persistence as ppers
 from pipeline import server as p
+
+
+@pytest.fixture
+def plan_dir(tmp_path, monkeypatch):
+    d = tmp_path / "plans"
+    d.mkdir()
+    monkeypatch.setattr(p, "PLAN_DIR", d)
+    # pipeline_persistence and pipeline_concurrency import PLAN_DIR from
+    # pipeline_paths at module load and read it as a free var, so patches
+    # must land on their own bindings too.
+    monkeypatch.setattr(ppers, "PLAN_DIR", d)
+    monkeypatch.setattr(pcon, "PLAN_DIR", d)
+    return d
 
 # ---------------------------------------------------------------------------
 # C1 / C3 -- PipelineService.list_plans method exists and is unique

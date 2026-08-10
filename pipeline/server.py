@@ -672,23 +672,6 @@ class PipelineService:
             "story_count": story_count,
         }
     def advance_all_plans(self) -> dict[str, Any]:
-        """
-        Run advance_pipeline on every plan that has been ingested (has a
-        manifest), keyed by plan name. Plans saved but not yet ingested (no
-        manifest) are skipped. Intended for a recurring scheduler (cron/launchd
-        or /loop) so newly ingested plans are picked up automatically with no
-        hardcoded plan name to maintain.
-
-        NOTE on zombie reaping: the per-plan advance_pipeline polling phase
-        already handles dead-pid in_progress stories via check_story_status
-        (which falls through to test-running on dead pids). Running an external
-        reap pass BEFORE the polling would clobber that and silently leave
-        stories re-dispatching forever without ever running the test
-        (manifest observation 2026-06-28: 3 e2e stories hit dispatch_attempts=
-        MISSING because the reap ate the polling opportunity). The reap helper
-        _reap_zombie_in_progress_stories is kept for callers that need a
-        one-shot cleanup (e.g. tests, ops CLI) but is NOT wired in here.
-        """
         plans = {}
         for manifest_path in sorted(PLAN_DIR.glob("*.manifest.json")):
             plan_name = manifest_path.name.removesuffix(".manifest.json")

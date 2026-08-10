@@ -24,9 +24,9 @@ until the migration is performed.
 import inspect
 import json
 
-from pipeline import server as p
-
 import pytest
+
+from pipeline import server as p
 
 
 # ---------- Structural requirements (the mechanical move) ----------

@@ -49,6 +49,10 @@ There is no `id`, `title`, `acceptance_criteria`, or `depends_on` field. `ingest
 
 Sparse stories (a summary alone) leave the agent to guess. Populate, at minimum: what to build, the approach, the TDD expectation (write the failing test first), testable success criteria (concrete, checkable statements such as *"`cargo test -p storage` passes"* or *"rejects a zero-length key with `StoreError::Corrupted`"*), and the negative/boundary cases the tests must cover. The testable criteria live here, not in a separate field.
 
+### Opting a story out of the test-author phase: `[no-new-tests]`
+
+For local-family dispatch the test-author phase is always-on: it writes a NEW failing test suite before the weak executor touches code. A **behavior-preserving refactor** (e.g. W1a's "move a tool body onto `PipelineService`; the existing `test_pipeline_mcp_server.py` already covers it") has no new test to write — forcing the phase to invent one produced a redundant, unsatisfiable structural-assertion oracle that parked mid-write (Mode 51, live 2026-08-10 on W1a-10). To skip the phase for such a story, place the literal token `[no-new-tests]` anywhere in `agent_instructions`. The phase then falls open to monolithic dispatch and the executor runs against the existing suite — the correct grade for a behavior-preserving move. The token is the exact bracketed string `[no-new-tests]`; free-text phrases like "no new tests" do NOT opt out (they are common in ordinary briefs and must not silently skip the phase). Use this only when the existing suite genuinely covers the change; if there is any new behavior to grade, let the phase run.
+
 ## Grading the integration, not just the unit
 
 An acceptance fixture that calls the changed function directly — never

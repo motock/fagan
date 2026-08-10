@@ -24,7 +24,15 @@ from pathlib import Path
 from app import backend, role_registry
 
 from .config import DEFAULT_MODEL
-from .git_ops import _worktree_has_new_commits
+
+# _worktree_has_new_commits is no longer called here (both test-author phases
+# now use _worktree_has_non_wip_commits), but tests monkeypatch
+# pipeline.planner._worktree_has_new_commits as a belt-and-suspenders boom on
+# the timeout path (test_rework_test_author_phase.py); keep it importable.
+from .git_ops import (  # noqa: F401
+    _worktree_has_new_commits,
+    _worktree_has_non_wip_commits,
+)
 from .persistence import _notify_user
 from .persona import _persona_body, _persona_default_model
 
@@ -563,6 +571,26 @@ _TEST_AUTHOR_SYSTEM = (
 _TEST_AUTHOR_ALLOWED_TOOLS = "Read,Write,Edit,Bash"
 
 
+# Sentinel a plan author places in a story's agent_instructions to opt a
+# behavior-preserving refactor out of the test-author phase. The phase exists
+# to write a NEW failing test suite before the weak executor touches code; a
+# pure physical move (e.g. W1a's "move a tool body onto PipelineService,
+# existing tests already cover behavior") has no new test to write, and
+# forcing the phase to invent one produced a redundant, unsatisfiable
+# structural-assertion oracle that parked mid-write (Mode 51, live 2026-08-10
+# on W1a-10). The opt-out falls open to monolithic dispatch -- the executor
+# then runs against the existing suite, the correct grade for a
+# behavior-preserving move. The literal bracketed token avoids matching
+# free-text phrases like "no new tests" that appear in ordinary briefs.
+_TEST_AUTHOR_OPT_OUT_MARKER = "[no-new-tests]"
+
+
+def _story_opts_out_of_test_author(story: dict) -> bool:
+    """True iff the story's agent_instructions explicitly opt out of the
+    test-author phase via the ``[no-new-tests]`` sentinel."""
+    return _TEST_AUTHOR_OPT_OUT_MARKER in story.get("agent_instructions", "")
+
+
 def _test_author_prompt(agent_instructions: str) -> str:
     """Build the test-authoring dispatch's prompt from the story's own
     agent_instructions (generalized from tests/benchmark/tdd_split_
@@ -732,6 +760,20 @@ def _run_test_author_phase(
     test_author on a different provider than dispatch - both then parked).
     The fail-open itself is unchanged; only the silence is fixed.
     """
+    # Escape hatch (Mode 51, live 2026-08-10 on W1a-10): a story whose brief
+    # carries the [no-new-tests] sentinel is a behavior-preserving refactor
+    # with no new test to write. Skip the phase before resolving/dispatching
+    # -- forcing it to invent a redundant structural-assertion oracle is what
+    # produced the unsatisfiable, parked-mid-write oracle. Fall open to
+    # monolithic dispatch against the existing suite (the correct grade).
+    if _story_opts_out_of_test_author(story):
+        _notify_user(
+            plan_name,
+            f"{story_key} test-author phase skipped (story opts out via "
+            "[no-new-tests]); dispatching monolithically against the "
+            "existing test suite",
+        )
+        return False
     test_author_backend, test_author_model = _resolve_test_author_backend(
         dispatch_backend,
         local_model,
@@ -790,7 +832,8 @@ def _run_test_author_phase(
     from .server import _default_branch
 
     try:
-        has_commits = _worktree_has_new_commits(worktree_path, story_key, _default_branch())
+        has_commits = _worktree_has_non_wip_commits(
+            worktree_path, story_key, _default_branch())
     except Exception as exc:  # noqa: BLE001 (already logged below; git-detection failures are unpredictable and must not raise past this function)
         logging.getLogger("pipeline").warning(
             f"test-author dispatch failed to detect commits for {story_key}: {exc}"
@@ -804,8 +847,9 @@ def _run_test_author_phase(
     if not has_commits:
         _notify_user(
             plan_name,
-            f"{story_key} test-author phase fell open (no commit produced); "
-            "dispatching monolithically without a test-first split",
+            f"{story_key} test-author phase fell open (no finished commit "
+            "produced - only a WIP park checkpoint or nothing); dispatching "
+            "monolithically without a test-first split",
         )
     return has_commits
 
@@ -883,7 +927,7 @@ def _run_rework_test_author_phase(
     from .server import _default_branch
 
     try:
-        return _worktree_has_new_commits(worktree_path, story_key, _default_branch())
+        return _worktree_has_non_wip_commits(worktree_path, story_key, _default_branch())
     except Exception as exc:  # noqa: BLE001 (mirrors _run_test_author_phase's contract)
         logging.getLogger("pipeline").warning(
             f"rework test-author dispatch failed to detect commits for {story_key}: {exc}"

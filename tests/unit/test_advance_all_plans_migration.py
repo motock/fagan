@@ -27,6 +27,7 @@ import inspect
 import json
 import re
 
+import pytest
 from pipeline import server as p
 
 # ---------- helpers (mirror the ones in test_pipeline_mcp_server.py) ----------

@@ -19,7 +19,6 @@ import pytest
 
 from pipeline import server as p
 
-
 # ---------- C1: the method exists on PipelineService with the right shape ----
 
 

@@ -611,6 +611,19 @@ class PipelineService:
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]
 
+    def mark_story_in_progress(self, plan_name: str, story_key: str) -> dict[str, Any]:
+        _validate_key(plan_name)
+        _validate_key(story_key)
+        get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
+
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        if story_key not in manifest["stories"]:
+            return {"ok": False, "error": f"No such story {story_key}"}
+        manifest["stories"][story_key]["status"] = "in_progress"
+        _atomic_write_json(manifest_path, manifest)
+        return {"ok": True}
+
 _service = PipelineService()
 
 # ---------- Tools ----------

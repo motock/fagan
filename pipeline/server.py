@@ -702,6 +702,23 @@ class PipelineService:
             roles[role] = {"provider": resolution.provider, "model": resolution.model}
         return {"ok": True, "roles": roles}
 
+    def decompose_plan(self, request: str) -> dict[str, Any]:
+        text = _run_decompose(request)
+        if not text:
+            return {"ok": False, "error": "decompose backend returned no output"}
+        candidate = _extract_json_block(text)
+        try:
+            plan = json.loads(candidate)
+        except json.JSONDecodeError as e:
+            return {"ok": False, "error": f"invalid JSON: {e}", "raw": text}
+        if not isinstance(plan, dict) or not isinstance(plan.get("epics"), list):
+            return {
+                "ok": False,
+                "error": "response JSON is missing an 'epics' list",
+                "raw": text,
+            }
+        return {"ok": True, "plan": plan}
+
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -816,21 +833,7 @@ def decompose_plan(request: str) -> dict[str, Any]:
     whenever the backend actually returned text that failed to parse (never
     raises).
     """
-    text = _run_decompose(request)
-    if not text:
-        return {"ok": False, "error": "decompose backend returned no output"}
-    candidate = _extract_json_block(text)
-    try:
-        plan = json.loads(candidate)
-    except json.JSONDecodeError as e:
-        return {"ok": False, "error": f"invalid JSON: {e}", "raw": text}
-    if not isinstance(plan, dict) or not isinstance(plan.get("epics"), list):
-        return {
-            "ok": False,
-            "error": "response JSON is missing an 'epics' list",
-            "raw": text,
-        }
-    return {"ok": True, "plan": plan}
+    return _service.decompose_plan(request)
 
 
 @mcp.tool()

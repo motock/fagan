@@ -229,6 +229,22 @@ def test_method_does_not_route_other_tools_through_self():
 
 
 @pytest.fixture
+def plan_dir(tmp_path, monkeypatch):
+    """Redirect pipeline.server.PLAN_DIR (and the persistence/concurrency
+    copies) to an isolated tmp dir, mirroring the per-file `plan_dir`
+    fixtures used across the rest of the unit suite."""
+    from pipeline import concurrency as pcon
+    from pipeline import persistence as ppers
+
+    d = tmp_path / "plans"
+    d.mkdir()
+    monkeypatch.setattr(p, "PLAN_DIR", d)
+    monkeypatch.setattr(ppers, "PLAN_DIR", d)
+    monkeypatch.setattr(pcon, "PLAN_DIR", d)
+    return d
+
+
+@pytest.fixture
 def _null_provider(monkeypatch):
     monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
 

@@ -231,8 +231,7 @@ def test_new_method_calls_validate_key_as_free_function():
     body_lines = []
     for ln in lines[def_idx + 1:]:
         s = ln.strip()
-        if not s or s.startswith("#") or s.startswith('"""') or s.startswith("Return stories") \
-                or s.startswith("To Do.") or s.startswith("Use this"):
+        if not s or s.startswith(("#", '"""', "Return stories", "To Do.", "Use this")):
             continue
         body_lines.append(s)
     assert body_lines, "method body has no executable statements"

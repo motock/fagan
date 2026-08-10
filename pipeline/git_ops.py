@@ -130,6 +130,49 @@ def _worktree_has_new_commits(worktree: Path, story_key: str, base_branch: str) 
     return r.returncode == 0 and bool(r.stdout.strip())
 
 
+def _worktree_has_non_wip_commits(
+    worktree: Path, story_key: str, base_branch: str,
+) -> bool:
+    """True iff the agent branch has at least one commit not on
+    ``base_branch`` whose subject is NOT a WIP checkpoint.
+
+    Companion to ``_worktree_has_new_commits``: that function answers "did
+    anything land on the branch" -- a WIP park/checkpoint commit counts, which
+    is correct for ``check_story_status``'s "did the agent do anything"
+    question. This one answers "did a dispatched phase produce a REAL finished
+    commit": a WIP commit made by the harness's own ``_commit_wip`` (subject
+    ``wip(<story_key>): ...``) does NOT count, because it records parked /
+    checkpointed / interrupted state, not completed work.
+
+    Used by the test-author phases (``_run_test_author_phase`` /
+    ``_run_rework_test_author_phase``). A phase that drifted (Mode 31
+    off-task drift, live 2026-08-10 on W1a-10) can park mid-write and leave
+    only a ``wip(...): parked on ...`` checkpoint commit. The old
+    ``_worktree_has_new_commits`` check accepted that as success and handed a
+    half-authored, unsatisfiable test file to the executor as a fixed
+    must-pass oracle. This function rejects it so the phase falls open to
+    monolithic dispatch instead -- the fail-open contract's intended behavior
+    on any incomplete test-author outcome.
+
+    The prefix match is case-insensitive: the branch name lower-cases the
+    story key but ``_commit_wip`` writes the raw key into the message, so a
+    mixed-case key (e.g. a UUID) must match either way. Returns False on any
+    git error (fail open, mirroring ``_worktree_has_new_commits``).
+    """
+    branch = f"agent/{story_key.lower()}"
+    prefix = f"wip({story_key}):".lower()
+    r = subprocess.run(
+        ["git", "log", f"{base_branch}..{branch}", "--format=%s"],
+        check=False, cwd=str(worktree), capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return False
+    return any(
+        bool(subject.strip()) and not subject.strip().lower().startswith(prefix)
+        for subject in r.stdout.splitlines()
+    )
+
+
 def _test_files_added_on_branch(
     worktree: Path, base_branch: str,
 ) -> list[str]:

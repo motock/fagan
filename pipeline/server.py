@@ -161,6 +161,7 @@ from .git_ops import (
     _test_files_added_on_branch,
     _test_names_in_file,
     _worktree_has_new_commits,
+    _worktree_has_non_wip_commits,  # noqa: F401 (re-exported for test patching)
 )
 
 # Pre-dispatch acceptance-oracle validation (a broken oracle costs an

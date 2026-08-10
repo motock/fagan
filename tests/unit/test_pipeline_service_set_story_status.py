@@ -21,7 +21,6 @@ import pytest
 
 import pipeline.server as p
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures / helpers (mirrors test_pipeline_mcp_server.py conventions).
 # ---------------------------------------------------------------------------

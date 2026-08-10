@@ -29,7 +29,6 @@ import re
 
 from pipeline import server as p
 
-
 # ---------- helpers (mirror the ones in test_pipeline_mcp_server.py) ----------
 
 def _write_manifest(plan_dir, plan_name, stories):

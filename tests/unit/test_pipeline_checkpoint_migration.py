@@ -131,7 +131,7 @@ def test_module_level_checkpoint_body_is_single_delegation():
                 in_body = True
             continue
         # skip the docstring
-        if stripped.startswith('"""') or stripped.startswith("'''"):
+        if stripped.startswith(('"""', "'''")):
             continue
         if stripped == "":
             continue

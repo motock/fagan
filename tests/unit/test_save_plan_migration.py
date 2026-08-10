@@ -321,6 +321,7 @@ def test_only_pipeline_server_changed_for_save_plan_move():
         ["git", "diff", "--stat", "--", "pipeline/server.py"],
         capture_output=True,
         text=True,
+        check=False,
     )
     # We don't assert non-empty here (the move may not be staged yet when this
     # test runs pre-implementation); we only assert the test infrastructure is

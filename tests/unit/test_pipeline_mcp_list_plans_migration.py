@@ -15,7 +15,6 @@ import inspect
 
 from pipeline import server as p
 
-
 # ---------------------------------------------------------------------------
 # C1 / C3 -- PipelineService.list_plans method exists and is unique
 # ---------------------------------------------------------------------------

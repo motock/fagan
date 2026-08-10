@@ -18,7 +18,6 @@ import textwrap
 import pytest
 
 from pipeline import server as p
-from pipeline import ticketing as pt
 
 
 # ---------- C1: the method exists on PipelineService with the right shape ----

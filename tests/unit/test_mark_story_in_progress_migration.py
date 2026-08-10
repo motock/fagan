@@ -85,7 +85,7 @@ def test_module_level_tool_signature_unchanged():
     )
     assert sig.parameters["plan_name"].annotation is str
     assert sig.parameters["story_key"].annotation is str
-    assert str(sig.return_annotation) == "dict[str, Any]"
+    assert str(sig.return_annotation) in ("dict[str, Any]", "dict[str, typing.Any]")
 
 
 def test_module_level_tool_docstring_unchanged():

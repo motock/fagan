@@ -49,7 +49,9 @@ def test_method_return_annotation_is_dict_of_str_any():
     """C1: return annotation is dict[str, Any]."""
     sig = inspect.signature(p.PipelineService.mark_story_in_progress)
     ret = sig.return_annotation
-    assert str(ret) == "dict[str, Any]", f"return annotation wrong: {ret!r}"
+    assert str(ret) in ("dict[str, Any]", "dict[str, typing.Any]"), (
+        f"return annotation wrong: {ret!r}"
+    )
 
 
 def test_method_has_no_docstring():

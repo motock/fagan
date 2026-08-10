@@ -20,6 +20,8 @@ import inspect
 import json
 import textwrap
 
+import pytest
+
 from pipeline import server as p
 
 # ---------- C1: PipelineService.save_plan method exists with right shape ----

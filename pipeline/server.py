@@ -1065,12 +1065,9 @@ def ingest_plan(
 def list_ready_stories(plan_name: str) -> list[dict]:
     """
     Return stories whose dependencies are satisfied and that are still in
-    To Do. Use this to decide what to dispatch next.
+        To Do. Use this to decide what to dispatch next.
     """
     return _service.list_ready_stories(plan_name)
-    ready.append({"key": key, "summary": story["summary"]})
-    return ready
-
 
 @mcp.tool()
 def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:

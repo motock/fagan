@@ -788,9 +788,6 @@ def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
 
 @mcp.tool()
 def list_plans() -> list[str]:
-    """
-    List saved plans available for ingestion.
-    """
     return _service.list_plans()
 
 

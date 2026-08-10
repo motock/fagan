@@ -633,6 +633,25 @@ class PipelineService:
         return _checkpoint_impl(plan_name, story_key, step, summary, next_hint)
 
     
+    def list_ready_stories(self, plan_name: str) -> list[dict]:
+        _validate_key(plan_name)
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+        if not manifest_path.exists():
+            return []
+
+        manifest = json.loads(manifest_path.read_text())
+        stories = manifest["stories"]
+        done = _completed_dep_ids(stories)
+
+        ready = []
+        for key, story in stories.items():
+            if story["status"] != "todo":
+                continue
+            deps_met = all(dep in done for dep in story["dependencies"])
+            if deps_met:
+                ready.append({"key": key, "summary": story["summary"]})
+        return ready
+
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -1046,26 +1065,9 @@ def ingest_plan(
 def list_ready_stories(plan_name: str) -> list[dict]:
     """
     Return stories whose dependencies are satisfied and that are still in
-    To Do. Use this to decide what to dispatch next.
+        To Do. Use this to decide what to dispatch next.
     """
-    _validate_key(plan_name)
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    if not manifest_path.exists():
-        return []
-
-    manifest = json.loads(manifest_path.read_text())
-    stories = manifest["stories"]
-    done = _completed_dep_ids(stories)
-
-    ready = []
-    for key, story in stories.items():
-        if story["status"] != "todo":
-            continue
-        deps_met = all(dep in done for dep in story["dependencies"])
-        if deps_met:
-            ready.append({"key": key, "summary": story["summary"]})
-    return ready
-
+    return _service.list_ready_stories(plan_name)
 
 @mcp.tool()
 def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:

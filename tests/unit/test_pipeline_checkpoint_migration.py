@@ -28,7 +28,7 @@ import pytest
 
 from pipeline import server as p
 
-
+# ---------- Structural requirements (the mechanical move) ----------
 # ---------- Structural requirements (the mechanical move) ----------
 
 def test_pipeline_service_has_checkpoint_method():

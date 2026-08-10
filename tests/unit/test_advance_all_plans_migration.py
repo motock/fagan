@@ -26,7 +26,6 @@ delegation path is exercised end-to-end.
 import inspect
 import json
 import re
-
 from pipeline import server as p
 
 

@@ -36,7 +36,7 @@ def test_pipeline_service_has_checkpoint_method():
     assert hasattr(p.PipelineService, "checkpoint"), (
         "PipelineService must define a `checkpoint` method"
     )
-    assert callable(getattr(p.PipelineService, "checkpoint"))
+    assert callable(p.PipelineService.checkpoint)
 
 
 def test_pipeline_service_checkpoint_takes_self_and_original_params():

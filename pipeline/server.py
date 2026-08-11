@@ -594,6 +594,9 @@ class PipelineService:
     ...)`` targets keep landing exactly as they did before the extraction.
     """
 
+    def get_effective_config(self, plan_name: str | None = None) -> dict[str, Any]:
+        return _get_effective_config_impl(plan_name)
+
     def pause_plan(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
         return _set_plan_paused(plan_name, True)
@@ -912,9 +915,10 @@ def get_role_config(plan_name: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_effective_config(plan_name: str | None = None) -> dict[str, Any]:
-    """
-    Read-only diagnostic snapshot of the pipeline's effective configuration:
+def get_effective_config(
+    plan_name: str | None = None,
+) -> dict[str, Any]:
+    """Read-only diagnostic snapshot of the pipeline's effective configuration:
     every role in config_provenance.PIPELINE_ROLES with its resolved
     (provider, model) and provenance, every cataloged env var's resolved
     value and provenance, any unrecognized/ignored env vars present, and
@@ -937,8 +941,12 @@ def get_effective_config(plan_name: str | None = None) -> dict[str, Any]:
     Pass plan_name to additionally layer in that plan's role_config
     overrides (same effect as get_role_config's plan_name); a plan_name
     whose manifest doesn't exist degrades to "no plan overrides" rather
-    than raising.
-    """
+    than raising."""
+    return _service.get_effective_config(plan_name)
+
+def _get_effective_config_impl(
+    plan_name: str | None = None,
+) -> dict[str, Any]:
     plan_role_config = _plan_role_config(plan_name) if plan_name else None
     model_fallbacks = {
         "overlord": lambda: _persona_default_model("overlord") or "opus",

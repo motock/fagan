@@ -2675,8 +2675,7 @@ def checkpoint(plan_name: str, story_key: str, step: str, summary: str, next_hin
     return _service.checkpoint(plan_name, story_key, step, summary, next_hint)
 
 
-@mcp.tool()
-def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
+def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Transition the ticket to Done and update the local manifest.
     Use after you've reviewed and merged the agent's PR.

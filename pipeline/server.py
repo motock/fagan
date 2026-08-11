@@ -884,8 +884,11 @@ class PipelineService:
                     "reason": "another advance_pipeline tick is already running for this plan",
                 }
             return _advance_pipeline_locked(plan_name)
+    def mark_story_done(self, plan_name: str, story_key: str) -> dict[str, Any]:
+        return _mark_story_done_impl(plan_name, story_key)
 
 _service = PipelineService()
+
 
 # ---------- Tools ----------
 @mcp.tool()
@@ -2674,6 +2677,13 @@ def checkpoint(plan_name: str, story_key: str, step: str, summary: str, next_hin
     """Record a durable checkpoint for a dispatched agent's progress. Commits any uncommitted work in the story's worktree as a WIP commit and appends an entry to the story's journal (plan.story.journal.json). Call this after completing each idempotent step of a story so a killed agent can resume from the last checkpoint instead of starting over."""
     return _service.checkpoint(plan_name, story_key, step, summary, next_hint)
 
+@mcp.tool()
+def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
+    """
+    Transition the ticket to Done and update the local manifest.
+    Use after you've reviewed and merged the agent's PR.
+    """
+    return _service.mark_story_done(plan_name, story_key)
 
 def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     """

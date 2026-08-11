@@ -883,7 +883,7 @@ class PipelineService:
                     "skipped": "locked",
                     "reason": "another advance_pipeline tick is already running for this plan",
                 }
-        return _advance_pipeline_locked(plan_name)
+            return _advance_pipeline_locked(plan_name)
 
 _service = PipelineService()
 

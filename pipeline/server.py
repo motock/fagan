@@ -890,8 +890,17 @@ class PipelineService:
     def mark_story_done(self, plan_name: str, story_key: str) -> dict[str, Any]:
         return _mark_story_done_impl(plan_name, story_key)
 
+    def check_usage(self) -> dict[str, Any]:
+        return _check_usage_impl()
+
 _service = PipelineService()
 
+
+@mcp.tool()
+
+def check_usage() -> dict[str, Any]:
+    """Probe current subscription usage (current session + current week) via a headless `/cost` call and persist it to USAGE_STATE_PATH."""
+    return _service.check_usage()
 
 # ---------- Tools ----------
 @mcp.tool()
@@ -2812,8 +2821,33 @@ def set_story_status(plan_name: str, story_key: str, status: str) -> dict[str, A
     return _service.set_story_status(plan_name, story_key, status)
 
 
-@mcp.tool()
-def check_usage() -> dict[str, Any]:
+def _check_usage_impl() -> dict[str, Any]:
+    """
+    Probe current subscription usage (current session + current week) via a
+    headless `/cost` call and persist it to USAGE_STATE_PATH.
+
+    Intended to be called every ~60s by an external poller (cron/launchd or
+    /loop). advance_pipeline reads the persisted state rather than probing
+    itself, decoupling the pipeline's tick cadence from the poller's.
+
+    The CLI occasionally omits the percentage summary lines (observed near
+    session-reset boundaries) without erroring, so a parse failure falls
+    back to the last persisted reading rather than crashing the caller's
+    tick - unless there is no prior reading to fall back to. If that frozen
+    reading is older than USAGE_STALE_AFTER_SECONDS, it's no longer trusted
+    as evidence of being over threshold, so the gate fails open instead of
+    blocking the pipeline indefinitely on a permanent CLI output change.
+
+    Staleness is measured from "measured_at" (the last time a probe actually
+    succeeded), not "checked_at" (bumped on every call, success or fallback).
+    A poller calling this every ~60s would otherwise perpetually look fresh
+    by checked_at's measure alone, even after hours of the CLI refusing to
+    parse - measured_at is carried forward unchanged across fallback calls
+    so the staleness clock keeps counting from the last real measurement.
+    """
+    return _service.check_usage()
+
+def _check_usage_impl() -> dict[str, Any]:
     """
     Probe current subscription usage (current session + current week) via a
     headless `/cost` call and persist it to USAGE_STATE_PATH.

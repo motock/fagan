@@ -874,6 +874,17 @@ class PipelineService:
                     "reason": "another dispatch/ingest/interrupt/review is in progress for this plan",
                 }
             return _original_review_story(plan_name, story_key)
+    def advance_pipeline(self, plan_name: str) -> dict[str, Any]:
+        _validate_key(plan_name)
+        with _plan_lock(plan_name) as acquired:
+            if not acquired:
+                return {
+                    "ok": True,
+                    "skipped": "locked",
+                    "reason": "another advance_pipeline tick is already running for this plan",
+                }
+            return _advance_pipeline_locked(plan_name)
+
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -3679,14 +3690,7 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
     Skips entirely (returns {"ok": True, "skipped": "locked"}) if another
     tick for this same plan is already running - see _plan_lock.
     """
-    with _plan_lock(plan_name) as acquired:
-        if not acquired:
-            return {
-                "ok": True,
-                "skipped": "locked",
-                "reason": "another advance_pipeline tick is already running for this plan",
-            }
-        return _advance_pipeline_locked(plan_name)
+    return _service.advance_pipeline(plan_name)
 
 
 def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:

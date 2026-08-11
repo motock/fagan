@@ -85,8 +85,7 @@ def test_advance_pipeline_serializes_concurrent_ticks(plan_dir, monkeypatch):
     def fake_tick(plan_name):
         with lock:
             max_concurrency["current"] += 1
-            if max_concurrency["current"] > max_concurrency["peak"]:
-                max_concurrency["peak"] = max_concurrency["current"]
+            max_concurrency["peak"] = max(max_concurrency["peak"], max_concurrency["current"])
         started.set()
         # Hold the "tick" open until the test releases it, simulating 200ms+
         # of real tick work during which a concurrent caller must be blocked.

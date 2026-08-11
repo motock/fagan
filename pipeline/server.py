@@ -729,14 +729,7 @@ class PipelineService:
                 f"must be one of {sorted(_VALID_STORY_STATUSES)}",
             }
 
-        # Detect manual lock file in plan directory for test compatibility
-        manual_lock_path = PLAN_DIR / plan_name / f"{plan_name}.lock"
-        if manual_lock_path.exists():
-            return {
-                "ok": True,
-                "skipped": "locked",
-                "reason": "another dispatch/ingest/interrupt is in progress for this plan",
-            }
+
         with _plan_lock(plan_name) as acquired:
             if not acquired:
                 return {

@@ -2750,32 +2750,7 @@ def patch_story(
     it. Only the fields above may be set; status transitions go through
     set_story_status, not this tool.
     """
-    _validate_key(plan_name)
-    _validate_key(story_key)
-    unknown = set(fields) - _PATCHABLE_STORY_FIELDS
-    if unknown:
-        return {
-            "ok": False,
-            "error": f"cannot patch field(s) {sorted(unknown)}: "
-            f"only {sorted(_PATCHABLE_STORY_FIELDS)} are editable",
-        }
-
-    with _plan_lock(plan_name) as acquired:
-        if not acquired:
-            return {
-                "ok": True,
-                "skipped": "locked",
-                "reason": "another dispatch/ingest/interrupt is in progress for this plan",
-            }
-        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-        manifest = json.loads(manifest_path.read_text())
-        story = manifest["stories"].get(story_key)
-        if story is None:
-            return {"ok": False, "error": f"No such story {story_key!r}"}
-        story.update(fields)
-        _atomic_write_json(manifest_path, manifest)
-        return {"ok": True, "story_key": story_key, "story": story}
-
+    return _service.patch_story(plan_name, story_key, fields)
 
 @mcp.tool()
 def set_story_status(plan_name: str, story_key: str, status: str) -> dict[str, Any]:

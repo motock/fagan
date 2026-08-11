@@ -612,6 +612,47 @@ class PipelineService:
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]
 
+    def request_decision(self,
+        plan_name: str,
+        story_key: str,
+        question: str,
+        options: list[str],
+        context: str = "",
+    ) -> dict[str, Any]:
+        """
+        Escalate a blocking decision to the overlord, which rules on the user's
+        behalf per the decision policy. The ruling is appended to the plan's
+        decisions log (audit trail) and returned. Call this from a story agent
+        when you are blocked on a choice the user would normally make.
+        """
+        _validate_key(plan_name)
+        _validate_key(story_key)
+        with _scoped_repo_root(plan_name):
+            policy = _load_policy()
+        opts = "\n".join(f"  - {o}" for o in options)
+        prompt = (
+            f"A pipeline agent working on story {story_key} is blocked on a decision.\n\n"
+            f"QUESTION: {question}\n\n"
+            f"OPTIONS:\n{opts}\n\n"
+            f"CONTEXT: {context}\n\n"
+            f"DECISION POLICY:\n{policy}\n\n"
+            f"Rule now, using your output contract exactly."
+        )
+        ruling = _parse_ruling(
+            _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
+        )
+        record = {
+            "story_key": story_key,
+            "question": question,
+            "options": list(options),
+            **ruling,
+            "decided_by": "overlord",
+            "decided_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _append_decision(plan_name, record)
+        return record
+
+
     def mark_story_in_progress(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
@@ -2821,32 +2862,13 @@ def request_decision(
     decisions log (audit trail) and returned. Call this from a story agent
     when you are blocked on a choice the user would normally make.
     """
-    _validate_key(plan_name)
-    _validate_key(story_key)
-    with _scoped_repo_root(plan_name):
-        policy = _load_policy()
-    opts = "\n".join(f"  - {o}" for o in options)
-    prompt = (
-        f"A pipeline agent working on story {story_key} is blocked on a decision.\n\n"
-        f"QUESTION: {question}\n\n"
-        f"OPTIONS:\n{opts}\n\n"
-        f"CONTEXT: {context}\n\n"
-        f"DECISION POLICY:\n{policy}\n\n"
-        f"Rule now, using your output contract exactly."
+    return _service.request_decision(
+        plan_name,
+        story_key,
+        question,
+        options,
+        context,
     )
-    ruling = _parse_ruling(
-        _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
-    )
-    record = {
-        "story_key": story_key,
-        "question": question,
-        "options": list(options),
-        **ruling,
-        "decided_by": "overlord",
-        "decided_at": datetime.now(timezone.utc).isoformat(),
-    }
-    _append_decision(plan_name, record)
-    return record
 
 
 @mcp.tool()

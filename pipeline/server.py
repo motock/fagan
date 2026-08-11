@@ -863,6 +863,17 @@ class PipelineService:
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "story_key": story_key, "story": story}
 
+    def review_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
+        _validate_key(plan_name)
+        _validate_key(story_key)
+        with _plan_lock(plan_name) as acquired:
+            if not acquired:
+                return {
+                    "ok": True,
+                    "skipped": "locked",
+                    "reason": "another dispatch/ingest/interrupt/review is in progress for this plan",
+                }
+            return _original_review_story(plan_name, story_key)
 _service = PipelineService()
 
 # ---------- Tools ----------
@@ -3637,16 +3648,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     (a stale/duplicate call, e.g. a second tick racing an already-merged
     story) is a no-op skip; see README.md's "Review & merge" section.
     """
-    _validate_key(plan_name)
-    _validate_key(story_key)
-    with _plan_lock(plan_name) as acquired:
-        if not acquired:
-            return {
-                "ok": True,
-                "skipped": "locked",
-                "reason": "another dispatch/ingest/interrupt/review is in progress for this plan",
-            }
-        return _original_review_story(plan_name, story_key)
+    return _service.review_story(plan_name, story_key)
 
 
 @mcp.tool()

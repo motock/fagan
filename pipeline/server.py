@@ -2815,9 +2815,7 @@ def set_story_status(plan_name: str, story_key: str, status: str) -> dict[str, A
     return _service.set_story_status(plan_name, story_key, status)
 
 
-@mcp.tool()
-
-def check_usage() -> dict[str, Any]:
+def _check_usage_impl() -> dict[str, Any]:
     """
     Probe current subscription usage (current session + current week) via a
     headless `/cost` call and persist it to USAGE_STATE_PATH.

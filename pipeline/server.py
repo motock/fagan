@@ -612,6 +612,48 @@ class PipelineService:
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]
 
+    def request_decision(
+        plan_name: str,
+        story_key: str,
+        question: str,
+        options: list[str],
+        context: str = "",
+    ) -> dict[str, Any]:
+        """
+        Escalate a blocking decision to the overlord, which rules on the user's
+        behalf per the decision policy. The ruling is appended to the plan's
+        decisions log (audit trail) and returned. Call this from a story agent
+        when you are blocked on a choice the user would normally make.
+        """
+        return _service.request_decision(
+            plan_name,
+            story_key,
+            question,
+            options,
+            context,
+        )
+
+    def request_decision(
+        plan_name: str,
+        story_key: str,
+        question: str,
+        options: list[str],
+        context: str = "",
+    ) -> dict[str, Any]:
+        """
+        Escalate a blocking decision to the overlord, which rules on the user's
+        behalf per the decision policy. The ruling is appended to the plan's
+        decisions log (audit trail) and returned. Call this from a story agent
+        when you are blocked on a choice the user would normally make.
+        """
+        return _service.request_decision(
+            plan_name,
+            story_key,
+            question,
+            options,
+            context,
+        )
+
     def mark_story_in_progress(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)

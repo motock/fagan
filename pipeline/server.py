@@ -896,6 +896,12 @@ class PipelineService:
 _service = PipelineService()
 
 
+@mcp.tool()
+
+def check_usage() -> dict[str, Any]:
+    """Probe current subscription usage (current session + current week) via a headless `/cost` call and persist it to USAGE_STATE_PATH."""
+    return _service.check_usage()
+
 # ---------- Tools ----------
 @mcp.tool()
 def get_role_config(plan_name: str | None = None) -> dict[str, Any]:

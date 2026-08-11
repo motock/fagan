@@ -729,7 +729,6 @@ class PipelineService:
                 f"must be one of {sorted(_VALID_STORY_STATUSES)}",
             }
 
-
         with _plan_lock(plan_name) as acquired:
             if not acquired:
                 return {
@@ -738,10 +737,7 @@ class PipelineService:
                     "reason": "another dispatch/ingest/interrupt is in progress for this plan",
                 }
             manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-            try:
-                manifest = json.loads(manifest_path.read_text())
-            except FileNotFoundError:
-                return {"ok": False, "error": f"Plan {plan_name!r} not found"}
+            manifest = json.loads(manifest_path.read_text())
             story = manifest["stories"].get(story_key)
             if story is None:
                 return {"ok": False, "error": f"No such story {story_key!r}"}

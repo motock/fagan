@@ -101,7 +101,7 @@ def test_advance_pipeline_serializes_concurrent_ticks(plan_dir, monkeypatch):
     def call_advance():
         try:
             results[threading.get_ident()] = p._service.advance_pipeline("advplan")
-        except Exception as exc:  # pragma: no cover - surface unexpected errors
+        except BaseException as exc:  # pragma: no cover - surface unexpected errors
             errors.append(exc)
 
     t1 = threading.Thread(target=call_advance)

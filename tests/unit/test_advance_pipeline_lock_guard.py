@@ -99,9 +99,16 @@ def test_advance_pipeline_serializes_concurrent_ticks(plan_dir, monkeypatch):
     errors = []
 
     def call_advance():
+        # Run in the thread; record any failure rather than letting it vanish
+        # into the thread's swallowed traceback.
         try:
             results[threading.get_ident()] = p._service.advance_pipeline("advplan")
-        except BaseException as exc:  # pragma: no cover - surface unexpected errors
+        except (  # pragma: no cover - surface unexpected errors
+            OSError,
+            KeyError,
+            ValueError,
+            RuntimeError,
+        ) as exc:
             errors.append(exc)
 
     t1 = threading.Thread(target=call_advance)

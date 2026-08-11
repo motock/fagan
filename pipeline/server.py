@@ -676,34 +676,8 @@ class PipelineService:
 
     
 
-    def interrupt_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
-        _validate_key(plan_name)
-        _validate_key(story_key)
-        with _plan_lock(plan_name) as acquired:
-            if not acquired:
-                return {
-                    "ok": True,
-                    "skipped": "locked",
-                    "reason": "another dispatch/interrupt is in progress for this plan",
-                }
-            manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-            manifest = json.loads(manifest_path.read_text())
-            story = manifest["stories"].get(story_key)
-            if not story:
-                return {"ok": False, "error": f"No such story {story_key}"}
-            if "pid" not in story:
-                return {"ok": False, "error": "Story not dispatched"}
-            sha = _terminate_and_checkpoint(
-                manifest,
-                manifest_path,
-                plan_name,
-                story_key,
-                story,
-                pid=story["pid"],
-                step="interrupted",
-                summary="Agent process terminated; checkpointed for resume.",
-            )
-            return {"ok": True, "status": "interrupted", "commit": sha}
+
+
 
     def interrupt_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)

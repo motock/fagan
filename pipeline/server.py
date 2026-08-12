@@ -884,6 +884,9 @@ class PipelineService:
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "story_key": story_key, "story": story}
 
+    def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
+        return _dispatch_story_impl(plan_name, story_key)
+
     def review_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
@@ -1320,6 +1323,10 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     same directory. That race is what produced the repeated zero-output
     agent deaths logged in 2026-06-27's e2e-decentralized-messaging run.
     """
+    return _service.dispatch_story(plan_name, story_key)
+
+
+def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
     with _plan_lock(plan_name) as acquired:

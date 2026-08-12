@@ -412,6 +412,15 @@ MAX_STEPS = int(os.environ.get("PIPELINE_TRANSPORT_MAX_STEPS", "40"))
 # failing excerpt fed back. Non-rework dispatches never set this, so their
 # done behavior (commit-enforced, no suite gate) is unchanged.
 REWORK_FULL_SUITE = os.environ.get("LOCAL_AGENT_REWORK_FULL_SUITE") == "1"
+# Same done-bar as REWORK_FULL_SUITE above, but armed on EVERY dispatch (not
+# just CI-fail-rework rounds). Running the full suite in-loop (the agent's
+# own responsibility on fresh dispatch) overflows the local agent's trimmed
+# context window on large suites, causing step-cap thrash even when the work
+# is already correct (live: W1a-11, 2026-08-10). Running it out-of-band here
+# keeps the agent's context clean: on pass, done proceeds; on fail, only the
+# failing tail is fed back. Default OFF (secure defaults / opt-in) so it does
+# not change behavior for dispatches that haven't opted in.
+FULL_SUITE_DONE_BAR = os.environ.get("LOCAL_AGENT_FULL_SUITE_DONE_BAR") == "1"
 # Cap consecutive assistant turns that emit no tool call. A weak model stuck
 # on a self-inflicted phantom failure — its own test asserts non-standard
 # behavior the correct implementation can never satisfy — will narrate its
@@ -2267,7 +2276,7 @@ def main() -> int:
                         # round, check the suite first; a failure WIP-commits
                         # (so the next attempt starts clean) and rejects instead
                         # of auto-accepting. Bounded by MAX_STEPS.
-                        if REWORK_FULL_SUITE:
+                        if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
                             suite_ok, suite_tail = _full_suite_result()
                             if not suite_ok:
                                 suite_rejections += 1
@@ -2296,7 +2305,7 @@ def main() -> int:
                 # green; otherwise feed the failing excerpt back and reject
                 # done so the agent fixes its own broken assertion (or the step
                 # cap binds). Non-rework dispatches skip this gate entirely.
-                if REWORK_FULL_SUITE:
+                if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
                     suite_ok, suite_tail = _full_suite_result()
                     if not suite_ok:
                         suite_rejections += 1

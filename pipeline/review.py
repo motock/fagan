@@ -104,6 +104,14 @@ def _run_reviewer(
         review_model_override = os.environ.get("PIPELINE_LOCAL_REVIEW_MODEL")
         if review_model_override:
             model = review_model_override
+    elif resolved_backend != resolution.provider:
+        # backend_name overrode the provider away from whichever provider
+        # resolution.model was actually paired with (e.g. an escalated
+        # review forcing "claude" while the registry's review role is
+        # ollama/glm) - resolution.model is a raw tag that belongs to the
+        # DISCARDED provider and must never be passed straight through as
+        # an invalid --model value to the new one.
+        model = _persona_default_model("code-reviewer") or DEFAULT_MODEL
     # Only pass an explicit resolved name to get_backend when a plan/registry
     # override actually named a provider - otherwise keep passing
     # backend_name (None in the common case) unchanged, so an unconfigured

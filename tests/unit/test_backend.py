@@ -14,6 +14,7 @@ import pytest
 
 from app import backend as b
 from app import backend_claude as bc
+from app import backend_ollama as bo
 
 
 # _chat was widened to return the full /api/chat envelope (not just the
@@ -855,7 +856,7 @@ def test_review_loop_truncates_tool_result_in_log_but_not_in_conversation(tmp_pa
     full text must still reach the model conversation unmodified."""
     driver = b.OllamaDriver()
     long_result = "X" * 3000
-    monkeypatch.setattr(b, "_run_readonly_tool", lambda fn, args, cwd: long_result)
+    monkeypatch.setattr(bo, "_run_readonly_tool", lambda fn, args, cwd: long_result)
 
     seen_messages = []
     responses = [
@@ -909,7 +910,7 @@ def _review_trim_spy(monkeypatch):
         budgets.append(max_chars)
         return real(messages, max_chars)
 
-    monkeypatch.setattr(b, "_trim_review_transcript", _spy)
+    monkeypatch.setattr(bo, "_trim_review_transcript", _spy)
     return budgets
 
 
@@ -943,7 +944,7 @@ def test_review_loop_proactively_trims_when_measured_tokens_near_num_ctx(tmp_pat
     the loop attempt a trim before the next turn."""
     driver = b.OllamaDriver()
     monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "1000")
-    monkeypatch.setattr(b, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
+    monkeypatch.setattr(bo, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
     budgets = _review_trim_spy(monkeypatch)
     monkeypatch.setattr(driver, "_chat", _fake_review_chat())
 
@@ -982,7 +983,7 @@ def test_review_loop_trim_budget_is_calibrated_not_fixed_ratio(tmp_path, monkeyp
     the very 500 it exists to prevent."""
     driver = b.OllamaDriver()
     monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "1000")
-    monkeypatch.setattr(b, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
+    monkeypatch.setattr(bo, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
     budgets = _review_trim_spy(monkeypatch)
     monkeypatch.setattr(driver, "_chat", _fake_review_chat())
 
@@ -1011,7 +1012,7 @@ def test_review_loop_does_not_trim_when_below_threshold(tmp_path, monkeypatch):
     # A context window far larger than anything this short review accumulates,
     # so the threshold is never legitimately reached.
     monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "100000")
-    monkeypatch.setattr(b, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
+    monkeypatch.setattr(bo, "REVIEW_PROACTIVE_TRIM_THRESHOLD", 0.85)
     budgets = _review_trim_spy(monkeypatch)
     monkeypatch.setattr(driver, "_chat", _fake_review_chat())
 
@@ -1220,7 +1221,7 @@ def test_ollama_resource_status_not_ok_when_model_too_large_for_total_ram(monkey
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b")
     driver = b.OllamaDriver()
     monkeypatch.setattr(driver, "_free_memory_mb", lambda: 20000)  # floor is satisfied
-    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+    monkeypatch.setattr(bo, "_total_memory_mb", lambda: 24576)
 
     status = driver.resource_status()
 
@@ -1239,7 +1240,7 @@ def test_ollama_resource_status_ok_for_validated_workhorse_model(monkeypatch):
     driver = b.OllamaDriver()
     # The live free-memory reading that the old floor+weights math rejected.
     monkeypatch.setattr(driver, "_free_memory_mb", lambda: 10837)
-    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+    monkeypatch.setattr(bo, "_total_memory_mb", lambda: 24576)
 
     status = driver.resource_status()
 
@@ -1254,7 +1255,7 @@ def test_ollama_resource_status_model_size_check_fails_open_when_total_ram_unkno
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b")
     driver = b.OllamaDriver()
     monkeypatch.setattr(driver, "_free_memory_mb", lambda: 20000)
-    monkeypatch.setattr(b, "_total_memory_mb", lambda: None)  # non-macOS / sysctl failure
+    monkeypatch.setattr(bo, "_total_memory_mb", lambda: None)  # non-macOS / sysctl failure
 
     assert driver.resource_status()["ok"] is True
 
@@ -1265,7 +1266,7 @@ def test_ollama_resource_status_model_size_check_falls_open_when_tag_unknown(mon
     monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({"models": []}))
     driver = b.OllamaDriver()
     monkeypatch.setattr(driver, "_free_memory_mb", lambda: 4096)
-    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+    monkeypatch.setattr(bo, "_total_memory_mb", lambda: 24576)
 
     assert driver.resource_status()["ok"] is True
 
@@ -1278,7 +1279,7 @@ def test_ollama_resource_status_cloud_model_zero_size_never_gated(monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "glm-5.2:cloud")
     driver = b.OllamaDriver()
     monkeypatch.setattr(driver, "_free_memory_mb", lambda: 4096)
-    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+    monkeypatch.setattr(bo, "_total_memory_mb", lambda: 24576)
 
     assert driver.resource_status()["ok"] is True
 
@@ -1290,7 +1291,7 @@ def test_ollama_resource_status_model_size_fraction_is_configurable(monkeypatch)
     monkeypatch.setenv("PIPELINE_LOCAL_MAX_MODEL_RAM_FRACTION", "0.4")  # stricter than 53.5%
     driver = b.OllamaDriver()
     monkeypatch.setattr(driver, "_free_memory_mb", lambda: 20000)
-    monkeypatch.setattr(b, "_total_memory_mb", lambda: 24576)
+    monkeypatch.setattr(bo, "_total_memory_mb", lambda: 24576)
 
     assert driver.resource_status()["ok"] is False
 
@@ -2537,7 +2538,7 @@ def test_chat_uses_tuned_table_values_when_present_and_no_env_override(monkeypat
     monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
     monkeypatch.setattr(
-        b, "_LOCAL_MODEL_TUNING",
+        bo, "_LOCAL_MODEL_TUNING",
         {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
     )
 
@@ -2567,7 +2568,7 @@ def test_dispatch_uses_tuned_table_values_when_present_and_no_env_override(
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
     monkeypatch.setattr(
-        b, "_LOCAL_MODEL_TUNING",
+        bo, "_LOCAL_MODEL_TUNING",
         {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
     )
 
@@ -2593,7 +2594,7 @@ def test_chat_env_override_wins_over_tuned_table(monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
     monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "1.0")
     monkeypatch.setattr(
-        b, "_LOCAL_MODEL_TUNING",
+        bo, "_LOCAL_MODEL_TUNING",
         {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
     )
 
@@ -2619,7 +2620,7 @@ def test_dispatch_env_override_wins_over_tuned_table(tmp_path, monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "1.0")
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
     monkeypatch.setattr(
-        b, "_LOCAL_MODEL_TUNING",
+        bo, "_LOCAL_MODEL_TUNING",
         {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
     )
 
@@ -2712,7 +2713,7 @@ def test_chat_partial_table_entry_only_overrides_the_key_present(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
     monkeypatch.setattr(
-        b, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"temperature": 0.5}},
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"temperature": 0.5}},
     )
 
     captured = {}
@@ -2740,7 +2741,7 @@ def test_dispatch_partial_table_entry_only_overrides_the_key_present(
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
     monkeypatch.setattr(
-        b, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"num_ctx": 8192}},
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"num_ctx": 8192}},
     )
 
     captured = {}
@@ -2932,7 +2933,7 @@ def test_review_loop_preamble_mentions_diff_stat():
     guidance and a multi-file change can be silently cut off. Assert by
     inspecting the module source directly (the preamble is a multi-line
     string built inside _review_loop)."""
-    module_src = open(b.__file__).read()  # noqa: SIM115 (existing test; not modified per workflow rule against touching tests without approval)
+    module_src = open(bo.__file__).read()  # noqa: SIM115 (existing test; not modified per workflow rule against touching tests without approval)
     assert "git diff --stat" in module_src, (
         "reviewer preamble must mention `git diff --stat` so the model "
         "scopes large diffs before reading them"

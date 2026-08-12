@@ -1088,6 +1088,9 @@ def ingest_plan(
     over untouched. Pass overwrite=True to restore the old wholesale-replace
     behavior (drops anything not produced by this call).
     """
+    _isolation_only_acceptance_warning({})
+    _scaffolding_provider_mismatch_warning({})
+    _platform_locked_fixture_warning({})
     return _service.ingest_plan(plan_name, only_epics=only_epics, overwrite=overwrite)
 
 def _ingest_plan_impl(
@@ -1248,6 +1251,10 @@ def _ingest_plan_impl(
         final_manifest["epics"] = merged_epics
         final_manifest["stories"] = merged_stories
         final_manifest["repo_root"] = repo_root
+        # Preserve any other top-level keys from the previous manifest that are not overwritten.
+        for key, val in prior.items():
+            if key not in ("epics", "stories", "repo_root", "role_config"):
+                final_manifest.setdefault(key, val)
         final_manifest["role_config"] = plan.get(
             "role_config", prior.get("role_config", {})
         )

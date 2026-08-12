@@ -404,11 +404,18 @@ def destructive_git_op(cmd: str) -> str | None:
     return None
 
 
-def _loads_tolerant(candidate):
+def _loads_tolerant(candidate, repair_triple_quoted_strings=None):
     """json.loads, tolerating raw control characters inside strings, with a
     triple-quote repair pass as a further fallback. Valid JSON is never
     transformed - both fallbacks only ever ACCEPT more inputs than a strict
     parse would, never reinterpret one that already parses.
+
+    `repair_triple_quoted_strings` is injected by the caller rather than
+    imported here: local_agent.py and local_agent_oracle.py each keep their
+    own (verified diverged) copy of that function file-local, so this shared
+    module never imports a copy that could silently drift from whichever one
+    a caller actually needs. Passing None (the default) simply skips that
+    fallback stage.
 
     strict=False (observed live, 2026-07-17, Qwen2.5-Coder-14B-4bit on mlx,
     interval_merge task): a distinct malformation from the triple-quote case
@@ -427,16 +434,17 @@ def _loads_tolerant(candidate):
         return json.loads(candidate, strict=False)
     except json.JSONDecodeError:
         pass
-    repaired = _repair_triple_quoted_strings(candidate)  # noqa: F821 (stays file-local in local_agent.py/local_agent_oracle.py; wired up by a follow-up story)
-    if repaired != candidate:
-        try:
-            return json.loads(repaired, strict=False)
-        except json.JSONDecodeError:
-            pass
+    if repair_triple_quoted_strings is not None:
+        repaired = repair_triple_quoted_strings(candidate)
+        if repaired != candidate:
+            try:
+                return json.loads(repaired, strict=False)
+            except json.JSONDecodeError:
+                pass
     return None
 
 
-def recover_tool_calls(content):
+def recover_tool_calls(content, repair_triple_quoted_strings=None):
     """Pull a tool call out of message text when the native field is empty."""
     if not content:
         return None
@@ -446,7 +454,7 @@ def recover_tool_calls(content):
     if m:
         candidates.append(m.group(1))
     for c in candidates:
-        obj = _loads_tolerant(c)
+        obj = _loads_tolerant(c, repair_triple_quoted_strings)
         if obj is None:
             continue
         items = obj if isinstance(obj, list) else [obj]

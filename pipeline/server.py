@@ -3946,7 +3946,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         # failure (on Claude), or any failure under an explicit
                         # non-auto backend, is terminal.
                         if (
-                            dispatch_mode == "auto"
+                            _auto_escalation_enabled()
                             and story.get("backend") == "local"
                             and not story.get("escalated")
                         ):

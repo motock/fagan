@@ -109,7 +109,8 @@ def _ci_status(branch: str, *, sha: str, timeout_s=None) -> dict[str, str]:
                 return {"state": "pending", "error": ""}
 
             if any(c.get("status") != "completed" for c in runs):
-                return {"state": "pending", "error": ""}
+                time.sleep(10)
+                continue
 
             conclusions = {c.get("conclusion") for c in runs}
             if conclusions & {"failure", "timed_out", "action_required"}:
@@ -225,9 +226,9 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
             # CI configured but no run yet – pending.
             return {"state": "pending", "error": ""}
 
-        if any(c.get("status") != "completed" for c in runs):
-            # CI still running – keep looping until timeout.
-            pass
+            if any(c.get("status") != "completed" for c in runs):
+                # CI still running – keep looping until timeout.
+                pass
         conclusions = {c.get("conclusion") for c in runs}
         if conclusions & {"failure", "timed_out", "action_required"}:
             return {

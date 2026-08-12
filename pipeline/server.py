@@ -18,7 +18,7 @@ Ticketing backend (optional - see TicketProvider / get_ticket_provider below):
     none:  force the no-op provider even if PLANE_* is configured.
     plane: force Plane; errors at call time if PLANE_* is incomplete.
     jira:  documented stub only - selecting it succeeds, but every method
-           raises NotImplementedError (see TICKETING_ABSTRACTION_PLAN.md S5).
+                raises NotImplementedError (see TICKETING_ABSTRACTION_PLAN.md S5).
   A ticketing backend is entirely optional: the pipeline runs fully off its
   local manifest (ingest_plan/dispatch_story/mark_story_done/...) with no
   backend configured at all.
@@ -4437,3 +4437,6 @@ def advance_all_plans() -> dict[str, Any]:
 
 if __name__ == "__main__":
     mcp.run()
+# A-posteriori escalation of a failed local run to Claude is gated by
+# _auto_escalation_enabled() (PIPELINE_AUTO_ESCALATE, falling back to
+# PIPELINE_BACKEND_DISPATCH=="auto" when unset - see pipeline/escalation.py).

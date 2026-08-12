@@ -364,6 +364,18 @@ from .usage import (  # noqa: F401
 )
 
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
+PIPELINE_SELF_REPO_ROOT = Path(__file__).resolve().parent.parent
+RETRO_PENDING_PATH = PIPELINE_SELF_REPO_ROOT / "retros" / "PENDING.md"
+
+def _record_retro_pending(plan_name: str, story_count: int) -> None:
+    RETRO_PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
+    existing_lines = RETRO_PENDING_PATH.read_text().splitlines() if RETRO_PENDING_PATH.exists() else []
+    marker = f"- {plan_name} "
+    if any(line.startswith(marker) for line in existing_lines):
+        return
+    date = datetime.now(timezone.utc).date().isoformat()
+    with RETRO_PENDING_PATH.open("a") as f:
+        f.write(f"- {plan_name} \u2014 completed {date}, {story_count} stories\n")
 
 PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -2734,6 +2746,8 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     # Check if all stories are now done
     all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
     if all_done:
+        if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):
+            _record_retro_pending(plan_name, len(manifest["stories"]))
         return {
             "ok": True,
             "plan_completed": True,

@@ -1344,6 +1344,158 @@ def test_mark_story_done_parked_story_does_not_count_as_done(plan_dir, monkeypat
     assert manifest["stories"]["S2"]["status"] == "parked"
 
 
+# ---------- mark_story_done retro PENDING.md tracking ----------
+# When the last story of a plan whose top-level manifest repo_root equals this
+# pipeline's own repo (PIPELINE_SELF_REPO_ROOT) completes, mark_story_done must
+# append a line to RETRO_PENDING_PATH so a retrospective gets queued. Plans
+# rooted in some other repo (external game/app plans dispatched through this
+# pipeline) must NOT get a PENDING.md entry. The write must be idempotent and
+# must only happen on the FINAL story (plan_completed), not every story.
+
+@pytest.fixture
+def retro_pending_path(tmp_path, monkeypatch):
+    self_root = tmp_path / "self_repo"
+    pending = self_root / "retros" / "PENDING.md"
+    # raising=False so the fixture itself doesn't error before the
+    # implementation adds these names; the test bodies then fail with
+    # AssertionError on the missing behavior instead.
+    monkeypatch.setattr(p, "PIPELINE_SELF_REPO_ROOT", self_root, raising=False)
+    monkeypatch.setattr(p, "RETRO_PENDING_PATH", pending, raising=False)
+    return pending
+
+
+def _write_manifest_with_repo_root(plan_dir, plan_name, stories, repo_root):
+    """Like _write_manifest but adds a top-level repo_root key, which the
+    retro-pending scoping rule keys off of."""
+    (plan_dir / f"{plan_name}.manifest.json").write_text(
+        json.dumps(
+            {"epics": {}, "stories": stories, "repo_root": repo_root}, indent=2
+        )
+    )
+
+
+def test_mark_story_done_records_retro_pending_for_self_repo_plan(
+    plan_dir, monkeypatch, retro_pending_path
+):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    self_root = p.PIPELINE_SELF_REPO_ROOT
+    _write_manifest_with_repo_root(plan_dir, "rp1", {
+        "S1": {"status": "done"},
+        "S2": {"status": "todo"},
+    }, str(self_root))
+    result = p.mark_story_done("rp1", "S2")
+    assert result["ok"] is True
+    assert result.get("plan_completed") is True
+    # PENDING.md must now exist and contain a line starting with the plan name.
+    assert retro_pending_path.exists()
+    content = retro_pending_path.read_text()
+    lines = content.splitlines()
+    matching = [ln for ln in lines if ln.startswith("- rp1 ")]
+    assert len(matching) == 1
+    # The line must carry the story count.
+    assert "2 stories" in matching[0]
+
+
+def test_mark_story_done_skips_retro_pending_for_non_self_repo_plan(
+    plan_dir, monkeypatch, retro_pending_path
+):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    _write_manifest_with_repo_root(plan_dir, "rp2", {
+        "S1": {"status": "done"},
+        "S2": {"status": "todo"},
+    }, "/some/other/repo")
+    result = p.mark_story_done("rp2", "S2")
+    assert result["ok"] is True
+    assert result.get("plan_completed") is True
+    # External-repo plan: no PENDING.md entry at all.
+    assert not retro_pending_path.exists()
+
+
+def test_mark_story_done_skips_retro_pending_when_repo_root_absent(
+    plan_dir, monkeypatch, retro_pending_path
+):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    # No repo_root key at all -> not a self-repo plan.
+    _write_manifest(plan_dir, "rp2b", {
+        "S1": {"status": "done"},
+        "S2": {"status": "todo"},
+    })
+    result = p.mark_story_done("rp2b", "S2")
+    assert result["ok"] is True
+    assert result.get("plan_completed") is True
+    assert not retro_pending_path.exists()
+
+
+def test_mark_story_done_retro_pending_is_idempotent(
+    plan_dir, monkeypatch, retro_pending_path
+):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    self_root = p.PIPELINE_SELF_REPO_ROOT
+    # Pre-create PENDING.md with an existing line for this plan.
+    retro_pending_path.parent.mkdir(parents=True, exist_ok=True)
+    retro_pending_path.write_text("- myplan \u2014 completed 2026-01-01, 1 stories\n")
+    _write_manifest_with_repo_root(plan_dir, "myplan", {
+        "S1": {"status": "done"},
+        "S2": {"status": "todo"},
+    }, str(self_root))
+    result = p.mark_story_done("myplan", "S2")
+    assert result["ok"] is True
+    assert result.get("plan_completed") is True
+    content = retro_pending_path.read_text()
+    lines = content.splitlines()
+    matching = [ln for ln in lines if ln.startswith("- myplan ")]
+    # Exactly one line — no duplicate appended.
+    assert len(matching) == 1
+    assert matching[0] == "- myplan \u2014 completed 2026-01-01, 1 stories"
+
+
+def test_mark_story_done_no_retro_pending_write_when_plan_not_yet_complete(
+    plan_dir, monkeypatch, retro_pending_path
+):
+    monkeypatch.setattr(p, "get_ticket_provider", lambda: _NullSetStateProvider())
+    self_root = p.PIPELINE_SELF_REPO_ROOT
+    _write_manifest_with_repo_root(plan_dir, "rp4", {
+        "S1": {"status": "todo"},
+        "S2": {"status": "todo"},
+    }, str(self_root))
+    # Complete only one of two stories — plan not yet complete.
+    result = p.mark_story_done("rp4", "S1")
+    assert result["ok"] is True
+    assert "plan_completed" not in result
+    assert result == {"ok": True}
+    # Must NOT have written a PENDING.md entry on a non-final story.
+    assert not retro_pending_path.exists()
+
+
+def test_pipeline_self_repo_root_and_retro_pending_path_constants_exist():
+    # The two new module-level constants must exist and be Path objects.
+    assert hasattr(p, "PIPELINE_SELF_REPO_ROOT")
+    assert hasattr(p, "RETRO_PENDING_PATH")
+    from pathlib import Path as _Path
+    assert isinstance(p.PIPELINE_SELF_REPO_ROOT, _Path)
+    assert isinstance(p.RETRO_PENDING_PATH, _Path)
+    # RETRO_PENDING_PATH must be PIPELINE_SELF_REPO_ROOT / "retros" / "PENDING.md".
+    assert p.RETRO_PENDING_PATH == p.PIPELINE_SELF_REPO_ROOT / "retros" / "PENDING.md"
+    # PIPELINE_SELF_REPO_ROOT must resolve to this repo's own root (server.py
+    # lives at pipeline/server.py, so parent.parent is the repo root).
+    assert p.PIPELINE_SELF_REPO_ROOT == _Path(p.__file__).resolve().parent.parent
+
+
+def test_record_retro_pending_helper_writes_expected_line(tmp_path, monkeypatch):
+    # The _record_retro_pending helper must exist and write a single line.
+    self_root = tmp_path / "self_repo"
+    pending = self_root / "retros" / "PENDING.md"
+    monkeypatch.setattr(p, "PIPELINE_SELF_REPO_ROOT", self_root, raising=False)
+    monkeypatch.setattr(p, "RETRO_PENDING_PATH", pending, raising=False)
+    assert hasattr(p, "_record_retro_pending")
+    p._record_retro_pending("helperplan", 3)
+    assert pending.exists()
+    line = pending.read_text()
+    assert line.startswith("- helperplan ")
+    assert "3 stories" in line
+    assert "completed" in line
+
+
 # ---------- patch_story / set_story_status (T2) ----------
 # These give a caller a sanctioned, lock-serialized way to edit a story's
 # authored fields or transition its status, so nobody needs to hand-edit the

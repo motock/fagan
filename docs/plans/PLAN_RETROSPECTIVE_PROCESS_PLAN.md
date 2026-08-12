@@ -1,6 +1,15 @@
 # Plan retrospective process
 
-**Status:** proposed 2026-07-21, not yet implemented.
+**Status:** partially implemented. The `mark_story_done` completion signal
+(§2, transient `plan_completed: true` return value) shipped 2026-07-21
+(#156) and works, but the loop it was meant to feed went dormant
+immediately: it depends on an interactive session catching that return
+value mid-conversation, and across 100+ plans completed since then, that
+happened exactly zero times outside the day it shipped. Confirmed
+2026-08-12 — see `retros/PENDING.md` for the backlog this gap left behind
+and §2.1 below for the durable-marker fix filed to close it
+(`retro-pending-marker` plan, story `b25dc05a-...`, pending pipeline
+dispatch as of this writing).
 **Scope:** institutionalize what has so far happened ad hoc three times
 (`HARNESS_RETRO_TDDSPLIT_2026_07_21.md` and its two unnamed predecessors baked
 into `MATURITY_AND_UNIQUENESS_PLANS.md`'s Modes list) — a retro written after a
@@ -80,6 +89,39 @@ Concretely:
   existing dispatch/review loop isn't built to grade against an oracle. This
   mirrors how the three precedent retros were actually produced: written
   in-session by Claude, not dispatched.
+
+## 2.1. Durable marker (fixing the dormancy)
+
+The original design in §2 relied on the interactive session noticing
+`plan_completed: true` in a single tool-call return value. In practice that
+signal is easy to miss mid-conversation, and it was missed on every one of
+the 58 pipeline-repo plans that went fully done between 2026-07-21 and
+2026-08-12 (only the 2 plans that completed on the shipping day itself got
+a retro). A transient return value with no persisted state is not
+"discoverable by a future session" per §1 goal 4 — it disappears the
+instant the turn that received it ends.
+
+The fix (filed as the `retro-pending-marker` plan): when `mark_story_done`
+detects a plan's last story going done (§2's existing check), it now also
+appends an idempotent line to `retros/PENDING.md` — but **only when the
+manifest's `repo_root` equals this pipeline repo's own root**. That scoping
+rule is deliberate, not an oversight: `repo_root` already distinguishes
+pipeline self-improvement plans from the far larger set of external
+game/app plans dispatched *through* this pipeline (checked against real
+data — every plan that has ever received a retro has `repo_root` pointing
+at this repo; zero of the ~70 external game-dev plans do). Retros are about
+harness improvement, not grading every dispatched feature; widening the net
+to all plans would flood `PENDING.md` with noise the retro process was
+never meant to carry (see "Log signal, not noise" in this repo's
+CLAUDE.md).
+
+`retros/PENDING.md` is the new discoverability surface `§1` goal 4 asked
+for: a plain file, in the same directory as `INDEX.md`, that any future
+session sees just by looking at `retros/`. Once a retro is written for an
+entry, remove that entry's line from `PENDING.md` by hand — the same manual
+curation `INDEX.md` already gets (§2's existing precedent), not automated
+(§6 still applies: retro *authorship* stays out of scope for automation,
+only the "don't forget it needs one" signal is now durable).
 
 ## 3. Retro template (content requirements)
 

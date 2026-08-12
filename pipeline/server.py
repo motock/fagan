@@ -2746,6 +2746,8 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     # Check if all stories are now done
     all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
     if all_done:
+        if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):
+            _record_retro_pending(plan_name, len(manifest["stories"]))
         return {
             "ok": True,
             "plan_completed": True,

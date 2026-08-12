@@ -35,7 +35,7 @@ def test_story_without_acceptance_yields_no_digests():
 
 
 def test_dispatch_story_records_the_digests_on_the_story():
-    src = inspect.getsource(srv.mcp._tool_manager._tools["dispatch_story"].fn)
+    src = inspect.getsource(srv._dispatch_story_impl)
     assert "acceptance_digests" in src, (
         "dispatch_story must record the digests; nothing downstream can detect "
         "tampering without them"

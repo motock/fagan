@@ -63,7 +63,7 @@ def test_unconfigured_role_notifies(monkeypatch):
 def test_the_dispatch_call_site_passes_plan_name():
     import pipeline.server as srv
 
-    src = inspect.getsource(srv.mcp._tool_manager._tools["dispatch_story"].fn)
+    src = inspect.getsource(srv._dispatch_story_impl)
     # Anchor on the actual call (with its opening paren), not an earlier
     # comment mentioning the function name.
     call = src.index("_run_test_author_phase(")

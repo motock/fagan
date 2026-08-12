@@ -12,12 +12,19 @@ import pipeline.server as srv
 
 
 def _dispatch_source():
-    tool = srv.mcp._tool_manager._tools["dispatch_story"]
-    return inspect.getsource(tool.fn)
+    return inspect.getsource(srv._dispatch_story_impl)
 
 
 def test_dispatch_story_is_still_registered_as_a_tool():
     assert "dispatch_story" in srv.mcp._tool_manager._tools
+
+
+def test_the_registered_tool_delegates_to_the_impl():
+    # Guards the wrapper -> _dispatch_story_impl wiring itself, since the
+    # tests below introspect _dispatch_story_impl's source directly and so
+    # cannot detect a broken/bypassed delegation (matches the identity
+    # pattern used for review_story and get_effective_config).
+    assert srv.mcp._tool_manager._tools["dispatch_story"].fn is srv.dispatch_story
 
 
 def test_dispatch_story_calls_the_oracle_gate():

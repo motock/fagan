@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from app import backend as b
+from app import backend_claude as bc
 
 
 # _chat was widened to return the full /api/chat envelope (not just the
@@ -1720,7 +1721,7 @@ def test_complete_skips_identity_check_for_unrecognized_tier(tmp_path, monkeypat
 
 # ---------- T3: fail-closed identity preflight wired into resource_status() ----------
 def test_verify_identity_returns_ok_true_for_genuine_anthropic_response(monkeypatch):
-    monkeypatch.setattr(b, "_claude_identity_status", None)
+    monkeypatch.setattr(bc, "_claude_identity_status", None)
     payload = {"model": "claude-sonnet-4-5-20260101"}
     monkeypatch.setattr(
         b.subprocess, "run",
@@ -1735,7 +1736,7 @@ def test_verify_identity_returns_ok_true_for_genuine_anthropic_response(monkeypa
 
 
 def test_verify_identity_returns_ok_false_for_non_anthropic_model(monkeypatch):
-    monkeypatch.setattr(b, "_claude_identity_status", None)
+    monkeypatch.setattr(bc, "_claude_identity_status", None)
     payload = {"model": "mistral-large-2"}
     monkeypatch.setattr(
         b.subprocess, "run",
@@ -1751,7 +1752,7 @@ def test_verify_identity_returns_ok_false_for_non_anthropic_model(monkeypatch):
 
 
 def test_verify_identity_caches_result_and_does_not_reprobe(monkeypatch):
-    monkeypatch.setattr(b, "_claude_identity_status", None)
+    monkeypatch.setattr(bc, "_claude_identity_status", None)
     calls = []
 
     def _fake_run(cmd, capture_output, text, env=None):
@@ -1772,7 +1773,7 @@ def test_resource_status_reflects_failed_identity_check_same_as_usage_pause(monk
     from app import pipeline_mcp_server as p
     monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": False})
     monkeypatch.setattr(
-        b, "_claude_identity_status",
+        bc, "_claude_identity_status",
         {"ok": False, "model": "mistral-large-2",
          "reason": "Claude backend identity check failed: served 'mistral-large-2', expected claude-sonnet-*"},
     )
@@ -1789,7 +1790,7 @@ def test_resource_status_ok_when_identity_not_yet_checked(monkeypatch):
     existing fail-open behavior for missing usage state."""
     from app import pipeline_mcp_server as p
     monkeypatch.setattr(p, "_read_usage_state", lambda: {"paused": False})
-    monkeypatch.setattr(b, "_claude_identity_status", None)
+    monkeypatch.setattr(bc, "_claude_identity_status", None)
 
     assert b.ClaudeCliDriver().resource_status()["ok"] is True
 

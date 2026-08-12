@@ -3806,13 +3806,6 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     review_ok, review_reason = _role_resource_ok(
         "review", plan_role_config=manifest.get("role_config")
     )
-    # A-posteriori escalation of a failed local run to Claude is a feature of
-    # auto dispatch only. Under an explicit local (or claude) backend the
-    # operator has pinned the dispatcher on purpose, so a local failure is
-    # terminal rather than silently spending Claude.
-    dispatch_mode = (
-        os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
-    )
 
     done = _completed_dep_ids(stories)
     ready = [

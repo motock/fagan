@@ -293,7 +293,7 @@ def _ci_status(
             # Pending otherwise.
             return {"state": "pending", "error": ""}
 
-    __all__.append("_ci_status_once")
+    
 
 
 
@@ -507,6 +507,7 @@ __all__ = [
     "_acceptance_tampered",
     "_ci_rerun",
     "_ci_status",
+    "_ci_status_once",
     "_repo_has_ci_configured",
     "_reverify_acceptance",
     "_reverify_build",

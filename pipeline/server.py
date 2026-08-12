@@ -1067,8 +1067,7 @@ _INGEST_AUTHORED_STORY_FIELDS = (
 # resolves it to "local"/"claude" first, per PIPELINE_BACKEND_DISPATCH=auto).
 _VALID_STORY_BACKENDS = frozenset(backend._DRIVERS) | {"auto"}
 
-@mcp.tool()
-def ingest_plan(
+def _ingest_plan_impl(
     plan_name: str,
     only_epics: list[str] | None = None,
     overwrite: bool = False,

@@ -10962,6 +10962,146 @@ def test_advance_pipeline_does_not_escalate_already_escalated(
     assert "S1" in result.get("failed", [])
 
 
+def test_advance_pipeline_escalates_local_failure_under_explicit_local_dispatch_with_auto_escalate_flag(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A local agent failure escalates to Claude even when the dispatcher is
+    explicitly pinned to ``local`` (PIPELINE_BACKEND_DISPATCH=local), as long
+    as PIPELINE_AUTO_ESCALATE=1 turns the a-posteriori escalation gate on.
+
+    This is the third escalation call site in advance_pipeline (the
+    a-posteriori local-failure escalation). Before the fix it used a raw
+    ``dispatch_mode == "auto"`` comparison, so under an explicit local backend
+    escalation never fired and the story terminal-failed instead. After the fix
+    it consults ``_auto_escalation_enabled()`` and honors the explicit opt-in.
+    """
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    _write_manifest(plan_dir, "esc4", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "in_progress", "pid": 9004,
+               "worktree": str(worktree_path),
+               "log": str(worktree_path / "agent.log"),
+               "backend": "local", "dependencies": []},
+    })
+
+    class _FailResult:
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setenv("PIPELINE_AUTO_ESCALATE", "1")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    def _fake_subprocess(cmd, **kw):
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+
+    result = p.advance_pipeline("esc4")
+
+    manifest = _read_manifest(plan_dir, "esc4")
+    story = manifest["stories"]["S1"]
+    assert story["backend"] == "claude"
+    assert story["status"] == "todo"
+    assert story["escalated"] is True
+    assert "pid" not in story
+    assert "S1" not in result.get("failed", [])
+    notif = (plan_dir / "esc4.notifications.log").read_text()
+    assert "escalating to Claude" in notif
+
+
+def test_advance_pipeline_does_not_escalate_local_failure_when_auto_escalate_explicitly_off(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """When PIPELINE_AUTO_ESCALATE=0 (explicit opt-out), a failing local story
+    under auto dispatch does NOT escalate to Claude - it terminal-fails.
+
+    This confirms the explicit opt-out (already proven at the escalation.py
+    unit level in tests/unit/test_acceptance_autonomy_escalate_flag.py) is also
+    honored at this specific a-posteriori call site in advance_pipeline, which
+    was never covered here before. Before the fix this call site ignored
+    PIPELINE_AUTO_ESCALATE entirely (it only checked dispatch_mode=="auto"),
+    so the opt-out would have been silently bypassed and escalation would have
+    fired anyway.
+    """
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    _write_manifest(plan_dir, "esc5", {
+        "S1": {"summary": "Thing", "agent_instructions": "Build.",
+               "status": "in_progress", "pid": 9005,
+               "worktree": str(worktree_path),
+               "log": str(worktree_path / "agent.log"),
+               "backend": "local", "dependencies": []},
+    })
+
+    class _FailResult:
+        stdout = "test failed"
+        stderr = ""
+        returncode = 1
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "auto")
+    monkeypatch.setenv("PIPELINE_AUTO_ESCALATE", "0")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    def _fake_subprocess(cmd, **kw):
+        if cmd and cmd[0] == "ps":
+            class _Gone:
+                returncode = 1
+                stdout = ""
+                stderr = ""
+            return _Gone()
+        return _FailResult()
+    monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+
+    result = p.advance_pipeline("esc5")
+
+    manifest = _read_manifest(plan_dir, "esc5")
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "failed"
+    assert "S1" in result.get("failed", [])
+    assert story.get("backend") != "claude"
+
+
+def test_advance_pipeline_aposteriori_escalation_uses_auto_escalation_gate():
+    """The a-posteriori local-failure escalation call site in advance_pipeline
+    must use the shared ``_auto_escalation_enabled()`` gate (not a raw
+    ``dispatch_mode == "auto"`` env-var comparison), and the now-dead
+    ``dispatch_mode`` local variable must be removed entirely from the file.
+
+    These are mechanically-checkable requirements of the fix: the third call
+    site is made consistent with the other two, and per project style the dead
+    ``dispatch_mode`` definition is removed (not left unused/commented out).
+    """
+    import pipeline.server as srv
+
+    source = Path(srv.__file__).read_text()
+
+    # The a-posteriori escalation block's comment must reference the new gate,
+    # not the old "auto dispatch only" wording.
+    assert "_auto_escalation_enabled()" in source
+    assert "A-posteriori escalation of a failed local run to Claude is gated by" in source
+    # The old comment wording must be gone.
+    assert (
+        "A-posteriori escalation of a failed local run to Claude is a feature of"
+        not in source
+    )
+
+    # The dead `dispatch_mode` local variable must be entirely gone - both its
+    # definition and its single use at the escalation condition.
+    assert "dispatch_mode" not in source
+
+
 def test_advance_pipeline_give_up_failure_gets_distinguishing_notify(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):

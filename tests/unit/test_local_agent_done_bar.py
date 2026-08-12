@@ -9,12 +9,11 @@ Imported the same way as test_local_agent.py: as a standalone module, since
 it only requires LOCAL_AGENT_MODEL in the environment at import time.
 """
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
-os_environ_model_key = "LOCAL_AGENT_MODEL"
-import os
-os.environ.setdefault(os_environ_model_key, "test-model")
+os.environ.setdefault("LOCAL_AGENT_MODEL", "test-model")
 
 _spec = importlib.util.spec_from_file_location(
     "local_agent", str(Path(__file__).parent.parent.parent / "scripts" / "local_agent.py")

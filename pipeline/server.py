@@ -614,6 +614,7 @@ class PipelineService:
 
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]
+
         def approve_merge(self, plan_name: str, story_key: str) -> dict[str, Any]:
             return _approve_merge_impl(plan_name, story_key)
 
@@ -4212,19 +4213,6 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
 
     return {"ok": True, **summary}
 
-@mcp.tool()
-
-def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Manually merge a story a human has approved out-of-band, typically one
-    \"parked\" by the risk gate (medium/high risk always parks regardless of
-    autonomy level - this is the human's explicit override for that gate,
-    not a way to bypass review). Also works on a still-\"pr_open\" story, for
-    approving before the gate has even adjudicated it.
-
-    Refuses unless the story already carries an APPROVE review verdict, and
-    refuses any status other than \"parked\"/\"pr_open\" - this merges reviewed
-    work, it does not re-review or fast-track anything."""
-    return _service.approve_merge(plan_name, story_key)
 
 
 

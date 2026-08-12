@@ -320,6 +320,8 @@ def _backend_source():
     from pathlib import Path
 
     here = Path(__file__).resolve()
-    # tests/unit/<file> -> repo root / app / backend.py
-    backend = here.parents[2] / "app" / "backend.py"
+    # tests/unit/<file> -> repo root / app / backend_ollama.py (dispatch()'s
+    # env writes live here, not app/backend.py, since the OllamaDriver
+    # extraction)
+    backend = here.parents[2] / "app" / "backend_ollama.py"
     return backend.read_text()

@@ -665,13 +665,13 @@ class TestBackendWiring:
         # literal that used to hold them. The replacement var names
         # (PIPELINE_LOCAL_*) legitimately appear elsewhere in backend.py, so we
         # only assert the six *transport-only* var names are absent from the
-        # warning-loop region (the top of the file, before the first @dataclass).
+        # warning-loop region (the top of the file, before the Backend protocol).
         src = Path("app/backend.py").read_text(encoding="utf-8")
-        # The warning loop lives at the top of the file, before the first
-        # @dataclass decorator. Isolate that region.
-        marker = "@dataclass"
+        # The warning loop lives at the top of the file, before the Backend
+        # protocol definition. Isolate that region.
+        marker = "class Backend(Protocol):"
         idx = src.find(marker)
-        assert idx != -1, "expected a @dataclass in backend.py"
+        assert idx != -1, "expected a Backend Protocol class in backend.py"
         top_region = src[:idx]
         for name, _ in _EXPECTED_IGNORED_ENV_VARS:
             assert name not in top_region, (

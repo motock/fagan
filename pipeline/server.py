@@ -1067,7 +1067,9 @@ _INGEST_AUTHORED_STORY_FIELDS = (
 # resolves it to "local"/"claude" first, per PIPELINE_BACKEND_DISPATCH=auto).
 _VALID_STORY_BACKENDS = frozenset(backend._DRIVERS) | {"auto"}
 
-def _ingest_plan_impl(
+
+@mcp.tool()
+def ingest_plan(
     plan_name: str,
     only_epics: list[str] | None = None,
     overwrite: bool = False,
@@ -1087,12 +1089,11 @@ def _ingest_plan_impl(
     over untouched. Pass overwrite=True to restore the old wholesale-replace
     behavior (drops anything not produced by this call).
     """
-    _isolation_only_acceptance_warning({})
-    _scaffolding_provider_mismatch_warning({})
-    _platform_locked_fixture_warning({})
     return _service.ingest_plan(plan_name, only_epics=only_epics, overwrite=overwrite)
 
 def _ingest_plan_impl(
+
+
     plan_name: str,
     only_epics: list[str] | None = None,
     overwrite: bool = False,

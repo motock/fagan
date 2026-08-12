@@ -1485,8 +1485,8 @@ def test_record_retro_pending_helper_writes_expected_line(tmp_path, monkeypatch)
     # The _record_retro_pending helper must exist and write a single line.
     self_root = tmp_path / "self_repo"
     pending = self_root / "retros" / "PENDING.md"
-    monkeypatch.setattr(p, "PIPELINE_SELF_REPO_ROOT", self_root)
-    monkeypatch.setattr(p, "RETRO_PENDING_PATH", pending)
+    monkeypatch.setattr(p, "PIPELINE_SELF_REPO_ROOT", self_root, raising=False)
+    monkeypatch.setattr(p, "RETRO_PENDING_PATH", pending, raising=False)
     assert hasattr(p, "_record_retro_pending")
     p._record_retro_pending("helperplan", 3)
     assert pending.exists()

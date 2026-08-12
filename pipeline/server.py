@@ -604,8 +604,6 @@ class PipelineService:
     def resume_plan(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
         return _set_plan_paused(plan_name, False)
-    def ingest_plan(self, plan_name: str, only_epics: list[str] | None = None, overwrite: bool = False) -> dict[str, Any]:
-        return _ingest_plan_impl(plan_name, only_epics=only_epics, overwrite=overwrite)
 
 
     def list_decisions(self, plan_name: str) -> list[dict]:
@@ -1070,29 +1068,6 @@ _INGEST_AUTHORED_STORY_FIELDS = (
 _VALID_STORY_BACKENDS = frozenset(backend._DRIVERS) | {"auto"}
 
 
-
-def _ingest_plan_impl(
-    plan_name: str,
-    only_epics: list[str] | None = None,
-    overwrite: bool = False,
-) -> dict[str, Any]:
-    """
-    Push a saved plan into Plane. Creates epics first, then issues linked
-    to their parent epic. Optionally restrict to specific epic summaries via
-    only_epics. Returns a manifest mapping local IDs to Plane UUIDs.
-
-    Re-ingesting an already-ingested plan merges into the existing manifest
-    rather than replacing it: epics/stories not touched this call (including
-    everything only_epics excludes) are preserved verbatim, a story whose key
-    already exists gets its authored fields (summary, agent_instructions,
-    dependencies, persona, model, acceptance, risk) refreshed while its
-    runtime state (status, pr_url, ...) is kept, and top-level manifest keys
-    outside epics/stories/repo_root (paused, local_model_fallback, final_rework_escalation, ...) carry
-    over untouched. Pass overwrite=True to restore the old wholesale-replace
-    behavior (drops anything not produced by this call).
-    """
-    return _service.ingest_plan(plan_name, only_epics=only_epics, overwrite=overwrite)
-
 @mcp.tool()
 def ingest_plan(
     plan_name: str,
@@ -1103,7 +1078,7 @@ def ingest_plan(
     Push a saved plan into Plane. Creates epics first, then issues linked
     to their parent epic. Optionally restrict to specific epic summaries via
     only_epics. Returns a manifest mapping local IDs to Plane UUIDs.
-    
+
     Re-ingesting an already-ingested plan merges into the existing manifest
     rather than replacing it: epics/stories not touched this call (including
     everything only_epics excludes) are preserved verbatim, a story whose key
@@ -1116,29 +1091,12 @@ def ingest_plan(
     """
     return _service.ingest_plan(plan_name, only_epics=only_epics, overwrite=overwrite)
 
+
 def _ingest_plan_impl(
-
-
-
     plan_name: str,
     only_epics: list[str] | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    """
-    Push a saved plan into Plane. Creates epics first, then issues linked
-    to their parent epic. Optionally restrict to specific epic summaries via
-    only_epics. Returns a manifest mapping local IDs to Plane UUIDs.
-
-    Re-ingesting an already-ingested plan merges into the existing manifest
-    rather than replacing it: epics/stories not touched this call (including
-    everything only_epics excludes) are preserved verbatim, a story whose key
-    already exists gets its authored fields (summary, agent_instructions,
-    dependencies, persona, model, acceptance, risk) refreshed while its
-    runtime state (status, pr_url, ...) is kept, and top-level manifest keys
-    outside epics/stories/repo_root (paused, local_model_fallback, final_rework_escalation, ...) carry
-    over untouched. Pass overwrite=True to restore the old wholesale-replace
-    behavior (drops anything not produced by this call).
-    """
     _validate_key(plan_name)
     path = PLAN_DIR / f"{plan_name}.json"
     if not path.exists():
@@ -1277,10 +1235,6 @@ def _ingest_plan_impl(
         final_manifest["epics"] = merged_epics
         final_manifest["stories"] = merged_stories
         final_manifest["repo_root"] = repo_root
-        # Preserve any other top-level keys from the previous manifest that are not overwritten.
-        for key, val in prior.items():
-            if key not in ("epics", "stories", "repo_root", "role_config"):
-                final_manifest.setdefault(key, val)
         final_manifest["role_config"] = plan.get(
             "role_config", prior.get("role_config", {})
         )

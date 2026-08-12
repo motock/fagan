@@ -37,5 +37,7 @@ def test_claude_dispatch_is_not_flagged():
 
 
 def test_the_warning_is_wired_into_ingest_plan():
-    src = inspect.getsource(srv.mcp._tool_manager._tools["ingest_plan"].fn)
+    # ingest_plan is a thin @mcp.tool() delegate onto _ingest_plan_impl (the
+    # PipelineService W1a extraction); the warning call lives in the impl.
+    src = inspect.getsource(srv._ingest_plan_impl)
     assert "_scaffolding_provider_mismatch_warning" in src

@@ -50,8 +50,9 @@ def test_story_without_acceptance_is_not_flagged():
 
 
 def test_the_lint_is_wired_into_ingest_plan():
-    tool = srv.mcp._tool_manager._tools["ingest_plan"]
-    src = inspect.getsource(tool.fn)
+    # ingest_plan is a thin @mcp.tool() delegate onto _ingest_plan_impl (the
+    # PipelineService W1a extraction); the lint calls live in the impl.
+    src = inspect.getsource(srv._ingest_plan_impl)
     assert "_platform_locked_fixture_warning" in src, (
         "ingest_plan must call the lint; a lint nothing calls flags nothing"
     )

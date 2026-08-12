@@ -615,8 +615,9 @@ class PipelineService:
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]
 
-        def approve_merge(self, plan_name: str, story_key: str) -> dict[str, Any]:
-            return _approve_merge_impl(plan_name, story_key)
+    def approve_merge(self, plan_name: str, story_key: str) -> dict[str, Any]:
+        return _approve_merge_impl(plan_name, story_key)
+
 
     def request_decision(self,
         plan_name: str,
@@ -4214,6 +4215,12 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     return {"ok": True, **summary}
 
 
+
+
+@mcp.tool()
+def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
+    """Approve a merge by delegating to PipelineService."""
+    return _service.approve_merge(plan_name, story_key)
 
 
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:

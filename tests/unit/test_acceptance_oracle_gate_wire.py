@@ -12,8 +12,7 @@ import pipeline.server as srv
 
 
 def _dispatch_source():
-    tool = srv.mcp._tool_manager._tools["dispatch_story"]
-    return inspect.getsource(tool.fn)
+    return inspect.getsource(srv._dispatch_story_impl)
 
 
 def test_dispatch_story_is_still_registered_as_a_tool():

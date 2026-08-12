@@ -180,7 +180,120 @@ def _ci_status(
     # Timeout reached – no terminal state.
     return {"state": "pending", "error": "CI did not complete within timeout"}
 
-    def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
+# Non‑blocking single‑poll CI status helper.
+def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
+    """Return a single‑poll CI status for ``branch``/``sha``.
+
+    This helper performs exactly one query to GitHub and returns immediately
+    without sleeping or looping.  It mirrors the classification logic of
+    :func:`_ci_status` but is designed for callers that need a non‑blocking
+    check.
+    """
+    if not PIPELINE_MERGE_CI_GATE:
+        return {"state": "pass", "error": "CI gate disabled"}
+
+    try:
+        if sha:
+            r = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+                    "--jq",
+                    ".check_runs[] | {name, status, conclusion}",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            r = subprocess.run(
+                ["gh", "pr", "checks", branch, "--json", "name,bucket"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+    except OSError as e:
+        return {"state": "none", "error": f"gh unavailable: {e}"}
+
+    if r.returncode != 0:
+        return {"state": "none", "error": r.stderr.strip()[:200]}
+
+    if sha:
+        try:
+            runs = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
+        except ValueError:
+            return {"state": "none", "error": "unparseable gh api check-runs output"}
+
+        if not runs:
+            if not _repo_has_ci_configured():
+                return {"state": "none", "error": ""}
+            # CI configured but no run yet – pending.
+            return {"state": "pending", "error": ""}
+
+        if any(c.get("status") != "completed" for c in runs):
+            return {"state": "pending", "error": ""}
+
+        conclusions = {c.get("conclusion") for c in runs}
+        if conclusions & {"failure", "timed_out", "action_required"}:
+            return {
+                "state": "fail",
+                "error": "; ".join(
+                    f"{r.get('name')}: {r.get('conclusion')}"
+                    for r in runs
+                    if r.get("conclusion")
+                    in {"failure", "timed_out", "action_required"}
+                )[:300],
+            }
+        if "cancelled" in conclusions:
+            return {
+                "state": "cancelled",
+                "error": "; ".join(
+                    f"{r.get('name')}: {r.get('conclusion')}"
+                    for r in runs
+                    if r.get("conclusion") == "cancelled"
+                )[:300],
+            }
+        if conclusions <= {"success", "neutral", "skipped"}:
+            return {"state": "pass", "error": ""}
+        return {"state": "pending", "error": ""}
+    else:
+        try:
+            entries = json.loads(r.stdout or "[]")
+            buckets = {c.get("bucket") for c in entries}
+        except ValueError:
+            return {"state": "none", "error": "unparseable gh pr checks output"}
+
+        if not buckets:
+            if not _repo_has_ci_configured():
+                return {"state": "none", "error": ""}
+            return {"state": "pending", "error": ""}
+
+        if buckets & {"fail", "error", "action_required"}:
+            return {
+                "state": "fail",
+                "error": "; ".join(
+                    f"{e.get('name')}: {e.get('bucket')}"
+                    for e in entries
+                    if e.get("bucket") in {"fail", "error", "action_required"}
+                )[:300],
+            }
+        if "cancelled" in buckets:
+            return {
+                "state": "cancelled",
+                "error": "; ".join(
+                    f"{e.get('name')}: {e.get('bucket')}"
+                    for e in entries
+                    if e.get("bucket") == "cancelled"
+                )[:300],
+            }
+        if buckets <= {"pass"}:
+            return {"state": "pass", "error": ""}
+        return {"state": "pending", "error": ""}
+
+
+
+def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
         """Return a single‑poll CI status for ``branch``/``sha``.
 
         This helper performs exactly one query to GitHub and returns immediately,

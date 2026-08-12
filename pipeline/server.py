@@ -1068,27 +1068,6 @@ _INGEST_AUTHORED_STORY_FIELDS = (
 _VALID_STORY_BACKENDS = frozenset(backend._DRIVERS) | {"auto"}
 
 
-def _ingest_plan_impl(
-    plan_name: str,
-    only_epics: list[str] | None = None,
-    overwrite: bool = False,
-) -> dict[str, Any]:
-    """
-    Push a saved plan into Plane. Creates epics first, then issues linked
-    to their parent epic. Optionally restrict to specific epic summaries via
-    only_epics. Returns a manifest mapping local IDs to Plane UUIDs.
-
-    Re-ingesting an already-ingested plan merges into the existing manifest
-    rather than replacing it: epics/stories not touched this call (including
-    everything only_epics excludes) are preserved verbatim, a story whose key
-    already exists gets its authored fields (summary, agent_instructions,
-    dependencies, persona, model, acceptance, risk) refreshed while its
-    runtime state (status, pr_url, ...) is kept, and top-level manifest keys
-    outside epics/stories/repo_root (paused, local_model_fallback, final_rework_escalation, ...) carry
-    over untouched. Pass overwrite=True to restore the old wholesale-replace
-    behavior (drops anything not produced by this call).
-    """
-    return _service.ingest_plan(plan_name, only_epics=only_epics, overwrite=overwrite)
 
 def _ingest_plan_impl(
 

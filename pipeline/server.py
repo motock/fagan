@@ -1303,6 +1303,7 @@ def list_ready_stories(plan_name: str) -> list[dict]:
     """
     return _service.list_ready_stories(plan_name)
 
+
 @mcp.tool()
 def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """

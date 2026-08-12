@@ -23,13 +23,13 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Protocol
 
 import httpx
 
 from app import inference_providers
+from app.backend_types import AgentHandle
 from app.inference_providers import (
     RateLimitedError,  # noqa: F401 (re-exported: backend.RateLimitedError)
 )
@@ -43,19 +43,6 @@ for _var, _real in IGNORED_ENV_VARS:
             f"{_var} is set in the environment but is a transport-only value that backend.py overwrites on every dispatch - it has no effect as an input; "
             f"set {_real} instead."
         )
-@dataclass
-class AgentHandle:
-    """A non-blocking agentic run (dispatch/review-style), identified by pid."""
-    pid: int
-    # The concrete model the agent actually boots with — for the local backend
-    # this is the RESOLVED model (a logical tier like "sonnet" maps to e.g.
-    # "minimax-m3:cloud" via PIPELINE_LOCAL_MODEL_DEFAULT), for the Claude
-    # backend it's the model string passed verbatim. The orchestrator records
-    # this on the manifest so the dashboard shows what really ran, not the
-    # plan's declared tier. None for backends that don't surface it.
-    model: str | None = None
-
-
 class Backend(Protocol):
     def complete(
         self, prompt: str, *, system: str | None, model: str,

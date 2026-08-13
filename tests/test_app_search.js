@@ -254,7 +254,7 @@ function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
 
 // Inject globals the production code touches at top level, then require
 // app.js as a Node module via a tiny shim.
-function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
+function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false, localStorage: ls } = {}) {
   // Set up the browser-like globals app.js reads at module load.
   global.document = doc;
   global.CSS = { escape: (s) => String(s).replace(/"/g, '\\"') };
@@ -262,7 +262,7 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
   global.clearInterval = fakeTimers.clearInterval;
   global.setTimeout = fakeTimers.setTimeout;
   global.clearTimeout = fakeTimers.clearTimeout;
-  global.localStorage = { getItem: () => null, setItem: () => {} };
+  global.localStorage = ls || { getItem: () => null, setItem: () => {} };
 
   // Bootstrap the DOM elements app.js attaches top-level listeners to so
   // loading the module doesn't throw on a null addEventListener. The
@@ -738,11 +738,13 @@ test("search term round-trips through FILTERS_KEY persistence", () => {
   const doc = makeDocument();
   const ft = fakeTimers();
   // Override the global localStorage with a real backing store.
-  global.localStorage = {
-    getItem: (k) => (k in store ? store[k] : null),
-    setItem: (k, v) => { store[k] = String(v); },
-  };
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = loadAppJs({
+    doc, fakeTimers: ft,
+    localStorage: {
+      getItem: (k) => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); },
+    },
+  });
   api.state.filters.search = "persist me";
   api.saveFilters();
   // The persisted blob must mention the search term.

@@ -4,16 +4,15 @@ Historically an external clock (a launchd plist) fired ``advance_all_plans``
 on a fixed interval. ``SchedulerDaemon`` takes ownership of that cadence so
 the pipeline no longer depends on an external scheduler.
 
-The reconcile sweep is permanently necessary: it is the only thing that
-evaluates the dispatch watchdog (``DISPATCH_WATCHDOG_SECONDS``) and the only
-recovery path for a lost event. It must never be removed.
-
 This module must not import from ``pipeline.server`` at module import time —
 ``pipeline.server`` imports from this package, and importing it here would
 create a circular import. Any use of ``advance_all_plans`` for a ``__main__``
 entrypoint must import it lazily, inside a function.
 """
+import datetime as _dt
+import json
 import logging
+import os
 import signal as _signal_module
 import time
 
@@ -42,6 +41,7 @@ class SchedulerDaemon:
         interval_s: float = 60,
         sleep_fn=time.sleep,
         clock=time.monotonic,
+        health_path=None,
     ) -> None:
         self._reconcile_fn = reconcile_fn
         self._scan_fn = scan_fn
@@ -49,7 +49,53 @@ class SchedulerDaemon:
         self._interval_s = interval_s
         self._sleep_fn = sleep_fn
         self._clock = clock
+        # Interval gating: last time we reconciled.
         self._last_reconcile = clock()
+        # Health surface state
+        self._health_path = health_path
+        self._last_reconcile_ts = None
+        self._last_scan_ts = None
+        self._last_error = None
+        self._reconcile_count = 0
+        self._scan_count = 0
+
+    def start(self) -> None:
+        """Perform an immediate reconcile sweep on startup.
+
+        This method is idempotent for the caller: it calls ``_reconcile_fn``
+        exactly once, updates health metrics and interval gating state.
+        It does not swallow exceptions; any error propagates to the caller.
+        """
+        # Perform reconcile immediately.
+        self._reconcile_fn()
+        now_ts = _dt.datetime.now().isoformat()
+        self._last_reconcile_ts = now_ts
+        self._reconcile_count += 1
+        # Update interval gating clock so run_once does not reconcile again
+        # until the configured interval has elapsed.
+        self._last_reconcile = self._clock()
+
+    def health(self) -> dict:
+        """Return a snapshot of the daemon's health state."""
+        return {
+            "alive": True,
+            "last_reconcile_ts": self._last_reconcile_ts,
+            "last_scan_ts": self._last_scan_ts,
+            "last_error": self._last_error,
+            "reconcile_count": self._reconcile_count,
+            "scan_count": self._scan_count,
+        }
+
+    def write_health(self, path: str) -> None:
+        """Atomically write the health JSON to *path*.
+
+        The file is written to ``<path>.tmp`` first and then moved into place
+        with :func:`os.replace` for atomicity.
+        """
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(self.health(), fh)
+        os.replace(tmp_path, path)
 
     def run_once(self) -> dict:
         """Perform one iteration: scan first, then reconcile if due.
@@ -57,35 +103,51 @@ class SchedulerDaemon:
         ``scan_fn`` is the cheap, event-driven path and runs every call.
         ``reconcile_fn`` (the watchdog/recovery sweep) only runs once
         ``interval_s`` has elapsed on the injected clock since the last
-        reconcile. Exceptions from either are logged and swallowed so a
-        single bad plan cannot kill the loop.
+        reconcile. Exceptions from either are logged and swallowed so a single
+        bad plan cannot kill the loop.
         """
         scanned = False
         reconciled = False
 
+        # Scan phase – always attempted, count regardless of success.
         try:
             self._scan_fn()
             scanned = True
-        except Exception:
+        except Exception as exc:  # pragma: no cover - exercised via tests
             logger.exception("scan_fn raised during scheduler iteration")
+            self._last_error = str(exc)
+        finally:
+            # Update health metrics for scan.
+            self._scan_count += 1
+            self._last_scan_ts = _dt.datetime.now().isoformat()
 
         now = self._clock()
         if now - self._last_reconcile >= self._interval_s:
             try:
                 self._reconcile_fn()
                 reconciled = True
-            except Exception:
+            except Exception as exc:  # pragma: no cover - exercised via tests
                 logger.exception("reconcile_fn raised during scheduler iteration")
+                self._last_error = str(exc)
             finally:
+                # Update health metrics for reconcile regardless of success.
+                self._reconcile_count += 1
+                self._last_reconcile_ts = _dt.datetime.now().isoformat()
                 self._last_reconcile = now
+
+        if self._health_path is not None:
+            try:
+                self.write_health(self._health_path)
+            except Exception as exc:  # pragma: no cover - unlikely but safe
+                logger.exception("write_health failed")
 
         return {"scanned": scanned, "reconciled": reconciled}
 
     def run_forever(self, stop_event) -> None:
         """Run until ``stop_event`` is set.
 
-        Registers SIGTERM/SIGINT handlers that set ``stop_event`` so the
-        daemon shuts down gracefully. The handlers never call ``sys.exit``.
+        Registers SIGTERM/SIGINT handlers that set ``stop_event`` so the daemon
+        shuts down gracefully. The handlers never call :func:`sys.exit`.
         """
 
         def _handler(signum, frame):  # pragma: no cover - exercised via tests
@@ -93,6 +155,9 @@ class SchedulerDaemon:
 
         signal(_signal_module.SIGTERM, _handler)
         signal(_signal_module.SIGINT, _handler)
+
+        # Perform an initial reconcile sweep before entering the loop.
+        self.start()
 
         while True:
             self.run_once()

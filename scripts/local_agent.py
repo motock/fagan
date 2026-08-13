@@ -103,6 +103,7 @@ from pipeline.local_agent_common import (
     _answer_orphaned_calls,
     _dropped_span_digest,  # noqa: F401 (unused here; re-exported for test_local_agent_context_compaction.py)
     _dropped_top_level_defs,
+    _dropped_top_level_vars,
     _is_context_overflow_error,
     _load_resume_transcript,
     _message_char_len,
@@ -1247,6 +1248,8 @@ def run_tool(fn, args) -> str:
             content, note = repair
         if preexisting:
             dropped = _dropped_top_level_defs(path.read_text(), content)
+            if path.suffix == ".py":
+                dropped += _dropped_top_level_vars(path.read_text(), content)
             if dropped and not args.get("confirm_removals"):
                 return (
                     f"ERROR: this create_file overwrite of {args['path']} would "

@@ -529,6 +529,52 @@ def _dropped_top_level_defs(old_content: str, new_content: str) -> list[str]:
     return sorted(old_top_defs - new_top_defs)
 
 
+def _dropped_top_level_vars(old_content: str, new_content: str) -> list[str]:
+    """Return names of module-level constants (top-level `ast.Assign`/
+    `ast.AnnAssign` targets) present in `old_content` but absent from
+    `new_content` - the Assign/AnnAssign twin of `_dropped_top_level_defs`.
+    Like that function, this does NOT require the name to still be referenced
+    somewhere in `new_content`: a create_file rewrite that silently drops a
+    module-level table/constant (e.g. `ENV_VAR_CATALOG = {...}`) consumed from
+    OTHER modules produces no same-file reference for
+    `_newly_undefined_module_vars` to catch, so this guard flags the drop
+    unconditionally. Returns [] (never raises) when either side fails to
+    parse; non-Name targets (attributes, subscripts) are skipped silently."""
+    try:
+        old_tree = ast.parse(old_content)
+        new_tree = ast.parse(new_content)
+    except SyntaxError:
+        return []
+
+    def _target_names(target):
+        if isinstance(target, ast.Name):
+            return {target.id}
+        if isinstance(target, (ast.Tuple, ast.List)):
+            names = set()
+            for elt in target.elts:
+                if isinstance(elt, ast.Name):
+                    names.add(elt.id)
+            return names
+        return set()
+
+    def _assign_names(node):
+        names = set()
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                names |= _target_names(target)
+        elif isinstance(node, ast.AnnAssign):
+            names |= _target_names(node.target)
+        return names
+
+    old_top_vars = set()
+    for node in old_tree.body:
+        old_top_vars |= _assign_names(node)
+    new_top_vars = set()
+    for node in new_tree.body:
+        new_top_vars |= _assign_names(node)
+    return sorted(old_top_vars - new_top_vars)
+
+
 # LM Studio's context-overflow error also arrives as a 400 whose BODY text
 # emits the prose form ("Trying to keep the first N tokens when context the
 # overflows. However, the model is loaded with context length of only ..."),

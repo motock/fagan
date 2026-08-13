@@ -273,6 +273,9 @@ def test_dispatch_story_planner_always_runs_for_local_when_decompose_unset(
     assert planner_calls[0]["agent_instructions"] == "Build it."
     # The plan must be written to disk.
     assert (worktree_path / ".agent_plan.md").exists()
+    # The fix writes a hash sidecar alongside the plan so a later dispatch can
+    # detect a stale checklist after a patch_story rewrite of agent_instructions.
+    assert (worktree_path / ".agent_plan_src_hash").exists()
 
 
 # ---------- tests_already_authored: planner must not tell the executor to
@@ -925,3 +928,222 @@ def test_no_decompose_mode_in_server_module():
         stripped = line.strip()
         if "PIPELINE_DECOMPOSE" in stripped and "SCRATCHPAD" not in stripped:
             pytest.fail(f"Unexpected PIPELINE_DECOMPOSE reference in server.py: {stripped}")
+
+
+# ===========================================================================
+# Checklist reuse gating: backend + hash sidecar (stale-checklist fix)
+# ===========================================================================
+#
+# The REUSE block (the `if plan_path.exists():` branch that injects an existing
+# .agent_plan.md into spec["prompt"]) was previously guarded ONLY by
+# plan_path.exists() -- no backend check, no staleness check. Two bugs flowed
+# from that:
+#   (a) a story escalated to `backend: claude` still got a local-only checklist
+#       injected if a leftover .agent_plan.md sat in the worktree from an
+#       earlier local attempt (contradicts the generation guard's "Claude
+#       doesn't need the crutch" comment).
+#   (b) patch_story can rewrite agent_instructions, but the cached checklist on
+#       disk was never invalidated -- the executor got NEW instructions in the
+#       prompt body AND the OLD, contradictory checklist appended after it.
+#
+# The fix:
+#   - adds `import hashlib` near the top of pipeline/server.py,
+#   - tracks a `plan_hash_path = worktree_path / ".agent_plan_src_hash"` sidecar
+#     alongside plan_path,
+#   - writes a sha256 of the story's agent_instructions to that sidecar whenever
+#     a fresh checklist is generated,
+#   - gates the REUSE block on BOTH a local-family backend AND a hash of the
+#     CURRENT agent_instructions matching the sidecar.
+#
+# These tests capture the actual composed prompt text (not just dispatch ok) by
+# stubbing backend.subprocess.Popen with a capturing stub, then asserting on the
+# prompt embedded in the cmd (claude: cmd[2], the `-p` argument) or the env
+# (local: env["LOCAL_AGENT_TASK"]).
+
+
+def _captured_prompt(cmd, env):
+    """Extract the composed prompt text from a captured Popen invocation.
+
+    Claude CLI: cmd == ["claude", "-p", prompt, "--model", model, ...] so the
+    prompt is the element immediately after "-p". Local (ollama) driver: the
+    prompt is carried in the LOCAL_AGENT_TASK env var, not in argv.
+    """
+    if "-p" in cmd:
+        idx = cmd.index("-p")
+        return cmd[idx + 1]
+    if env and "LOCAL_AGENT_TASK" in env:
+        return env["LOCAL_AGENT_TASK"]
+    raise AssertionError(
+        f"could not locate prompt in captured cmd={cmd!r} env_keys="
+        f"{list(env.keys()) if env else None}"
+    )
+
+
+def _capture_popen_factory(captured):
+    """Return a Popen stub that records (cmd, env) into `captured` and returns
+    a _FakeProc so dispatch_story completes normally."""
+
+    def _capture_popen(cmd, env=None, **kw):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return _FakeProc(9500)
+
+    return _capture_popen
+
+
+def test_server_module_imports_hashlib():
+    """The fix adds `import hashlib` to pipeline/server.py (alphabetically
+    between fcntl and json). Assert the module imports it so the generation
+    and reuse guards can compute the agent_instructions sha256."""
+    import inspect
+
+    source = inspect.getsource(p)
+    # The exact three-line block the task specifies.
+    assert "import ast\nimport fcntl\nimport hashlib\nimport json\n" in source
+
+
+def test_server_module_defines_plan_hash_sidecar_path():
+    """The fix tracks a `.agent_plan_src_hash` sidecar path alongside
+    plan_path, and the REUSE guard must reference it. Assert both the sidecar
+    path literal and the new guard variable appear in the server source."""
+    import inspect
+
+    source = inspect.getsource(p)
+    assert 'plan_hash_path = worktree_path / ".agent_plan_src_hash"' in source
+    # The new guard variable name from the fix.
+    assert "checklist_is_fresh" in source
+    assert "current_instructions_hash" in source
+    # The REUSE comment must now mention the backend+hash guard.
+    assert "local-family backend" in source
+    assert "matching" in source
+
+
+def test_dispatch_story_claude_backend_skips_stale_local_checklist(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Bug (a): a story escalated to `backend: claude` must NOT get a leftover
+    local-only checklist injected, even when .agent_plan.md physically exists
+    in the worktree from an earlier local attempt. The REUSE block must be
+    gated on a local-family backend."""
+    monkeypatch.delenv("PIPELINE_DECOMPOSE", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
+    # Default dispatch backend is claude (no env override), matching
+    # test_dispatch_story_claude_backend_skips_planner's pattern.
+    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    # Leftover local-only checklist from an earlier local attempt -- and
+    # deliberately NO .agent_plan_src_hash sidecar (pre-fix worktree).
+    (worktree_path / ".agent_plan.md").write_text(
+        "1. Some stale local-only checklist step.\n"
+    )
+    _write_manifest(plan_dir, "clstale", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("planner must not run for a Claude dispatch")
+
+    monkeypatch.setattr(p, "_run_planner", _boom)
+    _stub_dispatch_externals(monkeypatch)
+    # Override the bare Popen stub with a capturing one so we can inspect the
+    # composed prompt (the bare _stub_dispatch_externals Popen stub discards it).
+    captured = {}
+    monkeypatch.setattr(backend.subprocess, "Popen", _capture_popen_factory(captured))
+
+    result = p.dispatch_story("clstale", "S1")
+    assert result["ok"] is True
+
+    prompt = _captured_prompt(captured["cmd"], captured.get("env"))
+    assert "Implementation checklist from your tech lead" not in prompt
+    assert "Some stale local-only checklist step" not in prompt
+
+
+def test_dispatch_story_stale_checklist_hash_mismatch_skips_injection(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Bug (b): when patch_story rewrites agent_instructions, the cached
+    checklist on disk must be silently dropped (not injected) because its hash
+    no longer matches the CURRENT agent_instructions. Set backend to local so
+    the ONLY failing condition is the hash mismatch."""
+    import hashlib
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.delenv("PIPELINE_DECOMPOSE", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / ".agent_plan.md").write_text("1. Old wrong step.\n")
+    # A hash that does NOT match the manifest's current agent_instructions.
+    (worktree_path / ".agent_plan_src_hash").write_text(
+        hashlib.sha256(b"some old instructions").hexdigest()
+    )
+    _write_manifest(plan_dir, "hashmismatch", {
+        "S1": {"summary": "Do thing",
+               "agent_instructions": "Build it, corrected.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError(
+            "planner must not run when a plan already exists"
+        )
+
+    monkeypatch.setattr(p, "_run_planner", _boom)
+    _stub_dispatch_externals(monkeypatch)
+    captured = {}
+    monkeypatch.setattr(backend.subprocess, "Popen", _capture_popen_factory(captured))
+
+    result = p.dispatch_story("hashmismatch", "S1")
+    assert result["ok"] is True
+
+    prompt = _captured_prompt(captured["cmd"], captured.get("env"))
+    assert "Implementation checklist from your tech lead" not in prompt
+    assert "Old wrong step" not in prompt
+
+
+def test_dispatch_story_fresh_checklist_hash_match_still_injects(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Regression protection for the still-working case: when the sidecar hash
+    DOES match the story's current agent_instructions AND the backend is
+    local-family, the existing checklist must STILL be injected (the fix must
+    not over-suppress). Reuses the canonical 'Build it.' agent_instructions
+    string other tests in this file use for this scenario."""
+    import hashlib
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.delenv("PIPELINE_DECOMPOSE", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
+    monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / ".agent_plan.md").write_text("1. Current correct step.\n")
+    # A hash that DOES match the manifest's agent_instructions value of "Build it.".
+    (worktree_path / ".agent_plan_src_hash").write_text(
+        hashlib.sha256(b"Build it.").hexdigest()
+    )
+    _write_manifest(plan_dir, "hashmatch", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError(
+            "planner must not run when a plan already exists"
+        )
+
+    monkeypatch.setattr(p, "_run_planner", _boom)
+    _stub_dispatch_externals(monkeypatch)
+    captured = {}
+    monkeypatch.setattr(backend.subprocess, "Popen", _capture_popen_factory(captured))
+
+    result = p.dispatch_story("hashmatch", "S1")
+    assert result["ok"] is True
+
+    prompt = _captured_prompt(captured["cmd"], captured.get("env"))
+    assert "Implementation checklist from your tech lead" in prompt
+    assert "Current correct step" in prompt

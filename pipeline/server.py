@@ -33,6 +33,7 @@ Per-project overrides (set in project .mcp.json env block):
 
 import ast
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -1734,6 +1735,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             != "off"
         )
         plan_path = worktree_path / ".agent_plan.md"
+        plan_hash_path = worktree_path / ".agent_plan_src_hash"
         if (
             dispatch_backend in _LOCAL_BACKEND_NAMES
             and not resuming
@@ -1776,11 +1778,35 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             )
             if plan_text:
                 plan_path.write_text(plan_text)
+                plan_hash_path.write_text(
+                    hashlib.sha256(
+                        story.get("agent_instructions", "").encode()
+                    ).hexdigest()
+                )
         # Referencing an existing plan is independent of generating one, so
         # a resumed dispatch that rebuilds its prompt from scratch (no
         # transcript to resume) still sees the checklist from the story's
         # first dispatch, without spending a second planner call for it.
-        if plan_path.exists():
+        # Referencing an existing plan is independent of generating one, so
+        # a resumed dispatch that rebuilds its prompt from scratch (no
+        # transcript to resume) still sees the checklist from the story's
+        # first dispatch, without spending a second planner call for it.
+        # Reuse requires BOTH a local-family backend (the crutch was never
+        # meant for Claude -- see the generation guard above) AND a hash of
+        # the CURRENT agent_instructions matching what the checklist was
+        # generated from -- a patch_story rewrite of agent_instructions
+        # (e.g. a corrected rework brief) must silently drop the now-stale
+        # checklist rather than inject contradictory instructions.
+        current_instructions_hash = hashlib.sha256(
+            story.get("agent_instructions", "").encode()
+        ).hexdigest()
+        checklist_is_fresh = (
+            plan_path.exists()
+            and dispatch_backend in _LOCAL_BACKEND_NAMES
+            and plan_hash_path.exists()
+            and plan_hash_path.read_text().strip() == current_instructions_hash
+        )
+        if checklist_is_fresh:
             scratchpad_instruction = ""
             # Backstop to the planner-woven scratchpad steps above: even with
             # the clause folded into the checklist, keep the explicit trailing

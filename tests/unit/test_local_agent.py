@@ -4056,6 +4056,7 @@ def test_replace_lines_names_dropped_top_level_symbols(tmp_path, monkeypatch):
     assert "The edit was NOT applied." in result
     assert "helper_func" in result
     assert "SOME_CONST" in result
+    assert "permanently removes these top-level symbols" in result
 
 
 def test_str_replace_names_dropped_top_level_symbols(tmp_path, monkeypatch):

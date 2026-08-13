@@ -107,83 +107,6 @@ def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
     """
     return _ci_status_once(branch, sha=sha)
 
-# NOTE: The following helper was added to support CI pending SHA handling.
-# It encapsulates the rebase and force-push logic used during merge adjudication.
-def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
-    rb = _rebase_onto_master(worktree, branch)
-    if rb.get("auto_resolved"):
-        _notify_user(
-            plan_name,
-            f"{key} rebase auto-resolved an additive-import "
-            f"conflict against origin/{_default_branch()}.",
-        )
-    if not rb["ok"]:
-        return (
-            f"rebase: {rb['error']}",
-            "",
-        )
-    pushed_sha = ""
-    if Path(worktree).is_dir():
-        push = subprocess.run(
-            ["git", "push", "--force-with-lease", "origin", branch],
-            check=False,
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if push.returncode != 0:
-            return (
-                f"push: {(push.stderr or push.stdout).strip()[:200]}",
-                "",
-            )
-        rev = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            check=False,
-            cwd=worktree,
-            capture_output=True,
-            text=True,
-        )
-        pushed_sha = rev.stdout.strip()
-    return ("", pushed_sha)
-
-
-def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
-    rb = _rebase_onto_master(worktree, branch)
-    if rb.get("auto_resolved"):
-        _notify_user(
-            plan_name,
-            f"{key} rebase auto-resolved an additive-import "
-            f"conflict against origin/{_default_branch()}.",
-        )
-    if not rb["ok"]:
-        return (
-            f"rebase: {rb['error']}",
-            "",
-        )
-    pushed_sha = ""
-    if Path(worktree).is_dir():
-        push = subprocess.run(
-            ["git", "push", "--force-with-lease", "origin", branch],
-            check=False,
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
-        if push.returncode != 0:
-            return (
-                f"push: {(push.stderr or push.stdout).strip()[:200]}",
-                "",
-            )
-        rev = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            check=False,
-            cwd=worktree,
-            capture_output=True,
-            text=True,
-        )
-        pushed_sha = rev.stdout.strip()
-    return ("", pushed_sha)
-
 
 # Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
 # PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
@@ -4282,65 +4205,66 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             gate_error = ""
             ci_definitive_fail = False
             ci_wait = False
-            rb = _rebase_onto_master(worktree, branch)
-            if rb.get("auto_resolved"):
-                _notify_user(
-                    plan_name,
-                    f"{key} rebase auto-resolved an additive-import "
-                    f"conflict against origin/{_default_branch()}.",
-                )
-            if not rb["ok"]:
-                gate_error = f"rebase: {rb['error']}"
+            # S5: a story already polling a pending CI run must not
+            # re-rebase/force-push on every tick - with the non-blocking CI
+            # poll that mints a new SHA whenever origin/master moved,
+            # restarting CI and burning Actions minutes. Skip straight to
+            # polling the exact SHA recorded on the first pending observation.
+            if story.get("ci_pending_sha"):
+                pushed_sha = story["ci_pending_sha"]
             else:
                 gate_error, pushed_sha = _rebase_and_push_for_merge(plan_name, key, branch, worktree)
-                if not gate_error:
+            if not gate_error:
+                ci = _merge_gate_ci_status(branch, sha=pushed_sha)
+                if ci["state"] == "cancelled" and not story.get(
+                    "ci_rerun_attempted"
+                ):
+                    # Worth exactly one automatic rerun before treating it
+                    # as a failure - an abnormal queue delay can cancel
+                    # jobs with no code-quality signal at all.
+                    story["ci_rerun_attempted"] = True
+                    _ci_rerun(pushed_sha)
                     ci = _merge_gate_ci_status(branch, sha=pushed_sha)
-                    if ci["state"] == "cancelled" and not story.get(
-                        "ci_rerun_attempted"
-                    ):
-                        # Worth exactly one automatic rerun before treating it
-                        # as a failure - an abnormal queue delay can cancel
-                        # jobs with no code-quality signal at all.
-                        story["ci_rerun_attempted"] = True
-                        _ci_rerun(pushed_sha)
-                        ci = _merge_gate_ci_status(branch, sha=pushed_sha)
-                    if ci["state"] == "fail":
-                        gate_error = f"ci fail: {ci['error']}"
-                        # Only a genuine test-failure verdict is "definitive" -
-                        # cancelled (queue/infra flake, already given one
-                        # auto-rerun above) and pending are NOT, and must keep
-                        # retrying via the ordinary merge_attempts path below,
-                        # not consume rework budget.
-                        ci_definitive_fail = True
-                    elif ci["state"] == "cancelled":
-                        gate_error = f"ci fail: {ci['error']}"
-                    elif ci["state"] == "pending":
-                        story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
-                        if _ci_pending_expired(story["ci_pending_since"]):
-                            story.pop("ci_pending_since")
-                            gate_error = f"ci pending: {ci['error']}"
-                        else:
-                            ci_wait = True
-                    if ci["state"] != "pending":
+                if ci["state"] == "fail":
+                    gate_error = f"ci fail: {ci['error']}"
+                    # Only a genuine test-failure verdict is "definitive" -
+                    # cancelled (queue/infra flake, already given one
+                    # auto-rerun above) and pending are NOT, and must keep
+                    # retrying via the ordinary merge_attempts path below,
+                    # not consume rework budget.
+                    ci_definitive_fail = True
+                elif ci["state"] == "cancelled":
+                    gate_error = f"ci fail: {ci['error']}"
+                elif ci["state"] == "pending":
+                    story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
+                    story["ci_pending_sha"] = pushed_sha
+                    if _ci_pending_expired(story["ci_pending_since"]):
                         story.pop("ci_pending_since", None)
-                if ci_wait:
-                    summary["ci_pending"].append(key)
-                    continue
-                if not gate_error:
-                    # Independent of review: re-run the acceptance oracle
-                    # against the just-rebased branch right before merging.
-                    # Closes the gap CI alone can't (a repo without CI, or a
-                    # CI-independent slip between tests_passed and review).
-                    acc = _reverify_acceptance(story, worktree, key)
-                    if acc["state"] == "fail":
-                        gate_error = f"acceptance reverify fail: {acc['error']}"
-                if not gate_error:
-                    # Independent of tests: a green suite doesn't mean the
-                    # project actually builds (PR #48 merged with `npm run
-                    # build` broken - retro §3.1).
-                    build = _reverify_build(worktree)
-                    if build["state"] == "fail":
-                        gate_error = f"build reverify fail: {build['error']}"
+                        story.pop("ci_pending_sha", None)
+                        gate_error = f"ci pending: {ci['error']}"
+                    else:
+                        ci_wait = True
+                if ci["state"] != "pending":
+                    story.pop("ci_pending_since", None)
+                    story.pop("ci_pending_sha", None)
+            if ci_wait:
+                summary["ci_pending"].append(key)
+                continue
+            if not gate_error:
+                # Independent of review: re-run the acceptance oracle
+                # against the just-rebased branch right before merging.
+                # Closes the gap CI alone can't (a repo without CI, or a
+                # CI-independent slip between tests_passed and review).
+                acc = _reverify_acceptance(story, worktree, key)
+                if acc["state"] == "fail":
+                    gate_error = f"acceptance reverify fail: {acc['error']}"
+            if not gate_error:
+                # Independent of tests: a green suite doesn't mean the
+                # project actually builds (PR #48 merged with `npm run
+                # build` broken - retro §3.1).
+                build = _reverify_build(worktree)
+                if build["state"] == "fail":
+                    gate_error = f"build reverify fail: {build['error']}"
 
             if gate_error:
                 # Opt-in (PIPELINE_REWORK_ON_CI_FAIL=1): a DEFINITIVE CI test

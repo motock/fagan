@@ -4,13 +4,20 @@ The daemon replaces an external clock (launchd plist) that used to fire
 ``advance_all_plans`` on an interval. These tests inject a fake clock and a
 fake sleep function so nothing here ever sleeps in real time.
 """
+import fcntl
 import logging
+import os
+import pathlib
+import subprocess
+import sys
 import threading
 from dataclasses import dataclass
+from typing import ClassVar
 
 import pytest
 
 from pipeline import scheduler_daemon as mod
+from pipeline import server as server_mod
 from pipeline.events import InProcessEventBus
 
 
@@ -623,3 +630,186 @@ def test_start_does_not_increment_scan_count_in_health():
     # start() only reconciles; it must not scan.
     assert h["scan_count"] == 0
     assert h["last_scan_ts"] is None
+
+
+# ---------------------------------------------------------------------------
+# run_daemon() — production composition root + single-instance lock
+# ---------------------------------------------------------------------------
+
+
+class FakeSchedulerDaemon:
+    """Stand-in for the real SchedulerDaemon that never loops for real."""
+
+    instances: ClassVar[list["FakeSchedulerDaemon"]] = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.run_forever_calls: list = []
+        FakeSchedulerDaemon.instances.append(self)
+
+    def run_forever(self, stop_event) -> None:
+        self.run_forever_calls.append(stop_event)
+
+
+@pytest.fixture
+def run_daemon_env(tmp_path, monkeypatch):
+    """Patch every collaborator run_daemon() wires up, plus PLAN_DIR."""
+    FakeSchedulerDaemon.instances = []
+    monkeypatch.setattr(mod, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(mod, "SchedulerDaemon", FakeSchedulerDaemon)
+
+    sentinel_bus = object()
+    build_bus_calls = []
+
+    def fake_build_bus():
+        build_bus_calls.append(True)
+        return sentinel_bus
+
+    monkeypatch.setattr(mod, "build_bus", fake_build_bus)
+
+    scan_all_plans_calls = []
+
+    def fake_scan_all_plans(bus):
+        scan_all_plans_calls.append(bus)
+
+    monkeypatch.setattr(mod, "scan_all_plans", fake_scan_all_plans)
+
+    reconcile_calls = []
+
+    def fake_advance_all_plans():
+        reconcile_calls.append(True)
+
+    monkeypatch.setattr(server_mod, "advance_all_plans", fake_advance_all_plans)
+    monkeypatch.delenv("PIPELINE_SCHEDULER_INTERVAL_S", raising=False)
+    monkeypatch.delenv("PIPELINE_SCHEDULER_HEALTH_PATH", raising=False)
+
+    return {
+        "tmp_path": tmp_path,
+        "sentinel_bus": sentinel_bus,
+        "build_bus_calls": build_bus_calls,
+        "scan_all_plans_calls": scan_all_plans_calls,
+        "reconcile_calls": reconcile_calls,
+        "fake_advance_all_plans": fake_advance_all_plans,
+    }
+
+
+def test_run_daemon_wires_advance_all_plans_as_reconcile_fn(run_daemon_env, monkeypatch):
+    result = mod.run_daemon()
+    assert result == 0
+
+    assert len(FakeSchedulerDaemon.instances) == 1
+    daemon = FakeSchedulerDaemon.instances[0]
+    assert daemon.kwargs["reconcile_fn"] is run_daemon_env["fake_advance_all_plans"]
+    # Never invoked directly by run_daemon() itself.
+    assert run_daemon_env["reconcile_calls"] == []
+
+
+def test_run_daemon_wires_scan_fn_calling_scan_all_plans_with_bus(run_daemon_env):
+    mod.run_daemon()
+
+    daemon = FakeSchedulerDaemon.instances[0]
+    scan_fn = daemon.kwargs["scan_fn"]
+    assert run_daemon_env["scan_all_plans_calls"] == []
+
+    scan_fn()
+
+    assert run_daemon_env["scan_all_plans_calls"] == [run_daemon_env["sentinel_bus"]]
+
+
+def test_run_daemon_interval_s_defaults_to_60(run_daemon_env):
+    mod.run_daemon()
+    daemon = FakeSchedulerDaemon.instances[0]
+    assert daemon.kwargs["interval_s"] == 60
+
+
+def test_run_daemon_interval_s_overridden_by_env(run_daemon_env, monkeypatch):
+    monkeypatch.setenv("PIPELINE_SCHEDULER_INTERVAL_S", "15")
+    mod.run_daemon()
+    daemon = FakeSchedulerDaemon.instances[0]
+    assert daemon.kwargs["interval_s"] == 15
+
+
+def test_run_daemon_interval_s_invalid_value_returns_1(run_daemon_env, monkeypatch, capsys):
+    monkeypatch.setenv("PIPELINE_SCHEDULER_INTERVAL_S", "not-a-number")
+    result = mod.run_daemon()
+    assert result == 1
+    assert FakeSchedulerDaemon.instances == []
+    assert run_daemon_env["reconcile_calls"] == []
+    assert capsys.readouterr().err.strip() != ""
+
+
+def test_run_daemon_interval_s_negative_value_returns_1(run_daemon_env, monkeypatch, capsys):
+    monkeypatch.setenv("PIPELINE_SCHEDULER_INTERVAL_S", "-5")
+    result = mod.run_daemon()
+    assert result == 1
+    assert FakeSchedulerDaemon.instances == []
+    assert capsys.readouterr().err.strip() != ""
+
+
+def test_run_daemon_interval_s_zero_value_returns_1(run_daemon_env, monkeypatch, capsys):
+    monkeypatch.setenv("PIPELINE_SCHEDULER_INTERVAL_S", "0")
+    result = mod.run_daemon()
+    assert result == 1
+    assert FakeSchedulerDaemon.instances == []
+    assert capsys.readouterr().err.strip() != ""
+
+
+def test_run_daemon_health_path_is_none_when_env_unset(run_daemon_env):
+    mod.run_daemon()
+    daemon = FakeSchedulerDaemon.instances[0]
+    assert daemon.kwargs["health_path"] is None
+
+
+def test_run_daemon_health_path_set_from_env(run_daemon_env, monkeypatch):
+    monkeypatch.setenv("PIPELINE_SCHEDULER_HEALTH_PATH", "/tmp/health.json")
+    mod.run_daemon()
+    daemon = FakeSchedulerDaemon.instances[0]
+    assert daemon.kwargs["health_path"] == "/tmp/health.json"
+
+
+def test_run_daemon_second_instance_returns_1_when_lockfile_already_held(run_daemon_env):
+    lock_path = run_daemon_env["tmp_path"] / ".scheduler_daemon.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = mod.run_daemon()
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert result == 1
+    assert FakeSchedulerDaemon.instances == []
+    assert run_daemon_env["reconcile_calls"] == []
+    assert run_daemon_env["scan_all_plans_calls"] == []
+    assert run_daemon_env["build_bus_calls"] == []
+
+
+def test_run_daemon_first_instance_acquires_lock_and_calls_run_forever(run_daemon_env):
+    result = mod.run_daemon()
+    assert result == 0
+
+    daemon = FakeSchedulerDaemon.instances[0]
+    assert len(daemon.run_forever_calls) == 1
+    assert isinstance(daemon.run_forever_calls[0], threading.Event)
+
+
+def test_run_daemon_returns_0_after_clean_run_forever_return(run_daemon_env):
+    result = mod.run_daemon()
+    assert result == 0
+
+
+def test_importing_scheduler_daemon_module_acquires_no_lock(tmp_path):
+    env = dict(os.environ)
+    env["PLAN_DIR"] = str(tmp_path)
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    proc = subprocess.run(
+        [sys.executable, "-c", "import pipeline.scheduler_daemon"],
+        cwd=str(repo_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / ".scheduler_daemon.lock").exists()

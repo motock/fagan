@@ -10,13 +10,19 @@ create a circular import. Any use of ``advance_all_plans`` for a ``__main__``
 entrypoint must import it lazily, inside a function.
 """
 import datetime as _dt
+import fcntl
 import json
 import logging
 import os
 import signal as _signal_module
+import sys
+import threading
 import time
 
+from pipeline.event_wiring import build_bus
 from pipeline.events import EventBus
+from pipeline.paths import PLAN_DIR
+from pipeline.watchers import scan_all_plans
 
 logger = logging.getLogger(__name__)
 
@@ -164,3 +170,71 @@ class SchedulerDaemon:
             self._sleep_fn(1)
             if stop_event.is_set():
                 break
+
+
+def run_daemon() -> int:
+    """Production composition root: build real collaborators and run.
+
+    Acquires an exclusive, non-blocking single-instance lock at
+    ``PLAN_DIR / ".scheduler_daemon.lock"`` before touching anything else, so
+    two daemons can never run two clocks. If another instance already holds
+    the lock, this returns 1 immediately without calling ``scan_fn``,
+    ``reconcile_fn``, or ``run_forever``.
+    """
+    raw_interval = os.environ.get("PIPELINE_SCHEDULER_INTERVAL_S", "60")
+    try:
+        interval_s = int(raw_interval)
+    except ValueError:
+        print(
+            f"scheduler_daemon: PIPELINE_SCHEDULER_INTERVAL_S must be an "
+            f"integer, got {raw_interval!r}",
+            file=sys.stderr,
+        )
+        return 1
+    if interval_s <= 0:
+        print(
+            f"scheduler_daemon: PIPELINE_SCHEDULER_INTERVAL_S must be a "
+            f"positive integer, got {interval_s}",
+            file=sys.stderr,
+        )
+        return 1
+
+    lock_path = PLAN_DIR / ".scheduler_daemon.lock"
+    # Held for the process lifetime: do not close this fd or let it go out of
+    # scope before run_forever() runs, or the flock releases early.
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(
+            "scheduler_daemon: another instance already holds the lock at "
+            f"{lock_path}, exiting",
+            file=sys.stderr,
+        )
+        os.close(lock_fd)
+        return 1
+
+    health_path = os.environ.get("PIPELINE_SCHEDULER_HEALTH_PATH") or None
+
+    bus = build_bus()
+
+    def scan_fn():
+        scan_all_plans(bus)
+
+    # Lazy import: pipeline.server imports from this module at import time,
+    # so importing it here at module level would be circular.
+    from .server import advance_all_plans
+
+    daemon = SchedulerDaemon(
+        reconcile_fn=advance_all_plans,
+        scan_fn=scan_fn,
+        bus=bus,
+        interval_s=interval_s,
+        health_path=health_path,
+    )
+    daemon.run_forever(threading.Event())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run_daemon())

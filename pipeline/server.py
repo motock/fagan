@@ -681,6 +681,12 @@ class Store(Protocol):
 
     def transaction(self, plan_name: str): ...
 
+    def list_plans(self) -> list[str]: ...
+    def list_manifests(self) -> list[str]: ...
+    def update_story(self, plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any] | None: ...
+    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None: ...
+    def append_journal(self, plan_name: str, story_key: str, record: dict[str, Any]) -> None: ...
+
 
 class FileStore:
     """The JSON-files-in-PLAN_DIR Store, behaviourally identical to the raw
@@ -718,6 +724,35 @@ class FileStore:
         bool and skip all work when it is False."""
         return _plan_lock(plan_name)
 
+    def list_plans(self) -> list[str]:
+        return [f.stem for f in PLAN_DIR.glob("*.json")]
+
+    def list_manifests(self) -> list[str]:
+        return [
+            mp.name.removesuffix(".manifest.json")
+            for mp in sorted(PLAN_DIR.glob("*.manifest.json"))
+        ]
+
+    def update_story(
+        self, plan_name: str, story_key: str, fields: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Apply ``fields`` to one story and persist. Returns the updated story,
+        or None when the story does not exist (the caller owns the error shape)."""
+        manifest = self.get_manifest(plan_name)
+        story = manifest["stories"].get(story_key)
+        if story is None:
+            return None
+        story.update(fields)
+        self.save_manifest(plan_name, manifest)
+        return story
+
+    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None:
+        _append_decision(plan_name, record)
+
+    def append_journal(
+        self, plan_name: str, story_key: str, record: dict[str, Any]
+    ) -> None:
+        _append_journal(plan_name, story_key, record)
 
 _store = FileStore()
 

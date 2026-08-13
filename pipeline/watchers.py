@@ -16,7 +16,6 @@ from .events import make_event
 
 logger = logging.getLogger(__name__)
 
-
 def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
     """Scan ``manifest`` for agent completion markers.
 
@@ -74,26 +73,30 @@ def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
         try:
             with open(marker_path, "r", encoding="utf-8") as fh:
                 payload = json.load(fh)
+            # Validate payload is a dict
+            if not isinstance(payload, dict):
+                logger.warning(
+                    "Non-dict .agent_done marker in %s – skipping; file left for debugging",
+                    marker_path,
+                )
+                continue
         except json.JSONDecodeError:
             logger.warning(
                 "Malformed .agent_done marker in %s – skipping; file left for debugging",
                 marker_path,
             )
             continue
-        except Exception:  # pragma: no cover – defensive, unlikely.
+        except Exception:
             logger.exception("Unexpected error reading %s", marker_path)
             continue
 
-        event = make_event(
-            "agent_done", plan, story_key=story_key, payload=payload
-        )
+        event = make_event("agent_done", plan, story_key=story_key, payload=payload)
         bus.publish(event)
         events.append(event)
 
-        # Rename the marker to indicate it has been consumed.
         try:
             os.replace(marker_path, os.path.join(worktree, ".agent_done.consumed"))
-        except Exception:  # pragma: no cover – unlikely but safe.
+        except Exception:
             logger.exception("Failed to rename %s", marker_path)
 
     return events

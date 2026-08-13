@@ -12,6 +12,7 @@ import json
 import logging
 import os
 
+from . import paths
 from .events import make_event
 
 logger = logging.getLogger(__name__)
@@ -99,4 +100,32 @@ def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
         except Exception:
             logger.exception("Failed to rename %s", marker_path)
 
+    return events
+
+def scan_all_plans(bus):
+    """Scan all plan manifests in :data:`PLAN_DIR` and publish events.
+
+    The function iterates over every ``*.manifest.json`` file in the directory
+    specified by :data:`pipeline.paths.PLAN_DIR`.  For each manifest it:
+
+    * Parses the JSON; if the file is missing or malformed a warning is logged
+      and the plan is skipped.
+    * Skips any manifest that has a truthy ``paused`` key.
+    * Delegates to :func:`scan_done_markers` for the actual event publishing.
+
+    The returned list contains all events produced across every plan, flattened
+    into a single list.
+    """
+    events: list[dict] = []
+    for path in sorted(paths.PLAN_DIR.glob("*.manifest.json")):
+        plan_name = path.name.removesuffix(".manifest.json")
+        try:
+            manifest_text = path.read_text()
+            manifest = json.loads(manifest_text)
+        except (OSError, json.JSONDecodeError) as exc:  # pragma: no cover - exercised via tests
+            logger.warning("Failed to read or parse %s: %s", path, exc)
+            continue
+        if manifest.get("paused"):
+            continue
+        events.extend(scan_done_markers(manifest, plan_name, bus))
     return events

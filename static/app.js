@@ -91,6 +91,7 @@ function defaultFilters() {
     backends: [], // [] = no backend filter (show all); "local" | "claude"
     escalated: [], // [] = no escalation filter (show all); "yes" | "no"
     sort: "key", // "key" | "risk" | "activity"
+    search: "", // free-text search term; "" = match all
   };
 }
 
@@ -111,6 +112,7 @@ const HASH_KEYS = {
   backend: "backends",
   escalated: "escalated",
   sort: "sort",
+  q: "search",
 };
 
 // Build a `{plan, filters}` snapshot from current state, suitable for either
@@ -126,6 +128,7 @@ function hashStateFrom(s) {
       backends: [...s.filters.backends],
       escalated: [...s.filters.escalated],
       sort: s.filters.sort,
+      search: s.filters.search,
     },
   };
 }
@@ -165,6 +168,9 @@ function encodeHashState() {
   }
   if (snap.filters.sort !== "key") {
     parts.push(`sort=${encodeURIComponent(snap.filters.sort)}`);
+  }
+  if (snap.filters.search) {
+    parts.push(`q=${encodeURIComponent(snap.filters.search)}`);
   }
 
   return parts.join("&");
@@ -216,6 +222,14 @@ function parseHash(raw) {
       } catch {
         /* ignore */
       }
+      continue;
+    }
+
+    if (dim === "search") {
+      try {
+        const q = decodeURIComponent(value);
+        if (q) out.filters.search = q;
+      } catch { /* malformed encoding -> ignore */ }
       continue;
     }
 
@@ -443,19 +457,21 @@ function activityScore(story) {
 // then sort per state.filters.sort. Status filtering happens at the column
 // level in renderBoard, not here.
 function applyFilters(entries) {
-  const { personas, risks, backends, escalated, sort } = state.filters;
+  const { personas, risks, backends, escalated, sort, search } = state.filters;
+  const term = (search || "").trim().toLowerCase();
   // A story without a `backend` field is treated as "local" (the orchestrator
   // hasn't chosen anything else yet). This must agree with the badge logic
   // in renderBoard so a missing backend never leaks as "undefined".
   const storyBackend = (s) => (s && s.backend) ? s.backend : "local";
   const storyEscalated = (s) => !!(s && s.escalated);
-  const filtered = entries.filter(([, s]) =>
+  const filtered = entries.filter(([key, s]) =>
     (personas.length === 0 || personas.includes(s.persona))
     && (risks.length === 0 || risks.includes(s.risk))
     && (backends.length === 0 || backends.includes(storyBackend(s)))
     && (escalated.length === 0
         || (escalated.includes("yes") && storyEscalated(s))
-        || (escalated.includes("no") && !storyEscalated(s))));
+        || (escalated.includes("no") && !storyEscalated(s)))
+    && (term === "" || (String(key) + " " + (s.summary || "")).toLowerCase().includes(term)));
 
   const comparators = {
     key: ([a], [b]) => a.localeCompare(b, undefined, { numeric: true }),
@@ -547,6 +563,11 @@ function renderBoard(stories) {
   if (!columns) {
     return '<div class="board"><p class="empty-state">No statuses selected.</p></div>';
   }
+  const term = (state.filters.search || "").trim();
+  const anyCards = columns.includes('data-key="');
+  if (term && !anyCards) {
+    return `<div class="board"><div class="board-empty">No matches for "${escapeHtml(term)}"</div></div>`;
+  }
   return `<div class="board">${columns}</div>`;
 }
 
@@ -573,7 +594,15 @@ function renderFilterBar(stories) {
   const hasAnyEscalation = all.some((s) => s && s.escalated);
 
   const { filters } = state;
+  const term = (filters.search || "").trim().toLowerCase();
+  const matchCount = all.filter((s) =>
+    term === "" || (String(s.key || "") + " " + (s.summary || "")).toLowerCase().includes(term)
+  ).length;
+  const countLabel = term === "" ? "" : `<span class="filter-match-count">${matchCount} match${matchCount === 1 ? "" : "es"}</span>`;
   const groups = [
+    `<div class="filter-group filter-search-group"><span class="filter-group-label">Search</span>` +
+    `<input class="filter-search" type="search" placeholder="Search key or summary…" value="${escapeHtml(filters.search || "")}" data-action="search" />` +
+    `${countLabel}</div>`,
     `<div class="filter-group"><span class="filter-group-label">Status</span>${
       STATUS_COLUMNS.map((s) =>
         chip("statuses", s, s, filters.statuses.includes(s), s)).join("")
@@ -680,6 +709,15 @@ function renderPlanDetail(plan) {
       renderPlanDetail(plan);
     });
   });
+  const searchInput = section.querySelector(".filter-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      state.filters.search = searchInput.value;
+      saveFilters();
+      updateHash();
+      renderPlanDetail(plan);
+    });
+  }
   const resetBtn = section.querySelector(".filter-reset");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {

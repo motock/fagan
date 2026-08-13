@@ -586,7 +586,7 @@ def exclude_runtime_artifacts() -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.read_text() if path.exists() else ""
-        additions = [p for p in ("agent.log", "__pycache__/", "*.pyc", ".agent_transcript.json") if p not in existing]
+        additions = [p for p in ("agent.log", "__pycache__/", "*.pyc", ".agent_transcript.json", ".agent_done", ".agent_done.tmp", ".agent_done.consumed") if p not in existing]
         if additions:
             path.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "")
                             + "\n".join(additions) + "\n")
@@ -1443,7 +1443,7 @@ def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
     return None  # all rounds exhausted on a persistent failure
 
 
-def main() -> int:
+def _main_impl() -> int:
     # A fresh dispatch has no calibration data yet - clear any value left
     # over from a prior dispatch that shared this process (or, in-process, a
     # prior test). Ported from local_agent.py; keep both copies in sync.
@@ -1860,6 +1860,29 @@ def main() -> int:
     if worktree_dirty():
         auto_commit("WIP (step cap reached)")
     return 2
+
+
+_DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}
+
+
+def main() -> int:
+    """Run the agent loop, then drop a completion marker for the orchestrator.
+
+    Written last, so its existence means the agent has genuinely finished. A
+    marker failure never changes the run's exit code."""
+    rc = _main_impl()
+    try:
+        marker = {
+            "reason": _DONE_REASONS.get(rc, "error"),
+            "exit_code": rc,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp = CWD / ".agent_done.tmp"
+        tmp.write_text(json.dumps(marker) + "\n", encoding="utf-8")
+        os.replace(tmp, CWD / ".agent_done")
+    except Exception as e:  # noqa: BLE001 - a marker failure must never mask the run's exit code
+        print(f"[warn] .agent_done marker not written: {e}", flush=True)
+    return rc
 
 
 if __name__ == "__main__":

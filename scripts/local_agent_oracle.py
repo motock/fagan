@@ -79,37 +79,45 @@ from app import pipeline_mcp_server as p
 from pipeline import edit_guards
 from pipeline.local_agent_common import (
     CWD,
-    DESTRUCTIVE_GIT_PATTERNS,
     PersistingList,
-    _answer_orphaned_calls,
-    _DIGEST_MAX_CHARS,
-    _dropped_span_digest,
     _dropped_top_level_defs,
-    _evict_tool_outputs,
-    _EVICT_HEAD_CHARS,
-    _EVICT_KEEP_RECENT,
     _is_context_overflow_error,
     _load_resume_transcript,
-    _loads_tolerant,
     _message_char_len,
-    _OVERFLOW_BODY_MARKERS,
     _persist_messages,
-    _repetition_nudge,
     _str_replace_not_found_diag,
-    _strip_eviction_marker,
-    _TEST_COMMAND_MARKERS,
-    _tool_call_pairs,
     _total_chars,
     _trim_resumed_transcript,
-    _validate_message_list,
-    _VALID_ROLES,
-    _whitespace_visible,
     destructive_git_op,
-    exclude_runtime_artifacts,
-    git,
-    recover_tool_calls,
-    worktree_dirty,
 )
+
+# _answer_orphaned_calls, _DIGEST_MAX_CHARS, _dropped_span_digest,
+# _evict_tool_outputs, _EVICT_HEAD_CHARS, _EVICT_KEEP_RECENT,
+# _OVERFLOW_BODY_MARKERS, _repetition_nudge, _strip_eviction_marker,
+# _TEST_COMMAND_MARKERS, _tool_call_pairs, _validate_message_list,
+# _VALID_ROLES, _whitespace_visible, and DESTRUCTIVE_GIT_PATTERNS also moved
+# to local_agent_common, but aren't imported here: nothing in this file (or
+# its tests) calls them directly — they're only reachable as internal
+# implementation details of other functions that already live in
+# local_agent_common (e.g. _tool_call_pairs is only used inside
+# local_agent_common's own _dropped_span_digest). Importing an unused name
+# is a lint error (F401), so they're left off this list.
+#
+# NOTE: git, exclude_runtime_artifacts, worktree_dirty, _loads_tolerant, and
+# recover_tool_calls are intentionally NOT imported from local_agent_common
+# despite being byte-identical/behaviorally-identical there. Each reads a
+# caller-supplied value (CWD for the first three; the local
+# _repair_triple_quoted_strings callback for the last two) via its OWN
+# module's globals, not the importing module's. A bare import would silently
+# break two real things: (1) tests that monkeypatch THIS module's CWD to
+# redirect git/exclude_runtime_artifacts/worktree_dirty at a tmp_path repo
+# would instead operate on the real worktree, since the imported functions'
+# CWD lookup resolves against pipeline.local_agent_common's own globals; (2)
+# recover_tool_calls's triple-quote repair fallback (this module's own
+# _repair_triple_quoted_strings, defined below) would stop firing in
+# production, since the shared function's repair callback defaults to None
+# and every call site here (including tests) invokes it with one argument.
+# Kept local so each continues to close over this module's own globals.
 
 MODEL = os.environ["LOCAL_AGENT_MODEL"]
 ENDPOINT = os.environ.get("LOCAL_AGENT_ENDPOINT", "http://localhost:11434").rstrip("/")
@@ -499,6 +507,94 @@ def _repair_triple_quoted_strings(candidate):
         inner = m.group(1) if m.group(1) is not None else m.group(2)
         return json.dumps(inner)
     return re.sub(r'"""(.*?)"""|\'\'\'(.*?)\'\'\'', _sub, candidate, flags=re.DOTALL)
+
+
+def _loads_tolerant(candidate):
+    """json.loads, tolerating raw control characters inside strings, with a
+    triple-quote repair pass as a further fallback. Valid JSON is never
+    transformed - both fallbacks only ever ACCEPT more inputs than a strict
+    parse would, never reinterpret one that already parses.
+
+    strict=False (observed live, 2026-07-17, Qwen2.5-Coder-14B-4bit on mlx,
+    interval_merge task, the benchmark harness this oracle agent is
+    dispatched through): a distinct malformation from the triple-quote case
+    below - the model uses ordinary double-quoted JSON string syntax for a
+    multi-line create_file `content` argument, but embeds a RAW literal
+    newline instead of escaping it as `\\n`. A strict parse rejects this
+    ("Invalid control character"); the triple-quote repair does not apply
+    (no triple quotes present), so the tool call was silently dropped every
+    retry and the agent looped regenerating the same correct-but-unparseable
+    content until the wall-clock park, with the real fix never landing.
+    json.loads(strict=False) permits control characters (newlines, tabs,
+    etc.) inside strings without weakening validation of anything else -
+    it never accepts input a strict parse would reject, it only stops
+    rejecting on this one class of already-well-structured input.
+
+    Kept in sync with scripts/local_agent.py's copy (this module is a
+    verbatim port of that agent for oracle grading)."""
+    try:
+        return json.loads(candidate, strict=False)
+    except json.JSONDecodeError:
+        pass
+    repaired = _repair_triple_quoted_strings(candidate)
+    if repaired != candidate:
+        try:
+            return json.loads(repaired, strict=False)
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def recover_tool_calls(content):
+    """Pull a tool call out of message text when the native field is empty."""
+    if not content:
+        return None
+    text = content.strip().replace("[TOOL_CALLS]", "")
+    candidates = re.findall(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
+    m = re.search(r"(\[\s*\{.*\}\s*\]|\{.*\})", text, re.DOTALL)
+    if m:
+        candidates.append(m.group(1))
+    for c in candidates:
+        obj = _loads_tolerant(c)
+        if obj is None:
+            continue
+        items = obj if isinstance(obj, list) else [obj]
+        out = [{"function": {"name": it["name"], "arguments": it.get("arguments", it.get("parameters", {}))}}
+               for it in items if isinstance(it, dict) and "name" in it]
+        if out:
+            return out
+    return None
+
+
+def git(*args):
+    return subprocess.run(["git", *args], check=False, cwd=CWD, capture_output=True, text=True)
+
+
+def exclude_runtime_artifacts() -> None:
+    """Keep dispatch runtime junk out of git. agent.log lives *inside* the
+    worktree and is written live, so without this it would (a) make the tree
+    perpetually "dirty" — tripping commit-enforcement on every `done` — and
+    (b) get swept into commits by `git add -A` and carried into the eventual
+    merge. Same for pytest's __pycache__/*.pyc. Written to git's real
+    info/exclude path, which `git rev-parse --git-path` resolves correctly
+    whether .git is a directory (plain repo) or a file (a `git worktree`)."""
+    rel = git("rev-parse", "--git-path", "info/exclude").stdout.strip()
+    if not rel:
+        return
+    path = Path(rel) if os.path.isabs(rel) else CWD / rel
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text() if path.exists() else ""
+        additions = [p for p in ("agent.log", "__pycache__/", "*.pyc", ".agent_transcript.json") if p not in existing]
+        if additions:
+            path.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "")
+                            + "\n".join(additions) + "\n")
+    except OSError:
+        pass
+
+
+def worktree_dirty() -> bool:
+    return bool(git("status", "--porcelain").stdout.strip())
 
 
 def auto_commit(reason: str) -> None:

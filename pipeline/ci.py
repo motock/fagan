@@ -43,8 +43,9 @@ def _repo_has_ci_configured() -> bool:
     Linux CI job because an empty ``gh pr checks`` result was treated
     identically to "no CI configured".
     """
-    repo_root = REPO_ROOT if REPO_ROOT is not None else (lambda: __import__(".server", globals(), locals(), [], 1).REPO_ROOT)()
-    return (Path(repo_root) / ".github" / "workflows").is_dir()
+    from .server import REPO_ROOT
+
+    return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
 
 
 def _ci_status(

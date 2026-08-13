@@ -1411,6 +1411,64 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             # No-ops for non-Python projects or ones without a
             # requirements file.
             _provision_worktree_venv(worktree_path)
+        else:
+            # Resumed dispatch (interrupted / changes_requested / existing
+            # worktree): the worktree was branched from origin/<default> at
+            # some prior point. If origin's default branch has moved since
+            # then (e.g. an urgent fix landed via a separate PR between the
+            # original dispatch and this resume), the resumed agent's diff
+            # would be based on a stale base and could spuriously revert that
+            # fix and delete its regression tests - see retro
+            # mcp-self-mod-notice_2026-07-31 (PR #213 incident). Detect that
+            # here and notify; do NOT auto-rebase (separate, riskier
+            # follow-up). Fail open: any git error (e.g. a network issue on
+            # the fetch) is logged and swallowed so dispatch still proceeds -
+            # this is an observability hook, never a gate. Stateless across
+            # calls: no flag/cache is set, each resumed dispatch re-fetches
+            # and re-checks independently. Only runs for a real git worktree
+            # (a `.git` file/dir at the worktree root); a plain directory is
+            # not a git worktree and the rev-list probe cannot run there.
+            if (worktree_path / ".git").exists():
+                try:
+                    with _scoped_repo_root(plan_name) as repo_root:
+                        with _try_acquire_git_lock(repo_root) as acquired:
+                            if acquired:
+                                subprocess.run(
+                                    ["git", "fetch", "origin", _default_branch()],
+                                    cwd=repo_root,
+                                    check=True,
+                                )
+                        count_out = subprocess.run(
+                            [
+                                "git",
+                                "rev-list",
+                                "--count",
+                                f"{branch}..origin/{_default_branch()}",
+                            ],
+                            cwd=repo_root,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        )
+                        behind = int(count_out.stdout.strip() or "0")
+                        if behind > 0:
+                            msg = (
+                                f"story {story_key} is being resumed but its "
+                                f"worktree base predates the current "
+                                f"origin/{_default_branch()} by {behind} "
+                                f"commit(s); the resumed diff may revert work "
+                                f"that landed on the default branch since the "
+                                f"worktree was created. Rebase the worktree onto "
+                                f"origin/{_default_branch()} before proceeding."
+                            )
+                            _notify_user(plan_name, msg)
+                            logging.getLogger("pipeline").warning(msg)
+                except Exception:  # observability hook, never a gate
+                    logging.getLogger("pipeline").warning(
+                        "staleness check for resumed story %s failed; "
+                        "dispatching anyway (fail open)", story_key,
+                        exc_info=True,
+                    )
 
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 

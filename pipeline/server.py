@@ -1778,6 +1778,11 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             )
             if plan_text:
                 plan_path.write_text(plan_text)
+                plan_hash_path.write_text(
+                    hashlib.sha256(
+                        story.get("agent_instructions", "").encode()
+                    ).hexdigest()
+                )
         # Referencing an existing plan is independent of generating one, so
         # a resumed dispatch that rebuilds its prompt from scratch (no
         # transcript to resume) still sees the checklist from the story's

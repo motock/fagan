@@ -506,7 +506,8 @@ TOOLS = [
     {"type": "function", "function": {
         "name": "str_replace", "description": "Replace the single unique occurrence of old_str with new_str in an existing file.",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"}, "old_str": {"type": "string"}, "new_str": {"type": "string"}},
+            "path": {"type": "string"}, "old_str": {"type": "string"}, "new_str": {"type": "string"},
+            "confirm_removals": {"type": "boolean", "description": "Set true to confirm you intend to delete the top-level def/class/constant the previous attempt reported as permanently removed. Only needed after a rejected edit that fully removes a top-level symbol."}},
             "required": ["path", "old_str", "new_str"]}}},
     {"type": "function", "function": {
         "name": "replace_lines", "description": "Replace lines start..end (1-indexed, inclusive) in an existing file with new_str. Use this when str_replace's old_str will not match (e.g. whitespace differences): give the exact line numbers from `nl -ba <file> | sed -n '<start>,<end>p'` and the new content; no byte-exact old_str is required. If the line numbers came from an earlier view_file, supply expect_first/expect_last so stale numbers are caught before the edit is applied.",
@@ -1295,6 +1296,32 @@ def run_tool(fn, args) -> str:
                 f"assignment, remove the surviving use too, or replace it with an "
                 f"equivalent. The edit was NOT applied."
             )
+        # Unconditional top-level-symbol-loss check: name any def/class/
+        # constant that this edit removes in its entirety, even when no
+        # same-file reference survives (the symbol may be consumed by OTHER
+        # files). The gate fires only when a top-level def/class is fully
+        # removed (the incident shape: an over-wide range wiping out whole
+        # functions); a constant-only drop is a legitimate refactor the
+        # existing orphaned-name guard already governs, so it must not block
+        # here. When the gate fires it names ALL dropped symbols (defs +
+        # vars). Gated by confirm_removals so an intentional removal still
+        # goes through when the flag is set, and it does not block edits that
+        # remove no complete top-level def/class.
+        dropped_defs = _dropped_top_level_defs(text, new_text)
+        if path.suffix == ".py":
+            dropped_vars = _dropped_top_level_vars(text, new_text)
+        else:
+            dropped_vars = []
+        dropped = dropped_defs + dropped_vars
+        if dropped_defs and not args.get("confirm_removals"):
+            return (
+                f"ERROR: this edit to {args['path']} permanently removes these "
+                f"top-level symbols in their entirety: {', '.join(dropped)}. "
+                f"These may be public API consumed by other files. If this is "
+                f"unintentional, keep the definition in new_str. If the removal "
+                f"is intentional, repeat this exact call with "
+                f"confirm_removals=true. The edit was NOT applied."
+            )
         path.write_text(new_text)
         _SYNTAX_REJECT_COUNTS.pop(args["path"], None)
         return (f"edited {args['path']}" + (f" ({note})" if note else "")
@@ -1348,10 +1375,25 @@ def run_tool(fn, args) -> str:
         deletions, rewrites = edit_guards.classify_removed_lines(lines[start - 1:end], new_str)
         if deletions and not args.get("confirm_removals"):
             report = edit_guards.render_removal_report(deletions, rewrites)
+            # Unconditional top-level-symbol-loss check: name any def/class/
+            # constant that this range removes in its entirety, even when no
+            # same-file reference survives (the symbol may be consumed by OTHER
+            # files). This only ENRICHES the existing confirm_removals-gated
+            # rejection message -- it is not a separate blocking gate, so
+            # confirm_removals=true still short-circuits past it untouched.
+            dropped = _dropped_top_level_defs(old_text, new_text)
+            if path.suffix == ".py":
+                dropped += _dropped_top_level_vars(old_text, new_text)
+            symbol_note = ""
+            if dropped:
+                symbol_note = (
+                    f"This edit also permanently removes these top-level symbols "
+                    f"in their entirety: {', '.join(dropped)}\n"
+                )
             return (
                 f"ERROR: this edit to {args['path']} deletes {len(deletions)} line(s) "
                 f"that don't appear to survive (as-is or rewritten) in your replacement:"
-                f"{report}\n\nRevise new_str to preserve these lines, or if the deletion "
+                f"{symbol_note}{report}\n\nRevise new_str to preserve these lines, or if the deletion "
                 f"is intentional, repeat this exact call with confirm_removals=true. "
                 f"The edit was NOT applied."
             )

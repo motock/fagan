@@ -3188,3 +3188,124 @@ def test_oracle_removed_lines_echo_helper_is_deleted():
 def test_oracle_counter_import_removed_as_dead_code_but_deque_kept():
     assert not hasattr(lao, "Counter")
     assert hasattr(lao, "deque")
+
+
+# ---------------------------------------------------------------------------
+# Issue 97a29c75 (oracle mirror): wire the unconditional top-level-symbol-loss
+# check into replace_lines/str_replace and name lost symbols explicitly.
+# Mirrors the local_agent.py tests exactly so the two-file mirror stays in sync.
+# ---------------------------------------------------------------------------
+
+def test_oracle_replace_lines_names_dropped_top_level_symbols(tmp_path, monkeypatch):
+    """replace_lines whose range fully removes an unreferenced top-level
+    function AND constant must name both symbols in the rejection."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = (
+        "def helper_func():\n"
+        "    return 1\n"
+        "\n"
+        "SOME_CONST = 42\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = lao.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 1,
+        "end": 5,
+        "new_str": "# unrelated comment\n",
+    })
+    assert "The edit was NOT applied." in result
+    assert "helper_func" in result
+    assert "SOME_CONST" in result
+
+
+def test_oracle_str_replace_names_dropped_top_level_symbols(tmp_path, monkeypatch):
+    """str_replace whose old_str fully covers an unreferenced top-level
+    function AND constant must name both symbols in the rejection."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = (
+        "def helper_func():\n"
+        "    return 1\n"
+        "\n"
+        "SOME_CONST = 42\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    old_str = "def helper_func():\n    return 1\n\nSOME_CONST = 42\n"
+    result = lao.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": old_str,
+        "new_str": "# unrelated comment\n",
+    })
+    assert "The edit was NOT applied." in result
+    assert "helper_func" in result
+    assert "SOME_CONST" in result
+
+
+def test_oracle_replace_lines_confirm_removals_true_applies_dropped_symbol_edit(tmp_path, monkeypatch):
+    """The bypass: the same edit that names dropped symbols must still apply
+    when confirm_removals=true is passed (existing bypass behavior preserved)."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = (
+        "def helper_func():\n"
+        "    return 1\n"
+        "\n"
+        "SOME_CONST = 42\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = lao.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 1,
+        "end": 5,
+        "new_str": "# unrelated comment\n",
+        "confirm_removals": True,
+    })
+    assert "The edit was NOT applied." not in result
+    assert result.startswith("edited mod.py")
+    written = (tmp_path / "mod.py").read_text()
+    assert "helper_func" not in written
+    assert "SOME_CONST" not in written
+    assert "keeper" in written
+
+
+def test_oracle_replace_lines_no_full_symbol_removed_keeps_raw_report_only(tmp_path, monkeypatch):
+    """Negative (a): removing lines from INSIDE a function body (no complete
+    top-level symbol removed) must NOT trigger the new symbol-naming line."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = (
+        "def keeper():\n"
+        "    do_thing()\n"
+        "    time.sleep(10)\n"
+        "    return\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = lao.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 3,
+        "new_str": "    do_thing()\n",
+    })
+    assert "permanently removes these top-level symbols" not in result
+
+
+def test_oracle_str_replace_rename_names_old_symbol_as_removed(tmp_path, monkeypatch):
+    """Negative (b): a str_replace that renames a top-level function
+    (old_name -> new_name) must name old_name as removed."""
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    original = "def old_name():\n    return 1\n"
+    (tmp_path / "mod.py").write_text(original)
+    result = lao.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "def old_name():\n    return 1\n",
+        "new_str": "def new_name():\n    return 1\n",
+    })
+    assert "The edit was NOT applied." in result
+    assert "old_name" in result

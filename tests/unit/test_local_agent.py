@@ -4020,3 +4020,132 @@ def test_repetition_guard_answers_all_orphaned_calls_in_a_multi_call_turn(
         f"expected exactly 1 stub answer for the orphaned 4th call, "
         f"got {len(orphan_stubs)}: {messages!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue 97a29c75: wire the unconditional top-level-symbol-loss check into
+# replace_lines/str_replace and name lost symbols explicitly in the removal
+# report. A replace_lines/str_replace whose range fully removes an unrelated,
+# already-correct top-level function/constant (consumed by OTHER files, never
+# referenced in the same file) must name those symbols explicitly in the
+# rejection message, and confirm_removals=true must still let the edit through.
+# ---------------------------------------------------------------------------
+
+def test_replace_lines_names_dropped_top_level_symbols(tmp_path, monkeypatch):
+    """replace_lines whose range fully removes an unreferenced top-level
+    function AND constant must name both symbols in the rejection."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def helper_func():\n"
+        "    return 1\n"
+        "\n"
+        "SOME_CONST = 42\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    # Lines 1-5 cover helper_func + SOME_CONST (and the blank line), replacing
+    # them with an unrelated comment. Neither symbol is referenced in-file.
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 1,
+        "end": 5,
+        "new_str": "# unrelated comment\n",
+    })
+    assert "The edit was NOT applied." in result
+    assert "helper_func" in result
+    assert "SOME_CONST" in result
+
+
+def test_str_replace_names_dropped_top_level_symbols(tmp_path, monkeypatch):
+    """str_replace whose old_str fully covers an unreferenced top-level
+    function AND constant must name both symbols in the rejection."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def helper_func():\n"
+        "    return 1\n"
+        "\n"
+        "SOME_CONST = 42\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    old_str = "def helper_func():\n    return 1\n\nSOME_CONST = 42\n"
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": old_str,
+        "new_str": "# unrelated comment\n",
+    })
+    assert "The edit was NOT applied." in result
+    assert "helper_func" in result
+    assert "SOME_CONST" in result
+
+
+def test_replace_lines_confirm_removals_true_applies_dropped_symbol_edit(tmp_path, monkeypatch):
+    """The bypass: the same edit that names dropped symbols must still apply
+    when confirm_removals=true is passed (existing bypass behavior preserved)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def helper_func():\n"
+        "    return 1\n"
+        "\n"
+        "SOME_CONST = 42\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 1,
+        "end": 5,
+        "new_str": "# unrelated comment\n",
+        "confirm_removals": True,
+    })
+    assert "The edit was NOT applied." not in result
+    assert result.startswith("edited mod.py")
+    written = (tmp_path / "mod.py").read_text()
+    assert "helper_func" not in written
+    assert "SOME_CONST" not in written
+    assert "keeper" in written
+
+
+def test_replace_lines_no_full_symbol_removed_keeps_raw_report_only(tmp_path, monkeypatch):
+    """Negative (a): removing lines from INSIDE a function body (no complete
+    top-level symbol removed) must NOT trigger the new symbol-naming line."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "def keeper():\n"
+        "    do_thing()\n"
+        "    time.sleep(10)\n"
+        "    return\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("replace_lines", {
+        "path": "mod.py",
+        "start": 2,
+        "end": 3,
+        "new_str": "    do_thing()\n",
+    })
+    # The edit is rejected (a true deletion of the time.sleep line), but it
+    # must NOT carry the new named-symbol line because no complete top-level
+    # symbol was removed.
+    assert "permanently removes these top-level symbols" not in result
+
+
+def test_str_replace_rename_names_old_symbol_as_removed(tmp_path, monkeypatch):
+    """Negative (b): a str_replace that renames a top-level function
+    (old_name -> new_name) must name old_name as removed (unconditional-drop
+    semantics from the prerequisite story flag renames)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = "def old_name():\n    return 1\n"
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "def old_name():\n    return 1\n",
+        "new_str": "def new_name():\n    return 1\n",
+    })
+    assert "The edit was NOT applied." in result
+    assert "old_name" in result

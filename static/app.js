@@ -601,7 +601,7 @@ function renderFilterBar(stories) {
   const countLabel = term === "" ? "" : `<span class="filter-match-count">${matchCount} match${matchCount === 1 ? "" : "es"}</span>`;
   const groups = [
     `<div class="filter-group filter-search-group"><span class="filter-group-label">Search</span>` +
-    `<input class="filter-search" type="search" placeholder="Search key or summary…" value="${escapeHtml(filters.search || "")}" data-action="search" />` +
+    `<input class="filter-search" type="search" placeholder="Search key or summary…" value="${escapeHtml(filters.search || "")}" data-action="search"></input>` +
     `${countLabel}</div>`,
     `<div class="filter-group"><span class="filter-group-label">Status</span>${
       STATUS_COLUMNS.map((s) =>

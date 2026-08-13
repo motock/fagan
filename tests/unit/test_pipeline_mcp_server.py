@@ -6749,7 +6749,11 @@ def test_advance_pipeline_ci_pending_blocks_merge(plan_dir, monkeypatch):
 
     story = _read_manifest(plan_dir, "cipending")["stories"]["P1"]
     assert story["status"] == "pr_open"
-    assert story["merge_attempts"] == 1
+    # Non-blocking S5 contract: a pending CI result yields the tick back to the
+    # scheduler (sets ci_pending_since) instead of blocking with a gate_error
+    # that would consume a merge attempt.
+    assert story.get("ci_pending_since") is not None
+    assert "merge_attempts" not in story
     assert result["merged"] == []
 
 

@@ -54,7 +54,8 @@ def _manifest_path(plan_name: str) -> Path:
 
 def _notifications_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.notifications.log"
-
+def _notifications_jsonl_path(plan_name: str) -> Path:
+    return PLAN_DIR / f"{plan_name}.notifications.jsonl"
 
 def _decisions_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.decisions.json"
@@ -197,7 +198,39 @@ def _tail_notifications(plan_name: str, limit: int = 100) -> list[str]:
         return []
     lines = path.read_text().splitlines()
     return lines[-limit:]
-
+def _tail_notification_records(plan_name: str, limit: int = 100) -> list[dict[str, Any]]:
+    path = _notifications_jsonl_path(plan_name)
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        ts = str(obj.get("ts", ""))
+        message = str(obj.get("message", ""))
+        severity = obj.get("severity")
+        if severity not in ("info", "warning", "error"):
+            severity = "info"
+        else:
+            severity = str(severity)
+        story_key = obj.get("story_key")
+        event = obj.get("event")
+        dedup_key = obj.get("dedup_key")
+        records.append({
+            "ts": ts,
+            "message": message,
+            "severity": severity,
+            "story_key": story_key,
+            "event": event,
+            "dedup_key": dedup_key,
+        })
+    return records[-limit:]
 
 def _read_decisions(plan_name: str) -> list[dict[str, Any]]:
     path = _decisions_path(plan_name)
@@ -726,6 +759,7 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         "epics": manifest.get("epics", {}),
         "stories": decorated_stories,
         "notifications": _tail_notifications(plan_name),
+        "notification_records": _tail_notification_records(plan_name),
         "decisions": _read_decisions(plan_name),
     }
 

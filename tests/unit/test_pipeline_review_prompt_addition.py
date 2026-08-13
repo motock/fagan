@@ -74,3 +74,24 @@ def test_run_reviewer_backend_matching_registry_provider_keeps_registry_model(
     monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
     assert captured["model"] == "glm-5.2:cloud"
+
+
+def test_run_reviewer_forbids_test_suite_rerun(monkeypatch):
+    """The reviewer must be told NOT to re-run the test suite (CI already ran
+    it; that is the precondition for review) and warned that `python` is not
+    on PATH in the worktree. Without this, a reviewer that drifts off-task
+    invents `python -m pytest ...`, the bare `python` is not on PATH, the
+    command fails, the reviewer flails retrying, exhausts its step budget, and
+    returns no verdict - parking the story as inconclusive (UNKNOWN)."""
+    captured = {}
+
+    class _FakeDriver:
+        def complete(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p.backend, "get_backend", lambda role, name=None: _FakeDriver())
+    p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
+    prompt = captured["prompt"]
+    assert "Do NOT run the test suite" in prompt
+    assert "python is NOT on PATH" in prompt

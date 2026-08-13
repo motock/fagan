@@ -44,6 +44,10 @@
     }
   },
   "roles": {
+    "overlord": {
+      "provider": "ollama",
+      "model": "glm"
+    },
     "dispatch": {
       "provider": "ollama",
       "model": "gpt-oss-20b-high"

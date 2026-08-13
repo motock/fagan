@@ -468,6 +468,50 @@ stories (TDD-split stays strictly read-only). Tests in
       `load_oracle_module_with_env`/`load_module_with_env` mutating
       `os.environ` without cleanup; fixed with an `autouse` environ-snapshot
       fixture in both test files, plus a regression test pair.
+- [x] **Mode 52 (found 2026-08-12, FIXED 2026-08-13, PR #301, plan
+      `harness-guard-hardening-mode52-55`) — `create_file`'s content-loss
+      guard had no check for dropped module-level constants/dict literals,
+      only def/class.** `_dropped_top_level_defs`
+      (`scripts/local_agent.py`, mirrored in `local_agent_oracle.py`) walked
+      only `FunctionDef`/`AsyncFunctionDef`/`ClassDef`; `_newly_undefined_module_vars`
+      (Mode 43's fix) covered dropped constants but only when the name was
+      still referenced elsewhere in the same file — the exact precondition
+      Mode 44's def-guard was built to NOT require. A `create_file` rewrite
+      that dropped a constant/table nothing else in that file referenced
+      (e.g. an `ENV_VAR_CATALOG`-shaped export) passed both guards silently.
+      Extended the content-loss guard to cover dropped module-level
+      constants/dict literals unconditionally, not just def/class. See
+      memory `project_dispatch_failure_modes` Mode 52 for detail.
+- [x] **Mode 53 (found 2026-08-12, FIXED 2026-08-13, PR #303, plan
+      `harness-guard-hardening-mode52-55`) — no check for a stale worktree
+      base before a resumed/redispatched story starts working, only at merge
+      time.** `_rebase_onto_master` was only called from `approve_merge`/the
+      scheduler's merge tick, never from the dispatch/resume path — a
+      worktree branched before an unrelated fix landed on `origin/master`
+      carried no signal of that until merge time. Fixed: a resumed story's
+      worktree base is now flagged when it has fallen behind origin's
+      default branch, before dispatch starts.
+- [x] **Modes 54/55 (found 2026-08-12, FIXED 2026-08-13, PR #305, plan
+      `harness-guard-hardening-mode52-55`) — the adjacent-content-corruption
+      class recurred after `edit-guard-enforcement` landed.** token-context-a1's
+      corrupted stories (PRs #243/#244) merged 2026-08-06, 3 days after the
+      guards (landed 2026-08-03) — resolving that retro's own open "predate
+      or postdate" question in favor of postdate, i.e. a live gap, not a
+      historical artifact. w3a's story 6 rework (`b5577e47`, PR #254)
+      clobbered ~190 unrelated lines with the same guards live and was the
+      more severe sibling. **Root cause pinned 2026-08-12**: the damage came
+      via `replace_lines`, not `create_file`; the orphan-name guard
+      (`_newly_undefined_names`) only flagged a dropped top-level def/class/var
+      when something *else in the same file* still referenced it, and the 4
+      deleted symbols (`resolve_env_var`, `effective_env_config`,
+      `ENV_VAR_CATALOG`, `ignored_env_vars_present`) were consumed by
+      `pipeline/server.py`/the dashboard, not `config_provenance.py` itself —
+      the same cross-file blind spot as Mode 52, confirmed on `replace_lines`
+      too. Fixed: the unconditional top-level-symbol-loss check is now wired
+      into `replace_lines`/`str_replace`, naming lost symbols explicitly in
+      the removal report, closing the gap the old unscoped
+      `confirm_removals=true` escape hatch left. See memory
+      `project_dispatch_failure_modes` Modes 54/55 for full detail.
 - [ ] **Get CI to an enforced green baseline and tag a real release.** 263
       commits, no release tags — adoption starts with "what version."
 
@@ -611,12 +655,14 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > both queue behind it. **Decision: `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`'s
 > sequencing now governs post-A3 work.** With A1/A2 closed, the path is: ~~W3a
 > (effective-config+provenance view, no prerequisites, serves A2)~~ **DONE
-> 2026-08-09, PRs #247-#258** → **W1 (extract `PipelineService` — the
-> keystone both B3 and B4 depend on, next up)** → W1b/W1c → W2 (chat entry
-> point) → W3b (writable dashboard, closes B4) → W4 (multi-tenant, closes
-> B3). B1 (sandbox) and B5 (export the moat) are picked up once the service
-> seam exists, not before — see that doc's own "Ordering conflict" section
-> for the full rationale.
+> 2026-08-09, PRs #247-#258** → ~~W1a (extract `PipelineService` — the
+> keystone both B3 and B4 depend on)~~ **DONE 2026-08-12, 22 stories, PRs
+> #263-#286** → **W1b (`Store` protocol — `FileStore` as the only
+> implementation, next up) / W1c (HTTP adapter + SSE event stream)** → W2
+> (chat entry point) → W3b (writable dashboard, closes B4) → W4
+> (multi-tenant, closes B3). B1 (sandbox) and B5 (export the moat) are
+> picked up once the service seam exists, not before — see that doc's own
+> "Ordering conflict" section for the full rationale.
 
 Land what's half-done before building new; then extract the service seam
 that everything else — sandboxing included — is cheaper to build behind.

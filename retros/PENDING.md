@@ -70,3 +70,7 @@ if a precise date is needed when writing one of these up.
 - testpaths-allowlist-fix — 1 stories
 - transcript-gitignore-fix — 1 stories
 - transport-alias-deprecation — 3 stories
+- local-agent-dedup — completed 2026-08-13, 3 stories
+- local_agent_syntax_validation — completed 2026-08-13, 2 stories
+- w1a-extract-pipelineservice — completed 2026-08-12, 22 stories
+- harness-guard-hardening-mode52-55 — completed 2026-08-13, 3 stories

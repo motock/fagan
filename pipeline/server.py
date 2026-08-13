@@ -437,7 +437,7 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
         )
     if not rb["ok"]:
         return (
-            f"rebase failed: {rb['error']}",
+            f"rebase: {rb['error']}",
             "",
         )
     pushed_sha = ""
@@ -451,7 +451,7 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
         )
         if push.returncode != 0:
             return (
-                f"push failed: {(push.stderr or push.stdout).strip()[:200]}",
+                f"push: {(push.stderr or push.stdout).strip()[:200]}",
                 "",
             )
         rev = subprocess.run(

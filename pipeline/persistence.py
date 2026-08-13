@@ -24,13 +24,6 @@ NOTIFY_SEVERITIES = frozenset({"info", "warning", "error"})
 logger = logging.getLogger(__name__)
 
 
-def _notify_user(plan_name: str, message: str) -> None:
-    """Durably record a notice for the user. The orchestrating agent surfaces
-    these (e.g. via PushNotification) from advance_pipeline's summary."""
-    path = PLAN_DIR / f"{plan_name}.notifications.log"
-    with open(path, "a") as f:
-        f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat()} {message}\n")
-
 
 def _decisions_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.decisions.json"

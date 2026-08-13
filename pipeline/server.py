@@ -33,6 +33,7 @@ Per-project overrides (set in project .mcp.json env block):
 
 import ast
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -1734,6 +1735,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             != "off"
         )
         plan_path = worktree_path / ".agent_plan.md"
+        plan_hash_path = worktree_path / ".agent_plan_src_hash"
         if (
             dispatch_backend in _LOCAL_BACKEND_NAMES
             and not resuming

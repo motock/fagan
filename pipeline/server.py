@@ -88,6 +88,7 @@ from .ci import (  # noqa: F401
     _acceptance_tampered,
     _ci_rerun,
     _ci_status,
+    _ci_status_once,
     _repo_has_ci_configured,
     _reverify_acceptance,
     _reverify_build,
@@ -395,6 +396,21 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 # latter via the dashboard/notification summary, the former is for
 # tail-grepping the orchestrator log).
 logging.getLogger("pipeline")
+
+
+def _ci_pending_expired(since_iso: str) -> bool:
+    """True once a story has waited on pending CI longer than the total
+    patience the blocking gate used to provide (MERGE_MAX_ATTEMPTS
+    attempts x PIPELINE_MERGE_CI_TIMEOUT each)."""
+    try:
+        since = datetime.fromisoformat(since_iso)
+    except (TypeError, ValueError):
+        return False
+    now = datetime.now(timezone.utc)
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    elapsed = (now - since).total_seconds()
+    return elapsed >= MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
 
 
 # ---------- Repo / branch helpers ----------
@@ -3845,6 +3861,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
         "interrupted": [],
         "notify": [],
         "review_deferred": [],
+        "ci_pending": [],
     }
 
     # Scoped for the whole tick: dispatch_story resolves its own repo_root
@@ -4038,6 +4055,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             worktree = story.get("worktree", "")
             gate_error = ""
             ci_definitive_fail = False
+            ci_wait = False
             rb = _rebase_onto_master(worktree, branch)
             if rb.get("auto_resolved"):
                 _notify_user(
@@ -4082,7 +4100,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         )
                         pushed_sha = rev.stdout.strip()
                 if not gate_error:
-                    ci = _ci_status(branch, sha=pushed_sha)
+                    ci = _ci_status_once(branch, sha=pushed_sha)
                     if ci["state"] == "cancelled" and not story.get(
                         "ci_rerun_attempted"
                     ):
@@ -4091,7 +4109,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         # jobs with no code-quality signal at all.
                         story["ci_rerun_attempted"] = True
                         _ci_rerun(pushed_sha)
-                        ci = _ci_status(branch, sha=pushed_sha)
+                        ci = _ci_status_once(branch, sha=pushed_sha)
                     if ci["state"] == "fail":
                         gate_error = f"ci fail: {ci['error']}"
                         # Only a genuine test-failure verdict is "definitive" -
@@ -4103,7 +4121,17 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     elif ci["state"] == "cancelled":
                         gate_error = f"ci fail: {ci['error']}"
                     elif ci["state"] == "pending":
-                        gate_error = f"ci pending: {ci['error']}"
+                        story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
+                        if _ci_pending_expired(story["ci_pending_since"]):
+                            story.pop("ci_pending_since")
+                            gate_error = f"ci pending: {ci['error']}"
+                        else:
+                            ci_wait = True
+                    if ci["state"] != "pending":
+                        story.pop("ci_pending_since", None)
+                if ci_wait:
+                    summary["ci_pending"].append(key)
+                    continue
                 if not gate_error:
                     # Independent of review: re-run the acceptance oracle
                     # against the just-rebased branch right before merging.

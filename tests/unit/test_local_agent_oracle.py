@@ -3225,7 +3225,6 @@ def test_oracle_replace_lines_names_dropped_top_level_symbols(tmp_path, monkeypa
 def test_oracle_str_replace_names_dropped_top_level_symbols(tmp_path, monkeypatch):
     """str_replace whose old_str fully covers an unreferenced top-level
     function AND constant must name both symbols in the rejection."""
-    monkeypatch.setattr(la, "CWD", tmp_path)
     monkeypatch.setattr(lao, "CWD", tmp_path)
     original = (
         "def helper_func():\n"

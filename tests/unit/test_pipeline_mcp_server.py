@@ -9,6 +9,7 @@ internal logic is exercised directly. Tools are plain callables after the
 """
 
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -14972,6 +14973,12 @@ def test_dispatch_story_decompose_skips_replanning_on_resume_but_keeps_referenci
     worktree_path = worktree_root / "S1"
     worktree_path.mkdir()
     (worktree_path / ".agent_plan.md").write_text("1. Existing checklist step.")
+    # The checklist-reuse guard (server.py:~1899) requires a .agent_plan_src_hash
+    # whose content matches a sha256 of the story's agent_instructions, else a
+    # resumed dispatch silently drops the checklist from the rebuilt prompt.
+    (worktree_path / ".agent_plan_src_hash").write_text(
+        hashlib.sha256(b"Build it.").hexdigest()
+    )
     _write_manifest(plan_dir, "dcresume", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "interrupted", "worktree": str(worktree_path),

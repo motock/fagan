@@ -64,8 +64,8 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv/bin/python3</string>
-		<string>-c</string>
-		<string>import app.pipeline_mcp_server as p; p.advance_all_plans()</string>
+	<string>-m</string>
+	<string>pipeline.scheduler_daemon</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -73,8 +73,8 @@
 	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/advance-scheduler.err.log</string>
 	<key>StandardOutPath</key>
 	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/advance-scheduler.log</string>
-	<key>StartInterval</key>
-	<integer>60</integer>
+	<key>KeepAlive</key>
+	<true/>
 	<key>WorkingDirectory</key>
 	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline</string>
 </dict>

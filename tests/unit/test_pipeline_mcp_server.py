@@ -6697,7 +6697,11 @@ def test_advance_pipeline_ci_pending_not_routed_to_rework(plan_dir, monkeypatch)
 
     story = _read_manifest(plan_dir, "cipendingrework")["stories"]["P1"]
     assert story["status"] == "pr_open"
-    assert story["merge_attempts"] == 1
+    # Non-blocking S5 contract: a pending CI result yields the tick (sets
+    # ci_pending_since) instead of blocking with a gate_error that would
+    # consume a merge attempt. It must never be routed to rework.
+    assert story.get("ci_pending_since") is not None
+    assert "merge_attempts" not in story
     assert "rework_attempts" not in story
     assert result["merged"] == []
 

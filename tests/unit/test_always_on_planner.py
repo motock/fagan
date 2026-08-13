@@ -1124,7 +1124,7 @@ def test_dispatch_story_fresh_checklist_hash_match_still_injects(
     (worktree_path / ".agent_plan.md").write_text("1. Current correct step.\n")
     # A hash that DOES match the manifest's agent_instructions value of "Build it.".
     (worktree_path / ".agent_plan_src_hash").write_text(
-        hashlib.sha256("Build it.".encode()).hexdigest()
+        hashlib.sha256(b"Build it.").hexdigest()
     )
     _write_manifest(plan_dir, "hashmatch", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",

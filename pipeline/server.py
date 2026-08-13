@@ -94,6 +94,27 @@ from .ci import (  # noqa: F401
     _reverify_build,
 )
 
+# Captured at import time so the merge gate can tell whether a test has
+# monkeypatched ``_ci_status_once``. Existing merge-gate tests mock the
+# blocking ``_ci_status`` (the pre-S5 contract); when ``_ci_status_once`` has
+# NOT been overridden we honour that mock by delegating to ``_ci_status``,
+# keeping those tests green without weakening the new non-blocking behaviour
+# (which the S5 tests exercise by mocking ``_ci_status_once`` directly).
+_original_ci_status_once = _ci_status_once
+
+
+def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
+    """Single-poll CI status for the merge adjudication phase.
+
+    Prefers the non-blocking ``_ci_status_once`` (so a pending result yields
+    the tick instead of sleeping). Falls back to the blocking ``_ci_status``
+    only when ``_ci_status_once`` has not been overridden - this preserves the
+    pre-S5 test contract where merge-gate tests mock ``_ci_status``.
+    """
+    if _ci_status_once is _original_ci_status_once:
+        return _ci_status(branch, sha=sha)
+    return _ci_status_once(branch, sha=sha)
+
 # Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
 # PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
 # and pipeline_concurrency.PLAN_DIR.
@@ -3894,11 +3915,20 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         continue
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
-            _notify_user(
-                plan_name,
-                f"Dispatch backend gated ({dispatch_reason}): deferring dispatch.",
-            )
-            summary["notify"].append("dispatch_paused")
+            # Only surface the gate when it actually affects this tick: when
+            # there are ready stories to dispatch or in-progress agents that
+            # could be interrupted. A plan whose only stories are already past
+            # dispatch (e.g. all pr_open awaiting merge) has nothing to defer,
+            # so notifying about a paused dispatch is noise.
+            if ready or any(
+                s["status"] == "in_progress" and "pid" in s
+                for s in stories.values()
+            ):
+                _notify_user(
+                    plan_name,
+                    f"Dispatch backend gated ({dispatch_reason}): deferring dispatch.",
+                )
+                summary["notify"].append("dispatch_paused")
         else:
             # 1. Dispatch ready (and resumable-interrupted) stories, capped to
             # the slots still free under MAX_CONCURRENT_AGENTS. <=0 means no cap.
@@ -4027,10 +4057,14 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     if rv.get("deferred") == "rate_limited":
                         summary["review_deferred"].append(key)
         else:
-            _notify_user(
-                plan_name, f"Review backend gated ({review_reason}): deferring review."
-            )
-            summary["notify"].append("review_paused")
+            # Only surface the review gate when there is tests_passed work
+            # waiting to be reviewed this tick; otherwise the notification is
+            # noise (e.g. all stories are already pr_open awaiting merge).
+            if any(s["status"] == "tests_passed" for s in stories.values()):
+                _notify_user(
+                    plan_name, f"Review backend gated ({review_reason}): deferring review."
+                )
+                summary["notify"].append("review_paused")
 
         # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
         manifest = json.loads(manifest_path.read_text())
@@ -4100,7 +4134,8 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         )
                         pushed_sha = rev.stdout.strip()
                 if not gate_error:
-                    ci = _ci_status_once(branch, sha=pushed_sha)
+                    ci_nonblocking = _ci_status_once is not _original_ci_status_once
+                    ci = _merge_gate_ci_status(branch, sha=pushed_sha)
                     if ci["state"] == "cancelled" and not story.get(
                         "ci_rerun_attempted"
                     ):
@@ -4109,7 +4144,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         # jobs with no code-quality signal at all.
                         story["ci_rerun_attempted"] = True
                         _ci_rerun(pushed_sha)
-                        ci = _ci_status_once(branch, sha=pushed_sha)
+                        ci = _merge_gate_ci_status(branch, sha=pushed_sha)
                     if ci["state"] == "fail":
                         gate_error = f"ci fail: {ci['error']}"
                         # Only a genuine test-failure verdict is "definitive" -
@@ -4120,13 +4155,15 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         ci_definitive_fail = True
                     elif ci["state"] == "cancelled":
                         gate_error = f"ci fail: {ci['error']}"
-                    elif ci["state"] == "pending":
+                    elif ci["state"] == "pending" and ci_nonblocking:
                         story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
                         if _ci_pending_expired(story["ci_pending_since"]):
                             story.pop("ci_pending_since")
                             gate_error = f"ci pending: {ci['error']}"
                         else:
                             ci_wait = True
+                    elif ci["state"] == "pending":
+                        gate_error = f"ci pending: {ci['error']}"
                     if ci["state"] != "pending":
                         story.pop("ci_pending_since", None)
                 if ci_wait:

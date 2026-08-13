@@ -107,6 +107,44 @@ def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
     """
     return _ci_status_once(branch, sha=sha)
 
+def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
+    rb = _rebase_onto_master(worktree, branch)
+    if rb.get("auto_resolved"):
+        _notify_user(
+            plan_name,
+            f"{key} rebase auto-resolved an additive-import "
+            f"conflict against origin/{_default_branch()}.",
+        )
+    if not rb["ok"]:
+        return (
+            f"rebase: {rb['error']}",
+            "",
+        )
+    pushed_sha = ""
+    if Path(worktree).is_dir():
+        push = subprocess.run(
+            ["git", "push", "--force-with-lease", "origin", branch],
+            check=False,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if push.returncode != 0:
+            return (
+                f"push: {(push.stderr or push.stdout).strip()[:200]}",
+                "",
+            )
+        rev = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=False,
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        pushed_sha = rev.stdout.strip()
+    return ("", pushed_sha)
+
+
 # Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
 # PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
 # and pipeline_concurrency.PLAN_DIR.
@@ -4214,39 +4252,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             if not rb["ok"]:
                 gate_error = f"rebase: {rb['error']}"
             else:
-                # Force-push the rebased branch; only when we actually rebased
-                # in a real worktree (a missing worktree skipped the rebase and
-                # has nothing to push). Run from REPO_ROOT (the plan's repo).
-                # A failed push (concurrent push rejected by --force-with-lease,
-                # network/auth) MUST block: otherwise the remote HEAD stays at
-                # the pre-rebase commit and the CI gate + squash merge operate
-                # on stale code — the exact cross-story breakage Mode 9 closes.
-                pushed_sha = ""
-                if Path(worktree).is_dir():
-                    push = subprocess.run(
-                        ["git", "push", "--force-with-lease", "origin", branch],
-                        check=False,
-                        cwd=REPO_ROOT,
-                        capture_output=True,
-                        text=True,
-                    )
-                    if push.returncode != 0:
-                        gate_error = (
-                            f"push: {(push.stderr or push.stdout).strip()[:200]}"
-                        )
-                    else:
-                        # Mode 26: _ci_status/_ci_rerun must be pinned to the
-                        # exact commit that was just pushed, not the branch
-                        # name - a branch-name query can read a stale result
-                        # from an older, already-superseded run.
-                        rev = subprocess.run(
-                            ["git", "rev-parse", "HEAD"],
-                            check=False,
-                            cwd=worktree,
-                            capture_output=True,
-                            text=True,
-                        )
-                        pushed_sha = rev.stdout.strip()
+                gate_error, pushed_sha = _rebase_and_push_for_merge(plan_name, key, branch, worktree)
                 if not gate_error:
                     ci = _merge_gate_ci_status(branch, sha=pushed_sha)
                     if ci["state"] == "cancelled" and not story.get(

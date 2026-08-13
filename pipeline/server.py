@@ -94,25 +94,16 @@ from .ci import (  # noqa: F401
     _reverify_build,
 )
 
-# Captured at import time so the merge gate can tell whether a test has
-# monkeypatched ``_ci_status_once``. Existing merge-gate tests mock the
-# blocking ``_ci_status`` (the pre-S5 contract); when ``_ci_status_once`` has
-# NOT been overridden we honour that mock by delegating to ``_ci_status``,
-# keeping those tests green without weakening the new non-blocking behaviour
-# (which the S5 tests exercise by mocking ``_ci_status_once`` directly).
-_original_ci_status_once = _ci_status_once
-
 
 def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
     """Single-poll CI status for the merge adjudication phase.
 
-    Prefers the non-blocking ``_ci_status_once`` (so a pending result yields
-    the tick instead of sleeping). Falls back to the blocking ``_ci_status``
-    only when ``_ci_status_once`` has not been overridden - this preserves the
-    pre-S5 test contract where merge-gate tests mock ``_ci_status``.
+    Always uses the non-blocking ``_ci_status_once`` (so a pending result
+    yields the tick instead of sleeping). ``_ci_status_once`` performs exactly
+    one query and returns immediately; the blocking ``_ci_status`` poller is no
+    longer used by the merge gate, so the S5 non-blocking CI-pending behaviour
+    is the production default rather than a test-only code path.
     """
-    if _ci_status_once is _original_ci_status_once:
-        return _ci_status(branch, sha=sha)
     return _ci_status_once(branch, sha=sha)
 
 # Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
@@ -4134,7 +4125,6 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         )
                         pushed_sha = rev.stdout.strip()
                 if not gate_error:
-                    ci_nonblocking = _ci_status_once is not _original_ci_status_once
                     ci = _merge_gate_ci_status(branch, sha=pushed_sha)
                     if ci["state"] == "cancelled" and not story.get(
                         "ci_rerun_attempted"
@@ -4155,15 +4145,13 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                         ci_definitive_fail = True
                     elif ci["state"] == "cancelled":
                         gate_error = f"ci fail: {ci['error']}"
-                    elif ci["state"] == "pending" and ci_nonblocking:
+                    elif ci["state"] == "pending":
                         story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
                         if _ci_pending_expired(story["ci_pending_since"]):
                             story.pop("ci_pending_since")
                             gate_error = f"ci pending: {ci['error']}"
                         else:
                             ci_wait = True
-                    elif ci["state"] == "pending":
-                        gate_error = f"ci pending: {ci['error']}"
                     if ci["state"] != "pending":
                         story.pop("ci_pending_since", None)
                 if ci_wait:

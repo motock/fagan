@@ -44,7 +44,17 @@ USAGE_STATE_PATH = Path(os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_stat
 # into the worktree outside of any commit, and vulnerable to the identical
 # Mode 17 failure (a rework's `git add -A` WIP-commit would track them,
 # dirtying the tree ahead of the pre-merge rebase) if not excluded up front.
-_WORKTREE_LOG_EXCLUDES = ("agent.log", "review.log", ".agent_plan.md", ".agent_scratchpad.md")
+#
+# .agent_plan_src_hash (the checklist-reuse guard's companion hash, see
+# commit 9a45803) is the same class of artifact and hit the same failure live
+# (2026-08-13): it was never excluded, so a WIP commit's `git add -A` tracked
+# it, and the pre-merge rebase then failed on an add/add conflict against the
+# copy that had leaked onto the default branch - terminal-failing an
+# otherwise-green story's merge gate (P3-6, 3/3 attempts exhausted).
+_WORKTREE_LOG_EXCLUDES = (
+    "agent.log", "review.log", ".agent_plan.md", ".agent_scratchpad.md",
+    ".agent_plan_src_hash",
+)
 
 
 def _exclude_worktree_logs_from_tracking(repo_root: Path) -> None:

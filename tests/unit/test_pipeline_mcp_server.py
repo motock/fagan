@@ -10331,6 +10331,44 @@ def test_dispatch_story_excludes_review_and_agent_log_from_worktree_tracking(
     assert "agent.log" not in staged.stdout
 
 
+def test_agent_plan_src_hash_is_excluded_from_worktree_tracking(tmp_path):
+    """Regression guard for the .agent_plan_src_hash leak (2026-08-13): the
+    checklist-reuse guard's companion hash file is an untracked runtime
+    artifact (like .agent_plan.md) that must be in _WORKTREE_LOG_EXCLUDES so a
+    rework WIP-commit's `git add -A` never tracks it - a tracked copy caused an
+    add/add rebase conflict that terminal-failed P3-6's otherwise-green merge
+    gate. Mirrors test_dispatch_story_excludes_review_and_agent_log_from_worktree_tracking's
+    staging assertion, exercised directly against the exclude helper."""
+    from pipeline.paths import (
+        _WORKTREE_LOG_EXCLUDES,
+        _exclude_worktree_logs_from_tracking,
+    )
+
+    # The artifact must be in the exclude list (the one-line fix).
+    assert ".agent_plan_src_hash" in _WORKTREE_LOG_EXCLUDES
+
+    # The exclude helper must write it to the repo's .git/info/exclude (the
+    # shared, per-repo file that governs every worktree of the repo).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "master", str(repo)], check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"],
+                   cwd=repo, check=True)
+    _exclude_worktree_logs_from_tracking(repo)
+    exclude_content = (repo / ".git" / "info" / "exclude").read_text()
+    assert ".agent_plan_src_hash" in exclude_content
+
+    # The exclusion must actually work: a `git add -A` in the working tree must
+    # not stage the artifact even when it exists with real content.
+    (repo / ".agent_plan_src_hash").write_text("deadbeef\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    staged = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                            cwd=repo, capture_output=True, text=True, check=True)
+    assert ".agent_plan_src_hash" not in staged.stdout
+
+
 def test_dispatch_story_fresh_seeds_checkpoint_instruction_with_plan_name(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):

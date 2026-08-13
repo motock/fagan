@@ -765,7 +765,14 @@ def exclude_runtime_artifacts() -> None:
     rel = git("rev-parse", "--git-path", "info/exclude").stdout.strip()
     if not rel:
         return
-    path = Path(rel) if os.path.isabs(rel) else CWD / rel
+    if os.path.isabs(rel):
+        path = Path(rel)
+    elif (CWD / ".git").is_dir() and not rel.startswith(".git"):
+        # git returned a path relative to the git dir (e.g. "info/exclude");
+        # resolve it against the .git directory under the worktree root.
+        path = CWD / ".git" / rel
+    else:
+        path = CWD / rel
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.read_text() if path.exists() else ""

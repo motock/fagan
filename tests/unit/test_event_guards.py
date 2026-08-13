@@ -9,14 +9,14 @@ are expected to be RED until pipeline/event_guards.py is created.
 """
 
 import pytest
+
+from pipeline import event_guards
 from pipeline.event_guards import (
     HANDLER_PRECONDITIONS,
     check_precondition,
     precondition_met,
     sha_guard,
 )
-
-from pipeline import event_guards
 
 # ---------------------------------------------------------------------------
 # HANDLER_PRECONDITIONS mapping

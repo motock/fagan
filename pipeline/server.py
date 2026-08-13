@@ -688,6 +688,21 @@ class Store(Protocol):
     def append_journal(self, plan_name: str, story_key: str, record: dict[str, Any]) -> None: ...
 
 
+def _update_story_impl(self, plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+    manifest = self.get_manifest(plan_name)
+    story = manifest["stories"].get(story_key)
+    if story is None:
+        return None
+    story.update(fields)
+    self.save_manifest(plan_name, manifest)
+    return story
+
+def _append_decision_impl(self, plan_name: str, record: dict[str, Any]) -> None:
+    _append_decision(plan_name, record)
+
+def _append_journal_impl(self, plan_name: str, story_key: str, record: dict[str, Any]) -> None:
+    _append_journal(plan_name, story_key, record)
+
 class FileStore:
     """The JSON-files-in-PLAN_DIR Store, behaviourally identical to the raw
     path construction it replaces.
@@ -724,35 +739,31 @@ class FileStore:
         bool and skip all work when it is False."""
         return _plan_lock(plan_name)
 
-    def list_plans(self) -> list[str]:
-        return [f.stem for f in PLAN_DIR.glob("*.json")]
+    list_plans = lambda self: [f.stem for f in PLAN_DIR.glob("*.json")]
 
-    def list_manifests(self) -> list[str]:
-        return [
-            mp.name.removesuffix(".manifest.json")
-            for mp in sorted(PLAN_DIR.glob("*.manifest.json"))
-        ]
+    list_manifests = lambda self: [
+        mp.name.removesuffix(".manifest.json")
+        for mp in sorted(PLAN_DIR.glob("*.manifest.json"))
+    ]
 
-    def update_story(
-        self, plan_name: str, story_key: str, fields: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """Apply ``fields`` to one story and persist. Returns the updated story,
-        or None when the story does not exist (the caller owns the error shape)."""
-        manifest = self.get_manifest(plan_name)
-        story = manifest["stories"].get(story_key)
-        if story is None:
-            return None
-        story.update(fields)
-        self.save_manifest(plan_name, manifest)
-        return story
+    update_story = _update_story_impl
+    append_decision = _append_decision_impl
+    append_journal = _append_journal_impl
 
-    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None:
-        _append_decision(plan_name, record)
+def _update_story_impl(self, plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+    manifest = self.get_manifest(plan_name)
+    story = manifest["stories"].get(story_key)
+    if story is None:
+        return None
+    story.update(fields)
+    self.save_manifest(plan_name, manifest)
+    return story
 
-    def append_journal(
-        self, plan_name: str, story_key: str, record: dict[str, Any]
-    ) -> None:
-        _append_journal(plan_name, story_key, record)
+def _append_decision_impl(self, plan_name: str, record: dict[str, Any]) -> None:
+    _append_decision(plan_name, record)
+
+def _append_journal_impl(self, plan_name: str, story_key: str, record: dict[str, Any]) -> None:
+    _append_journal(plan_name, story_key, record)
 
 _store = FileStore()
 

@@ -45,7 +45,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from mcp.server.fastmcp import FastMCP
 
@@ -661,6 +661,65 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
 # ---------- Usage probe ----------
 # Legacy format (Claude Code ≤ ~Jun 2026): "Current session: N% used · resets …"
 
+
+
+
+class Store(Protocol):
+    """Storage seam for pipeline state (W1b).
+
+    Every manifest / decisions / journal access in this module goes through a
+    Store, so the on-disk JSON layout stops being spelled out at ~20 call
+    sites. ``FileStore`` below is the only implementation today; see
+    docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md, Workstream W1 step 2.
+    """
+
+    def manifest_path(self, plan_name: str) -> Path: ...
+
+    def get_manifest(self, plan_name: str) -> dict[str, Any]: ...
+
+    def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None: ...
+
+    def transaction(self, plan_name: str): ...
+
+
+class FileStore:
+    """The JSON-files-in-PLAN_DIR Store, behaviourally identical to the raw
+    path construction it replaces.
+
+    Methods deliberately read this module's globals (``PLAN_DIR``,
+    ``_plan_lock``, ``_atomic_write_json``, ...) as free variables rather than
+    holding copies, for the same reason ``PipelineService`` does: ``_store`` is
+    constructed at import time, and the test suite patches
+    ``pipeline.server.PLAN_DIR`` after that. Holding a copy would freeze the
+    real ~/.claude/plans path into every test run.
+    """
+
+    def manifest_path(self, plan_name: str) -> Path:
+        return PLAN_DIR / f"{plan_name}.manifest.json"
+
+    def get_manifest(self, plan_name: str) -> dict[str, Any]:
+        return json.loads(self.manifest_path(plan_name).read_text())
+
+    def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None:
+        tmp = self.manifest_path(plan_name).with_suffix(
+            self.manifest_path(plan_name).suffix + f".tmp.{os.getpid()}"
+        )
+        try:
+            tmp.write_text(json.dumps(manifest))
+            os.replace(tmp, self.manifest_path(plan_name))
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def transaction(self, plan_name: str):
+        """Serialise mutations of one plan. Today this is exactly ``_plan_lock``:
+        a non-blocking, flock-based, thread-reentrant context manager that
+        yields whether the lock was acquired. Callers MUST check the yielded
+        bool and skip all work when it is False."""
+        return _plan_lock(plan_name)
+
+
+_store = FileStore()
 
 class PipelineService:
     """Transport-agnostic pipeline operations.

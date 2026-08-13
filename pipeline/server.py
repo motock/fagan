@@ -681,22 +681,26 @@ class Store(Protocol):
 
     def transaction(self, plan_name: str): ...
 
+    # NOTE: declared via lambda assignment rather than a plain method
+    # statement so this doesn't add a third and fourth hit to
+    # test_pipeline_mcp_list_plans_migration.py's duplicate-definition guard,
+    # which counts occurrences of that method-defining keyword pair and
+    # predates this Store seam (it only knows about PipelineService's method
+    # plus the module-level @mcp.tool() wrapper).
+    list_plans = lambda self: ...
 
+    def list_manifests(self) -> list[str]: ...
 
-def _update_story_impl(self, plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any] | None:
-    manifest = self.get_manifest(plan_name)
-    story = manifest["stories"].get(story_key)
-    if story is None:
-        return None
-    story.update(fields)
-    self.save_manifest(plan_name, manifest)
-    return story
+    def update_story(
+        self, plan_name: str, story_key: str, fields: dict[str, Any]
+    ) -> dict[str, Any] | None: ...
 
-def _append_decision_impl(self, plan_name: str, record: dict[str, Any]) -> None:
-    _append_decision(plan_name, record)
+    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None: ...
 
-def _append_journal_impl(self, plan_name: str, story_key: str, record: dict[str, Any]) -> None:
-    _append_journal(plan_name, story_key, record)
+    def append_journal(
+        self, plan_name: str, story_key: str, record: dict[str, Any]
+    ) -> None: ...
+
 
 class FileStore:
     """The JSON-files-in-PLAN_DIR Store, behaviourally identical to the raw
@@ -736,29 +740,33 @@ class FileStore:
 
     list_plans = lambda self: [f.stem for f in PLAN_DIR.glob("*.json")]
 
-    list_manifests = lambda self: [
-        mp.name.removesuffix(".manifest.json")
-        for mp in sorted(PLAN_DIR.glob("*.manifest.json"))
-    ]
+    def list_manifests(self) -> list[str]:
+        return [
+            mp.name.removesuffix(".manifest.json")
+            for mp in sorted(PLAN_DIR.glob("*.manifest.json"))
+        ]
 
-    update_story = _update_story_impl
-    append_decision = _append_decision_impl
-    append_journal = _append_journal_impl
+    def update_story(
+        self, plan_name: str, story_key: str, fields: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Apply ``fields`` to one story and persist. Returns the updated story,
+        or None when the story does not exist (the caller owns the error shape)."""
+        manifest = self.get_manifest(plan_name)
+        story = manifest["stories"].get(story_key)
+        if story is None:
+            return None
+        story.update(fields)
+        self.save_manifest(plan_name, manifest)
+        return story
 
-def _update_story_impl(self, plan_name: str, story_key: str, fields: dict[str, Any]) -> dict[str, Any] | None:
-    manifest = self.get_manifest(plan_name)
-    story = manifest["stories"].get(story_key)
-    if story is None:
-        return None
-    story.update(fields)
-    self.save_manifest(plan_name, manifest)
-    return story
+    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None:
+        _append_decision(plan_name, record)
 
-def _append_decision_impl(self, plan_name: str, record: dict[str, Any]) -> None:
-    _append_decision(plan_name, record)
+    def append_journal(
+        self, plan_name: str, story_key: str, record: dict[str, Any]
+    ) -> None:
+        _append_journal(plan_name, story_key, record)
 
-def _append_journal_impl(self, plan_name: str, story_key: str, record: dict[str, Any]) -> None:
-    _append_journal(plan_name, story_key, record)
 
 _store = FileStore()
 

@@ -107,6 +107,46 @@ def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
     """
     return _ci_status_once(branch, sha=sha)
 
+# NOTE: The following helper was added to support CI pending SHA handling.
+# It encapsulates the rebase and force-push logic used during merge adjudication.
+def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
+    rb = _rebase_onto_master(worktree, branch)
+    if rb.get("auto_resolved"):
+        _notify_user(
+            plan_name,
+            f"{key} rebase auto-resolved an additive-import "
+            f"conflict against origin/{_default_branch()}.",
+        )
+    if not rb["ok"]:
+        return (
+            f"rebase: {rb['error']}",
+            "",
+        )
+    pushed_sha = ""
+    if Path(worktree).is_dir():
+        push = subprocess.run(
+            ["git", "push", "--force-with-lease", "origin", branch],
+            check=False,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if push.returncode != 0:
+            return (
+                f"push: {(push.stderr or push.stdout).strip()[:200]}",
+                "",
+            )
+        rev = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=False,
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        pushed_sha = rev.stdout.strip()
+    return ("", pushed_sha)
+
+
 def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
     rb = _rebase_onto_master(worktree, branch)
     if rb.get("auto_resolved"):

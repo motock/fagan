@@ -4150,3 +4150,86 @@ def test_str_replace_rename_names_old_symbol_as_removed(tmp_path, monkeypatch):
     })
     assert "The edit was NOT applied." in result
     assert "old_name" in result
+
+
+def test_str_replace_blocks_constant_only_top_level_drop_without_confirm(tmp_path, monkeypatch):
+    """A str_replace that fully removes a top-level constant assignment
+    (no def/class touched) without confirm_removals must be BLOCKED: it
+    returns an ERROR string naming the dropped constant, and the file on
+    disk is left unchanged (still contains the constant).
+
+    This is the var-only-drop case the dropped_defs-only gate used to let
+    through. The gate must now check the combined dropped (defs + vars)
+    list, matching create_file's existing overwrite guard.
+    """
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "OLD_TIMEOUT = 30\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "OLD_TIMEOUT = 30\n\n",
+        "new_str": "",
+    })
+    # Blocked: an ERROR, not an applied edit.
+    assert result.startswith("ERROR")
+    assert "The edit was NOT applied." in result
+    # The dropped constant is named in the rejection (from the combined
+    # `dropped` list, not the defs-only list).
+    assert "OLD_TIMEOUT" in result
+    assert "permanently removes these top-level symbols" in result
+    # The file on disk is unchanged.
+    assert (tmp_path / "mod.py").read_text() == original
+    assert "OLD_TIMEOUT" in (tmp_path / "mod.py").read_text()
+
+
+def test_str_replace_constant_only_drop_confirm_removals_true_applies(tmp_path, monkeypatch):
+    """The bypass: the same constant-only drop that is blocked without the
+    flag must still apply when confirm_removals=true is passed (existing
+    bypass behavior preserved for the widened gate)."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "OLD_TIMEOUT = 30\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "OLD_TIMEOUT = 30\n\n",
+        "new_str": "",
+        "confirm_removals": True,
+    })
+    assert "The edit was NOT applied." not in result
+    assert result.startswith("edited mod.py")
+    written = (tmp_path / "mod.py").read_text()
+    assert "OLD_TIMEOUT" not in written
+    assert "keeper" in written
+
+
+def test_str_replace_constant_only_drop_names_only_the_constant(tmp_path, monkeypatch):
+    """When a constant-only drop is blocked, the rejection must name the
+    actual dropped symbol(s) from the combined `dropped` list and must NOT
+    silently omit a var-only drop. The surviving def must not be falsely
+    reported as removed."""
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    original = (
+        "OLD_TIMEOUT = 30\n"
+        "\n"
+        "def keeper():\n"
+        "    return 2\n"
+    )
+    (tmp_path / "mod.py").write_text(original)
+    result = la.run_tool("str_replace", {
+        "path": "mod.py",
+        "old_str": "OLD_TIMEOUT = 30\n\n",
+        "new_str": "",
+    })
+    assert "OLD_TIMEOUT" in result
+    # The surviving def is not reported as removed.
+    assert "keeper" not in result

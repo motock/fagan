@@ -1013,6 +1013,39 @@ def _newly_undefined_names(path_str: str, old_content: str, new_content: str) ->
     return orphaned
 
 
+def _var_drop_is_confirmed_loss(
+    name: str, old_str: str, new_str: str, orphaned: list[str],
+) -> bool:
+    """Decide whether a top-level var `name` reported by
+    `_dropped_top_level_vars` (which flags any vanished module-level
+    assignment unconditionally, with no same-file reference check by
+    design) is a genuine unconfirmed loss that should block this
+    str_replace, or a legitimate refactor that should pass through.
+    Ported verbatim from local_agent.py; keep both copies in sync.
+
+    Two escapes let it through:
+    (a) `new_str` on its own contains a top-level Assign/AnnAssign - this
+        edit renamed/replaced the assignment rather than deleting it.
+    (b) `name` has no surviving reference anywhere in the new file (i.e.
+        it is not in `orphaned`, which already tracks exactly that) AND
+        `old_str` itself contains more than the bare assignment (a second
+        occurrence of `name`, e.g. a same-edit usage) - the assignment and
+        its only use were removed together in this one self-contained
+        edit, not left dangling.
+
+    Only when neither escape applies is this a confirmed loss."""
+    try:
+        new_str_tree = ast.parse(new_str)
+    except SyntaxError:
+        new_str_tree = None
+    if new_str_tree is not None and any(
+        isinstance(n, (ast.Assign, ast.AnnAssign)) for n in new_str_tree.body
+    ):
+        return False
+    name_survives = any(entry.split(" (")[0] == name for entry in orphaned)
+    return name_survives or old_str.count(name) < 2
+
+
 def _try_repair_indentation(content: str) -> tuple[str, str] | None:
     """Attempt a deterministic, semantics-preserving indentation repair on
     `content` when compile() rejects it with an IndentationError (unexpected
@@ -1225,24 +1258,27 @@ def run_tool(fn, args) -> str:
                 f"assignment, remove the surviving use too, or replace it with an "
                 f"equivalent. The edit was NOT applied."
             )
-        # Unconditional top-level-symbol-loss check: name any def/class/
-        # constant that this edit removes in its entirety, even when no
-        # same-file reference survives (the symbol may be consumed by OTHER
-        # files). The gate fires only when a top-level def/class is fully
-        # removed (the incident shape: an over-wide range wiping out whole
-        # functions); a constant-only drop is a legitimate refactor the
-        # existing orphaned-name guard already governs, so it must not block
-        # here. When the gate fires it names ALL dropped symbols (defs +
-        # vars). Gated by confirm_removals so an intentional removal still
-        # goes through when the flag is set, and it does not block edits that
-        # remove no complete top-level def/class.
+        # Top-level-symbol-loss check: name any def/class that this edit
+        # removes in its entirety, even when no same-file reference survives
+        # (the symbol may be consumed by OTHER files) - this half is
+        # unconditional. A dropped top-level var/constant is only added when
+        # it is a genuine unconfirmed loss per _var_drop_is_confirmed_loss:
+        # a rename (new_str itself assigns a top-level name) or a
+        # self-contained removal (the assignment and its only use both lived
+        # in old_str and neither survives) escapes the gate; a bare deletion
+        # with nothing replacing it does not. Gated by confirm_removals so
+        # an intentional removal still goes through when the flag is set.
         dropped_defs = _dropped_top_level_defs(text, new_text)
         if path.suffix == ".py":
-            dropped_vars = _dropped_top_level_vars(text, new_text)
+            dropped_vars = [
+                name for name in _dropped_top_level_vars(text, new_text)
+                if _var_drop_is_confirmed_loss(
+                    name, args["old_str"], args["new_str"], orphaned)
+            ]
         else:
             dropped_vars = []
         dropped = dropped_defs + dropped_vars
-        if dropped_defs and not args.get("confirm_removals"):
+        if dropped and not args.get("confirm_removals"):
             return (
                 f"ERROR: this edit to {args['path']} permanently removes these "
                 f"top-level symbols in their entirety: {', '.join(dropped)}. "

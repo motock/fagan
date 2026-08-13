@@ -4298,6 +4298,16 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
                     story["ci_pending_sha"] = pushed_sha
                     if _ci_pending_expired(story["ci_pending_since"]):
+                        _notify_user(
+                            plan_name,
+                            f"{key} CI has been pending since "
+                            f"{story['ci_pending_since']} and exceeded the "
+                            f"merge-gate pending bound; giving up on the wait.",
+                            story_key=key,
+                            severity="warning",
+                            event="ci_pending_stalled",
+                            dedup_key=f"ci_pending_stalled:{key}",
+                        )
                         story.pop("ci_pending_since", None)
                         story.pop("ci_pending_sha", None)
                         gate_error = f"ci pending: {ci['error']}"

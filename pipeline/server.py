@@ -701,7 +701,15 @@ class FileStore:
         return json.loads(self.manifest_path(plan_name).read_text())
 
     def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None:
-        _atomic_write_json(self.manifest_path(plan_name), manifest)
+        tmp = self.manifest_path(plan_name).with_suffix(
+            self.manifest_path(plan_name).suffix + f".tmp.{os.getpid()}"
+        )
+        try:
+            tmp.write_text(json.dumps(manifest))
+            os.replace(tmp, self.manifest_path(plan_name))
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def transaction(self, plan_name: str):
         """Serialise mutations of one plan. Today this is exactly ``_plan_lock``:

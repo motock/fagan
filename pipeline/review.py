@@ -198,8 +198,23 @@ def _run_reviewer(
         )
     else:
         prior_findings_note = ""
+    no_rerun_note = (
+        "The full test suite is ALREADY green (CI ran it; that is the "
+        "precondition for this review). Do NOT run the test suite, do NOT "
+        "run pytest, and do NOT build or install the project. Re-running it "
+        "is duplicate spend that risks exhausting your step budget without "
+        "reaching a verdict.\n"
+        "Bash is provided ONLY for reading the diff: `git diff --stat`, "
+        "`git diff -- <file>`, `git diff <commit> HEAD`, and `view_file` "
+        "for context. Use it for nothing else.\n"
+        "python is NOT on PATH in this worktree (the venv interpreter lives "
+        "in the venv's bin directory, not on PATH); any `python ...` command "
+        "will fail with 'command not found' and waste your step budget. "
+        "Do not attempt it.\n\n"
+    )
     prompt = (
         f"{lead}"
+        f"{no_rerun_note}"
         f"{auto_fix_note}"
         f"{prior_findings_note}"
         f"Report EVERY Blocking finding you notice in this single "

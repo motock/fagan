@@ -1242,7 +1242,7 @@ def run_tool(fn, args) -> str:
         else:
             dropped_vars = []
         dropped = dropped_defs + dropped_vars
-        if dropped_defs and not args.get("confirm_removals"):
+        if dropped and not args.get("confirm_removals"):
             return (
                 f"ERROR: this edit to {args['path']} permanently removes these "
                 f"top-level symbols in their entirety: {', '.join(dropped)}. "

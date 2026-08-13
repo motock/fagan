@@ -59,6 +59,16 @@ def _approved_story(worktree="/x", risk="low"):
 def _gate_autonomy(monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
+    # Isolate from host resource state: the merge-path wiring under test is
+    # independent of whether dispatch/review backends are currently available.
+    # Without this, a gated backend (exhausted Claude usage, unreachable
+    # Ollama, ...) leaks dispatch_paused/review_paused into summary["notify"]
+    # and fires an extra "Dispatch backend gated" _notify_user call, breaking
+    # the notify-list-untouched assertion. Mirrors the pattern at
+    # test_pipeline_mcp_server.py:4787.
+    monkeypatch.setattr(
+        p, "_role_resource_ok", lambda role, plan_role_config=None: (True, "")
+    )
 
 
 def _reconnect_notices(notes):

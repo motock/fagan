@@ -57,3 +57,23 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
     from pipeline import persistence
     default_plan_dir = tmp_path_factory.mktemp("default_plan_dir")
     monkeypatch.setattr(persistence, "PLAN_DIR", default_plan_dir)
+
+
+@pytest.fixture
+def plan_dir(tmp_path, monkeypatch):
+    """Shared PLAN_DIR fixture for test modules that do not define their own.
+
+    Patches pipeline.server, pipeline.persistence, and pipeline.concurrency
+    PLAN_DIR bindings to the same directory so manifest writes/journals land
+    in the test tmp_path. Test modules that define their own ``plan_dir``
+    fixture shadow this one (pytest resolves module-level fixtures first).
+    """
+    import pipeline.server as p
+    from pipeline import concurrency as pcon
+    from pipeline import persistence as ppers
+    d = tmp_path / "plans"
+    d.mkdir()
+    monkeypatch.setattr(p, "PLAN_DIR", d)
+    monkeypatch.setattr(ppers, "PLAN_DIR", d)
+    monkeypatch.setattr(pcon, "PLAN_DIR", d)
+    return d

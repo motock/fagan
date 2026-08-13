@@ -6408,7 +6408,7 @@ def test_advance_pipeline_ci_fail_blocks_merge(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "fail", "error": "ruff"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
@@ -6439,7 +6439,7 @@ def test_advance_pipeline_ci_fail_routes_to_rework_when_opted_in(plan_dir, monke
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "fail", "error": "test_clamp_boundary failed"})
     merged_calls = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged_calls.append(key))
@@ -6472,7 +6472,7 @@ def test_advance_pipeline_ci_fail_rework_sets_ci_rework_flag(plan_dir, monkeypat
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "fail", "error": "test_x failed"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
@@ -6505,7 +6505,7 @@ def test_advance_pipeline_ci_fail_rework_feedback_uses_wired_helper(plan_dir, mo
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "fail", "error": "test_clamp_boundary failed"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
@@ -6534,7 +6534,7 @@ def test_advance_pipeline_ci_fail_stays_terminal_without_opt_in(plan_dir, monkey
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "fail", "error": "boom"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
@@ -6562,7 +6562,7 @@ def test_advance_pipeline_ci_fail_rework_exhausted_falls_to_terminal_fail(plan_d
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "fail", "error": "still broken"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
@@ -6597,7 +6597,7 @@ def test_advance_pipeline_ci_fail_rework_counter_survives_review_approve(plan_di
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "fail", "error": "test_x failed"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
@@ -6662,7 +6662,7 @@ def test_advance_pipeline_transient_push_failure_not_routed_to_rework(plan_dir, 
         lambda *a, **k: type("R", (), {"returncode": 1, "stdout": "", "stderr": "network down"})(),
     )
     ci_calls = []
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: ci_calls.append(br))
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: ci_calls.append(br))
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
     result = p.advance_pipeline("cipushfail")
@@ -6689,7 +6689,7 @@ def test_advance_pipeline_ci_pending_not_routed_to_rework(plan_dir, monkeypatch)
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "pending", "error": "timeout"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
@@ -6697,7 +6697,11 @@ def test_advance_pipeline_ci_pending_not_routed_to_rework(plan_dir, monkeypatch)
 
     story = _read_manifest(plan_dir, "cipendingrework")["stories"]["P1"]
     assert story["status"] == "pr_open"
-    assert story["merge_attempts"] == 1
+    # Non-blocking S5 contract: a pending CI result yields the tick (sets
+    # ci_pending_since) instead of blocking with a gate_error that would
+    # consume a merge attempt. It must never be routed to rework.
+    assert story.get("ci_pending_since") is not None
+    assert "merge_attempts" not in story
     assert "rework_attempts" not in story
     assert result["merged"] == []
 
@@ -6716,7 +6720,7 @@ def test_advance_pipeline_cancelled_ci_not_routed_to_rework(plan_dir, monkeypatc
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "cancelled", "error": ""})
     monkeypatch.setattr(p, "_ci_rerun", lambda br: True)
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
@@ -6741,7 +6745,7 @@ def test_advance_pipeline_ci_pending_blocks_merge(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "pending", "error": "timeout"})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: None)
 
@@ -6749,7 +6753,11 @@ def test_advance_pipeline_ci_pending_blocks_merge(plan_dir, monkeypatch):
 
     story = _read_manifest(plan_dir, "cipending")["stories"]["P1"]
     assert story["status"] == "pr_open"
-    assert story["merge_attempts"] == 1
+    # Non-blocking S5 contract: a pending CI result yields the tick back to the
+    # scheduler (sets ci_pending_since) instead of blocking with a gate_error
+    # that would consume a merge attempt.
+    assert story.get("ci_pending_since") is not None
+    assert "merge_attempts" not in story
     assert result["merged"] == []
 
 
@@ -6764,7 +6772,7 @@ def test_advance_pipeline_rebase_and_ci_ok_merges(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
@@ -6826,7 +6834,7 @@ def test_advance_pipeline_cancelled_ci_triggers_one_rerun_then_merges(plan_dir, 
         return {"state": "pass", "error": ""}
 
     rerun_calls = []
-    monkeypatch.setattr(p, "_ci_status", _fake_ci_status)
+    monkeypatch.setattr(p, "_ci_status_once", _fake_ci_status)
     monkeypatch.setattr(p, "_ci_rerun", lambda br: rerun_calls.append(br) or True)
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
@@ -6853,7 +6861,7 @@ def test_advance_pipeline_cancelled_ci_second_time_does_not_rerun_again(plan_dir
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status",
+    monkeypatch.setattr(p, "_ci_status_once",
                         lambda br, **_: {"state": "cancelled", "error": ""})
     rerun_calls = []
     monkeypatch.setattr(p, "_ci_rerun", lambda br: rerun_calls.append(br) or True)
@@ -7230,7 +7238,7 @@ def test_advance_pipeline_build_reverify_fail_blocks_merge(plan_dir, monkeypatch
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_build",
@@ -7256,7 +7264,7 @@ def test_advance_pipeline_build_reverify_pass_merges(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass", "error": ""})
@@ -7279,7 +7287,7 @@ def test_approve_merge_build_reverify_fail_returns_error(plan_dir, monkeypatch):
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_build",
@@ -7307,7 +7315,7 @@ def test_advance_pipeline_acceptance_reverify_fail_blocks_merge(plan_dir, monkey
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "AttributeError"})
     merged_calls = []
@@ -7341,7 +7349,7 @@ def test_advance_pipeline_full_suite_reverify_fail_blocks_merge(plan_dir, monkey
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "ModuleNotFoundError: shared"})
     merged_calls = []
@@ -7366,7 +7374,7 @@ def test_advance_pipeline_acceptance_reverify_pass_merges(plan_dir, monkeypatch)
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
@@ -7389,7 +7397,7 @@ def test_approve_merge_acceptance_reverify_fail_returns_error(plan_dir, monkeypa
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, **_: {"state": "pass", "error": ""})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, **_: {"state": "pass", "error": ""})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "fail", "error": "AttributeError"})
     merged_calls = []
@@ -13580,7 +13588,7 @@ def test_approve_merge_rereads_manifest_inside_lock(plan_dir, monkeypatch):
     seen_worktrees = []
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, sha: {"state": "pass"})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, sha: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})
@@ -13706,7 +13714,7 @@ def test_scheduler_merge_clears_parked_reason_on_done(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
-    monkeypatch.setattr(p, "_ci_status", lambda br, sha: {"state": "pass"})
+    monkeypatch.setattr(p, "_ci_status_once", lambda br, sha: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_acceptance",
                         lambda story, wt, *a, **k: {"state": "pass"})
     monkeypatch.setattr(p, "_reverify_build", lambda wt: {"state": "pass"})

@@ -22,6 +22,10 @@ The module exposes a single public function:
 * ``<plan>.notifications.jsonl`` – a JSONL record created by
   :func:`pipeline.persistence._notification_record`.  The sink re‑uses that
   helper so the two writers cannot drift.
+Forward‑looking constraints:
+- No sink performs inline network I/O (an outbound sink must queue or run in the daemon).
+- Redact at the sink boundary.
+- Outbound sinks ship disabled by default.
 
 The implementation swallows all exceptions, logs them at ERROR level with
 ``exc_info=True``, and never propagates failures.  This mirrors the behaviour of
@@ -34,7 +38,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from .persistence import PLAN_DIR, _notification_record, _write_notification_record
+from . import persistence
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +70,12 @@ def file_log_sink(event: dict[str, Any]) -> None:
         message = payload.get("message", "")
 
         # Free‑text line
-        log_path = PLAN_DIR / f"{plan}.notifications.log"
+        log_path = persistence.PLAN_DIR / f"{plan}.notifications.log"
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(f"{ts} {message}\n")
 
         # Structured JSONL record via helper
-        record = _notification_record(
+        record = persistence._notification_record(
             plan_name=plan,
             message=payload.get("message"),
             story_key=payload.get("story_key"),
@@ -80,7 +84,7 @@ def file_log_sink(event: dict[str, Any]) -> None:
             dedup_key=payload.get("dedup_key"),
             ts=ts,
         )
-        _write_notification_record(plan, record)
+        persistence._write_notification_record(plan, record)
     except Exception:  # pragma: no cover - defensive
         logger.exception("Failed to write notification sink for event %s", event)
         return

@@ -83,10 +83,15 @@ def test_get_plan_returns_notification_records(client, plan_dir):
     records = res.json()["notification_records"]
     assert len(records) == 2
 
+    # P3-7's view-layer collapse adds count/last_ts to every record;
+    # these two have distinct dedup_keys so none merge, but each still
+    # carries count=1 and last_ts==ts.
     expected_keys = {"ts", "message", "severity", "story_key",
-                     "event", "dedup_key"}
+                     "event", "dedup_key", "count", "last_ts"}
     for rec in records:
         assert set(rec.keys()) == expected_keys
+        assert rec["count"] == 1
+        assert rec["last_ts"] == rec["ts"]
 
     assert records[0]["message"] == "first"
     assert records[0]["severity"] == "info"
@@ -170,8 +175,10 @@ def test_missing_keys_get_defaults(client, plan_dir):
     assert len(records) == 1
     rec = records[0]
     assert set(rec.keys()) == {"ts", "message", "severity", "story_key",
-                               "event", "dedup_key"}
+                               "event", "dedup_key", "count", "last_ts"}
     assert rec["ts"] == ""
+    assert rec["count"] == 1
+    assert rec["last_ts"] == ""
     assert rec["message"] == "m"
     assert rec["severity"] == "info"
     assert rec["story_key"] is None
@@ -230,9 +237,9 @@ def test_severity_values_pass_through(client, plan_dir):
     assert [r["severity"] for r in records] == ["info", "warning", "error"]
 
 
-def test_consecutive_duplicates_are_not_collapsed(client, plan_dir):
-    """Dedup collapsing is a later story; every record, including
-    consecutive duplicates, is returned."""
+def test_consecutive_duplicates_are_collapsed_by_dedup_key(client, plan_dir):
+    """Consecutive records sharing a truthy dedup_key collapse into one
+    entry carrying count and last_ts (P3-7 view-layer dedup)."""
     _write_manifest(plan_dir, "dups", {"S1": {"summary": "x", "status": "todo"}})
     _write_jsonl(plan_dir, "dups", [
         {"ts": "t0", "message": "same", "severity": "info", "dedup_key": "k"},
@@ -243,7 +250,13 @@ def test_consecutive_duplicates_are_not_collapsed(client, plan_dir):
     res = client.get("/api/plans/dups")
     assert res.status_code == 200
     records = res.json()["notification_records"]
-    assert len(records) == 3
+    assert len(records) == 1
+    assert records[0]["count"] == 3
+    assert records[0]["ts"] == "t0"
+    assert records[0]["last_ts"] == "t2"
+    assert records[0]["message"] == "same"
+    assert records[0]["severity"] == "info"
+    assert records[0]["dedup_key"] == "k"
 
 
 def test_raw_notifications_key_is_unchanged(client, plan_dir):

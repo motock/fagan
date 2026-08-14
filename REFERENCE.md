@@ -320,6 +320,59 @@ the cost gate.
 
 ---
 
+## Notification records
+
+The pipeline writes two notification artifacts per plan: a legacy free‑text log
+`<plan>.notifications.log` and a structured JSON Lines file
+`<plan>.notifications.jsonl`.  The log is unchanged – it continues to be the
+human‑readable stream that older tooling expects.  The JSONL file is additive,
+appended each time `_notify_user` is called, and contains one JSON object per
+line terminated by a newline.
+
+Each record has the following keys:
+
+- `ts`: ISO‑8601 UTC timestamp of when the notice was emitted.
+- `plan`: name of the plan that produced the notice.
+- `message`: free‑text message passed to `_notify_user`.
+- `story_key`: optional story key associated with the notice (may be `null`).
+- `severity`: one of `"info"`, `"warning"`, or `"error"`.  Any other value is
+  normalised to `"info"`; this guarantees that a failure path never aborts a
+  pipeline tick.
+- `event`: machine‑readable name for the kind of notice, e.g.
+  `ci_pending_stalled`.  It lives in `payload["event"]` on the bus event and is
+  distinct from the outer event envelope whose `type` is always `"notification"`.
+- `dedup_key`: value captured at write time; it is **not** used to suppress a
+  write.  The full history remains on disk; the dashboard later collapses
+  consecutive records with the same `dedup_key` into a single entry that adds
+  `count` and `last_ts`.
+
+The notification system uses a single event bus returned by
+`pipeline.event_wiring.get_bus()`.  `_notify_user` publishes a `notification`
+event on that bus; sinks subscribe to it.  The only built‑in sink is
+`pipeline.notification_sinks.file_log_sink`, which reproduces the legacy log
+behaviour.
+
+When writing a new sink, three rules must be obeyed:
+
+1. **Never raise into the bus** – swallow any exception and log at ERROR so that
+   a tick cannot fail because of a notification failure.
+2. **No inline network I/O** – posting to an external webhook inside the
+   notification path would block the sequential pipeline tick; queue or run in a
+   background daemon instead.
+3. **Redact sensitive data at the sink boundary** and ship outbound sinks
+   disabled by default.  Notification text may contain gate errors, branch names,
+   worktree paths, and raw CI stderr.
+
+The dashboard API (`GET /api/plans/{plan}`) now returns two fields:
+
+- `notification_records`: structured, deduped, severity‑normalised records.
+- `notifications`: the legacy free‑text log strings (kept for backward
+  compatibility).
+
+No outbound sinks (Slack, webhook, email) are implemented; notifications are
+only written locally and consumed by the dashboard.
+
+
 ## Plan / story schema
 
 `save_plan` accepts JSON of this shape (the `product-analyst` persona emits it):

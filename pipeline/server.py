@@ -1063,7 +1063,7 @@ class PipelineService:
     def review_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
-        with _plan_lock(plan_name) as acquired:
+        with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {
                     "ok": True,
@@ -1073,7 +1073,7 @@ class PipelineService:
             return _original_review_story(plan_name, story_key)
     def advance_pipeline(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
-        with _plan_lock(plan_name) as acquired:
+        with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {
                     "ok": True,

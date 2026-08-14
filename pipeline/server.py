@@ -847,7 +847,7 @@ class PipelineService:
             "decided_by": "overlord",
             "decided_at": datetime.now(timezone.utc).isoformat(),
         }
-        _append_decision(plan_name, record)
+        _store.append_decision(plan_name, record)
         return record
 
 

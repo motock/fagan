@@ -16,7 +16,7 @@ const RISK_RANK = { high: 3, medium: 2, low: 1 };
 // us `last_activity` and the UI does the math so cards stay accurate
 // without re-fetching.
 const STALE_IN_PROGRESS_MINUTES = 30;
-
+const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
 const FILTERS_KEY = "pipeline-dashboard-filters";
 
 // Parse an ISO-8601 string into a Date. Returns null for any falsy or
@@ -644,11 +644,27 @@ function renderFilterBar(stories) {
     + `<button class="filter-reset" data-action="reset">Reset</button></div>`;
 }
 
-function renderNotifications(lines) {
-  if (!lines.length) return '<p class="empty-state">No notifications yet.</p>';
-  return lines.slice().reverse()
-    .map((line) => `<div class="log-line">${escapeHtml(line)}</div>`)
-    .join("");
+function renderNotifications(records) {
+  if (!records || !records.length) return '<p class="empty-state">No notifications yet.</p>';
+  return records.slice().reverse().map(function (r) {
+    var color = NOTIF_SEVERITY_COLOR[r.severity] || "--c-unknown";
+    var sev = escapeHtml(r.severity || "");
+    var parts = [];
+    parts.push('<div class="log-line">');
+    parts.push('<span class="badge" style="--badge-color: var(' + color + ')">' + sev + '</span>');
+    if (r.story_key) {
+      parts.push('<span class="mono">' + escapeHtml(r.story_key) + '</span>');
+    }
+    parts.push(escapeHtml(r.message || ""));
+    if (r.count && r.count > 1) {
+      parts.push('<span class="badge">x' + escapeHtml(String(r.count)) + '</span>');
+    }
+    if (r.ts) {
+      parts.push(escapeHtml(r.ts));
+    }
+    parts.push('</div>');
+    return parts.join(' ');
+  }).join('');
 }
 
 function renderDecisions(decisions) {
@@ -683,7 +699,7 @@ function renderPlanDetail(plan) {
     <div class="panels">
       <div class="panel">
         <h3>Notifications</h3>
-        <div class="panel-body">${renderNotifications(plan.notifications)}</div>
+        <div class="panel-body">${renderNotifications(plan.notification_records)}</div>
       </div>
       <div class="panel">
         <h3>Overlord decisions</h3>
@@ -709,7 +725,7 @@ function renderPlanDetail(plan) {
       renderPlanDetail(plan);
     });
   });
-  const searchInput = section.querySelector(".filter-search");
+  const searchInput = section.querySelector && section.querySelector(".filter-search");
   if (searchInput) {
     searchInput.addEventListener("input", () => {
       state.filters.search = searchInput.value;
@@ -718,7 +734,7 @@ function renderPlanDetail(plan) {
       renderPlanDetail(plan);
     });
   }
-  const resetBtn = section.querySelector(".filter-reset");
+  const resetBtn = section.querySelector && section.querySelector(".filter-reset");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
       state.filters = defaultFilters();
@@ -1623,6 +1639,7 @@ if (typeof module !== "undefined" && module.exports) {
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
     showStoryModal, _renderStoryModalBody, handleCopyClick,
     renderOverview, selectOverview, refresh, state,
+    renderNotifications,
     renderChecklist,
   };
 }

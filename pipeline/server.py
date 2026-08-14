@@ -1003,13 +1003,14 @@ class PipelineService:
                 f"must be one of {sorted(_VALID_STORY_STATUSES)}",
             }
 
-        with _plan_lock(plan_name) as acquired:
+        with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {
                     "ok": True,
                     "skipped": "locked",
                     "reason": "another dispatch/ingest/interrupt is in progress for this plan",
                 }
+            manifest = _store.get_manifest(plan_name)
             manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
             manifest = json.loads(manifest_path.read_text())
             story = manifest["stories"].get(story_key)
@@ -1018,7 +1019,7 @@ class PipelineService:
             story["status"] = status
             if status != "parked":
                 story.pop("parked_reason", None)
-            _atomic_write_json(manifest_path, manifest)
+            _store.save_manifest(plan_name, manifest)
             return {"ok": True, "story_key": story_key, "status": status}
     
     def patch_story(

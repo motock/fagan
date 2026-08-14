@@ -18,6 +18,7 @@ const RISK_RANK = { high: 3, medium: 2, low: 1 };
 const STALE_IN_PROGRESS_MINUTES = 30;
 const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
 const FILTERS_KEY = "pipeline-dashboard-filters";
+let notifSeverityFilter = "all";
 
 // Parse an ISO-8601 string into a Date. Returns null for any falsy or
 // unparseable value — the dashboard never promises strict formatting, and

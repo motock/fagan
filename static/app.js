@@ -19,7 +19,13 @@ const STALE_IN_PROGRESS_MINUTES = 30;
 const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
 const FILTERS_KEY = "pipeline-dashboard-filters";
 let notifSeverityFilter = "all";
+function filterNotifications(records, severity) {
+  if (!records) return [];
+  if (!severity || severity === "all") return records.slice();
+  return records.filter((r) => (r && r.severity) === severity);
+}
 
+const DEFAULT_THEME = "dark";
 // Parse an ISO-8601 string into a Date. Returns null for any falsy or
 // unparseable value — the dashboard never promises strict formatting, and
 // a bad row should just hide the age label rather than throw.

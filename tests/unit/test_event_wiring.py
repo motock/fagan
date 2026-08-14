@@ -289,8 +289,8 @@ def test_build_bus_subscribes_only_agent_done():
     """No other event type has any subscriber."""
     bus = build_bus()
     subscribed = {k for k, v in bus._handlers.items() if v}
-    assert subscribed == {"agent_done"}, (
-        f"only 'agent_done' should be subscribed, got {subscribed!r}"
+    assert subscribed == {"agent_done", "notification"}, (
+        f"only 'agent_done' and 'notification' should be subscribed, got {subscribed!r}"
     )
 
 
@@ -300,7 +300,7 @@ def test_build_bus_does_not_subscribe_other_known_types():
 
     bus = build_bus()
     for etype in EVENT_TYPES:
-        if etype == "agent_done":
+        if etype == "agent_done" or etype == "notification":
             continue
         assert bus._handlers.get(etype, []) == [], (
             f"unexpected handler(s) for {etype!r}"

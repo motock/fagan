@@ -4,9 +4,11 @@ from pathlib import Path
 
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus
+from .notification_sinks import file_log_sink
 from .paths import PLAN_DIR
 
 logger = logging.getLogger(__name__)
+
 
 def wake_handler(event: dict) -> dict:
     """Handle an agent_done event to potentially advance the pipeline.
@@ -51,7 +53,23 @@ def wake_handler(event: dict) -> dict:
     result = advance_pipeline(plan_name)
     return {"ok": True, "woke": plan_name, "result": result}
 
+
 def build_bus() -> EventBus:
     bus = InProcessEventBus()
     bus.subscribe("agent_done", wake_handler)
+    bus.subscribe("notification", file_log_sink)
     return bus
+
+# Process‑level singleton for the event bus.
+_BUS = None
+
+def get_bus() -> EventBus:
+    """The one bus this process publishes on. Subsequent calls return the same instance.
+
+    The bus is lazily created on first use and cached in the module‑level ``_BUS`` variable.
+    It never re‑subscribes handlers; a second call returns the existing bus.
+    """
+    global _BUS
+    if _BUS is None:
+        _BUS = build_bus()
+    return _BUS

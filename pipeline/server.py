@@ -4638,22 +4638,22 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 
 
 def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:
-    with _plan_lock(plan_name) as acquired:
+    with _store.transaction(plan_name) as acquired:
         if not acquired:
             return {
                 "ok": True,
                 "skipped": "locked",
                 "reason": "an advance_pipeline tick is already running for this plan",
             }
-        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-        if not manifest_path.exists():
+        if not _store.manifest_path(plan_name).exists():
             return {"ok": False, "error": f"No manifest for {plan_name}"}
-        manifest = json.loads(manifest_path.read_text())
+        manifest = _store.get_manifest(plan_name)
         manifest["paused"] = paused
-        _atomic_write_json(manifest_path, manifest)
+        _store.save_manifest(plan_name, manifest)
         return {"ok": True, "plan_name": plan_name, "paused": paused}
 
 
+# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 @mcp.tool()
 def pause_plan(plan_name: str) -> dict[str, Any]:
     """

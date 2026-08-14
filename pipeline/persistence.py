@@ -140,11 +140,7 @@ def _notify_user(
     log line first, then appends a JSONL record.
     """
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    # Write free-text log line (may raise on OSError)
-    path = PLAN_DIR / f"{plan_name}.notifications.log"
-    with open(path, "a") as f:
-        f.write(f"{ts} {message}\n")
-    # Build and write structured record
+    # Build structured record first
     record = _notification_record(
         plan_name,
         message,
@@ -154,7 +150,42 @@ def _notify_user(
         dedup_key,
         ts,
     )
-    _write_notification_record(plan_name, record)
+    try:
+        # Lazy import to avoid cycle: event_wiring imports notification_sinks, which imports persistence
+        from .event_wiring import get_bus
+        from .events import make_event
+        bus = get_bus()
+        evt = make_event(
+            "notification",
+            plan_name,
+            story_key=story_key,
+            payload={
+                "message": message,
+                "story_key": story_key,
+                "severity": record["severity"],
+                "event": event,
+                "dedup_key": dedup_key,
+                "ts": ts,
+            },
+        )
+        # Ensure the event's timestamp matches payload
+        evt["ts"] = ts
+        bus.publish(evt)
+        # If no handlers were registered, write directly to avoid missing output
+        if not hasattr(bus, "_handlers") or not bus._handlers:
+            path = PLAN_DIR / f"{plan_name}.notifications.log"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{ts} {message}\n")
+            _write_notification_record(plan_name, record)
+    except Exception:
+        # InProcessEventBus.publish swallows handler exceptions internally, so a failing sink never raises out of publish and never triggers this fallback.
+        # Only bus machinery failure (import error, get_bus raising) reaches here, and no sink ran,
+        # so exactly one write happens either way.
+        logger.exception("Failed to publish notification event; falling back to file writes")
+        path = PLAN_DIR / f"{plan_name}.notifications.log"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{ts} {message}\n")
+        _write_notification_record(plan_name, record)
 
 __all__ = [
     "NOTIFY_SEVERITIES",

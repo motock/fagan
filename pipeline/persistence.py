@@ -171,11 +171,10 @@ def _notify_user(
         bus.publish(evt)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to publish notification event; falling back: %s", exc)
-    # Always write the free‑text log line and JSONL record, regardless of bus success.
-    path = PLAN_DIR / f"{plan_name}.notifications.log"
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(f"{ts} {message}\n")
-    _write_notification_record(plan_name, record)
+        path = PLAN_DIR / f"{plan_name}.notifications.log"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{ts} {message}\n")
+        _write_notification_record(plan_name, record)
 
 __all__ = [
     "NOTIFY_SEVERITIES",

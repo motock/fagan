@@ -536,13 +536,13 @@ def _repo_root_for(plan_name: str) -> Path:
     else falls back to the server's global REPO_ROOT for older manifests
     ingested before this field existed.
     """
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    if manifest_path.exists():
-        repo_root = json.loads(manifest_path.read_text()).get("repo_root")
+    if _store.manifest_path(plan_name).exists():
+        repo_root = _store.get_manifest(plan_name).get("repo_root")
         if repo_root:
             return Path(repo_root)
     return REPO_ROOT
-
+    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+    _ = manifest_path
 
 @contextmanager
 def _scoped_repo_root(plan_name: str):

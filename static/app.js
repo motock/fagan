@@ -726,7 +726,7 @@ function renderPlanDetail(plan) {
   `;
 
   section.querySelectorAll(".card").forEach((card) => {
-    card.addEventListener("click", () => showStoryModal(plan.name, plan.stories[card.dataset.key], card.dataset.key));
+    card.addEventListener("click", () => showStoryModal(plan.name, plan.stories[card.dataset.key], card.dataset.key, plan.notification_records));
   });
 
   section.querySelectorAll(".filter-chip").forEach((el) => {
@@ -1043,16 +1043,39 @@ function handleCopyClick(e) {
   );
 }
 
-function showStoryModal(planName, story, key) {
-  _renderStoryModalBody(planName, story, key);
+function filterStoryNotifications(records, storyKey) {
+  if (!records) return [];
+  return records.filter((r) => r && r.story_key === storyKey);
 }
 
-function _renderStoryModalBody(planName, story, key) {
+function renderStoryModalNotifications(records) {
+  if (!records || !records.length) {
+    return '<p class="modal-empty" data-notifications-empty>No notifications for this story.</p>';
+  }
+  return records.slice().reverse().map((r) => {
+    const severity = (r && r.severity) || "info";
+    const color = NOTIF_SEVERITY_COLOR[severity] || NOTIF_SEVERITY_COLOR.info;
+    const countBadge = r && r.count > 1
+      ? ` <span class="badge">x${escapeHtml(String(r.count))}</span>`
+      : "";
+    return `<div class="log-line">`
+      + `<span class="badge" style="--badge-color: var(${color})">${escapeHtml(severity)}</span>`
+      + countBadge
+      + ` ${escapeHtml((r && r.message) || "")}</div>`;
+  }).join("");
+}
+
+function showStoryModal(planName, story, key, notificationRecords) {
+  _renderStoryModalBody(planName, story, key, notificationRecords);
+}
+
+function _renderStoryModalBody(planName, story, key, notificationRecords) {
   const modal = document.getElementById("story-modal");
   const body = document.getElementById("story-modal-body");
   const deps = story.dependencies;
   const depsText = Array.isArray(deps) ? deps.join(", ") : "";
   const depsShow = Array.isArray(deps) && deps.length > 0 ? depsText : null;
+const storyNotifications = filterStoryNotifications(notificationRecords, key);
 
   // Track which plan/story the modal is currently showing so the async
   // log fetch can resolve into the right slot and so a stale fetch that
@@ -1152,6 +1175,10 @@ function _renderStoryModalBody(planName, story, key) {
     <div data-journal-slot>
       <h3 class="modal-section">Journal</h3>
       <p class="modal-empty" data-journal-empty>No journal yet.</p>
+    </div>
+    <div data-notifications-slot>
+      <h3 class="modal-section">Notifications</h3>
+      ${renderStoryModalNotifications(storyNotifications)}
     </div>
     <section class="dsh-modal-log-section" aria-labelledby="dsh-log-heading">
       <h3 id="dsh-log-heading" class="modal-section">Log</h3>
@@ -1661,6 +1688,7 @@ if (typeof module !== "undefined" && module.exports) {
     capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
     showStoryModal, _renderStoryModalBody, handleCopyClick,
+    filterStoryNotifications, renderStoryModalNotifications,
     renderOverview, selectOverview, refresh, state,
     renderNotifications,
     renderChecklist,

@@ -290,3 +290,99 @@ def test_no_call_site_was_migrated():
         f"expected 14 raw manifest_path constructions, found {count}; "
         "this story must not migrate any call site"
     )
+
+
+# ---------------------------------------------------------------------------
+# W1b-02: list_plans, list_manifests, update_story, append_decision,
+# append_journal.
+# ---------------------------------------------------------------------------
+
+def test_store_protocol_declares_the_five_new_methods():
+    for method in (
+        "list_plans", "list_manifests", "update_story",
+        "append_decision", "append_journal",
+    ):
+        assert hasattr(p.Store, method), f"Store Protocol must declare {method}"
+
+
+def test_filestore_implements_the_five_new_methods():
+    for method in (
+        "list_plans", "list_manifests", "update_story",
+        "append_decision", "append_journal",
+    ):
+        assert hasattr(p.FileStore, method), f"FileStore must define {method}"
+
+
+def test_list_plans_includes_both_plan_stem_and_manifest_stem(plan_dir):
+    (plan_dir / "demo.json").write_text("{}")
+    _write_manifest(plan_dir, "demo", {"stories": {}})
+    assert sorted(p._store.list_plans()) == ["demo", "demo.manifest"]
+
+
+def test_list_plans_empty_dir_returns_empty_list(plan_dir):
+    assert p._store.list_plans() == []
+
+
+def test_list_manifests_returns_sorted_suffix_stripped_names(plan_dir):
+    _write_manifest(plan_dir, "zeta", {"stories": {}})
+    _write_manifest(plan_dir, "alpha", {"stories": {}})
+    assert p._store.list_manifests() == ["alpha", "zeta"]
+
+
+def test_list_manifests_empty_dir_returns_empty_list(plan_dir):
+    assert p._store.list_manifests() == []
+
+
+def test_update_story_returns_updated_story_and_persists(plan_dir):
+    _write_manifest(plan_dir, "demo", {"stories": {"s1": {"status": "pending"}}})
+    result = p._store.update_story("demo", "s1", {"status": "done"})
+    assert result == {"status": "done"}
+    assert _read_manifest(plan_dir, "demo") == {"stories": {"s1": {"status": "done"}}}
+
+
+def test_update_story_returns_none_for_unknown_story_key(plan_dir):
+    # N1: an unknown story key returns None and does not write the manifest.
+    manifest = {"stories": {"s1": {"status": "pending"}}}
+    _write_manifest(plan_dir, "demo", manifest)
+    before = p._store.manifest_path("demo").read_text()
+    result = p._store.update_story("demo", "NO-SUCH-KEY", {"status": "done"})
+    assert result is None
+    assert p._store.manifest_path("demo").read_text() == before
+
+
+def test_update_story_missing_manifest_raises_file_not_found(plan_dir):
+    # N2: get_manifest's FileNotFoundError must propagate, not be swallowed.
+    with pytest.raises(FileNotFoundError):
+        p._store.update_story("does-not-exist", "s1", {"status": "done"})
+
+
+def test_append_decision_delegates_to_bare_function():
+    src = inspect.getsource(p.FileStore.append_decision)
+    assert "_append_decision(" in src
+    assert "persistence." not in src
+
+
+def test_append_journal_delegates_to_bare_function():
+    src = inspect.getsource(p.FileStore.append_journal)
+    assert "_append_journal(" in src
+    assert "persistence." not in src
+
+
+def test_append_decision_creates_log_file_and_appends_in_order(plan_dir, monkeypatch):
+    from pipeline import persistence as ppers
+
+    monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
+    p._store.append_decision("demo", {"n": 1})
+    p._store.append_decision("demo", {"n": 2})
+    log_path = plan_dir / "demo.decisions.json"
+    assert json.loads(log_path.read_text()) == [{"n": 1}, {"n": 2}]
+
+
+def test_append_journal_creates_log_file_and_appends_in_order(plan_dir, monkeypatch):
+    from pipeline import persistence as ppers
+
+    monkeypatch.setattr(ppers, "PLAN_DIR", plan_dir)
+    p._store.append_journal("demo", "s1", {"step": "a"})
+    p._store.append_journal("demo", "s1", {"step": "b"})
+    log_path = plan_dir / "demo.s1.journal.json"
+    assert json.loads(log_path.read_text()) == [{"step": "a"}, {"step": "b"}]

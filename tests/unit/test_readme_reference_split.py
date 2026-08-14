@@ -174,6 +174,7 @@ EXPECTED_README_SECTIONS = [
     "The overlord and the decision policy",
     "Reference",
     "Prerequisites",
+    "Scheduler",
     "License",
 ]
 
@@ -187,11 +188,11 @@ def test_readme_h2_count_and_order():
     )
 
 
-def test_readme_has_seven_h2_sections():
+def test_readme_has_eight_h2_sections():
     assert README.is_file(), "README.md must exist at the repo root"
     headings = h2_headings(README.read_text())
-    assert len(headings) == 7, (
-        f"README.md must have exactly 7 H2 sections, got {len(headings)}: {headings}"
+    assert len(headings) == 8, (
+        f"README.md must have exactly 8 H2 sections, got {len(headings)}: {headings}"
     )
 
 

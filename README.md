@@ -120,11 +120,6 @@ See [`REFERENCE.md`](REFERENCE.md) for the full MCP tools reference, the plan/st
 - **GitHub CLI** (`gh`).
 - **Claude Code CLI** (`claude`).
 
-## License
-
-Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE) and
-[NOTICE](NOTICE).
-
 ## Scheduler
 
 The **advance-scheduler** is now a long‑lived daemon rather than a 60s launchd tick. Launchd now only crash‑restarts the daemon via KeepAlive.
@@ -132,3 +127,9 @@ The **advance-scheduler** is now a long‑lived daemon rather than a 60s launchd
 ### Environment Variables
 - **PIPELINE_SCHEDULER_INTERVAL_S** – default reconcile sweep interval (default 60 seconds).
 - **PIPELINE_SCHEDULER_HEALTH_PATH** – optional path where the daemon writes its health JSON each iteration.
+
+## License
+
+Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE) and
+[NOTICE](NOTICE).
+

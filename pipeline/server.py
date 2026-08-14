@@ -4699,7 +4699,4 @@ if __name__ == "__main__":
 # A-posteriori escalation of a failed local run to Claude is gated by
 # _auto_escalation_enabled() (PIPELINE_AUTO_ESCALATE, falling back to
 # PIPELINE_BACKEND_DISPATCH=="auto" when unset - see pipeline/escalation.py).
-# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+

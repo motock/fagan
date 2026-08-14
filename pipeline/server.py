@@ -542,7 +542,7 @@ def _repo_root_for(plan_name: str) -> Path:
             return Path(repo_root)
     return REPO_ROOT
     manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-
+    _ = manifest_path
 
 @contextmanager
 def _scoped_repo_root(plan_name: str):

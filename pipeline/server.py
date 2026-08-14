@@ -1011,8 +1011,6 @@ class PipelineService:
                     "reason": "another dispatch/ingest/interrupt is in progress for this plan",
                 }
             manifest = _store.get_manifest(plan_name)
-            manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-            manifest = json.loads(manifest_path.read_text())
             story = manifest["stories"].get(story_key)
             if story is None:
                 return {"ok": False, "error": f"No such story {story_key!r}"}
@@ -1021,7 +1019,7 @@ class PipelineService:
                 story.pop("parked_reason", None)
             _store.save_manifest(plan_name, manifest)
             return {"ok": True, "story_key": story_key, "status": status}
-    
+# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
     def patch_story(
         self, plan_name: str, story_key: str, fields: dict[str, Any]
     ) -> dict[str, Any]:

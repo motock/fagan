@@ -149,6 +149,13 @@ def _notify_user(
         dedup_key,
         ts,
     )
+
+    def _write_directly() -> None:
+        path = PLAN_DIR / f"{plan_name}.notifications.log"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{ts} {message}\n")
+        _write_notification_record(plan_name, record)
+
     try:
         # Lazy import to avoid cycle: event_wiring imports notification_sinks, which imports persistence
         from .event_wiring import get_bus
@@ -169,12 +176,17 @@ def _notify_user(
         )
         evt["ts"] = ts
         bus.publish(evt)
+        # InProcessEventBus.publish swallows handler exceptions internally, so a
+        # sink that fails to persist never raises here and can't be caught below.
+        # Instead, check whether any handler is actually subscribed to
+        # "notification": if no sink ran, write directly so the notification is
+        # never silently dropped; if a sink is subscribed (the normal, wired
+        # bus), it already persisted the record, so skip to avoid a double write.
+        if not getattr(bus, "_handlers", {}).get("notification"):
+            _write_directly()
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to publish notification event; falling back: %s", exc)
-        path = PLAN_DIR / f"{plan_name}.notifications.log"
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(f"{ts} {message}\n")
-        _write_notification_record(plan_name, record)
+        _write_directly()
 
 __all__ = [
     "NOTIFY_SEVERITIES",

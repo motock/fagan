@@ -2354,8 +2354,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     _validate_key(plan_name)
     _validate_key(story_key)
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    manifest = json.loads(manifest_path.read_text())
+    manifest_path = _store.manifest_path(plan_name)
+    manifest = _store.get_manifest(plan_name)
     story = manifest["stories"].get(story_key)
     if not story or "pid" not in story:
         return {"ok": False, "error": "Story not dispatched"}
@@ -4703,4 +4703,4 @@ if __name__ == "__main__":
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-
+# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"

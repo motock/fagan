@@ -856,12 +856,12 @@ class PipelineService:
         _validate_key(story_key)
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
-        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-        manifest = json.loads(manifest_path.read_text())
+        manifest = _store.get_manifest(plan_name)
         if story_key not in manifest["stories"]:
             return {"ok": False, "error": f"No such story {story_key}"}
         manifest["stories"][story_key]["status"] = "in_progress"
-        _atomic_write_json(manifest_path, manifest)
+        _store.save_manifest(plan_name, manifest)
+        # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json", _atomic_write_json
         return {"ok": True}
     def checkpoint(self,
                    plan_name: str,

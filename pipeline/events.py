@@ -30,6 +30,7 @@ EVENT_TYPES = frozenset(
         "parked",
         "rework",
         "reconcile",
+        "notification",
     }
 )
 

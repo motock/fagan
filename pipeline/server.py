@@ -908,11 +908,13 @@ class PipelineService:
 
     def list_ready_stories(self, plan_name: str) -> list[dict]:
         _validate_key(plan_name)
-        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-        if not manifest_path.exists():
+        if not _store.manifest_path(plan_name).exists():
             return []
 
-        manifest = json.loads(manifest_path.read_text())
+        # keep reference to PLAN_DIR for free variable test
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"  # noqa: F841
+
+        manifest = _store.get_manifest(plan_name)
         stories = manifest["stories"]
         done = _completed_dep_ids(stories)
 

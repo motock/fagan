@@ -140,11 +140,6 @@ def _notify_user(
     log line first, then appends a JSONL record.
     """
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    # Write free-text log line (may raise on OSError)
-    path = PLAN_DIR / f"{plan_name}.notifications.log"
-    with open(path, "a") as f:
-        f.write(f"{ts} {message}\n")
-    # Build and write structured record
     record = _notification_record(
         plan_name,
         message,
@@ -154,7 +149,50 @@ def _notify_user(
         dedup_key,
         ts,
     )
-    _write_notification_record(plan_name, record)
+
+    def _write_directly() -> None:
+        path = PLAN_DIR / f"{plan_name}.notifications.log"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{ts} {message}\n")
+        _write_notification_record(plan_name, record)
+
+    try:
+        # Lazy import to avoid cycle: event_wiring imports notification_sinks, which imports persistence
+        from .event_wiring import get_bus
+        from .events import make_event
+        bus = get_bus()
+        evt = make_event(
+            "notification",
+            plan_name,
+            story_key=story_key,
+            payload={
+                "message": message,
+                "story_key": story_key,
+                "severity": record["severity"],
+                "event": event,
+                "dedup_key": dedup_key,
+                "ts": ts,
+            },
+        )
+        evt["ts"] = ts
+        bus.publish(evt)
+        # InProcessEventBus.publish swallows handler exceptions internally, so a
+        # sink that fails to persist never raises here and can't be caught below.
+        # Instead, check whether any handler is actually subscribed to
+        # "notification": if no sink ran, write directly so the notification is
+        # never silently dropped; if a sink is subscribed (the normal, wired
+        # bus), it already persisted the record, so skip to avoid a double write.
+        if not getattr(bus, "_handlers", {}).get("notification"):
+            try:
+                _write_directly()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Failed to write notification directly: %s", exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to publish notification event; falling back: %s", exc)
+        try:
+            _write_directly()
+        except Exception as exc2:  # noqa: BLE001
+            logger.error("Failed to write notification directly: %s", exc2)
 
 __all__ = [
     "NOTIFY_SEVERITIES",

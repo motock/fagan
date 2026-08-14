@@ -20,9 +20,9 @@ import json
 from unittest import mock
 
 import pytest
-from pipeline.event_wiring import build_bus, wake_handler
 
 from pipeline import event_wiring
+from pipeline.event_wiring import build_bus, wake_handler
 
 # The module under test does not exist yet, so the imports above fail -- that
 # is the intended RED state for this dispatch.

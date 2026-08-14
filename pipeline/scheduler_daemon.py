@@ -74,7 +74,7 @@ class SchedulerDaemon:
         """
         # Perform reconcile immediately.
         self._reconcile_fn()
-        now_ts = _dt.datetime.now().isoformat()
+        now_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
         self._last_reconcile_ts = now_ts
         self._reconcile_count += 1
         # Update interval gating clock so run_once does not reconcile again
@@ -125,7 +125,7 @@ class SchedulerDaemon:
         finally:
             # Update health metrics for scan.
             self._scan_count += 1
-            self._last_scan_ts = _dt.datetime.now().isoformat()
+            self._last_scan_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
 
         now = self._clock()
         if now - self._last_reconcile >= self._interval_s:
@@ -138,13 +138,13 @@ class SchedulerDaemon:
             finally:
                 # Update health metrics for reconcile regardless of success.
                 self._reconcile_count += 1
-                self._last_reconcile_ts = _dt.datetime.now().isoformat()
+                self._last_reconcile_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
                 self._last_reconcile = now
 
         if self._health_path is not None:
             try:
                 self.write_health(self._health_path)
-            except Exception as exc:  # pragma: no cover - unlikely but safe
+            except Exception:  # pragma: no cover - unlikely but safe
                 logger.exception("write_health failed")
 
         return {"scanned": scanned, "reconciled": reconciled}

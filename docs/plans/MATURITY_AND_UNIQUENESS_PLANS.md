@@ -596,7 +596,7 @@ stories (TDD-split stays strictly read-only). Tests in
 > it. The dashboard should read/write through the same service API every other
 > client uses. See `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (W1, W3b).
 
-- [ ] **Structured logs + a correlation ID carried across the whole story
+- [~] **Structured logs + a correlation ID carried across the whole story
       lifecycle** (dispatch → review → rework → merge, including into the agent
       subprocess so `agent.log` joins up with orchestrator lines). Today: text
       files with no join key (`dashboard.log` 9.5 MB, `mlx-server.log` 7 MB),
@@ -604,6 +604,18 @@ stories (TDD-split stays strictly read-only). Tests in
       also the tooling A3's "bound the failure-mode discovery rate" needs to
       become measurable rather than archaeological — and `CLAUDE.md` already
       mandates it, so the orchestrator currently fails its own standard.
+      **Partial progress (2026-08-14): `event-driven-pipeline-phase3` shipped
+      complete, 12/12 stories, PRs #318-#346.** `_notify_user` now emits
+      structured events (severity, dedup key) onto a process-wide bus with a
+      file-log sink and a JSONL sidecar, replacing ad hoc inline file writes;
+      the dashboard serves/collapses/filters these as structured records and
+      renders them per-story in the story detail modal. This gives
+      notification-level events a real schema and a queryable sidecar, but it
+      does **not** close this bullet: there is still no correlation ID joining
+      a story's dispatch/review/rework/merge log lines together, and
+      `agent.log` (the dispatched agent subprocess's own transcript) is not on
+      the bus — only orchestrator-side notifications are. The remaining gap is
+      narrower than before this landed, not gone.
 - [ ] **Writable dashboard / control plane.** Current dashboard is read-only
       by design (good safety instinct). Add an explicit, audit-logged action
       surface (pause/resume/approve/reroute) so overlord decisions are
@@ -657,8 +669,12 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > (effective-config+provenance view, no prerequisites, serves A2)~~ **DONE
 > 2026-08-09, PRs #247-#258** → ~~W1a (extract `PipelineService` — the
 > keystone both B3 and B4 depend on)~~ **DONE 2026-08-12, 22 stories, PRs
-> #263-#286** → **W1b (`Store` protocol — `FileStore` as the only
-> implementation, next up) / W1c (HTTP adapter + SSE event stream)** → W2
+> #263-#286** → ~~W1b (`Store` protocol — `FileStore` as the only
+> implementation)~~ **IN PROGRESS 2026-08-14 — 17/20 stories done (PRs
+> #315-#344); story 18 (module-level `review_story`) is mid-rework and
+> currently paused, stories 19-20 (`_advance_pipeline_locked`,
+> `_approve_merge_impl`) not yet dispatched** / W1c (HTTP adapter + SSE
+> event stream, not started) → W2
 > (chat entry point) → W3b (writable dashboard, closes B4) → W4
 > (multi-tenant, closes B3). B1 (sandbox) and B5 (export the moat) are
 > picked up once the service seam exists, not before — see that doc's own

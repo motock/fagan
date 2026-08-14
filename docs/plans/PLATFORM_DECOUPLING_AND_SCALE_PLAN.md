@@ -310,6 +310,16 @@ Concretely, and largely independent of everything else:
 The project's own CLAUDE.md already mandates structured logging with correlation
 IDs. The orchestrator does not currently meet its own standard.
 
+**Partial progress (2026-08-14):** `event-driven-pipeline-phase3` (12/12
+stories, PRs #318-#346) put `_notify_user` events onto a structured,
+process-wide bus with a file-log sink and a JSONL sidecar, and the dashboard
+now serves/dedup-collapses/filters those as structured records, including
+per-story rendering. That's a real piece of "structured logs with a stable
+field set," but it's notification events only — it doesn't mint a
+correlation ID or carry one through dispatch → review → rework → merge, and
+the dispatched agent's own `agent.log` subprocess output is still off the
+bus. This bullet stays open.
+
 ---
 
 ## Are there scaling concerns with the current runtimes?
@@ -375,10 +385,14 @@ The dependency order is fairly rigid:
    **DONE 2026-08-09** — plan `w3a-effective-config-provenance`, PRs
    #247-#258 (`pipeline/config_provenance.py`, `get_effective_config` MCP
    tool, `/api/config` dashboard endpoint).
-2. **W1a — extract `PipelineService`** (next up), MCP tools become
-   delegations. The keystone; nothing else is cheap before it.
+2. ~~**W1a — extract `PipelineService`**, MCP tools become delegations. The
+   keystone; nothing else is cheap before it.~~ **DONE 2026-08-12** — 22
+   stories, PRs #263-#286.
 3. **W1b — `Store` protocol** with `FileStore` as the only implementation.
-4. **W1c — HTTP adapter + event stream.**
+   **IN PROGRESS 2026-08-14** — 17/20 stories done (PRs #315-#344); story 18
+   (`review_story` Store migration) mid-rework and currently paused, stories
+   19-20 not yet dispatched.
+4. **W1c — HTTP adapter + event stream.** Not started.
 5. **W2 — chat entry point** on the HTTP API.
 6. **W3b — dashboard reads the API**, config becomes editable.
 7. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
@@ -425,9 +439,11 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   release tag, blocked on the GHA billing cap) or themselves blocked on this
   plan's W4 structured logging, the next work after A3 is **this doc's
   sequence**: ~~W3a (effective-config+provenance view, no prerequisites)~~
-  **DONE 2026-08-09, PRs #247-#258** → **W1 (extract `PipelineService`, the
-  keystone — next up)** → W1b/W1c → W2 (chat entry point) → W3b (writable
-  dashboard) → W4 (multi-tenant), with B1 (sandboxing) and B5 (export the
+  **DONE 2026-08-09, PRs #247-#258** → ~~W1a (extract `PipelineService`, the
+  keystone)~~ **DONE 2026-08-12, PRs #263-#286** → **W1b (`Store` protocol
+  — IN PROGRESS, 17/20 stories, PRs #315-#344)** → W1c (HTTP adapter, not
+  started) → W2 (chat entry point) → W3b (writable dashboard) → W4
+  (multi-tenant), with B1 (sandboxing) and B5 (export the
   moat) picked up after the service seam exists rather than before it.
   Rationale: B1/B5 don't unblock anything else, while W1 is the single
   prerequisite blocking B3, B4, and the UI-entry-point goal simultaneously —

@@ -259,22 +259,6 @@ def _collapse_duplicate_notifications(records: list[dict]) -> list[dict]:
             result.append(entry)
     return result
 
-    for rec in records:
-        entry = {**rec, "count": 1, "last_ts": rec["ts"]}
-        if (
-            result
-            and entry.get("dedup_key")
-            and result[-1].get("dedup_key")
-            and entry["dedup_key"] == result[-1]["dedup_key"]
-        ):
-            prev = result[-1]
-            prev["count"] += 1
-            prev["last_ts"] = entry["ts"]
-            prev["message"] = entry["message"]
-            prev["severity"] = entry["severity"]
-        else:
-            result.append(entry)
-    return result
 
 def _read_decisions(plan_name: str) -> list[dict[str, Any]]:
     path = _decisions_path(plan_name)

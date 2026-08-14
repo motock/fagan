@@ -787,9 +787,10 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         "epics": manifest.get("epics", {}),
         "stories": decorated_stories,
         "notifications": _tail_notifications(plan_name),
-        "notification_records": _collapse_duplicate_notifications(
-            _tail_notification_records(plan_name)
-        ),
+        "notification_records": [
+            {k: v for k, v in r.items() if k in {"ts", "message", "severity", "story_key", "event", "dedup_key"} or (k == "count" and r.get("count", 1) > 1) or (k == "last_ts" and r.get("count", 1) > 1)}
+            for r in _collapse_duplicate_notifications(_tail_notification_records(plan_name))
+        ],
         "decisions": _read_decisions(plan_name),
     }
 

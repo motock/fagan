@@ -25,7 +25,6 @@ function filterNotifications(records, severity) {
   return records.filter((r) => (r && r.severity) === severity);
 }
 
-const DEFAULT_THEME = "dark";
 // Parse an ISO-8601 string into a Date. Returns null for any falsy or
 // unparseable value — the dashboard never promises strict formatting, and
 // a bad row should just hide the age label rather than throw.
@@ -652,8 +651,19 @@ function renderFilterBar(stories) {
 }
 
 function renderNotifications(records) {
-  if (!records || !records.length) return '<p class="empty-state">No notifications yet.</p>';
-  return records.slice().reverse().map(function (r) {
+  const chipRow = `<div class="filter-group"><span class="filter-group-label">Severity</span>${
+    ["all", "error", "warning", "info"]
+      .map((sev) => chip("notif-severity", sev, sev, notifSeverityFilter === sev))
+      .join("")
+  }</div>`;
+  const filtered = filterNotifications(records, notifSeverityFilter);
+  if (!filtered.length) {
+    const emptyMsg = (records && records.length)
+      ? "No notifications at this severity."
+      : "No notifications yet.";
+    return chipRow + `<p class="empty-state">${emptyMsg}</p>`;
+  }
+  return chipRow + filtered.reverse().map(function (r) {
     var color = NOTIF_SEVERITY_COLOR[r.severity] || "--c-unknown";
     var sev = escapeHtml(r.severity || "");
     var parts = [];
@@ -729,6 +739,12 @@ function renderPlanDetail(plan) {
         toggleFilter(dim, value);
       }
       updateHash();
+      renderPlanDetail(plan);
+    });
+  });
+  section.querySelectorAll('.filter-chip[data-dim="notif-severity"]').forEach((el) => {
+    el.addEventListener("click", () => {
+      notifSeverityFilter = el.dataset.value;
       renderPlanDetail(plan);
     });
   });
@@ -1648,5 +1664,6 @@ if (typeof module !== "undefined" && module.exports) {
     renderOverview, selectOverview, refresh, state,
     renderNotifications,
     renderChecklist,
+    filterNotifications,
   };
 }

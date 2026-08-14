@@ -400,8 +400,13 @@ def test_invoke_overlord_defaults_to_claude_persona_model_when_unconfigured(
     """Zero-config regression guard: with no registry entry, plan_role_config,
     or PIPELINE_BACKEND_OVERLORD override, overlord must resolve exactly as
     before - claude, persona-declared model ("opus" per agents_dir's
-    overlord.md)."""
+    overlord.md). The registry is forced empty so this stays a true
+    zero-config test even when model_registry.json declares an overlord
+    entry (which makes the default-configured path resolve elsewhere)."""
     monkeypatch.delenv("PIPELINE_BACKEND_OVERLORD", raising=False)
+    # Force an empty registry (no overlord role) so the fallback path is
+    # exercised regardless of what model_registry.json currently declares.
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
     captured = {}
 
     class _FakeDriver:

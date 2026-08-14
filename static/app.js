@@ -1005,6 +1005,10 @@ function handleCopyClick(e) {
 }
 
 function showStoryModal(planName, story, key) {
+  _renderStoryModalBody(planName, story, key);
+}
+
+function _renderStoryModalBody(planName, story, key) {
   const modal = document.getElementById("story-modal");
   const body = document.getElementById("story-modal-body");
   const deps = story.dependencies;
@@ -1617,7 +1621,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
-    showStoryModal, handleCopyClick,
+    showStoryModal, _renderStoryModalBody, handleCopyClick,
     renderOverview, selectOverview, refresh, state,
     renderChecklist,
   };

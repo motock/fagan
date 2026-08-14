@@ -2469,7 +2469,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if INFRA_FAILURE_LOG_SUBSTRING in last_log_line:
         sha = _commit_wip(str(worktree), story_key, "infra_failure")
         interrupted_at = datetime.now(timezone.utc).isoformat()
-        _append_journal(
+        _store.append_journal(
             plan_name,
             story_key,
             {
@@ -2552,7 +2552,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if last_log_line in STEP_CAP_MARKERS:
         sha = _commit_wip(str(worktree), story_key, "step_cap_reached")
         interrupted_at = datetime.now(timezone.utc).isoformat()
-        _append_journal(
+        _store.append_journal(
             plan_name,
             story_key,
             {

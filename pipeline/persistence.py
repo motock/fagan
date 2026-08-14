@@ -183,10 +183,16 @@ def _notify_user(
         # never silently dropped; if a sink is subscribed (the normal, wired
         # bus), it already persisted the record, so skip to avoid a double write.
         if not getattr(bus, "_handlers", {}).get("notification"):
-            _write_directly()
+            try:
+                _write_directly()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Failed to write notification directly: %s", exc)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to publish notification event; falling back: %s", exc)
-        _write_directly()
+        try:
+            _write_directly()
+        except Exception as exc2:  # noqa: BLE001
+            logger.error("Failed to write notification directly: %s", exc2)
 
 __all__ = [
     "NOTIFY_SEVERITIES",

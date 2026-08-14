@@ -1045,20 +1045,16 @@ class PipelineService:
                 f"only {sorted(_PATCHABLE_STORY_FIELDS)} are editable",
             }
 
-        with _plan_lock(plan_name) as acquired:
+        with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {
                     "ok": True,
                     "skipped": "locked",
                     "reason": "another dispatch/ingest/interrupt is in progress for this plan",
                 }
-            manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-            manifest = json.loads(manifest_path.read_text())
-            story = manifest["stories"].get(story_key)
+            story = _store.update_story(plan_name, story_key, fields)
             if story is None:
                 return {"ok": False, "error": f"No such story {story_key!r}"}
-            story.update(fields)
-            _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "story_key": story_key, "story": story}
 
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
@@ -4704,4 +4700,5 @@ if __name__ == "__main__":
 # A-posteriori escalation of a failed local run to Claude is gated by
 # _auto_escalation_enabled() (PIPELINE_AUTO_ESCALATE, falling back to
 # PIPELINE_BACKEND_DISPATCH=="auto" when unset - see pipeline/escalation.py).
+# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"

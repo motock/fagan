@@ -233,7 +233,32 @@ def _tail_notification_records(plan_name: str, limit: int = 100) -> list[dict[st
     return records[-limit:]
 
 def _collapse_duplicate_notifications(records: list[dict]) -> list[dict]:
+    if not records:
+        return []
     result: list[dict] = []
+    for rec in records:
+        entry = {**rec}
+        # ensure count and last_ts present
+        entry["count"] = 1
+        entry["last_ts"] = entry["ts"]
+        if (
+            result
+            and entry.get("dedup_key")
+            and result[-1].get("dedup_key")
+            and entry["dedup_key"] == result[-1]["dedup_key"]
+        ):
+            prev = result[-1]
+            if "count" not in prev:
+                prev["count"] = 1
+                prev["last_ts"] = prev["ts"]
+            prev["count"] += 1
+            prev["last_ts"] = entry["ts"]
+            prev["message"] = entry["message"]
+            prev["severity"] = entry["severity"]
+        else:
+            result.append(entry)
+    return result
+
     for rec in records:
         entry = {**rec, "count": 1, "last_ts": rec["ts"]}
         if (

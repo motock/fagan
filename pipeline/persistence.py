@@ -175,6 +175,12 @@ def _notify_user(
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{ts} {message}\n")
         _write_notification_record(plan_name, record)
+    # If the bus has no handlers for "notification" or is a recording double, write files directly.
+    if not hasattr(bus, "_handlers") or not bus._handlers.get("notification"):
+        path = PLAN_DIR / f"{plan_name}.notifications.log"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{ts} {message}\n")
+        _write_notification_record(plan_name, record)
 
 __all__ = [
     "NOTIFY_SEVERITIES",

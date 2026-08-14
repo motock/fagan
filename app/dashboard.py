@@ -232,6 +232,25 @@ def _tail_notification_records(plan_name: str, limit: int = 100) -> list[dict[st
         })
     return records[-limit:]
 
+def _collapse_duplicate_notifications(records: list[dict]) -> list[dict]:
+    result: list[dict] = []
+    for rec in records:
+        entry = {**rec, "count": 1, "last_ts": rec["ts"]}
+        if (
+            result
+            and entry.get("dedup_key")
+            and result[-1].get("dedup_key")
+            and entry["dedup_key"] == result[-1]["dedup_key"]
+        ):
+            prev = result[-1]
+            prev["count"] += 1
+            prev["last_ts"] = entry["ts"]
+            prev["message"] = entry["message"]
+            prev["severity"] = entry["severity"]
+        else:
+            result.append(entry)
+    return result
+
 def _read_decisions(plan_name: str) -> list[dict[str, Any]]:
     path = _decisions_path(plan_name)
     if not path.exists():
@@ -759,7 +778,9 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         "epics": manifest.get("epics", {}),
         "stories": decorated_stories,
         "notifications": _tail_notifications(plan_name),
-        "notification_records": _tail_notification_records(plan_name),
+        "notification_records": _collapse_duplicate_notifications(
+            _tail_notification_records(plan_name)
+        ),
         "decisions": _read_decisions(plan_name),
     }
 

@@ -880,7 +880,7 @@ class PipelineService:
     def interrupt_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
-        with _plan_lock(plan_name) as acquired:
+        with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {
                     "ok": True,

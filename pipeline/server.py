@@ -946,8 +946,7 @@ class PipelineService:
         }
     def advance_all_plans(self) -> dict[str, Any]:
         plans = {}
-        for manifest_path in sorted(PLAN_DIR.glob("*.manifest.json")):
-            plan_name = manifest_path.name.removesuffix(".manifest.json")
+        for plan_name in _store.list_manifests():
             try:
                 plans[plan_name] = advance_pipeline(plan_name)
             except Exception as e:  # noqa: BLE001 (one plan's failure must not stop every other plan's tick, per the comment below)

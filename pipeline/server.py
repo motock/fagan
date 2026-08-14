@@ -3001,11 +3001,10 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(story_key)
     get_ticket_provider().set_state(story_key, LogicalState.DONE, plan_name)
 
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-    manifest = json.loads(manifest_path.read_text())
+    manifest = _store.get_manifest(plan_name)
     manifest["stories"][story_key]["status"] = "done"
     manifest["stories"][story_key].pop("parked_reason", None)
-    _atomic_write_json(manifest_path, manifest)
+    _store.save_manifest(plan_name, manifest)
 
     # Check if all stories are now done
     all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
@@ -4700,5 +4699,6 @@ if __name__ == "__main__":
 # A-posteriori escalation of a failed local run to Claude is gated by
 # _auto_escalation_enabled() (PIPELINE_AUTO_ESCALATE, falling back to
 # PIPELINE_BACKEND_DISPATCH=="auto" when unset - see pipeline/escalation.py).
+# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"

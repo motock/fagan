@@ -4034,10 +4034,10 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
 
 
 def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+    manifest_path = _store.manifest_path(plan_name)
     if not manifest_path.exists():
         return {"ok": False, "error": f"No manifest for {plan_name}"}
-    manifest = json.loads(manifest_path.read_text())
+    manifest = _store.get_manifest(plan_name)
     stories = manifest["stories"]
 
     if manifest.get("paused"):

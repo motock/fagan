@@ -16,7 +16,6 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from pipeline.server import PipelineService
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 # app.pipeline_mcp_server / app.backend) into the dashboard's import graph.
 from app import role_registry
 from pipeline import config_provenance
+from pipeline.server import PipelineService
 
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
 USAGE_STATE_PATH = Path(

@@ -277,7 +277,7 @@ def test_store_singleton_constructed_at_import():
 
 def test_no_call_site_was_migrated():
     # C6: `manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"` must still
-    # appear 13 times -- this story migrates one call site (_ingest_plan_impl).
+    # appear 12 times -- this story migrates one call site (_advance_pipeline_locked).
     import subprocess
 
     result = subprocess.run(
@@ -286,8 +286,8 @@ def test_no_call_site_was_migrated():
         capture_output=True, text=True, check=True,
     )
     count = int(result.stdout.strip())
-    assert count == 13, (
-        f"expected 13 raw manifest_path constructions, found {count}; "
+    assert count == 12, (
+        f"expected 12 raw manifest_path constructions, found {count}; "
         "this story migrated one call site"
     )
 

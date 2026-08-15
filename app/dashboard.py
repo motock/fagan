@@ -19,6 +19,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from pipeline.server import PipelineService
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles

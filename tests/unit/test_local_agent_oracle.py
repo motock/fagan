@@ -1534,6 +1534,50 @@ def _status_error(code):
     )
 
 
+def test_chat_omits_think_by_default(monkeypatch):
+    """Mirrors local_agent.py's THINK behavior: unset LOCAL_AGENT_THINK must
+    not add a `think` key to the payload."""
+    monkeypatch.setattr(lao, "THINK", "")
+    captured = {}
+
+    def _capture(payload):
+        captured.update(payload)
+        return {"role": "assistant", "content": "done", "tool_calls": []}
+
+    monkeypatch.setattr(lao, "_stream_one_turn", _capture)
+    lao.chat([{"role": "user", "content": "hi"}])
+    assert "think" not in captured
+
+
+def test_chat_think_bool_is_passed_through(monkeypatch):
+    monkeypatch.setattr(lao, "THINK", "false")
+    captured = {}
+
+    def _capture(payload):
+        captured.update(payload)
+        return {"role": "assistant", "content": "done", "tool_calls": []}
+
+    monkeypatch.setattr(lao, "_stream_one_turn", _capture)
+    lao.chat([{"role": "user", "content": "hi"}])
+    assert captured["think"] is False
+
+
+@pytest.mark.parametrize("level", ["low", "medium", "high", "max"])
+def test_chat_think_level_is_passed_through(monkeypatch, level):
+    """Same graded-reasoning level support as local_agent.py's copy - kept
+    in sync per this file's own convention."""
+    monkeypatch.setattr(lao, "THINK", level)
+    captured = {}
+
+    def _capture(payload):
+        captured.update(payload)
+        return {"role": "assistant", "content": "done", "tool_calls": []}
+
+    monkeypatch.setattr(lao, "_stream_one_turn", _capture)
+    lao.chat([{"role": "user", "content": "hi"}])
+    assert captured["think"] == level
+
+
 def test_chat_retries_on_timeout_then_succeeds(monkeypatch):
     """A transient read timeout must not kill the run: chat() retries and
     returns the message once the stall clears."""

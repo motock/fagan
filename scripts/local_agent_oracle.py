@@ -142,6 +142,11 @@ NO_TOOL_CAP = int(os.environ.get("LOCAL_AGENT_NO_TOOL_CAP", "5"))
 # done-rejections so a model that cannot green the suite stops burning budget.
 REWORK_SUITE_REJECT_CAP = int(os.environ.get("LOCAL_AGENT_REWORK_SUITE_REJECT_CAP", "3"))
 TEMPERATURE = float(os.environ.get("PIPELINE_TRANSPORT_TEMPERATURE", "0.3"))
+# Mirror local_agent.py's THINK: "true"/"false" or a graded-reasoning level
+# ("low"/"medium"/"high"/"max") — omitted from the payload when unset/
+# unrecognized. Ported from local_agent.py; keep both copies in sync.
+THINK = os.environ.get("LOCAL_AGENT_THINK", "").strip().lower()
+_THINK_LEVELS = ("low", "medium", "high", "max")
 
 
 _COMPLETION_PHRASES = ("all done", "i'm done", "i am done", "all finished", "finished")
@@ -474,6 +479,10 @@ def chat(messages):
     """
     payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": True,
                "options": {"num_ctx": NUM_CTX, "temperature": TEMPERATURE}}
+    if THINK in ("true", "false"):
+        payload["think"] = (THINK == "true")
+    elif THINK in _THINK_LEVELS:
+        payload["think"] = THINK
     last_exc: Exception | None = None
     for attempt in range(1, CHAT_MAX_ATTEMPTS + 1):
         try:

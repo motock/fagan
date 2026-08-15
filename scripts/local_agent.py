@@ -217,11 +217,14 @@ def _no_tool_nudge(consecutive: int, content: str = "") -> str:
 # charaf/Huihui-Qwen3.6-27B-abliterated-mlx-nvfp4:thinking-coding, 60-step
 # degenerate loop, 2026-07-11). Ollama's /api/chat accepts a top-level
 # "think": false to suppress the block at the source so the model emits a
-# clean native tool call. Opt-in via LOCAL_AGENT_THINK ("false"/"true");
-# omitted from the request when unset so non-Qwen3 models (devstral, gpt-oss,
-# qwen3-coder) get an unchanged body. See _ollama_payload() and
+# clean native tool call. Opt-in via LOCAL_AGENT_THINK, either "false"/"true"
+# or a graded-reasoning level ("low"/"medium"/"high"/"max" — live-validated
+# against gemma4:12b-mlx, which 400s on any other string); omitted from the
+# request when unset/unrecognized so non-Qwen3/non-gemma4 models (devstral,
+# gpt-oss, qwen3-coder) get an unchanged body. See _ollama_payload() and
 # test_local_agent.py.
 THINK = os.environ.get("LOCAL_AGENT_THINK", "").strip().lower()
+_THINK_LEVELS = ("low", "medium", "high", "max")
 # Per-bash-invocation timeout. The model can call `cargo fetch` and wedge on
 # a network index update forever; without this the agent loop blocks on a
 # single subprocess.run until cargo eventually times out (if at all).
@@ -680,15 +683,19 @@ def _provider_chat_turn(messages):
 def _ollama_payload(messages):
     """Build the Ollama /api/chat request body for one turn.
 
-    Extracted from chat() so the Qwen3 thinking-mode flag (THINK) is
+    Extracted from chat() so the Qwen3/gemma4 thinking-mode flag (THINK) is
     unit-testable without an HTTP boundary. `think` is included only when
-    LOCAL_AGENT_THINK is explicitly "true"/"false" — omitted otherwise so
-    non-Qwen3 models get an unchanged request body (see THINK's comment).
+    LOCAL_AGENT_THINK is explicitly "true"/"false" (bool) or one of the
+    graded-reasoning levels (passed through verbatim as a string) — omitted
+    otherwise so models with no tuned opinion get an unchanged request body
+    (see THINK's comment).
     """
     payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": True,
                "options": {"num_ctx": NUM_CTX, "temperature": TEMPERATURE}}
     if THINK in ("true", "false"):
         payload["think"] = (THINK == "true")
+    elif THINK in _THINK_LEVELS:
+        payload["think"] = THINK
     return payload
 
 

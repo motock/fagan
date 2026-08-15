@@ -124,6 +124,81 @@ def test_ollama_provider_chat_includes_tools_when_given(monkeypatch):
     assert captured["tools"] == tools
 
 
+def test_ollama_provider_chat_includes_think_when_given(monkeypatch):
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": ""}}
+
+    def _fake_post(url, json, timeout):
+        captured.update(json)
+        return _Resp()
+
+    monkeypatch.setattr(ip.httpx, "post", _fake_post)
+    ip.OllamaProvider().chat(
+        [], model="m", num_ctx=1, temperature=0, think="medium",
+        endpoint="http://x", timeout=10,
+    )
+    assert captured["think"] == "medium"
+
+
+def test_ollama_provider_chat_includes_think_false_explicitly(monkeypatch):
+    """think=False is a real, meaningful value (suppress reasoning) - a naive
+    `if think:` check would silently drop it since False is falsy. Must use
+    `is not None` so False reaches the wire."""
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": ""}}
+
+    def _fake_post(url, json, timeout):
+        captured.update(json)
+        return _Resp()
+
+    monkeypatch.setattr(ip.httpx, "post", _fake_post)
+    ip.OllamaProvider().chat(
+        [], model="m", num_ctx=1, temperature=0, think=False,
+        endpoint="http://x", timeout=10,
+    )
+    assert captured["think"] is False
+
+
+def test_ollama_provider_chat_omits_think_by_default(monkeypatch):
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": ""}}
+
+    def _fake_post(url, json, timeout):
+        captured.update(json)
+        return _Resp()
+
+    monkeypatch.setattr(ip.httpx, "post", _fake_post)
+    ip.OllamaProvider().chat(
+        [], model="m", num_ctx=1, temperature=0,
+        endpoint="http://x", timeout=10,
+    )
+    assert "think" not in captured
+
+
 def test_ollama_provider_chat_raises_rate_limited_on_429(monkeypatch):
     class _Resp:
         status_code = 429

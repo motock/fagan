@@ -2931,6 +2931,17 @@ def test_ollama_payload_think_unknown_value_is_omitted(monkeypatch):
     assert "think" not in p
 
 
+@pytest.mark.parametrize("level", ["low", "medium", "high", "max"])
+def test_ollama_payload_think_level_is_passed_through(monkeypatch, level):
+    """LOCAL_AGENT_THINK accepts the graded-reasoning level strings too (not
+    just true/false) - passed through verbatim as Ollama's "think" field.
+    Live-validated against gemma4:12b-mlx, which 400s on any value outside
+    this set."""
+    monkeypatch.setattr(la, "THINK", level)
+    p = la._ollama_payload([{"role": "user", "content": "hi"}])
+    assert p["think"] == level
+
+
 def _init_git_repo(path):
     subprocess.run(["git", "init"], check=False, cwd=path, capture_output=True, text=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], check=False, cwd=path, capture_output=True, text=True)

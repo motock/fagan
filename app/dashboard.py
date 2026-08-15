@@ -1,13 +1,10 @@
-"""Read-only monitoring dashboard for the agent pipeline.
+"""Monitoring dashboard for the agent pipeline.
 
 A small FastAPI app, separate from pipeline_mcp_server.py (the MCP server
-the orchestrator drives). It only reads the plan/manifest/notification/
-decision files PLAN_DIR already holds - it never touches those files, so
-it carries none of the pipeline's risk surface. The one exception is a
-small dashboard-owned UI-preference file (.dashboard_ui_state.json, see
-_read_archived_plans/_write_archived_plans below) tracking which plans the
-user has archived/dismissed from the sidebar - this is purely a view
-preference, never read by pipeline_mcp_server.py or any orchestration path.
+the orchestrator drives). It provides read access to the plan/manifest/
+notification/decision files in PLAN_DIR, and provides write access to
+the pipeline via a `PipelineService` instance (`_service`). Later stories
+in this epic add HTTP routes that delegate to `_service`.
 
 Run with:  uvicorn dashboard:app --reload
 """
@@ -29,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 # app.pipeline_mcp_server / app.backend) into the dashboard's import graph.
 from app import role_registry
 from pipeline import config_provenance
+from pipeline.server import PipelineService
 
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
 USAGE_STATE_PATH = Path(
@@ -36,18 +34,14 @@ USAGE_STATE_PATH = Path(
 ).expanduser()
 # Where dispatched stories' worktrees live — the same root
 # pipeline_mcp_server.WORKTREE_ROOT reads (default ~/.claude/worktrees, see
-# pipeline_mcp_server.py). Read independently here rather than importing the
-# orchestrator module: the dashboard's contract is read-only and must not
-# pull pipeline_mcp_server's write surface into its import graph (see this
-# module's docstring). The checklist endpoint reads agent artifacts
-# (.agent_plan.md / .agent_scratchpad.md) out of a story's worktree, which is
-# a NEW read boundary for the dashboard — but still only a read.
+# pipeline_mcp_server.py). The dashboard's contract includes read access
+# to agent artifacts in a story's worktree, and write access to the
+# pipeline via `_service`.
 WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).expanduser()
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
-
-
+_service = PipelineService()
 def _manifest_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.manifest.json"
 

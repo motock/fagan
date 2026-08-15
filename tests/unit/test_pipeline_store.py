@@ -277,7 +277,9 @@ def test_store_singleton_constructed_at_import():
 
 def test_no_call_site_was_migrated():
     # C6: `manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"` must
-    # appear 11 times -- W1b-20 migrates _approve_merge_impl's call site.
+    # appear 9 times -- this branch migrated three call sites (review_story,
+    # _advance_pipeline_locked, _approve_merge_impl) and deleted one
+    # dead-code occurrence in _repo_root_for.
     import subprocess
 
     result = subprocess.run(
@@ -286,9 +288,10 @@ def test_no_call_site_was_migrated():
         capture_output=True, text=True, check=True,
     )
     count = int(result.stdout.strip())
-    assert count == 11, (
-        f"expected 11 raw manifest_path constructions, found {count}; "
-        "this story migrated _approve_merge_impl's call site"
+    assert count == 9, (
+        f"expected 9 raw manifest_path constructions, found {count}; "
+        "this branch migrated review_story, _advance_pipeline_locked, and "
+        "_approve_merge_impl, and deleted one dead-code occurrence"
     )
 
 

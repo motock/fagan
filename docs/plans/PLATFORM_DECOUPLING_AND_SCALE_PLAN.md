@@ -1,9 +1,11 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **Ideas / architecture assessment only (2026-08-05).** Nothing here is
-> scoped into stories yet. This doc exists to capture the target shape and the
-> real scope of each move, so the workstreams can be sequenced deliberately
-> rather than discovered mid-implementation.
+> Status: **In execution (last updated 2026-08-15).** W3a and W1a are done;
+> W1b is done; W1c is scoped and ingested (plan `w1c-http-adapter`, 9 stories)
+> with its first story dispatched. See "Suggested sequencing" below for the
+> live state of each workstream. This doc exists to capture the target shape
+> and the real scope of each move, so the workstreams can be sequenced
+> deliberately rather than discovered mid-implementation.
 >
 > Supersedes/absorbs the two standalone idea notes: "dashboard env config" and
 > "dashboard agent chatbot".
@@ -388,11 +390,20 @@ The dependency order is fairly rigid:
 2. ~~**W1a — extract `PipelineService`**, MCP tools become delegations. The
    keystone; nothing else is cheap before it.~~ **DONE 2026-08-12** — 22
    stories, PRs #263-#286.
-3. **W1b — `Store` protocol** with `FileStore` as the only implementation.
-   **IN PROGRESS 2026-08-14** — 17/20 stories done (PRs #315-#344); story 18
-   (`review_story` Store migration) mid-rework and currently paused, stories
-   19-20 not yet dispatched.
-4. **W1c — HTTP adapter + event stream.** Not started.
+3. ~~**W1b — `Store` protocol** with `FileStore` as the only implementation.~~
+   **DONE 2026-08-15** — 20/20 stories, PRs #315-#349.
+4. **W1c — HTTP adapter + event stream.** **SCOPED 2026-08-15** — plan
+   `w1c-http-adapter`, 9 stories (W1c-01 wires `PipelineService` into
+   `app/dashboard.py`'s import graph; W1c-02..08 add POST routes per
+   operation group, all delegating to the same singleton; W1c-09 adds a
+   live SSE tail of a plan's `notifications.jsonl`). Extends the existing
+   `app/dashboard.py` FastAPI app rather than standing up a second service
+   (decided 2026-08-15: simplest for a single local-install process; a
+   split-service topology remains open for W4 enterprise). No auth story
+   included — write routes trust the same localhost-only bind
+   (`DASHBOARD_HOST=127.0.0.1` default) the dashboard already relies on;
+   real auth is W4's job. Ingested and dispatching on the local (gemma4)
+   backend; W1c-01 is a prerequisite for W1c-02..09.
 5. **W2 — chat entry point** on the HTTP API.
 6. **W3b — dashboard reads the API**, config becomes editable.
 7. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
@@ -440,9 +451,10 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   plan's W4 structured logging, the next work after A3 is **this doc's
   sequence**: ~~W3a (effective-config+provenance view, no prerequisites)~~
   **DONE 2026-08-09, PRs #247-#258** → ~~W1a (extract `PipelineService`, the
-  keystone)~~ **DONE 2026-08-12, PRs #263-#286** → **W1b (`Store` protocol
-  — IN PROGRESS, 17/20 stories, PRs #315-#344)** → W1c (HTTP adapter, not
-  started) → W2 (chat entry point) → W3b (writable dashboard) → W4
+  keystone)~~ **DONE 2026-08-12, PRs #263-#286** → ~~W1b (`Store` protocol)~~
+  **DONE 2026-08-15, PRs #315-#349** → **W1c (HTTP adapter — SCOPED
+  2026-08-15, plan `w1c-http-adapter`, 9 stories, dispatching)** → W2 (chat
+  entry point) → W3b (writable dashboard) → W4
   (multi-tenant), with B1 (sandboxing) and B5 (export the
   moat) picked up after the service seam exists rather than before it.
   Rationale: B1/B5 don't unblock anything else, while W1 is the single

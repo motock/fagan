@@ -271,13 +271,15 @@ def test_store_singleton_constructed_at_import():
 
 
 # ---------------------------------------------------------------------------
-# No call-site migration (C6): the raw path-construction line count is
-# unchanged at 14. This story is purely additive.
+# No call-site migration (C6): the raw path-construction line count tracks
+# each story's migration of one call site.
 # ---------------------------------------------------------------------------
 
 def test_no_call_site_was_migrated():
-    # C6: `manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"` must still
-    # appear 12 times -- this story migrates one call site (_advance_pipeline_locked).
+    # C6: `manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"` must
+    # appear 9 times -- this branch migrated three call sites (review_story,
+    # _advance_pipeline_locked, _approve_merge_impl) and deleted one
+    # dead-code occurrence in _repo_root_for.
     import subprocess
 
     result = subprocess.run(
@@ -286,9 +288,10 @@ def test_no_call_site_was_migrated():
         capture_output=True, text=True, check=True,
     )
     count = int(result.stdout.strip())
-    assert count == 12, (
-        f"expected 12 raw manifest_path constructions, found {count}; "
-        "this story migrated one call site"
+    assert count == 9, (
+        f"expected 9 raw manifest_path constructions, found {count}; "
+        "this branch migrated review_story, _advance_pipeline_locked, and "
+        "_approve_merge_impl, and deleted one dead-code occurrence"
     )
 
 

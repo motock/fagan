@@ -4508,9 +4508,9 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
-    manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+    manifest_path = _store.manifest_path(plan_name)
 
-    with _plan_lock(plan_name) as acquired:
+    with _store.transaction(plan_name) as acquired:
         if not acquired:
             return {
                 "ok": False,
@@ -4521,7 +4521,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # the freshest on-disk state, not a pre-lock stale copy. A scheduler
         # tick may have changed the story's status or verdict while we waited
         # to acquire the lock.
-        manifest = json.loads(manifest_path.read_text())
+        manifest = _store.get_manifest(plan_name)
         story = manifest["stories"].get(story_key)
         if not story:
             return {"ok": False, "error": f"No such story {story_key}"}
@@ -4697,8 +4697,6 @@ if __name__ == "__main__":
 # A-posteriori escalation of a failed local run to Claude is gated by
 # _auto_escalation_enabled() (PIPELINE_AUTO_ESCALATE, falling back to
 # PIPELINE_BACKEND_DISPATCH=="auto" when unset - see pipeline/escalation.py).
-# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
-# manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
 # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"

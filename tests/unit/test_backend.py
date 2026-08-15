@@ -2652,6 +2652,13 @@ def test_gptoss_20b_tuned_to_low_temperature_from_ab_experiment():
     assert b._LOCAL_MODEL_TUNING["gpt-oss:20b"] == {"temperature": 0.3}
 
 
+def test_gemma4_26b_qat_tuned_to_medium_think_from_manual_probe():
+    """See the table's own comment: 2026-08-14 manual probe, 5 tasks, not a
+    full benchmark matrix - "medium" was a reasonable default, not shown
+    optimal versus low/high for this specific tag."""
+    assert b._LOCAL_MODEL_TUNING["gemma4:26b-a4b-it-qat"] == {"think": "medium"}
+
+
 def test_chat_falls_back_to_init_defaults_when_model_tag_absent_from_table(
     monkeypatch,
 ):
@@ -2704,6 +2711,125 @@ def test_dispatch_falls_back_to_init_defaults_when_model_tag_absent_from_table(
 
     assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "16384"
     assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "0.3"
+
+
+def test_tuned_think_returns_none_when_absent_from_env_and_table(monkeypatch):
+    """No universal fallback for think (unlike temperature/num_ctx) - a
+    model/deployment with no opinion should get an unchanged request body,
+    so absent-everywhere resolves to None, not some default level."""
+    monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
+    monkeypatch.setattr(bo, "_LOCAL_MODEL_TUNING", {})
+    assert bo._tuned_think("fake-model:1b") is None
+
+
+def test_tuned_think_reads_bool_env_override(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_THINK", "false")
+    monkeypatch.setattr(
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+    )
+    assert bo._tuned_think("fake-model:1b") is False
+
+
+def test_tuned_think_reads_level_env_override(monkeypatch):
+    monkeypatch.setenv("PIPELINE_LOCAL_THINK", "high")
+    monkeypatch.setattr(
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+    )
+    assert bo._tuned_think("fake-model:1b") == "high"
+
+
+def test_tuned_think_invalid_env_value_falls_through_to_table(monkeypatch):
+    """A garbage PIPELINE_LOCAL_THINK (not true/false/low/medium/high/max)
+    must not silently disable reasoning on a model the caller intended to
+    think - fall through to the table instead of coercing to a bogus value."""
+    monkeypatch.setenv("PIPELINE_LOCAL_THINK", "yes")
+    monkeypatch.setattr(
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+    )
+    assert bo._tuned_think("fake-model:1b") == "medium"
+
+
+def test_tuned_think_reads_table_entry_when_no_env(monkeypatch):
+    monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
+    monkeypatch.setattr(
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "low"}},
+    )
+    assert bo._tuned_think("fake-model:1b") == "low"
+
+
+def test_chat_passes_tuned_think_to_provider(monkeypatch):
+    monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
+    monkeypatch.setattr(
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+    )
+    captured = {}
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: captured.update(json) or _FakeResponse(
+            {"message": {"content": "ok"}}
+        ),
+    )
+    b.OllamaDriver()._chat([{"role": "user", "content": "hi"}], "fake-model:1b")
+    assert captured["think"] == "medium"
+
+
+def test_chat_omits_think_when_not_tuned(monkeypatch):
+    monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
+    monkeypatch.setattr(bo, "_LOCAL_MODEL_TUNING", {})
+    captured = {}
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: captured.update(json) or _FakeResponse(
+            {"message": {"content": "ok"}}
+        ),
+    )
+    b.OllamaDriver()._chat([{"role": "user", "content": "hi"}], "fake-model:1b")
+    assert "think" not in captured
+
+
+def test_dispatch_uses_tuned_table_think_level(tmp_path, monkeypatch):
+    """A per-model table `think` level (e.g. gemma4:26b-a4b-it-qat's tuned
+    "medium") reaches the dispatch subprocess as LOCAL_AGENT_THINK, same
+    plumbing as the pre-existing bool-only PIPELINE_LOCAL_THINK env path."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
+    monkeypatch.setattr(
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+    )
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(4248),
+    )
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+    assert captured["env"]["LOCAL_AGENT_THINK"] == "medium"
+
+
+def test_dispatch_env_level_override_wins_over_tuned_table_think(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setenv("PIPELINE_LOCAL_THINK", "high")
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
+    monkeypatch.setattr(
+        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+    )
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(4249),
+    )
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+    assert captured["env"]["LOCAL_AGENT_THINK"] == "high"
 
 
 def test_chat_partial_table_entry_only_overrides_the_key_present(monkeypatch):

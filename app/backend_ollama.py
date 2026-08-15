@@ -79,7 +79,7 @@ def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
 # env var always overrides an entry here (operator override wins); a model
 # tag with no entry, or an entry missing one of the two keys, falls back to
 # OllamaDriver's constructor-captured default for that specific value.
-_LOCAL_MODEL_TUNING: dict[str, dict[str, float | int]] = {
+_LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
     # 2026-07-03 A/B experiment (tests/benchmark/_runs/full_20260703_postfix
     # vs temp_tune_20260703, 15 cells each): temp=1.0 -> 6/15 success, 3
     # cells where the implementation file never landed at all; temp=0.3 ->
@@ -93,6 +93,16 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int]] = {
     # TOKEN_CONTEXT_OPTIMIZATION_PLAN.md and the launchd plist's
     # PIPELINE_LOCAL_NUM_CTX for where num_ctx is actually decided.
     "gpt-oss:20b": {"temperature": 0.3},
+    # 2026-08-14 manual probe (not a full benchmark matrix - 5 tasks,
+    # single trial each, think="medium" throughout, no A/B against
+    # low/high for this specific model): cron_field, retry_backoff,
+    # ratelimiter_inspect, lru_cache, and token_bucket all passed their
+    # full acceptance oracle, including the backward-jump/high-water-mark
+    # mutation-timing bug that both gemma4:12b-mlx (medium AND high) and
+    # gpt-oss-20b-high got wrong identically. "medium" was used as a
+    # reasonable default, not shown optimal versus low/high for this tag -
+    # revisit if a real benchmark run says otherwise.
+    "gemma4:26b-a4b-it-qat": {"think": "medium"},
 }
 
 
@@ -110,6 +120,26 @@ def _tuned_temperature(model_tag: str, fallback: float) -> float:
         return float(env)
     tuned = _LOCAL_MODEL_TUNING.get(model_tag, {}).get("temperature")
     return float(tuned) if tuned is not None else fallback
+
+
+_THINK_LEVELS = ("low", "medium", "high", "max")
+
+
+def _tuned_think(model_tag: str) -> bool | str | None:
+    """Resolve the "think" value for model_tag: env override (only the exact
+    tokens "true"/"false"/"low"/"medium"/"high"/"max" opt in - anything else,
+    e.g. a typo, falls through rather than coercing to a bogus value) > the
+    RESOLVED model tag's _LOCAL_MODEL_TUNING entry > None. Unlike temperature/
+    num_ctx there is no fallback default - None means the request body omits
+    "think" entirely, leaving the model/provider's own default behavior
+    unchanged, since not every deployment has an opinion on reasoning depth.
+    """
+    env = os.environ.get("PIPELINE_LOCAL_THINK", "").strip().lower()
+    if env in ("true", "false"):
+        return env == "true"
+    if env in _THINK_LEVELS:
+        return env
+    return _LOCAL_MODEL_TUNING.get(model_tag, {}).get("think")
 
 
 def _recover_tool_calls(content: str | None) -> list | None:
@@ -414,6 +444,7 @@ class OllamaDriver:
         # envelope) lives in self.provider - see inference_providers.py.
         num_ctx = _tuned_num_ctx(model, self.num_ctx)
         temperature = _tuned_temperature(model, self.temperature)
+        think = _tuned_think(model)
         # Returns the full response envelope (not just the "message" body)
         # so callers that have structured usage data (review loop's
         # prompt_eval_count/eval_count/total_duration for the per-call
@@ -426,6 +457,7 @@ class OllamaDriver:
                 return self.provider.chat(
                     messages, model=model, num_ctx=num_ctx, temperature=temperature,
                     tools=tools, endpoint=self.endpoint, timeout=self.timeout,
+                    think=think,
                 )
             except httpx.HTTPStatusError as e:
                 if e.response.status_code < 500:
@@ -801,14 +833,17 @@ class OllamaDriver:
         )
         env["PIPELINE_TRANSPORT_MAX_STEPS"] = str(max_steps)
 
-        # Restart the MCP server so the new max-steps env var takes effect.
-        # in; anything else leaves LOCAL_AGENT_THINK unset and local_agent.py
-        # omits the `think` key from the /api/chat body entirely (no-op for
-        # non-Qwen3 models like devstral/gpt-oss/qwen3-coder). See
-        # scripts/local_agent.py THINK/_ollama_payload and test_backend.py.
-        think = os.environ.get("PIPELINE_LOCAL_THINK", "").strip().lower()
-        if think in ("true", "false"):
-            env["LOCAL_AGENT_THINK"] = think
+        # think is resolved the same way as num_ctx/temperature (env override
+        # > per-model _LOCAL_MODEL_TUNING entry > omitted); anything else
+        # leaves LOCAL_AGENT_THINK unset and local_agent.py omits the `think`
+        # key from the /api/chat body entirely (no-op for models with no
+        # tuned opinion). See scripts/local_agent.py THINK/_ollama_payload
+        # and test_backend.py.
+        think = _tuned_think(resolved_model)
+        if think is not None:
+            env["LOCAL_AGENT_THINK"] = "true" if think is True else (
+                "false" if think is False else think
+            )
         if oracle_mode:
             env["LOCAL_AGENT_ACCEPTANCE"] = json.dumps(acceptance)
             env["LOCAL_AGENT_MODE"] = "oracle"

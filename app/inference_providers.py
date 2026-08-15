@@ -47,7 +47,7 @@ class LocalInferenceProvider(Protocol):
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
         tools: list | None = None, endpoint: str | None = None,
-        timeout: float = 600.0,
+        timeout: float = 600.0, think: bool | str | None = None,
     ) -> dict:
         """Blocking, non-streaming chat completion. Returns Ollama's native
         envelope shape - {"message": {"role", "content", "tool_calls"?},
@@ -56,7 +56,17 @@ class LocalInferenceProvider(Protocol):
         (which reads envelope["message"] and envelope.get("prompt_eval_count"/
         "eval_count")) works unchanged no matter which provider is active.
         A provider whose native format differs (e.g. MLXProvider's OpenAI-
-        shaped choices[0].message/usage) translates into this shape itself."""
+        shaped choices[0].message/usage) translates into this shape itself.
+
+        think, when not None, is forwarded as Ollama's top-level "think"
+        request field (bool to toggle reasoning on/off, or a level string -
+        "low"/"medium"/"high"/"max" - for models that support graded
+        reasoning effort; live-validated against gemma4:12b-mlx, which 400s
+        on any other string). Omitted from the request when None so a
+        provider/model with no opinion on reasoning gets an unchanged body.
+        Only OllamaProvider acts on it - LMStudioProvider/MLXProvider accept
+        the kwarg for signature parity but their wire protocols have no
+        equivalent field, so it's a silent no-op there."""
         ...
 
     def loaded_models(self, endpoint: str) -> set[str]:
@@ -82,7 +92,7 @@ class OllamaProvider:
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
         tools: list | None = None, endpoint: str | None = None,
-        timeout: float = 600.0,
+        timeout: float = 600.0, think: bool | str | None = None,
     ) -> dict:
         endpoint = (endpoint or self.default_endpoint).rstrip("/")
         body = {
@@ -91,6 +101,8 @@ class OllamaProvider:
         }
         if tools:
             body["tools"] = tools
+        if think is not None:
+            body["think"] = think
         resp = httpx.post(f"{endpoint}/api/chat", json=body, timeout=timeout)
         # Detect 429 before raise_for_status() converts it to a generic
         # HTTPError - Ollama-cloud (and any upstream proxy) rate-limits per
@@ -165,8 +177,11 @@ class LMStudioProvider:
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
         tools: list | None = None, endpoint: str | None = None,
-        timeout: float = 600.0,
+        timeout: float = 600.0, think: bool | str | None = None,
     ) -> dict:
+        # think accepted for signature parity with LocalInferenceProvider -
+        # LM Studio's OpenAI-compatible endpoint has no equivalent field, so
+        # it's intentionally unused here.
         endpoint = (endpoint or self.default_endpoint).rstrip("/")
         body = {
             "model": model, "messages": messages, "stream": False,
@@ -265,8 +280,11 @@ class MLXProvider:
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
         tools: list | None = None, endpoint: str | None = None,
-        timeout: float = 600.0,
+        timeout: float = 600.0, think: bool | str | None = None,
     ) -> dict:
+        # think accepted for signature parity with LocalInferenceProvider -
+        # mlx_lm.server's OpenAI-compatible endpoint has no equivalent field,
+        # so it's intentionally unused here.
         endpoint = (endpoint or self.default_endpoint).rstrip("/")
         body = {
             "messages": messages, "stream": False,

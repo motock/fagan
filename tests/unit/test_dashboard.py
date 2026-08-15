@@ -2405,7 +2405,12 @@ def test_effective_config_never_leaks_secret_value(
     assert secret not in res.text
 
 
-def test_dashboard_module_does_not_import_orchestrator_write_surface():
+def test_dashboard_module_imports_pipeline_service_for_scoped_write_surface():
+    """W1c (docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md) deliberately
+    gives app/dashboard.py write access via a `PipelineService` singleton
+    (see the module docstring) - it must import pipeline.server for that,
+    but the write surface stays scoped to PipelineService: it must not
+    import app.pipeline_mcp_server or app.backend directly."""
     import ast
 
     source = Path("app/dashboard.py").read_text()
@@ -2417,8 +2422,9 @@ def test_dashboard_module_does_not_import_orchestrator_write_surface():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported_modules.append(node.module)
 
-    forbidden = {"pipeline.server", "app.pipeline_mcp_server", "app.backend"}
-    assert not (forbidden & set(imported_modules)), imported_modules
+    assert "pipeline.server" in imported_modules, imported_modules
+    still_forbidden = {"app.pipeline_mcp_server", "app.backend"}
+    assert not (still_forbidden & set(imported_modules)), imported_modules
 
 
 def test_effective_config_endpoint_performs_no_writes(client, plan_dir, isolated_config_sources):

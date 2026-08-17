@@ -1071,6 +1071,41 @@ def ingest_plan(plan_name: str, request: IngestPlanRequest | None = None):
     return result
 
 
+@app.post("/api/plans/{plan_name}/advance")
+def advance_pipeline(plan_name: str) -> dict[str, Any]:
+    """Delegates to _service.advance_pipeline(plan_name)."""
+    result = _service.advance_pipeline(plan_name)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result
+
+
+@app.post("/api/plans/advance_all")
+def advance_all_plans() -> dict[str, Any]:
+    """Delegates to _service.advance_all_plans()."""
+    result = _service.advance_all_plans()
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result
+
+
+@app.post("/api/plans/{plan_name}/stories/{story_key}/checkpoint")
+def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Delegates to _service.checkpoint(plan_name, story_key, step, summary, next_hint)."""
+    step = body.get("step")
+    summary = body.get("summary")
+    if step is None or summary is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Both 'step' and 'summary' are required in the request body",
+        )
+    next_hint = body.get("next_hint", "")
+    result = _service.checkpoint(plan_name, story_key, step, summary, next_hint)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result
+
+
 # Mounted last so it never shadows the /api/* routes above; html=True serves
 # static/index.html for "/".
 if STATIC_DIR.is_dir():

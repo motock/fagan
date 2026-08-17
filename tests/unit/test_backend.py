@@ -2476,6 +2476,129 @@ def test_dispatch_malformed_temperature_raises_value_error_like_max_steps(
         )
 
 
+# ---------------------------------------------------------------------------
+# Cloud-model relaxation: a ":cloud"-tagged model (deepseek-v4-flash:cloud,
+# glm-5.2:cloud, minimax-m3:cloud) is a frontier model proxied through the
+# local Ollama-compatible endpoint, NOT a constrained on-device model. The
+# local agent loop's 32K context ceiling, 60-step cap, and weak-model park
+# guards (off-task-drift, read-heavy, net-progress) are training wheels for
+# ~20B on-device models and actively derail a capable cloud model doing hard
+# multi-file work. The dispatch path relaxes ONLY for ":cloud" tags so genuine
+# on-device dispatch (gemma4, gpt-oss, devstral, qwen-mlx) is unchanged.
+# ---------------------------------------------------------------------------
+
+
+def test_tuned_num_ctx_cloud_model_uses_cloud_default_not_local(monkeypatch):
+    """A :cloud model ignores the on-device PIPELINE_LOCAL_NUM_CTX ceiling and
+    gets a cloud-specific default, so its transcript isn't trimmed to 32K."""
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
+    monkeypatch.delenv("PIPELINE_CLOUD_NUM_CTX", raising=False)
+    # 131072 cloud default, NOT the 32768 on-device value and NOT the fallback.
+    assert bo._tuned_num_ctx("deepseek-v4-flash:cloud", 16384) == 131072
+
+
+def test_tuned_num_ctx_cloud_model_respects_cloud_env_override(monkeypatch):
+    """PIPELINE_CLOUD_NUM_CTX is the cloud-model context knob; an explicit
+    value wins over the cloud default."""
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
+    monkeypatch.setenv("PIPELINE_CLOUD_NUM_CTX", "200000")
+    assert bo._tuned_num_ctx("glm-5.2:cloud", 16384) == 200000
+
+
+def test_tuned_num_ctx_on_device_model_ignores_cloud_knob(monkeypatch):
+    """Negative: an on-device model tag never reads PIPELINE_CLOUD_NUM_CTX -
+    the cloud knob must not leak into on-device dispatch."""
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    monkeypatch.setenv("PIPELINE_CLOUD_NUM_CTX", "200000")
+    assert bo._tuned_num_ctx("gemma4:26b-a4b-it-qat", 16384) == 16384
+
+
+def test_dispatch_cloud_model_gets_raised_ctx_steps_and_disabled_park(
+    tmp_path, monkeypatch,
+):
+    """A :cloud model dispatches with a raised context ceiling (131072), a
+    raised step cap (120), and the weak-model park guards disabled
+    (LOCAL_AGENT_PARK_ENABLED=0) - regardless of the on-device knobs, which
+    stay set for on-device dispatch."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_STEPS", "60")
+    monkeypatch.delenv("PIPELINE_CLOUD_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_CLOUD_MAX_STEPS", raising=False)
+    monkeypatch.delenv("LOCAL_AGENT_PARK_ENABLED", raising=False)
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(330),
+    )
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="deepseek-v4-flash:cloud",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_MODEL"] == "deepseek-v4-flash:cloud"
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "131072"
+    assert captured["env"]["PIPELINE_TRANSPORT_MAX_STEPS"] == "120"
+    assert captured["env"]["LOCAL_AGENT_PARK_ENABLED"] == "0"
+
+
+def test_dispatch_cloud_model_respects_explicit_park_enabled(tmp_path, monkeypatch):
+    """Boundary: an explicit LOCAL_AGENT_PARK_ENABLED in the environment is
+    honored, not clobbered - an operator can re-enable park guards for a
+    cloud model if they want the training wheels back."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setenv("LOCAL_AGENT_PARK_ENABLED", "1")
+    monkeypatch.delenv("PIPELINE_CLOUD_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_CLOUD_MAX_STEPS", raising=False)
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(331),
+    )
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="glm-5.2:cloud",
+        allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["LOCAL_AGENT_PARK_ENABLED"] == "1"
+
+
+def test_dispatch_on_device_model_unchanged_by_cloud_relaxation(tmp_path, monkeypatch):
+    """Negative: an on-device model keeps the on-device 32K/60 knobs and gets
+    NO LOCAL_AGENT_PARK_ENABLED injection - the cloud relaxation must not
+    touch on-device dispatch."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_STEPS", "60")
+    monkeypatch.delenv("PIPELINE_CLOUD_NUM_CTX", raising=False)
+    monkeypatch.delenv("PIPELINE_CLOUD_MAX_STEPS", raising=False)
+    monkeypatch.delenv("LOCAL_AGENT_PARK_ENABLED", raising=False)
+
+    captured = {}
+    monkeypatch.setattr(
+        b.subprocess, "Popen",
+        lambda argv, cwd, env, stdout, stderr:
+            captured.update(env=env) or _FakePopenResult(332),
+    )
+
+    b.OllamaDriver().dispatch(
+        "do it", system=None, model="opus", allowed_tools="Bash,Edit,Write,Read",
+        cwd=tmp_path, log_path=tmp_path / "agent.log", append=False,
+    )
+
+    assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "32768"
+    assert captured["env"]["PIPELINE_TRANSPORT_MAX_STEPS"] == "60"
+    assert "LOCAL_AGENT_PARK_ENABLED" not in captured["env"]
+
+
 def test_chat_rereads_num_ctx_and_temperature_on_each_call(monkeypatch):
     """_chat() backs both complete() and the review loop, so it must also
     honor env changes made after construction, not just dispatch()."""

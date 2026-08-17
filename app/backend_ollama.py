@@ -107,6 +107,16 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
 
 
 def _tuned_num_ctx(model_tag: str, fallback: int) -> int:
+    # A ":cloud"-tagged model (deepseek-v4-flash:cloud, glm-5.2:cloud,
+    # minimax-m3:cloud) is a frontier model proxied through the local
+    # Ollama-compatible endpoint, not a constrained on-device model. The
+    # on-device PIPELINE_LOCAL_NUM_CTX ceiling (e.g. 32K) would needlessly
+    # cap and trim its transcript; use a cloud-specific knob so a capable
+    # cloud model keeps its full reasoning context. The ":cloud" suffix is
+    # the existing convention (planner.py:973, backend.py:135). See the
+    # matching max_steps/park relaxation in OllamaDriver.dispatch.
+    if model_tag.endswith(":cloud"):
+        return int(os.environ.get("PIPELINE_CLOUD_NUM_CTX", "131072"))
     env = os.environ.get("PIPELINE_LOCAL_NUM_CTX")
     if env is not None:
         return int(env)
@@ -831,6 +841,23 @@ class OllamaDriver:
         max_steps = int(
             os.environ.get("PIPELINE_LOCAL_MAX_STEPS", str(self.max_steps))
         )
+        # Cloud-model relaxation: a ":cloud"-tagged frontier model proxied
+        # through the local endpoint is not a constrained on-device model.
+        # Give it a longer step leash than the on-device cap so a hard
+        # multi-file story can finish, and disable the weak-model park guards
+        # (LOCAL_AGENT_PARK_ENABLED kill-switch) so off-task-drift / read-heavy
+        # / net-progress nudges steer but never terminate a capable model's
+        # legitimate deep investigation or cross-file edits. num_ctx is already
+        # raised via _tuned_num_ctx's :cloud branch. Genuine on-device dispatch
+        # (gemma4, gpt-oss, devstral, qwen-mlx) is untouched - it keeps the
+        # 60-step cap and the park guards it needs. An explicit
+        # LOCAL_AGENT_PARK_ENABLED in the environment is honored, not clobbered.
+        if resolved_model.endswith(":cloud"):
+            max_steps = int(
+                os.environ.get("PIPELINE_CLOUD_MAX_STEPS", "120")
+            )
+            if "LOCAL_AGENT_PARK_ENABLED" not in os.environ:
+                env["LOCAL_AGENT_PARK_ENABLED"] = "0"
         env["PIPELINE_TRANSPORT_MAX_STEPS"] = str(max_steps)
 
         # think is resolved the same way as num_ctx/temperature (env override

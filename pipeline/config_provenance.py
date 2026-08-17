@@ -223,6 +223,10 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     EnvVarSpec("PIPELINE_LOCAL_TEMPERATURE", "0.3"),
     EnvVarSpec("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b"),
     EnvVarSpec("PIPELINE_AUTO_ESCALATE", None),
+    # Escalation retarget: backend/model a stuck story escalates TO (default
+    # Claude, no model override). See _escalation_target in escalation.py.
+    EnvVarSpec("PIPELINE_ESCALATION_BACKEND", "claude"),
+    EnvVarSpec("PIPELINE_ESCALATION_MODEL", None),
 )
 
 def _is_secret(name: str) -> bool:

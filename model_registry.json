@@ -29,6 +29,12 @@
         },
         "devstral": {
           "tag": "devstral:24b"
+        },
+        "gemma4-26b-qat": {
+          "tag": "gemma4:26b-a4b-it-qat"
+        },
+        "deepseek-v4-flash": {
+          "tag": "deepseek-v4-flash:cloud"
         }
       }
     },
@@ -50,21 +56,29 @@
     },
     "dispatch": {
       "provider": "ollama",
-      "model": "gpt-oss-20b-high"
+      "model": "gemma4-26b-qat"
     },
     "test_author": {
       "provider": "ollama",
-      "model": "glm"
+      "model": "deepseek-v4-flash"
     },
     "planner": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     },
     "review": {
       "provider": "ollama",
       "model": "glm"
     },
     "diagnosis": {
+      "provider": "ollama",
+      "model": "glm"
+    },
+    "security": {
+      "provider": "ollama",
+      "model": "glm"
+    },
+    "decompose": {
       "provider": "ollama",
       "model": "glm"
     }

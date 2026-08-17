@@ -3125,11 +3125,14 @@ def test_review_story_low_risk_skips_security_reviewer(plan_dir, agents_dir, mon
     assert len(security_calls) == 0, "security reviewer must NOT be called for low-risk stories"
 
 
-def test_run_security_reviewer_always_uses_claude_backend_even_under_local_review(agents_dir, monkeypatch):
-    """T11/T12: the security-engineer pass is the one place "cloud only as
-    reviewer" and "security review needs human-grade scrutiny" are the same
-    requirement - it must never silently run on the local reviewer just
-    because PIPELINE_BACKEND_REVIEW=local is set for ordinary review."""
+def test_run_security_reviewer_uses_security_role_backend_not_review_env(agents_dir, monkeypatch):
+    """T11/T12: the security-engineer pass resolves its OWN "security" role
+    (registry default ollama/glm while Claude usage is capped) and must never
+    silently follow PIPELINE_BACKEND_REVIEW=local the way ordinary review
+    does - security review is routed by its own role, not the review env
+    var. The stock registry security role is the always-on default here; a
+    plan's role_config.security override is covered by
+    test_run_security_reviewer_routes_via_plan_role_config_security."""
     (agents_dir / "security-engineer.md").write_text(
         '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
     )
@@ -3150,7 +3153,7 @@ def test_run_security_reviewer_always_uses_claude_backend_even_under_local_revie
     p._run_security_reviewer("/tmp/some-worktree", "agent/some-branch")
 
     assert captured["role"] == "review"
-    assert captured["name"] == "claude"
+    assert captured["name"] == "ollama"
 
 
 def test_run_security_reviewer_does_not_run_test_suite(agents_dir, monkeypatch):
@@ -3201,11 +3204,12 @@ def test_run_security_reviewer_incremental_review_scopes_to_since_sha(agents_dir
 
 def test_run_security_reviewer_routes_via_plan_role_config_security(agents_dir, monkeypatch):
     """The security-engineer pass is role-routable: a plan's
-    role_config.security overrides the Claude default, so a high-risk
-    story can clear security review on a configured non-Claude backend
+    role_config.security overrides the registry default, so a high-risk
+    story can clear security review on a configured backend
     (e.g. ollama/glm) instead of dead-ending when Claude is unavailable.
-    Unconfigured, it still resolves to Claude (covered by
-    test_run_security_reviewer_always_uses_claude_backend_even_under_local_review)."""
+    Unconfigured, it resolves to the registry's security role default
+    (covered by
+    test_run_security_reviewer_uses_security_role_backend_not_review_env)."""
     (agents_dir / "security-engineer.md").write_text(
         '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
     )
@@ -9442,6 +9446,125 @@ def test_escalate_to_claude_pops_infra_failure_streak_fields(
     assert story["backend"] == "claude"
 
 
+# ---------- Escalation retarget (PIPELINE_ESCALATION_BACKEND/MODEL) ----------
+# While Claude usage is capped, an operator can retarget escalation away from
+# Claude so an escalated story re-dispatches/re-reviews on a non-Claude
+# provider instead of failing against an unavailable Claude. The default
+# (env unset) must preserve the original claude flip exactly, so the many
+# existing escalation tests - none of which set these env vars - stay green.
+
+def test_escalation_target_defaults_to_claude_with_no_model(monkeypatch):
+    monkeypatch.delenv("PIPELINE_ESCALATION_BACKEND", raising=False)
+    monkeypatch.delenv("PIPELINE_ESCALATION_MODEL", raising=False)
+    assert p._escalation_target() == ("claude", None)
+
+
+def test_escalation_target_env_override(monkeypatch):
+    monkeypatch.setenv("PIPELINE_ESCALATION_BACKEND", "ollama")
+    monkeypatch.setenv("PIPELINE_ESCALATION_MODEL", "deepseek-v4-flash:cloud")
+    assert p._escalation_target() == ("ollama", "deepseek-v4-flash:cloud")
+
+
+def test_escalation_target_blank_model_yields_none(monkeypatch):
+    monkeypatch.setenv("PIPELINE_ESCALATION_BACKEND", "ollama")
+    monkeypatch.setenv("PIPELINE_ESCALATION_MODEL", "  ")
+    assert p._escalation_target() == ("ollama", None)
+
+
+def test_escalate_to_claude_retargets_to_env_backend_and_model(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """PIPELINE_ESCALATION_BACKEND/MODEL retarget the dispatch-failure
+    escalation: the story flips to the configured backend (not Claude) and its
+    model is set to the configured model so the next dispatch runs on it."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    manifest_path = plan_dir / "escesc.manifest.json"
+    manifest = {
+        "epics": {},
+        "stories": {
+            "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+                   "worktree": str(worktree), "backend": "local",
+                   "model": "gemma4:26b-a4b-it-qat",
+                   "dispatch_attempts": 1, "dispatch_error": "boom"},
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+    monkeypatch.setenv("PIPELINE_ESCALATION_BACKEND", "ollama")
+    monkeypatch.setenv("PIPELINE_ESCALATION_MODEL", "deepseek-v4-flash:cloud")
+
+    p._escalate_to_claude(manifest, "escesc", "S1", manifest_path)
+
+    story = manifest["stories"]["S1"]
+    assert story["backend"] == "ollama"
+    assert story["model"] == "deepseek-v4-flash:cloud"
+    assert story["escalated"] is True
+    assert story["status"] == "todo"
+
+
+def test_escalate_to_claude_default_leaves_model_untouched(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Default escalation target (claude, no model) must NOT overwrite or clear
+    the story's existing model field - preserving the original behavior where
+    Claude dispatch resolves its own model and the escalation only flips the
+    backend."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    manifest_path = plan_dir / "escdef.manifest.json"
+    manifest = {
+        "epics": {},
+        "stories": {
+            "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+                   "worktree": str(worktree), "backend": "local",
+                   "model": "gemma4:26b-a4b-it-qat",
+                   "dispatch_attempts": 1},
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(p.subprocess, "run", _make_fake_git_run(head_sha="deadbeef"))
+    monkeypatch.delenv("PIPELINE_ESCALATION_BACKEND", raising=False)
+    monkeypatch.delenv("PIPELINE_ESCALATION_MODEL", raising=False)
+
+    p._escalate_to_claude(manifest, "escdef", "S1", manifest_path)
+
+    story = manifest["stories"]["S1"]
+    assert story["backend"] == "claude"
+    assert story.get("model") == "gemma4:26b-a4b-it-qat"
+
+
+def test_escalate_review_to_claude_retargets_to_env_backend_and_model(monkeypatch):
+    monkeypatch.setattr("pipeline.escalation._notify_user", lambda *a, **k: None)
+    monkeypatch.setenv("PIPELINE_ESCALATION_BACKEND", "ollama")
+    monkeypatch.setenv("PIPELINE_ESCALATION_MODEL", "deepseek-v4-flash:cloud")
+    story = {"backend": "local", "model": "gemma4:26b-a4b-it-qat",
+             "rework_attempts": 3, "review_inconclusive_count": 2}
+
+    p._escalate_review_to_claude(story, "S1", "escplan", "rework budget exhausted")
+
+    assert story["backend"] == "ollama"
+    assert story["model"] == "deepseek-v4-flash:cloud"
+    assert story["escalated"] is True
+    assert "rework_attempts" not in story
+    assert "review_inconclusive_count" not in story
+
+
+def test_escalate_review_to_claude_default_preserves_claude_no_model(monkeypatch):
+    monkeypatch.setattr("pipeline.escalation._notify_user", lambda *a, **k: None)
+    monkeypatch.delenv("PIPELINE_ESCALATION_BACKEND", raising=False)
+    monkeypatch.delenv("PIPELINE_ESCALATION_MODEL", raising=False)
+    story = {"backend": "local", "model": "gemma4:26b-a4b-it-qat",
+             "rework_attempts": 3}
+
+    p._escalate_review_to_claude(story, "S1", "escplan", "rework budget exhausted")
+
+    assert story["backend"] == "claude"
+    assert story["escalated"] is True
+    # default target has no model -> existing model field is left untouched
+    assert story.get("model") == "gemma4:26b-a4b-it-qat"
+
+
 def test_check_story_status_routes_oracle_step_cap_to_interrupted(
     plan_dir, tmp_path, monkeypatch,
 ):
@@ -13466,6 +13589,36 @@ def test_review_story_escalated_story_reviews_via_claude_backend(
     assert captured["backend_name"] == "claude"
 
 
+def test_review_story_escalated_story_reviews_via_escalation_target(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """PIPELINE_ESCALATION_BACKEND retargets the escalated-review seam away from
+    Claude: once a story is escalated and the operator has retargeted
+    escalation to a non-Claude backend, every subsequent review for that story
+    must go to the escalation target - not hardcoded Claude (which may be
+    usage-capped and unavailable). Default (env unset) still forces Claude,
+    as the prior test asserts."""
+    monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "local")
+    monkeypatch.setenv("PIPELINE_ESCALATION_BACKEND", "ollama")
+    _write_manifest(plan_dir, "escrevtgt", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "backend": "claude", "escalated": True},
+    })
+    captured = {}
+
+    def _fake_reviewer(wt, br, backend_name=None, **k):
+        captured["backend_name"] = backend_name
+        return "VERDICT: APPROVE"
+
+    monkeypatch.setattr(p, "_run_reviewer", _fake_reviewer)
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+
+    p.review_story("escrevtgt", "S1")
+
+    assert captured["backend_name"] == "ollama"
+
+
 # ---------- FM-A: acceptance oracle gates check_story_status when present ----------
 
 def _setup_oracle_story(plan_dir, plan_name, worktree, acceptance=None, extra=None):
@@ -14458,9 +14611,15 @@ def test_extract_json_block_returns_text_unchanged_when_no_fence():
     assert p._extract_json_block(text) == '{"epics": []}'
 
 
-def test_run_decompose_calls_claude_backend_with_product_analyst_persona(
+def test_run_decompose_calls_registry_resolved_backend_with_product_analyst_persona(
     agents_dir, monkeypatch,
 ):
+    """_run_decompose routes through role_registry.resolve_role("decompose"),
+    so against the REAL registry it resolves to the stock roles.decompose
+    entry - ollama/glm (tag glm-5.2:cloud) while Claude usage is capped - and
+    seeds the product-analyst persona body. (The persona's own declared
+    model is only used as the fallback when the registry has NO
+    roles.decompose entry; the registry entry wins now that one exists.)"""
     fake = _FakePlannerBackend(response='{"epics": []}')
     calls = []
 
@@ -14473,11 +14632,11 @@ def test_run_decompose_calls_claude_backend_with_product_analyst_persona(
     result = p._run_decompose("Build a CLI todo app.")
 
     assert result == '{"epics": []}'
-    assert calls == [{"role": "decompose", "name": "claude"}]
+    assert calls == [{"role": "decompose", "name": "ollama"}]
     assert fake.calls[0]["prompt"] == "Build a CLI todo app."
     assert "Analyst body." in fake.calls[0]["system"]
-    # agents_dir's product-analyst.md declares model: opus.
-    assert fake.calls[0]["model"] == "opus"
+    # registry roles.decompose.model is glm (resolved to its tag).
+    assert fake.calls[0]["model"] == "glm-5.2:cloud"
 
 
 def test_run_decompose_routes_to_registry_configured_provider(agents_dir, monkeypatch):

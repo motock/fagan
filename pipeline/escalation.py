@@ -29,6 +29,36 @@ from .rebrief import (
 )
 
 
+def _escalation_target() -> tuple[str, str | None]:
+    """Resolve the backend (and optional model) a stuck story escalates TO.
+
+    Historically every escalation path flipped the story to Claude. With
+    Claude usage capped, PIPELINE_ESCALATION_BACKEND / PIPELINE_ESCALATION_MODEL
+    let an operator retarget escalation to another provider (e.g. an
+    Ollama-served cloud model) so an escalated story re-dispatches/re-reviews
+    on a non-Claude backend instead of failing against an unavailable Claude.
+    Defaults to ("claude", None): the original behavior, where Claude dispatch
+    resolves its own model and the escalation only flips the backend.
+
+    The model, when set, is a raw driver tag (e.g. "deepseek-v4-flash:cloud"),
+    not a registry friendly name - it is written straight to story["model"],
+    mirroring how _escalate_to_local_fallback_model handles its fallback tag.
+    """
+    backend = (os.environ.get("PIPELINE_ESCALATION_BACKEND") or "claude").strip().lower() or "claude"
+    model = (os.environ.get("PIPELINE_ESCALATION_MODEL") or "").strip() or None
+    return backend, model
+
+
+def _escalation_label() -> str:
+    """Display name for the escalation target in operator-facing notifications.
+
+    Preserves the capitalized "Claude" the existing notifications and their
+    tests expect when the target is the default; other backends render as
+    their lowercase driver name."""
+    backend, _ = _escalation_target()
+    return "Claude" if backend == "claude" else backend
+
+
 def _escalate_to_claude(
     manifest: dict, plan_name: str, story_key: str, manifest_path: Path
 ) -> None:
@@ -71,8 +101,15 @@ def _escalate_to_claude(
     journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
     if journal_path.exists():
         journal_path.unlink()
-    # Reset the story: Claude dispatch on next tick.
-    story["backend"] = "claude"
+    # Reset the story: escalation-target dispatch on next tick. The target is
+    # Claude by default; PIPELINE_ESCALATION_BACKEND/MODEL retarget it (e.g. to
+    # a non-Claude provider while Claude usage is capped). Only set the model
+    # when one is configured - the default leaves story["model"] untouched so
+    # Claude dispatch resolves its own model exactly as before this existed.
+    backend, model = _escalation_target()
+    story["backend"] = backend
+    if model:
+        story["model"] = model
     story["escalated"] = True
     story["status"] = "todo"
     for key in ("pid", "worktree", "log", "dispatch_attempts", "dispatch_error",
@@ -158,11 +195,14 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     by the caller via story.get("escalated")) is terminal - there is no
     further fallback past Claude, so it must park rather than escalate
     again or loop forever."""
-    story["backend"] = "claude"
+    backend, model = _escalation_target()
+    story["backend"] = backend
+    if model:
+        story["model"] = model
     story["escalated"] = True
     story.pop("rework_attempts", None)
     story.pop("review_inconclusive_count", None)
-    _notify_user(plan_name, f"{story_key} escalating to Claude ({reason}); "
+    _notify_user(plan_name, f"{story_key} escalating to {_escalation_label()} ({reason}); "
                             f"retrying the same worktree with a fresh budget.")
 
 

@@ -961,7 +961,33 @@ def effective_config(plan: str | None = None) -> dict[str, Any]:
     }
 
 
-# Mounted last so it never shadows the /api/* routes above; html=True serves
-# static/index.html for "/".
+
+
+
+
+@app.post("/api/plans/{plan_name}/stories/{story_key}/dispatch")
+def dispatch_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
+    """Delegates to _service.dispatch_story(plan_name, story_key)."""
+    result = _service.dispatch_story(plan_name, story_key)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=404,
+            detail=result.get("error", "Unknown error during dispatch"),
+        )
+    return result
+
+
+@app.post("/api/plans/{plan_name}/stories/{story_key}/start")
+def start_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
+    """Delegates to _service.mark_story_in_progress(plan_name, story_key)."""
+    result = _service.mark_story_in_progress(plan_name, story_key)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=404,
+            detail=result.get("error", "Unknown error when starting story"),
+        )
+    return result
+
+
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

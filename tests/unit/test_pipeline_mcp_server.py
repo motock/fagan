@@ -2419,6 +2419,60 @@ def test_review_story_skips_llm_reviewer_on_known_failing_acceptance_review(
     assert story["rework_attempts"] == 1
 
 
+def test_review_story_skips_llm_reviewer_only_when_last_test_check_sha_matches_head(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """A last_test_check recorded at a PAST commit (stale sha) must NOT be
+    trusted by the skip_llm_reviewer fast path - the worktree HEAD has since
+    moved, so the recorded failure may no longer exist. Only when the recorded
+    sha matches the current HEAD should the fast path fire."""
+    reviewer_calls = []
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, **k: reviewer_calls.append(1) or "VERDICT: APPROVE")
+
+    def _fake_run(cmd, **kw):
+        if cmd and cmd[0] == "git" and cmd[1] == "rev-parse":
+            return subprocess.CompletedProcess(cmd, 0, stdout="bbb222\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    # Stale: recorded failure at commit aaa111, but HEAD is now bbb222.
+    _write_manifest(plan_dir, "rvstale", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance_failed_review": True,
+               "last_test_check": {
+                   "cmd": ["pytest", "-q"], "returncode": 1,
+                   "sha": "aaa111",
+                   "stdout_tail": "FAILED test_foo.py::test_bar - assert False\n",
+                   "stderr_tail": "",
+               }},
+    })
+    result = p.review_story("rvstale", "S1")
+    assert reviewer_calls == [1], (
+        "stale last_test_check (sha aaa111 != HEAD bbb222) must fall through "
+        "to the real reviewer, not take the skip fast path"
+    )
+
+    # Fresh: recorded failure at the current HEAD bbb222 -> fast path fires.
+    reviewer_calls.clear()
+    _write_manifest(plan_dir, "rvfresh", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance_failed_review": True,
+               "last_test_check": {
+                   "cmd": ["pytest", "-q"], "returncode": 1,
+                   "sha": "bbb222",
+                   "stdout_tail": "FAILED test_foo.py::test_bar - assert False\n",
+                   "stderr_tail": "",
+               }},
+    })
+    result = p.review_story("rvfresh", "S1")
+    assert reviewer_calls == []
+    assert result["verdict"] == "REQUEST_CHANGES"
+    assert "FAILED test_foo.py::test_bar" in result["review_feedback"]
+
+
 def test_review_story_calls_llm_reviewer_normally_without_acceptance_failed_review(
     plan_dir, agents_dir, monkeypatch,
 ):

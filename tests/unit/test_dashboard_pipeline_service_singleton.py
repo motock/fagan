@@ -31,6 +31,8 @@ _EXPECTED_API_ROUTES = {
     ("/api/plans", "GET"),
     ("/api/plans/{plan_name}/archive", "POST"),
     ("/api/plans/{plan_name}/unarchive", "POST"),
+    ("/api/plans/{plan_name}/save", "POST"),
+    ("/api/plans/{plan_name}/ingest", "POST"),
     ("/api/plans/{plan_name}", "GET"),
     ("/api/plans/{plan_name}/stories/{story_key}/journal", "GET"),
     ("/api/plans/{plan_name}/stories/{story_key}/log", "GET"),

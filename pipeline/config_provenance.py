@@ -222,6 +222,14 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     EnvVarSpec("PIPELINE_LOCAL_NUM_CTX", "16384"),
     EnvVarSpec("PIPELINE_LOCAL_TEMPERATURE", "0.3"),
     EnvVarSpec("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b"),
+    # Cloud-model relaxation: a ":cloud"-tagged model proxied through the
+    # local endpoint is a frontier model, not a constrained on-device one.
+    # These override the on-device LOCAL_* knobs ONLY for ":cloud" tags so a
+    # capable cloud model gets a raised context ceiling and step cap and the
+    # weak-model park guards disabled (see backend_ollama._tuned_num_ctx and
+    # OllamaDriver.dispatch). On-device dispatch is unaffected.
+    EnvVarSpec("PIPELINE_CLOUD_NUM_CTX", "131072"),
+    EnvVarSpec("PIPELINE_CLOUD_MAX_STEPS", "120"),
     EnvVarSpec("PIPELINE_AUTO_ESCALATE", None),
     # Escalation retarget: backend/model a stuck story escalates TO (default
     # Claude, no model override). See _escalation_target in escalation.py.

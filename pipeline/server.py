@@ -2761,6 +2761,21 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # Persist it on the story every time, regardless of pass/fail, so a
     # future occurrence leaves a paper trail. getattr() on stderr: some
     # test doubles for subprocess.run's return value don't define it.
+    # The worktree's current HEAD sha is recorded alongside so later
+    # dispatch/review/rebrief logic can detect when this cache is stale
+    # (recorded at a past commit) and refuse to reuse it.
+    check_sha = None
+    if worktree and os.path.isdir(worktree):
+        try:
+            check_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, OSError):
+            check_sha = None
     story["last_test_check"] = {
         "cmd": test_cmd,
         "cwd": str(test_dir),
@@ -2768,10 +2783,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         "stdout_tail": (test_result.stdout or "")[-2000:],
         "stderr_tail": (getattr(test_result, "stderr", "") or "")[-2000:],
         "ts": datetime.now(timezone.utc).isoformat(),
+        "sha": check_sha,
     }
     if passed:
         lint = _run_lint_gate(worktree, test_env)
         if lint is not None:
+            lint["sha"] = check_sha
             story["last_lint_check"] = lint
             if lint["returncode"] != 0:
                 passed = False

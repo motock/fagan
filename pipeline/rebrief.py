@@ -83,10 +83,23 @@ def collect_failure_evidence(
         sections.append(f"MEASURED FACTS ABOUT THE LAST ATTEMPT:\n{facts}")
 
     last_test_check = story.get("last_test_check") or {}
+    # Staleness gate (2026-08-15): last_test_check records the worktree HEAD
+    # sha at the moment the check ran. If the worktree has since moved to a
+    # new commit, the recorded failure may no longer exist - do NOT feed it
+    # into the diagnosis. Only include the LAST TEST FAILURE section when the
+    # recorded sha matches the worktree's current HEAD. A missing sha (stories
+    # written before this fix) against a real git HEAD also omits the section.
+    try:
+        current_head = _git(worktree, ["rev-parse", "HEAD"])
+    except (OSError, subprocess.SubprocessError, AttributeError):
+        current_head = None
     last_error = last_test_check.get("error")
-    if last_error:
+    if last_test_check.get("sha") == current_head and last_error:
         sections.append(f"LAST TEST FAILURE:\n{last_error}")
-    elif last_test_check.get("returncode") not in (None, 0):
+    elif (
+        last_test_check.get("sha") == current_head
+        and last_test_check.get("returncode") not in (None, 0)
+    ):
         tail = (last_test_check.get("stdout_tail") or "") + (last_test_check.get("stderr_tail") or "")
         if tail.strip():
             sections.append(f"LAST TEST FAILURE (rc={last_test_check['returncode']}):\n{tail}")

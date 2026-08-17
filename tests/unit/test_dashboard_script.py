@@ -68,7 +68,9 @@ def _wait_healthy(port: int, timeout_s: float = 15.0) -> bool:
                 if resp.status == 200:
                     return True
         except (urllib.error.URLError, ConnectionResetError, OSError):
-            time.sleep(0.25)
+            # Tight poll: a refused connect is instant, so the only cost of
+            # a short interval is the (cheap) retry syscall, not latency.
+            time.sleep(0.05)
     return False
 
 
@@ -337,7 +339,7 @@ def test_start_when_already_running_refuses(env):
     )
 
     # Give a moment for any erroneous spawn to register with the kernel.
-    time.sleep(0.5)
+    time.sleep(0.15)
     try:
         after = {
             int(p)
@@ -367,11 +369,9 @@ def test_restart_cycles_pid_on_same_port(env):
     pid_file = REPO_ROOT / f".dashboard.{port}.pid"
     old_pid = int(pid_file.read_text().strip())
 
-    # Force a different pid by starting with a short sleep first, then
-    # restarting immediately. uvicorn assigns pids sequentially enough that
-    # in practice we get a different one; if we don't, restart is still
-    # correct — we just relax the assertion.
-    time.sleep(1.0)
+    # A restarted uvicorn is a freshly-forked process, so it gets a new pid
+    # from the kernel in practice; if it doesn't (pid recycled to the same
+    # number), restart is still correct — we just relax the assertion below.
     restart = _run_script("restart", env=env_)
     assert restart.returncode == 0, (
         f"restart failed: stdout={restart.stdout!r} stderr={restart.stderr!r}"

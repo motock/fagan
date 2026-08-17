@@ -5157,6 +5157,55 @@ def test_check_story_status_strips_pipeline_env_from_test_subprocess(
     assert "PATH" in test_env
 
 
+def test_check_story_status_records_sha_on_last_test_and_lint_check(
+    plan_dir, worktree_root, monkeypatch,
+):
+    """The persisted last_test_check / last_lint_check must carry the worktree's
+    current HEAD sha so later dispatch/review/rebrief logic can detect when the
+    cache is stale (recorded at a past commit) and refuse to reuse it."""
+    try:
+        os.kill(99999, 0)
+        return  # pid unexpectedly alive; can't exercise the path reliably
+    except ProcessLookupError:
+        pass
+
+    wt = worktree_root / "S1"
+    wt.mkdir()
+    (wt / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    manifest_path = plan_dir / "sha.manifest.json"
+    manifest_path.write_text(json.dumps({"stories": {"S1": {
+        "summary": "x", "agent_instructions": "x", "status": "in_progress",
+        "dependencies": [], "pid": 99999, "worktree": str(wt),
+        "log": str(wt / "agent.log"),
+    }}}))
+    (wt / "agent.log").write_text("[step 0] bash: pwd\n")
+
+    marker = "__sha_test_marker__"
+    lint_marker = "__sha_lint_marker__"
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (str(wt), [marker, "pytest"]))
+    monkeypatch.setattr(p, "detect_lint_command",
+                        lambda wt: (str(wt), [lint_marker, "lint"]))
+    monkeypatch.setattr(p, "_is_heavy", lambda cmd: False)
+
+    def _fake_run(cmd, **kw):
+        if cmd and cmd[0] == marker:
+            return subprocess.CompletedProcess(cmd, 0, stdout="3 passed", stderr="")
+        if cmd and cmd[0] == lint_marker:
+            return subprocess.CompletedProcess(cmd, 0, stdout="no lint issues", stderr="")
+        if cmd and cmd[0] == "git" and cmd[1] == "rev-parse":
+            return subprocess.CompletedProcess(cmd, 0, stdout="aaa111\n", stderr="")
+        # git diff / show / grep used by _find_dead_new_functions: no output.
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    p.check_story_status("sha", "S1")
+
+    story = json.loads(manifest_path.read_text())["stories"]["S1"]
+    assert story["last_test_check"]["sha"] == "aaa111"
+    assert story["last_lint_check"]["sha"] == "aaa111"
+
+
 
 # An empty agent.log within the startup grace window is "agent is alive and
 # bootstrapping" (its first print() hasn't flushed — Ollama -np 1 can take

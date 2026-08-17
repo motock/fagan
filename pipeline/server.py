@@ -3485,9 +3485,17 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # while the detected test command itself passed), falls through to the
     # normal reviewer call below.
     last_test_check = story.get("last_test_check") or {}
-    skip_llm_reviewer = story.get("acceptance_failed_review") and last_test_check.get(
-        "returncode"
-    ) not in (0, None)
+    # Staleness gate (2026-08-15): last_test_check records the worktree HEAD
+    # sha at the moment the check ran. If the worktree has since moved to a
+    # new commit (before_sha != recorded sha), the recorded failure may no
+    # longer exist - do NOT trust it. Only take the skip fast path when the
+    # recorded sha matches the current HEAD. A missing sha (stories written
+    # before this fix) also falls through to the real reviewer.
+    skip_llm_reviewer = (
+        story.get("acceptance_failed_review")
+        and last_test_check.get("returncode") not in (0, None)
+        and last_test_check.get("sha") == before_sha
+    )
     if skip_llm_reviewer:
         reviewer_output = _synthesize_test_failure_feedback(last_test_check)
     else:

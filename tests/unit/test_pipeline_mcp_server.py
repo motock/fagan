@@ -2430,6 +2430,10 @@ def test_review_story_skips_llm_reviewer_only_when_last_test_check_sha_matches_h
     monkeypatch.setattr(p, "_run_reviewer",
                         lambda wt, br, **k: reviewer_calls.append(1) or "VERDICT: APPROVE")
 
+    # The worktree must exist on disk so review_story computes before_sha
+    # from it (via the monkeypatched git rev-parse below).
+    (plan_dir / "wt").mkdir(parents=True, exist_ok=True)
+
     def _fake_run(cmd, **kw):
         if cmd and cmd[0] == "git" and cmd[1] == "rev-parse":
             return subprocess.CompletedProcess(cmd, 0, stdout="bbb222\n", stderr="")
@@ -2470,7 +2474,8 @@ def test_review_story_skips_llm_reviewer_only_when_last_test_check_sha_matches_h
     result = p.review_story("rvfresh", "S1")
     assert reviewer_calls == []
     assert result["verdict"] == "REQUEST_CHANGES"
-    assert "FAILED test_foo.py::test_bar" in result["review_feedback"]
+    story = _read_manifest(plan_dir, "rvfresh")["stories"]["S1"]
+    assert "FAILED test_foo.py::test_bar" in story["review_feedback"]
 
 
 def test_review_story_calls_llm_reviewer_normally_without_acceptance_failed_review(

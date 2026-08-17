@@ -2461,6 +2461,65 @@ def test_review_story_skips_llm_reviewer_on_known_failing_acceptance_review(
     assert story["rework_attempts"] == 1
 
 
+def test_review_story_skips_llm_reviewer_only_when_last_test_check_sha_matches_head(
+    plan_dir, agents_dir, monkeypatch,
+):
+    """A last_test_check recorded at a PAST commit (stale sha) must NOT be
+    trusted by the skip_llm_reviewer fast path - the worktree HEAD has since
+    moved, so the recorded failure may no longer exist. Only when the recorded
+    sha matches the current HEAD should the fast path fire."""
+    reviewer_calls = []
+    monkeypatch.setattr(p, "_run_reviewer",
+                        lambda wt, br, **k: reviewer_calls.append(1) or "VERDICT: APPROVE")
+
+    # The worktree must exist on disk so review_story computes before_sha
+    # from it (via the monkeypatched git rev-parse below).
+    (plan_dir / "wt").mkdir(parents=True, exist_ok=True)
+
+    def _fake_run(cmd, **kw):
+        if cmd and cmd[0] == "git" and cmd[1] == "rev-parse":
+            return subprocess.CompletedProcess(cmd, 0, stdout="bbb222\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    # Stale: recorded failure at commit aaa111, but HEAD is now bbb222.
+    _write_manifest(plan_dir, "rvstale", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance_failed_review": True,
+               "last_test_check": {
+                   "cmd": ["pytest", "-q"], "returncode": 1,
+                   "sha": "aaa111",
+                   "stdout_tail": "FAILED test_foo.py::test_bar - assert False\n",
+                   "stderr_tail": "",
+               }},
+    })
+    result = p.review_story("rvstale", "S1")
+    assert reviewer_calls == [1], (
+        "stale last_test_check (sha aaa111 != HEAD bbb222) must fall through "
+        "to the real reviewer, not take the skip fast path"
+    )
+
+    # Fresh: recorded failure at the current HEAD bbb222 -> fast path fires.
+    reviewer_calls.clear()
+    _write_manifest(plan_dir, "rvfresh", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low",
+               "acceptance_failed_review": True,
+               "last_test_check": {
+                   "cmd": ["pytest", "-q"], "returncode": 1,
+                   "sha": "bbb222",
+                   "stdout_tail": "FAILED test_foo.py::test_bar - assert False\n",
+                   "stderr_tail": "",
+               }},
+    })
+    result = p.review_story("rvfresh", "S1")
+    assert reviewer_calls == []
+    assert result["verdict"] == "REQUEST_CHANGES"
+    story = _read_manifest(plan_dir, "rvfresh")["stories"]["S1"]
+    assert "FAILED test_foo.py::test_bar" in story["review_feedback"]
+
+
 def test_review_story_calls_llm_reviewer_normally_without_acceptance_failed_review(
     plan_dir, agents_dir, monkeypatch,
 ):
@@ -5197,6 +5256,55 @@ def test_check_story_status_strips_pipeline_env_from_test_subprocess(
         "test subprocess inherited the per-plan REPO_ROOT sentinel")
     # Sanity: the rest of the environment (PATH etc.) is preserved.
     assert "PATH" in test_env
+
+
+def test_check_story_status_records_sha_on_last_test_and_lint_check(
+    plan_dir, worktree_root, monkeypatch,
+):
+    """The persisted last_test_check / last_lint_check must carry the worktree's
+    current HEAD sha so later dispatch/review/rebrief logic can detect when the
+    cache is stale (recorded at a past commit) and refuse to reuse it."""
+    try:
+        os.kill(99999, 0)
+        return  # pid unexpectedly alive; can't exercise the path reliably
+    except ProcessLookupError:
+        pass
+
+    wt = worktree_root / "S1"
+    wt.mkdir()
+    (wt / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    manifest_path = plan_dir / "sha.manifest.json"
+    manifest_path.write_text(json.dumps({"stories": {"S1": {
+        "summary": "x", "agent_instructions": "x", "status": "in_progress",
+        "dependencies": [], "pid": 99999, "worktree": str(wt),
+        "log": str(wt / "agent.log"),
+    }}}))
+    (wt / "agent.log").write_text("[step 0] bash: pwd\n")
+
+    marker = "__sha_test_marker__"
+    lint_marker = "__sha_lint_marker__"
+    monkeypatch.setattr(p, "detect_test_command",
+                        lambda wt: (str(wt), [marker, "pytest"]))
+    monkeypatch.setattr(p, "detect_lint_command",
+                        lambda wt: (str(wt), [lint_marker, "lint"]))
+    monkeypatch.setattr(p, "_is_heavy", lambda cmd: False)
+
+    def _fake_run(cmd, **kw):
+        if cmd and cmd[0] == marker:
+            return subprocess.CompletedProcess(cmd, 0, stdout="3 passed", stderr="")
+        if cmd and cmd[0] == lint_marker:
+            return subprocess.CompletedProcess(cmd, 0, stdout="no lint issues", stderr="")
+        if cmd and cmd[0] == "git" and cmd[1] == "rev-parse":
+            return subprocess.CompletedProcess(cmd, 0, stdout="aaa111\n", stderr="")
+        # git diff / show / grep used by _find_dead_new_functions: no output.
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    p.check_story_status("sha", "S1")
+
+    story = json.loads(manifest_path.read_text())["stories"]["S1"]
+    assert story["last_test_check"]["sha"] == "aaa111"
+    assert story["last_lint_check"]["sha"] == "aaa111"
 
 
 

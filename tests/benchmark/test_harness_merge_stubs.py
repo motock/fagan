@@ -11,14 +11,51 @@ it. The CI stub now actually runs the story's worktree test suite.
 import sys
 from pathlib import Path
 
+import pytest
+
 BENCH = Path(__file__).resolve().parent
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
+_ORIG_SYS_PATH = list(sys.path)
+
 import harness
+
+# harness.py inserts the MAIN pipeline repo at the front of sys.path so its
+# own runtime imports resolve there. If left in place, the module-level
+# imports below would pull the MAIN repo's pipeline.server /
+# app.pipeline_mcp_server into sys.modules, and every later test file in the
+# same pytest session that does `from app import pipeline_mcp_server` (e.g.
+# test_pipeline_mcp_server.py) would silently get the MAIN repo's module --
+# which lacks this worktree's sha fix -- instead of the worktree's. Restore
+# sys.path so the imports below resolve to THIS worktree's pipeline code.
+sys.path[:] = _ORIG_SYS_PATH
 
 import pipeline.server as _pserver
 from app import pipeline_mcp_server as p
+
+
+@pytest.fixture(autouse=True)
+def _restore_patched_seams():
+    """install_merge_stubs permanently rebinds pipeline.server's _ci_status /
+    _open_pr / _merge_pr (and the compat shim's copies) to hermetic stubs and
+    never restores them. Without restoration, running this module in the full
+    suite leaves the stubs in place for the rest of the session, breaking
+    unrelated tests that exercise the real seams (e.g. test_pipeline_mcp_server's
+    test_ci_status_*). Snapshot the originals before each test and restore them
+    after."""
+    originals = {
+        "p": {name: getattr(p, name) for name in ("_ci_status", "_open_pr", "_merge_pr")},
+        "server": {
+            name: getattr(_pserver, name)
+            for name in ("_ci_status", "_open_pr", "_merge_pr")
+        },
+    }
+    yield
+    for name, orig in originals["p"].items():
+        setattr(p, name, orig)
+    for name, orig in originals["server"].items():
+        setattr(_pserver, name, orig)
 
 
 def _seed_worktree(root: Path, story_key: str, test_file_content: str) -> Path:

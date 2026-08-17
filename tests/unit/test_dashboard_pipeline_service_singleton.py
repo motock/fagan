@@ -44,6 +44,9 @@ _EXPECTED_API_ROUTES = {
     ("/api/plans/{plan_name}/stories/{story_key}/review", "POST"),
     ("/api/plans/{plan_name}/stories/{story_key}/approve_merge", "POST"),
     ("/api/plans/{plan_name}/stories/{story_key}/done", "POST"),
+    ("/api/plans/{plan_name}/advance", "POST"),
+    ("/api/plans/advance_all", "POST"),
+    ("/api/plans/{plan_name}/stories/{story_key}/checkpoint", "POST"),
     ("/api/config", "GET"),
 }
 

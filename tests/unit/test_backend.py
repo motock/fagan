@@ -1096,6 +1096,68 @@ def test_ollama_resource_status_memory_floor_defaults_to_2048mb(monkeypatch):
     assert driver.resource_status()["ok"] is True
 
 
+# ---------- Cloud-aware resource_status (model_tag param) ----------
+def test_cloud_model_skips_memory_floor(monkeypatch):
+    """A :cloud-tagged model is served via Ollama with zero local VRAM
+    footprint, so the free-memory floor is irrelevant to it - the gate must
+    skip the floor for a :cloud tag (reachability still applies)."""
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 500)  # < 2048 floor
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+
+    status = driver.resource_status(model_tag="deepseek-v4-flash:cloud")
+
+    assert status["ok"] is True
+
+
+def test_local_model_enforces_memory_floor(monkeypatch):
+    """An on-device (non-:cloud) tag keeps the free-memory floor exactly as
+    today - a :cloud suffix is the ONLY thing that exempts a model."""
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 500)  # < 2048 floor
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+
+    status = driver.resource_status(model_tag="gemma4:26b-a4b-it-qat")
+
+    assert status["ok"] is False
+    assert "insufficient free memory" in status["reason"]
+
+
+def test_cloud_model_still_requires_reachable(monkeypatch):
+    """A :cloud tag is NOT exempt from reachability - an unreachable server
+    short-circuits before the floor and gates regardless of the tag."""
+    def _boom(url, timeout):
+        raise b.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(b.httpx, "get", _boom)
+    driver = b.OllamaDriver()
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 500)
+
+    status = driver.resource_status(model_tag="deepseek-v4-flash:cloud")
+
+    assert status["ok"] is False
+    assert "unreachable" in status["reason"]
+
+
+def test_resource_status_default_tag_unchanged(monkeypatch):
+    """resource_status() with no model_tag arg must behave identically to
+    today: it uses PIPELINE_LOCAL_MODEL_DEFAULT (an on-device tag), so the
+    floor applies."""
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "gemma4:26b-a4b-it-qat")
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    driver = b.OllamaDriver()
+
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 500)
+    assert driver.resource_status()["ok"] is False
+    assert "insufficient free memory" in driver.resource_status()["reason"]
+
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 4096)
+    assert driver.resource_status()["ok"] is True
+
+
 def test_resource_status_memory_floor_uses_provider_specific_override(monkeypatch):
     # MLX pins one model's full footprint in memory for the server's entire
     # lifetime (no VRAM-swap eviction like Ollama), so free memory settles at

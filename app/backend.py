@@ -111,7 +111,7 @@ class Backend(Protocol):
         """Return the raw usage/cost report text for the resource gate."""
         ...
 
-    def resource_status(self) -> dict:
+    def resource_status(self, model_tag: str | None = None) -> dict:
         """Whether this backend is resource-available to take work right now.
 
         Returns {"ok": bool, "reason": str}. The orchestrator's per-role gate

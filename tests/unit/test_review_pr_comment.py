@@ -64,7 +64,7 @@ def _make_story(plan_dir, *, status, worktree=None, **extra):
     story = {
         "summary": "Add thing",
         "status": status,
-        "worktree": str(plan_dir / "wt") if worktree is None else worktree,
+        "worktree": str(plan_dir / "wt") if worktree is None else str(worktree),
         "risk": "low",
     }
     story.update(extra)

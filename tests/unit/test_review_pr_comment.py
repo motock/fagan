@@ -338,7 +338,7 @@ def test_comment_uses_raw_findings_not_feedback_preamble(
         p, "_reverify_acceptance",
         lambda s, wt, sk="": {"state": "pass", "error": ""},
     )
-    open_pr, post_comment = _force_request_changes(
+    _, post_comment = _force_request_changes(
         monkeypatch, _REQUEST_CHANGES_WITH_FINDINGS
     )
 

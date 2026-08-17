@@ -111,7 +111,7 @@ def test_stale_last_test_check_sha_is_omitted_from_evidence(tmp_path, monkeypatc
     # Worktree HEAD is now bbb222.
     monkeypatch.setattr(
         "pipeline.rebrief._git",
-        lambda worktree, args, timeout=15: "bbb222" if args == ["rev-parse", "HEAD"] else None,
+        lambda worktree, args, timeout=15: "bbb222\n" if args == ["rev-parse", "HEAD"] else None,
     )
     stale = {
         "summary": "s",

@@ -93,6 +93,11 @@ def collect_failure_evidence(
         current_head = _git(worktree, ["rev-parse", "HEAD"])
     except (OSError, subprocess.SubprocessError, AttributeError):
         current_head = None
+    # _git returns result.stdout unstripped (e.g. "bbb222\n"), while the
+    # recorded sha was stored via .stdout.strip() ("bbb222"). Normalize the
+    # comparison side so a fresh record matches; a stale record (different
+    # sha) still correctly fails the gate.
+    current_head = (current_head or "").strip() or None
     last_error = last_test_check.get("error")
     if last_test_check.get("sha") == current_head and last_error:
         sections.append(f"LAST TEST FAILURE:\n{last_error}")

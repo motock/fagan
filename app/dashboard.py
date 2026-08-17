@@ -1017,6 +1017,40 @@ def start_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
+@app.post("/api/plans/{plan_name}/stories/{story_key}/review")
+def review_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
+    """Delegates to _service.review_story(plan_name, story_key)."""
+    result = _service.review_story(plan_name, story_key)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=404,
+            detail=result.get("error", "Unknown error during review"),
+        )
+    return result
+
+
+@app.post("/api/plans/{plan_name}/stories/{story_key}/approve_merge")
+def approve_merge_route(plan_name: str, story_key: str) -> dict[str, Any]:
+    """Delegates to _service.approve_merge(plan_name, story_key)."""
+    result = _service.approve_merge(plan_name, story_key)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=404,
+            detail=result.get("error", "Unknown error during approve_merge"),
+        )
+    return result
+
+
+@app.post("/api/plans/{plan_name}/stories/{story_key}/done")
+def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
+    """Delegates to _service.mark_story_done(plan_name, story_key)."""
+    result = _service.mark_story_done(plan_name, story_key)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=404,
+            detail=result.get("error", "Unknown error when marking story as done"),
+        )
+    return result
 @app.post("/api/plans/{plan_name}/save")
 def save_plan(plan_name: str, request: SavePlanRequest):
     result = _service.save_plan(plan_name, request.plan_json)

@@ -129,6 +129,48 @@ def _isolate_usage_state(tmp_path, monkeypatch):
     return path
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_ollama_seams(monkeypatch):
+    """Make the suite hermetic: stub every live-Ollama HTTP seam to a no-op.
+
+    Three production paths fire real Ollama requests during tests that only
+    mock the subprocess/Plane boundaries, and each is a multi-second
+    /api/chat round-trip (or, on a cold model load, tens of seconds):
+
+      - `_dispatch_story_impl` runs the guided-decomposition planner
+        (`_run_planner` -> `get_backend("planner").complete()`, a 600s-timeout
+        /api/chat) on every fresh local-family dispatch with no plan on disk.
+      - `check_story_status` runs the step-cap diagnosis (`diagnose_failure`
+        -> `get_backend("diagnosis").complete()`) on every step-cap exit.
+      - every local dispatch probes `/api/tags` (`_ollama_loaded_models`) and
+        serving parallelism (`_ollama_serving_parallelism`) as observability
+        hooks that must never gate dispatch.
+
+    None of these are what the tests in this file assert on - they assert
+    routing/streak/journal/argv behavior and mock `get_backend` or
+    `_run_planner` directly when they DO care about planner output. So stub
+    the seams to fast no-ops here. Tests needing a specific value override
+    with their own `monkeypatch.setattr`, which runs later on the same
+    function-scoped monkeypatch and wins.
+
+    `OllamaDriver.complete` is stubbed at the class rather than `p._run_planner`
+    itself because several tests call `p._run_planner(...)` directly to pin its
+    routing (they mock `backend.get_backend`, so they never reach the real
+    driver); stubbing the chat method leaves those intact while short-
+    circuiting the dispatch path that would otherwise hit a live server. No
+    test in this file exercises the real `OllamaDriver.complete` chat behavior
+    - that coverage lives in test_backend.py / test_acceptance_ollama_*.py.
+    A "" response makes `_run_planner` return None (its documented fail-open),
+    so dispatch proceeds with no checklist exactly like an unconfigured
+    planner.
+    """
+    monkeypatch.setattr(backend.OllamaDriver, "complete",
+                        lambda self, prompt, **kw: "")
+    monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: set())
+    monkeypatch.setattr(backend, "_ollama_serving_parallelism", lambda: None)
+    monkeypatch.setattr(p, "diagnose_failure", lambda *a, **k: None)
+
+
 @pytest.fixture
 def usage_state_path(_isolate_usage_state):
     # Same isolated path as the autouse fixture; tests that want a specific gate

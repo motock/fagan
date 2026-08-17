@@ -169,6 +169,8 @@ from .escalation import (
     _escalate_review_to_claude,
     _escalate_to_claude,
     _escalate_to_local_fallback_model,
+    _escalation_label,
+    _escalation_target,
 )
 from .git_ops import (
     _commit_wip,
@@ -2537,7 +2539,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_name,
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; escalating to "
-                f"Claude (no local_model_fallback configured).",
+                f"{_escalation_label()} (no local_model_fallback configured).",
             )
             return {
                 "status": "todo",
@@ -2637,7 +2639,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 _notify_user(
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
-                    f"on {current_model}; escalating to Claude (no "
+                    f"on {current_model}; escalating to {_escalation_label()} (no "
                     f"local_model_fallback configured).",
                 )
                 return {
@@ -3480,15 +3482,18 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         prior_kw = {"prior_feedback": _prior_fb} if _prior_fb else {}
         try:
             # Once a story is escalated (see _escalate_review_to_claude below),
-            # every subsequent review must go to Claude regardless of the global
-            # PIPELINE_BACKEND_REVIEW setting - review backend is otherwise
-            # resolved purely from that env var with no per-story override, so
-            # this is the one seam that needs an explicit check.
+            # every subsequent review must go to the escalation target
+            # regardless of the global PIPELINE_BACKEND_REVIEW setting - review
+            # backend is otherwise resolved purely from that env var with no
+            # per-story override, so this is the one seam that needs an explicit
+            # check. The target is Claude by default; PIPELINE_ESCALATION_BACKEND
+            # retargets it (e.g. to a non-Claude provider while Claude is capped).
+            _escalation_backend = _escalation_target()[0]
             reviewer_output = (
                 _run_reviewer(
                     worktree,
                     branch,
-                    backend_name="claude",
+                    backend_name=_escalation_backend,
                     plan_role_config=plan_role_config,
                     since_sha=story.get("last_reviewed_sha"),
                     risk=story.get("risk", "low"),
@@ -3596,7 +3601,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _run_reviewer(
                 worktree,
                 branch,
-                backend_name="claude",
+                backend_name=_escalation_backend,
                 plan_role_config=plan_role_config,
                 since_sha=story.get("last_reviewed_sha"),
                 risk=story.get("risk", "low"),
@@ -4210,7 +4215,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                             _escalate_to_claude(manifest, plan_name, key, manifest_path)
                             _notify_user(
                                 plan_name,
-                                f"{key} local agent failed; escalating to Claude and starting clean.",
+                                f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
                             )
                             summary["notify"].append(key)
                         elif (

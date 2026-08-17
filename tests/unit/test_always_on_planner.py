@@ -130,15 +130,14 @@ def _stub_dispatch_externals(monkeypatch):
 
 # ---------- (a) registry default: ollama/glm, no env, no role_config ----------
 
-def test_resolve_planner_backend_defaults_to_claude_sonnet_no_env_no_role_config(monkeypatch):
+def test_resolve_planner_backend_defaults_to_registry_planner_entry_no_env_no_role_config(monkeypatch):
     """With NO env vars and NO plan_role_config, the planner must resolve to
-    claude/sonnet via the registry's roles.planner entry. Commit c16fe7f
-    ("fix(registry): route test_author/planner/review roles to claude/
-    sonnet") re-enabled this default after confirming live that the claude
-    CLI transport works fine in this interactive MCP context (the earlier
-    ANTHROPIC_BASE_URL redirect that caused it to fail closed is no longer
-    present in any env source). This is the always-on default - no
-    PIPELINE_DECOMPOSE mode flag involved."""
+    the registry's roles.planner entry. While Claude usage is capped the
+    stock roles.planner entry is ollama/glm, which resolve_role resolves to
+    its concrete driver tag glm-5.2:cloud. This is the always-on default,
+    exercised against the REAL registry (not an empty stub) so the stock
+    roles.planner entry is covered. Reverting the registry to claude/sonnet
+    requires reverting these assertions too."""
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
     # Use the REAL registry (not an empty stub) so the stock roles.planner
@@ -146,8 +145,8 @@ def test_resolve_planner_backend_defaults_to_claude_sonnet_no_env_no_role_config
     backend_name, model = p._resolve_planner_backend(
         "ollama", "gpt-oss:20b",
     )
-    assert backend_name == "claude"
-    assert model == "sonnet"
+    assert backend_name == "ollama"
+    assert model == "glm-5.2:cloud"
 
 
 # ---------- (b) no roles.planner registry entry → ollama/glm via fallback ----------
@@ -743,11 +742,11 @@ def test_resolve_planner_backend_no_mode_parameter(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
 
     # Without mode — must succeed. (backend_name reflects the real registry's
-    # roles.planner.provider - claude/sonnet as of c16fe7f (2026-07-28); the
+    # roles.planner.provider - ollama/glm while Claude usage is capped; the
     # point of this assertion is just "the call succeeded", not the specific
     # value.)
     backend_name, _model = p._resolve_planner_backend("ollama", "gpt-oss:20b")
-    assert backend_name == "claude"
+    assert backend_name == "ollama"
 
     # With mode keyword — must raise TypeError (parameter removed).
     with pytest.raises(TypeError):
@@ -881,19 +880,20 @@ def test_dispatch_story_scratchpad_env_still_respected(
     assert captured.get("include_scratchpad") is False
 
 
-# ---------- get_role_config shows planner resolving to claude/sonnet ----------
+# ---------- get_role_config shows planner resolving to the registry default ----------
 
-def test_get_role_config_planner_resolves_to_claude_sonnet(monkeypatch):
+def test_get_role_config_planner_resolves_to_registry_planner_entry(monkeypatch):
     """get_role_config(plan_name=None) must show the planner role resolving
-    to claude/sonnet (stock registry, per c16fe7f (2026-07-28) - see
-    test_resolve_planner_backend_defaults_to_claude_sonnet_no_env_no_role_config)."""
+    to the registry's roles.planner entry - ollama/glm (tag glm-5.2:cloud)
+    while Claude usage is capped (see
+    test_resolve_planner_backend_defaults_to_registry_planner_entry_no_env_no_role_config)."""
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
     result = p.get_role_config(plan_name=None)
     assert result["ok"] is True
     planner = result["roles"]["planner"]
-    assert planner["provider"] == "claude"
-    assert planner["model"] == "sonnet"
+    assert planner["provider"] == "ollama"
+    assert planner["model"] == "glm-5.2:cloud"
 
 
 # ---------- no PIPELINE_DECOMPOSE / PIPELINE_DECOMPOSE_CLOUD_MODEL references remain ----------

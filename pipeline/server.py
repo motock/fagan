@@ -1628,17 +1628,77 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         )
                         behind = int(count_out.stdout.strip() or "0")
                         if behind > 0:
-                            msg = (
-                                f"story {story_key} is being resumed but its "
-                                f"worktree base predates the current "
-                                f"origin/{_default_branch()} by {behind} "
-                                f"commit(s); the resumed diff may revert work "
-                                f"that landed on the default branch since the "
-                                f"worktree was created. Rebase the worktree onto "
-                                f"origin/{_default_branch()} before proceeding."
-                            )
-                            _notify_user(plan_name, msg)
-                            logging.getLogger("pipeline").warning(msg)
+                            # The worktree base predates origin/<default>; a
+                            # resumed agent would otherwise run on a stale base
+                            # that could revert work merged since the worktree
+                            # was created (live 2026-08-17). Actually rebase the
+                            # worktree onto origin/<default> BEFORE the agent
+                            # starts. Fail-secure on a rebase conflict (park,
+                            # never run on the stale base); fail-open on any
+                            # other git/infra failure (proceed, today's
+                            # behavior). _rebase_onto_master never raises.
+                            result = _rebase_onto_master(worktree_path, branch)
+                            if result["ok"]:
+                                _notify_user(
+                                    plan_name,
+                                    f"story {story_key} worktree base predates "
+                                    f"origin/{_default_branch()} by {behind} "
+                                    f"commit(s); rebased onto "
+                                    f"origin/{_default_branch()} before resume.",
+                                )
+                                logging.getLogger("pipeline").info(
+                                    "story %s worktree base predated "
+                                    "origin/%s by %s commit(s); rebased onto "
+                                    "origin/%s before resume",
+                                    story_key, _default_branch(), behind,
+                                    _default_branch(),
+                                )
+                            elif result["conflict"]:
+                                # Fail-secure: never dispatch an agent on a
+                                # base that would revert merged work. Park the
+                                # story for human resolution; a later resume
+                                # can retry the rebase and proceed if it now
+                                # succeeds (parked is a retryable state).
+                                story["status"] = "parked"
+                                story["parked_reason"] = (
+                                    f"rebase conflict: {result['error']}; "
+                                    f"worktree still behind "
+                                    f"origin/{_default_branch()}"
+                                )
+                                _atomic_write_json(manifest_path, manifest)
+                                _notify_user(
+                                    plan_name,
+                                    f"story {story_key} parked: rebase conflict "
+                                    f"against origin/{_default_branch()} - "
+                                    f"{result['error']}",
+                                )
+                                logging.getLogger("pipeline").warning(
+                                    "story %s parked: rebase conflict against "
+                                    "origin/%s; worktree still behind",
+                                    story_key, _default_branch(),
+                                )
+                                return {
+                                    "status": "parked",
+                                    "reason": "rebase_conflict",
+                                    "parked_reason": story["parked_reason"],
+                                }
+                            else:
+                                # Fail open on a non-conflict git/infra failure
+                                # (e.g. git fetch timeout): notify and proceed
+                                # with dispatch, exactly as before.
+                                _notify_user(
+                                    plan_name,
+                                    f"story {story_key} rebase onto "
+                                    f"origin/{_default_branch()} failed "
+                                    f"(non-conflict); dispatching anyway "
+                                    f"(fail open): {result['error']}",
+                                )
+                                logging.getLogger("pipeline").warning(
+                                    "rebase for resumed story %s failed "
+                                    "(non-conflict); dispatching anyway "
+                                    "(fail open): %s",
+                                    story_key, result["error"],
+                                )
                 except Exception:  # observability hook, never a gate
                     logging.getLogger("pipeline").warning(
                         "staleness check for resumed story %s failed; "

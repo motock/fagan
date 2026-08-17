@@ -1500,6 +1500,37 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     return _service.dispatch_story(plan_name, story_key)
 
 
+def _resolve_dispatch_backend(story: dict[str, Any], env_backend: str) -> str:
+    """Resolve the concrete backend name for a story's dispatch.
+
+    Shared by dispatch_story (which persists the result onto the story) and
+    the per-story dispatch gate in _advance_pipeline_locked (which must gate
+    each story by ITS OWN backend+model, not a blanket env-default gate).
+    Priority order:
+      1. story["backend"] already set (e.g. from an escalation flip)
+      2. PIPELINE_BACKEND_DISPATCH=auto  → a-priori router
+      3. PIPELINE_BACKEND_DISPATCH=local|claude  → that driver directly
+    Then the persona-based and unwinnable-scope safety overrides (both only
+    when the story had no explicit backend, so a prior escalation flip wins
+    as-is and is never re-routed here).
+    """
+    dispatch_backend = story.get("backend") or (
+        _route_dispatch_backend(story) if env_backend == "auto" else env_backend
+    )
+    # Persona-based safety override: a security persona always dispatches to
+    # Claude, regardless of dispatch mode (auto/local/claude) - unless the
+    # story already had an explicit backend (a prior escalation flip), which
+    # wins as-is and is never re-routed here.
+    if not story.get("backend") and _persona_requires_claude(story):
+        dispatch_backend = "claude"
+    # Unwinnable-as-scoped safety override: a repo-wide, unscoped lint/fix
+    # sweep always dispatches to Claude too, for the same reason (Mode 40
+    # retro #4) - see _story_has_unwinnable_local_scope's docstring.
+    if not story.get("backend") and _story_has_unwinnable_local_scope(story):
+        dispatch_backend = "claude"
+    return dispatch_backend
+
+
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
@@ -1617,27 +1648,12 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
-        # Resolve concrete backend name for this story. Priority order:
-        #   1. story["backend"] already set (e.g. from an escalation flip)
-        #   2. PIPELINE_BACKEND_DISPATCH=auto  → a-priori router
-        #   3. PIPELINE_BACKEND_DISPATCH=local|claude  → that driver directly
+        # Resolve concrete backend name for this story (shared with the
+        # per-story dispatch gate in _advance_pipeline_locked).
         env_backend = (
             os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
         )
-        dispatch_backend = story.get("backend") or (
-            _route_dispatch_backend(story) if env_backend == "auto" else env_backend
-        )
-        # Persona-based safety override: a security persona always dispatches to
-        # Claude, regardless of dispatch mode (auto/local/claude) - unless the
-        # story already had an explicit backend (a prior escalation flip), which
-        # wins as-is and is never re-routed here.
-        if not story.get("backend") and _persona_requires_claude(story):
-            dispatch_backend = "claude"
-        # Unwinnable-as-scoped safety override: a repo-wide, unscoped lint/fix
-        # sweep always dispatches to Claude too, for the same reason (Mode 40
-        # retro #4) - see _story_has_unwinnable_local_scope's docstring.
-        if not story.get("backend") and _story_has_unwinnable_local_scope(story):
-            dispatch_backend = "claude"
+        dispatch_backend = _resolve_dispatch_backend(story, env_backend)
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
 
@@ -4085,7 +4101,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     # different backends, so gate each by ITS backend's availability rather
     # than one global Claude flag. This is what lets local dispatch keep
     # running when Claude's weekly limit is hit (and vice versa).
-    dispatch_ok, dispatch_reason = _role_resource_ok("dispatch")
+    dispatch_ok, _dispatch_reason = _role_resource_ok("dispatch")
     review_ok, review_reason = _role_resource_ok(
         "review", plan_role_config=manifest.get("role_config")
     )
@@ -4136,157 +4152,221 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
     # _default_branch read the plain REPO_ROOT global, so this plan's repo
     # must be active for the duration of every action below.
     with _scoped_repo_root(plan_name):
-        if not dispatch_ok:
-            # The dispatch backend is gated: stop spending it, and free up
-            # in-flight agents (they run on the dispatch backend and are
-            # resumable via their checkpoint journal) rather than letting them
-            # keep burning the resource we're protecting.
-            #
-            # Exception: a local-memory-pressure gate ("insufficient free
-            # memory") is self-inflicted by an in-progress dispatch actively
-            # loading its model into memory - it is not burning a shared,
-            # exhaustible resource the way Claude usage or a downed server
-            # would be. Killing it doesn't free anything real; it destroys
-            # progress and the redispatch (interrupted stories are dispatch-
-            # eligible) immediately re-triggers the identical gate once the
-            # new process starts loading again. Observed live 2026-07-13: a
-            # new PID every ~10-20s across three separate model runs, never
-            # converging. Every OTHER gate reason (Claude usage exhausted,
-            # Ollama unreachable, ...) still interrupts as before - those
-            # really do mean "stop spending this backend now."
-            memory_pressure = "insufficient free memory" in dispatch_reason
-            for key, story in stories.items():
-                if story["status"] == "in_progress" and "pid" in story:
-                    if memory_pressure:
-                        continue
+        # Per-story dispatch gate. The dispatch backend is resolved per-story
+        # (dispatch_story's own resolution, shared via _resolve_dispatch_backend),
+        # so the gate must be per-story too: a :cloud-tagged model (served via
+        # Ollama with zero local VRAM footprint) or a Claude-routed story must
+        # never be blocked by the LOCAL free-memory floor, while an on-device
+        # model keeps the floor exactly as before. Reachability still applies
+        # to every backend (a cloud model proxied through an unreachable server
+        # cannot dispatch).
+        env_backend = (
+            os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+        )
+        # In-progress interruption is also per-story: only interrupt an
+        # in-progress story whose OWN backend+model would be gated by the
+        # LOCAL memory floor (local + non-:cloud). A :cloud or claude-routed
+        # in-progress story must NOT be interrupted by the local memory gate.
+        # The blanket gate's memory-pressure exception (do not interrupt on
+        # 'insufficient free memory') is preserved for the claude-routed path
+        # (a claude story is only interrupted when the blanket gate is down
+        # for a NON-memory reason, e.g. Claude usage exhausted).
+        memory_pressure = "insufficient free memory" in _dispatch_reason
+        for key, story in stories.items():
+            if story["status"] != "in_progress" or "pid" not in story:
+                continue
+            story_backend = _resolve_dispatch_backend(story, env_backend)
+            if story_backend == "claude":
+                # Claude-routed: interrupt only when the blanket gate is down
+                # for a non-memory reason (Claude usage exhausted, etc.).
+                # Never interrupt a claude story on local memory pressure.
+                if not dispatch_ok and not memory_pressure:
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
-            # Only surface the gate when it actually affects this tick: when
-            # there are ready stories to dispatch or in-progress agents that
-            # could be interrupted. A plan whose only stories are already past
-            # dispatch (e.g. all pr_open awaiting merge) has nothing to defer,
-            # so notifying about a paused dispatch is noise.
-            if ready or any(
-                s["status"] == "in_progress" and "pid" in s
-                for s in stories.values()
-            ):
-                _notify_user(
-                    plan_name,
-                    f"Dispatch backend gated ({dispatch_reason}): deferring dispatch.",
+                continue
+            # Local backend: gate on the local memory floor for THIS story's
+            # model. A :cloud tag has no local footprint, so it is never
+            # interrupted by the memory gate. An on-device tag is interrupted
+            # when its own floor is not met. A story with no explicit model
+            # resolves to the env-default on-device model, which the blanket
+            # gate already accounts for - interrupt it only when the blanket
+            # gate is down for a non-memory reason (preserving old behavior).
+            tag = story.get("model")
+            if tag and tag.endswith(":cloud"):
+                continue
+            if tag:
+                status = backend.get_backend("dispatch", name=story_backend).resource_status(
+                    model_tag=tag
                 )
-                summary["notify"].append("dispatch_paused")
-        else:
-            # 1. Dispatch ready (and resumable-interrupted) stories, capped to
-            # the slots still free under MAX_CONCURRENT_AGENTS. <=0 means no cap.
-            if MAX_CONCURRENT_AGENTS > 0:
-                slots = max(0, MAX_CONCURRENT_AGENTS - _count_in_progress_agents())
-                to_dispatch = ready[:slots]
+                if not status.get("ok", True):
+                    interrupt_story(plan_name, key)
+                    summary["interrupted"].append(key)
             else:
-                to_dispatch = ready
-            for key in to_dispatch:
-                try:
-                    result = dispatch_story(plan_name, key)
-                    if not (isinstance(result, dict) and result.get("skipped")):
-                        summary["dispatched"].append(key)
-                    else:
-                        summary.setdefault("skipped", []).append(key)
-                except Exception as e:  # noqa: BLE001 (git fetch/worktree/backend launch failure)
-                    # Re-read: dispatch_story only writes the manifest on a
-                    # successful launch, so on a raise the on-disk status is
-                    # still todo/interrupted - bump the attempt counter there.
-                    m = json.loads(manifest_path.read_text())
-                    st = m["stories"][key]
-                    attempts = st.get("dispatch_attempts", 0) + 1
-                    st["dispatch_attempts"] = attempts
-                    if attempts >= DISPATCH_MAX_ATTEMPTS:
-                        st["status"] = "failed"
-                        st["dispatch_error"] = str(e)
-                        _notify_user(
-                            plan_name,
-                            f"{key} dispatch failed {attempts}x "
-                            f"({e}); giving up - needs human intervention.",
-                        )
-                        summary["failed"].append(key)
-                    else:
-                        # leave status dispatch-eligible; the next tick retries.
-                        _notify_user(
-                            plan_name,
-                            f"{key} dispatch attempt {attempts}/"
-                            f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.",
-                        )
-                    summary["notify"].append(key)
-                    _atomic_write_json(manifest_path, m)
+                if not dispatch_ok and not memory_pressure:
+                    interrupt_story(plan_name, key)
+                    summary["interrupted"].append(key)
 
-            # 2. Poll running agents: tests fail -> notify (or escalate); tests pass -> tests_passed.
-            manifest = json.loads(manifest_path.read_text())
-            stories = manifest["stories"]
-            for key, story in stories.items():
-                if story["status"] == "in_progress" and "pid" in story:
-                    check_result = check_story_status(plan_name, key)
-                    status = check_result.get("status")
-                    if status == "failed":
-                        fallback_model = manifest.get("local_model_fallback")
-                        # A-posteriori escalation: under auto dispatch, if the
-                        # local agent failed and has NOT been escalated before,
-                        # wipe its worktree and re-queue for Claude. A second
-                        # failure (on Claude), or any failure under an explicit
-                        # non-auto backend, is terminal.
-                        if (
-                            _auto_escalation_enabled()
-                            and story.get("backend") == "local"
-                            and not story.get("escalated")
-                        ):
-                            manifest = json.loads(manifest_path.read_text())
-                            _escalate_to_claude(manifest, plan_name, key, manifest_path)
-                            _notify_user(
-                                plan_name,
-                                f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
-                            )
-                            summary["notify"].append(key)
-                        elif (
-                            fallback_model
-                            and story.get("backend") == "local"
-                            and story.get("model") != fallback_model
-                            and not story.get("tried_fallback_model")
-                        ):
-                            # Plan-scoped opt-in (manifest["local_model_fallback"]):
-                            # never escalates to Claude - just gives one other
-                            # local model a shot before the terminal park/fail
-                            # path below.
-                            manifest = json.loads(manifest_path.read_text())
-                            failed_model = (
-                                story.get("dispatched_model")
-                                or story.get("model")
-                                or "default"
-                            )
-                            _escalate_to_local_fallback_model(
-                                manifest, plan_name, key, manifest_path, fallback_model
-                            )
-                            _notify_user(
-                                plan_name,
-                                f"{key} local agent failed on {failed_model}; retrying on "
-                                f"fallback model {fallback_model} before parking.",
-                            )
-                            summary["notify"].append(key)
-                        elif check_result.get("failure_kind") == "give_up":
-                            # T6: the agent explicitly surrendered rather than
-                            # producing ordinary red tests. Point the human at
-                            # the story's scope/clarity instead of the generic
-                            # message - a missing/wrong API needs a fix to
-                            # agent_instructions, not another identical retry.
-                            _notify_user(
-                                plan_name,
-                                f"{key} agent gave up (explicit surrender, zero productive "
-                                f"progress) - likely under-specified (missing API, wrong "
-                                f"scope) rather than a model-capability gap; needs human "
-                                f"clarification before another dispatch.",
-                            )
-                            summary["failed"].append(key)
-                            summary["notify"].append(key)
-                        else:
-                            _notify_user(plan_name, f"{key} tests failed")
-                            summary["failed"].append(key)
-                            summary["notify"].append(key)
+        # 1. Dispatch ready (and resumable-interrupted) stories, capped to
+        # the slots still free under MAX_CONCURRENT_AGENTS. <=0 means no cap.
+        if MAX_CONCURRENT_AGENTS > 0:
+            slots = max(0, MAX_CONCURRENT_AGENTS - _count_in_progress_agents())
+            to_dispatch = ready[:slots]
+        else:
+            to_dispatch = ready
+        # Per-story dispatch gate: only dispatch stories whose own backend+model
+        # passes its gate. A :cloud story dispatches even under local memory
+        # pressure; an on-device story is deferred when the floor is not met.
+        gated = []
+        for key in to_dispatch:
+            story = stories[key]
+            story_backend = _resolve_dispatch_backend(story, env_backend)
+            if story_backend == "claude":
+                # Gate on Claude's usage resource_status, NOT local memory.
+                status = backend.get_backend("dispatch", name="claude").resource_status()
+                if not status.get("ok", True):
+                    gated.append(key)
+                    continue
+            else:
+                tag = story.get("model")
+                if tag:
+                    status = backend.get_backend("dispatch", name=story_backend).resource_status(
+                        model_tag=tag
+                    )
+                else:
+                    status = backend.get_backend("dispatch", name=story_backend).resource_status()
+                if not status.get("ok", True):
+                    gated.append(key)
+                    continue
+            try:
+                result = dispatch_story(plan_name, key)
+                if not (isinstance(result, dict) and result.get("skipped")):
+                    summary["dispatched"].append(key)
+                else:
+                    summary.setdefault("skipped", []).append(key)
+            except Exception as e:  # noqa: BLE001 (git fetch/worktree/backend launch failure)
+                # Re-read: dispatch_story only writes the manifest on a
+                # successful launch, so on a raise the on-disk status is
+                # still todo/interrupted - bump the attempt counter there.
+                m = json.loads(manifest_path.read_text())
+                st = m["stories"][key]
+                attempts = st.get("dispatch_attempts", 0) + 1
+                st["dispatch_attempts"] = attempts
+                if attempts >= DISPATCH_MAX_ATTEMPTS:
+                    st["status"] = "failed"
+                    st["dispatch_error"] = str(e)
+                    _notify_user(
+                        plan_name,
+                        f"{key} dispatch failed {attempts}x "
+                        f"({e}); giving up - needs human intervention.",
+                    )
+                    summary["failed"].append(key)
+                else:
+                    # leave status dispatch-eligible; the next tick retries.
+                    _notify_user(
+                        plan_name,
+                        f"{key} dispatch attempt {attempts}/"
+                        f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.",
+                    )
+                summary["notify"].append(key)
+                _atomic_write_json(manifest_path, m)
+
+        # 2. Poll running agents: tests fail -> notify (or escalate); tests pass
+        # -> tests_passed. Polling is per-story, mirroring the interruption gate
+        # above: a story this tick would interrupt (blanket gate down for a
+        # non-memory reason, or its own memory floor not met) is NOT polled; a
+        # surviving story IS polled even when the blanket dispatch gate is down.
+        # This keeps a :cloud story dispatched under local memory pressure from
+        # stalling in_progress unpolled — dispatch and interruption are already
+        # per-story, so polling must be too. Review below stays gated by the
+        # REVIEW backend (review_ok); merge (further below) is unconditional.
+        manifest = json.loads(manifest_path.read_text())
+        stories = manifest["stories"]
+        for key, story in stories.items():
+            if story["status"] != "in_progress" or "pid" not in story:
+                continue
+            # Per-story poll gate — mirrors the interruption gate (lines above):
+            # poll only stories that survive this tick (were NOT interrupted).
+            story_backend = _resolve_dispatch_backend(story, env_backend)
+            tag = story.get("model")
+            if story_backend != "claude" and tag and tag.endswith(":cloud"):
+                pass  # :cloud is never interrupted by the local memory gate
+            elif story_backend == "claude" or not tag:
+                # Interrupted when the blanket gate is down for a non-memory
+                # reason; polled when the gate is up OR down for memory pressure.
+                if not (dispatch_ok or memory_pressure):
+                    continue
+            else:
+                # On-device with an explicit model tag: polled only when its own
+                # floor holds (otherwise it was interrupted this tick).
+                if not backend.get_backend("dispatch", name=story_backend).resource_status(
+                    model_tag=tag
+                ).get("ok", True):
+                    continue
+            check_result = check_story_status(plan_name, key)
+            status = check_result.get("status")
+            if status == "failed":
+                fallback_model = manifest.get("local_model_fallback")
+                # A-posteriori escalation: under auto dispatch, if the
+                # local agent failed and has NOT been escalated before,
+                # wipe its worktree and re-queue for Claude. A second
+                # failure (on Claude), or any failure under an explicit
+                # non-auto backend, is terminal.
+                if (
+                    _auto_escalation_enabled()
+                    and story.get("backend") == "local"
+                    and not story.get("escalated")
+                ):
+                    manifest = json.loads(manifest_path.read_text())
+                    _escalate_to_claude(manifest, plan_name, key, manifest_path)
+                    _notify_user(
+                        plan_name,
+                        f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
+                    )
+                    summary["notify"].append(key)
+                elif (
+                    fallback_model
+                    and story.get("backend") == "local"
+                    and story.get("model") != fallback_model
+                    and not story.get("tried_fallback_model")
+                ):
+                    # Plan-scoped opt-in (manifest["local_model_fallback"]):
+                    # never escalates to Claude - just gives one other
+                    # local model a shot before the terminal park/fail
+                    # path below.
+                    manifest = json.loads(manifest_path.read_text())
+                    failed_model = (
+                        story.get("dispatched_model")
+                        or story.get("model")
+                        or "default"
+                    )
+                    _escalate_to_local_fallback_model(
+                        manifest, plan_name, key, manifest_path, fallback_model
+                    )
+                    _notify_user(
+                        plan_name,
+                        f"{key} local agent failed on {failed_model}; retrying on "
+                        f"fallback model {fallback_model} before parking.",
+                    )
+                    summary["notify"].append(key)
+                elif check_result.get("failure_kind") == "give_up":
+                    # T6: the agent explicitly surrendered rather than
+                    # producing ordinary red tests. Point the human at
+                    # the story's scope/clarity instead of the generic
+                    # message - a missing/wrong API needs a fix to
+                    # agent_instructions, not another identical retry.
+                    _notify_user(
+                        plan_name,
+                        f"{key} agent gave up (explicit surrender, zero productive "
+                        f"progress) - likely under-specified (missing API, wrong "
+                        f"scope) rather than a model-capability gap; needs human "
+                        f"clarification before another dispatch.",
+                    )
+                    summary["failed"].append(key)
+                    summary["notify"].append(key)
+                else:
+                    _notify_user(plan_name, f"{key} tests failed")
+                    summary["failed"].append(key)
+                    summary["notify"].append(key)
 
         # Review every tests_passed story (incl. ones orphaned by a crashed
         # review on a prior tick - review_story is idempotent). Gated by the

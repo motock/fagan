@@ -9,6 +9,9 @@ _merge_decision stays in pipeline_mcp_server.py because it reads
 PIPELINE_AUTONOMY / PIPELINE_RISK_THRESHOLD / _RISK_ORDER as free variables
 that tests patch via p.<name> across many functions (advance_pipeline_locked
 included); moving it would require migrating those patches too.
+
+_format_review_comment and _post_pr_comment provide helpers for automated
+review comments via the gh CLI.
 """
 
 import subprocess
@@ -83,7 +86,30 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     return result
 
 
+def _format_review_comment(findings: str, cycle: int) -> str:
+    """Returns a markdown PR-comment body.
+
+    ## ⚠️ Changes requested — automated review (cycle {cycle})
+
+    {findings}
+    """
+    return f"## ⚠️ Changes requested — automated review (cycle {cycle})\n\n{findings}"
+
+
+def _post_pr_comment(worktree: str, body: str) -> None:
+    """Posts `body` as a comment on the current branch's PR via the gh CLI.
+
+    External boundary: spawns `gh`. Tests mock this function rather than hitting a real remote.
+    """
+    subprocess.run(
+        ["gh", "pr", "comment", "--body", body],
+        cwd=worktree, check=True, capture_output=True, text=True,
+    )
+
+
 __all__ = [
+    "_format_review_comment",
     "_merge_pr",
     "_open_pr",
+    "_post_pr_comment",
 ]

@@ -24,6 +24,7 @@ import pytest
 
 from app import (
     backend,
+    backend_ollama,
     pipeline_mcp_server,  # noqa: F401  backward compat
     role_registry,
 )
@@ -4982,6 +4983,265 @@ def test_advance_pipeline_does_not_interrupt_in_progress_on_memory_pressure_gate
     story = _read_manifest(plan_dir, "memgate")["stories"]["R1"]
     assert story["status"] == "in_progress"
     assert story["pid"] == 111
+
+
+# ---------- Cloud-aware per-story dispatch gate ----------
+# A :cloud-tagged model (e.g. deepseek-v4-flash:cloud) is served via Ollama
+# with zero local VRAM footprint, so the local free-memory floor must not
+# gate it. On-device models keep the floor exactly as before. These drive
+# advance_pipeline through the real path (not the helper in isolation).
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+        self.status_code = 200
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise backend.httpx.HTTPStatusError(
+                f"{self.status_code} simulated", request=None, response=self
+            )
+
+    def json(self):
+        return self._payload
+
+def _cloud_gate_manifest():
+    return {
+        "C1": {"summary": "cloud story", "agent_instructions": "Do it.",
+               "status": "todo", "dependencies": [],
+               "model": "deepseek-v4-flash:cloud", "backend": "ollama"},
+        "D1": {"summary": "on-device story", "agent_instructions": "Do it.",
+               "status": "todo", "dependencies": [],
+               "model": "gemma4:26b-a4b-it-qat", "backend": "ollama"},
+    }
+
+
+def test_advance_pipeline_dispatches_cloud_story_under_memory_pressure(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A :cloud story must dispatch even when local free memory is below the
+    floor, while a sibling on-device story is deferred (floor still applies)."""
+    _write_manifest(plan_dir, "cloudgate", _cloud_gate_manifest())
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
+    # Local free memory below the 2048mb floor.
+    monkeypatch.setattr(backend.OllamaDriver, "_free_memory_mb", lambda self: 500)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    # Reachability must be ok (the gate checks it first, even for :cloud).
+    monkeypatch.setattr(backend.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    monkeypatch.setattr(backend_ollama, "_total_memory_mb", lambda: 24576)
+
+    result = p.advance_pipeline("cloudgate")
+
+    assert result["ok"] is True
+    assert "C1" in result["dispatched"], f"cloud story must dispatch: {result}"
+    assert "D1" not in result["dispatched"], "on-device story must be deferred"
+    stories = _read_manifest(plan_dir, "cloudgate")["stories"]
+    assert stories["C1"]["status"] == "in_progress"
+    assert stories["D1"]["status"] == "todo"
+
+
+def test_advance_pipeline_does_not_interrupt_cloud_in_progress_on_memory_pressure(
+    plan_dir, agents_dir, monkeypatch, tmp_path,
+):
+    """A :cloud in-progress story must NOT be interrupted by the local memory
+    gate, while an on-device in-progress story IS interrupted (existing
+    behavior preserved)."""
+    _write_manifest(plan_dir, "cloudint", {
+        "A1": {"summary": "cloud running", "status": "in_progress", "pid": 111,
+               "worktree": str(tmp_path / "wta"), "dependencies": [],
+               "model": "deepseek-v4-flash:cloud", "backend": "ollama"},
+        "B1": {"summary": "on-device running", "status": "in_progress", "pid": 222,
+               "worktree": str(tmp_path / "wtb"), "dependencies": [],
+               "model": "gemma4:26b-a4b-it-qat", "backend": "ollama"},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
+    monkeypatch.setattr(backend.OllamaDriver, "_free_memory_mb", lambda self: 500)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    monkeypatch.setattr(backend.httpx, "get", lambda url, timeout: _FakeResponse({}))
+
+    class _GitResult:
+        returncode = 0
+        stdout = "sha123\n"
+        stderr = ""
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _GitResult())
+
+    result = p.advance_pipeline("cloudint")
+
+    assert result["ok"] is True
+    assert "A1" not in result["interrupted"], "cloud in-progress must not be interrupted"
+    assert "B1" in result["interrupted"], "on-device in-progress must be interrupted"
+    stories = _read_manifest(plan_dir, "cloudint")["stories"]
+    assert stories["A1"]["status"] == "in_progress"
+    assert stories["B1"]["status"] == "interrupted"
+
+
+def test_advance_pipeline_polls_cloud_in_progress_under_downed_blanket_gate(
+    plan_dir, agents_dir, monkeypatch, tmp_path,
+):
+    """A :cloud in-progress story must be POLLED even when the blanket dispatch
+    gate is down for memory pressure. Dispatch and interruption are per-story, so
+    a :cloud story can be dispatched (and left running) while the blanket local
+    gate is down; if polling were still blanket-gated it would stall in_progress
+    forever. A sibling on-device story whose own floor is not met is interrupted
+    and NOT polled."""
+    _write_manifest(plan_dir, "cloudpoll", {
+        "A1": {"summary": "cloud running", "status": "in_progress", "pid": 111,
+               "worktree": str(tmp_path / "wta"), "dependencies": [],
+               "model": "deepseek-v4-flash:cloud", "backend": "ollama"},
+        "B1": {"summary": "on-device running", "status": "in_progress", "pid": 222,
+               "worktree": str(tmp_path / "wtb"), "dependencies": [],
+               "model": "gemma4:26b-a4b-it-qat", "backend": "ollama"},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    # Blanket dispatch gate DOWN for memory pressure: the exact condition under
+    # which a cloud story can be dispatched but, pre-fix, was never polled.
+    monkeypatch.setattr(
+        p, "_role_resource_ok",
+        lambda role, plan_role_config=None: (False, "insufficient free memory for local dispatch"),
+    )
+    polled = []
+    monkeypatch.setattr(
+        p, "check_story_status",
+        lambda plan, key: polled.append(key) or {"status": "running"},
+    )
+    # B1's own floor not met -> interrupted (and skipped by the poll gate).
+    monkeypatch.setattr(backend.OllamaDriver, "_free_memory_mb", lambda self: 500)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    monkeypatch.setattr(backend.httpx, "get", lambda url, timeout: _FakeResponse({}))
+
+    class _GitResult:
+        returncode = 0
+        stdout = "sha123\n"
+        stderr = ""
+
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _GitResult())
+
+    result = p.advance_pipeline("cloudpoll")
+
+    assert result["ok"] is True
+    assert "A1" in polled, f"cloud in-progress must be polled with blanket gate down: {result}"
+    assert "B1" not in polled, "on-device in-progress whose floor is not met must not be polled"
+    assert "A1" not in result["interrupted"], "cloud in-progress must not be interrupted"
+    assert "B1" in result["interrupted"], "on-device in-progress whose floor is not met must be interrupted"
+
+
+def test_advance_pipeline_still_gates_cloud_story_when_unreachable(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A :cloud story is NOT exempt from reachability - an unreachable server
+    gates it regardless of the :cloud tag."""
+    _write_manifest(plan_dir, "cloudunreach", {
+        "C1": {"summary": "cloud story", "agent_instructions": "Do it.",
+               "status": "todo", "dependencies": [],
+               "model": "deepseek-v4-flash:cloud", "backend": "ollama"},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
+    monkeypatch.setattr(backend.OllamaDriver, "_free_memory_mb", lambda self: 500)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    # Make the ollama backend unreachable.
+    def _boom(url, timeout):
+        raise backend.httpx.ConnectError("connection refused")
+    monkeypatch.setattr(backend.httpx, "get", _boom)
+
+    result = p.advance_pipeline("cloudunreach")
+
+    assert result["ok"] is True
+    assert "C1" not in result["dispatched"], "unreachable cloud story must not dispatch"
+    stories = _read_manifest(plan_dir, "cloudunreach")["stories"]
+    assert stories["C1"]["status"] == "todo"
+
+
+def test_claude_routed_story_gated_by_usage_not_memory(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A story routing to 'claude' is gated by Claude's usage resource_status,
+    NOT by the local memory floor."""
+    _write_manifest(plan_dir, "claudegate", {
+        "S1": {"summary": "security story", "agent_instructions": "Do it.",
+               "status": "todo", "dependencies": [],
+               "risk": "high"},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
+    monkeypatch.setattr(backend.OllamaDriver, "_free_memory_mb", lambda self: 500)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    monkeypatch.setattr(backend.httpx, "get", lambda url, timeout: _FakeResponse({}))
+
+    # Sub-case 1: Claude usage gated -> deferred.
+    monkeypatch.setattr(
+        backend.ClaudeCliDriver, "resource_status",
+        lambda self, model_tag=None: {"ok": False, "reason": "usage exhausted"},
+    )
+    result = p.advance_pipeline("claudegate")
+    assert "S1" not in result["dispatched"], "claude-gated story must be deferred"
+    assert _read_manifest(plan_dir, "claudegate")["stories"]["S1"]["status"] == "todo"
+
+    # Sub-case 2: Claude usage ok -> dispatched.
+    monkeypatch.setattr(
+        backend.ClaudeCliDriver, "resource_status",
+        lambda self, model_tag=None: {"ok": True, "reason": ""},
+    )
+    result = p.advance_pipeline("claudegate")
+    assert "S1" in result["dispatched"], "claude-ok story must dispatch"
+    assert _read_manifest(plan_dir, "claudegate")["stories"]["S1"]["status"] == "in_progress"
+
+
+def test_default_model_story_gated_under_memory_pressure(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """A story with model=None resolves to the env-default on-device model, so
+    the local memory floor applies - it must be gated under memory pressure
+    (matches today's behavior)."""
+    _write_manifest(plan_dir, "defaultgate", {
+        "S1": {"summary": "default story", "agent_instructions": "Do it.",
+               "status": "todo", "dependencies": [],
+               "backend": "ollama"},
+    })
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: _FakeProc(1234))
+    monkeypatch.setattr(pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(p, "check_story_status", lambda plan, key: {"status": "running"})
+    monkeypatch.setattr(backend.OllamaDriver, "_free_memory_mb", lambda self: 500)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "gemma4:26b-a4b-it-qat")
+    monkeypatch.setattr(backend.httpx, "get", lambda url, timeout: _FakeResponse({}))
+
+    result = p.advance_pipeline("defaultgate")
+
+    assert result["ok"] is True
+    assert "S1" not in result["dispatched"], "default on-device story must be gated"
+    assert _read_manifest(plan_dir, "defaultgate")["stories"]["S1"]["status"] == "todo"
 
 
 def test_dispatch_story_proceeds_when_lock_free(plan_dir, worktree_root, agents_dir, monkeypatch):

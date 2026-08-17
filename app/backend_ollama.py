@@ -904,7 +904,7 @@ class OllamaDriver:
             "resource_status() (Ollama reachability), not a /cost probe."
         )
 
-    def resource_status(self) -> dict:
+    def resource_status(self, model_tag: str | None = None) -> dict:
         """Local backend has no usage/cost limit to respect, so the gate is
         (1) whether the local inference server is up, and (2) T13: whether
         the host has enough free memory to actually run a dispatch on it -
@@ -957,8 +957,17 @@ class OllamaDriver:
             return {"ok": False, "reason": str(e)}
         if not ok:
             return {"ok": ok, "reason": reason}
+        # Resolve the effective model tag for THIS story's gate. Callers pass
+        # the story's resolved model; when omitted we fall back to the
+        # env-default on-device tag (today's behavior). A :cloud-served tag
+        # has zero local VRAM footprint, so the free-memory floor is
+        # irrelevant to it - skip the floor for :cloud (reachability above
+        # still applies). On-device tags keep the floor exactly as before.
+        tag = model_tag if model_tag is not None else os.environ.get(
+            "PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL
+        )
         free_mb = self._free_memory_mb()
-        if free_mb is not None:
+        if free_mb is not None and not tag.endswith(":cloud"):
             provider_env = f"PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_{self.provider.name.upper()}"
             floor_mb = int(os.environ.get(
                 provider_env,
@@ -994,7 +1003,7 @@ class OllamaDriver:
         # MLX pins one model for its process lifetime (already covered by
         # its provider-scoped floor override).
         if self.provider.name == "ollama":
-            model_tag = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL)
+            model_tag = tag
             weights_mb = _ollama_model_weights_mb(self.endpoint, model_tag)
             total_mb = _total_memory_mb()
             max_fraction = float(os.environ.get(

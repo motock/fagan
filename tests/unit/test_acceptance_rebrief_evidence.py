@@ -100,3 +100,42 @@ def test_error_key_takes_priority_over_stdout_stderr_tail(tmp_path):
     evidence = collect_failure_evidence(wt, story)
     assert "explicit-error-text" in evidence
     assert "other-text" not in evidence
+
+
+def test_stale_last_test_check_sha_is_omitted_from_evidence(tmp_path, monkeypatch):
+    """A last_test_check recorded at a PAST commit (stale sha) must NOT be fed
+    into the diagnosis - the worktree HEAD has since moved, so the recorded
+    failure may no longer exist. Only when the recorded sha matches the
+    worktree's current HEAD should the LAST TEST FAILURE section appear."""
+    wt = _worktree(tmp_path, "boom")
+    # Worktree HEAD is now bbb222.
+    monkeypatch.setattr(
+        "pipeline.rebrief._git",
+        lambda worktree, args, timeout=15: "bbb222\n" if args == ["rev-parse", "HEAD"] else None,
+    )
+    stale = {
+        "summary": "s",
+        "last_test_check": {
+            "returncode": 1,
+            "sha": "aaa111",
+            "stdout_tail": "FAILED tests/test_x.py::test_y - AssertionError: expected 3 got 4",
+            "stderr_tail": "",
+        },
+    }
+    evidence = collect_failure_evidence(wt, stale)
+    assert "LAST TEST FAILURE" not in evidence
+    assert "expected 3 got 4" not in evidence
+
+    # Fresh: recorded sha matches the current HEAD -> section included.
+    fresh = {
+        "summary": "s",
+        "last_test_check": {
+            "returncode": 1,
+            "sha": "bbb222",
+            "stdout_tail": "FAILED tests/test_x.py::test_y - AssertionError: expected 3 got 4",
+            "stderr_tail": "",
+        },
+    }
+    evidence = collect_failure_evidence(wt, fresh)
+    assert "LAST TEST FAILURE" in evidence
+    assert "expected 3 got 4" in evidence

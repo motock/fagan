@@ -2761,6 +2761,21 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # Persist it on the story every time, regardless of pass/fail, so a
     # future occurrence leaves a paper trail. getattr() on stderr: some
     # test doubles for subprocess.run's return value don't define it.
+    # The worktree's current HEAD sha is recorded alongside so later
+    # dispatch/review/rebrief logic can detect when this cache is stale
+    # (recorded at a past commit) and refuse to reuse it.
+    check_sha = None
+    if worktree and os.path.isdir(worktree):
+        try:
+            check_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, OSError):
+            check_sha = None
     story["last_test_check"] = {
         "cmd": test_cmd,
         "cwd": str(test_dir),
@@ -2768,10 +2783,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         "stdout_tail": (test_result.stdout or "")[-2000:],
         "stderr_tail": (getattr(test_result, "stderr", "") or "")[-2000:],
         "ts": datetime.now(timezone.utc).isoformat(),
+        "sha": check_sha,
     }
     if passed:
         lint = _run_lint_gate(worktree, test_env)
         if lint is not None:
+            lint["sha"] = check_sha
             story["last_lint_check"] = lint
             if lint["returncode"] != 0:
                 passed = False
@@ -3468,9 +3485,17 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # while the detected test command itself passed), falls through to the
     # normal reviewer call below.
     last_test_check = story.get("last_test_check") or {}
-    skip_llm_reviewer = story.get("acceptance_failed_review") and last_test_check.get(
-        "returncode"
-    ) not in (0, None)
+    # Staleness gate (2026-08-15): last_test_check records the worktree HEAD
+    # sha at the moment the check ran. If the worktree has since moved to a
+    # new commit (before_sha != recorded sha), the recorded failure may no
+    # longer exist - do NOT trust it. Only take the skip fast path when the
+    # recorded sha matches the current HEAD. A missing sha (stories written
+    # before this fix) also falls through to the real reviewer.
+    skip_llm_reviewer = (
+        story.get("acceptance_failed_review")
+        and last_test_check.get("returncode") not in (0, None)
+        and last_test_check.get("sha") == before_sha
+    )
     if skip_llm_reviewer:
         reviewer_output = _synthesize_test_failure_feedback(last_test_check)
     else:

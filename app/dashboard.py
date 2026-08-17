@@ -19,6 +19,16 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+
+class SavePlanRequest(BaseModel):
+    plan_json: str
+
+
+class IngestPlanRequest(BaseModel):
+    only_epics: list[str] | None = None
+    overwrite: bool = False
 
 # config_provenance is a read-only leaf: its only non-stdlib import is
 # app.role_registry (see both modules' docstrings), so pulling it in does
@@ -961,10 +971,6 @@ def effective_config(plan: str | None = None) -> dict[str, Any]:
     }
 
 
-
-
-
-
 @app.post("/api/plans/{plan_name}/stories/{story_key}/dispatch")
 def dispatch_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     """Delegates to _service.dispatch_story(plan_name, story_key)."""
@@ -989,5 +995,27 @@ def start_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
+@app.post("/api/plans/{plan_name}/save")
+def save_plan(plan_name: str, request: SavePlanRequest):
+    result = _service.save_plan(plan_name, request.plan_json)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result
+
+
+@app.post("/api/plans/{plan_name}/ingest")
+def ingest_plan(plan_name: str, request: IngestPlanRequest | None = None):
+    if request is None:
+        result = _service.ingest_plan(plan_name)
+    else:
+        result = _service.ingest_plan(plan_name, only_epics=request.only_epics, overwrite=request.overwrite)
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result
+
+
+# Mounted last so it never shadows the /api/* routes above; html=True serves
+# static/index.html for "/".
 if STATIC_DIR.is_dir():
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

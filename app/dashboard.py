@@ -759,6 +759,28 @@ def unarchive_plan(plan_name: str) -> dict[str, Any]:
     return {"name": plan_name, "archived": False}
 
 
+@app.post("/api/plans/{plan_name}/pause")
+def pause_plan(plan_name: str) -> dict[str, Any]:
+    """Pause a plan's execution. Delegates the manifest mutation to
+    _service.pause_plan (which persists the `paused` flag) and returns the
+    service's result verbatim. A plan with no manifest is a 404, matching the
+    archive/unarchive precedent."""
+    if plan_name not in _list_plan_names():
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    return _service.pause_plan(plan_name)
+
+
+@app.post("/api/plans/{plan_name}/resume")
+def resume_plan(plan_name: str) -> dict[str, Any]:
+    """Resume a plan's execution. Delegates the manifest mutation to
+    _service.resume_plan (which clears the `paused` flag) and returns the
+    service's result verbatim. A plan with no manifest is a 404, matching the
+    archive/unarchive precedent."""
+    if plan_name not in _list_plan_names():
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    return _service.resume_plan(plan_name)
+
+
 @app.get("/api/plans/{plan_name}")
 def get_plan(plan_name: str) -> dict[str, Any]:
     manifest = _read_manifest(plan_name)

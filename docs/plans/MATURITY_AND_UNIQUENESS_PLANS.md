@@ -525,6 +525,14 @@ stories (TDD-split stays strictly read-only). Tests in
       degradation when absent.
 - [ ] **A getting-started end-to-end smoke** a stranger can run and see a
       story merge, on the all-Claude path (no local model required).
+- [ ] **Re-enable the macOS CI leg before the repo goes public.** Commit
+      7958a23 disabled the macOS runner "until repo is public" (repo is
+      still private), and `test_a_job_that_runs_pytest_also_runs_on_macos`
+      is currently `@pytest.mark.skip` for the same period (PR #355). Before
+      switching the repo to public: re-enable the macOS matrix leg in
+      `.github/workflows/ci.yml` AND remove the skip so macOS-only
+      dependencies (the original `plutil` motivation) are caught before a
+      PR opens again. This is a release gate, not optional polish.
 
 ---
 

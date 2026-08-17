@@ -17,7 +17,19 @@ BENCH = Path(__file__).resolve().parent
 if str(BENCH) not in sys.path:
     sys.path.insert(0, str(BENCH))
 
+_ORIG_SYS_PATH = list(sys.path)
+
 import harness
+
+# harness.py inserts the MAIN pipeline repo at the front of sys.path so its
+# own runtime imports resolve there. If left in place, the module-level
+# imports below would pull the MAIN repo's pipeline.server /
+# app.pipeline_mcp_server into sys.modules, and every later test file in the
+# same pytest session that does `from app import pipeline_mcp_server` (e.g.
+# test_pipeline_mcp_server.py) would silently get the MAIN repo's module --
+# which lacks this worktree's sha fix -- instead of the worktree's. Restore
+# sys.path so the imports below resolve to THIS worktree's pipeline code.
+sys.path[:] = _ORIG_SYS_PATH
 
 import pipeline.server as _pserver
 from app import pipeline_mcp_server as p

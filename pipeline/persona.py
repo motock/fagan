@@ -163,7 +163,7 @@ def _persona_requires_claude(story: dict[str, Any]) -> bool:
 _UNWINNABLE_SCOPE_PATTERNS = (
     re.compile(r"ruff check \.(?:\s|$)", re.IGNORECASE),
     re.compile(r"eslint \.(?:\s|$)", re.IGNORECASE),
-    re.compile(r"\brepo[- ]wide\b", re.IGNORECASE),
+    re.compile(r"\b(?:fix|clean\s*up|resolve|address|sweep|eliminate)\b[^.]*\brepo[- ]wide\b|\brepo[- ]wide\b[^.]*\b(?:fix|clean\s*up|resolve|address|sweep|eliminate)\b", re.IGNORECASE),
     re.compile(r"\bacross the (?:entire |whole )?repo(?:sitory)?\b", re.IGNORECASE),
 )
 

@@ -36,6 +36,8 @@ def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | 
         succeeds.  Otherwise a dict with keys ``kind``, ``detail`` and
         ``command``.
     """
+    if timeout_s <= 0:
+        return {"kind":"lint_probe_failed","detail":"timeout must be positive","command":""}
     try:
         detected = detect_lint_command(Path(checkout))
         if detected is None:

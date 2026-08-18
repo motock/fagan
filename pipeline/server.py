@@ -295,10 +295,10 @@ from .planner import (  # noqa: F401
 # many functions). _merge_pr reads REPO_ROOT via a lazy import from the
 # server.
 from .pr import (
+    _format_review_comment,
     _merge_pr,
     _open_pr,
     _post_pr_comment,
-    _format_review_comment,
 )
 
 # Rebase + conflict auto-resolution. _rebase_onto_master reads REPO_ROOT /

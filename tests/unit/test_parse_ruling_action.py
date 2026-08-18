@@ -3,7 +3,7 @@ from pipeline.parsers import _normalize_action, _parse_ruling
 
 class TestParseRulingAction:
     def test_roundtrip_escalate_model(self):
-        text = "ACTION: elevate_model\nRULING: something"
+        text = "ACTION: escalate_model\nRULING: something"
         assert _parse_ruling(text)["action"] == "escalate_model"
 
     def test_roundtrip_split_story(self):

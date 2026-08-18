@@ -42,8 +42,6 @@ def _normalize_action(raw) -> str:
     cleaned = raw.strip().lower()
     if cleaned in TRIAGE_ACTIONS:
         return cleaned
-    if cleaned == "elevate_model":
-        return "escalate_model"
     return DEFAULT_TRIAGE_ACTION
 
 

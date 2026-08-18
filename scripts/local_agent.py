@@ -838,7 +838,7 @@ def _full_suite_result() -> tuple[bool, str, str | None]:
     return True, "", None
 
 
-def _reject_done_for_suite(messages: list, step: int, suite_tail: str) -> None:
+def _reject_done_for_suite(messages: list, step: int, suite_tail: str, gate: str | None) -> None:
     """L1: feed a full-suite failure back as a user turn and announce the
     rejection. Used at both `done`-rejection sites (clean tree, and the
     dirty-tree auto-accept escape) so the raised rework done-bar holds and

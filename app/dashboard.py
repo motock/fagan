@@ -10,18 +10,12 @@ Run with:  uvicorn dashboard:app --reload
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import os
-import re
-from datetime import datetime
 from pathlib import Path
-from typing import Any
-
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
+import json
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 
 
 class SavePlanRequest(BaseModel):

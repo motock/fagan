@@ -1180,8 +1180,8 @@ async def stream_plan_events(plan_name: str, request: Request):
         if path.exists():
             last_pos = path.stat().st_size
 
-        def read_new_lines(current_pos):
-            new_lines = []
+        def read_new_lines(current_pos: int):
+            new_lines: list[str] = []
             with open(path, "r") as f:
                 f.seek(current_pos)
                 while True:
@@ -1189,12 +1189,11 @@ async def stream_plan_events(plan_name: str, request: Request):
                     if not line:
                         break
                     new_lines.append(line)
-                return new_lines, f.tell()
+            return new_lines, f.tell()
 
         while True:
             if await request.is_disconnected():
                 break
-
             if path.exists():
                 new_lines, next_pos = await asyncio.to_thread(read_new_lines, last_pos)
                 for line in new_lines:
@@ -1209,10 +1208,9 @@ async def stream_plan_events(plan_name: str, request: Request):
                     except json.JSONDecodeError:
                         continue
                 last_pos = next_pos
-
             await asyncio.sleep(1)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-
+    # Mount static files for the dashboard UI.
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

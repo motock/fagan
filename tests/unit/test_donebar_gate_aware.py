@@ -191,6 +191,26 @@ def test_rejection_test_gate_keeps_existing_wording(monkeypatch):
     assert "do not call done until pytest passes in full" in msg
 
 
+def test_rejection_interpolates_the_failure_tail(monkeypatch):
+    """The failure excerpt (suite_tail) must be interpolated into the rejection
+    message, not appear as the literal text '{suite_tail}'. Without this the
+    agent is told a gate failed but never shown *what* failed — defeating the
+    done-bar's whole purpose of feeding the excerpt back."""
+    for gate in ("test", "lint"):
+        msg = _reject(monkeypatch, gate, tail="__TAIL_MARKER_42__")
+        assert "__TAIL_MARKER_42__" in msg, f"tail not interpolated for {gate!r} gate"
+        assert "{suite_tail}" not in msg, f"literal {{{{suite_tail}}}} leaked for {gate!r} gate"
+
+
+def test_oracle_rejection_interpolates_full_tail():
+    """The oracle's inlined rejection must be an f-string so {full_tail} is
+    interpolated into the message, not emitted as literal text (mechanical
+    source-level check mirroring the local_agent interpolation test)."""
+    src = (_SCRIPTS / "local_agent_oracle.py").read_text()
+    assert 'f"Your tests PASS' in src, "oracle lint-gate rejection is not an f-string"
+    assert 'f"The acceptance oracle passes' in src, "oracle test-gate rejection is not an f-string"
+
+
 def test_rejection_print_names_the_gate(monkeypatch, capsys):
     """The print() line announcing the rejection names the gate."""
     la._reject_done_for_suite([], 3, "tail", "lint")

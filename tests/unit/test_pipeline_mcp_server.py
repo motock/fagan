@@ -11531,6 +11531,26 @@ def test_story_has_unwinnable_local_scope_false_for_missing_instructions():
     assert p._story_has_unwinnable_local_scope({}) is False
 
 
+def test_story_has_unwinnable_local_scope_false_for_descriptive_ci_boilerplate_mention():
+    """A bare, descriptive mention of 'repo-wide' inside a CI-reminder
+    sentence is not an instruction to perform a repo-wide sweep and must
+    not trip the override for an otherwise narrowly-scoped story."""
+    story = {"agent_instructions": (
+        "Add pipeline/foo.py implementing X. Do not modify any existing "
+        "test file; add new ones only.\n\nCI runs `ruff check .` "
+        "repo-wide and will reject the merge on any violation."
+    )}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_still_detects_imperative_repo_wide_sweep():
+    """Guard against a regex narrowed too far: differently-worded
+    imperative repo-wide sweep instructions must still trip True."""
+    story = {"agent_instructions":
+             "Clean up every remaining lint error repo-wide before merging."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
 def test_route_dispatch_backend_unwinnable_scope_overrides_low_risk(monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "high")
     story = {"risk": "low", "persona": "software-engineer",

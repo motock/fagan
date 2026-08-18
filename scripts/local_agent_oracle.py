@@ -695,6 +695,34 @@ def _full_suite_result() -> tuple[bool, str]:
             return False, (lr.stdout + lr.stderr)[-500:]
     return True, ""
 
+# New gate-aware wrapper
+
+def _full_suite_result_new() -> tuple[bool, str, str | None]:
+    """Gate-aware wrapper around the original _full_suite_result logic.
+    Returns (passed, tail, gate)."""
+    test_dir, test_cmd = p.detect_test_command(CWD)
+    if not test_cmd:
+        return True, "", None
+    argv = test_cmd
+    needs_heavy = bool(argv) and p._is_heavy(argv)
+    if needs_heavy:
+        with p._heavy_lock():
+            r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)  # noqa: PLW1510
+    else:
+        r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)  # noqa: PLW1510
+    if r.returncode != 0:
+        return False, (r.stdout + r.stderr)[-500:], "test"
+    lint = p.detect_lint_command(CWD)
+    if lint is not None:
+        lint_dir, lint_cmd = lint
+        lr = subprocess.run(lint_cmd, check=False, cwd=lint_dir, capture_output=True, text=True)
+        if lr.returncode != 0:
+            return False, (lr.stdout + lr.stderr)[-500:], "lint"
+    return True, "", None
+
+# Alias the original name to the new wrapper
+_full_suite_result = _full_suite_result_new
+
 
 # Full-suite rejections recorded by finish_if_green. The `done` handler keeps
 # its own local counter for the path the model drives; this one bounds the

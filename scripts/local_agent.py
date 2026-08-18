@@ -802,24 +802,24 @@ def auto_wip_commit(reason: str) -> None:
     git("commit", "-m", f"WIP ({reason})")
 
 
-def _full_suite_result() -> tuple[bool, str]:
+def _full_suite_result() -> tuple[bool, str, str | None]:
     """Run the FULL worktree suite (unscoped), for the L1 CI-fail-rework
     done-gate. Mirrors the merge gate's _ci_status_stub runner
     (tests/benchmark/harness.py:623) and the oracle variant's helper:
     detect_test_command + the heavy lock, run the detected command verbatim
     (no acceptance scoping - this agent has no acceptance oracle), return
-    (passed, tail[-500:]). No detectable test command -> (True, '') (nothing
+    (passed, tail[-500:], gate). No detectable test command -> (True, '', None) (nothing
     to fail). Kept in sync with scripts/local_agent_oracle.py:_full_suite_result.
 
     Mode 40: once tests pass, also run detect_lint_command (if the repo has
-    one) and fold a lint failure into the same (False, tail) result - the
+    one) and fold a lint failure into the same (False, tail, 'lint') result - the
     live incident that motivated this was an agent exiting DONE with a
     green suite but a lint-failing CI, because nothing local ever checked
-    lint before this. No detected lint command -> unchanged (True, '').
+    lint before this. No detected lint command -> unchanged (True, '', None).
     """
     test_dir, test_cmd = p.detect_test_command(CWD)
     if not test_cmd:
-        return True, ""
+        return True, "", None
     argv = test_cmd
     needs_heavy = bool(argv) and p._is_heavy(argv)
     if needs_heavy:
@@ -828,14 +828,14 @@ def _full_suite_result() -> tuple[bool, str]:
     else:
         r = subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
     if r.returncode != 0:
-        return False, (r.stdout + r.stderr)[-500:]
+        return False, (r.stdout + r.stderr)[-500:], "test"
     lint = p.detect_lint_command(CWD)
     if lint is not None:
         lint_dir, lint_cmd = lint
         lr = subprocess.run(lint_cmd, check=False, cwd=lint_dir, capture_output=True, text=True)
         if lr.returncode != 0:
-            return False, (lr.stdout + lr.stderr)[-500:]
-    return True, ""
+            return False, (lr.stdout + lr.stderr)[-500:], "lint"
+    return True, "", None
 
 
 def _reject_done_for_suite(messages: list, step: int, suite_tail: str) -> None:

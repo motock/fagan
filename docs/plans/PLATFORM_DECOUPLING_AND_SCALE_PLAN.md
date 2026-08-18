@@ -1,9 +1,10 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **In execution (last updated 2026-08-15).** W3a and W1a are done;
-> W1b is done; W1c is scoped and ingested (plan `w1c-http-adapter`, 9 stories)
-> with its first story dispatched. See "Suggested sequencing" below for the
-> live state of each workstream. This doc exists to capture the target shape
+> Status: **In execution (last updated 2026-08-17).** W3a, W1a, W1b, and W1c
+> are done; W2 and W3b are scoped, ingested, and paused (W2:
+> `W2_CHAT_ENTRY_POINT_PLAN`, 6 stories; W3b: `w3b-dashboard-config-ui`,
+> 7 stories), queued behind the active overload-failure-triage plan. See
+> "Suggested sequencing" below for the live state of each workstream. This doc exists to capture the target shape
 > and the real scope of each move, so the workstreams can be sequenced
 > deliberately rather than discovered mid-implementation.
 >
@@ -392,8 +393,8 @@ The dependency order is fairly rigid:
    stories, PRs #263-#286.
 3. ~~**W1b — `Store` protocol** with `FileStore` as the only implementation.~~
    **DONE 2026-08-15** — 20/20 stories, PRs #315-#349.
-4. **W1c — HTTP adapter + event stream.** **SCOPED 2026-08-15** — plan
-   `w1c-http-adapter`, 9 stories (W1c-01 wires `PipelineService` into
+4. ~~**W1c — HTTP adapter + event stream.**~~ **DONE 2026-08-17** — 9/9
+   stories, PRs #350, #360-#366 (W1c-01 wires `PipelineService` into
    `app/dashboard.py`'s import graph; W1c-02..08 add POST routes per
    operation group, all delegating to the same singleton; W1c-09 adds a
    live SSE tail of a plan's `notifications.jsonl`). Extends the existing
@@ -402,10 +403,21 @@ The dependency order is fairly rigid:
    split-service topology remains open for W4 enterprise). No auth story
    included — write routes trust the same localhost-only bind
    (`DASHBOARD_HOST=127.0.0.1` default) the dashboard already relies on;
-   real auth is W4's job. Ingested and dispatching on the local (gemma4)
-   backend; W1c-01 is a prerequisite for W1c-02..09.
-5. **W2 — chat entry point** on the HTTP API.
-6. **W3b — dashboard reads the API**, config becomes editable.
+   real auth is W4's job.
+5. **W2 — chat entry point** on the HTTP API. **SCOPED 2026-08-17** — plan
+   `W2_CHAT_ENTRY_POINT_PLAN`, 6 stories (W2-01 adds a `chat` role to the
+   registry; W2-02 a `ChatService` adapter skeleton + `POST /api/chat`;
+   W2-03 plan-authoring tools + `POST /api/decompose`; W2-04 ops control
+   tools; W2-05 decision tools + `POST /api/plans/{plan}/decisions`; W2-06
+   a security gate, risk=high / security-engineer, with an acceptance
+   fixture asserting all tool calls route through the HTTP API and no
+   `PipelineService` backdoor). Ingested and paused, queued behind the
+   active overload-failure-triage plan.
+6. **W3b — dashboard reads the API**, config becomes editable. **SCOPED
+   2026-08-17** — plan `w3b-dashboard-config-ui`, 7 stories (A1/A2 finish
+   decoupling the dashboard from the in-process service; B1-B5 add the
+   config-write UI surface with a security-engineer gate on B5).
+   Ingested and paused, queued behind W2.
 7. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
    only where there's a real second deployment to validate against. Building it
    speculatively against an imagined tenant is exactly the over-engineering the
@@ -452,9 +464,11 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   sequence**: ~~W3a (effective-config+provenance view, no prerequisites)~~
   **DONE 2026-08-09, PRs #247-#258** → ~~W1a (extract `PipelineService`, the
   keystone)~~ **DONE 2026-08-12, PRs #263-#286** → ~~W1b (`Store` protocol)~~
-  **DONE 2026-08-15, PRs #315-#349** → **W1c (HTTP adapter — SCOPED
-  2026-08-15, plan `w1c-http-adapter`, 9 stories, dispatching)** → W2 (chat
-  entry point) → W3b (writable dashboard) → W4
+  **DONE 2026-08-15, PRs #315-#349** → ~~**W1c (HTTP adapter)**~~ **DONE
+  2026-08-17, PRs #350, #360-#366** → **W2 (chat entry point — SCOPED
+  2026-08-17, plan `W2_CHAT_ENTRY_POINT_PLAN`, 6 stories, ingested+paused)**
+  → **W3b (writable dashboard — SCOPED 2026-08-17, plan
+  `w3b-dashboard-config-ui`, 7 stories, ingested+paused)** → W4
   (multi-tenant), with B1 (sandboxing) and B5 (export the
   moat) picked up after the service seam exists rather than before it.
   Rationale: B1/B5 don't unblock anything else, while W1 is the single

@@ -123,6 +123,8 @@ def test_approve_proceeds_when_tracked_file_was_touched(plan_dir, tmp_path, monk
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", lambda wt, key, story: "https://gh/pr/1")
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story["status"] == "changes_requested"
@@ -153,6 +155,8 @@ def test_approve_downgraded_when_tracked_file_not_touched(plan_dir, tmp_path, mo
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == ["foo.py"]
@@ -164,11 +168,17 @@ def test_approve_downgraded_when_tracked_file_not_touched(plan_dir, tmp_path, mo
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     open_pr = Mock(return_value="https://gh/pr/1")
     monkeypatch.setattr(p, "_open_pr", open_pr)
+    post_comment = Mock()
+    monkeypatch.setattr(p, "_post_pr_comment", post_comment)
     result = p.review_story(plan_name, story_key)
-    # Downgraded to REQUEST_CHANGES, not a PR open.
+    # Downgraded to REQUEST_CHANGES, which now opens the PR and posts the
+    # reviewer's findings so a human can see what the gate flagged.
     assert result["verdict"] == "REQUEST_CHANGES"
     assert result["status"] == "changes_requested"
-    open_pr.assert_not_called()
+    open_pr.assert_called_once()
+    post_comment.assert_called_once()
+    args, _ = post_comment.call_args
+    assert "foo.py" in args[1]
     story = load_story(plan_dir, plan_name, story_key)
     assert story["status"] == "changes_requested"
     assert story["status"] != "pr_open"
@@ -190,11 +200,14 @@ def test_repeated_downgrade_parks_at_rework_cap(plan_dir, tmp_path, monkeypatch)
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     # Now drive repeated cycles where the reviewer keeps APPROVEing but the
     # tracked file foo.py is never touched (only unrelated WIP commits land).
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     # The first REQUEST_CHANGES already consumed one rework attempt. Drive
     # additional review cycles until the cap is reached and the story parks.
     # REWORK_MAX_ATTEMPTS is the cap for a plain (non-escalated, non-oracle)
@@ -206,6 +219,8 @@ def test_repeated_downgrade_parks_at_rework_cap(plan_dir, tmp_path, monkeypatch)
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == ["foo.py"]
@@ -214,6 +229,7 @@ def test_repeated_downgrade_parks_at_rework_cap(plan_dir, tmp_path, monkeypatch)
     # tests_passed, then review with an APPROVE that must be downgraded.
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     while story.get("status") != "parked":
         commit(worktree, f"unrelated_{attempts}.txt", "wip", msg="wip checkpoint")
         reset_to_tests_passed(plan_dir, plan_name, story_key)
@@ -239,6 +255,8 @@ def test_approve_proceeds_when_no_trackable_findings(plan_dir, tmp_path, monkeyp
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\nsome prose finding without a file path")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == []
@@ -277,6 +295,8 @@ def test_approve_proceeds_when_tracked_test_file_untouched_but_suite_passes(
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: test_foo.py: assertion fails")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == ["test_foo.py"]
@@ -316,6 +336,8 @@ def test_approve_still_downgraded_for_untouched_non_test_file_alongside_exempt_t
             "- Blocking: test_foo.py: assertion fails\n"
             "- Blocking: server.py: logic bug unrelated to the test failure"
         ))
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert set(story.get("last_review_findings", [])) == {"test_foo.py", "server.py"}
@@ -325,10 +347,15 @@ def test_approve_still_downgraded_for_untouched_non_test_file_alongside_exempt_t
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     open_pr = Mock(return_value="https://gh/pr/1")
     monkeypatch.setattr(p, "_open_pr", open_pr)
+    post_comment = Mock()
+    monkeypatch.setattr(p, "_post_pr_comment", post_comment)
     result = p.review_story(plan_name, story_key)
     assert result["verdict"] == "REQUEST_CHANGES"
     assert result["status"] == "changes_requested"
-    open_pr.assert_not_called()
+    open_pr.assert_called_once()
+    post_comment.assert_called_once()
+    args, _ = post_comment.call_args
+    assert "server.py" in args[1]
     story = load_story(plan_dir, plan_name, story_key)
     feedback = story.get("review_feedback", "")
     assert "server.py" in feedback
@@ -345,6 +372,8 @@ def test_approve_fail_open_on_git_diff_error(plan_dir, tmp_path, monkeypatch):
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == ["foo.py"]

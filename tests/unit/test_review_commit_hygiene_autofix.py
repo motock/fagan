@@ -30,6 +30,7 @@ registered entry point end-to-end.
 
 import json
 import subprocess
+from unittest.mock import Mock
 
 import pytest
 
@@ -128,17 +129,19 @@ def _head_subject(worktree):
 
 def _force_request_changes(monkeypatch, output):
     """Mock _run_reviewer to return a REQUEST_CHANGES verdict with the given
-    reviewer output, and _open_pr to fail loudly if ever called."""
+    reviewer output, and install recording mocks for _open_pr/_post_pr_comment.
+    Returns ``(open_pr, post_comment)`` so callers can assert on them."""
     def _fake_reviewer(wt, br, backend_name=None, plan_role_config=None,
                        acceptance=None, since_sha=None, risk=None):
         return output
 
     monkeypatch.setattr(p, "_run_reviewer", _fake_reviewer)
 
-    def _boom_pr(*a, **k):
-        raise AssertionError("PR must not be opened on REQUEST_CHANGES")
-
-    monkeypatch.setattr(p, "_open_pr", _boom_pr)
+    open_pr = Mock(return_value="https://gh/pr/1")
+    monkeypatch.setattr(p, "_open_pr", open_pr)
+    post_comment = Mock()
+    monkeypatch.setattr(p, "_post_pr_comment", post_comment)
+    return open_pr, post_comment
 
 
 def _disable_auto_escalation(monkeypatch):
@@ -202,7 +205,9 @@ def test_commit_message_only_finding_amends_head_commit(
         p, "_notify_user",
         lambda plan_name, msg: notify_calls.append((plan_name, msg)),
     )
-    _force_request_changes(monkeypatch, _COMMIT_HYGIENE_FEEDBACK)
+    open_pr, post_comment = _force_request_changes(
+        monkeypatch, _COMMIT_HYGIENE_FEEDBACK
+    )
 
     result = p.review_story("cha", "S1")
 
@@ -220,6 +225,9 @@ def test_commit_message_only_finding_amends_head_commit(
     assert on_disk.get("commit_hygiene_autofix_attempts") == 1
     # A notification was emitted.
     assert any("auto-amended" in msg for _, msg in notify_calls), notify_calls
+    # The autofix-success path must NOT open a PR or post a comment.
+    open_pr.assert_not_called()
+    post_comment.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

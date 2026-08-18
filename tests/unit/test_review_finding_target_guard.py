@@ -366,6 +366,8 @@ def test_approve_fail_open_on_git_diff_error(plan_dir, tmp_path, monkeypatch):
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == ["foo.py"]

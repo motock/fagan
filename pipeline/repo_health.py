@@ -8,8 +8,8 @@ probe that runs a detected lint command and reports failures.
 The implementation mirrors the style of ``pipeline.oracle_gate``.
 """
 
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 # Import the lint detection helper.  Import at module level to avoid circular
 # imports with ``pipeline.server``.

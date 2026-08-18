@@ -660,7 +660,7 @@ def oracle_result() -> tuple[bool, str]:
     return r.returncode == 0, (r.stdout + r.stderr)[-800:]
 
 
-def _full_suite_result() -> tuple[bool, str]:
+def _full_suite_result() -> tuple[bool, str, str | None]:
     """Run the FULL worktree suite (unscoped), for the L1 CI-fail-rework
     done-bar. Mirrors oracle_result's runner (detect_test_command + the heavy
     lock) but does NOT scope to ACCEPTANCE_PATHS - it runs the detected test
@@ -694,6 +694,34 @@ def _full_suite_result() -> tuple[bool, str]:
         if lr.returncode != 0:
             return False, (lr.stdout + lr.stderr)[-500:]
     return True, ""
+
+# New gate-aware wrapper
+
+def _full_suite_result_new() -> tuple[bool, str, str | None]:
+    """Gate-aware wrapper around the original _full_suite_result logic.
+    Returns (passed, tail, gate)."""
+    test_dir, test_cmd = p.detect_test_command(CWD)
+    if not test_cmd:
+        return True, "", None
+    argv = test_cmd
+    needs_heavy = bool(argv) and p._is_heavy(argv)
+    if needs_heavy:
+        with p._heavy_lock():
+            r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)  # noqa: PLW1510
+    else:
+        r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)  # noqa: PLW1510
+    if r.returncode != 0:
+        return False, (r.stdout + r.stderr)[-500:], "test"
+    lint = p.detect_lint_command(CWD)
+    if lint is not None:
+        lint_dir, lint_cmd = lint
+        lr = subprocess.run(lint_cmd, check=False, cwd=lint_dir, capture_output=True, text=True)
+        if lr.returncode != 0:
+            return False, (lr.stdout + lr.stderr)[-500:], "lint"
+    return True, "", None
+
+# Alias the original name to the new wrapper
+_full_suite_result = _full_suite_result_new
 
 
 # Full-suite rejections recorded by finish_if_green. The `done` handler keeps
@@ -737,7 +765,7 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
     if not ok:
         return False
     if REWORK_FULL_SUITE:
-        full_ok, full_tail = _full_suite_result()
+        full_ok, full_tail, gate = _full_suite_result()
         if not full_ok:
             _SUITE_REJECTIONS += 1
             if suite_reject_cap_reached():
@@ -752,14 +780,10 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
                 return False
             if messages is not None:
                 messages.append({"role": "user", "content": (
-                    "The acceptance oracle passes but the FULL test suite still "
-                    f"fails. The merge-gate CI will reject this on the same "
-                    f"failure:\n{full_tail}\n\nThe bug could be in the "
-                    "implementation you just changed, or in a test file - do "
-                    "not assume either side is correct. Re-read the failing "
-                    "test and the code it exercises, identify which one is "
-                    "actually wrong, and make ONE targeted fix there. Do NOT "
-                    "call done until `pytest` passes in full.")})
+    f"Your tests PASS, but the lint check (`ruff check .`) fails. The merge-gate CI lint gate will reject this on the same failure:\n{full_tail}\n\nMost lint errors are auto-fixable: run `ruff check . --fix`, then `ruff check .` to confirm it is clean.\n\nDo NOT edit implementation logic — this is a formatting/import/style error, not a correctness bug, and editing logic will not fix it. Do not call done until `ruff check .` passes in full."
+)}) if gate == 'lint' else messages.append({"role": "user", "content": (
+    f"The acceptance oracle passes but the full test suite still fails. The merge-gate CI will reject this on the same failure:\n{full_tail}\n\nThe bug could be in the implementation you just changed, or in a test file - do not assume either side is correct. Re-read the failing test and the code it exercises, identify which one is actually wrong, and make ONE targeted fix there. Do NOT call done until `pytest` passes in full."
+)})
             print(f"[step {step}] ORACLE GREEN but full suite still fails - "
                   f"rework done-bar not met; continuing.", flush=True)
             return False
@@ -1736,7 +1760,7 @@ def _main_impl() -> int:
                     # feed the failing excerpt back and reject. Cold-start
                     # dispatchs skip this (REWORK_FULL_SUITE unset).
                     if REWORK_FULL_SUITE:
-                        full_ok, full_tail = _full_suite_result()
+                        full_ok, full_tail, gate = _full_suite_result()
                         if not full_ok:
                             suite_rejections += 1
                             if suite_rejections >= REWORK_SUITE_REJECT_CAP:
@@ -1746,19 +1770,26 @@ def _main_impl() -> int:
                                       f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
                                       f"cannot green the full suite — parking", flush=True)
                                 return 2
-                            print(f"[step {step}] done rejected — full test suite "
-                                  f"still fails (rework done-bar); asking agent to "
-                                  f"fix the failure", flush=True)
-                            messages.append({"role": "user", "content": (
-                                "The acceptance oracle passes but the FULL test suite "
-                                f"still fails. The merge-gate CI will reject this on "
-                                f"the same failure:\n{full_tail}\n\nThe bug could be "
-                                "in the implementation you just changed, or in a test "
-                                "file - do not assume either side is correct. Re-read "
-                                "the failing test and the code it exercises, identify "
-                                "which one is actually wrong, and make ONE targeted "
-                                "fix there. Do NOT call done until `pytest` passes in "
-                                "full.")})
+                            if gate == 'lint':
+                                print(f"[step {step}] done rejected — lint gate still "
+                                      f"fails (rework done-bar); asking agent to fix the "
+                                      f"lint failure", flush=True)
+                                messages.append({"role": "user", "content": (
+                                    f"Your tests PASS, but the lint check (`ruff check .`) fails. The merge-gate CI lint gate will reject this on the same failure:\n{full_tail}\n\nMost lint errors are auto-fixable: run `ruff check . --fix`, then `ruff check .` to confirm it is clean.\n\nDo NOT edit implementation logic — this is a formatting/import/style error, not a correctness bug, and editing logic will not fix it. Do not call done until `ruff check .` passes in full.")})
+                            else:
+                                print(f"[step {step}] done rejected — full test suite "
+                                      f"still fails (rework done-bar); asking agent to "
+                                      f"fix the failure", flush=True)
+                                messages.append({"role": "user", "content": (
+                                    "The acceptance oracle passes but the FULL test suite "
+                                    f"still fails. The merge-gate CI will reject this on "
+                                    f"the same failure:\n{full_tail}\n\nThe bug could be "
+                                    "in the implementation you just changed, or in a test "
+                                    "file - do not assume either side is correct. Re-read "
+                                    "the failing test and the code it exercises, identify "
+                                    "which one is actually wrong, and make ONE targeted "
+                                    "fix there. Do NOT call done until `pytest` passes in "
+                                    "full.")})
                             break
                     if worktree_dirty():
                         auto_commit("feat: implement task (acceptance oracle green)")

@@ -3025,7 +3025,7 @@ def test_done_rejected_on_rework_round_when_full_suite_fails(tmp_path, monkeypat
     monkeypatch.setattr(la, "MAX_STEPS", 3)
     monkeypatch.setattr(la, "worktree_dirty", lambda: False)
     excerpt = "FAILED test_rate_limiter.py::test_time_backwards_no_refill - assert 9.0 == 3.0"
-    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt))
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt, "test"))
 
     fake, calls = _sequence_chat([("done", {"summary": "first attempt"})])
     monkeypatch.setattr(la, "chat", fake)
@@ -3062,7 +3062,7 @@ def test_done_rejected_message_does_not_presume_the_test_is_wrong(tmp_path, monk
     monkeypatch.setattr(la, "MAX_STEPS", 3)
     monkeypatch.setattr(la, "worktree_dirty", lambda: False)
     excerpt = "FAILED test_review_story_lock_guard.py::test_review_story_skips_when_lock_held"
-    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt))
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt, "test"))
 
     fake, calls = _sequence_chat([("done", {"summary": "first attempt"})])
     monkeypatch.setattr(la, "chat", fake)
@@ -3088,7 +3088,7 @@ def test_done_accepted_on_non_rework_round_without_consulting_suite(tmp_path, mo
 
     def _suite_spy():
         suite_calls.append(True)
-        return (False, "would-fail-but-uncalled")
+        return (False, "would-fail-but-uncalled", "test")
 
     monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
 
@@ -3107,7 +3107,7 @@ def test_done_accepted_on_rework_round_when_full_suite_green(tmp_path, monkeypat
     monkeypatch.setattr(la, "CWD", tmp_path)
     monkeypatch.setattr(la, "REWORK_FULL_SUITE", True)
     monkeypatch.setattr(la, "worktree_dirty", lambda: False)
-    monkeypatch.setattr(la, "_full_suite_result", lambda: (True, ""))
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (True, "", None))
 
     fake, _ = _sequence_chat([("done", {"summary": "fixed"})])
     monkeypatch.setattr(la, "chat", fake)
@@ -3135,7 +3135,7 @@ def test_dirty_tree_auto_accept_does_not_bypass_suite_gate(tmp_path, monkeypatch
     monkeypatch.setattr(la, "worktree_dirty", lambda: True)
     monkeypatch.setattr(la, "auto_wip_commit", lambda reason: None)
     monkeypatch.setattr(la, "_full_suite_result",
-                        lambda: (False, "assert 9.0 == 3.0 - test_rate_limiter.py:62"))
+                        lambda: (False, "assert 9.0 == 3.0 - test_rate_limiter.py:62", "test"))
 
     fake, _ = _sequence_chat([("done", {"summary": "bypass attempt"})])
     monkeypatch.setattr(la, "chat", fake)
@@ -3173,7 +3173,7 @@ def test_rework_suite_reject_cap_parks_instead_of_burning_the_budget(
 
     def _suite_spy():
         suite_calls.append(True)
-        return (False, "FAILED test_x.py::test_y - assert 1 == 2")
+        return (False, "FAILED test_x.py::test_y - assert 1 == 2", "test")
 
     monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
 
@@ -3206,7 +3206,7 @@ def test_rework_suite_reject_cap_is_driven_by_the_constant(tmp_path, monkeypatch
 
     def _suite_spy():
         suite_calls.append(True)
-        return (False, "FAILED test_x.py::test_y")
+        return (False, "FAILED test_x.py::test_y", "test")
 
     monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
 
@@ -3255,8 +3255,9 @@ def test_full_suite_result_runs_lint_after_tests_pass_and_fails_on_lint_error(
 
     monkeypatch.setattr(la.subprocess, "run", _run)
 
-    ok, tail = la._full_suite_result()
+    ok, tail, gate = la._full_suite_result()
     assert ok is False
+    assert gate == "lint"
     assert "F401" in tail
     assert calls == [["pytest", "-q"], ["ruff", "check", "."]]
 
@@ -3274,9 +3275,10 @@ def test_full_suite_result_tests_and_lint_both_pass(tmp_path, monkeypatch):
 
     monkeypatch.setattr(la.subprocess, "run", lambda *a, **k: _R())
 
-    ok, tail = la._full_suite_result()
+    ok, tail, gate = la._full_suite_result()
     assert ok is True
     assert tail == ""
+    assert gate is None
 
 
 def test_full_suite_result_skips_lint_when_not_detected(tmp_path, monkeypatch):
@@ -3300,8 +3302,9 @@ def test_full_suite_result_skips_lint_when_not_detected(tmp_path, monkeypatch):
 
     monkeypatch.setattr(la.subprocess, "run", _run)
 
-    ok, _tail = la._full_suite_result()
+    ok, _tail, gate = la._full_suite_result()
     assert ok is True
+    assert gate is None
     assert calls == [["pytest", "-q"]]  # lint subprocess never invoked
 
 
@@ -3328,8 +3331,9 @@ def test_full_suite_result_does_not_run_lint_when_tests_fail(tmp_path, monkeypat
 
     monkeypatch.setattr(la.subprocess, "run", _run)
 
-    ok, tail = la._full_suite_result()
+    ok, tail, gate = la._full_suite_result()
     assert ok is False
+    assert gate == "test"
     assert "test_y" in tail
     assert calls == [["pytest", "-q"]]  # lint never invoked
 

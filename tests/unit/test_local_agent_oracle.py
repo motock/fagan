@@ -851,7 +851,7 @@ def test_oracle_rework_suite_reject_cap_parks_instead_of_burning_the_budget(
 
     def _suite_spy():
         suite_calls.append(True)
-        return (False, "FAILED test_x.py::test_y - assert 1 == 2")
+        return (False, "FAILED test_x.py::test_y - assert 1 == 2", "test")
 
     monkeypatch.setattr(lao, "_full_suite_result", _suite_spy)
 
@@ -2536,7 +2536,7 @@ def _finish_if_green_spy(monkeypatch, *, oracle_ok, full_ok, full_tail=""):
 
     def _full():
         full_calls.append(True)
-        return (full_ok, full_tail)
+        return (full_ok, full_tail, None if full_ok else "test")
 
     monkeypatch.setattr(lao, "oracle_result", _oracle)
     monkeypatch.setattr(lao, "_full_suite_result", _full)
@@ -2651,7 +2651,7 @@ def test_finish_if_green_suite_rejections_reset_on_green(monkeypatch):
     assert lao.finish_if_green(2, messages=messages) is False
 
     # Now the suite goes green: finish_if_green terminates and clears the count.
-    monkeypatch.setattr(lao, "_full_suite_result", lambda: (True, ""))
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (True, "", None))
     assert lao.finish_if_green(3, messages=messages) is True
     assert lao.suite_reject_cap_reached() is False
 
@@ -2683,8 +2683,9 @@ def test_full_suite_result_runs_unscoped_test_cmd_and_captures_tail(monkeypatch,
     monkeypatch.setattr(lao.p, "_is_heavy", lambda argv: False)
     monkeypatch.setattr(lao.subprocess, "run", _run)
 
-    ok, tail = lao._full_suite_result()
+    ok, tail, gate = lao._full_suite_result()
     assert ok is False
+    assert gate == "test"
     # Unscoped: the acceptance paths were NOT appended (contrast oracle_result,
     # which appends ACCEPTANCE_PATHS to the pytest argv).
     assert recorded["argv"] == ["pytest", "-q"]
@@ -2699,9 +2700,10 @@ def test_full_suite_result_no_test_cmd_returns_pass(monkeypatch, tmp_path):
     monkeypatch.setattr(lao, "CWD", tmp_path)
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_oracle.py"])
     monkeypatch.setattr(lao.p, "detect_test_command", lambda cwd: (tmp_path, None))
-    ok, tail = lao._full_suite_result()
+    ok, tail, gate = lao._full_suite_result()
     assert ok is True
     assert tail == ""
+    assert gate is None
 
 
 # ---------------------------------------------------------------------------
@@ -2729,7 +2731,7 @@ def test_oracle_done_rejected_on_rework_round_when_full_suite_fails(
     monkeypatch.setattr(lao, "MAX_STEPS", 3)
     monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
     excerpt = "FAILED test_rate_limiter.py::test_time_moves_backward - assert True is False"
-    monkeypatch.setattr(lao, "_full_suite_result", lambda: (False, excerpt))
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (False, excerpt, "test"))
     monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
     monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
 
@@ -2748,6 +2750,46 @@ def test_oracle_done_rejected_on_rework_round_when_full_suite_fails(
     assert excerpt in last_user["content"], last_user["content"]
 
 
+def test_oracle_done_rejected_on_lint_gate_when_tests_pass(
+    tmp_path, monkeypatch, capsys
+):
+    """Sibling of the test-gate case above: oracle green, tests PASS, but the
+    lint gate fails. The `done` handler must reject with the LINT-gate message
+    (tell the agent to run `ruff check . --fix`, NOT to edit implementation
+    logic), mirroring finish_if_green's gate-aware branch. This is the exact
+    W1c-08 incident shape (tests green, ruff red) ported to the oracle done
+    bypass path."""
+    _init_git_repo(tmp_path)
+    monkeypatch.setattr(lao, "CWD", tmp_path)
+    monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
+    monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
+    monkeypatch.setattr(lao, "MAX_STEPS", 3)
+    monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
+    lint_excerpt = "test_foo.py:5:1: F401 'os' imported but unused"
+    monkeypatch.setattr(lao, "_full_suite_result",
+                        lambda: (False, lint_excerpt, "lint"))
+    monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
+
+    fake, calls = _sequence_chat([("done", {"summary": "all done"})])
+    monkeypatch.setattr(lao, "chat", fake)
+
+    rc = lao.main()
+    out = capsys.readouterr().out
+
+    assert rc != 0, f"done bypassed the lint gate; rc={rc}\n{out!r}"
+    assert "DONE (oracle green)" not in out, out
+    # Gate-aware: the lint-gate print fires, NOT the test-gate print.
+    assert "done rejected — lint gate still fails" in out, out
+    assert "full test suite still fails" not in out, out
+    # The lint excerpt was fed back, with the lint-specific guidance.
+    assert len(calls) >= 2
+    last_user = [m for m in calls[1] if m["role"] == "user"][-1]
+    assert lint_excerpt in last_user["content"], last_user["content"]
+    assert "ruff check . --fix" in last_user["content"], last_user["content"]
+    assert "Do NOT edit implementation logic" in last_user["content"], last_user["content"]
+
+
 def test_oracle_done_rejected_message_does_not_presume_the_test_is_wrong(
     tmp_path, monkeypatch,
 ):
@@ -2763,7 +2805,7 @@ def test_oracle_done_rejected_message_does_not_presume_the_test_is_wrong(
     monkeypatch.setattr(lao, "MAX_STEPS", 3)
     monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
     excerpt = "FAILED test_review_story_lock_guard.py::test_review_story_skips_when_lock_held"
-    monkeypatch.setattr(lao, "_full_suite_result", lambda: (False, excerpt))
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (False, excerpt, "test"))
     monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
     monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
 
@@ -2792,7 +2834,7 @@ def test_oracle_done_accepted_on_cold_start_without_consulting_suite(
     suite_calls: list = []
     monkeypatch.setattr(
         lao, "_full_suite_result",
-        lambda: suite_calls.append(True) or (False, "would-fail-but-uncalled"),
+        lambda: suite_calls.append(True) or (False, "would-fail-but-uncalled", "test"),
     )
     monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
     monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
@@ -2816,7 +2858,7 @@ def test_oracle_done_accepted_on_rework_round_when_full_suite_green(
     monkeypatch.setattr(lao, "ACCEPTANCE_PATHS", ["tests/test_acceptance.py"])
     monkeypatch.setattr(lao, "REWORK_FULL_SUITE", True)
     monkeypatch.setattr(lao, "oracle_result", lambda: (True, "(oracle green)"))
-    monkeypatch.setattr(lao, "_full_suite_result", lambda: (True, ""))
+    monkeypatch.setattr(lao, "_full_suite_result", lambda: (True, "", None))
     monkeypatch.setattr(lao, "worktree_dirty", lambda: False)
     monkeypatch.setattr(lao, "auto_commit", lambda reason: None)
 
@@ -2858,8 +2900,9 @@ def test_full_suite_result_runs_lint_after_tests_pass_and_fails_on_lint_error(
 
     monkeypatch.setattr(lao.subprocess, "run", _run)
 
-    ok, tail = lao._full_suite_result()
+    ok, tail, gate = lao._full_suite_result()
     assert ok is False
+    assert gate == "lint"
     assert "F401" in tail
     assert calls == [["pytest", "-q"], ["ruff", "check", "."]]
 
@@ -2878,9 +2921,10 @@ def test_full_suite_result_tests_and_lint_both_pass(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lao.subprocess, "run", lambda *a, **k: _R())
 
-    ok, tail = lao._full_suite_result()
+    ok, tail, gate = lao._full_suite_result()
     assert ok is True
     assert tail == ""
+    assert gate is None
 
 
 def test_full_suite_result_skips_lint_when_not_detected(tmp_path, monkeypatch):
@@ -2903,8 +2947,9 @@ def test_full_suite_result_skips_lint_when_not_detected(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lao.subprocess, "run", _run)
 
-    ok, _tail = lao._full_suite_result()
+    ok, _tail, gate = lao._full_suite_result()
     assert ok is True
+    assert gate is None
     assert calls == [["pytest", "-q"]]
 
 
@@ -2929,8 +2974,9 @@ def test_full_suite_result_does_not_run_lint_when_tests_fail(tmp_path, monkeypat
 
     monkeypatch.setattr(lao.subprocess, "run", _run)
 
-    ok, tail = lao._full_suite_result()
+    ok, tail, gate = lao._full_suite_result()
     assert ok is False
+    assert gate == "test"
     assert "test_y" in tail
     assert calls == [["pytest", "-q"]]
 

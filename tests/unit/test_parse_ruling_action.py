@@ -46,3 +46,17 @@ class TestParseRulingAction:
         assert result["rationale"] == "qux"
         assert result["notify_user"] is True
         assert result["action"] == "split_story"
+
+    def test_normalize_action_rejects_near_miss_unrecognized_value(self):
+        # overlord-policy.md line 111: "an absent, unparseable, or
+        # unrecognized ACTION value fails closed to park_for_human." That
+        # applies to ANY string outside the 4-item enum (escalate_model /
+        # split_story / repo_issue / park_for_human) - including one that
+        # merely resembles a valid action - not just to values with no
+        # resemblance at all. It must never be silently aliased to a
+        # *different* valid action.
+        assert _normalize_action("elevate_model") == "park_for_human"
+
+    def test_parse_ruling_rejects_near_miss_unrecognized_action(self):
+        text = "ACTION: elevate_model\nRULING: something"
+        assert _parse_ruling(text)["action"] == "park_for_human"

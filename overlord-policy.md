@@ -95,6 +95,23 @@ effect with no described idempotency key or "did I already do this?" check:
   to leave the story at its self-rated tier; this section only raises risk
   for the *absence* of one, it never lowers it.
 
+## Failure triage
+
+When a story reaches a terminal state (parked, failed, or a step‑cap streak at threshold) the pipeline asks the overlord what to do about it, supplying measured repo‑health findings and the story's attempt history in the prompt;
+
+All four ACTION values are defined:
+
+- `escalate_model` – the scope is right, the implementer is too weak; retry the same scope on a stronger rung of the existing ladder.
+- `split_story` – the scope is wrong for any implementer at this tier; the story needs to be broken up.
+- `repo_issue` – the failure is environmental, not the story's fault (a red lint baseline, a red suite at a clean baseline, a born‑broken acceptance oracle, CI unavailable). The overlord NEVER edits the repo; a detected repo issue becomes a normal pipeline story that goes through TDD, review and CI like anything else.
+- `park_for_human` – genuinely ambiguous; hold it.
+
+The overlord should choose the honest action even when the pipeline cannot execute it yet: `split_story` and `repo_issue` are currently recorded and then parked for a human, and a ruling that misrepresents the situation to fit what is implemented is worse than an honest one that parks;
+
+The phrase `fail closed` means that an absent, unparseable, or unrecognized ACTION value fails closed to `park_for_human`;
+
+Triage never overrides the park‑and‑ping tier: a story held for `risk: high` stays held regardless of the ruling.
+
 ## Output contract
 
 The overlord returns:
@@ -105,6 +122,7 @@ TIER: routine | notify-async | park-and-ping
 RISK: low | medium | high
 RATIONALE: <2-4 sentences: why this, what was rejected, what was protected>
 NOTIFY_USER: yes | no
+ACTION: elevate_model | split_story | repo_issue | park_for_human
 ```
 
 `NOTIFY_USER` is `yes` for `notify-async` and `park-and-ping`, `no` for routine.

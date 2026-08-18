@@ -289,6 +289,8 @@ def test_approve_proceeds_when_tracked_test_file_untouched_but_suite_passes(
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: test_foo.py: assertion fails")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == ["test_foo.py"]

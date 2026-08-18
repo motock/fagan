@@ -4,7 +4,6 @@ from pipeline.parsers import _normalize_action, _parse_ruling
 class TestParseRulingAction:
     def test_roundtrip_escalate_model(self):
         text = "ACTION: elevate_model\nRULING: something"
-        # Should roundtrip to known action
         assert _parse_ruling(text)["action"] == "escalate_model"
 
     def test_roundtrip_split_story(self):
@@ -28,6 +27,7 @@ class TestParseRulingAction:
 
     def test_invalid_action(self):
         text = "ACTION: delete_the_repo\nRULING: something"
+        assert _normalize_action("delete_the_repo") == "park_for_human"
         assert _parse_ruling(text)["action"] == "park_for_human"
 
     def test_empty_action_value(self):
@@ -44,6 +44,6 @@ class TestParseRulingAction:
         assert result["tier"] == "bar"
         assert result["risk"] == "baz"
         assert result["rationale"] == "qux"
-        assert result["notify_user"] == "yes"  # note: original code didn't include notify_user in dict
-        # Actually _parse_ruling doesn't return notify_user; test to ensure no error
+        # notify_user is not returned by _parse_ruling; test that it is not present
+        assert "notify_user" not in result
         assert result["action"] == "split_story"

@@ -10,7 +10,6 @@ Run with:  uvicorn dashboard:app --reload
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -18,8 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
@@ -31,6 +29,11 @@ class SavePlanRequest(BaseModel):
 class IngestPlanRequest(BaseModel):
     only_epics: list[str] | None = None
     overwrite: bool = False
+
+class DecisionRequest(BaseModel):
+    question: str
+    options: list[str]
+    context: str = ""
 
 # config_provenance is a read-only leaf: its only non-stdlib import is
 # app.role_registry (see both modules' docstrings), so pulling it in does
@@ -1113,6 +1116,16 @@ def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
         )
     return result
 
+
+@app.post("/api/plans/{plan_name}/stories/{story_key}/decisions")
+def request_decision_route(plan_name: str, story_key: str, body: DecisionRequest) -> dict[str, Any]:
+    """Delegates to _service.request_decision(plan_name, story_key, question, options, context)."""
+    if not body.options:
+        raise HTTPException(status_code=400, detail="options must not be empty")
+    result = _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result
 
 @app.post("/api/plans/{plan_name}/save")
 def save_plan(plan_name: str, request: SavePlanRequest):

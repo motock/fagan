@@ -331,12 +331,15 @@ def test_default_timeout_is_600():
 
 def test_env_read_is_first_statement():
     # The gate must be read at CALL time as the first statement of the
-    # function body - not hoisted into a module-level constant.
+    # function body - not hoisted into a module-level constant. The function
+    # has a real docstring as its first statement, so the env read is the
+    # first statement *after* the docstring.
     tree = ast.parse(inspect.getsource(repo_health.suite_baseline_finding))
     func = tree.body[0]
     assert isinstance(func, ast.FunctionDef)
-    first = func.body[0]
-    assert isinstance(first, ast.Assign), "first statement must be the env read"
+    assert isinstance(func.body[0], ast.Expr), "first statement must be the docstring"
+    first = func.body[1]
+    assert isinstance(first, ast.Assign), "env read must be the first executable statement"
     call = first.value
     assert isinstance(call, ast.Call)
     func_name = call.func

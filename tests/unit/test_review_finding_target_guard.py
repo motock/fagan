@@ -200,11 +200,14 @@ def test_repeated_downgrade_parks_at_rework_cap(plan_dir, tmp_path, monkeypatch)
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     # Now drive repeated cycles where the reviewer keeps APPROVEing but the
     # tracked file foo.py is never touched (only unrelated WIP commits land).
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     # The first REQUEST_CHANGES already consumed one rework attempt. Drive
     # additional review cycles until the cap is reached and the story parks.
     # REWORK_MAX_ATTEMPTS is the cap for a plain (non-escalated, non-oracle)
@@ -216,6 +219,8 @@ def test_repeated_downgrade_parks_at_rework_cap(plan_dir, tmp_path, monkeypatch)
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == ["foo.py"]
@@ -224,6 +229,7 @@ def test_repeated_downgrade_parks_at_rework_cap(plan_dir, tmp_path, monkeypatch)
     # tests_passed, then review with an APPROVE that must be downgraded.
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     while story.get("status") != "parked":
         commit(worktree, f"unrelated_{attempts}.txt", "wip", msg="wip checkpoint")
         reset_to_tests_passed(plan_dir, plan_name, story_key)

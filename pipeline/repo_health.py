@@ -137,7 +137,7 @@ def oracle_finding(story, checkout) -> dict | None:
     """
     try:
         result = validate_acceptance_fixtures(story, Path(checkout))
-    except Exception as exc:  # defensive guard
+    except Exception as exc:  # defensive guard  # noqa: BLE001
         return {
             "kind": "oracle_probe_failed",
             "detail": f"{type(exc).__name__}: {exc}",

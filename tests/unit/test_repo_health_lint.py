@@ -3,6 +3,7 @@ import subprocess
 # Import the module under test
 from pipeline import repo_health
 
+
 # Helper to create a mock subprocess.run result
 class MockCompletedProcess:
     def __init__(self, returncode=0, stdout="", stderr=""):

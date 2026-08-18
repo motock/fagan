@@ -122,7 +122,8 @@ TIER: routine | notify-async | park-and-ping
 RISK: low | medium | high
 RATIONALE: <2-4 sentences: why this, what was rejected, what was protected>
 NOTIFY_USER: yes | no
-ACTION: elevate_model | split_story | repo_issue | park_for_human
+ACTION: escalate_model | split_story | repo_issue | park_for_human
 ```
+ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human.
 
 `NOTIFY_USER` is `yes` for `notify-async` and `park-and-ping`, `no` for routine.

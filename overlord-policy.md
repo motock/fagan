@@ -97,7 +97,7 @@ effect with no described idempotency key or "did I already do this?" check:
 
 ## Failure triage
 
-When a story reaches a terminal state (parked, failed, or a step‑cap streak at threshold) the pipeline asks the overlord what to do about it, supplying measured repo‑health findings and the story's attempt history in the prompt;
+Once wired, the pipeline will ask the overlord what to do about it, supplying measured repo‑health findings and the story's attempt history in the prompt;
 
 All four ACTION values are defined:
 

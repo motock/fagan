@@ -32,6 +32,7 @@ import json
 import subprocess
 
 import pytest
+from unittest.mock import Mock
 
 import pipeline.server as p
 from pipeline import concurrency as pcon

@@ -155,6 +155,8 @@ def test_approve_downgraded_when_tracked_file_not_touched(plan_dir, tmp_path, mo
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\n- Blocking: foo.py: needs guard")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == ["foo.py"]
@@ -166,11 +168,17 @@ def test_approve_downgraded_when_tracked_file_not_touched(plan_dir, tmp_path, mo
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     open_pr = Mock(return_value="https://gh/pr/1")
     monkeypatch.setattr(p, "_open_pr", open_pr)
+    post_comment = Mock()
+    monkeypatch.setattr(p, "_post_pr_comment", post_comment)
     result = p.review_story(plan_name, story_key)
-    # Downgraded to REQUEST_CHANGES, not a PR open.
+    # Downgraded to REQUEST_CHANGES, which now opens the PR and posts the
+    # reviewer's findings so a human can see what the gate flagged.
     assert result["verdict"] == "REQUEST_CHANGES"
     assert result["status"] == "changes_requested"
-    open_pr.assert_not_called()
+    open_pr.assert_called_once()
+    post_comment.assert_called_once()
+    args, _ = post_comment.call_args
+    assert "foo.py" in args[1]
     story = load_story(plan_dir, plan_name, story_key)
     assert story["status"] == "changes_requested"
     assert story["status"] != "pr_open"

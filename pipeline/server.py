@@ -295,8 +295,10 @@ from .planner import (  # noqa: F401
 # many functions). _merge_pr reads REPO_ROOT via a lazy import from the
 # server.
 from .pr import (
+    _format_review_comment,
     _merge_pr,
     _open_pr,
+    _post_pr_comment,
 )
 
 # Rebase + conflict auto-resolution. _rebase_onto_master reads REPO_ROOT /
@@ -4081,6 +4083,12 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                         f"{story_key} final rework attempt ({attempts}/{rework_cap}) escalating to {provider}/{model}.",
                     )
             story["status"] = "changes_requested"
+            if worktree and os.path.isdir(worktree):
+                try:
+                    story["pr_url"] = _open_pr(worktree, story_key, story)
+                    _post_pr_comment(worktree, _format_review_comment(reviewer_output, attempts))
+                except (subprocess.CalledProcessError, OSError) as exc:
+                    _notify_user(plan_name, f"{story_key}: could not open PR / post review comment ({exc.__class__.__name__}); findings remain in review_feedback for the rework agent.")
     _atomic_write_json(manifest_path, manifest)
     return {
         "ok": True,

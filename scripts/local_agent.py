@@ -839,25 +839,17 @@ def _full_suite_result() -> tuple[bool, str, str | None]:
 
 
 def _reject_done_for_suite(messages: list, step: int, suite_tail: str, gate: str | None) -> None:
-    """L1: feed a full-suite failure back as a user turn and announce the
-    rejection. Used at both `done`-rejection sites (clean tree, and the
-    dirty-tree auto-accept escape) so the raised rework done-bar holds and
-    the agent can't dodge it by interleaving dirty/clean done calls. The
-    caller increments `suite_rejections` and `break`s out of the tool-call
-    loop so the next step re-enters with this fed-back excerpt."""
-    print(f"[step {step}] done rejected — full test suite still fails "
-          f"(rework done-bar); asking agent to fix the failure", flush=True)
-    messages.append({"role": "user", "content": (
-        "The full test suite still fails. The merge-gate CI will reject "
-        f"this on the same failure:\n{suite_tail}\n\nThe bug could be in "
-        "the implementation you just changed, or in a test file - do not "
-        "assume either side is correct. Re-read the failing test and the "
-        "code it exercises, identify which one is actually wrong, and make "
-        "ONE targeted fix there. Do NOT call done until `pytest` passes in "
-        "full.")})
-
-
-# Consecutive syntax-rejection count per path, so a model that resubmits the
+    """L1: feed a full-suite failure back as a user turn and announce the rejection. Used at both `done`-rejection sites (clean tree, and the dirty-tree auto-accept escape) so the raised rework done-bar holds and the agent can't dodge it by interleaving dirty/clean done calls. The caller increments `suite_rejections` and `break`s out of the tool-call loop so the next step re-enters with this fed-back excerpt."""
+    if gate == 'lint':
+        print(f"[step {step}] done rejected — lint gate still fails (rework done-bar); asking agent to fix the lint failure", flush=True)
+        messages.append({"role": "user", "content": (
+            "Your tests PASS, but the lint check (`ruff check .`) fails. The merge-gate CI lint gate will reject this on the same failure:\n{suite_tail}\n\nMost lint errors are auto-fixable: run `ruff check . --fix`, then `ruff check .` to confirm it is clean.\n\nDo NOT edit implementation logic — this is a formatting/import/style error, not a correctness bug, and editing logic will not fix it. Do not call done until `ruff check .` passes in full."
+        )})
+    else:
+        print(f"[step {step}] done rejected — full test suite still fails (rework done-bar); asking agent to fix the failure", flush=True)
+        messages.append({"role": "user", "content": (
+            "The full test suite still fails. The merge-gate CI will reject this on the same failure:\n{suite_tail}\n\nThe bug could be in the implementation you just changed, or in a test file - do not assume either side is correct. Re-read the failing test and the code it exercises, identify which one is actually wrong, and make ONE targeted fix there. Do NOT call done until `pytest` passes in full."
+        )})
 # same broken content can be escalated instead of silently retrying forever
 # (observed: gpt-oss retried near-identical broken content 4x until the
 # repetition guard parked the run with no file ever landing). Resets on any
@@ -1867,7 +1859,7 @@ def _main_impl() -> int:
                         # (so the next attempt starts clean) and rejects instead
                         # of auto-accepting. Bounded by MAX_STEPS.
                         if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
-                            suite_ok, suite_tail = _full_suite_result()
+                            suite_ok, suite_tail, gate = _full_suite_result()
                             if not suite_ok:
                                 suite_rejections += 1
                                 auto_wip_commit("commit enforcement")
@@ -1876,7 +1868,7 @@ def _main_impl() -> int:
                                           f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
                                           f"cannot green the full suite — parking", flush=True)
                                     return 2
-                                _reject_done_for_suite(messages, step, suite_tail)
+                                _reject_done_for_suite(messages, step, suite_tail, gate)
                                 _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                                 break
                         auto_wip_commit("commit enforcement")
@@ -1896,7 +1888,7 @@ def _main_impl() -> int:
                 # done so the agent fixes its own broken assertion (or the step
                 # cap binds). Non-rework dispatches skip this gate entirely.
                 if REWORK_FULL_SUITE or FULL_SUITE_DONE_BAR:
-                    suite_ok, suite_tail = _full_suite_result()
+                    suite_ok, suite_tail, gate = _full_suite_result()
                     if not suite_ok:
                         suite_rejections += 1
                         if suite_rejections >= REWORK_SUITE_REJECT_CAP:
@@ -1906,7 +1898,7 @@ def _main_impl() -> int:
                                   f"({REWORK_SUITE_REJECT_CAP}) reached; agent "
                                   f"cannot green the full suite — parking", flush=True)
                             return 2
-                        _reject_done_for_suite(messages, step, suite_tail)
+                        _reject_done_for_suite(messages, step, suite_tail, gate)
                         _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                         break
                 print(f"[step {step}] DONE: {args.get('summary', '')}", flush=True)

@@ -765,7 +765,7 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
     if not ok:
         return False
     if REWORK_FULL_SUITE:
-        full_ok, full_tail = _full_suite_result()
+        full_ok, full_tail, gate = _full_suite_result()
         if not full_ok:
             _SUITE_REJECTIONS += 1
             if suite_reject_cap_reached():

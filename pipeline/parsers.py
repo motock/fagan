@@ -40,7 +40,11 @@ def _normalize_action(raw) -> str:
     if not isinstance(raw, str):
         return DEFAULT_TRIAGE_ACTION
     cleaned = raw.strip().lower()
-    return cleaned if cleaned in TRIAGE_ACTIONS else DEFAULT_TRIAGE_ACTION
+    if cleaned in TRIAGE_ACTIONS:
+        return cleaned
+    if cleaned == "elevate_model":
+        return "escalate_model"
+    return DEFAULT_TRIAGE_ACTION
 
 
 def _parse_ruling(text: str) -> dict[str, Any]:

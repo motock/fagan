@@ -7,7 +7,9 @@ local_agent.py) and the str_replace-aware per-target guard (Fix B).
 External boundaries (Ollama HTTP, pytest) are not exercised — these cover
 the pure-logic helpers.
 """
+import ast
 import importlib.util
+import inspect
 import json
 import os
 import subprocess
@@ -3482,3 +3484,59 @@ def test_oracle_str_replace_constant_only_drop_names_only_the_constant(tmp_path,
     assert "OLD_TIMEOUT" in result
     # The surviving def is not reported as removed.
     assert "keeper" not in result
+
+
+# ---------------------------------------------------------------------------
+# Regression: the original _full_suite_result (code review, agent/cc446d9f...
+# branch, Blocking #3) was left in the file as dead code - its signature was
+# edited to claim `-> tuple[bool, str, str | None]` but its body still
+# returns 2-tuples (`return True, ""` / `return False, tail`) - and it is
+# permanently shadowed by `_full_suite_result = _full_suite_result_new`
+# below it. Every runtime call to `lao._full_suite_result(...)` resolves
+# through that alias to the correctly-reimplemented `_full_suite_result_new`,
+# so calling the public name cannot surface this bug - it must be checked
+# statically against the module source, matching how the review found it.
+# ---------------------------------------------------------------------------
+
+
+def test_full_suite_result_return_statements_match_its_3_tuple_annotation():
+    """The FunctionDef literally named `_full_suite_result` in the module
+    source must be the sole definition of that name, and every tuple-valued
+    `return` in its body must have 3 elements, matching its
+    `-> tuple[bool, str, str | None]` annotation. Today this finds the
+    original (dead, shadowed) definition, whose body still returns 2-tuples
+    - a lying signature the review flagged."""
+    source = inspect.getsource(lao)
+    tree = ast.parse(source)
+    matches = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_full_suite_result"
+    ]
+    assert len(matches) == 1, (
+        f"expected exactly one `def _full_suite_result`, found {len(matches)}"
+    )
+    func = matches[0]
+    tuple_returns = [
+        stmt.value
+        for stmt in ast.walk(func)
+        if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Tuple)
+    ]
+    assert tuple_returns, "expected at least one tuple-valued return statement"
+    for tup in tuple_returns:
+        assert len(tup.elts) == 3, (
+            f"a `return` statement in _full_suite_result has {len(tup.elts)} "
+            "elements but the function is annotated "
+            "-> tuple[bool, str, str | None]"
+        )
+
+
+def test_no_orphaned_full_suite_result_new_symbol():
+    """_full_suite_result_new must not exist as a leftover duplicate name -
+    the review flagged it (plus the `_full_suite_result = _full_suite_result_new`
+    alias line) as dead-code debris that should be deleted/renamed away, not
+    left shadowing the real `_full_suite_result` name."""
+    assert not hasattr(lao, "_full_suite_result_new"), (
+        "_full_suite_result_new should be renamed to _full_suite_result, "
+        "not left as an orphaned duplicate definition"
+    )

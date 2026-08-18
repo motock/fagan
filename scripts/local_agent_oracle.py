@@ -661,43 +661,6 @@ def oracle_result() -> tuple[bool, str]:
 
 
 def _full_suite_result() -> tuple[bool, str, str | None]:
-    """Run the FULL worktree suite (unscoped), for the L1 CI-fail-rework
-    done-bar. Mirrors oracle_result's runner (detect_test_command + the heavy
-    lock) but does NOT scope to ACCEPTANCE_PATHS - it runs the detected test
-    command verbatim, exactly what the merge gate's _ci_status_stub runs
-    (tests/benchmark/harness.py:623) so the done-bar matches the gate that
-    tripped the rework. Returns (passed, tail[-500:]); the tail feeds back into
-    the agent loop on a failure so the model sees the broken assertion. No
-    detectable test command -> (True, '') (nothing to fail, mirrors the gate's
-    no-test-cmd -> pass).
-
-    Mode 40: once tests pass, also run detect_lint_command (if the repo has
-    one) and fold a lint failure into the same (False, tail) result. Kept in
-    sync with scripts/local_agent.py:_full_suite_result.
-    """
-    test_dir, test_cmd = p.detect_test_command(CWD)
-    if not test_cmd:
-        return True, ""
-    argv = test_cmd
-    needs_heavy = bool(argv) and p._is_heavy(argv)
-    if needs_heavy:
-        with p._heavy_lock():
-            r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see test_local_agent_oracle.py)
-    else:
-        r = subprocess.run(argv, cwd=test_dir, capture_output=True, text=True)  # noqa: PLW1510 (check=False would break test fakes with fixed signatures; see test_local_agent_oracle.py)
-    if r.returncode != 0:
-        return False, (r.stdout + r.stderr)[-500:]
-    lint = p.detect_lint_command(CWD)
-    if lint is not None:
-        lint_dir, lint_cmd = lint
-        lr = subprocess.run(lint_cmd, check=False, cwd=lint_dir, capture_output=True, text=True)
-        if lr.returncode != 0:
-            return False, (lr.stdout + lr.stderr)[-500:]
-    return True, ""
-
-# New gate-aware wrapper
-
-def _full_suite_result_new() -> tuple[bool, str, str | None]:
     """Gate-aware wrapper around the original _full_suite_result logic.
     Returns (passed, tail, gate)."""
     test_dir, test_cmd = p.detect_test_command(CWD)
@@ -720,8 +683,7 @@ def _full_suite_result_new() -> tuple[bool, str, str | None]:
             return False, (lr.stdout + lr.stderr)[-500:], "lint"
     return True, "", None
 
-# Alias the original name to the new wrapper
-_full_suite_result = _full_suite_result_new
+_full_suite_result = _full_suite_result  # noqa: PLW0127
 
 
 # Full-suite rejections recorded by finish_if_green. The `done` handler keeps

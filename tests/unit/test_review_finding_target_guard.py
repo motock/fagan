@@ -249,6 +249,8 @@ def test_approve_proceeds_when_no_trackable_findings(plan_dir, tmp_path, monkeyp
     monkeypatch.setattr(
         p, "_run_reviewer",
         lambda *a, **k: "VERDICT: REQUEST_CHANGES\nsome prose finding without a file path")
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert story.get("last_review_findings") == []

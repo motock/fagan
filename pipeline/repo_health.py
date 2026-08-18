@@ -5,7 +5,8 @@ The contract is that all functions are fail‑safe: they return a finding dict o
 must never be asked of a model (C7).  This module implements a lint baseline
 probe that runs a detected lint command and reports failures.
 
-The implementation mirrors the style of ``pipeline.oracle_gate``.
+Additionally this module provides oracle and CI finding helpers.
+
 """
 
 import os
@@ -14,7 +15,10 @@ from pathlib import Path
 
 from .build_detect import detect_lint_command, detect_test_command
 
-__all__ = ["lint_baseline_finding", "suite_baseline_finding"]
+# Import oracle gate at module level
+from .oracle_gate import validate_acceptance_fixtures
+
+__all__ = ["ci_finding", "lint_baseline_finding", "oracle_finding", "suite_baseline_finding"]
 
 
 def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | None:
@@ -69,10 +73,6 @@ def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | 
 
 
 def suite_baseline_finding(checkout: str | Path, timeout_s: int = 600) -> dict | None:
-    gate = os.environ.get("PIPELINE_TRIAGE_SUITE_PROBE", "")
-    gate = gate.strip().lower()
-    if gate not in ("1", "true", "yes", "on"):
-        return None
     """Run a suite baseline probe on *checkout*.
 
     The full test suite in this repository takes roughly eight minutes.  The
@@ -80,13 +80,10 @@ def suite_baseline_finding(checkout: str | Path, timeout_s: int = 600) -> dict |
     would stall every tick for every plan.  Therefore this probe is opt-in
     via the ``PIPELINE_TRIAGE_SUITE_PROBE`` environment variable.
     """
-    suite_baseline_finding.__doc__ = """Run a suite baseline probe on *checkout*.
-
-    The full test suite in this repository takes roughly eight minutes.  The
-    triage sweep runs inside the scheduler tick, and an always‑on suite probe
-    would stall every tick for every plan.  Therefore this probe is opt-in
-    via the ``PIPELINE_TRIAGE_SUITE_PROBE`` environment variable.
-    """
+    gate = os.environ.get("PIPELINE_TRIAGE_SUITE_PROBE", "")
+    gate = gate.strip().lower()
+    if gate not in ("1", "true", "yes", "on"):
+        return None
     try:
         test_dir, test_cmd = detect_test_command(Path(checkout))
         result = subprocess.run(
@@ -112,3 +109,77 @@ def suite_baseline_finding(checkout: str | Path, timeout_s: int = 600) -> dict |
             "detail": f"{type(exc).__name__}: {exc}",
             "command": "",
         }
+
+
+def oracle_finding(story, checkout) -> dict | None:
+    """Return an oracle finding dict or None.
+
+    Parameters
+    ----------
+    story
+        The story dict passed to :func:`pipeline.oracle_gate.validate_acceptance_fixtures`.
+    checkout
+        Path to the repository checkout.
+
+    Returns
+    -------
+    dict | None
+        ``None`` if the story has no acceptance fixtures, fails correctly, or the
+        state is unrecognised.  Otherwise a finding dict with keys ``kind``,
+        ``detail`` and ``paths``.
+    """
+    try:
+        result = validate_acceptance_fixtures(story, Path(checkout))
+    except Exception as exc:  # defensive guard  # noqa: BLE001
+        return {
+            "kind": "oracle_probe_failed",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "paths": [],
+        }
+    state = result.get("state")
+    if state in ("none", "fails_correctly"):
+        return None
+    if state == "errors":
+        return {
+            "kind": "oracle_broken",
+            "detail": result.get("detail", "")[-800:],
+            "paths": result.get("paths", []),
+        }
+    if state == "passes":
+        return {
+            "kind": "oracle_already_passes",
+            "detail": result.get("detail", ""),
+            "paths": result.get("paths", []),
+        }
+    if state == "empty":
+        return {
+            "kind": "oracle_empty",
+            "detail": result.get("detail", ""),
+            "paths": result.get("paths", []),
+        }
+    return None
+
+
+def ci_finding(ci_status) -> dict | None:
+    """Pure CI finding helper.
+
+    This function is deliberately free of any imports that pull in
+    :mod:`pipeline.ci` or :mod:`pipeline.server` to avoid circular imports.
+    It operates purely on the ``ci_status`` dict supplied by the caller.
+    """
+    if not isinstance(ci_status, dict):
+        return None
+    state = ci_status.get("state")
+    if state in ("pass", "pending"):
+        return None
+    if state == "none":
+        return {
+            "kind": "ci_unavailable",
+            "detail": str(ci_status.get("error", ""))[:800],
+        }
+    if state == "fail":
+        return {
+            "kind": "ci_red",
+            "detail": str(ci_status.get("error", ""))[:800],
+        }
+    return None

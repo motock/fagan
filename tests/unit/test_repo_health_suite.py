@@ -43,6 +43,58 @@ def _enable_flag(monkeypatch, value="1"):
 
 
 # ---------------------------------------------------------------------------
+# Regression: the opt-in explanation must be a *real* docstring, not an
+# expression statement discarded after the early return whose text only
+# reaches __doc__ via a runtime `.__doc__` mutation gated behind the flag
+# (code review, agent/cc446d9f... branch, Blocking #2). These two tests are
+# placed before every other test in this file (and use ast/reload rather than
+# calling the function) so neither can pass merely because an earlier test
+# already flipped the flag on and left the `.__doc__` mutation behind - the
+# exact cross-test-pollution failure mode the review identified.
+# ---------------------------------------------------------------------------
+
+
+def test_docstring_is_the_functions_actual_first_statement():
+    """ast.get_docstring uses the same mechanism Python itself uses to
+    populate __doc__ at function-definition time. It must find the opt-in
+    explanation as the function's real first statement - independent of
+    whether the function has ever been called - not None because the real
+    text is buried after the early-return guard as a discarded expression."""
+    tree = ast.parse(inspect.getsource(repo_health.suite_baseline_finding))
+    func = tree.body[0]
+    assert isinstance(func, ast.FunctionDef)
+    doc = ast.get_docstring(func)
+    assert doc is not None, (
+        "suite_baseline_finding has no real docstring - the opt-in "
+        "explanation is not the function's first statement"
+    )
+    lowered = doc.lower()
+    assert "opt-in" in lowered
+    assert "eight minutes" in lowered
+    assert "scheduler tick" in lowered
+
+
+def test_calling_function_does_not_mutate_its_own_docstring(monkeypatch):
+    """A real docstring never needs a manual __doc__ assignment. Capture
+    __doc__ before and after a call with the probe flag enabled - they must
+    be identical. This runs first in the file (before any other test has had
+    a chance to enable the flag and trigger the mutation) so doc_before is
+    genuinely the pristine, never-called value."""
+    doc_before = repo_health.suite_baseline_finding.__doc__
+    _enable_flag(monkeypatch, "1")
+    monkeypatch.setattr(repo_health, "detect_test_command", lambda c: (Path("/td"), ["pytest"]))
+    monkeypatch.setattr(
+        repo_health.subprocess, "run", lambda *a, **k: MockCompletedProcess(returncode=0)
+    )
+    repo_health.suite_baseline_finding("/c")
+    doc_after = repo_health.suite_baseline_finding.__doc__
+    assert doc_before == doc_after, (
+        "suite_baseline_finding.__doc__ changed as a side effect of calling "
+        "the function - the docstring must be static, not runtime-mutated"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Gate / opt-in behaviour
 # ---------------------------------------------------------------------------
 
@@ -279,12 +331,15 @@ def test_default_timeout_is_600():
 
 def test_env_read_is_first_statement():
     # The gate must be read at CALL time as the first statement of the
-    # function body - not hoisted into a module-level constant.
+    # function body - not hoisted into a module-level constant. The function
+    # has a real docstring as its first statement, so the env read is the
+    # first statement *after* the docstring.
     tree = ast.parse(inspect.getsource(repo_health.suite_baseline_finding))
     func = tree.body[0]
     assert isinstance(func, ast.FunctionDef)
-    first = func.body[0]
-    assert isinstance(first, ast.Assign), "first statement must be the env read"
+    assert isinstance(func.body[0], ast.Expr), "first statement must be the docstring"
+    first = func.body[1]
+    assert isinstance(first, ast.Assign), "env read must be the first executable statement"
     call = first.value
     assert isinstance(call, ast.Call)
     func_name = call.func

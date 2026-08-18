@@ -31,11 +31,23 @@ def _extract_json_block(text: str) -> str:
     m = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
     return m.group(1).strip() if m else stripped
 
+TRIAGE_ACTIONS = frozenset({"escalate_model", "split_story", "repo_issue", "park_for_human"})
+# Default action when parsing fails: park_for_human
+DEFAULT_TRIAGE_ACTION = "park_for_human"
+
+def _normalize_action(raw) -> str:
+    """Normalize raw ACTION value to a known triage action."""
+    if not isinstance(raw, str):
+        return DEFAULT_TRIAGE_ACTION
+    cleaned = raw.strip().lower()
+    return cleaned if cleaned in TRIAGE_ACTIONS else DEFAULT_TRIAGE_ACTION
+
+
 def _parse_ruling(text: str) -> dict[str, Any]:
     """Parse the overlord's output contract into a structured ruling."""
     fields: dict[str, str] = {}
     for line in text.splitlines():
-        m = re.match(r"\s*(RULING|TIER|RISK|RATIONALE|NOTIFY_USER)\s*:\s*(.*)", line)
+        m = re.match(r"\s*(RULING|TIER|RISK|RATIONALE|NOTIFY_USER|ACTION)\s*:\s*(.*)", line)
         if m:
             fields[m.group(1)] = m.group(2).strip()
     return {
@@ -43,7 +55,7 @@ def _parse_ruling(text: str) -> dict[str, Any]:
         "tier": fields.get("TIER", "").lower(),
         "risk": fields.get("RISK", "").lower(),
         "rationale": fields.get("RATIONALE", ""),
-        "notify_user": fields.get("NOTIFY_USER", "no").lower() in ("yes", "true"),
+        "action": _normalize_action(fields.get("ACTION", "")),
     }
 
 

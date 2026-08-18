@@ -1,7 +1,7 @@
 import subprocess
 
 # Import the module under test
-import pipeline.repo_health as repo_health
+from pipeline import repo_health
 
 # Helper to create a mock subprocess.run result
 class MockCompletedProcess:

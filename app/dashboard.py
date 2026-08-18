@@ -1212,5 +1212,5 @@ def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str
 # 
 #     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-    # Mount static files for the dashboard UI.
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# Mount static files for the dashboard UI.
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

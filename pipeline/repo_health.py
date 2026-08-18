@@ -18,7 +18,7 @@ from .build_detect import detect_lint_command, detect_test_command
 # Import oracle gate at module level
 from .oracle_gate import validate_acceptance_fixtures
 
-__all__ = ["ci_finding", "lint_baseline_finding", "oracle_finding", "suite_baseline_finding"]
+__all__ = ["ci_finding", "classify_repo_health", "format_findings", "lint_baseline_finding", "oracle_finding", "suite_baseline_finding"]
 
 
 def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | None:
@@ -183,3 +183,74 @@ def ci_finding(ci_status) -> dict | None:
             "detail": str(ci_status.get("error", ""))[:800],
         }
     return None
+
+# New helper functions
+
+def classify_repo_health(story, checkout, ci_status=None):
+    """Return a list of repo‑health findings.
+
+    The function calls the four probe helpers in the documented order:
+    ``lint_baseline_finding``, ``suite_baseline_finding``, ``oracle_finding`` and
+    ``ci_finding``.  Each call is wrapped in its own ``try/except Exception`` so
+    that a failure in one probe does not prevent the others from running.
+
+    Only non‑``None`` results are collected and returned in the same order.
+    ``ci_status`` defaults to ``None``.
+    """
+    findings = []
+    # lint
+    try:
+        result = lint_baseline_finding(checkout)
+        if result is not None:
+            findings.append(result)
+    except Exception:  # noqa: S110, BLE001
+        pass
+    # suite
+    try:
+        result = suite_baseline_finding(checkout)
+        if result is not None:
+            findings.append(result)
+    except Exception:  # noqa: S110, BLE001
+        pass
+    # oracle
+    try:
+        result = oracle_finding(story, checkout)
+        if result is not None:
+            findings.append(result)
+    except Exception:  # noqa: S110, BLE001
+        pass
+    # ci
+    try:
+        result = ci_finding(ci_status)
+        if result is not None:
+            findings.append(result)
+    except Exception:  # noqa: S110, BLE001
+        pass
+    return findings
+
+
+def format_findings(findings):
+    """Format a list of findings into a human‑readable block.
+
+    Parameters
+    ----------
+    findings : list[dict] | None
+        The list returned by :func:`classify_repo_health`.
+
+    Returns
+    -------
+    str
+        A string suitable for inclusion in a prompt.  The string is
+        truncated to a maximum of 2000 characters.
+    """
+    if not findings:
+        return ""
+    lines = ["REPO-HEALTH FINDINGS (measured, not inferred):"]
+    for f in findings:
+        kind = f.get("kind", "unknown") or "unknown"
+        detail = f.get("detail", "") or ""
+        detail = detail[:400]
+        lines.append(f"- {kind}: {detail}")
+    output = "\n".join(lines)
+    return output[:2000]
+

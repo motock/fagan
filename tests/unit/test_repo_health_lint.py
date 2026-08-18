@@ -71,3 +71,38 @@ def test_lint_probe_timeout(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     result = repo_health.lint_baseline_finding("/tmp/repo")
     assert result["kind"] == "lint_probe_failed"
+
+# Test that a non-positive timeout_s does not escape the never-raise contract.
+# subprocess.run raises ValueError for a non-positive timeout (in some Python
+# versions), and the module docstring promises every function is fail-safe:
+# it must return a finding dict or None and never raise.  The
+# except (OSError, subprocess.SubprocessError) clause does not catch
+# ValueError, so a non-positive timeout must be guarded up front and converted
+# to a lint_probe_failed finding instead of propagating.
+
+def test_lint_probe_nonpositive_timeout(monkeypatch):
+    monkeypatch.setattr(repo_health, "detect_lint_command", lambda checkout: ("/tmp/repo", ["echo", "ok"]))
+    def fake_run(*args, **kwargs):
+        if kwargs.get("timeout", 300) <= 0:
+            raise ValueError("timeout must be positive")
+        return MockCompletedProcess(returncode=0)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = repo_health.lint_baseline_finding("/tmp/repo", timeout_s=0)
+    assert result is not None
+    assert result["kind"] == "lint_probe_failed"
+
+# Follow-up call after the non-positive timeout: the failed probe must not
+# leave any mutated state behind, so a subsequent normal happy-path call still
+# delegates to detect_lint_command, runs subprocess.run with a valid timeout,
+# and returns the expected finding.
+
+def test_lint_probe_nonpositive_timeout_leaves_no_state(monkeypatch):
+    monkeypatch.setattr(repo_health, "detect_lint_command", lambda checkout: ("/tmp/repo", ["echo", "ok"]))
+    def fake_run(*args, **kwargs):
+        if kwargs.get("timeout", 300) <= 0:
+            raise ValueError("timeout must be positive")
+        return MockCompletedProcess(returncode=0)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    repo_health.lint_baseline_finding("/tmp/repo", timeout_s=0)
+    # Normal happy-path call must still work exactly as before.
+    assert repo_health.lint_baseline_finding("/tmp/repo", timeout_s=300) is None

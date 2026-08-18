@@ -205,7 +205,9 @@ def test_commit_message_only_finding_amends_head_commit(
         p, "_notify_user",
         lambda plan_name, msg: notify_calls.append((plan_name, msg)),
     )
-    _force_request_changes(monkeypatch, _COMMIT_HYGIENE_FEEDBACK)
+    open_pr, post_comment = _force_request_changes(
+        monkeypatch, _COMMIT_HYGIENE_FEEDBACK
+    )
 
     result = p.review_story("cha", "S1")
 
@@ -224,9 +226,6 @@ def test_commit_message_only_finding_amends_head_commit(
     # A notification was emitted.
     assert any("auto-amended" in msg for _, msg in notify_calls), notify_calls
     # The autofix-success path must NOT open a PR or post a comment.
-    open_pr, post_comment = _force_request_changes(
-        monkeypatch, _COMMIT_HYGIENE_FEEDBACK
-    )
     open_pr.assert_not_called()
     post_comment.assert_not_called()
 

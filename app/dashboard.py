@@ -1213,4 +1213,4 @@ async def stream_plan_events(plan_name: str, request: Request):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     # Mount static files for the dashboard UI.
-
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

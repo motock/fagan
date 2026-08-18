@@ -223,6 +223,12 @@ def test_commit_message_only_finding_amends_head_commit(
     assert on_disk.get("commit_hygiene_autofix_attempts") == 1
     # A notification was emitted.
     assert any("auto-amended" in msg for _, msg in notify_calls), notify_calls
+    # The autofix-success path must NOT open a PR or post a comment.
+    open_pr, post_comment = _force_request_changes(
+        monkeypatch, _COMMIT_HYGIENE_FEEDBACK
+    )
+    open_pr.assert_not_called()
+    post_comment.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

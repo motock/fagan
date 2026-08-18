@@ -660,7 +660,7 @@ def oracle_result() -> tuple[bool, str]:
     return r.returncode == 0, (r.stdout + r.stderr)[-800:]
 
 
-def _full_suite_result() -> tuple[bool, str]:
+def _full_suite_result() -> tuple[bool, str, str | None]:
     """Run the FULL worktree suite (unscoped), for the L1 CI-fail-rework
     done-bar. Mirrors oracle_result's runner (detect_test_command + the heavy
     lock) but does NOT scope to ACCEPTANCE_PATHS - it runs the detected test
@@ -780,14 +780,10 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
                 return False
             if messages is not None:
                 messages.append({"role": "user", "content": (
-                    "The acceptance oracle passes but the FULL test suite still "
-                    f"fails. The merge-gate CI will reject this on the same "
-                    f"failure:\n{full_tail}\n\nThe bug could be in the "
-                    "implementation you just changed, or in a test file - do "
-                    "not assume either side is correct. Re-read the failing "
-                    "test and the code it exercises, identify which one is "
-                    "actually wrong, and make ONE targeted fix there. Do NOT "
-                    "call done until `pytest` passes in full.")})
+    "Your tests PASS, but the lint check (`ruff check .`) fails. The merge-gate CI lint gate will reject this on the same failure:\n{full_tail}\n\nMost lint errors are auto-fixable: run `ruff check . --fix`, then `ruff check .` to confirm it is clean.\n\nDo NOT edit implementation logic — this is a formatting/import/style error, not a correctness bug, and editing logic will not fix it. Do not call done until `ruff check .` passes in full."
+)}) if gate == 'lint' else messages.append({"role": "user", "content": (
+    "The acceptance oracle passes but the full test suite still fails. The merge-gate CI will reject this on the same failure:\n{full_tail}\n\nThe bug could be in the implementation you just changed, or in a test file - do not assume either side is correct. Re-read the failing test and the code it exercises, identify which one is actually wrong, and make ONE targeted fix there. Do NOT call done until `pytest` passes in full."
+)})
             print(f"[step {step}] ORACLE GREEN but full suite still fails - "
                   f"rework done-bar not met; continuing.", flush=True)
             return False

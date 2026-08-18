@@ -848,7 +848,7 @@ def _reject_done_for_suite(messages: list, step: int, suite_tail: str, gate: str
     else:
         print(f"[step {step}] done rejected — full test suite still fails (rework done-bar); asking agent to fix the failure", flush=True)
         messages.append({"role": "user", "content": (
-            "The full test suite still fails. The merge-gate CI will reject this on the same failure:\n{suite_tail}\n\nThe bug could be in the implementation you just changed, or in a test file - do not assume either side is correct. Re-read the failing test and the code it exercises, identify which one is actually wrong, and make ONE targeted fix there. Do NOT call done until `pytest` passes in full."
+            "The full test suite still fails. The merge-gate CI will reject this on the same failure:\n{suite_tail}\n\nThe bug could be in the implementation you just changed, or in a test file - do not assume either side is correct. Re-read the failing test and the code it exercises, identify which one is actually wrong, and make ONE targeted fix there. do not call done until pytest passes in full."
         )})
 # same broken content can be escalated instead of silently retrying forever
 # (observed: gpt-oss retried near-identical broken content 4x until the

@@ -71,54 +71,10 @@ def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | 
 
 
 def suite_baseline_finding(checkout: str | Path, timeout_s: int = 600) -> dict | None:
-    # Read the opt‑in gate at call time.
     gate = os.environ.get("PIPELINE_TRIAGE_SUITE_PROBE", "")
     gate = gate.strip().lower()
     if gate not in ("1", "true", "yes", "on"):
         return None
-    """Run an optional full‑suite baseline probe on *checkout*.
-
-    The full test suite can take roughly eight minutes on this repository.  The
-    triage sweep runs inside the scheduler tick, and an always‑on suite probe
-    would stall every tick for every plan.  Therefore the probe is opt‑in via
-    the ``PIPELINE_TRIAGE_SUITE_PROBE`` environment variable.
-
-    Parameters
-    ----------
-    checkout:
-        Path to the repository checkout.  The function accepts a string or a
-        :class:`pathlib.Path`.
-    timeout_s:
-        Maximum number of seconds to allow the test command to run.
-
-    Returns
-    -------
-    dict | None
-        ``None`` if the probe is disabled, the suite exits cleanly, or the
-        suite reports no tests collected.  Otherwise a dict with keys
-        ``kind``, ``detail`` and ``command``.
-    ""
-
-    The full test suite can take roughly eight minutes on this repository.  The
-    triage sweep runs inside the scheduler tick, and an always‑on suite probe
-    would stall every tick for every plan.  Therefore the probe is opt‑in via
-    the ``PIPELINE_TRIAGE_SUITE_PROBE`` environment variable.
-
-    Parameters
-    ----------
-    checkout:
-        Path to the repository checkout.  The function accepts a string or a
-        :class:`pathlib.Path`.
-    timeout_s:
-        Maximum number of seconds to allow the test command to run.
-
-    Returns
-    -------
-    dict | None
-        ``None`` if the probe is disabled, the suite exits cleanly, or the
-        suite reports no tests collected.  Otherwise a dict with keys
-        ``kind``, ``detail`` and ``command``.
-    """
     try:
         test_dir, test_cmd = detect_test_command(Path(checkout))
         result = subprocess.run(

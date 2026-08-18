@@ -71,6 +71,13 @@ def lint_baseline_finding(checkout: str | Path, timeout_s: int = 300) -> dict | 
 
 
 def suite_baseline_finding(checkout: str | Path, timeout_s: int = 600) -> dict | None:
+    """Run a suite baseline probe on *checkout*.
+
+    The full test suite in this repository takes roughly eight minutes.  The
+    triage sweep runs inside the scheduler tick, and an always‑on suite probe
+    would stall every tick for every plan.  Therefore this probe is opt‑in
+    via the ``PIPELINE_TRIAGE_SUITE_PROBE`` environment variable.
+    """
     gate = os.environ.get("PIPELINE_TRIAGE_SUITE_PROBE", "")
     gate = gate.strip().lower()
     if gate not in ("1", "true", "yes", "on"):

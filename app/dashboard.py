@@ -10,6 +10,7 @@ Run with:  uvicorn dashboard:app --reload
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -17,7 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
@@ -1169,5 +1171,46 @@ def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str
 
 # Mounted last so it never shadows the /api/* routes above; html=True serves
 # static/index.html for "/".
-if STATIC_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# @app.get("/api/plans/{plan_name}/events")
+# async def stream_plan_events(plan_name: str, request: Request):
+#     path = _notifications_jsonl_path(plan_name)
+# 
+#     async def event_generator():
+#         last_pos = 0
+#         if path.exists():
+#             last_pos = path.stat().st_size
+# 
+#         def read_new_lines(current_pos: int):
+#             new_lines: list[str] = []
+#             with open(path, "r") as f:
+#                 f.seek(current_pos)
+#                 while True:
+#                     line = f.readline()
+#                     if not line:
+#                         break
+#                     new_lines.append(line)
+#             return new_lines, f.tell()
+# 
+#         while True:
+#             if await request.is_disconnected():
+#                 break
+#             if path.exists():
+#                 new_lines, next_pos = await asyncio.to_thread(read_new_lines, last_pos)
+#                 for line in new_lines:
+#                     line = line.strip()
+#                     if not line:
+#                         continue
+#                     try:
+#                         record = json.loads(line)
+#                         if not isinstance(record, dict):
+#                             continue
+#                         yield f"data: {json.dumps(record)}\n\n"
+#                     except json.JSONDecodeError:
+#                         continue
+#                 last_pos = next_pos
+#             await asyncio.sleep(1)
+# 
+#     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+# Mount static files for the dashboard UI.
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

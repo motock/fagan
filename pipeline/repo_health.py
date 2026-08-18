@@ -77,42 +77,16 @@ def suite_baseline_finding(checkout: str | Path, timeout_s: int = 600) -> dict |
 
     The full test suite in this repository takes roughly eight minutes.  The
     triage sweep runs inside the scheduler tick, and an always‑on suite probe
-    would stall every tick for every plan.  Therefore this probe is opt‑in
+    would stall every tick for every plan.  Therefore this probe is opt-in
     via the ``PIPELINE_TRIAGE_SUITE_PROBE`` environment variable.
     """
     suite_baseline_finding.__doc__ = """Run a suite baseline probe on *checkout*.
 
     The full test suite in this repository takes roughly eight minutes.  The
     triage sweep runs inside the scheduler tick, and an always‑on suite probe
-    would stall every tick for every plan.  Therefore this probe is opt‑in
+    would stall every tick for every plan.  Therefore this probe is opt-in
     via the ``PIPELINE_TRIAGE_SUITE_PROBE`` environment variable.
     """
-    return None
-    try:
-        test_dir, test_cmd = detect_test_command(Path(checkout))
-        result = subprocess.run(
-            test_cmd,
-            cwd=test_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout_s,
-        )
-        if result.returncode in (0, 5):
-            return None
-        output = (result.stdout or "") + (result.stderr or "")
-        detail = output[-800:]
-        return {
-            "kind": "suite_baseline_red",
-            "detail": detail,
-            "command": " ".join(test_cmd),
-        }
-    except (OSError, subprocess.SubprocessError) as exc:
-        return {
-            "kind": "suite_probe_failed",
-            "detail": f"{type(exc).__name__}: {exc}",
-            "command": "",
-        }
     try:
         test_dir, test_cmd = detect_test_command(Path(checkout))
         result = subprocess.run(

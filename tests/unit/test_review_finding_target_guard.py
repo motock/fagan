@@ -326,6 +326,8 @@ def test_approve_still_downgraded_for_untouched_non_test_file_alongside_exempt_t
             "- Blocking: test_foo.py: assertion fails\n"
             "- Blocking: server.py: logic bug unrelated to the test failure"
         ))
+    monkeypatch.setattr(p, "_open_pr", Mock(return_value="https://gh/pr/1"))
+    monkeypatch.setattr(p, "_post_pr_comment", Mock())
     p.review_story(plan_name, story_key)
     story = load_story(plan_dir, plan_name, story_key)
     assert set(story.get("last_review_findings", [])) == {"test_foo.py", "server.py"}
@@ -335,10 +337,15 @@ def test_approve_still_downgraded_for_untouched_non_test_file_alongside_exempt_t
     monkeypatch.setattr(p, "_run_reviewer", lambda *a, **k: "VERDICT: APPROVE")
     open_pr = Mock(return_value="https://gh/pr/1")
     monkeypatch.setattr(p, "_open_pr", open_pr)
+    post_comment = Mock()
+    monkeypatch.setattr(p, "_post_pr_comment", post_comment)
     result = p.review_story(plan_name, story_key)
     assert result["verdict"] == "REQUEST_CHANGES"
     assert result["status"] == "changes_requested"
-    open_pr.assert_not_called()
+    open_pr.assert_called_once()
+    post_comment.assert_called_once()
+    args, _ = post_comment.call_args
+    assert "server.py" in args[1]
     story = load_story(plan_dir, plan_name, story_key)
     feedback = story.get("review_feedback", "")
     assert "server.py" in feedback

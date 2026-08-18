@@ -59,7 +59,7 @@ def test_done_rejected_on_fresh_dispatch_when_flag_set_and_suite_fails(
     monkeypatch.setattr(la, "MAX_STEPS", 3)
     monkeypatch.setattr(la, "worktree_dirty", lambda: False)
     excerpt = "FAILED test_widget.py::test_frobnicate - assert 1 == 2"
-    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt))
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (False, excerpt, "test"))
 
     fake, calls = _sequence_chat([("done", {"summary": "first attempt"})])
     monkeypatch.setattr(la, "chat", fake)
@@ -83,7 +83,7 @@ def test_done_accepted_on_fresh_dispatch_when_flag_set_and_suite_green(
     monkeypatch.setattr(la, "REWORK_FULL_SUITE", False)
     monkeypatch.setattr(la, "FULL_SUITE_DONE_BAR", True)
     monkeypatch.setattr(la, "worktree_dirty", lambda: False)
-    monkeypatch.setattr(la, "_full_suite_result", lambda: (True, ""))
+    monkeypatch.setattr(la, "_full_suite_result", lambda: (True, "", None))
 
     fake, _ = _sequence_chat([("done", {"summary": "all green"})])
     monkeypatch.setattr(la, "chat", fake)
@@ -106,7 +106,7 @@ def test_done_accepted_on_fresh_dispatch_when_flag_unset_without_consulting_suit
 
     def _suite_spy():
         suite_calls.append(True)
-        return (False, "would-fail-but-uncalled")
+        return (False, "would-fail-but-uncalled", "test")
 
     monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
 
@@ -132,7 +132,7 @@ def test_dirty_tree_auto_accept_checks_suite_on_fresh_dispatch_when_flag_set(
     monkeypatch.setattr(la, "worktree_dirty", lambda: True)
     monkeypatch.setattr(la, "auto_wip_commit", lambda reason: None)
     monkeypatch.setattr(la, "_full_suite_result",
-                        lambda: (False, "assert 9.0 == 3.0 - test_x.py:12"))
+                        lambda: (False, "assert 9.0 == 3.0 - test_x.py:12", "test"))
 
     fake, _ = _sequence_chat([("done", {"summary": "bypass attempt"})])
     monkeypatch.setattr(la, "chat", fake)
@@ -161,7 +161,7 @@ def test_fresh_dispatch_parks_after_suite_reject_cap_when_flag_set(
 
     def _suite_spy():
         suite_calls.append(True)
-        return (False, "FAILED test_x.py::test_y")
+        return (False, "FAILED test_x.py::test_y", "test")
 
     monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
 
@@ -189,7 +189,7 @@ def test_both_flags_set_runs_suite_once_not_twice(tmp_path, monkeypatch):
 
     def _suite_spy():
         suite_calls.append(True)
-        return (True, "")
+        return (True, "", None)
 
     monkeypatch.setattr(la, "_full_suite_result", _suite_spy)
 

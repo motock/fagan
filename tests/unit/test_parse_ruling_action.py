@@ -44,6 +44,5 @@ class TestParseRulingAction:
         assert result["tier"] == "bar"
         assert result["risk"] == "baz"
         assert result["rationale"] == "qux"
-        # notify_user is not returned by _parse_ruling; test that it is not present
-        assert "notify_user" not in result
+        assert result["notify_user"] is True
         assert result["action"] == "split_story"

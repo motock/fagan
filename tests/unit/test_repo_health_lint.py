@@ -1,7 +1,5 @@
 import subprocess
 
-import pytest
-
 # Import the module under test
 import pipeline.repo_health as repo_health
 

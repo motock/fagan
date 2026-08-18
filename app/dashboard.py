@@ -31,6 +31,10 @@ class SavePlanRequest(BaseModel):
 class IngestPlanRequest(BaseModel):
     only_epics: list[str] | None = None
     overwrite: bool = False
+class DecisionRequest(BaseModel):
+    question: str
+    options: list[str]
+    context: str = ""
 
 # config_provenance is a read-only leaf: its only non-stdlib import is
 # app.role_registry (see both modules' docstrings), so pulling it in does

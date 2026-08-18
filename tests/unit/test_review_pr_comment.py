@@ -338,6 +338,11 @@ def test_comment_uses_raw_findings_not_feedback_preamble(
         p, "_reverify_acceptance",
         lambda s, wt, sk="": {"state": "pass", "error": ""},
     )
+    # An acceptance-bearing story uses REWORK_MAX_ATTEMPTS_ORACLE as its
+    # rework cap (default 1), which would park on the very first cycle and
+    # never reach the changes_requested PR/comment path this test exercises.
+    # Raise the cap so the genuine REQUEST_CHANGES lands on changes_requested.
+    monkeypatch.setattr(p, "REWORK_MAX_ATTEMPTS_ORACLE", 2)
     _, post_comment = _force_request_changes(
         monkeypatch, _REQUEST_CHANGES_WITH_FINDINGS
     )

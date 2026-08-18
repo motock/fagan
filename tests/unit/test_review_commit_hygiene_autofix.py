@@ -30,9 +30,9 @@ registered entry point end-to-end.
 
 import json
 import subprocess
+from unittest.mock import Mock
 
 import pytest
-from unittest.mock import Mock
 
 import pipeline.server as p
 from pipeline import concurrency as pcon

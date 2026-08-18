@@ -678,12 +678,12 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > 2026-08-09, PRs #247-#258** → ~~W1a (extract `PipelineService` — the
 > keystone both B3 and B4 depend on)~~ **DONE 2026-08-12, 22 stories, PRs
 > #263-#286** → ~~W1b (`Store` protocol — `FileStore` as the only
-> implementation)~~ **IN PROGRESS 2026-08-14 — 17/20 stories done (PRs
-> #315-#344); story 18 (module-level `review_story`) is mid-rework and
-> currently paused, stories 19-20 (`_advance_pipeline_locked`,
-> `_approve_merge_impl`) not yet dispatched** / W1c (HTTP adapter + SSE
-> event stream, not started) → W2
-> (chat entry point) → W3b (writable dashboard, closes B4) → W4
+> implementation)~~ **DONE 2026-08-15 — 20/20 stories, PRs #315-#349** →
+> ~~W1c (HTTP adapter + SSE event stream)~~ **DONE 2026-08-17 — 9/9
+> stories, PRs #350, #360-#366** → W2 (chat entry point — SCOPED
+> 2026-08-17, plan `W2_CHAT_ENTRY_POINT_PLAN`, 6 stories, ingested+paused)
+> → W3b (writable dashboard, closes B4 — SCOPED 2026-08-17, plan
+> `w3b-dashboard-config-ui`, 7 stories, ingested+paused) → W4
 > (multi-tenant, closes B3). B1 (sandbox) and B5 (export the moat) are
 > picked up once the service seam exists, not before — see that doc's own
 > "Ordering conflict" section for the full rationale.

@@ -78,26 +78,32 @@ def _patch_notify(monkeypatch):
     monkeypatch.setattr(triage_mod, "_notify_user", _fake_notify)
 
 
-@pytest.fixture
-def patch_rule(monkeypatch):
-    """Helper fixture returning a recorder + setter for rule_on_story.
+class _RuleRecorder(dict):
+    """A dict-like recorder exposing a ``set`` method that installs a
+    rule_on_story implementation and records each invocation."""
 
-    Returns a dict with a ``calls`` list and a ``set`` callable that installs
-    a new rule_on_story implementation.
-    """
-    state = {"calls": []}
+    def __init__(self, monkeypatch, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._monkeypatch = monkeypatch
 
-    def _install(impl):
+    def set(self, impl):
         def _wrapper(plan_name, story_key, story, evidence):
-            state["calls"].append(
+            self["calls"].append(
                 {"plan_name": plan_name, "story_key": story_key, "story": story, "evidence": evidence}
             )
             return impl(plan_name, story_key, story, evidence)
 
-        monkeypatch.setattr(triage_mod, "rule_on_story", _wrapper)
+        self._monkeypatch.setattr(triage_mod, "rule_on_story", _wrapper)
 
-    state["set"] = _install
-    return state
+
+@pytest.fixture
+def patch_rule(monkeypatch):
+    """Helper fixture returning a recorder + setter for rule_on_story.
+
+    Returns a dict-like object with a ``calls`` list and a ``set`` callable
+    that installs a new rule_on_story implementation.
+    """
+    return _RuleRecorder(monkeypatch, calls=[])
 
 
 @pytest.fixture

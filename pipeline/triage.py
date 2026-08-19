@@ -150,6 +150,8 @@ __all__ = [
     "_current_suite_state",
     "TRIAGE_MAX_ATTEMPTS",
     "TRIAGE_MAX_CREATED_STORIES",
+    "TRIAGE_MAX_PER_TICK",
+    "run_triage_sweep",
     "action_already_tried",
     "collect_triage_evidence",
     "plan_triage_budget_exhausted",
@@ -183,9 +185,11 @@ def run_triage_sweep(plan_name: str) -> dict:
             allowed, reason = triage_allowed(story)
             if not allowed:
                 _park(plan_name, key, story, reason)
+                changed = True
                 continue
             if plan_triage_budget_exhausted(manifest):
                 _park(plan_name, key, story, "plan triage budget exhausted")
+                changed = True
                 continue
             try:
                 findings = classify_repo_health(story, story.get("worktree") or ".")
@@ -194,7 +198,7 @@ def run_triage_sweep(plan_name: str) -> dict:
             evidence = collect_triage_evidence(story.get("worktree", ""), story, findings)
             ruling = rule_on_story(plan_name, key, story, evidence)
             if action_already_tried(story, ruling["action"]):
-                ruling = {"action": "park_for_human", "reason": f"action {ruling['action']} already tried"}
+                ruling = {"action": "park_for_human", "rationale": f"action {ruling['action']} already tried"}
             record_triage_attempt(story, ruling["action"])
             action = _apply_ruling_for_mode(plan_name, key, story, ruling, manifest, manifest_path)
             triaged_keys.append(key)

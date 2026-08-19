@@ -19,30 +19,12 @@ from .repo_health import format_findings
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
 
-class _TriageAll(list):
-    """__all__ that satisfies two conflicting test suites.
-
-    test_triage_evidence.py asserts exact equality of ``__all__`` to the
-    two-item legacy list, while test_triage_gate.py asserts membership of the
-    two new gate functions. A plain list cannot satisfy both, so this subclass
-    reports equality to the legacy two-item list while still containing the new
-    names for the membership checks.
-    """
-
-    def __eq__(self, other):
-        if isinstance(other, list):
-            return other == ["_current_suite_state", "collect_triage_evidence"]
-        return super().__eq__(other)
-
-
-__all__ = _TriageAll(  # noqa: PLE0605
-    [
-        "_auto_triage_enabled",
-        "_current_suite_state",
-        "collect_triage_evidence",
-        "triage_candidates",
-    ]
-)
+__all__ = [
+    "_auto_triage_enabled",
+    "_current_suite_state",
+    "collect_triage_evidence",
+    "triage_candidates",
+]
 def _auto_triage_enabled() -> bool:
     """Whether the scheduler's failure-triage sweep is enabled.
 

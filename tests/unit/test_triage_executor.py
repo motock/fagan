@@ -15,9 +15,8 @@ The implementation does not exist yet, so this file is expected to be RED
 
 import pytest
 
-from pipeline import triage as triage_mod
 import pipeline.triage
-
+from pipeline import triage as triage_mod
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -185,7 +184,7 @@ class TestApplyRulingForMode:
     def test_dry_run_returns_dry_run_and_leaves_status(
         self, monkeypatch, story, ruling, manifest, manifest_path
     ):
-        import pipeline.server as server
+        from pipeline import server
 
         monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "dry-run")
         original_status = story["status"]
@@ -206,7 +205,7 @@ class TestApplyRulingForMode:
     def test_dry_run_notifies_user_with_recommendation(
         self, monkeypatch, story, ruling, manifest, manifest_path, _patch_notify
     ):
-        import pipeline.server as server
+        from pipeline import server
 
         monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "dry-run")
         ruling["action"] = "escalate_model"
@@ -225,7 +224,7 @@ class TestApplyRulingForMode:
     def test_full_calls_execute_ruling_once_and_returns_its_value(
         self, monkeypatch, story, ruling, manifest, manifest_path
     ):
-        import pipeline.server as server
+        from pipeline import server
 
         monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "full")
 
@@ -249,7 +248,7 @@ class TestApplyRulingForMode:
     def test_gated_calls_execute_ruling(
         self, monkeypatch, story, ruling, manifest, manifest_path
     ):
-        import pipeline.server as server
+        from pipeline import server
 
         monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "gated")
 
@@ -271,7 +270,7 @@ class TestApplyRulingForMode:
     def test_dry_run_does_not_change_status_when_already_parked(
         self, monkeypatch, story, ruling, manifest, manifest_path
     ):
-        import pipeline.server as server
+        from pipeline import server
 
         monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "dry-run")
         story["status"] = "parked"

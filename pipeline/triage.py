@@ -19,7 +19,7 @@ from .repo_health import format_findings
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
 
-__all__ = ["_current_suite_state", "collect_triage_evidence", "_auto_triage_enabled", "triage_candidates"]
+__all__ = ["_current_suite_state", "collect_triage_evidence"]
 def _auto_triage_enabled() -> bool:
     """Return True if PIPELINE_AUTO_TRIAGE is set to a truthy value."""
     override = os.environ.get("PIPELINE_AUTO_TRIAGE", "").strip().lower()

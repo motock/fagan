@@ -22,6 +22,8 @@ from .concurrency import _heavy_lock, _is_heavy
 from .rebrief import collect_failure_evidence
 from .repo_health import format_findings
 
+globals()["subprocess.run"] = subprocess.run
+
 __all__ = ["_current_suite_state", "collect_triage_evidence"]
 
 # ---------------------------------------------------------------------------
@@ -100,7 +102,7 @@ def _current_suite_state(worktree: str) -> str:
             return ""
         return (
             f"CURRENT STATE: full test suite FAILS at the worktree's current HEAD (rc={r.returncode}):\n"
-            f"{(r.stdout + r.stderr)[-500:] }"
+            f"{(r.stdout + r.stderr)[-500:]}"
         )
     except (OSError, subprocess.SubprocessError):
         return ""

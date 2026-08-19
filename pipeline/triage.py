@@ -18,7 +18,7 @@ from .repo_health import format_findings
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
 
-__all__ = ["_current_suite_state", "collect_triage_evidence"]
+__all__ = ["collect_triage_evidence"]
 
 # ---------------------------------------------------------------------------
 # Helper: run the real test suite against the worktree's CURRENT HEAD

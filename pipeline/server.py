@@ -37,6 +37,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -3175,24 +3176,67 @@ _VALID_STORY_STATUSES = frozenset(
 )
 
 
-def _ci_rework_feedback(gate_error: str) -> str:
-    """Generate review feedback for merge-gate CI failures."""
+def _parse_pytest_excerpt(gate_error: str) -> str | None:
+    """Best-effort extract of a pytest failure excerpt from ``gate_error``.
+
+    Looks for a literal ``<file>.py:<line>: <Exception>: <assertion>`` pattern
+    and, only when the whole pattern is found, returns a short
+    ``On {file}:{line}, {assertion} fails`` string built from the exact file,
+    line, and assertion substrings captured from ``gate_error``. Returns
+    ``None`` when nothing recognizable parses -- it never fabricates a
+    file/line/assertion that is not literally present in ``gate_error``.
+    """
+    if not gate_error:
+        return None
+    match = re.search(
+        r"(?P<file>[\w./-]+\.py):(?P<line>\d+):\s+"
+        r"(?P<exc>[A-Za-z_]+Error):\s*(?P<assertion>.+)",
+        gate_error,
+    )
+    if not match:
+        return None
+    return (
+        f"On {match.group('file')}:{match.group('line')}, "
+        f"{match.group('assertion')} fails"
+    )
+
+
+def _ci_rework_feedback(gate_error: str, attempts: int) -> str:
+    """Generate review feedback for merge-gate CI failures.
+
+    ``attempts`` is the current rework round number (1 for the first rework).
+    Round 1 is byte-identical to the pre-round-escalation wording. From round 2
+    onward a ``PREVIOUS REWORK ATTEMPT {attempts-1} DID NOT FIX THIS.`` prefix
+    is prepended, and when a pytest excerpt is parseable from ``gate_error`` it
+    is appended (in addition to the verbatim ``Gate error:`` line) along with
+    the full-suite done-bar instruction.
+    """
     lint_keywords = ("lint", "ruff", "eslint", "clippy", "golangci")
     lower = gate_error.lower()
     if any(k in lower for k in lint_keywords):
-        return (
+        base = (
             f"The merge-gate CI check failed on your submitted branch "
             f"Gate error: {gate_error}\n\n"
             "This is a LINT failure, not a test failure - the test suite may already pass, so re-running tests alone proves nothing. Run the project's lint command (e.g. `ruff check .` for Python) from the repo root, fix every finding, and commit.\n\n"
             "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
         )
     else:
-        return (
+        base = (
             f"The merge-gate CI check failed on your submitted branch "
             f"Gate error: {gate_error}\n\n"
             "The bug could be in the implementation OR in a test file you wrote; re-examine both against the spec and make a targeted fix.\n\n"
             "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
         )
+    if attempts < 2:
+        return base
+    msg = f"PREVIOUS REWORK ATTEMPT {attempts - 1} DID NOT FIX THIS. " + base
+    excerpt = _parse_pytest_excerpt(gate_error)
+    if excerpt is not None:
+        msg = (
+            f"{msg}\n\n{excerpt}\n"
+            "Do not call done until the full suite passes."
+        )
+    return msg
 
 
 @mcp.tool()
@@ -4623,7 +4667,7 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
                     # assertion every round (the agent's own broken test is
                     # invisible to the acceptance-scoped oracle/reviewer).
                     story["ci_rework"] = True
-                    story["review_feedback"] = _ci_rework_feedback(gate_error)
+                    story["review_feedback"] = _ci_rework_feedback(gate_error, attempts)
                     story["status"] = "changes_requested"
                     _notify_user(
                         plan_name,

@@ -35,7 +35,7 @@ def _never_run(*args, **kwargs):
 
 def _never_heavy_lock():
     """A fake _heavy_lock whose __enter__ fails the test if entered."""
-    @pytest.fail  # noqa: E731  (not actually used as decorator)
+    @pytest.fail
     class _Boom:
         def __enter__(self):
             pytest.fail("_heavy_lock must NOT be entered for this case")

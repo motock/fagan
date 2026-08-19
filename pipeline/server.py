@@ -4229,6 +4229,25 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
 
 
 def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
+    """Run the failure-triage sweep over the terminal-state stories left by
+    previous ticks, then the tick proper.
+
+    Rename-and-delegate: the entire existing tick body moved verbatim to
+    _advance_pipeline_locked_impl with no other change, so the sweep could be
+    added without re-indenting a 455-line function. The sweep is advisory (C2
+    of docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md): anything that goes wrong
+    inside it must leave the tick exactly as it was.
+    """
+    try:
+        run_triage_sweep(plan_name)
+    except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
+        logging.getLogger("pipeline").warning(
+            "triage sweep raised; continuing with the tick unchanged"
+        )
+    return _advance_pipeline_locked_impl(plan_name)
+
+
+def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     manifest_path = _store.manifest_path(plan_name)
     if not manifest_path.exists():
         return {"ok": False, "error": f"No manifest for {plan_name}"}
@@ -4248,6 +4267,71 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
 
     # Per-backend resource gate (Step 5): dispatch and review can run on
     # different backends, so gate each by ITS backend's availability rather
+    # than one global Claude flag. This is what lets local dispatch keep
+    # running when Claude's weekly limit is hit (and vice versa).
+    dispatch_ok, _dispatch_reason = _role_resource_ok("dispatch")
+    review_ok, review_reason = _role_resource_ok(
+        "review", plan_role_config=manifest.get("role_config")
+    )
+
+    done = _completed_dep_ids(stories)
+    ready = [
+        k
+        for k, v in stories.items()
+        if v["status"] in ("todo", "interrupted", "changes_requested")
+        and all(d in done for d in v.get("dependencies", []))
+    ]
+
+    if PIPELINE_AUTONOMY == "dry-run":
+        return {
+            "ok": True,
+            "dry_run": True,
+            "autonomy": PIPELINE_AUTONOMY,
+            # "paused" kept for back-compat = dispatch gated.
+            "paused": not dispatch_ok,
+            "dispatch_paused": not dispatch_ok,
+            "review_paused": not review_ok,
+            "would_dispatch": ready if dispatch_ok else [],
+            "would_merge_decisions": {
+                k: _merge_decision(v)
+                for k, v in stories.items()
+                if v["status"] == "pr_open"
+            },
+        }
+
+    summary: dict[str, Any] = {
+        "autonomy": PIPELINE_AUTONOMY,
+        "paused": not dispatch_ok,
+        "dispatch_paused": not dispatch_ok,
+        "review_paused": not review_ok,
+        "dispatched": [],
+        "advanced": [],
+        "merged": [],
+        "parked": [],
+        "failed": [],
+        "interrupted": [],
+        "notify": [],
+        "review_deferred": [],
+        "ci_pending": [],
+    }
+
+    # Scoped for the whole tick: dispatch_story resolves its own repo_root
+    # too (so it's correct called standalone), but _merge_pr and
+    # _default_branch read the plain REPO_ROOT global, so this plan's repo
+    # must be active for the duration of every action below.
+    with _scoped_repo_root(plan_name):
+        # Per-story dispatch gate. The dispatch backend is resolved per-story
+        # (dispatch_story's own resolution, shared via _resolve_dispatch_backend),
+        # so the gate must be per-story too: a :cloud-tagged model (served via
+        # Ollama with zero local VRAM footprint) or a Claude-routed story must
+        # never be blocked by the LOCAL free-memory floor, while an on-device
+        # model keeps the floor exactly as before. Reachability still applies
+        # to every backend (a cloud model proxied through an unreachable server
+        # cannot dispatch).
+        env_backend = (
+            os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+        )
+        # In-progress interruption is also per-story: only interrupt an
     # than one global Claude flag. This is what lets local dispatch keep
     # running when Claude's weekly limit is hit (and vice versa).
     dispatch_ok, _dispatch_reason = _role_resource_ok("dispatch")

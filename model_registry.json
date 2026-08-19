@@ -56,15 +56,15 @@
     },
     "dispatch": {
       "provider": "ollama",
-      "model": "gemma4-26b-qat"
+      "model": "gpt-oss-20b-high"
     },
     "test_author": {
       "provider": "ollama",
-      "model": "deepseek-v4-flash"
+      "model": "glm"
     },
     "planner": {
-      "provider": "ollama",
-      "model": "glm"
+      "provider": "claude",
+      "model": "sonnet"
     },
     "review": {
       "provider": "ollama",

@@ -132,21 +132,23 @@ def _stub_dispatch_externals(monkeypatch):
 
 def test_resolve_planner_backend_defaults_to_registry_planner_entry_no_env_no_role_config(monkeypatch):
     """With NO env vars and NO plan_role_config, the planner must resolve to
-    the registry's roles.planner entry. While Claude usage is capped the
-    stock roles.planner entry is ollama/glm, which resolve_role resolves to
-    its concrete driver tag glm-5.2:cloud. This is the always-on default,
-    exercised against the REAL registry (not an empty stub) so the stock
-    roles.planner entry is covered. Reverting the registry to claude/sonnet
-    requires reverting these assertions too."""
+    whatever roles.planner says in the registry - a precedence test against
+    a synthetic registry, not a lock on any specific provider/model, so
+    swapping the live model_registry.json's planner entry never breaks this
+    test. This is the always-on default - no PIPELINE_DECOMPOSE mode flag
+    involved."""
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
-    # Use the REAL registry (not an empty stub) so the stock roles.planner
-    # entry is exercised.
+    fake_registry = {
+        "providers": {"acme": {"models": {"widget": {"tag": "widget-v1"}}}},
+        "roles": {"planner": {"provider": "acme", "model": "widget"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: fake_registry)
     backend_name, model = p._resolve_planner_backend(
         "ollama", "gpt-oss:20b",
     )
-    assert backend_name == "ollama"
-    assert model == "glm-5.2:cloud"
+    assert backend_name == "acme"
+    assert model == "widget-v1"
 
 
 # ---------- (b) no roles.planner registry entry → ollama/glm via fallback ----------
@@ -741,12 +743,16 @@ def test_resolve_planner_backend_no_mode_parameter(monkeypatch):
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
 
-    # Without mode — must succeed. (backend_name reflects the real registry's
-    # roles.planner.provider - ollama/glm while Claude usage is capped; the
-    # point of this assertion is just "the call succeeded", not the specific
-    # value.)
+    # Without mode — must succeed. The point of this assertion is just "the
+    # call succeeded", not any specific provider/model, so stub the registry
+    # rather than depend on whatever model_registry.json says today.
+    fake_registry = {
+        "providers": {"acme": {"models": {"widget": {"tag": "widget-v1"}}}},
+        "roles": {"planner": {"provider": "acme", "model": "widget"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: fake_registry)
     backend_name, _model = p._resolve_planner_backend("ollama", "gpt-oss:20b")
-    assert backend_name == "ollama"
+    assert backend_name == "acme"
 
     # With mode keyword — must raise TypeError (parameter removed).
     with pytest.raises(TypeError):
@@ -880,20 +886,26 @@ def test_dispatch_story_scratchpad_env_still_respected(
     assert captured.get("include_scratchpad") is False
 
 
-# ---------- get_role_config shows planner resolving to the registry default ----------
+# ---------- get_role_config shows planner resolving to the registry entry ----------
 
 def test_get_role_config_planner_resolves_to_registry_planner_entry(monkeypatch):
     """get_role_config(plan_name=None) must show the planner role resolving
-    to the registry's roles.planner entry - ollama/glm (tag glm-5.2:cloud)
-    while Claude usage is capped (see
+    to whatever roles.planner says in the registry - stubbed here so the
+    test doesn't depend on which provider/model model_registry.json
+    currently configures (see
     test_resolve_planner_backend_defaults_to_registry_planner_entry_no_env_no_role_config)."""
     monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_PLANNER_MODEL", raising=False)
+    fake_registry = {
+        "providers": {"acme": {"models": {"widget": {"tag": "widget-v1"}}}},
+        "roles": {"planner": {"provider": "acme", "model": "widget"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: fake_registry)
     result = p.get_role_config(plan_name=None)
     assert result["ok"] is True
     planner = result["roles"]["planner"]
-    assert planner["provider"] == "ollama"
-    assert planner["model"] == "glm-5.2:cloud"
+    assert planner["provider"] == "acme"
+    assert planner["model"] == "widget-v1"
 
 
 # ---------- no PIPELINE_DECOMPOSE / PIPELINE_DECOMPOSE_CLOUD_MODEL references remain ----------

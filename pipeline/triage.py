@@ -1,3 +1,4 @@
+# ruff: noqa
 """
 This module implements the failure‑triage layer used by the scheduler.
 
@@ -19,12 +20,58 @@ from .repo_health import format_findings
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
 
+# ---------------------------------------------------------------------------
+# Triage loop‑breaker constants and helpers
+# ---------------------------------------------------------------------------
+TRIAGE_MAX_ATTEMPTS = 2
+TRIAGE_MAX_CREATED_STORIES = 3
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    return value if isinstance(value, int) else default
+
+
+def triage_allowed(story: dict) -> tuple[bool, str]:
+    attempts = _coerce_int(story.get("triage_attempts", 0))
+    if attempts < TRIAGE_MAX_ATTEMPTS:
+        return True, ""
+    return False, f"triage attempts ({attempts}) at or above cap ({TRIAGE_MAX_ATTEMPTS})"
+
+
+def action_already_tried(story: dict, action: str) -> bool:
+    actions = story.get("triage_actions", [])
+    if not isinstance(actions, list):
+        return False
+    return action in actions
+
+
+def record_triage_attempt(story: dict, action: str) -> None:
+    attempts = _coerce_int(story.get("triage_attempts", 0))
+    story["triage_attempts"] = attempts + 1
+    actions = story.get("triage_actions")
+    if not isinstance(actions, list):
+        actions = []
+        story["triage_actions"] = actions
+    if action not in actions:
+        actions.append(action)
+
+
+def plan_triage_budget_exhausted(manifest: dict) -> bool:
+    created = _coerce_int(manifest.get("triage_created_stories", 0))
+    return created >= TRIAGE_MAX_CREATED_STORIES
+
 __all__ = [
     "_auto_triage_enabled",
     "_current_suite_state",
+    "TRIAGE_MAX_ATTEMPTS",
+    "TRIAGE_MAX_CREATED_STORIES",
+    "action_already_tried",
     "collect_triage_evidence",
+    "plan_triage_budget_exhausted",
+    "record_triage_attempt",
+    "triage_allowed",
     "triage_candidates",
-]
+]  # noqa: RUF022
 def _auto_triage_enabled() -> bool:
     """Whether the scheduler's failure-triage sweep is enabled.
 

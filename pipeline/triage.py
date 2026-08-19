@@ -12,17 +12,18 @@ import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 import logging
-
+import json
 from .overlord import _invoke_overlord, _load_policy
 from .persistence import _notify_user
 from .parsers import _parse_ruling
+from .parsers import _atomic_write_json
 from .persistence import _append_decision, _plan_role_config
 from .build_detect import detect_test_command
 from .concurrency import _heavy_lock, _is_heavy
 from .config import STEP_CAP_FALLBACK_THRESHOLD
 from .rebrief import collect_failure_evidence
-from .repo_health import format_findings
-
+from .repo_health import format_findings, classify_repo_health
+TRIAGE_MAX_PER_TICK = 1
 # ---------------------------------------------------------------------------
 # Triage executor helpers
 # ---------------------------------------------------------------------------
@@ -149,6 +150,8 @@ __all__ = [
     "_current_suite_state",
     "TRIAGE_MAX_ATTEMPTS",
     "TRIAGE_MAX_CREATED_STORIES",
+    "TRIAGE_MAX_PER_TICK",
+    "run_triage_sweep",
     "action_already_tried",
     "collect_triage_evidence",
     "plan_triage_budget_exhausted",
@@ -159,7 +162,53 @@ __all__ = [
     "triage_allowed",
     "triage_candidates",
     ]
-
+def run_triage_sweep(plan_name: str) -> dict:
+    if not _auto_triage_enabled():
+        return {"ok": True, "skipped": "disabled"}
+    try:
+        from .server import PLAN_DIR
+        manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except Exception:
+            return {"ok": True, "skipped": "no_manifest"}
+        if manifest.get("paused"):
+            return {"ok": True, "skipped": "plan_paused"}
+        candidates = triage_candidates(manifest.get("stories", {}))
+        if not candidates:
+            return {"ok": True, "triaged": []}
+        triaged_keys = []
+        actions = {}
+        changed = False
+        for key in candidates[:TRIAGE_MAX_PER_TICK]:
+            story = manifest["stories"][key]
+            allowed, reason = triage_allowed(story)
+            if not allowed:
+                _park(plan_name, key, story, reason)
+                changed = True
+                continue
+            if plan_triage_budget_exhausted(manifest):
+                _park(plan_name, key, story, "plan triage budget exhausted")
+                changed = True
+                continue
+            try:
+                findings = classify_repo_health(story, story.get("worktree") or ".")
+            except Exception:
+                findings = []
+            evidence = collect_triage_evidence(story.get("worktree", ""), story, findings)
+            ruling = rule_on_story(plan_name, key, story, evidence)
+            if action_already_tried(story, ruling["action"]):
+                ruling = {"action": "park_for_human", "rationale": f"action {ruling['action']} already tried"}
+            record_triage_attempt(story, ruling["action"])
+            action = _apply_ruling_for_mode(plan_name, key, story, ruling, manifest, manifest_path)
+            triaged_keys.append(key)
+            actions[key] = ruling["action"]
+            changed = True
+        if changed:
+            _atomic_write_json(manifest_path, manifest)
+        return {"ok": True, "triaged": triaged_keys, "actions": actions}
+    except Exception as exc:
+        return {"ok": False, "error": type(exc).__name__}
 
 def _auto_triage_enabled() -> bool:
     """Whether the scheduler's failure-triage sweep is enabled.

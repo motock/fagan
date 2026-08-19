@@ -365,24 +365,18 @@ from .ticketing import (  # noqa: F401
     _resolve_issue_uuid,
     _state_cache,
     get_ticket_provider,
-    get_ticket_provider,
     plane_request,
 )
-
 from .triage import run_triage_sweep
 
 # Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
 # threshold constants and USAGE_STATE_PATH (Option B); the autouse
 # _isolate_usage_state fixture patches both p.USAGE_STATE_PATH and
 # pipeline_usage.USAGE_STATE_PATH.
-
-from .triage import run_triage_sweep
-
 # Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
 # threshold constants and USAGE_STATE_PATH (Option B); the autouse
 # _isolate_usage_state fixture patches both p.USAGE_STATE_PATH and
 # pipeline_usage.USAGE_STATE_PATH.
-
 # Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
 # threshold constants and USAGE_STATE_PATH (Option B); the autouse
 # _isolate_usage_state fixture patches both p.USAGE_STATE_PATH and

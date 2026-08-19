@@ -10158,6 +10158,68 @@ def test_escalate_review_to_claude_default_preserves_claude_no_model(monkeypatch
     assert story.get("model") == "gemma4:26b-a4b-it-qat"
 
 
+def test_escalate_review_to_claude_clears_stale_review_state(monkeypatch):
+    """_escalate_review_to_claude keeps the SAME worktree/branch (unlike
+    _escalate_to_claude), so a stale last_reviewed_sha from before escalation
+    remains valid git history. The Mode 24/28 guard in pipeline/server.py
+    downgrades a fresh reviewer APPROVE back to REQUEST_CHANGES whenever a
+    file recorded in story["last_review_findings"] does not appear in
+    `git diff --name-only <last_reviewed_sha> HEAD` - which would perpetually
+    re-trip on findings already fixed (the flagged file may never need
+    touching again), silently burning the 'fresh' budget and parking an
+    already-correct implementation. Escalation must therefore also pop the
+    stale review-state keys, not just the rework/inconclusive counters."""
+    monkeypatch.setattr("pipeline.escalation._notify_user", lambda *a, **k: None)
+    monkeypatch.setenv("PIPELINE_ESCALATION_BACKEND", "ollama")
+    monkeypatch.setenv("PIPELINE_ESCALATION_MODEL", "deepseek-v4-flash:cloud")
+    story = {
+        "backend": "local",
+        "model": "gemma4:26b-a4b-it-qat",
+        "rework_attempts": 3,
+        "review_inconclusive_count": 2,
+        "last_review_findings": ["pipeline/server.py:3868 missing guard reset"],
+        "last_reviewed_sha": "abc123deadbeef",
+        "acceptance_failed_review": True,
+        "review_feedback": "Prior Blocking finding(s) were never addressed",
+    }
+
+    p._escalate_review_to_claude(story, "S1", "escplan", "rework budget exhausted")
+
+    # All six stale review-state keys must be cleared.
+    assert "rework_attempts" not in story
+    assert "review_inconclusive_count" not in story
+    assert "last_review_findings" not in story
+    assert "last_reviewed_sha" not in story
+    assert "acceptance_failed_review" not in story
+    assert "review_feedback" not in story
+    # Existing retarget behavior must still hold in the same call.
+    assert story["backend"] == "ollama"
+    assert story["model"] == "deepseek-v4-flash:cloud"
+    assert story["escalated"] is True
+
+
+def test_escalate_review_to_claude_no_stale_keys_does_not_raise(monkeypatch):
+    """A story that never had any of the six review-state keys set must not
+    raise when escalated - dict.pop with a default already handles a missing
+    key, so this documents no regression."""
+    monkeypatch.setattr("pipeline.escalation._notify_user", lambda *a, **k: None)
+    monkeypatch.delenv("PIPELINE_ESCALATION_BACKEND", raising=False)
+    monkeypatch.delenv("PIPELINE_ESCALATION_MODEL", raising=False)
+    story = {"backend": "local", "model": "gemma4:26b-a4b-it-qat"}
+
+    # Must not raise.
+    p._escalate_review_to_claude(story, "S1", "escplan", "rework budget exhausted")
+
+    assert story["backend"] == "claude"
+    assert story["escalated"] is True
+    assert story.get("model") == "gemma4:26b-a4b-it-qat"
+    # None of the six keys should have been introduced.
+    for key in ("rework_attempts", "review_inconclusive_count",
+                "last_review_findings", "last_reviewed_sha",
+                "acceptance_failed_review", "review_feedback"):
+        assert key not in story
+
+
 def test_check_story_status_routes_oracle_step_cap_to_interrupted(
     plan_dir, tmp_path, monkeypatch,
 ):

@@ -202,6 +202,12 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     story["escalated"] = True
     story.pop("rework_attempts", None)
     story.pop("review_inconclusive_count", None)
+    # Clearing stale review state that may cause Mode 24/28 guard to
+    # re‑trip on already‑fixed findings when the same worktree is reused.
+    story.pop("last_review_findings", None)
+    story.pop("last_reviewed_sha", None)
+    story.pop("acceptance_failed_review", None)
+    story.pop("review_feedback", None)
     _notify_user(plan_name, f"{story_key} escalating to {_escalation_label()} ({reason}); "
                             f"retrying the same worktree with a fresh budget.")
 

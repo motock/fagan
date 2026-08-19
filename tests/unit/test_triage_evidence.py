@@ -343,9 +343,11 @@ def test_module_all_exports_collect_triage_evidence():
     assert "collect_triage_evidence" in triage.__all__
 
 
-def test_module_all_only_exports_collect_triage_evidence():
-    """__all__ must be exactly ['collect_triage_evidence']."""
-    assert triage.__all__ == ["collect_triage_evidence"]
+def test_module_all_exports_public_api():
+    """__all__ must export the public API surface: collect_triage_evidence
+    and the _current_suite_state helper (codebase convention for
+    underscore-prefixed helpers that tests reference directly)."""
+    assert triage.__all__ == ["_current_suite_state", "collect_triage_evidence"]
 
 
 def test_module_docstring_states_fail_open_contract():
@@ -377,3 +379,78 @@ def test_module_does_not_import_server_at_module_level():
             assert line.startswith((" ", "\t")), (
                 f"module-level server import forbidden (circular): {line!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Section (b2): current suite state wiring into collect_triage_evidence
+#
+# These verify the WIRING of _current_suite_state into collect_triage_evidence
+# actually works end to end. A passing unit test of _current_suite_state alone
+# would not catch a wiring bug where it is implemented but never called. They
+# monkeypatch pipeline.triage._current_suite_state so no real subprocess runs.
+# ---------------------------------------------------------------------------
+
+_PASS_STRING = (
+    "CURRENT STATE: full test suite PASSES at the worktree's current HEAD."
+)
+
+
+def test_current_suite_state_pass_string_appears_after_story_state(monkeypatch):
+    """When _current_suite_state returns the pass string, that exact string
+    must appear in collect_triage_evidence's result, positioned AFTER the
+    'STORY STATE:' section."""
+    monkeypatch.setattr(triage, "_current_suite_state", lambda w: _PASS_STRING)
+    monkeypatch.setattr(triage, "collect_failure_evidence", lambda w, s, limit=6000: "")
+    result = triage.collect_triage_evidence("/nonexistent/worktree", {"status": "parked"})
+    assert _PASS_STRING in result
+    assert "STORY STATE:" in result
+    assert result.index("STORY STATE:") < result.index(_PASS_STRING), (
+        "current suite state section must appear AFTER the STORY STATE section"
+    )
+
+
+def test_current_suite_state_empty_omits_current_state_section(monkeypatch):
+    """When _current_suite_state returns '', 'CURRENT STATE' must NOT appear
+    anywhere in the result."""
+    monkeypatch.setattr(triage, "_current_suite_state", lambda w: "")
+    monkeypatch.setattr(triage, "collect_failure_evidence", lambda w, s, limit=6000: "")
+    result = triage.collect_triage_evidence("/nonexistent/worktree", {"status": "parked"})
+    assert "CURRENT STATE" not in result
+
+
+def test_current_suite_state_raising_does_not_propagate(monkeypatch):
+    """If _current_suite_state raises, collect_triage_evidence's own
+    try/except around the call must catch it (defense in depth, matching how
+    format_findings is double-wrapped just below). The result still contains
+    'STORY STATE:' and nothing propagates."""
+    def _boom(w):
+        raise RuntimeError("boom from _current_suite_state")
+
+    monkeypatch.setattr(triage, "_current_suite_state", _boom)
+    monkeypatch.setattr(triage, "collect_failure_evidence", lambda w, s, limit=6000: "")
+    result = triage.collect_triage_evidence("/nonexistent/worktree", {"status": "parked"})
+    assert "STORY STATE:" in result
+    assert "CURRENT STATE" not in result
+
+
+def test_current_suite_state_participates_in_trim_budget(monkeypatch):
+    """With a non-empty _current_suite_state return AND collect_failure_evidence
+    stubbed to return 100000 characters, len(result) <= limit must still hold.
+    This exercises the pre-existing trim path with the new fixed section
+    present (current_state_section participates in fixed_parts/fixed_len
+    accounting)."""
+    monkeypatch.setattr(triage, "_current_suite_state", lambda w: _PASS_STRING)
+    monkeypatch.setattr(
+        triage, "collect_failure_evidence", lambda w, s, limit=6000: "X" * 100000
+    )
+    limit = 8000
+    result = triage.collect_triage_evidence(
+        "/nonexistent/worktree", {"status": "parked"}, limit=limit
+    )
+    assert len(result) <= limit, (
+        f"result length {len(result)} exceeds limit {limit} with the new "
+        f"current_state_section present"
+    )
+    # The fixed sections (including current_state) must survive the trim.
+    assert "STORY STATE:" in result
+    assert _PASS_STRING in result

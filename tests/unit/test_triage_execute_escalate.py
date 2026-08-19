@@ -25,7 +25,6 @@ import pytest
 import pipeline.triage
 from pipeline import triage as triage_mod
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

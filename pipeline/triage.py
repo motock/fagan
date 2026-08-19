@@ -57,21 +57,18 @@ def record_triage_attempt(story: dict, action: str) -> None:
 
 
 def plan_triage_budget_exhausted(manifest: dict) -> bool:
+    """Ceiling ships together with the loop breaker so the guard can never be forgotten later.
+    The actions that create stories (split_story, repo_issue) are deliberately out of scope.
+    """
     created = _coerce_int(manifest.get("triage_created_stories", 0))
     return created >= TRIAGE_MAX_CREATED_STORIES
 
 __all__ = [
     "_auto_triage_enabled",
     "_current_suite_state",
-    "TRIAGE_MAX_ATTEMPTS",
-    "TRIAGE_MAX_CREATED_STORIES",
-    "action_already_tried",
     "collect_triage_evidence",
-    "plan_triage_budget_exhausted",
-    "record_triage_attempt",
-    "triage_allowed",
     "triage_candidates",
-]  # noqa: RUF022
+]
 def _auto_triage_enabled() -> bool:
     """Whether the scheduler's failure-triage sweep is enabled.
 

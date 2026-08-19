@@ -79,23 +79,23 @@ def _current_suite_state(worktree: str) -> str:
         needs_heavy = bool(test_cmd) and _is_heavy(test_cmd)
         if needs_heavy:
             with _heavy_lock():
-                r = subprocess.run(
-                    test_cmd,
-                    cwd=test_dir,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=timeout_s,
-                )
+                r = triage.subprocess.run(
+                     test_cmd,
+                     cwd=test_dir,
+                     capture_output=True,
+                     text=True,
+                     check=False,
+                     timeout=timeout_s,
+                 )
         else:
-            r = subprocess.run(
-                test_cmd,
-                cwd=test_dir,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_s,
-            )
+            r = triage.subprocess.run(
+                 test_cmd,
+                 cwd=test_dir,
+                 capture_output=True,
+                 text=True,
+                 check=False,
+                 timeout=timeout_s,
+             )
         if r.returncode == 0:
             return "CURRENT STATE: full test suite PASSES at the worktree's current HEAD."
         if r.returncode == 5:
@@ -104,10 +104,8 @@ def _current_suite_state(worktree: str) -> str:
             f"CURRENT STATE: full test suite FAILS at the worktree's current HEAD (rc={r.returncode}):\n"
             f"{(r.stdout + r.stderr)[-500:]}"
         )
-    except (OSError, subprocess.SubprocessError):
+    except Exception:  # noqa: BLE001
         return ""
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 

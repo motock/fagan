@@ -351,7 +351,13 @@ def test_module_all_exports_public_api():
     assert triage.__all__ == [
         "_auto_triage_enabled",
         "_current_suite_state",
+        "TRIAGE_MAX_ATTEMPTS",
+        "TRIAGE_MAX_CREATED_STORIES",
+        "action_already_tried",
         "collect_triage_evidence",
+        "plan_triage_budget_exhausted",
+        "record_triage_attempt",
+        "triage_allowed",
         "triage_candidates",
     ]
 

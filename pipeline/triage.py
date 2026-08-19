@@ -79,8 +79,7 @@ __all__ = [
     "record_triage_attempt",
     "triage_allowed",
     "triage_candidates",
-    "rule_on_story",
-]
+    ]
 
 
 def _auto_triage_enabled() -> bool:

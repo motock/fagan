@@ -22,7 +22,7 @@ import subprocess
 
 import pytest
 
-from pipeline import triage  # noqa: E402
+from pipeline import triage
 
 
 # ---------------------------------------------------------------------------

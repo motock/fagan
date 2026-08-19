@@ -150,8 +150,6 @@ __all__ = [
     "_current_suite_state",
     "TRIAGE_MAX_ATTEMPTS",
     "TRIAGE_MAX_CREATED_STORIES",
-    "TRIAGE_MAX_PER_TICK",
-    "run_triage_sweep",
     "action_already_tried",
     "collect_triage_evidence",
     "plan_triage_budget_exhausted",

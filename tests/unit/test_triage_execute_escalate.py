@@ -237,7 +237,6 @@ class TestClaudeBranch:
         base_story["tried_fallback_model"] = True
         patched["auto_escalation"] = True
 
-        result = pipeline.truling = None  # noqa: F841 (guard against typo)
         result = pipeline.triage.execute_ruling(
             "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
         )

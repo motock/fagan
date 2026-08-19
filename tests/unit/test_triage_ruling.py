@@ -10,8 +10,7 @@ import logging
 
 import pytest
 
-import pipeline.triage as triage
-
+from pipeline import triage
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

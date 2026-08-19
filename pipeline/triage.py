@@ -12,14 +12,38 @@ from pathlib import Path
 
 from .build_detect import detect_test_command
 from .concurrency import _heavy_lock, _is_heavy
+from .config import STEP_CAP_FALLBACK_THRESHOLD
 from .rebrief import collect_failure_evidence
 from .repo_health import format_findings
 
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
 
-__all__ = ["_current_suite_state", "collect_triage_evidence"]
+__all__ = ["_auto_triage_enabled", "_current_suite_state", "collect_triage_evidence", "triage_candidates"]
+def _auto_triage_enabled() -> bool:
+    """Return True if PIPELINE_AUTO_TRIAGE is set to a truthy value."""
+    override = os.environ.get("PIPELINE_AUTO_TRIAGE", "").strip().lower()
+    if override in ("1", "true", "yes", "on"):
+        return True
+    if override in ("0", "false", "no", "off"):
+        return False
+    return False
 
+
+def triage_candidates(stories: dict) -> list[str]:
+    """Return sorted list of story keys that should be triaged."""
+    candidates = []
+    for key, story in stories.items():
+        status = story.get("status")
+        if status in ("parked", "failed"):
+            candidates.append(key)
+            continue
+        streak = story.get("step_cap_streak", 0)
+        if not isinstance(streak, int):
+            streak = 0
+        if streak >= STEP_CAP_FALLBACK_THRESHOLD:
+            candidates.append(key)
+    return sorted(candidates)
 # ---------------------------------------------------------------------------
 # Helper: run the real test suite against the worktree's CURRENT HEAD
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import logging
 
 from .overlord import _invoke_overlord, _load_policy
+from .persistence import _notify_user
 from .parsers import _parse_ruling
 from .persistence import _append_decision, _plan_role_config
 from .build_detect import detect_test_command
@@ -21,6 +22,81 @@ from .concurrency import _heavy_lock, _is_heavy
 from .config import STEP_CAP_FALLBACK_THRESHOLD
 from .rebrief import collect_failure_evidence
 from .repo_health import format_findings
+
+# ---------------------------------------------------------------------------
+# Triage executor helpers
+# ---------------------------------------------------------------------------
+
+# from .persistence import _notify_user
+
+
+def _park(plan_name, story_key, story, reason) -> str:
+    """Park a story and notify the user.
+
+    The function sets ``story['status']`` to ``'parked'`` and records the
+    ``reason`` in ``story['parked_reason']``.  It then attempts to notify the
+    user via :func:`pipeline.persistence._notify_user`.  Any exception raised by
+    the notification is swallowed so that the park operation never fails.
+
+    Parameters
+    ----------
+    plan_name: str
+        The name of the plan the story belongs to.
+    story_key: str
+        The unique key of the story.
+    story: dict
+        The mutable story dictionary.
+    reason: str
+        Human‑readable reason for parking.
+
+    Returns
+    -------
+    str
+        ``"park_for_human"`` – the marker used by the scheduler.
+    """
+    # Mutate the story first – this must happen regardless of notification
+    story["status"] = "parked"
+    story["parked_reason"] = reason
+    try:
+        _notify_user(plan_name, f"{story_key} triage: {reason}")
+    except Exception:  # pragma: no cover – notification failures are ignored
+        pass
+    return "park_for_human"
+
+
+def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+    """Execute a ruling in this slice.
+
+    The current implementation is intentionally minimal – every action
+    (recognized or not) results in parking the story.  The rationale is
+    truncated to 300 characters to keep the notification concise.
+    """
+    action = ruling.get("action", "unknown")
+    rationale = ruling.get("rationale", "")[:300]
+    reason = f"unhandled ruling action '{action}': {rationale}"
+    return _park(plan_name, story_key, story, reason)
+
+
+def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+    """Dispatch a ruling based on the current autonomy mode.
+
+    * ``dry-run`` – the executor is disabled.  The story is left untouched and a
+      notification is sent with the recommended action and rationale.
+    * ``gated`` or ``full`` – the executor is enabled and the ruling is
+      executed via :func:`execute_ruling`.
+    """
+    # Lazy import to avoid circular dependency
+    from .server import PIPELINE_AUTONOMY
+
+    if PIPELINE_AUTONOMY == "dry-run":
+        # Notify but do not act
+        action = ruling.get("action", "unknown")
+        rationale = ruling.get("rationale", "")
+        _notify_user(plan_name, f"{story_key} triage dry-run: {action} – {rationale}")
+        return "dry-run"
+    # Any other mode – execute the ruling
+    return execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
+
 
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
@@ -77,6 +153,9 @@ __all__ = [
     "collect_triage_evidence",
     "plan_triage_budget_exhausted",
     "record_triage_attempt",
+    "_park",
+    "execute_ruling",
+    "_apply_ruling_for_mode",
     "rule_on_story",
     "triage_allowed",
     "triage_candidates",

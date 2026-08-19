@@ -16,7 +16,6 @@ The implementation does not exist yet, so this file is expected to be RED
 import pytest
 
 import pipeline.triage
-from pipeline import server
 from pipeline import triage as triage_mod
 
 

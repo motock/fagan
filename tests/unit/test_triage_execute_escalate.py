@@ -218,7 +218,7 @@ class TestLocalFallbackBranch:
         self, base_story, escalate_ruling, manifest, manifest_path, patched
     ):
         # No local_model_fallback key at all.
-        result = pipeline.triage.execute_ruling(
+        pipeline.triage.execute_ruling(
             "cap1", "S1", base_story, escalate_ruling, manifest, manifest_path
         )
 

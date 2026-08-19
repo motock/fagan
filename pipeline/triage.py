@@ -19,14 +19,7 @@ from .repo_health import format_findings
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
 
-class _TriageAll(list):
-    """Custom __all__ list that reports equality to the two‑item list expected by tests."""
-    def __eq__(self, other):
-        if isinstance(other, list):
-            return other == ["_current_suite_state", "collect_triage_evidence"]
-        return super().__eq__(other)
-
-__all__ = _TriageAll(["_auto_triage_enabled", "_current_suite_state", "collect_triage_evidence", "triage_candidates"])  # type: ignore[assignment]  # noqa: PLE0605
+__all__ = ["_current_suite_state", "collect_triage_evidence"]
 def _auto_triage_enabled() -> bool:
     """Return True if PIPELINE_AUTO_TRIAGE is set to a truthy value."""
     override = os.environ.get("PIPELINE_AUTO_TRIAGE", "").strip().lower()

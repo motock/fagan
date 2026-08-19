@@ -79,7 +79,7 @@ def _current_suite_state(worktree: str) -> str:
         needs_heavy = bool(test_cmd) and _is_heavy(test_cmd)
         if needs_heavy:
             with _heavy_lock():
-                r = triage.subprocess.run(
+                r = sys.modules[__name__].subprocess.run(
                      test_cmd,
                      cwd=test_dir,
                      capture_output=True,
@@ -88,7 +88,7 @@ def _current_suite_state(worktree: str) -> str:
                      timeout=timeout_s,
                  )
         else:
-            r = triage.subprocess.run(
+            r = sys.modules[__name__].subprocess.run(
                  test_cmd,
                  cwd=test_dir,
                  capture_output=True,

@@ -31,10 +31,12 @@ EVIDENCE = "=== FAILURE EVIDENCE ===\nbuild failed: ModuleNotFoundError: No modu
 @pytest.fixture(autouse=True)
 def _reset_triage_mocks(monkeypatch):
     """Ensure each test starts from a clean, deterministic set of stubs."""
-    # Default stubs; individual tests override as needed.
-    monkeypatch.setattr(triage, "_load_policy", lambda: "GLOBAL POLICY TEXT")
-    monkeypatch.setattr(triage, "_plan_role_config", lambda plan_name: {"overlord": {"provider": "ollama"}})
-    monkeypatch.setattr(triage, "_append_decision", lambda plan_name, record: None)
+    # Default stubs; individual tests override as needed. raising=False keeps
+    # the suite red for the RIGHT reason (missing rule_on_story / failing
+    # assertions) rather than erroring in this fixture before any test body runs.
+    monkeypatch.setattr(triage, "_load_policy", lambda: "GLOBAL POLICY TEXT", raising=False)
+    monkeypatch.setattr(triage, "_plan_role_config", lambda plan_name: {"overlord": {"provider": "ollama"}}, raising=False)
+    monkeypatch.setattr(triage, "_append_decision", lambda plan_name, record: None, raising=False)
     yield
 
 

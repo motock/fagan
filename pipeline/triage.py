@@ -80,7 +80,7 @@ def _current_suite_state(worktree: str) -> str:
 # Main triage evidence collection
 # ---------------------------------------------------------------------------
 
-def collect_triage_evidence(worktree: str, story: dict, findings: list | None = None) -> str:
+def collect_triage_evidence(worktree: str, story: dict, findings: list | None = None, limit: int = 8000) -> str:
     triage_question = f"TRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it."
     story_state = "\n".join(
         f"{k}: {story.get(k, '-') }"
@@ -121,7 +121,7 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
     if findings_section:
         fixed_parts.append(findings_section)
     fixed_text = "\n".join(fixed_parts)
-    limit = 8000
+    # limit = 8000
     remaining = max(0, limit - len(fixed_text))
     try:
         failure_evidence = collect_failure_evidence(worktree, story, limit=remaining)

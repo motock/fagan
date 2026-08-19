@@ -10,7 +10,12 @@ and the park‑and‑notify invariant.
 import os
 import subprocess
 from pathlib import Path
+from datetime import datetime, timezone
+import logging
 
+from .overlord import _invoke_overlord, _load_policy
+from .parsers import _parse_ruling
+from .persistence import _append_decision, _plan_role_config
 from .build_detect import detect_test_command
 from .concurrency import _heavy_lock, _is_heavy
 from .config import STEP_CAP_FALLBACK_THRESHOLD
@@ -72,9 +77,12 @@ __all__ = [
     "collect_triage_evidence",
     "plan_triage_budget_exhausted",
     "record_triage_attempt",
+    "rule_on_story",
     "triage_allowed",
     "triage_candidates",
-]
+    ]
+
+
 def _auto_triage_enabled() -> bool:
     """Whether the scheduler's failure-triage sweep is enabled.
 
@@ -106,14 +114,14 @@ def triage_candidates(stories: dict) -> list[str]:
 
     A story is a candidate if its ``status`` is ``"parked"`` or ``"failed"``,
     OR its ``step_cap_streak`` is at or above
-    ``STEP_CAP_FALLBACK_THRESHOLD``. A missing or non-integer
+    ``STEP_CAP_FALLBACK_THRESHOLD``. A missing or non‑integer
     ``step_cap_streak`` counts as 0, and a story dict with no ``status`` key
     is treated as having no status (never raises).
 
     ``interrupted`` is deliberately NOT a trigger by itself: it is already in
     the scheduler's ready list (``("todo", "interrupted", "changes_requested")``)
-    and auto-resumes on the next tick, so triaging it would fire continuously
-    during normal operation. The step-cap STREAK is the interrupted-adjacent
+    and auto‑resumes on the next tick, so triaging it would fire continuously
+    during normal operation. The step‑cap STREAK is the interrupted‑adjacent
     signal worth acting on, and it is a streak, not a single interrupt.
 
     The result is ``sorted(...)`` so the sweep is deterministic.
@@ -130,6 +138,7 @@ def triage_candidates(stories: dict) -> list[str]:
         if streak >= STEP_CAP_FALLBACK_THRESHOLD:
             candidates.append(key)
     return sorted(candidates)
+
 # ---------------------------------------------------------------------------
 # Helper: run the real test suite against the worktree's CURRENT HEAD
 # ---------------------------------------------------------------------------
@@ -243,3 +252,54 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
         result = fixed_text[:limit]
     return result
 
+# ---------------------------------------------------------------------------
+# Rule on story – the core triage decision logic
+# ---------------------------------------------------------------------------
+
+def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) -> dict:
+    """Return a ruling for a terminal story.
+
+    The function builds a prompt consisting of the policy text, a triage framing
+    that states the story is terminal and asks what to do about it, the supplied
+    evidence, and a closing instruction to rule now using the output contract
+    exactly, including the ACTION field, and to choose the honest action even if
+    it is one the pipeline cannot execute yet.
+
+    The function is fail‑open: any exception during policy load, overlord call
+    or parsing results in a default ruling that parks the story for a human
+    and logs a warning containing only the exception type.
+    """
+    try:
+        policy = _load_policy()
+        # Build prompt
+        prompt = f"{policy}\nTRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it.\nEVIDENCE:\n{evidence}\nPlease respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nACTION: ..."
+        # Call overlord
+        raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
+        # Parse ruling
+        ruling = _parse_ruling(raw or "")
+    except Exception as exc:  # pragma: no cover - fail open
+        ruling = {
+            "ruling": "",
+            "tier": "",
+            "risk": "",
+            "rationale": f"triage failed open: {type(exc).__name__}",
+            "notify_user": True,
+            "action": "park_for_human",
+            "failed_open": True,
+        }
+        logging.getLogger("pipeline").warning(type(exc).__name__)
+    else:
+        ruling["failed_open"] = False
+    # Append decision record
+    record = {
+        "story_key": story_key,
+        "question": "failure triage",
+        **ruling,
+        "decided_by": "overlord-triage",
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        _append_decision(plan_name, record)
+    except Exception:  # pragma: no cover - persistence failure should not crash
+        logging.getLogger("pipeline").warning("Failed to append decision for story %s", story_key)
+    return ruling

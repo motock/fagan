@@ -3227,18 +3227,21 @@ def test_review_story_low_risk_skips_security_reviewer(plan_dir, agents_dir, mon
     assert len(security_calls) == 0, "security reviewer must NOT be called for low-risk stories"
 
 
-def test_run_security_reviewer_uses_security_role_backend_not_review_env(agents_dir, monkeypatch):
-    """T11/T12: the security-engineer pass resolves its OWN "security" role
-    (registry default ollama/glm while Claude usage is capped) and must never
-    silently follow PIPELINE_BACKEND_REVIEW=local the way ordinary review
-    does - security review is routed by its own role, not the review env
-    var. The stock registry security role is the always-on default here; a
-    plan's role_config.security override is covered by
-    test_run_security_reviewer_routes_via_plan_role_config_security."""
+def test_run_security_reviewer_always_uses_claude_backend_even_under_local_review(agents_dir, monkeypatch):
+    """T11/T12: the security-engineer pass is the one place "cloud only as
+    reviewer" and "security review needs human-grade scrutiny" are the same
+    requirement - it must never silently run on the local reviewer just
+    because PIPELINE_BACKEND_REVIEW=local is set for ordinary review. Stub
+    the registry with NO roles.security entry so this exercises
+    resolve_role's hardcoded default_provider="claude" fallback - a code
+    invariant, not a value that changes when model_registry.json's other
+    roles get reconfigured."""
     (agents_dir / "security-engineer.md").write_text(
         '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
     )
     monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "local")
+    fake_registry = {"providers": {}, "roles": {}}
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: fake_registry)
     captured = {}
 
     class _FakeDriver:
@@ -3255,7 +3258,7 @@ def test_run_security_reviewer_uses_security_role_backend_not_review_env(agents_
     p._run_security_reviewer("/tmp/some-worktree", "agent/some-branch")
 
     assert captured["role"] == "review"
-    assert captured["name"] == "ollama"
+    assert captured["name"] == "claude"
 
 
 def test_run_security_reviewer_does_not_run_test_suite(agents_dir, monkeypatch):
@@ -3306,12 +3309,11 @@ def test_run_security_reviewer_incremental_review_scopes_to_since_sha(agents_dir
 
 def test_run_security_reviewer_routes_via_plan_role_config_security(agents_dir, monkeypatch):
     """The security-engineer pass is role-routable: a plan's
-    role_config.security overrides the registry default, so a high-risk
-    story can clear security review on a configured backend
+    role_config.security overrides the Claude default, so a high-risk
+    story can clear security review on a configured non-Claude backend
     (e.g. ollama/glm) instead of dead-ending when Claude is unavailable.
-    Unconfigured, it resolves to the registry's security role default
-    (covered by
-    test_run_security_reviewer_uses_security_role_backend_not_review_env)."""
+    Unconfigured, it still resolves to Claude (covered by
+    test_run_security_reviewer_always_uses_claude_backend_even_under_local_review)."""
     (agents_dir / "security-engineer.md").write_text(
         '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
     )
@@ -15435,11 +15437,15 @@ def test_run_decompose_calls_registry_resolved_backend_with_product_analyst_pers
     agents_dir, monkeypatch,
 ):
     """_run_decompose routes through role_registry.resolve_role("decompose"),
-    so against the REAL registry it resolves to the stock roles.decompose
-    entry - ollama/glm (tag glm-5.2:cloud) while Claude usage is capped - and
-    seeds the product-analyst persona body. (The persona's own declared
-    model is only used as the fallback when the registry has NO
-    roles.decompose entry; the registry entry wins now that one exists.)"""
+    so it resolves to whatever roles.decompose says in the registry - stubbed
+    here (a synthetic "acme"/"widget" entry) so the test doesn't depend on
+    which provider/model model_registry.json's decompose entry currently
+    configures - and seeds the product-analyst persona body."""
+    fake_registry = {
+        "providers": {"acme": {"models": {"widget": {"tag": "widget-v1"}}}},
+        "roles": {"decompose": {"provider": "acme", "model": "widget"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: fake_registry)
     fake = _FakePlannerBackend(response='{"epics": []}')
     calls = []
 
@@ -15452,11 +15458,11 @@ def test_run_decompose_calls_registry_resolved_backend_with_product_analyst_pers
     result = p._run_decompose("Build a CLI todo app.")
 
     assert result == '{"epics": []}'
-    assert calls == [{"role": "decompose", "name": "ollama"}]
+    assert calls == [{"role": "decompose", "name": "acme"}]
     assert fake.calls[0]["prompt"] == "Build a CLI todo app."
     assert "Analyst body." in fake.calls[0]["system"]
-    # registry roles.decompose.model is glm (resolved to its tag).
-    assert fake.calls[0]["model"] == "glm-5.2:cloud"
+    # registry roles.decompose.model is "widget" (resolved to its tag).
+    assert fake.calls[0]["model"] == "widget-v1"
 
 
 def test_run_decompose_routes_to_registry_configured_provider(agents_dir, monkeypatch):

@@ -357,6 +357,8 @@ def test_module_all_exports_public_api():
         "collect_triage_evidence",
         "plan_triage_budget_exhausted",
         "record_triage_attempt",
+        "execute_ruling",
+        "_apply_ruling_for_mode",
         "rule_on_story",
         "triage_allowed",
         "triage_candidates",

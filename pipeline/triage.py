@@ -4,7 +4,6 @@ This module implements the failure‑triage layer used by the scheduler.
 All public functions in this module are fails open: on any error they
 return a minimal, well‑formed prompt that contains the TRIAGE QU
 and the park‑and‑notify invariant.
-
 """
 
 import os
@@ -19,10 +18,10 @@ from .repo_health import format_findings
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
 
-__all__ = ["collect_triage_evidence"]
+__all__ = ["_current_suite_state", "collect_triage_evidence"]
 
 # ---------------------------------------------------------------------------
-# Helper: run the real test suite against the current HEAD
+# Helper: run the real test suite against the worktree's CURRENT HEAD
 # ---------------------------------------------------------------------------
 
 def _current_suite_state(worktree: str) -> str:
@@ -32,8 +31,7 @@ def _current_suite_state(worktree: str) -> str:
     :func:`collect_failure_evidence`, which only reads cached/stale state) and
     is the fix for the gap found live on story 30e5f9fc-3681-40db-ae54-dd95387dd1e7,
     where a story sat parked with an already‑passing suite because nothing
-    ever re‑checked. Never raises. Fails open to ``""`` (silence) on any problem
-    - silence preserves today's behavior exactly, it never asserts something false.
+    ever re‑checked. Never raises. Fails open to ``""`` (silence) on any problem - silence preserves today's behavior exactly, it never asserts something false.
     """
     if not worktree:
         return ""
@@ -73,7 +71,7 @@ def _current_suite_state(worktree: str) -> str:
         if r.returncode == 5:
             return ""
         return f"CURRENT STATE: full test suite FAILS at the worktree's current HEAD (rc={r.returncode}):\n{(r.stdout + r.stderr)[-500:]}"
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return ""
 
 # ---------------------------------------------------------------------------
@@ -102,7 +100,9 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
             "triage_actions",
         ]
     )
-    # Section (b2) – current suite state
+    # Section (b2) – current suite state: a LIVE check against the
+    # worktree's current HEAD, not cached/stale state (see
+    # _current_suite_state's docstring for why this exists).
     current_state_section = ""
     try:
         current_state_section = _current_suite_state(worktree)
@@ -115,13 +115,13 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
             findings_section = format_findings(findings)
         except Exception:  # noqa: BLE001
             findings_section = ""
+    # Compute the length of the fixed sections
     fixed_parts = [triage_question, "STORY STATE:\n" + story_state]
     if current_state_section:
         fixed_parts.append(current_state_section)
     if findings_section:
         fixed_parts.append(findings_section)
     fixed_text = "\n".join(fixed_parts)
-    # limit = 8000
     remaining = max(0, limit - len(fixed_text))
     try:
         failure_evidence = collect_failure_evidence(worktree, story, limit=remaining)

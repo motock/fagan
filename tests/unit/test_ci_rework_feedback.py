@@ -12,6 +12,10 @@ A NEW COMMIT is always required.
 
 These tests call `p._ci_rework_feedback(...)` directly. They are RED until a
 later dispatch adds the helper to `pipeline/server.py`.
+
+NOTE: the helper now takes a required `attempts: int` parameter (the current
+rework round). These tests exercise round 1 (`attempts=1`), which is
+byte-identical to the pre-round-escalation wording.
 """
 
 from pipeline import server as p
@@ -26,7 +30,7 @@ _COMMIT_REQUIRED = (
 
 def test_lint_failure_includes_gate_error_verbatim_and_lint_instruction():
     gate_error = "ci fail: Lint (ruff): failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     # 1. gate_error appears verbatim (same first-line failure statement).
     assert gate_error in msg
@@ -40,7 +44,7 @@ def test_lint_failure_includes_gate_error_verbatim_and_lint_instruction():
 
 def test_test_failure_uses_balanced_both_sides_wording_no_lint_instruction():
     gate_error = "ci fail: Test (Python 3.14): failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     # gate_error appears verbatim.
     assert gate_error in msg
@@ -58,7 +62,7 @@ def test_test_failure_uses_balanced_both_sides_wording_no_lint_instruction():
 
 def test_empty_detail_falls_back_to_balanced_message_never_crashes():
     gate_error = "ci fail: "
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     # Never crashes; returns a string.
     assert isinstance(msg, str)
@@ -76,7 +80,7 @@ def test_empty_detail_falls_back_to_balanced_message_never_crashes():
 
 def test_case_insensitive_lint_match_uppercase_LINT():
     gate_error = "ci fail: LINT: failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     assert gate_error in msg
     # Took the lint branch.
@@ -87,7 +91,7 @@ def test_case_insensitive_lint_match_uppercase_LINT():
 
 def test_case_insensitive_lint_match_eslint():
     gate_error = "ci fail: eslint: failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     assert gate_error in msg
     # Took the lint branch (eslint is a lint-ish check name).
@@ -98,7 +102,7 @@ def test_case_insensitive_lint_match_eslint():
 
 def test_clippy_takes_lint_branch():
     gate_error = "ci fail: clippy: failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     assert gate_error in msg
     assert "lint" in msg.lower()
@@ -108,7 +112,7 @@ def test_clippy_takes_lint_branch():
 
 def test_golangci_takes_lint_branch():
     gate_error = "ci fail: golangci-lint: failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     assert gate_error in msg
     assert "lint" in msg.lower()
@@ -120,7 +124,7 @@ def test_unidentified_check_falls_back_to_balanced():
     # A check name that is neither lint-ish nor obviously a test still takes
     # the balanced both-sides branch (defensive default).
     gate_error = "ci fail: Build: failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     assert gate_error in msg
     assert "implementation" in msg.lower()
@@ -134,7 +138,7 @@ def test_realistic_semicolon_joined_error_string_with_lint_check():
     # "name: conclusion" pairs, truncated to 300 chars. A multi-check string
     # where one check is lint-named must take the lint branch.
     gate_error = "Lint (ruff): failure; Test (Python 3.14): failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     assert gate_error in msg
     assert "lint" in msg.lower()
@@ -146,7 +150,7 @@ def test_first_line_is_the_failure_statement_with_gate_error():
     # The helper ALWAYS starts with the failure statement including gate_error
     # verbatim - same first line as today's static template.
     gate_error = "ci fail: Lint (ruff): failure"
-    msg = p._ci_rework_feedback(gate_error)
+    msg = p._ci_rework_feedback(gate_error, 1)
 
     # The failure statement (the line containing gate_error) must be the
     # opening of the message.

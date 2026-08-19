@@ -17,9 +17,7 @@ import pytest
 
 from pipeline.config import STEP_CAP_FALLBACK_THRESHOLD
 from pipeline.triage import __all__ as triage_all
-from pipeline.triage import _auto_triage_enabled
-from pipeline.triage import triage_candidates
-
+from pipeline.triage import _auto_triage_enabled, triage_candidates
 
 # ---------------------------------------------------------------------------
 # __all__ membership - the two new names must both be exported.

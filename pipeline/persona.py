@@ -99,7 +99,15 @@ def _build_dispatch_command(
     )
     rework_instruction = ""
     if review_feedback:
-        rework_instruction = (
+        rework_attempts = story.get("rework_attempts", 0)
+        if rework_attempts >= 2:
+            rework_instruction = (
+                f"This is rework round {rework_attempts}. A previous attempt "
+                f"already redispatched on this same feedback and did not fully "
+                f"resolve it -- read the feedback below carefully rather than "
+                f"repeating the same partial fix. "
+            )
+        rework_instruction += (
             f"The code reviewer REQUESTED CHANGES on the previous attempt. "
             f"Address this feedback before finishing:\n{review_feedback}\n\n"
         )

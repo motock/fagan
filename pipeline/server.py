@@ -2172,8 +2172,19 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{_NEVER_TOUCH_TESTS_STEERING} Run them to see the current "
                     "failures, then implement until they pass."
                 )
+            rework_attempts = story.get("rework_attempts", 0)
+            if rework_attempts >= 2:
+                round_prefix = (
+                    f"This is rework round {rework_attempts}. A previous attempt "
+                    f"already redispatched on this same feedback and did not fully "
+                    f"resolve it -- read the feedback below carefully rather than "
+                    f"repeating the same partial fix. "
+                )
+            else:
+                round_prefix = ""
             if fix_checklist:
                 dispatch_kwargs["resume_append_content"] = (
+                    f"{round_prefix}"
                     "The code reviewer REQUESTED CHANGES on your previous "
                     "attempt. Your tech lead has translated the feedback "
                     f"into a fix checklist:\n{fix_checklist}\n\n"
@@ -2183,6 +2194,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
             else:
                 dispatch_kwargs["resume_append_content"] = (
+                    f"{round_prefix}"
                     "The code reviewer REQUESTED CHANGES on your previous attempt. "
                     f"Address this feedback:\n{review_feedback}"
                     f"{revised_instructions_note}"

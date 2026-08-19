@@ -64,12 +64,10 @@ def plan_triage_budget_exhausted(manifest: dict) -> bool:
     return created >= TRIAGE_MAX_CREATED_STORIES
 
 __all__ = [
-    "TRIAGE_MAX_ATTEMPTS",
-    "TRIAGE_MAX_CREATED_STORIES",
-    "triage_allowed",
-    "action_already_tried",
-    "record_triage_attempt",
-    "plan_triage_budget_exhausted",
+    "_auto_triage_enabled",
+    "_current_suite_state",
+    "collect_triage_evidence",
+    "triage_candidates",
 ]
 def _auto_triage_enabled() -> bool:
     """Whether the scheduler's failure-triage sweep is enabled.

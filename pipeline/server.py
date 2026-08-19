@@ -2473,6 +2473,16 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                             f"{elapsed:.0f}s; process terminated."
                         ),
                     )
+                    # CLAUDE.md Step 9: diagnose where this implementer hung and
+                    # fold the root cause into agent_instructions so the resume
+                    # isn't a blind retry. Mirrors the step-cap branch's call
+                    # byte-for-byte (same helper, same arguments). Fail-open: a
+                    # None/errored diagnosis leaves agent_instructions untouched.
+                    _rebrief_step_cap_struggle(
+                        story, str(Path(story["worktree"])),
+                        plan_role_config=manifest.get("role_config"),
+                        plan_name=plan_name,
+                        story_key=story_key)
                     story["dispatch_error"] = (
                         f"watchdog killed after {elapsed:.0f}s with no completion"
                     )

@@ -5867,6 +5867,151 @@ def test_check_story_status_kills_hung_process_past_watchdog_timeout(
     assert journal[-1]["step"] == "dispatch_watchdog_timeout"
 
 
+def test_check_story_status_watchdog_timeout_invokes_rebrief_step_cap_struggle(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """A dispatch subprocess killed by the watchdog (hung past
+    DISPATCH_WATCHDOG_SECONDS) must be diagnosed exactly like the step-cap
+    branch: _rebrief_step_cap_struggle is invoked with the story, the
+    worktree, and the plan's role_config/plan_name/story_key BEFORE the
+    manifest is written, so the resume isn't blind. Mirrors the step-cap
+    branch's own call byte-for-byte (same helper, same arguments)."""
+    monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 60)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text("Working on it...\n")
+    old_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    _write_manifest(plan_dir, "wdrebrief", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "dispatched_at": old_dispatched_at,
+               "agent_instructions": "GOAL: build the thing."},
+    })
+
+    killed = []
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            if cmd[0] == "ps":
+                stdout = "S\n"
+            elif cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                stdout = "sha-wd\n"
+            else:
+                stdout = ""
+            stderr = ""
+        return Result()
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    captured = {}
+    def _spy_rebrief(story, worktree_arg, plan_role_config=None,
+                     plan_name=None, story_key=None):
+        captured["story"] = story
+        captured["worktree"] = worktree_arg
+        captured["plan_role_config"] = plan_role_config
+        captured["plan_name"] = plan_name
+        captured["story_key"] = story_key
+        captured["called"] = True
+    monkeypatch.setattr(p, "_rebrief_step_cap_struggle", _spy_rebrief)
+
+    result = p.check_story_status("wdrebrief", "S1")
+
+    # The watchdog branch still terminates and reports its own post-condition.
+    assert (4242, pcheckpoint.signal.SIGTERM) in killed
+    assert result["status"] == "interrupted"
+    assert result.get("watchdog_killed") is True
+    # The diagnosis call MUST have fired.
+    assert captured.get("called") is True, (
+        "_rebrief_step_cap_struggle was not invoked on the watchdog branch")
+    # Arguments mirror the step-cap branch byte-for-byte.
+    assert captured["worktree"] == str(worktree)
+    assert captured["plan_name"] == "wdrebrief"
+    assert captured["story_key"] == "S1"
+    # The story dict passed in is the in-scope story (same pid).
+    assert captured["story"]["pid"] == 4242
+    # plan_role_config comes from manifest.get('role_config'); absent here ->
+    # None, matching the step-cap branch's manifest.get('role_config') value.
+    assert captured["plan_role_config"] is None
+
+
+def test_check_story_status_watchdog_timeout_diagnosis_lands_in_agent_instructions(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """When the watchdog kills a hung process and the diagnosis role returns a
+    fix, the PRIOR-ATTEMPT DIAGNOSIS block must land in agent_instructions
+    identically to the step-cap path - the worktree/agent.log left behind by
+    _terminate_and_checkpoint are exactly as diagnosable as the step-cap
+    path's. This verifies the real _rebrief_step_cap_struggle runs (not just a
+    spy) and folds the diagnosis into the persisted manifest."""
+    monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 60)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "agent.log").write_text(
+        "Working on it...\n"
+        "[step 3] bash: pytest -q\n"
+        "stuck in a loop re-running the same failing test\n"
+    )
+    old_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    _write_manifest(plan_dir, "wddiag", {
+        "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
+               "worktree": str(worktree), "dispatched_at": old_dispatched_at,
+               "agent_instructions": "GOAL: build the thing."},
+    })
+
+    killed = []
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            returncode = 0
+            if cmd[0] == "ps":
+                stdout = "S\n"
+            elif cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                stdout = "sha-wd\n"
+            else:
+                stdout = ""
+            stderr = ""
+        return Result()
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+
+    # Override the autouse no-op stub: the diagnosis role returns a real fix.
+    monkeypatch.setattr(p, "diagnose_failure",
+                        lambda *a, **k: "The agent is stuck re-running a "
+                                        "failing test; fix the test fixture.")
+
+    p.check_story_status("wddiag", "S1")
+
+    story = _read_manifest(plan_dir, "wddiag")["stories"]["S1"]
+    assert story["status"] == "interrupted"
+    instructions = story["agent_instructions"]
+    from pipeline import rebrief
+    assert rebrief.DIAGNOSIS_HEADER in instructions, (
+        "watchdog-killed story must carry a PRIOR-ATTEMPT DIAGNOSIS block, "
+        f"got: {instructions!r}")
+    assert "stuck re-running a failing test" in instructions
+    # The original brief is preserved alongside the diagnosis.
+    assert "GOAL: build the thing." in instructions
+
+
+def test_check_story_status_watchdog_timeout_two_rebrief_call_sites(
+    plan_dir, tmp_path, monkeypatch,
+):
+    """Mechanically-checkable guard: pipeline/server.py must contain exactly
+    two call sites of _rebrief_step_cap_struggle after this change - the
+    pre-existing step-cap branch and the new watchdog branch - not one."""
+    import re
+    src = Path(p.__file__).read_text()
+    # Count call sites: occurrences of the helper name that are not the def
+    # line and not a comment/docstring-only mention. The def line is
+    # `def _rebrief_step_cap_struggle(`; call sites are bare invocations.
+    call_sites = re.findall(r"\b_rebrief_step_cap_struggle\(", src)
+    # Subtract the def line itself (def _rebrief_step_cap_struggle().
+    def_lines = re.findall(r"def _rebrief_step_cap_struggle\(", src)
+    assert len(call_sites) - len(def_lines) == 2, (
+        f"expected 2 _rebrief_step_cap_struggle call sites (step-cap + "
+        f"watchdog), found {len(call_sites) - len(def_lines)}: {call_sites}")
+
+
 def test_check_story_status_running_within_watchdog_window_is_not_killed(
     plan_dir, tmp_path, monkeypatch,
 ):

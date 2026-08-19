@@ -12,14 +12,74 @@ from pathlib import Path
 
 from .build_detect import detect_test_command
 from .concurrency import _heavy_lock, _is_heavy
+from .config import STEP_CAP_FALLBACK_THRESHOLD
 from .rebrief import collect_failure_evidence
 from .repo_health import format_findings
 
 # expose subprocess.run for monkeypatching
 globals()["subprocess.run"] = subprocess.run
 
-__all__ = ["_current_suite_state", "collect_triage_evidence"]
+__all__ = [
+    "_auto_triage_enabled",
+    "_current_suite_state",
+    "collect_triage_evidence",
+    "triage_candidates",
+]
+def _auto_triage_enabled() -> bool:
+    """Whether the scheduler's failure-triage sweep is enabled.
 
+    Mirrors :func:`pipeline.escalation._auto_escalation_enabled`'s shape so an
+    operator who knows one knob knows the other: a truthy value in
+    ``("1", "true", "yes", "on")`` enables it, a falsy value in
+    ``("0", "false", "no", "off")`` disables it, and any unrecognized value
+    fails closed to disabled.
+
+    The one deliberate difference from escalation: escalation falls back to a
+    legacy rule (``PIPELINE_BACKEND_DISPATCH == "auto"``) when its flag is
+    unset, because that behavior predates the flag and must be preserved.
+    Triage has no legacy behavior to preserve, so per CLAUDE.md 'Secure by
+    Design / Secure defaults' new features ship disabled and the operator opts
+    in: unset means OFF. This knob is independent of both
+    ``PIPELINE_BACKEND_DISPATCH`` (dispatch routing) and
+    ``PIPELINE_AUTO_ESCALATE`` (the escalation ladder below triage).
+    """
+    override = os.environ.get("PIPELINE_AUTO_TRIAGE", "").strip().lower()
+    if override in ("1", "true", "yes", "on"):
+        return True
+    if override in ("0", "false", "no", "off"):
+        return False
+    return False
+
+
+def triage_candidates(stories: dict) -> list[str]:
+    """Return the sorted list of story keys the triage sweep should consider.
+
+    A story is a candidate if its ``status`` is ``"parked"`` or ``"failed"``,
+    OR its ``step_cap_streak`` is at or above
+    ``STEP_CAP_FALLBACK_THRESHOLD``. A missing or non-integer
+    ``step_cap_streak`` counts as 0, and a story dict with no ``status`` key
+    is treated as having no status (never raises).
+
+    ``interrupted`` is deliberately NOT a trigger by itself: it is already in
+    the scheduler's ready list (``("todo", "interrupted", "changes_requested")``)
+    and auto-resumes on the next tick, so triaging it would fire continuously
+    during normal operation. The step-cap STREAK is the interrupted-adjacent
+    signal worth acting on, and it is a streak, not a single interrupt.
+
+    The result is ``sorted(...)`` so the sweep is deterministic.
+    """
+    candidates = []
+    for key, story in stories.items():
+        status = story.get("status")
+        if status in ("parked", "failed"):
+            candidates.append(key)
+            continue
+        streak = story.get("step_cap_streak", 0)
+        if not isinstance(streak, int):
+            streak = 0
+        if streak >= STEP_CAP_FALLBACK_THRESHOLD:
+            candidates.append(key)
+    return sorted(candidates)
 # ---------------------------------------------------------------------------
 # Helper: run the real test suite against the worktree's CURRENT HEAD
 # ---------------------------------------------------------------------------

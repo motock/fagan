@@ -344,10 +344,16 @@ def test_module_all_exports_collect_triage_evidence():
 
 
 def test_module_all_exports_public_api():
-    """__all__ must export the public API surface: collect_triage_evidence
-    and the _current_suite_state helper (codebase convention for
-    underscore-prefixed helpers that tests reference directly)."""
-    assert triage.__all__ == ["_current_suite_state", "collect_triage_evidence"]
+    """__all__ must export the public API surface: collect_triage_evidence,
+    the _current_suite_state helper (codebase convention for
+    underscore-prefixed helpers that tests reference directly), and the
+    auto-triage gate functions _auto_triage_enabled and triage_candidates."""
+    assert triage.__all__ == [
+        "_auto_triage_enabled",
+        "_current_suite_state",
+        "collect_triage_evidence",
+        "triage_candidates",
+    ]
 
 
 def test_module_docstring_states_fail_open_contract():

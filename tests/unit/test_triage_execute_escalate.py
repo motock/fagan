@@ -22,8 +22,8 @@ escalation helpers and ``_notify_user`` are monkeypatched on
 
 import pytest
 
-from pipeline import triage as triage_mod
 import pipeline.triage
+from pipeline import triage as triage_mod
 
 
 # ---------------------------------------------------------------------------

@@ -48,6 +48,50 @@ def _repo_has_ci_configured() -> bool:
     return (Path(REPO_ROOT) / ".github" / "workflows").is_dir()
 
 
+def _fetch_ci_failure_excerpt(branch: str) -> str | None:
+    """Capture a bounded failing-test excerpt from the failed workflow run.
+
+    Resolves the most recent workflow run id for ``branch`` via ``gh run list``,
+    then pulls the failing job's log with ``gh run view --log-failed`` (falling
+    back to ``--log`` if that errors or returns empty). Returns a bounded tail
+    (~800 chars) of the log, or ``None`` on any failure so callers can fall back
+    to the classification-only ``error``. Never raises.
+    """
+    try:
+        run_list = subprocess.run(
+            [
+                "gh", "run", "list", "--branch", branch, "--limit", "1",
+                "--json", "databaseId", "--jq", ".[0].databaseId",
+            ],
+            check=False, capture_output=True, text=True, timeout=20,
+        )
+        if run_list.returncode != 0:
+            return None
+        try:
+            data = json.loads(run_list.stdout or "[]")
+        except ValueError:
+            return None
+        if isinstance(data, list):
+            if not data:
+                return None
+            run_id = data[0].get("databaseId")
+        else:
+            run_id = data
+        if not run_id:
+            return None
+        run_id = str(run_id)
+        for flag in ("--log-failed", "--log"):
+            view = subprocess.run(
+                ["gh", "run", "view", run_id, flag],
+                check=False, capture_output=True, text=True, timeout=20,
+            )
+            if view.returncode == 0 and view.stdout.strip():
+                return view.stdout[-800:]
+        return None
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return None
+
+
 def _ci_status(
     branch: str, *, sha: str, timeout_s: int | None = None
 ) -> dict[str, str]:
@@ -119,15 +163,16 @@ def _ci_status(
 
             conclusions = {c.get("conclusion") for c in runs}
             if conclusions & {"failure", "timed_out", "action_required"}:
-                return {
-                    "state": "fail",
-                    "error": "; ".join(
-                        f"{r.get('name')}: {r.get('conclusion')}"
-                        for r in runs
-                        if r.get("conclusion")
-                        in {"failure", "timed_out", "action_required"}
-                    )[:300],
-                }
+                error = "; ".join(
+                    f"{r.get('name')}: {r.get('conclusion')}"
+                    for r in runs
+                    if r.get("conclusion")
+                    in {"failure", "timed_out", "action_required"}
+                )[:300]
+                excerpt = _fetch_ci_failure_excerpt(branch)
+                if excerpt:
+                    error = f"{error}\n\n{excerpt}"
+                return {"state": "fail", "error": error}
             if "cancelled" in conclusions:
                 return {
                     "state": "cancelled",
@@ -157,14 +202,15 @@ def _ci_status(
                 continue
 
             if buckets & {"fail", "error", "action_required"}:
-                return {
-                    "state": "fail",
-                    "error": "; ".join(
-                        f"{e.get('name')}: {e.get('bucket')}"
-                        for e in entries
-                        if e.get("bucket") in {"fail", "error", "action_required"}
-                    )[:300],
-                }
+                error = "; ".join(
+                    f"{e.get('name')}: {e.get('bucket')}"
+                    for e in entries
+                    if e.get("bucket") in {"fail", "error", "action_required"}
+                )[:300]
+                excerpt = _fetch_ci_failure_excerpt(branch)
+                if excerpt:
+                    error = f"{error}\n\n{excerpt}"
+                return {"state": "fail", "error": error}
             if "cancelled" in buckets:
                 return {
                     "state": "cancelled",
@@ -236,15 +282,16 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
 
         conclusions = {c.get("conclusion") for c in runs}
         if conclusions & {"failure", "timed_out", "action_required"}:
-            return {
-                "state": "fail",
-                "error": "; ".join(
-                    f"{r.get('name')}: {r.get('conclusion')}"
-                    for r in runs
-                    if r.get("conclusion")
-                    in {"failure", "timed_out", "action_required"}
-                )[:300],
-            }
+            error = "; ".join(
+                f"{r.get('name')}: {r.get('conclusion')}"
+                for r in runs
+                if r.get("conclusion")
+                in {"failure", "timed_out", "action_required"}
+            )[:300]
+            excerpt = _fetch_ci_failure_excerpt(branch)
+            if excerpt:
+                error = f"{error}\n\n{excerpt}"
+            return {"state": "fail", "error": error}
         if "cancelled" in conclusions:
             return {
                 "state": "cancelled",
@@ -272,14 +319,15 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
             return {"state": "pending", "error": ""}
 
         if buckets & {"fail", "error", "action_required"}:
-            return {
-                "state": "fail",
-                "error": "; ".join(
-                    f"{e.get('name')}: {e.get('bucket')}"
-                    for e in entries
-                    if e.get("bucket") in {"fail", "error", "action_required"}
-                )[:300],
-            }
+            error = "; ".join(
+                f"{e.get('name')}: {e.get('bucket')}"
+                for e in entries
+                if e.get("bucket") in {"fail", "error", "action_required"}
+            )[:300]
+            excerpt = _fetch_ci_failure_excerpt(branch)
+            if excerpt:
+                error = f"{error}\n\n{excerpt}"
+            return {"state": "fail", "error": error}
         if "cancelled" in buckets:
             return {
                 "state": "cancelled",
@@ -505,6 +553,7 @@ __all__ = [
     "_ci_rerun",
     "_ci_status",
     "_ci_status_once",
+    "_fetch_ci_failure_excerpt",
     "_repo_has_ci_configured",
     "_reverify_acceptance",
     "_reverify_build",

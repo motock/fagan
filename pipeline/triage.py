@@ -71,7 +71,7 @@ def _current_suite_state(worktree: str) -> str:
         if r.returncode == 5:
             return ""
         return f"CURRENT STATE: full test suite FAILS at the worktree's current HEAD (rc={r.returncode}):\n{(r.stdout + r.stderr)[-500:]}"
-    except (OSError, subprocess.SubprocessError):
+    except Exception:  # noqa: BLE001
         return ""
 
 # ---------------------------------------------------------------------------

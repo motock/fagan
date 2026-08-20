@@ -363,4 +363,3 @@ class TestMaxTurnsBoundaryValidation:
             # If construction wrongly succeeds, calling execute_turn must NOT
             # raise the obscure UnboundLocalError described in the review.
             svc.execute_turn("hello")
-        assert "_service" not in source

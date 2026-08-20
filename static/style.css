@@ -801,3 +801,37 @@ main {
   background: rgba(0, 0, 0, 0.25); padding: 0 4px; border-radius: 3px;
 }
 /* new block */
+/* Comms view styles */
+.comms-head {}
+.comms-title {}
+.comms-title .label {}
+.on-air {}
+.on-air.live { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%{opacity:.5;} 50%{opacity:1;} 100%{opacity:.5;} }
+@media (prefers-reduced-motion: reduce) { .on-air.live { animation: none; } }
+.comms-sub {}
+.comms-body {}
+.comms-thread {}
+.comms-landing {}
+.comms-landing h3 {}
+.comms-foot {}
+.comms-input-row {}
+.comms-input {}
+.comms-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.comms-send {}
+.comms-send:hover { background: var(--accent-soft); color: var(--accent); }
+.comms-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.comms-send:disabled { opacity: 0.5; cursor: not-allowed; }
+.msg {}
+.msg .who {}
+.msg.user .bubble {}
+.msg.tower .bubble {}
+.msg.tower.denied .bubble { border-left: 4px solid var(--c-failed); }
+.trace-row {}
+.trace-chip {}
+.trace-chip:hover { background: var(--panel-2); }
+.trace-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.trace-chip .dot {}
+.trace-detail {}
+.trace-chip.expanded + .trace-detail { display: block; }
+

@@ -21,6 +21,7 @@ SYSTEM_PROMPT = (
     "When you need to call a tool, emit a JSON object with keys name and args, wrapped exactly in [TOOL_CALL] and [/TOOL_CALL] tags. "
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
     "If no tool calls are needed, simply answer in natural language. "
+    "You can read plan and story status, journals, logs, and checklists. You can execute control actions (dispatch, interrupt, patch, review, approve_merge, advance, pause, resume, mark done). All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it. "
     "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
     "Available tools: list_plans (list all plans), get_plan (get one plan's detail), and health (check API health). "
     "Call tools to gather information, then provide a natural-language reply."
@@ -76,6 +77,114 @@ TOOLS: dict[str, dict] = {
         "execute": lambda http_client, api_base_url, plan_name, only_epics=None, overwrite=False, **kwargs: (
             http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/ingest"),
                              json={"only_epics": only_epics, "overwrite": overwrite}).json()
+        ),
+    },
+    "dispatch_story": {
+        "description": "Dispatch a story.",
+        "params": {"plan_name": "str", "story_key": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/dispatch")).json()
+        ),
+    },
+    "interrupt_story": {
+        "description": "Interrupt a story.",
+        "params": {"plan_name": "str", "story_key": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/interrupt")).json()
+        ),
+    },
+    "patch_story": {
+        "description": "Patch a story with fields.",
+        "params": {"plan_name": "str", "story_key": "str", "fields": "dict"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, fields, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/patch"), json=fields).json()
+        ),
+    },
+    "set_story_status": {
+        "description": "Set story status.",
+        "params": {"plan_name": "str", "story_key": "str", "status": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, status, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/status"), json={"status": status}).json()
+        ),
+    },
+    "review_story": {
+        "description": "Review a story.",
+        "params": {"plan_name": "str", "story_key": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/review")).json()
+        ),
+    },
+    "approve_merge": {
+        "description": "Approve merge for a story.",
+        "params": {"plan_name": "str", "story_key": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/approve_merge")).json()
+        ),
+    },
+    "mark_story_done": {
+        "description": "Mark a story as done.",
+        "params": {"plan_name": "str", "story_key": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/done")).json()
+        ),
+    },
+    "checkpoint": {
+        "description": "Create a checkpoint for a story.",
+        "params": {"plan_name": "str", "story_key": "str", "step": "str", "summary": "str", "next_hint": "str | None"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, step, summary, next_hint=None, **kwargs: (
+            http_client.post(
+                _resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/checkpoint"),
+                json={"step": step, "summary": summary} if next_hint is None else {"step": step, "summary": summary, "next_hint": next_hint}
+            ).json()
+        ),
+    },
+    "advance_pipeline": {
+        "description": "Advance a plan pipeline.",
+        "params": {"plan_name": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/advance")).json()
+        ),
+    },
+    "advance_all_plans": {
+        "description": "Advance all plans.",
+        "params": {},
+        "execute": lambda http_client, api_base_url, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, "/api/plans/advance_all")).json()
+        ),
+    },
+    "pause_plan": {
+        "description": "Pause a plan.",
+        "params": {"plan_name": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/pause")).json()
+        ),
+    },
+    "resume_plan": {
+        "description": "Resume a plan.",
+        "params": {"plan_name": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/resume")).json()
+        ),
+    },
+    "get_story_journal": {
+        "description": "Get story journal.",
+        "params": {"plan_name": "str", "story_key": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/journal")).json()
+        ),
+    },
+    "get_story_log": {
+        "description": "Get story log.",
+        "params": {"plan_name": "str", "story_key": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/log")).json()
+        ),
+    },
+    "get_story_checklist": {
+        "description": "Get story checklist.",
+        "params": {"plan_name": "str", "story_key": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/stories/{story_key}/checklist")).json()
         ),
     },
 }

@@ -18,6 +18,8 @@ const RISK_RANK = { high: 3, medium: 2, low: 1 };
 const STALE_IN_PROGRESS_MINUTES = 30;
 const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
 const FILTERS_KEY = "pipeline-dashboard-filters";
+const window = globalThis.window;
+// removed redundant window definition
 let notifSeverityFilter = "all";
 function filterNotifications(records, severity) {
   if (!records) return [];
@@ -375,16 +377,29 @@ function renderPlanList(plans) {
   // "Overview" always sits at the top of the plan sidebar so the user has
   // a one-click escape hatch back to the fleet landing view, independent
   // of the currently selected plan.
-  const overview = document.createElement("div");
-  overview.className = "plan-item overview-item"
-    + (state.selectedPlan ? "" : " active");
-  overview.setAttribute("data-overview", "true");
-  overview.innerHTML = `
-    <div class="plan-name">Overview</div>
-    <div class="plan-meta">fleet landing</div>
-  `;
-  overview.addEventListener("click", () => selectOverview());
-  nav.appendChild(overview);
+// "Comms" pinned item
+const comms = document.createElement("div");
+comms.className = "plan-item comms-item" + (state.commsActive ? " active" : "");
+comms.setAttribute("data-comms", "true");
+comms.innerHTML = `
+  <div class="plan-name">Comms</div>
+  <div class="plan-meta">chat</div>
+`;
+comms.addEventListener("click", () => selectComms());
+nav.appendChild(comms);
+
+// "Overview" always sits at the top of the plan sidebar so the user has
+// a one-click escape hatch back to the fleet landing view, independent
+// of the currently selected plan.
+const overview = document.createElement("div");
+overview.className = "plan-item overview-item" + (!state.selectedPlan && !state.commsActive ? " active" : "");
+overview.setAttribute("data-overview", "true");
+overview.innerHTML = `
+  <div class="plan-name">Overview</div>
+  <div class="plan-meta">fleet landing</div>
+`;
+overview.addEventListener("click", () => selectOverview());
+nav.appendChild(overview);
 
   for (const plan of plans) {
     const div = document.createElement("div");
@@ -1544,7 +1559,22 @@ function renderUsage(usage) {
   }
 }
 
+function _applyActiveView() {
+  const commsEl = document.getElementById("comms-view");
+  const planDetailEl = document.getElementById("plan-detail");
+  if (!commsEl || !planDetailEl) return;
+  if (state.commsActive) {
+    commsEl.classList.remove("hidden");
+    planDetailEl.classList.add("hidden");
+  } else {
+    commsEl.classList.add("hidden");
+    planDetailEl.classList.remove("hidden");
+  }
+}
+
+
 async function refresh() {
+  _applyActiveView();
   try {
     renderUsage(await fetchJson("/api/usage"));
   } catch {
@@ -1713,5 +1743,8 @@ if (typeof module !== "undefined" && module.exports) {
     renderNotifications,
     renderChecklist,
     filterNotifications,
+  filterNotifications,
+  selectComms,
+  _applyActiveView,
   };
 }

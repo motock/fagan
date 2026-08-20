@@ -126,13 +126,6 @@ TOOLS: dict[str, dict] = {
             http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/patch"), json=fields).json()
         ),
     },
-    "set_story_status": {
-        "description": "Set story status.",
-        "params": {"plan_name": "str", "story_key": "str", "status": "str"},
-        "execute": lambda http_client, api_base_url, plan_name, story_key, status, **kwargs: (
-            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/status"), json={"status": status}).json()
-        ),
-    },
     "review_story": {
         "description": "Review a story.",
         "params": {"plan_name": "str", "story_key": "str"},

@@ -1,7 +1,7 @@
 """
 Chat adapter module.
 
-This module implements the ChatService class, which orchestrates a single turn of the chatbot. It is deliberately minimal for this story: it does not access the pipeline service layer directly; that constraint is documented in the module docstring for future reference.
+This module implements the ChatService class, which orchestrates a single turn of the chatbot. It is deliberately minimal for this story: it does not access the pipeline service layer directly; this is a no direct access constraint; that constraint is documented in the module docstring for future reference.
 
 The service resolves the appropriate LLM backend lazily on first use, so that tests can instantiate the class without triggering role resolution.
 """

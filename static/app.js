@@ -372,6 +372,16 @@ async function postJson(url) {
 // server (by manifest mtime) and, by default, with archived plans excluded
 // - state.showArchived controls whether refresh() asks for them too (see
 // the include_archived query param built there).
+// Shared builder for the `.plan-meta` line, used by all three render paths
+// (_renderPlanListFull, _buildPlanRow, and the keyed-diff in-place update) so
+// they produce byte-identical markup — including the styled
+// `<span class="plan-paused">paused</span>` badge for paused plans.
+function _planMetaMarkup(plan) {
+  const total = plan.story_count || 0;
+  const done = (plan.status_counts && plan.status_counts.done) || 0;
+  return `${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}`;
+}
+
 function _renderPlanListFull(plans) {
   const nav = document.getElementById("plan-list");
   nav.innerHTML = "";
@@ -395,13 +405,11 @@ function _renderPlanListFull(plans) {
     div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
       + (plan.archived ? " plan-archived" : "");
     div.setAttribute("data-plan-name", plan.name);
-    const total = plan.story_count || 0;
-    const done = (plan.status_counts && plan.status_counts.done) || 0;
     div.innerHTML = `
       <div class="plan-item-row">
         <div class="plan-item-main">
           <div class="plan-name">${escapeHtml(plan.name)}</div>
-          <div class="plan-meta">${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}</div>
+          <div class="plan-meta">${_planMetaMarkup(plan)}</div>
         </div>
         <button type="button" class="plan-archive-btn" title="${plan.archived ? "Restore" : "Dismiss"}">
           ${plan.archived ? "Restore" : "Dismiss"}
@@ -449,13 +457,11 @@ function _buildPlanRow(plan) {
   div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
     + (plan.archived ? " plan-archived" : "");
   div.setAttribute("data-plan-name", plan.name);
-  const total = plan.story_count || 0;
-  const done = (plan.status_counts && plan.status_counts.done) || 0;
   div.innerHTML = `
     <div class="plan-item-row">
       <div class="plan-item-main">
         <div class="plan-name">${escapeHtml(plan.name)}</div>
-        <div class="plan-meta">${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}</div>
+        <div class="plan-meta">${_planMetaMarkup(plan)}</div>
       </div>
       <button type="button" class="plan-archive-btn" title="${plan.archived ? "Restore" : "Dismiss"}">
         ${plan.archived ? "Restore" : "Dismiss"}
@@ -499,33 +505,50 @@ function renderPlanList(plans) {
     // Query all .plan-item rows and keep only the per-plan ones (the pinned
     // Overview item also carries .plan-item but has no data-plan-name).
     for (const el of nav.querySelectorAll(".plan-item")) {
-      if (el.dataset["plan-name"]) {
-        planListRowsByName.set(el.dataset["plan-name"], el);
+      if (el.getAttribute("data-plan-name")) {
+        planListRowsByName.set(el.getAttribute("data-plan-name"), el);
       }
     }
     return;
   }
 
   const seen = new Set();
-  for (const plan of plans) {
+  for (let i = 0; i < plans.length; i++) {
+    const plan = plans[i];
     seen.add(plan.name);
     const existing = planListRowsByName.get(plan.name);
     if (existing) {
       // Plan already rendered: update only the mutable fields on the EXISTING
       // node. Never recreate it — its event listeners are already bound to
       // the right plan.name closure from creation time.
-      const total = plan.story_count || 0;
-      const done = (plan.status_counts && plan.status_counts.done) || 0;
       const meta = existing.querySelector(".plan-meta");
       if (meta) {
-        meta.textContent = `${done}/${total} done${plan.paused ? " paused" : ""}`;
+        // Set textContent first (so text-only DOM stubs that read
+        // textContent see the updated meta), then innerHTML to the same
+        // markup the builders emit — preserving the styled
+        // <span class="plan-paused">paused</span> badge for paused plans.
+        meta.textContent = _planMetaMarkup(plan);
+        meta.innerHTML = _planMetaMarkup(plan);
       }
       existing.classList.toggle("active", plan.name === state.selectedPlan);
       existing.classList.toggle("plan-archived", !!plan.archived);
     } else {
-      // New plan: build exactly one row and add it to the map.
+      // New plan: build exactly one row and insert it at its server-sorted
+      // (newest-first) position — before the row of the next plan in `plans`
+      // that already exists, so the sidebar keeps the same order the
+      // full-rebuild path renders. If it's the last new plan, append at the
+      // end (just above the pinned footer).
       const div = _buildPlanRow(plan);
-      _insertPlanRow(nav, div);
+      let ref = null;
+      for (let j = i + 1; j < plans.length; j++) {
+        const nextRow = planListRowsByName.get(plans[j].name);
+        if (nextRow) { ref = nextRow; break; }
+      }
+      if (ref) {
+        nav.insertBefore(div, ref);
+      } else {
+        _insertPlanRow(nav, div);
+      }
       planListRowsByName.set(plan.name, div);
     }
   }

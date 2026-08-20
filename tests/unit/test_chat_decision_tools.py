@@ -441,6 +441,7 @@ class TestAnswerDecisionTool:
             "question": "which lib?",
             "answer": "use foo",
             "context": "because bar",
+            "decided_by": "chat",
         }
 
     def test_context_defaults_to_empty_when_omitted(self) -> None:

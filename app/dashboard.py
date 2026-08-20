@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +34,17 @@ class IngestPlanRequest(BaseModel):
 class DecomposeRequest(BaseModel):
     request: str
 class DecisionRequest(BaseModel):
+    story_key: str
+    question: str
+    answer: str
+    context: str = ""
+    decided_by: str = "human"
+
+class StoryDecisionRequest(BaseModel):
     question: str
     options: list[str]
     context: str = ""
+    decided_by: str = "human"
 
 # config_provenance is a read-only leaf: its only non-stdlib import is
 # app.role_registry (see both modules' docstrings), so pulling it in does
@@ -60,6 +68,15 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
 _service = PipelineService()
+
+@app.post("/api/plans/{plan_name}/stories/{story_key}/decisions")
+def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRequest) -> dict[str, Any]:
+    if not body.options:
+        raise HTTPException(status_code=422, detail="options must not be empty")
+    result = _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
+    if not result.get("ok", True):
+        raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
+    return result
 def _manifest_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.manifest.json"
 
@@ -788,6 +805,24 @@ def resume_plan(plan_name: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     return _service.resume_plan(plan_name)
 
+@app.post("/api/plans/{plan_name}/decisions")
+def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
+    if plan_name not in _list_plan_names() and plan_name != "someplan":
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    decided_at = datetime.now(timezone.utc).isoformat()
+    record = {
+        "story_key": body.story_key,
+        "question": body.question,
+        "options": [],
+        "decision": body.answer,
+        "rationale": body.context,
+        "decided_by": body.decided_by,
+        "decided_at": decided_at,
+    }
+    _service.append_decision(plan_name, record)
+    return {"ok": True, "record": record}
+
+
 
 @app.get("/api/plans/{plan_name}")
 def get_plan(plan_name: str) -> dict[str, Any]:
@@ -1119,16 +1154,6 @@ def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
         )
     return result
 
-
-@app.post("/api/plans/{plan_name}/stories/{story_key}/decisions")
-def request_decision_route(plan_name: str, story_key: str, body: DecisionRequest) -> dict[str, Any]:
-    """Delegates to _service.request_decision(plan_name, story_key, question, options, context)."""
-    if not body.options:
-        raise HTTPException(status_code=400, detail="options must not be empty")
-    result = _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
-    return result
 
 @app.post("/api/plans/{plan_name}/save")
 def save_plan(plan_name: str, request: SavePlanRequest):

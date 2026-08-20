@@ -23,6 +23,7 @@ SYSTEM_PROMPT = (
     "If no tool calls are needed, simply answer in natural language. "
     "You can read plan and story status, journals, logs, and checklists. You can execute control actions (dispatch, interrupt, patch, review, approve_merge, advance, pause, resume, mark done). All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it. "
     "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
+    "You can surface decisions the overlord has ruled on by calling list_decisions. If the user wants to override or supplement a ruling, record their answer via answer_decision. Human answers are appended to the same decision log as overlord rulings, preserving the audit trail. "
     "Available tools: list_plans (list all plans), get_plan (get one plan's detail), and health (check API health). "
     "Call tools to gather information, then provide a natural-language reply."
 )
@@ -48,6 +49,21 @@ TOOLS: dict[str, dict] = {
         "params": {"plan_name": "str"},
         "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
             http_client.get(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}" )).json()
+        ),
+    },
+    "list_decisions": {
+        "description": "List decisions for a plan.",
+        "params": {"plan_name": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}" )).json()["decisions"]
+        ),
+    },
+    "answer_decision": {
+        "description": "Record a decision for a plan.",
+        "params": {"plan_name": "str", "story_key": "str", "question": "str", "answer": "str", "context": "str | None"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, question, answer, context=None, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/decisions"),
+                             json={"story_key": story_key, "question": question, "answer": answer, "context": context or ""}).json()
         ),
     },
     "health": {

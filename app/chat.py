@@ -6,13 +6,15 @@ This module implements the ChatService class, which orchestrates a single turn o
 
 from __future__ import annotations
 
-import json
-import os
+from urllib.parse import quote
+
+def _seg(x):
+    return quote(str(x), safe="")
 def _seg(x):
     return quote(str(x), safe="")
 
 
-import httpx
+import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 

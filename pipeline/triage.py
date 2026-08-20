@@ -29,7 +29,7 @@ TRIAGE_MAX_PER_TICK = 1
 
 # E6/E7: split_story and repo_issue actions are deferred until implemented.
 # Refer to docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md for implementation details.
-# They will be added to __all__ and handled in execute_ruling.
+# Exported via __all__; handled in execute_ruling.
 DEFERRED_ACTIONS = frozenset({"split_story", "repo_issue"})
 # ---------------------------------------------------------------------------
 # Triage executor helpers
@@ -191,6 +191,7 @@ __all__ = [
     "TRIAGE_MAX_ATTEMPTS",
     "TRIAGE_MAX_CREATED_STORIES",
     "TRIAGE_MAX_PER_TICK",
+    "DEFERRED_ACTIONS",
     "run_triage_sweep",
     "action_already_tried",
     "collect_triage_evidence",

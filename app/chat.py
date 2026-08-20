@@ -79,7 +79,7 @@ TOOLS: dict[str, dict] = {
         "params": {"plan_name": "str", "story_key": "str", "question": "str", "answer": "str", "context": "str | None"},
         "execute": lambda http_client, api_base_url, plan_name, story_key, question, answer, context=None, **kwargs: (
             http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/decisions"),
-                             json={"story_key": story_key, "question": question, "answer": answer, "context": context or ""}).json()
+                             json={"story_key": story_key, "question": question, "answer": answer, "decided_by": "chat", "context": context or ""}).json()
         ),
     },
     "health": {

@@ -72,7 +72,10 @@ app = FastAPI(title="Agent Pipeline Dashboard")
 def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRequest) -> dict[str, Any]:
     if not body.options:
         raise HTTPException(status_code=422, detail="options must not be empty")
-    return _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
+    result = _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
+    if not result.get("ok", True):
+        raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
+    return result
 _service = PipelineService()
 def _manifest_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.manifest.json"
@@ -1152,11 +1155,8 @@ def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
-@app.post("/api/plans/{plan_name}/stories/{story_key}/decisions")
-def request_decision_route(plan_name: str, story_key: str, body: DecisionRequest) -> dict[str, Any]:
-    """Delegates to _service.request_decision(plan_name, story_key, question, options, context)."""
-    if not body.options:
-        raise HTTPException(status_code=400, detail="options must not be empty")
+# Removed duplicate route to avoid conflict
+    raise HTTPException(status_code=400, detail="options must not be empty")
     result = _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))

@@ -15,6 +15,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+
 def _patch_story_execute(http_client, api_base_url, plan_name, story_key, fields, **kwargs):
     if "risk" in fields:
         return {"error": "risk field cannot be patched via chat"}

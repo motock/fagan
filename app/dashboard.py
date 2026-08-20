@@ -469,6 +469,7 @@ def _parse_progress(plan_text: str | None, scratchpad_text: str | None) -> dict 
 
 def _plan_summary(
     plan_name: str, manifest: dict[str, Any], archived_plans: set[str] | None = None,
+    *, include_notification_summary: bool = False,
 ) -> dict[str, Any]:
     stories = manifest.get("stories", {})
     try:
@@ -478,6 +479,10 @@ def _plan_summary(
         # under a race with a concurrent write - sort it last rather than
         # 500ing the whole list over one plan's timestamp.
         updated_at = 0.0
+    latest_notification = None
+    if include_notification_summary:
+        records = _collapse_duplicate_notifications(_tail_notification_records(plan_name, limit=5))
+        latest_notification = records[-1] if records else None
     return {
         "name": plan_name,
         "paused": bool(manifest.get("paused", False)),
@@ -486,6 +491,7 @@ def _plan_summary(
         "aggregate": _aggregate_stories(stories),
         "updated_at": updated_at,
         "archived": plan_name in (archived_plans or set()),
+        **({"latest_notification": latest_notification} if include_notification_summary else {}),
     }
 
 
@@ -751,7 +757,7 @@ def list_plans(include_archived: bool = False) -> dict[str, Any]:
             continue
         if not include_archived and name in archived_plans:
             continue
-        plans.append(_plan_summary(name, manifest, archived_plans))
+        plans.append(_plan_summary(name, manifest, archived_plans, include_notification_summary=True))
     # Newest-first: most-recently-touched plan surfaces at the top of the
     # sidebar regardless of name, so active work is never buried below
     # long-finished plans just because they alphabetize earlier.

@@ -1755,7 +1755,7 @@ if (typeof module !== "undefined" && module.exports) {
     renderNotifications,
     renderChecklist,
     filterNotifications,
-  filterNotifications,
+
   selectComms,
   _applyActiveView,
   };

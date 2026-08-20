@@ -77,33 +77,31 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
     action = ruling.get("action", "unknown")
     rationale = ruling.get("rationale", "")[:300]
     if action == "escalate_model":
-        # Only perform escalation if helpers are not patched
-        if _escalate_to_claude is _orig_escalate_to_claude and _escalate_to_local_fallback_model is _orig_escalate_to_local_fallback_model:
-            try:
-                fallback = manifest.get("local_model_fallback")
-                if (
-                    fallback
-                    and story.get("model") != fallback
-                    and not story.get("tried_fallback_model")
-                    and story.get("backend", "local") == "local"
-                ):
-                    _escalate_to_local_fallback_model(
-                        manifest, plan_name, story_key, manifest_path, fallback
-                    )
-                    return "escalate_model"
-                if _auto_escalation_enabled() and not story.get("escalated"):
-                    _escalate_to_claude(
-                        manifest, plan_name, story_key, manifest_path
-                    )
-                    return "escalate_model"
-            except Exception as exc:
-                reason = f"escalate_model ruled but ladder exhausted: {type(exc).__name__}"
-                return _park(plan_name, story_key, story, reason)
-            # ladder exhausted
-            reason = f"escalate_model ruled but ladder exhausted: {rationale}"
+        try:
+            fallback = manifest.get("local_model_fallback")
+            if (
+                fallback
+                and story.get("model") != fallback
+                and not story.get("tried_fallback_model")
+                and story.get("backend", "local") == "local"
+            ):
+                _escalate_to_local_fallback_model(
+                    manifest, plan_name, story_key, manifest_path, fallback
+                )
+                return "escalate_model"
+            if _auto_escalation_enabled() and not story.get("escalated"):
+                _escalate_to_claude(
+                    manifest, plan_name, story_key, manifest_path
+                )
+                return "escalate_model"
+        except Exception as exc:
+            reason = f"escalate_model ruled but ladder exhausted: {type(exc).__name__}"
             return _park(plan_name, story_key, story, reason)
-            return _park(plan_name, story_key, story, reason)
+        # ladder exhausted
+        reason = f"escalate_model ruled but ladder exhausted: {rationale}"
+        return _park(plan_name, story_key, story, reason)
     reason = f"unhandled ruling action '{action}': {rationale}"
+    return _park(plan_name, story_key, story, reason)
     return _park(plan_name, story_key, story, reason)
 
 def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:

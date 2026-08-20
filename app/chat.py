@@ -23,7 +23,7 @@ SYSTEM_PROMPT = (
     "Call tools to gather information, then provide a natural-language reply."
 )
 
-# Empty tool registry – populated by a later story.
+# Read-only tool registry: list_plans, get_plan, health.
 TOOLS: dict[str, dict] = {
     "list_plans": {
         "description": "List all pipeline plans.",

@@ -122,9 +122,7 @@ TOOLS: dict[str, dict] = {
     "patch_story": {
         "description": "Patch a story with fields.",
         "params": {"plan_name": "str", "story_key": "str", "fields": "dict"},
-        "execute": lambda http_client, api_base_url, plan_name, story_key, fields, **kwargs: (
-            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/patch"), json=fields).json()
-        ),
+        "execute": _patch_story_execute,
     },
     "review_story": {
         "description": "Review a story.",

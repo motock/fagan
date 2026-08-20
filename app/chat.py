@@ -7,6 +7,7 @@ This module implements the ChatService class, which orchestrates a single turn o
 from __future__ import annotations
 
 from urllib.parse import quote
+import httpx
 
 def _seg(x):
     return quote(str(x), safe="")

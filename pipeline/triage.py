@@ -191,7 +191,6 @@ __all__ = [
     "TRIAGE_MAX_ATTEMPTS",
     "TRIAGE_MAX_CREATED_STORIES",
     "TRIAGE_MAX_PER_TICK",
-    "DEFERRED_ACTIONS",
     "run_triage_sweep",
     "action_already_tried",
     "collect_triage_evidence",
@@ -202,6 +201,7 @@ __all__ = [
     "rule_on_story",
     "triage_allowed",
     "triage_candidates",
+    "DEFERRED_ACTIONS",
     ]
 def run_triage_sweep(plan_name: str) -> dict:
     if not _auto_triage_enabled():

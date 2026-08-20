@@ -465,6 +465,18 @@ async function togglePlanArchived(planName, currentlyArchived) {
   await refresh();
 }
 
+function _applyActiveView() {
+  const commsEl = document.getElementById("comms-view");
+  const planDetailEl = document.getElementById("plan-detail");
+  if (state.commsActive) {
+    commsEl.classList.remove("hidden");
+    planDetailEl.classList.add("hidden");
+  } else {
+    commsEl.classList.add("hidden");
+    planDetailEl.classList.remove("hidden");
+  }
+}
+
 function riskRank(story) {
   return RISK_RANK[story.risk] || 0;
 }

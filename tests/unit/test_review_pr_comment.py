@@ -229,6 +229,45 @@ def test_open_pr_raises_called_process_error_is_swallowed(
 
 
 # ---------------------------------------------------------------------------
+# (2b) Same failure on the APPROVE path's _open_pr call - this one had NO
+# try/except at all (unlike the REQUEST_CHANGES path above): a git-push
+# failure here propagated out of review_story, through advance_pipeline's
+# tests_passed loop, and aborted the whole scheduler tick - silently
+# skipping review for every other tests_passed story and merge adjudication
+# for the rest of the plan (confirmed live in advance-scheduler.err.log,
+# story 30e5f9fc-3681-40db-ae54-dd95387dd1e7, 2026-08-19).
+# ---------------------------------------------------------------------------
+
+def test_open_pr_raises_called_process_error_on_approve_path_is_swallowed(
+    plan_dir, agents_dir, tmp_path, monkeypatch,
+):
+    """If _open_pr raises subprocess.CalledProcessError on an APPROVE verdict,
+    review_story must not raise, status stays at its pre-review value (NOT
+    pr_open), pr_url is never set, and the next tick can retry."""
+    wt = _init_git_worktree(tmp_path)
+    story = _make_story(plan_dir, status="tests_passed", worktree=wt)
+    _write_manifest_with_story(plan_dir, "prc", "S1", story)
+
+    monkeypatch.setattr(
+        p, "_run_reviewer", lambda wt, br, **k: "Looks good.\nVERDICT: APPROVE"
+    )
+    monkeypatch.setattr(
+        p, "_open_pr",
+        Mock(side_effect=subprocess.CalledProcessError(1, "git push")),
+    )
+
+    # Must not raise.
+    result = p.review_story("prc", "S1")
+
+    assert result["ok"] is True
+    assert result["verdict"] == "APPROVE"
+    assert result["status"] == "tests_passed"
+    on_disk = _read_story(plan_dir, "prc", "S1")
+    assert on_disk["status"] == "tests_passed"
+    assert "pr_url" not in on_disk
+
+
+# ---------------------------------------------------------------------------
 # (3) Inconclusive bare REQUEST_CHANGES (no findings) -> no PR, no comment.
 # ---------------------------------------------------------------------------
 

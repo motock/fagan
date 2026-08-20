@@ -6282,6 +6282,16 @@ def test_advance_pipeline_paused_interrupts_running_and_skips_new_work(
 ):
     usage_state_path.write_text(json.dumps({"session_pct": 95, "week_pct": 10, "paused": True}))
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
+    # This test's manifest has no role_config, so review resolution falls to
+    # the registry (pipeline/usage.py's _role_resource_ok). Pin the registry
+    # to claude explicitly rather than relying on whatever model_registry.json
+    # happens to say on disk - the scenario this test wants is "review runs
+    # on Claude and Claude is gated", not "review runs on whatever the live
+    # registry currently defaults to".
+    monkeypatch.setattr(
+        role_registry, "load_registry",
+        lambda *a, **k: {"providers": {"claude": {"models": {}}}, "roles": {}},
+    )
     _write_manifest(plan_dir, "pause", {
         "T1": {"summary": "todo", "status": "todo", "dependencies": []},
         "R1": {"summary": "running", "status": "in_progress", "pid": 111, "worktree": "/x"},
@@ -6469,6 +6479,14 @@ def test_advance_pipeline_local_dispatch_runs_while_claude_review_gated(
     monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)  # -> claude
     # Local backend reports healthy without hitting a real Ollama.
     monkeypatch.setattr(backend.OllamaDriver, "resource_status", lambda self: {"ok": True, "reason": ""})
+    # This test's manifest has no role_config, so review resolution falls to
+    # the registry. Pin it to claude explicitly - the scenario under test is
+    # "review runs on Claude and Claude is gated", not whatever the live
+    # model_registry.json on disk currently defaults review to.
+    monkeypatch.setattr(
+        role_registry, "load_registry",
+        lambda *a, **k: {"providers": {"claude": {"models": {}}}, "roles": {}},
+    )
 
     _write_manifest(plan_dir, "split", {
         "T1": {"summary": "todo", "status": "todo", "dependencies": []},
@@ -7543,12 +7561,27 @@ def test_advance_pipeline_ci_gate_disabled_skips_ci(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "gated")
     monkeypatch.setattr(p, "PIPELINE_RISK_THRESHOLD", "low")
     monkeypatch.setattr(pci, "PIPELINE_MERGE_CI_GATE", False)
+    # Not under test here, but _advance_pipeline_locked unconditionally
+    # resolves the review-role resource gate before reaching the merge/CI
+    # logic this test targets. With no role_config on this manifest, that
+    # resolution falls to the registry's review provider (real Ollama by
+    # default), whose resource_status() shells out to `vm_stat` - exactly
+    # the kind of incidental subprocess call this test's _boom_run guard
+    # exists to catch. Stub it out so only a genuine CI-gate-path subprocess
+    # call would trip the guard.
+    monkeypatch.setattr(backend.OllamaDriver, "resource_status", lambda self: {"ok": True, "reason": ""})
     _write_manifest(plan_dir, "cidisabled", {
         "P1": {"summary": "approved", "status": "pr_open", "review_verdict": "APPROVE",
                "risk": "low", "worktree": "/x"},
     })
     monkeypatch.setattr(p, "_rebase_onto_master",
                         lambda wt, br, **k: {"ok": True, "conflict": False, "error": ""})
+    # Pre-existing gap (fails the same way on unmodified master): the
+    # merge-adjudication path resolves the default branch name via
+    # _default_branch(), which shells out to `git symbolic-ref`. That call is
+    # unrelated to the CI gate this test targets, so stub it directly rather
+    # than let it fall through to the _boom_run guard below.
+    monkeypatch.setattr(p, "_default_branch", lambda: "master")
 
     def _boom_run(*a, **k):
         raise AssertionError("subprocess must not run when CI gate is disabled")
@@ -14178,6 +14211,29 @@ def test_review_story_unknown_parks_after_max_inconclusive_attempts(plan_dir, ag
     assert "inconclusive after 2 attempts" in story["parked_reason"]
     assert pr_calls == [], "an UNKNOWN verdict must never open a PR"
     assert any("parked" in n.lower() for n in notes)
+    assert story["last_inconclusive_output_excerpt"] == "no verdict line here"
+
+
+def test_review_story_unknown_park_excerpt_notes_empty_response(plan_dir, agents_dir, monkeypatch):
+    # When the reviewer returns a genuinely empty string (e.g. a swallowed
+    # backend exception at the generic except-Exception fallback), the park
+    # excerpt must say so explicitly rather than persisting an empty string
+    # a human investigator could mistake for "field wasn't set".
+    _write_manifest(plan_dir, "unk_park_empty", {
+        "S1": {"summary": "Add thing", "status": "tests_passed",
+               "worktree": str(plan_dir / "wt"), "risk": "low"},
+    })
+    monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "")
+    monkeypatch.setattr(p, "_open_pr", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("no PR on UNKNOWN")))
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+
+    p.review_story("unk_park_empty", "S1")
+    p.review_story("unk_park_empty", "S1")
+
+    story = _read_manifest(plan_dir, "unk_park_empty")["stories"]["S1"]
+    assert story["status"] == "parked"
+    assert story["last_inconclusive_output_excerpt"] == "(empty response)"
 
 
 def test_review_story_conclusive_verdict_after_unknown_resets_and_reworks(plan_dir, agents_dir, monkeypatch):

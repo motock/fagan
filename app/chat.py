@@ -21,8 +21,8 @@ SYSTEM_PROMPT = (
     "When you need to call a tool, emit a JSON object with keys name and args, wrapped exactly in [TOOL_CALL] and [/TOOL_CALL] tags. "
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
     "If no tool calls are needed, simply answer in natural language. "
-    "Available tools: list_plans (list all plans), get_plan (get one plan's detail), health (check API health). "
     "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
+    "Available tools: list_plans (list all plans), get_plan (get one plan's detail), and health (check API health). "
     "Call tools to gather information, then provide a natural-language reply."
 )
 

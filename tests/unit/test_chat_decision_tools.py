@@ -528,6 +528,7 @@ class TestEndToEndViaLoop:
             "question": "which lib?",
             "answer": "use foo",
             "context": "because bar",
+            "decided_by": "chat",
         }
 
     def test_answer_decision_called_through_loop_without_context(self) -> None:

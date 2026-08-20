@@ -67,6 +67,7 @@ WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).exp
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
+_service = PipelineService()
 
 @app.post("/api/plans/{plan_name}/stories/{story_key}/decisions")
 def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRequest) -> dict[str, Any]:
@@ -76,7 +77,6 @@ def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRe
     if not result.get("ok", True):
         raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
     return result
-_service = PipelineService()
 def _manifest_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.manifest.json"
 

@@ -31,7 +31,8 @@ class SavePlanRequest(BaseModel):
 class IngestPlanRequest(BaseModel):
     only_epics: list[str] | None = None
     overwrite: bool = False
-
+class DecomposeRequest(BaseModel):
+    request: str
 class DecisionRequest(BaseModel):
     question: str
     options: list[str]
@@ -1136,7 +1137,12 @@ def save_plan(plan_name: str, request: SavePlanRequest):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result
 
-
+@app.post("/api/decompose")
+def decompose_route(request: DecomposeRequest):
+    result = _service.decompose_plan(request.request)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result
 @app.post("/api/plans/{plan_name}/ingest")
 def ingest_plan(plan_name: str, request: IngestPlanRequest | None = None):
     if request is None:

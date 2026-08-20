@@ -707,6 +707,47 @@ class TestSystemPromptUpdate:
 
 
 # =========================================================================== #
+# Regression: approve_merge must remain advertised in the ops paragraph
+# =========================================================================== #
+class TestOpsParagraphAdvertisesApproveMerge:
+    """Regression test for the removal of ``approve_merge`` from the ops
+    paragraph of ``_SYSTEM_PROMPT_PREFIX``.
+
+    The base commit (3acf30d) advertised ``approve_merge`` as one of the
+    control actions in the "You can execute control actions (...)" sentence.
+    A subsequent edit removed it from that sentence, which breaks the
+    contract encoded by ``TestSystemPromptUpdate.OPS_PHRASES``.  This test
+    pins the original contract directly against the control-actions clause
+    so the regression is reproduced in isolation.
+    """
+
+    def test_control_actions_clause_lists_approve_merge(self) -> None:
+        # The control-actions sentence enumerates the callable ops actions
+        # inside parentheses, e.g.
+        #   "control actions (dispatch, interrupt, patch, review,
+        #    approve_merge, advance, pause, resume, mark done)"
+        assert "control actions" in SYSTEM_PROMPT, (
+            "SYSTEM_PROMPT must contain the control-actions clause"
+        )
+        clause_start = SYSTEM_PROMPT.index("control actions")
+        # The parenthesised action list ends at the first ')' after the
+        # clause; everything inside must still mention approve_merge.
+        clause_end = SYSTEM_PROMPT.index(")", clause_start)
+        clause = SYSTEM_PROMPT[clause_start:clause_end]
+        assert "approve_merge" in clause, (
+            "the control-actions clause must still advertise approve_merge; "
+            f"got clause: {clause!r}"
+        )
+
+    def test_approve_merge_phrase_present_in_prompt(self) -> None:
+        # Direct, redundant pin of the phrase the reviewer flagged as removed.
+        assert "approve_merge" in SYSTEM_PROMPT, (
+            "SYSTEM_PROMPT must still contain the phrase 'approve_merge' "
+            "in its ops paragraph"
+        )
+
+
+# =========================================================================== #
 # Module-level invariants
 # =========================================================================== #
 class TestModuleInvariants:

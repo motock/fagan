@@ -133,13 +133,6 @@ TOOLS: dict[str, dict] = {
             http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/review")).json()
         ),
     },
-    "approve_merge": {
-        "description": "Approve merge for a story.",
-        "params": {"plan_name": "str", "story_key": "str"},
-        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
-            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/approve_merge")).json()
-        ),
-    },
     "mark_story_done": {
         "description": "Mark a story as done.",
         "params": {"plan_name": "str", "story_key": "str"},

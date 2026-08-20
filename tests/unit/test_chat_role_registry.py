@@ -1,0 +1,276 @@
+"""Tests for the new ``chat`` pipeline role.
+
+This story registers the chatbot's own model as a first-class pipeline
+role, the same way overlord/planner/dispatch/review/decompose/
+test_author/diagnosis/security already are. Two small changes make it
+so:
+
+1. ``pipeline.config_provenance.PIPELINE_ROLES`` gains the string
+   ``"chat"`` at the end, so ``effective_role_config()`` and the
+   ``/api/config`` dashboard route include it in their output.
+2. ``model_registry.json`` gains a ``roles.chat`` entry defaulting to
+   provider ``claude`` / model ``sonnet`` (both declared under
+   ``providers.*``), so a fresh install resolves without extra config.
+
+These tests are written FIRST and must fail (red) until the
+implementation lands. They cover the happy path, the registry-optional
+negative path, and every mechanically-checkable requirement the task
+states.
+"""
+import json
+from pathlib import Path
+
+import pytest
+
+from app import role_registry as rr
+from pipeline import config_provenance as cp
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_REGISTRY_PATH = _REPO_ROOT / "model_registry.json"
+
+
+# ---------------------------------------------------------------------------
+# 1. PIPELINE_ROLES contains "chat" (and at the end).
+# ---------------------------------------------------------------------------
+def test_chat_is_in_pipeline_roles():
+    """The string ``chat`` must be a member of PIPELINE_ROLES."""
+    assert "chat" in cp.PIPELINE_ROLES, (
+        "expected 'chat' to be registered in config_provenance.PIPELINE_ROLES"
+    )
+
+
+def test_chat_is_last_in_pipeline_roles():
+    """The task says to add ``chat`` at the END of the tuple."""
+    assert cp.PIPELINE_ROLES[-1] == "chat", (
+        "expected 'chat' to be the final entry of PIPELINE_ROLES, "
+        f"got {cp.PIPELINE_ROLES[-1]!r}"
+    )
+
+
+def test_pipeline_roles_still_a_tuple():
+    """The type must remain a tuple (no accidental list/other)."""
+    assert isinstance(cp.PIPELINE_ROLES, tuple)
+
+
+def test_pipeline_roles_has_nine_roles():
+    """The original 8 roles plus the new chat role = 9 total."""
+    assert len(cp.PIPELINE_ROLES) == 9, (
+        f"expected 9 roles after adding chat, got {len(cp.PIPELINE_ROLES)}: "
+        f"{cp.PIPELINE_ROLES}"
+    )
+
+
+def test_pipeline_roles_preserves_original_eight():
+    """Adding chat must not drop or reorder the original eight roles."""
+    expected_first_eight = [
+        "overlord",
+        "planner",
+        "dispatch",
+        "review",
+        "decompose",
+        "test_author",
+        "diagnosis",
+        "security",
+    ]
+    assert list(cp.PIPELINE_ROLES[:8]) == expected_first_eight
+
+
+# ---------------------------------------------------------------------------
+# 2. model_registry.json has a roles.chat entry pairing claude/sonnet.
+# ---------------------------------------------------------------------------
+def test_model_registry_has_chat_role_entry():
+    """model_registry.json must declare a roles.chat block."""
+    data = json.loads(_REGISTRY_PATH.read_text())
+    roles = data.get("roles", {})
+    assert "chat" in roles, "model_registry.json roles block must include 'chat'"
+
+
+def test_model_registry_chat_uses_claude_provider():
+    """The chat role must default to provider claude."""
+    data = json.loads(_REGISTRY_PATH.read_text())
+    chat = data["roles"]["chat"]
+    assert chat.get("provider") == "claude", (
+        f"expected roles.chat.provider == 'claude', got {chat.get('provider')!r}"
+    )
+
+
+def test_model_registry_chat_uses_sonnet_model():
+    """The chat role must default to model sonnet (a friendly name)."""
+    data = json.loads(_REGISTRY_PATH.read_text())
+    chat = data["roles"]["chat"]
+    assert chat.get("model") == "sonnet", (
+        f"expected roles.chat.model == 'sonnet', got {chat.get('model')!r}"
+    )
+
+
+def test_model_registry_chat_pairs_with_declared_provider_model():
+    """The chat role's provider+model must both be declared under
+    providers.* — load_registry enforces this and would raise
+    RoleRegistryError otherwise. This is the load-time validation the
+    task calls out."""
+    data = rr.load_registry()
+    providers = data["providers"]
+    chat = data["roles"]["chat"]
+    assert chat["provider"] in providers, (
+        f"chat provider {chat['provider']!r} not declared under providers"
+    )
+    assert chat["model"] in providers[chat["provider"]]["models"], (
+        f"chat model {chat['model']!r} not declared under "
+        f"providers.{chat['provider']}.models"
+    )
+
+
+def test_load_registry_does_not_raise_with_chat_role():
+    """The existing load_registry call must not raise RoleRegistryError
+    once the chat entry is present — this is the headline regression
+    guard the task lists."""
+    # Must not raise.
+    rr.load_registry()
+
+
+# ---------------------------------------------------------------------------
+# 3. resolve_role with role "chat" and the real registry.
+# ---------------------------------------------------------------------------
+def test_resolve_role_chat_returns_claude_provider():
+    """resolve_role(role='chat', registry=load_registry()) must return a
+    RoleResolution whose provider is claude, without raising."""
+    resolution = rr.resolve_role("chat", registry=rr.load_registry())
+    assert isinstance(resolution, rr.RoleResolution)
+    assert resolution.provider == "claude"
+
+
+def test_resolve_role_chat_returns_sonnet_tag_model():
+    """The resolved model must be the sonnet *tag* (resolved against
+    providers.claude.models), not the friendly name."""
+    resolution = rr.resolve_role("chat", registry=rr.load_registry())
+    data = rr.load_registry()
+    expected_tag = data["providers"]["claude"]["models"]["sonnet"]["tag"]
+    assert resolution.model == expected_tag, (
+        f"expected model tag {expected_tag!r}, got {resolution.model!r}"
+    )
+
+
+def test_resolve_role_chat_does_not_raise():
+    """Headline: resolving the chat role with the real registry raises
+    nothing."""
+    rr.resolve_role("chat", registry=rr.load_registry())
+
+
+# ---------------------------------------------------------------------------
+# 4. effective_role_config includes a chat entry with error None.
+# ---------------------------------------------------------------------------
+def test_effective_role_config_includes_chat_entry():
+    """effective_role_config(registry=load_registry()) must return a list
+    that includes an entry whose role == 'chat'."""
+    result = cp.effective_role_config(registry=rr.load_registry(), environ={})
+    roles = [entry["role"] for entry in result]
+    assert "chat" in roles, f"effective_role_config output missing 'chat': {roles}"
+
+
+def test_effective_role_config_chat_entry_error_is_none():
+    """The chat entry must resolve cleanly — error is None."""
+    result = cp.effective_role_config(registry=rr.load_registry(), environ={})
+    chat_entry = next(e for e in result if e["role"] == "chat")
+    assert chat_entry["error"] is None, (
+        f"expected chat entry error None, got {chat_entry['error']!r}"
+    )
+
+
+def test_effective_role_config_chat_entry_provider_is_claude():
+    """The chat entry's provider must be claude (from the registry)."""
+    result = cp.effective_role_config(registry=rr.load_registry(), environ={})
+    chat_entry = next(e for e in result if e["role"] == "chat")
+    assert chat_entry["provider"] == "claude", (
+        f"expected chat provider 'claude', got {chat_entry['provider']!r}"
+    )
+
+
+def test_effective_role_config_chat_entry_model_is_sonnet_tag():
+    """The chat entry's model must be the sonnet tag."""
+    result = cp.effective_role_config(registry=rr.load_registry(), environ={})
+    chat_entry = next(e for e in result if e["role"] == "chat")
+    data = rr.load_registry()
+    expected_tag = data["providers"]["claude"]["models"]["sonnet"]["tag"]
+    assert chat_entry["model"] == expected_tag, (
+        f"expected chat model {expected_tag!r}, got {chat_entry['model']!r}"
+    )
+
+
+def test_effective_role_config_chat_entry_has_full_shape():
+    """The chat entry must carry the same keys as every other role
+    entry, so the dashboard can render it uniformly."""
+    result = cp.effective_role_config(registry=rr.load_registry(), environ={})
+    chat_entry = next(e for e in result if e["role"] == "chat")
+    expected_keys = {
+        "role",
+        "provider",
+        "model",
+        "provider_source",
+        "model_source",
+        "restart_required",
+        "error",
+    }
+    assert set(chat_entry.keys()) == expected_keys, (
+        f"chat entry keys mismatch: {set(chat_entry.keys())}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. Negative: the registry is fully optional. A missing role falls
+#    through to the caller's default_provider / model_fallback chain and
+#    does NOT raise.
+# ---------------------------------------------------------------------------
+def test_resolve_role_chat_with_empty_registry_uses_fallback_no_raise():
+    """resolve_role with role 'chat' and an empty registry dict must NOT
+    raise — the registry is optional, and a missing role falls through to
+    the caller's default_provider + model_fallback chain. Passing
+    model_fallback='sonnet' confirms the fallback chain works."""
+    resolution = rr.resolve_role(
+        "chat",
+        registry={},
+        model_fallback="sonnet",
+        environ={},
+    )
+    assert isinstance(resolution, rr.RoleResolution)
+    # With an empty registry, provider falls through to default_provider
+    # ("claude") and model falls through to the caller's model_fallback.
+    assert resolution.provider == "claude"
+    assert resolution.model == "sonnet"
+
+
+def test_resolve_role_chat_with_empty_registry_no_fallback_raises():
+    """Boundary/negative: with an empty registry AND no model_fallback,
+    resolve_role must raise RoleRegistryError (no model configured) —
+    confirming the fallback chain is what makes the empty-registry case
+    work, not silent zero-value behavior."""
+    with pytest.raises(rr.RoleRegistryError, match="no model configured"):
+        rr.resolve_role("chat", registry={}, environ={})
+
+
+def test_resolve_role_chat_with_empty_registry_callable_fallback():
+    """Boundary: a callable model_fallback must also work through the
+    fallback chain (the registry is optional regardless of fallback
+    form)."""
+    resolution = rr.resolve_role(
+        "chat",
+        registry={},
+        model_fallback=lambda: "sonnet",
+        environ={},
+    )
+    assert resolution.model == "sonnet"
+    assert resolution.provider == "claude"
+
+
+def test_effective_role_config_chat_with_empty_registry_and_fallback():
+    """effective_role_config with an empty registry but a chat
+    model_fallback must still include a chat entry with error None —
+    the dashboard must not crash just because the registry is absent."""
+    result = cp.effective_role_config(
+        registry={},
+        model_fallbacks={"chat": "sonnet"},
+        environ={},
+    )
+    chat_entry = next(e for e in result if e["role"] == "chat")
+    assert chat_entry["error"] is None
+    assert chat_entry["provider"] == "claude"
+    assert chat_entry["model"] == "sonnet"

@@ -81,6 +81,10 @@
     "decompose": {
       "provider": "ollama",
       "model": "glm"
+    },
+    "chat": {
+      "provider": "claude",
+      "model": "sonnet"
     }
   }
 }

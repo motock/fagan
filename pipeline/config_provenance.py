@@ -314,6 +314,7 @@ PIPELINE_ROLES: tuple[str, ...] = (
     "test_author",
     "diagnosis",
     "security",
+    "chat",
 )
 
 def effective_env_config(*, environ=None, plist_env=None, mcp_env=None):

@@ -21,9 +21,11 @@ SYSTEM_PROMPT = (
     "When you need to call a tool, emit a JSON object with keys name and args, wrapped exactly in [TOOL_CALL] and [/TOOL_CALL] tags. "
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
     "If no tool calls are needed, simply answer in natural language. "
-    "Available tools: list_plans (list all plans), get_plan (get one plan's detail), and health (check API health). "
+    "Available tools: list_plans (list all plans), get_plan (get one plan's detail), health (check API health). "
+    "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
     "Call tools to gather information, then provide a natural-language reply."
 )
+
 
 
 def _resolve_tool_url(http_client, api_base_url: str, path: str) -> str:
@@ -31,7 +33,7 @@ def _resolve_tool_url(http_client, api_base_url: str, path: str) -> str:
         return f"{api_base_url}{path}"
     return path
 
-# Read-only tool registry: list_plans, get_plan, health.
+# Read-only tool registry: list_plans, get_plan, health, decompose, save_plan, ingest_plan.
 TOOLS: dict[str, dict] = {
     "list_plans": {
         "description": "List all pipeline plans.",
@@ -52,6 +54,28 @@ TOOLS: dict[str, dict] = {
         "params": {},
         "execute": lambda http_client, api_base_url, **kwargs: (
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/health")).json()
+        ),
+    },
+    "decompose": {
+        "description": "Decompose a goal into a plan.",
+        "params": {"goal": "str"},
+        "execute": lambda http_client, api_base_url, goal, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, "/api/decompose"), json={"request": goal}).json()
+        ),
+    },
+    "save_plan": {
+        "description": "Save a plan JSON to a named plan.",
+        "params": {"plan_name": "str", "plan_json": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, plan_json, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/save"), json={"plan_json": plan_json}).json()
+        ),
+    },
+    "ingest_plan": {
+        "description": "Ingest a plan's epics and stories.",
+        "params": {"plan_name": "str", "only_epics": "list[str] | None", "overwrite": "bool"},
+        "execute": lambda http_client, api_base_url, plan_name, only_epics=None, overwrite=False, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/ingest"),
+                             json={"only_epics": only_epics, "overwrite": overwrite}).json()
         ),
     },
 }
@@ -82,6 +106,7 @@ def _parse_tool_calls(text: str) -> list[dict]:
             continue
         calls.append({"name": obj["name"], "args": obj["args"]})
     return calls
+
 
 
 def _execute_tool(name: str, args: dict, http_client, api_base_url: str) -> dict:

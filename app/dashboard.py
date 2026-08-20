@@ -1155,13 +1155,6 @@ def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
-# Removed duplicate route to avoid conflict
-    raise HTTPException(status_code=400, detail="options must not be empty")
-    result = _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
-    return result
-
 @app.post("/api/plans/{plan_name}/save")
 def save_plan(plan_name: str, request: SavePlanRequest):
     result = _service.save_plan(plan_name, request.plan_json)

@@ -14,9 +14,16 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-# System prompt used for all chat turns.  It must contain the tool‑call
-# protocol tags and end with the exact sentence required by the tests.
-SYSTEM_PROMPT = (
+# System prompt used for all chat turns. Assembled AFTER the TOOLS registry
+# below (see the SYSTEM_PROMPT assignment following the TOOLS dict) so the
+# "Available tools:" sentence enumerates every registered tool name instead
+# of a frozen snapshot - a prior fixed sentence here only ever named the 3
+# read-only tools from the story that first wrote it, silently drifting out
+# of sync as later stories registered 20 more (root-caused 2026-08-20:
+# 14 of 23 registered tools were never named anywhere in the prompt).
+# It must contain the tool-call protocol tags and end with the exact
+# _FINAL_SENTENCE required by the tests.
+_SYSTEM_PROMPT_PREFIX = (
     "You are a helpful assistant. Your role is to author plans, control ops, and make decisions. "
     "When you need to call a tool, emit a JSON object with keys name and args, wrapped exactly in [TOOL_CALL] and [/TOOL_CALL] tags. "
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
@@ -24,9 +31,8 @@ SYSTEM_PROMPT = (
     "You can read plan and story status, journals, logs, and checklists. You can execute control actions (dispatch, interrupt, patch, review, approve_merge, advance, pause, resume, mark done). All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it. "
     "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
     "You can surface decisions the overlord has ruled on by calling list_decisions. If the user wants to override or supplement a ruling, record their answer via answer_decision. Human answers are appended to the same decision log as overlord rulings, preserving the audit trail. "
-    "Available tools: list_plans (list all plans), get_plan (get one plan's detail), and health (check API health). "
-    "Call tools to gather information, then provide a natural-language reply."
 )
+_FINAL_SENTENCE = "Call tools to gather information, then provide a natural-language reply."
 
 
 
@@ -204,6 +210,17 @@ TOOLS: dict[str, dict] = {
         ),
     },
 }
+
+
+def _available_tools_sentence() -> str:
+    """Build the "Available tools: ..." sentence from every name currently
+    registered in TOOLS, so the prompt can never drift out of sync with the
+    registry the way the old frozen sentence did."""
+    entries = [f"{name} ({TOOLS[name]['description']})" for name in sorted(TOOLS)]
+    return "Available tools: " + ", ".join(entries) + " "
+
+
+SYSTEM_PROMPT = _SYSTEM_PROMPT_PREFIX + _available_tools_sentence() + _FINAL_SENTENCE
 
 # ---------------------------------------------------------------------------
 # Helper functions

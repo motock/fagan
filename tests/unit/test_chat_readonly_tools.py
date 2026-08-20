@@ -300,21 +300,33 @@ class TestEndToEndViaLoop:
 
 # --------------------------------------------------------------------------- #
 # SYSTEM_PROMPT update
+#
+# NOTE: this class originally pinned the "Available tools:" sentence to the
+# exact 3 tools this story registers (list_plans, get_plan, health). That
+# exact-match assertion is what let the sentence silently drift: 6 later
+# stories (W2-03 through W2-05) each registered more tools without being
+# able to touch this frozen sentence, so by the time all 8 W2 stories had
+# merged, 14 of the 23 registered tools were never named anywhere in
+# SYSTEM_PROMPT (root-caused 2026-08-20). SYSTEM_PROMPT now builds the
+# sentence from TOOLS itself (see app/chat.py's _available_tools_sentence),
+# so these tests assert the forward-compatible property instead: every
+# CURRENTLY registered tool is named, and the enumeration still sits
+# immediately before the final sentence, whatever tools TOOLS holds.
 # --------------------------------------------------------------------------- #
 class TestSystemPromptUpdate:
-    NEW_SENTENCE = (
-        "Available tools: list_plans (list all plans), "
-        "get_plan (get one plan's detail), and health (check API health)."
-    )
     FINAL_SENTENCE = (
         "Call tools to gather information, then provide a natural-language reply."
     )
 
     def test_contains_new_available_tools_sentence(self) -> None:
-        assert self.NEW_SENTENCE in SYSTEM_PROMPT
+        assert "Available tools: " in SYSTEM_PROMPT
+
+    def test_every_registered_tool_is_named_in_the_prompt(self) -> None:
+        missing = [name for name in TOOLS if name not in SYSTEM_PROMPT]
+        assert missing == [], f"tools registered but never named in SYSTEM_PROMPT: {missing}"
 
     def test_new_sentence_precedes_final_sentence(self) -> None:
-        new_idx = SYSTEM_PROMPT.index(self.NEW_SENTENCE)
+        new_idx = SYSTEM_PROMPT.index("Available tools: ")
         final_idx = SYSTEM_PROMPT.index(self.FINAL_SENTENCE)
         assert new_idx < final_idx, (
             "the 'Available tools' sentence must come before the final "
@@ -322,16 +334,21 @@ class TestSystemPromptUpdate:
         )
 
     def test_new_sentence_immediately_before_final_sentence(self) -> None:
-        # The new sentence must be inserted immediately before the final
-        # sentence, with only the separating whitespace between them.
-        suffix = SYSTEM_PROMPT[SYSTEM_PROMPT.index(self.NEW_SENTENCE) + len(self.NEW_SENTENCE):]
-        assert suffix.lstrip() == self.FINAL_SENTENCE
+        # The tools enumeration must be inserted immediately before the
+        # final sentence, with only the separating whitespace between them.
+        available_idx = SYSTEM_PROMPT.index("Available tools: ")
+        final_idx = SYSTEM_PROMPT.index(self.FINAL_SENTENCE)
+        between = SYSTEM_PROMPT[available_idx:final_idx]
+        assert between.rstrip().endswith(")"), (
+            "nothing but the tool enumeration and whitespace may sit "
+            "between 'Available tools:' and the final sentence"
+        )
 
     def test_still_ends_with_final_sentence(self) -> None:
         assert SYSTEM_PROMPT.endswith(self.FINAL_SENTENCE)
 
-    def test_new_sentence_appears_exactly_once(self) -> None:
-        assert SYSTEM_PROMPT.count(self.NEW_SENTENCE) == 1
+    def test_available_tools_sentence_appears_exactly_once(self) -> None:
+        assert SYSTEM_PROMPT.count("Available tools: ") == 1
 
 
 # --------------------------------------------------------------------------- #

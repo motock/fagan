@@ -9,6 +9,7 @@ The service resolves the appropriate LLM backend lazily on first use, so that te
 from __future__ import annotations
 
 import os
+
 import httpx
 
 # System prompt used for all chat turns.  It must contain the tool‑call
@@ -55,8 +56,7 @@ class ChatService:
             return self._driver, model_tag
         if self._resolved_driver is not None:
             return self._resolved_driver, self._resolved_model
-        from app import role_registry
-        from app import backend
+        from app import backend, role_registry
 
         resolution = role_registry.resolve_role("chat", registry=role_registry.load_registry())
         driver = backend.get_backend(resolution.provider)

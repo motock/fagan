@@ -138,6 +138,54 @@ occurrences, same root cause:
   can drift — then the test asserts the generator's correctness once,
   and no later story can ever leave it stale.
 
+## A blanket "never modify existing tests" instruction breaks when the story legitimately changes a shape an old test pins exactly
+
+Every dispatched agent is told not to modify existing tests (CLAUDE.md's
+"Protect existing tests" step) — correct as a default, but a story whose
+whole point is to change a request/response shape, a return value, or any
+other contract an *existing* test already asserts via strict/exact
+equality will collide with that default. Neither the test-author phase nor
+the implementer is authorized to fix the old test, so the story either
+ships with a legitimately-failing pre-existing test, or (per CLAUDE.md
+Step 4) should stop and escalate via `request_decision` — which in
+practice neither phase does, because nothing in the story's
+`agent_instructions` told them this specific test existed or that touching
+it was in scope.
+
+**Not hypothetical:** `chat-security-hardening` story "Stamp
+`decided_by=chat` on decisions recorded through the chat tool" (2026-08-20,
+PR #405). `agent_instructions` said only `"Do NOT modify any existing
+test"` with no carve-out. The one-line implementation (stamping
+`decided_by: "chat"` onto the `answer_decision` POST body) was correct on
+the first attempt — the reviewer said so explicitly — but broke a
+pre-existing test (`test_chat_decision_tools.py::test_posts_to_decisions_endpoint_with_body`,
+from an earlier story) that asserted the POST body via *strict dict
+equality* with no `decided_by` key. Two full local rework cycles (backend
+`ollama`/`deepseek-v4-flash:cloud`) then failed to converge — the agent
+edited the file, couldn't get the full-suite rework done-bar green within
+`REWORK_SUITE_REJECT_CAP` (3) attempts, and the story parked with zero
+commits (`"no new commit after 2 rework redispatches"`). Unblocked only by
+a human patching `agent_instructions` with the exact before/after text of
+the one authorized edit and redispatching.
+
+**How to apply at plan-authoring time:** before finalizing
+`agent_instructions` for a story that changes an existing return value,
+request/response body, or any other shape already in production, grep the
+existing test suite for other tests exercising that same call path or
+contract (not just the file the test-author phase will write to) — a
+strict `==` on a dict/list/string is the highest-risk shape, since adding
+one field anywhere in that structure breaks it. If a conflict exists,
+either:
+- pre-authorize the exact reconciling edit by naming the file, the test,
+  and the literal before/after text (mirroring `d914df45`'s "AUTHORIZED
+  EDITS: make exactly these N edits, nothing else" pattern elsewhere in
+  this plan), or
+- name the conflicting test explicitly and instruct the agent to raise it
+  via `request_decision` rather than guess.
+A bare "do not modify existing tests" with no carve-out is only safe when
+the story genuinely adds new, non-conflicting behavior — verify that
+before assuming it.
+
 ## Lint-check hand-authored acceptance fixtures before ingesting
 
 `acceptance` fixture source is plan-authored content that bypasses every

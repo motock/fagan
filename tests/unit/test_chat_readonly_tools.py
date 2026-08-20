@@ -194,12 +194,13 @@ class TestGetPlan:
         assert client.get_calls == ["/api/plans/demo"]
 
     def test_url_includes_plan_name_with_special_chars(self) -> None:
-        # A plan name with a slash is passed verbatim into the URL path.
-        client = _FakeHttpClient({"/api/plans/a/b": {"name": "a/b"}})
+        # A plan name containing a slash is percent-encoded so it cannot be
+        # mistaken for an extra path segment (see test_chat_path_encoding.py).
+        client = _FakeHttpClient({"/api/plans/a%2Fb": {"name": "a/b"}})
         TOOLS["get_plan"]["execute"](
             client, "http://base.test", plan_name="a/b"
         )
-        assert client.get_calls == ["/api/plans/a/b"]
+        assert client.get_calls == ["/api/plans/a%2Fb"]
 
     def test_missing_plan_name_raises_type_error(self) -> None:
         # plan_name is a required positional/keyword arg; omitting it must fail.

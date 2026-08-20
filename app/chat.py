@@ -50,6 +50,21 @@ TOOLS: dict[str, dict] = {
             http_client.get(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}" )).json()
         ),
     },
+    "list_decisions": {
+        "description": "List decisions for a plan.",
+        "params": {"plan_name": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}" )).json()["decisions"]
+        ),
+    },
+    "answer_decision": {
+        "description": "Record a decision for a plan.",
+        "params": {"plan_name": "str", "story_key": "str", "question": "str", "answer": "str", "context": "str | None"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, question, answer, context=None, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/decisions"),
+                             json={"story_key": story_key, "question": question, "answer": answer, "context": context or ""}).json()
+        ),
+    },
     "health": {
         "description": "Check dashboard API health.",
         "params": {},

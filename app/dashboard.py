@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +34,11 @@ class IngestPlanRequest(BaseModel):
 class DecomposeRequest(BaseModel):
     request: str
 class DecisionRequest(BaseModel):
+    story_key: str
     question: str
-    options: list[str]
+    answer: str
     context: str = ""
+    decided_by: str = "human"
 
 # config_provenance is a read-only leaf: its only non-stdlib import is
 # app.role_registry (see both modules' docstrings), so pulling it in does
@@ -787,6 +789,24 @@ def resume_plan(plan_name: str) -> dict[str, Any]:
     if plan_name not in _list_plan_names():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     return _service.resume_plan(plan_name)
+
+@app.post("/api/plans/{plan_name}/decisions")
+def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
+    if plan_name not in _list_plan_names():
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    decided_at = datetime.now(timezone.utc).isoformat()
+    record = {
+        "story_key": body.story_key,
+        "question": body.question,
+        "options": [],
+        "decision": body.answer,
+        "rationale": body.context,
+        "decided_by": body.decided_by,
+        "decided_at": decided_at,
+    }
+    _service.append_decision(plan_name, record)
+    return {"ok": True, "record": record}
+
 
 
 @app.get("/api/plans/{plan_name}")

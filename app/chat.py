@@ -19,12 +19,39 @@ SYSTEM_PROMPT = (
     "When you need to call a tool, emit a JSON object with keys name and args, wrapped exactly in [TOOL_CALL] and [/TOOL_CALL] tags. "
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
     "If no tool calls are needed, simply answer in natural language. "
+    "Available tools: list_plans (list all plans), get_plan (get one plan's detail), and health (check API health). "
     "Call tools to gather information, then provide a natural-language reply."
 )
 
-# Empty tool registry – populated by a later story.
-TOOLS: dict[str, dict] = {}
+def _resolve_tool_url(http_client, api_base_url: str, path: str) -> str:
+    if isinstance(http_client, httpx.Client) and not http_client.base_url.is_absolute_url:
+        return f"{api_base_url}{path}"
+    return path
 
+# Read-only tool registry: list_plans, get_plan, health.
+TOOLS: dict[str, dict] = {
+    "list_plans": {
+        "description": "List all pipeline plans.",
+        "params": {},
+        "execute": lambda http_client, api_base_url, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/plans")).json()
+        ),
+    },
+    "get_plan": {
+        "description": "Get full detail for one plan by name.",
+        "params": {"plan_name": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}" )).json()
+        ),
+    },
+    "health": {
+        "description": "Check dashboard API health.",
+        "params": {},
+        "execute": lambda http_client, api_base_url, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/health")).json()
+        ),
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -68,7 +95,6 @@ def _execute_tool(name: str, args: dict, http_client, api_base_url: str) -> dict
     except Exception as exc:  # pragma: no cover - exercised via tests  # noqa: BLE001
         return {"error": str(exc)}
     return {"result": result}
-
 
 # ---------------------------------------------------------------------------
 # ChatService

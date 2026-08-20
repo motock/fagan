@@ -1427,6 +1427,8 @@ def _ingest_plan_impl(
             if old_story is not None:
                 combined = dict(old_story)
                 for field in _INGEST_AUTHORED_STORY_FIELDS:
+                    if field == "risk" and old_story.get("status") != "todo":
+                        continue
                     combined[field] = new_story[field]
                 merged_stories[key] = combined
             else:

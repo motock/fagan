@@ -9,8 +9,7 @@ approve_merge tool, the tool was removed from the chat registry entirely,
 so a prompt-injected chat model has no path to it regardless of gating.
 The original version of this fixture asserted the opposite (that
 approve_merge WAS callable and routed through HTTP) and would now fail
-against the current, intentionally-stricter app/chat.py.
-"""
+against the current, intentionally-stricter app/chat.py."""
 import inspect
 import json
 

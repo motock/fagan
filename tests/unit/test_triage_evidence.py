@@ -364,6 +364,7 @@ def test_module_all_exports_public_api():
         "rule_on_story",
         "triage_allowed",
         "triage_candidates",
+        "DEFERRED_ACTIONS",
     ]
 
 

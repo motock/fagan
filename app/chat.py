@@ -32,7 +32,7 @@ _SYSTEM_PROMPT_PREFIX = (
     "When you need to call a tool, emit a JSON object with keys name and args, wrapped exactly in [TOOL_CALL] and [/TOOL_CALL] tags. "
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
     "If no tool calls are needed, simply answer in natural language. "
-    "You can read plan and story status, journals, logs, and checklists. You can execute control actions (dispatch, interrupt, patch, review, approve_merge, advance, pause, resume, mark done). All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it. "
+    "You can read plan and story status, journals, logs, and checklists. You can execute control actions (dispatch, interrupt, patch, review, advance, pause, resume, mark done). All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it. "
     "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
     "You can surface decisions the overlord has ruled on by calling list_decisions. If the user wants to override or supplement a ruling, record their answer via answer_decision. Human answers are appended to the same decision log as overlord rulings, preserving the audit trail. "
 )
@@ -126,25 +126,11 @@ TOOLS: dict[str, dict] = {
             http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/patch"), json=fields).json()
         ),
     },
-    "set_story_status": {
-        "description": "Set story status.",
-        "params": {"plan_name": "str", "story_key": "str", "status": "str"},
-        "execute": lambda http_client, api_base_url, plan_name, story_key, status, **kwargs: (
-            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/status"), json={"status": status}).json()
-        ),
-    },
     "review_story": {
         "description": "Review a story.",
         "params": {"plan_name": "str", "story_key": "str"},
         "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
             http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/review")).json()
-        ),
-    },
-    "approve_merge": {
-        "description": "Approve merge for a story.",
-        "params": {"plan_name": "str", "story_key": "str"},
-        "execute": lambda http_client, api_base_url, plan_name, story_key, **kwargs: (
-            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/stories/{_seg(story_key)}/approve_merge")).json()
         ),
     },
     "mark_story_done": {

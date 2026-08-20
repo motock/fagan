@@ -12,7 +12,9 @@ clean them up afterwards so the registry is left empty for later stories.
 from __future__ import annotations
 
 import json
+
 import pytest
+
 import app.chat as chat_module
 from app.chat import SYSTEM_PROMPT, TOOLS, ChatService, _execute_tool, _parse_tool_calls
 

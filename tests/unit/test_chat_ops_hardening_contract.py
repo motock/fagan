@@ -33,7 +33,6 @@ import pytest
 import app.chat as chat_module
 from app.chat import SYSTEM_PROMPT, TOOLS, _execute_tool
 
-
 # The two tools this hardening removes from the chat surface.
 _REMOVED_TOOLS = ["approve_merge", "set_story_status"]
 

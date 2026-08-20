@@ -165,7 +165,7 @@ TOOLS: dict[str, dict] = {
         "description": "Advance a plan pipeline.",
         "params": {"plan_name": "str"},
         "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
-            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/advance")).json()
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/advance")).json()
         ),
     },
     "advance_all_plans": {
@@ -186,7 +186,7 @@ TOOLS: dict[str, dict] = {
         "description": "Resume a plan.",
         "params": {"plan_name": "str"},
         "execute": lambda http_client, api_base_url, plan_name, **kwargs: (
-            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{plan_name}/resume")).json()
+            http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/resume")).json()
         ),
     },
     "get_story_journal": {

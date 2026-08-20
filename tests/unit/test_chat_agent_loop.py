@@ -297,3 +297,70 @@ class TestModuleInvariants:
         source = inspect.getsource(chat_module)
         assert "PipelineService" not in source
         assert "_service" not in source
+
+
+# --------------------------------------------------------------------------- #
+# execute_turn — negative max_turns boundary validation (regression)
+# --------------------------------------------------------------------------- #
+class TestMaxTurnsBoundaryValidation:
+    """A negative or non-positive ``max_turns`` is an unvalidated system-boundary
+    numeric input. It must be rejected at construction with a clear ``ValueError``
+    rather than silently accepted and later producing an ``UnboundLocalError``
+    inside ``execute_turn`` (because the loop body never runs and ``response``
+    is never assigned).
+    """
+
+    def test_should_reject_negative_max_turns_at_construction(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError):
+            ChatService(
+                driver=_ScriptedDriver(replies=["hi"]),
+                http_client=object(),
+                api_base_url="http://x.test",
+                max_turns=-1,
+            )
+
+    def test_should_reject_zero_max_turns_at_construction(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError):
+            ChatService(
+                driver=_ScriptedDriver(replies=["hi"]),
+                http_client=object(),
+                api_base_url="http://x.test",
+                max_turns=0,
+            )
+
+    def test_should_reject_negative_env_var_max_turns_at_construction(
+        self, monkeypatch
+    ) -> None:
+        import pytest
+
+        monkeypatch.setenv("PIPELINE_CHAT_MAX_TURNS", "-5")
+        with pytest.raises(ValueError):
+            ChatService(
+                driver=_ScriptedDriver(replies=["hi"]),
+                http_client=object(),
+                api_base_url="http://x.test",
+            )
+
+    def test_negative_max_turns_does_not_raise_unbound_local_error(self) -> None:
+        """The bug manifests as ``UnboundLocalError`` on ``execute_turn`` when a
+        negative ``max_turns`` is silently accepted. After the fix, construction
+        itself must raise ``ValueError`` so no broken instance is ever created
+        and ``execute_turn`` can never be reached to raise ``UnboundLocalError``.
+        """
+        import pytest
+
+        with pytest.raises(ValueError):
+            svc = ChatService(
+                driver=_ScriptedDriver(replies=["hi"]),
+                http_client=object(),
+                api_base_url="http://x.test",
+                max_turns=-1,
+            )
+            # If construction wrongly succeeds, calling execute_turn must NOT
+            # raise the obscure UnboundLocalError described in the review.
+            svc.execute_turn("hello")
+        assert "_service" not in source

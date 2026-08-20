@@ -11,6 +11,8 @@ import os
 import re
 
 import httpx
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 # System prompt used for all chat turns.  It must contain the tool‑call
 # protocol tags and end with the exact sentence required by the tests.
@@ -22,6 +24,7 @@ SYSTEM_PROMPT = (
     "Available tools: list_plans (list all plans), get_plan (get one plan's detail), and health (check API health). "
     "Call tools to gather information, then provide a natural-language reply."
 )
+
 
 def _resolve_tool_url(http_client, api_base_url: str, path: str) -> str:
     if isinstance(http_client, httpx.Client) and not http_client.base_url.is_absolute_url:
@@ -162,3 +165,30 @@ class ChatService:
                 result_blocks.append(block)
             current_prompt = "\n".join(result_blocks)
         return {"reply": response + "\n\n(turn cap reached)", "tool_calls": tool_calls_made, "turns": turns}
+
+# ---------------------------------------------------------------------------
+# FastAPI router for chat endpoint
+# ---------------------------------------------------------------------------
+class ChatRequest(BaseModel):
+    plan_name: str | None = None
+    message: str
+    history: list[dict] | None = None
+
+class ChatResponse(BaseModel):
+    reply: str
+    tool_calls: list
+    turns: int
+
+chat_router = APIRouter()
+
+@chat_router.post("/chat", response_model=ChatResponse)
+def chat_endpoint(req: ChatRequest) -> ChatResponse:
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="message must not be empty")
+    svc = ChatService()
+    result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history)
+    return ChatResponse(**result)
+
+"""
+End of file
+"""

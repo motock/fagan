@@ -21,6 +21,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
+from app import chat
+
 
 class SavePlanRequest(BaseModel):
     plan_json: str
@@ -1226,4 +1228,5 @@ def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str
 #     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 # Mount static files for the dashboard UI.
+app.include_router(chat.chat_router, prefix="/api")
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

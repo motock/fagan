@@ -82,6 +82,62 @@ non-blocking heuristic on this at `ingest_plan` and posts a notification
 when it looks isolation-only — treat that notification as a prompt to
 re-check the fixture, not noise to ignore.
 
+## Cumulative artifacts: registries, dispatch tables, and prompt strings a chain of stories grows together
+
+When several stories in a plan each add to the SAME shared artifact in
+sequence — a registry dict, a `__all__` list, a system-prompt string,
+a dispatch table — never let one story's tests assert the artifact's exact
+total contents (equality on a set/list, an exact substring pinned to that
+story's own additions, an exact total count). Assert only what THAT story
+added: membership (`"x" in registry`), a sorted/set comparison, or a
+structural relationship to a stable anchor (e.g. "this new entry appears
+before the fixed closing sentence") — never the complete enumeration.
+
+**Why this matters and is not hypothetical:** two documented, independent
+occurrences, same root cause:
+
+- `pipeline/triage.py` (`overlord-failure-triage`, 2026-08-18/20): one shared
+  test file asserted `triage.__all__ == [16 items in a fixed order]`. Every
+  one of 8 later stories had to edit that assertion just to add its own
+  symbol at the right index — local-model success on that epic was 33% vs.
+  75% on a sibling epic that used one test file per story with membership
+  assertions. See [[feedback_per_story_test_files_not_shared]].
+- `app/chat.py`'s `SYSTEM_PROMPT` (`W2_CHAT_ENTRY_POINT_PLAN`, 2026-08-20):
+  the story that first populated the `TOOLS` registry wrote a test pinning
+  the "Available tools: ..." sentence to the exact 3 tools it added, and
+  asserting that exact string appeared immediately before the prompt's
+  final sentence. Six later dependent stories each legitimately registered
+  more tools but could not touch that frozen sentence without violating
+  the "never modify an existing test" rule. Two of those stories (W2-03,
+  W2-05) burned their full local rework budget — 96+ minutes combined,
+  zero commits produced in several of the cycles — failing a test that had
+  nothing to do with their own assigned work. Worse: because nothing could
+  ever update the enumeration, the defect shipped all the way to `master`
+  — 14 of the 23 tools ultimately registered were never named anywhere in
+  the prompt the chat model actually receives, and no test caught it,
+  because the test measured a frozen snapshot instead of the live registry.
+
+**How to apply at plan-authoring time:**
+- When 3+ stories are chained on a shared production artifact (see the
+  "Local (non-Claude) dispatch" note below on chaining these sequentially
+  in the first place), scan every story's `agent_instructions` for "add an
+  entry to X" / "add a sentence to Y" and check: does the test this story's
+  brief implies would assert the OLD exact state, or the growing state?
+- State explicitly in `agent_instructions`, for every story in such a
+  chain: *"`<artifact>` is cumulative — later sibling stories add more to
+  it. Your tests must assert only what YOU add (membership / ordering
+  relative to a fixed anchor), never the total contents, exact count, or
+  exact full-string match."*
+- An **insertion anchor** ("insert this immediately before the exact
+  sentence '...'") is correct and necessary guidance for the *implementer*
+  — it is not license for the *test* to assert exact position of the total
+  string. Anchor the implementation; assert only the delta.
+- If an artifact is regenerable from a registry it enumerates (like a
+  "these are the available tools" prompt sentence), prefer building it
+  programmatically from the registry itself over hand-writing prose that
+  can drift — then the test asserts the generator's correctness once,
+  and no later story can ever leave it stale.
+
 ## Lint-check hand-authored acceptance fixtures before ingesting
 
 `acceptance` fixture source is plan-authored content that bypasses every

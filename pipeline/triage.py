@@ -26,6 +26,11 @@ from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalat
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
 TRIAGE_MAX_PER_TICK = 1
+
+# E6/E7: split_story and repo_issue actions are deferred until implemented.
+# Refer to docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md for implementation details.
+# Exported via __all__; handled in execute_ruling.
+DEFERRED_ACTIONS = frozenset({"split_story", "repo_issue"})
 # ---------------------------------------------------------------------------
 # Triage executor helpers
 # ---------------------------------------------------------------------------
@@ -76,6 +81,15 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
     """
     action = ruling.get("action", "unknown")
     rationale = ruling.get("rationale", "")[:300]
+    if action in DEFERRED_ACTIONS:
+        story["triage_deferred_action"] = action
+        reason = f"triage ruled {action}, which is not implemented yet; parked for a human"
+        _park(plan_name, story_key, story, reason)
+        try:
+            _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
+        except Exception:
+            pass
+        return "park_for_human"
     if action == "escalate_model":
         try:
             fallback = manifest.get("local_model_fallback")
@@ -187,6 +201,7 @@ __all__ = [
     "rule_on_story",
     "triage_allowed",
     "triage_candidates",
+    "DEFERRED_ACTIONS",
     ]
 def run_triage_sweep(plan_name: str) -> dict:
     if not _auto_triage_enabled():

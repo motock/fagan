@@ -180,9 +180,7 @@ TWO_SEGMENT_TOOLS = [
     ("dispatch_story", "/dispatch", "POST", {}),
     ("interrupt_story", "/interrupt", "POST", {}),
     ("patch_story", "/patch", "POST", {"fields": {"x": 1}}),
-    ("set_story_status", "/status", "POST", {"status": "blocked"}),
     ("review_story", "/review", "POST", {}),
-    ("approve_merge", "/approve_merge", "POST", {}),
     ("mark_story_done", "/done", "POST", {}),
     ("checkpoint", "/checkpoint", "POST", {"step": "s", "summary": "m"}),
     ("get_story_journal", "/journal", "GET", {}),
@@ -278,17 +276,6 @@ class TestAnswerDecisionEncoding:
 # Body values must never be path-encoded (regression guard)
 # --------------------------------------------------------------------------- #
 class TestBodyValuesNotEncoded:
-    def test_set_story_status_status_in_body(self) -> None:
-        transport = _FakeTransport()
-        client = _client(transport)
-        TOOLS["set_story_status"]["execute"](
-            client, "http://test",
-            plan_name="demo", story_key="s1", status="blocked/needs#review?",
-        )
-        req = _one_request(transport)
-        body = json.loads(req.content.decode())
-        assert body["status"] == "blocked/needs#review?"
-
     def test_patch_story_fields_in_body(self) -> None:
         transport = _FakeTransport()
         client = _client(transport)

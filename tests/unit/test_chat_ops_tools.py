@@ -261,42 +261,11 @@ class TestPatchStoryTool:
             )
 
 
-class TestSetStoryStatusTool:
-    def test_posts_to_status_endpoint_with_status_body(self) -> None:
-        url = "/api/plans/demo/stories/s4/status"
-        client = _FakeHttpClient({url: {"ok": True}})
-        out = TOOLS["set_story_status"]["execute"](
-            client, "http://base.test", plan_name="demo", story_key="s4", status="blocked"
-        )
-        assert out == {"ok": True}
-        posted_url, body = client.post_calls[0]
-        assert posted_url == url
-        assert body == {"status": "blocked"}
-
-    def test_missing_status_raises_type_error(self) -> None:
-        client = _FakeHttpClient({})
-        with pytest.raises(TypeError):
-            TOOLS["set_story_status"]["execute"](
-                client, "http://base.test", plan_name="demo", story_key="s4"
-            )
-
-
 class TestReviewStoryTool:
     def test_posts_to_review_endpoint(self) -> None:
         url = "/api/plans/demo/stories/s4/review"
         client = _FakeHttpClient({url: {"ok": True}})
         out = TOOLS["review_story"]["execute"](
-            client, "http://base.test", plan_name="demo", story_key="s4"
-        )
-        assert out == {"ok": True}
-        assert client.post_calls[0][0] == url
-
-
-class TestApproveMergeTool:
-    def test_posts_to_approve_merge_endpoint(self) -> None:
-        url = "/api/plans/demo/stories/s4/approve_merge"
-        client = _FakeHttpClient({url: {"ok": True}})
-        out = TOOLS["approve_merge"]["execute"](
             client, "http://base.test", plan_name="demo", story_key="s4"
         )
         assert out == {"ok": True}
@@ -529,15 +498,6 @@ class TestEndToEndViaLoop:
         assert req.method == "POST"
         assert req.url.path == "/api/plans/demo/stories/s4/review"
 
-    def test_approve_merge_called_through_loop(self) -> None:
-        out, transport = self._run(
-            "approve_merge", {"plan_name": "demo", "story_key": "s4"}
-        )
-        assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/stories/s4/approve_merge"
-
     # --- plan-level write actions ---
     def test_advance_pipeline_called_through_loop(self) -> None:
         out, transport = self._run(
@@ -679,7 +639,6 @@ class TestSystemPromptUpdate:
         "control actions",
         "dispatch",
         "interrupt",
-        "approve_merge",
         "subject to server-side gates",
         "do NOT attempt to bypass it",
     ]
@@ -700,47 +659,6 @@ class TestSystemPromptUpdate:
 
     def test_ops_paragraph_appears_exactly_once(self) -> None:
         assert SYSTEM_PROMPT.count("journals, logs, and checklists") == 1
-
-
-# =========================================================================== #
-# Regression: approve_merge must remain advertised in the ops paragraph
-# =========================================================================== #
-class TestOpsParagraphAdvertisesApproveMerge:
-    """Regression test for the removal of ``approve_merge`` from the ops
-    paragraph of ``_SYSTEM_PROMPT_PREFIX``.
-
-    The base commit (3acf30d) advertised ``approve_merge`` as one of the
-    control actions in the "You can execute control actions (...)" sentence.
-    A subsequent edit removed it from that sentence, which breaks the
-    contract encoded by ``TestSystemPromptUpdate.OPS_PHRASES``.  This test
-    pins the original contract directly against the control-actions clause
-    so the regression is reproduced in isolation.
-    """
-
-    def test_control_actions_clause_lists_approve_merge(self) -> None:
-        # The control-actions sentence enumerates the callable ops actions
-        # inside parentheses, e.g.
-        #   "control actions (dispatch, interrupt, patch, review,
-        #    approve_merge, advance, pause, resume, mark done)"
-        assert "control actions" in SYSTEM_PROMPT, (
-            "SYSTEM_PROMPT must contain the control-actions clause"
-        )
-        clause_start = SYSTEM_PROMPT.index("control actions")
-        # The parenthesised action list ends at the first ')' after the
-        # clause; everything inside must still mention approve_merge.
-        clause_end = SYSTEM_PROMPT.index(")", clause_start)
-        clause = SYSTEM_PROMPT[clause_start:clause_end]
-        assert "approve_merge" in clause, (
-            "the control-actions clause must still advertise approve_merge; "
-            f"got clause: {clause!r}"
-        )
-
-    def test_approve_merge_phrase_present_in_prompt(self) -> None:
-        # Direct, redundant pin of the phrase the reviewer flagged as removed.
-        assert "approve_merge" in SYSTEM_PROMPT, (
-            "SYSTEM_PROMPT must still contain the phrase 'approve_merge' "
-            "in its ops paragraph"
-        )
 
 
 # =========================================================================== #

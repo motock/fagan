@@ -88,15 +88,17 @@ class ChatService:
         Base URL for the HTTP client.  Defaults to the environment variable
         ``PIPELINE_CHAT_API_BASE`` or ``http://127.0.0.1:8000``.
     max_turns:
-        Maximum number of turns for the chat loop.  Not used in this story
-        but stored for future use.
+        Maximum number of turns for the chat loop.  A positive integer is required; a non‑positive value is rejected at construction.
     """
 
     def __init__(self, *, driver=None, http_client=None, api_base_url=None, max_turns=None):
         self._driver = driver
         self._api_base_url = api_base_url or os.environ.get("PIPELINE_CHAT_API_BASE", "http://127.0.0.1:8000")
         self._http_client = http_client or httpx.Client(base_url=self._api_base_url)
-        self._max_turns = max_turns or int(os.environ.get("PIPELINE_CHAT_MAX_TURNS", "10"))
+        raw_max = max_turns if max_turns is not None else int(os.environ.get("PIPELINE_CHAT_MAX_TURNS", "10"))
+        if raw_max <= 0:
+            raise ValueError(f"max_turns must be a positive integer, got {raw_max}")
+        self._max_turns = raw_max
         self._resolved_driver = None
         self._resolved_model = None
 

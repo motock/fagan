@@ -3862,6 +3862,17 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["parked_reason"] = (
                     f"review inconclusive after {inconclusive} attempts - needs human review"
                 )
+                # Diagnostic-only: the raw reason a VERDICT line never
+                # appeared (step-cap, truncation, a swallowed backend
+                # exception, or a genuinely empty response) is otherwise
+                # lost the moment this story parks - nothing else persists
+                # reviewer_output on the inconclusive path, so a human
+                # investigating later has no way to tell which of those it
+                # was without re-running the review. Bounded to keep the
+                # manifest small; not used by any control-flow logic.
+                story["last_inconclusive_output_excerpt"] = (
+                    reviewer_output[:500] if reviewer_output else "(empty response)"
+                )
                 _notify_user(
                     plan_name,
                     f"{story_key} parked: review inconclusive after "
@@ -3898,6 +3909,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["status"] = "parked"
                 story["parked_reason"] = (
                     f"review inconclusive after {inconclusive} attempts - needs human review"
+                )
+                story["last_inconclusive_output_excerpt"] = (
+                    reviewer_output[:500] if reviewer_output else "(empty response)"
                 )
                 _notify_user(
                     plan_name,
@@ -3977,7 +3991,29 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             pass
 
     if verdict == "APPROVE":
-        pr_url = _open_pr(worktree, story_key, story)
+        # A git-push failure (transient network/auth hiccup, or a race with
+        # a concurrent rebase) must not crash the whole advance_pipeline
+        # tick: this call sits inside the tests_passed review loop in
+        # _advance_pipeline_locked, so an uncaught exception here aborts
+        # review for every OTHER tests_passed story and skips merge
+        # adjudication entirely for the rest of that tick (confirmed live in
+        # advance-scheduler.err.log, story 30e5f9fc, 2026-08-19: an
+        # unguarded CalledProcessError from this exact call propagated
+        # through wake_handler and silently dropped the tick). The sibling
+        # REQUEST_CHANGES-path call (below, in the PR-comment block) already
+        # swallows this error the same way - mirror that here. Fail open:
+        # leave status/verdict untouched so the next tick's review_story
+        # call retries from scratch rather than getting stuck.
+        try:
+            pr_url = _open_pr(worktree, story_key, story)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            _notify_user(
+                plan_name,
+                f"{story_key}: review APPROVEd but could not open PR "
+                f"({exc.__class__.__name__}); will retry next tick.",
+            )
+            _atomic_write_json(manifest_path, manifest)
+            return {"ok": True, "verdict": verdict, "status": story["status"]}
         story["pr_url"] = pr_url
         story["status"] = "pr_open"
         # The work passed: drop any stale rework state from earlier cycles.

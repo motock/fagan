@@ -183,8 +183,25 @@ def _role_resource_ok(
     (env-local-first), not role_registry, so passing plan_role_config for
     dispatch would mismatch and re-introduce the same bug. The override branch
     only fires when a plan/registry provider actually exists, so an
-    unconfigured install or an env=auto review resolves identically to before."""
-    if role == "review" and plan_role_config is not None:
+    unconfigured install or an env=auto review resolves identically to before.
+
+    role_config is plan-level and OPTIONAL (pipeline-story-schema.md) - most
+    plans never set it, so plan_role_config is routinely None here (a bare
+    `manifest.get("role_config")`). The registry can still name a review
+    provider on its own (model_registry.json's roles.review), and
+    role_registry.resolve_role already null-safes a None plan_role_config
+    internally (`(plan_role_config or {}).get(role, {})`). Gating this whole
+    block on `plan_role_config is not None` therefore reintroduced exactly
+    the bug this function exists to fix, just one layer up: a plan with no
+    role_config at all fell straight to the env-based Claude default below
+    regardless of what the registry said, while _run_reviewer's own
+    resolve_role call (unconditional, no such guard) correctly routed the
+    actual review to the registry's provider - gate and reviewer disagreed
+    about the backend. Confirmed live on overlord-failure-triage
+    (2026-08-18, 159 "Claude usage gate tripped" deferrals over 3.2h while
+    registry roles.review was ollama/glm the whole time and the plan's own
+    role_config had not yet been patched onto the manifest)."""
+    if role == "review":
         plan_cfg = (plan_role_config or {}).get("review", {})
         registry = role_registry.load_registry()
         registry_provider = (

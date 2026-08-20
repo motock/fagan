@@ -19,6 +19,11 @@ const STALE_IN_PROGRESS_MINUTES = 30;
 const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
 const FILTERS_KEY = "pipeline-dashboard-filters";
 let notifSeverityFilter = "all";
+// Keyed-diff state for renderPlanList: maps each plan name to its live
+// `.plan-item` DOM node so per-plan rows are updated in place across poll
+// ticks instead of being torn down and rebuilt every 4s. `null` means the
+// sidebar has never been rendered (first call does a full rebuild).
+let planListRowsByName = null;
 function filterNotifications(records, severity) {
   if (!records) return [];
   if (!severity || severity === "all") return records.slice();
@@ -367,7 +372,7 @@ async function postJson(url) {
 // server (by manifest mtime) and, by default, with archived plans excluded
 // - state.showArchived controls whether refresh() asks for them too (see
 // the include_archived query param built there).
-function renderPlanList(plans) {
+function _renderPlanListFull(plans) {
   const nav = document.getElementById("plan-list");
   nav.innerHTML = "";
 
@@ -389,6 +394,7 @@ function renderPlanList(plans) {
     const div = document.createElement("div");
     div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
       + (plan.archived ? " plan-archived" : "");
+    div.setAttribute("data-plan-name", plan.name);
     const total = plan.story_count || 0;
     const done = (plan.status_counts && plan.status_counts.done) || 0;
     div.innerHTML = `
@@ -433,6 +439,104 @@ function renderPlanList(plans) {
   label.appendChild(labelText);
   toggle.appendChild(label);
   nav.appendChild(toggle);
+}
+
+// Build a single per-plan `.plan-item` row (the same markup the full-rebuild
+// loop in _renderPlanListFull produces) and return it. Used by the keyed-diff
+// wrapper to create exactly one new row for a plan that isn't in the map yet.
+function _buildPlanRow(plan) {
+  const div = document.createElement("div");
+  div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
+    + (plan.archived ? " plan-archived" : "");
+  div.setAttribute("data-plan-name", plan.name);
+  const total = plan.story_count || 0;
+  const done = (plan.status_counts && plan.status_counts.done) || 0;
+  div.innerHTML = `
+    <div class="plan-item-row">
+      <div class="plan-item-main">
+        <div class="plan-name">${escapeHtml(plan.name)}</div>
+        <div class="plan-meta">${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}</div>
+      </div>
+      <button type="button" class="plan-archive-btn" title="${plan.archived ? "Restore" : "Dismiss"}">
+        ${plan.archived ? "Restore" : "Dismiss"}
+      </button>
+    </div>
+  `;
+  div.addEventListener("click", () => selectPlan(plan.name));
+  div.querySelector(".plan-archive-btn").addEventListener("click", (event) => {
+    // Don't let the archive/restore click also select the plan.
+    event.stopPropagation();
+    togglePlanArchived(plan.name, plan.archived);
+  });
+  return div;
+}
+
+// Insert a freshly-built plan row into the sidebar. New rows go just above
+// the pinned footer toggle (which _renderPlanListFull always appends last),
+// so plan rows stay grouped together; fall back to appending if the footer
+// isn't present (e.g. a test shim without insertBefore).
+function _insertPlanRow(nav, div) {
+  const footer = nav.querySelector(".plan-list-footer");
+  if (footer && typeof nav.insertBefore === "function") {
+    nav.insertBefore(div, footer);
+  } else {
+    nav.appendChild(div);
+  }
+}
+
+// Keyed-diff wrapper around _renderPlanListFull. The first call ever does a
+// full rebuild and records each plan row in planListRowsByName; every later
+// call diffs `plans` against that map so unchanged rows are updated in place
+// (preserving in-progress interaction like an open right-click menu or a
+// focused Dismiss button) instead of being torn down and rebuilt each poll
+// tick. Pinned Overview/Comms items are not part of this diff.
+function renderPlanList(plans) {
+  const nav = document.getElementById("plan-list");
+
+  if (planListRowsByName === null) {
+    _renderPlanListFull(plans);
+    planListRowsByName = new Map();
+    // Query all .plan-item rows and keep only the per-plan ones (the pinned
+    // Overview item also carries .plan-item but has no data-plan-name).
+    for (const el of nav.querySelectorAll(".plan-item")) {
+      if (el.dataset["plan-name"]) {
+        planListRowsByName.set(el.dataset["plan-name"], el);
+      }
+    }
+    return;
+  }
+
+  const seen = new Set();
+  for (const plan of plans) {
+    seen.add(plan.name);
+    const existing = planListRowsByName.get(plan.name);
+    if (existing) {
+      // Plan already rendered: update only the mutable fields on the EXISTING
+      // node. Never recreate it — its event listeners are already bound to
+      // the right plan.name closure from creation time.
+      const total = plan.story_count || 0;
+      const done = (plan.status_counts && plan.status_counts.done) || 0;
+      const meta = existing.querySelector(".plan-meta");
+      if (meta) {
+        meta.textContent = `${done}/${total} done${plan.paused ? " paused" : ""}`;
+      }
+      existing.classList.toggle("active", plan.name === state.selectedPlan);
+      existing.classList.toggle("plan-archived", !!plan.archived);
+    } else {
+      // New plan: build exactly one row and add it to the map.
+      const div = _buildPlanRow(plan);
+      _insertPlanRow(nav, div);
+      planListRowsByName.set(plan.name, div);
+    }
+  }
+
+  // Drop rows for plans no longer present.
+  for (const [name, el] of planListRowsByName) {
+    if (!seen.has(name)) {
+      el.remove();
+      planListRowsByName.delete(name);
+    }
+  }
 }
 
 // Archive/unarchive is fire-and-forget from the UI's perspective: on
@@ -1690,6 +1794,7 @@ if (typeof module !== "undefined" && module.exports) {
     showStoryModal, _renderStoryModalBody, handleCopyClick,
     filterStoryNotifications, renderStoryModalNotifications,
     renderOverview, selectOverview, refresh, state,
+    renderPlanList, _renderPlanListFull,
     renderNotifications,
     renderChecklist,
     filterNotifications,

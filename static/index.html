@@ -32,6 +32,35 @@
     <section id="plan-detail">
       <p class="empty-state">Select a plan to see its story lifecycle.</p>
     </section>
+
+    <section id="comms-view" class="hidden">
+      <div class="comms-head">
+        <div class="comms-title">
+          <span class="on-air" id="on-air"></span>
+          <div>
+            <div class="label">Comms</div>
+            <div class="comms-sub" id="comms-sub">chat</div>
+          </div>
+        </div>
+      </div>
+      <div class="comms-body" id="comms-body">
+        <div class="comms-thread" id="comms-thread" style="display:none;"></div>
+        <div class="comms-landing" id="comms-landing">
+          <h3>Ask the tower.</h3>
+          <p>Describe a goal to draft a plan, ask what's blocked or why a
+          story failed, or answer a decision the overlord is waiting on.
+          Every action still runs through the same gated API the board
+          buttons call.</p>
+        </div>
+      </div>
+      <div class="comms-foot">
+        <div class="comms-input-row">
+          <textarea class="comms-input" id="comms-input" rows="1"
+            placeholder="Ask about a plan, describe a goal, or answer a decision..."></textarea>
+          <button class="comms-send" id="comms-send" type="button">Transmit</button>
+        </div>
+      </div>
+    </section>
   </main>
 
   <div id="story-modal" class="modal hidden dsh-modal" role="dialog" aria-modal="true">

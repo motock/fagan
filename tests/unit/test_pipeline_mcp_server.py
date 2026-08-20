@@ -9208,9 +9208,9 @@ def test_check_story_status_no_last_reviewed_sha_passes(plan_dir, monkeypatch):
 
 def test_check_story_status_no_progress_exhausts_rework_cap_parks(plan_dir, monkeypatch):
     """Mode 27: a stuck agent that keeps producing no new commit must park
-    once rework_attempts reaches the cap, rather than redispatching forever.
-    rework_attempts starts at 2 (cap 3): one no-progress retry hits the cap
-    and parks."""
+    once rework_attempts reaches REWORK_MAX_ATTEMPTS_NO_COMMIT (cap 2).
+    rework_attempts starts at 2: one no-progress retry brings attempts to 3,
+    which is past the cap, so it parks."""
     _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
                head_sha="abc123", rework_attempts=2)
     monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
@@ -9221,6 +9221,44 @@ def test_check_story_status_no_progress_exhausts_rework_cap_parks(plan_dir, monk
     assert manifest["status"] == "parked"
     assert manifest["rework_attempts"] == 3
     assert "no new commit after 3" in manifest["parked_reason"]
+
+
+def test_check_story_status_no_progress_cap_is_tighter_than_general_rework_cap(
+    plan_dir, monkeypatch,
+):
+    """REWORK_MAX_ATTEMPTS_NO_COMMIT (2) is intentionally tighter than the
+    general REWORK_MAX_ATTEMPTS (3): a story that produced zero commits
+    across its FIRST rework cycle (rework_attempts=1 going into this call,
+    so attempts becomes 2) must already park here, whereas the general cap
+    would have allowed one more cycle. Root-caused 2026-08-20 on
+    W2_CHAT_ENTRY_POINT_PLAN (W2-03, W2-05): two stories spent their full
+    general-cap budget on this exact zero-commit path with nothing to show
+    for the extra cycle."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="abc123", rework_attempts=1)
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "parked"
+    assert result["reason"] == "no_new_commit_rework_budget_exhausted"
+
+
+def test_check_story_status_no_progress_cap_uniform_for_oracle_and_escalated_stories(
+    plan_dir, monkeypatch,
+):
+    """The no-new-commit cap applies uniformly regardless of the story's
+    acceptance-oracle or escalation status - unlike the general rework cap
+    (REWORK_MAX_ATTEMPTS_ORACLE=1, REWORK_MAX_ATTEMPTS_ESCALATED=3), zero
+    commits is the same severity of stall signal either way."""
+    _css_setup(plan_dir, monkeypatch, last_reviewed_sha="abc123",
+               head_sha="abc123", rework_attempts=1, acceptance=True)
+    manifest = _read_manifest(plan_dir, "plan")
+    manifest["stories"]["S1"]["escalated"] = True
+    manifest_path = plan_dir / "plan.manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
+    result = p.check_story_status("plan", "S1")
+    assert result["status"] == "parked"
+    assert result["reason"] == "no_new_commit_rework_budget_exhausted"
 
 
 def test_check_story_status_no_progress_exhausts_rework_cap_escalates_to_claude(
@@ -9404,7 +9442,7 @@ def test_check_story_status_acceptance_fail_review_no_new_commit_routes_to_chang
     (worktree / "agent.log").write_text("the agent did real work but crashed\n")
     _write_manifest(plan_dir, "revfail_stuck", {
         "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
-               "worktree": str(worktree), "rework_attempts": 1,
+               "worktree": str(worktree), "rework_attempts": 0,
                "last_reviewed_sha": "34a3f38"},
     })
     monkeypatch.setattr(p.os, "kill",
@@ -9435,7 +9473,7 @@ def test_check_story_status_acceptance_fail_review_no_new_commit_routes_to_chang
     assert result["reason"] == "no_new_commit_since_last_review"
     story = _read_manifest(plan_dir, "revfail_stuck")["stories"]["S1"]
     assert story["status"] == "changes_requested"
-    assert story["rework_attempts"] == 2
+    assert story["rework_attempts"] == 1
 
 
 def test_check_story_status_acceptance_fail_review_new_commit_still_passes(

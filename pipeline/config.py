@@ -217,6 +217,24 @@ REWORK_MAX_ATTEMPTS_ORACLE = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS_OR
 # "converge fast" track.
 REWORK_MAX_ATTEMPTS_ESCALATED = int(os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED", "3"))
 
+# Rework budget for the specific "no new commit since last review" signal
+# (HEAD unchanged across a redispatch - the agent parked, crashed, or looped
+# without writing code). This is a stronger and qualitatively different
+# signal than "made changes but the reviewer still isn't satisfied": a
+# redispatch that produces zero commits means the agent could not even
+# identify an edit to make, so a further redispatch under the SAME budget
+# tends to repeat that, not resolve it. Root-caused 2026-08-20 on
+# W2_CHAT_ENTRY_POINT_PLAN: two of three escalated stories (W2-03, W2-05)
+# spent all of REWORK_MAX_ATTEMPTS (3) on this exact path with zero commits
+# each cycle - about 40 minutes of wall clock per story bought nothing.
+# Lower than REWORK_MAX_ATTEMPTS so a zero-progress story converges to
+# "parked" or escalated faster than one that IS making incremental progress
+# each cycle (that case stays on REWORK_MAX_ATTEMPTS/_ORACLE/_ESCALATED,
+# unaffected by this constant).
+REWORK_MAX_ATTEMPTS_NO_COMMIT = int(
+    os.environ.get("PIPELINE_REWORK_MAX_ATTEMPTS_NO_COMMIT", "2")
+)
+
 # Inconclusive-review budget. A non-rate-limited UNKNOWN verdict (a reviewer
 # response with no parseable VERDICT line, or the fail-safe path for a
 # reviewer backend's own internal error) is not evidence the story needs
@@ -271,6 +289,7 @@ __all__ = [
     "REVIEW_INCONCLUSIVE_MAX",
     "REWORK_MAX_ATTEMPTS",
     "REWORK_MAX_ATTEMPTS_ESCALATED",
+    "REWORK_MAX_ATTEMPTS_NO_COMMIT",
     "REWORK_MAX_ATTEMPTS_ORACLE",
     "SESSION_PAUSE_THRESHOLD",
     "SESSION_RESUME_THRESHOLD",

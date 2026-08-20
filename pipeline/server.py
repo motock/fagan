@@ -150,6 +150,7 @@ from .config import (  # noqa: F401
     REVIEWER_AUTO_FIX_MAX_LINES,
     REWORK_MAX_ATTEMPTS,
     REWORK_MAX_ATTEMPTS_ESCALATED,
+    REWORK_MAX_ATTEMPTS_NO_COMMIT,
     REWORK_MAX_ATTEMPTS_ORACLE,
     SESSION_PAUSE_THRESHOLD,
     SESSION_RESUME_THRESHOLD,
@@ -3003,12 +3004,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         if head_res.stdout.strip() == story["last_reviewed_sha"]:
             attempts = story.get("rework_attempts", 0) + 1
             story["rework_attempts"] = attempts
-            if story.get("escalated"):
-                rework_cap = REWORK_MAX_ATTEMPTS_ESCALATED
-            elif story.get("acceptance"):
-                rework_cap = REWORK_MAX_ATTEMPTS_ORACLE
-            else:
-                rework_cap = REWORK_MAX_ATTEMPTS
+            # Zero commits since the last review is a stronger, distinct
+            # signal from "made changes but the reviewer wasn't satisfied" -
+            # see REWORK_MAX_ATTEMPTS_NO_COMMIT's docstring in config.py.
+            # Applies uniformly regardless of escalation/oracle status.
+            rework_cap = REWORK_MAX_ATTEMPTS_NO_COMMIT
             if attempts >= rework_cap:
                 # Mirror review_story's own rework-cap escalation (Mode 24/28):
                 # a local agent that keeps parking/crashing without writing

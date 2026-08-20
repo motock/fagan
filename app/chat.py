@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
+def _seg(x):
+    return quote(str(x), safe="")
+
 
 import httpx
 from fastapi import APIRouter, HTTPException

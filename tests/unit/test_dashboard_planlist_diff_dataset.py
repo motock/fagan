@@ -213,11 +213,17 @@ _SHIM = r"""
 
 def _run_app_js(expr):
     """Evaluate a JS expression inside an environment where static/app.js
-    has been loaded. Returns the JSON-serialized result."""
+    has been loaded. Returns the JSON-serialized result.
+
+    The app.js source is INLINED (not eval'd) so its module-level `let`
+    declarations (e.g. `planListRowsByName`) live in the same scope as the
+    test expression, letting tests inspect or reset that diff state."""
+    with open(APP_JS, encoding="utf-8") as fh:
+        app_src = fh.read()
     script = (
         _SHIM
-        + "const fs = require('fs');"
-        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
+        + app_src
+        + "\n"
         + "globalThis.state = globalThis.window.state;"
         + "process.stdout.write(JSON.stringify(" + expr + "));"
     )

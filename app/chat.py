@@ -10,9 +10,12 @@ import json
 import os
 import re
 from urllib.parse import quote
+
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+
 def _seg(x):
     return quote(str(x), safe="")
 # System prompt used for all chat turns. Assembled AFTER the TOOLS registry

@@ -58,6 +58,20 @@ def _one_request(transport: _FakeTransport) -> httpx.Request:
     return transport.requests[0]
 
 
+def _raw_path(req: httpx.Request) -> str:
+    """The path actually sent on the wire, percent-encoding intact.
+
+    ``httpx.URL.path`` is a decoded convenience property - it silently turns
+    ``%2F`` back into ``/`` and ``%23`` back into ``#``, so asserting against
+    it cannot tell an encoded segment from an unencoded one. ``raw_path``
+    (bytes, path+query as transmitted) is what a real server actually
+    receives and routes on, which is the property these encoding tests need.
+    None of the tools under test send a query string, so no ``?``-splitting
+    is needed here.
+    """
+    return req.url.raw_path.decode()
+
+
 # --------------------------------------------------------------------------- #
 # Import / helper presence
 # --------------------------------------------------------------------------- #
@@ -109,7 +123,10 @@ SINGLE_SEGMENT_TOOLS = [
 @pytest.mark.parametrize("tool_name,suffix,method", SINGLE_SEGMENT_TOOLS)
 class TestSingleSegmentEncoding:
     def _call(self, tool_name, plan_name):
-        transport = _FakeTransport()
+        # list_decisions indexes ["decisions"] out of the response; every
+        # other tool under test is happy with the default {"ok": True}.
+        payload = {"decisions": []} if tool_name == "list_decisions" else None
+        transport = _FakeTransport(payload)
         client = _client(transport)
         # Provide any extra required kwargs the tool needs.
         extra = {}
@@ -123,36 +140,36 @@ class TestSingleSegmentEncoding:
     def test_hash_does_not_redirect(self, tool_name, suffix, method) -> None:
         req = self._call(tool_name, "demo/stories/s1/approve_merge#")
         # The path must NOT be the redirected route.
-        assert req.url.path != "/api/plans/demo/stories/s1/approve_merge"
+        assert _raw_path(req) != "/api/plans/demo/stories/s1/approve_merge"
         # It must start with the plans prefix and end with the tool's suffix.
-        assert req.url.path.startswith("/api/plans/")
+        assert _raw_path(req).startswith("/api/plans/")
         if suffix:
-            assert req.url.path.endswith(suffix)
+            assert _raw_path(req).endswith(suffix)
         # The '#' must have been percent-encoded (not dropped as a fragment).
-        assert "%23" in req.url.path
+        assert "%23" in _raw_path(req)
 
     def test_dotdot_does_not_escape_prefix(self, tool_name, suffix, method) -> None:
         req = self._call(tool_name, "../../../etc")
-        assert req.url.path.startswith("/api/plans/")
+        assert _raw_path(req).startswith("/api/plans/")
         if suffix:
-            assert req.url.path.endswith(suffix)
+            assert _raw_path(req).endswith(suffix)
         # The literal '../' sequence must not appear unencoded in the path.
-        assert "../" not in req.url.path
+        assert "../" not in _raw_path(req)
 
     def test_slash_in_plan_name_encoded(self, tool_name, suffix, method) -> None:
         req = self._call(tool_name, "a/b")
         # A '/' inside plan_name must be encoded, so the path still has
         # exactly the number of segments the tool defines (prefix + suffix).
-        assert req.url.path.startswith("/api/plans/")
+        assert _raw_path(req).startswith("/api/plans/")
         if suffix:
-            assert req.url.path.endswith(suffix)
+            assert _raw_path(req).endswith(suffix)
         # No raw '/' beyond the structural ones.
-        assert "a/b" not in req.url.path
+        assert "a/b" not in _raw_path(req)
 
     def test_plain_name_unchanged(self, tool_name, suffix, method) -> None:
         req = self._call(tool_name, "my-plan_1")
         expected = f"/api/plans/my-plan_1{suffix}"
-        assert req.url.path == expected
+        assert _raw_path(req) == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -190,34 +207,34 @@ class TestTwoSegmentEncoding:
     def test_both_segments_encoded_independently(self, tool_name, suffix, method, extra) -> None:
         # A '/' inside story_key must not be treated as a path separator.
         req = self._call(tool_name, "demo", "s/1", extra)
-        assert req.url.path.startswith("/api/plans/demo/stories/")
-        assert req.url.path.endswith(f"/{suffix.lstrip('/')}")
+        assert _raw_path(req).startswith("/api/plans/demo/stories/")
+        assert _raw_path(req).endswith(f"/{suffix.lstrip('/')}")
         # The raw 's/1' must not appear; it must be encoded.
-        assert "s/1" not in req.url.path
+        assert "s/1" not in _raw_path(req)
 
     def test_slash_in_plan_name_encoded(self, tool_name, suffix, method, extra) -> None:
         req = self._call(tool_name, "a/b", "s1", extra)
-        assert req.url.path.startswith("/api/plans/")
-        assert "a/b" not in req.url.path
+        assert _raw_path(req).startswith("/api/plans/")
+        assert "a/b" not in _raw_path(req)
         # story_key still intact as a segment.
-        assert "/s1" in req.url.path or "/s1" in req.url.path.replace("%2F", "/")
+        assert "/s1" in _raw_path(req) or "/s1" in _raw_path(req).replace("%2F", "/")
 
     def test_hash_in_story_key_does_not_redirect(self, tool_name, suffix, method, extra) -> None:
         req = self._call(tool_name, "demo", "evil#pause", extra)
         # Must not land on a /pause route via the fragment trick.
-        assert req.url.path.endswith(f"/{suffix.lstrip('/')}")
-        assert "%23" in req.url.path
+        assert _raw_path(req).endswith(f"/{suffix.lstrip('/')}")
+        assert "%23" in _raw_path(req)
 
     def test_dotdot_in_both_does_not_escape(self, tool_name, suffix, method, extra) -> None:
         req = self._call(tool_name, "../../etc", "../../etc", extra)
-        assert req.url.path.startswith("/api/plans/")
-        assert "../" not in req.url.path
-        assert req.url.path.endswith(f"/{suffix.lstrip('/')}")
+        assert _raw_path(req).startswith("/api/plans/")
+        assert "../" not in _raw_path(req)
+        assert _raw_path(req).endswith(f"/{suffix.lstrip('/')}")
 
     def test_plain_names_unchanged(self, tool_name, suffix, method, extra) -> None:
         req = self._call(tool_name, "my-plan_1", "s4", extra)
         expected = f"/api/plans/my-plan_1/stories/s4{suffix}"
-        assert req.url.path == expected
+        assert _raw_path(req) == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -234,9 +251,9 @@ class TestAnswerDecisionEncoding:
         )
         req = _one_request(transport)
         # plan_name is a path segment -> encoded.
-        assert req.url.path.startswith("/api/plans/")
-        assert "a/b" not in req.url.path
-        assert req.url.path.endswith("/decisions")
+        assert _raw_path(req).startswith("/api/plans/")
+        assert "a/b" not in _raw_path(req)
+        assert _raw_path(req).endswith("/decisions")
         # story_key/question/answer/context are JSON body values -> NOT
         # path-encoded. They must arrive intact in the request body.
         body = json.loads(req.content.decode())
@@ -254,7 +271,7 @@ class TestAnswerDecisionEncoding:
             question="q", answer="a",
         )
         req = _one_request(transport)
-        assert req.url.path == "/api/plans/my-plan_1/decisions"
+        assert _raw_path(req) == "/api/plans/my-plan_1/decisions"
 
 
 # --------------------------------------------------------------------------- #
@@ -315,7 +332,7 @@ class TestNoSegmentToolsUnchanged:
         client = _client(transport)
         TOOLS[tool_name]["execute"](client, "http://test", **extra)
         req = _one_request(transport)
-        assert req.url.path == expected_path
+        assert _raw_path(req) == expected_path
 
 
 # --------------------------------------------------------------------------- #

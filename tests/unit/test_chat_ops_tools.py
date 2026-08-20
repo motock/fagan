@@ -110,9 +110,7 @@ OPS_TOOLS = [
     "dispatch_story",
     "interrupt_story",
     "patch_story",
-    "set_story_status",
     "review_story",
-    "approve_merge",
     "mark_story_done",
     "checkpoint",
     # plan-level write actions
@@ -161,9 +159,7 @@ class TestOpsToolsRegistryShape:
             ("dispatch_story", {"plan_name", "story_key"}),
             ("interrupt_story", {"plan_name", "story_key"}),
             ("patch_story", {"plan_name", "story_key", "fields"}),
-            ("set_story_status", {"plan_name", "story_key", "status"}),
             ("review_story", {"plan_name", "story_key"}),
-            ("approve_merge", {"plan_name", "story_key"}),
             ("mark_story_done", {"plan_name", "story_key"}),
             ("checkpoint", {"plan_name", "story_key", "step", "summary"}),
             ("advance_pipeline", {"plan_name"}),
@@ -265,42 +261,11 @@ class TestPatchStoryTool:
             )
 
 
-class TestSetStoryStatusTool:
-    def test_posts_to_status_endpoint_with_status_body(self) -> None:
-        url = "/api/plans/demo/stories/s4/status"
-        client = _FakeHttpClient({url: {"ok": True}})
-        out = TOOLS["set_story_status"]["execute"](
-            client, "http://base.test", plan_name="demo", story_key="s4", status="blocked"
-        )
-        assert out == {"ok": True}
-        posted_url, body = client.post_calls[0]
-        assert posted_url == url
-        assert body == {"status": "blocked"}
-
-    def test_missing_status_raises_type_error(self) -> None:
-        client = _FakeHttpClient({})
-        with pytest.raises(TypeError):
-            TOOLS["set_story_status"]["execute"](
-                client, "http://base.test", plan_name="demo", story_key="s4"
-            )
-
-
 class TestReviewStoryTool:
     def test_posts_to_review_endpoint(self) -> None:
         url = "/api/plans/demo/stories/s4/review"
         client = _FakeHttpClient({url: {"ok": True}})
         out = TOOLS["review_story"]["execute"](
-            client, "http://base.test", plan_name="demo", story_key="s4"
-        )
-        assert out == {"ok": True}
-        assert client.post_calls[0][0] == url
-
-
-class TestApproveMergeTool:
-    def test_posts_to_approve_merge_endpoint(self) -> None:
-        url = "/api/plans/demo/stories/s4/approve_merge"
-        client = _FakeHttpClient({url: {"ok": True}})
-        out = TOOLS["approve_merge"]["execute"](
             client, "http://base.test", plan_name="demo", story_key="s4"
         )
         assert out == {"ok": True}
@@ -533,15 +498,6 @@ class TestEndToEndViaLoop:
         assert req.method == "POST"
         assert req.url.path == "/api/plans/demo/stories/s4/review"
 
-    def test_approve_merge_called_through_loop(self) -> None:
-        out, transport = self._run(
-            "approve_merge", {"plan_name": "demo", "story_key": "s4"}
-        )
-        assert out["reply"] == "done"
-        req = transport.requests[0]
-        assert req.method == "POST"
-        assert req.url.path == "/api/plans/demo/stories/s4/approve_merge"
-
     # --- plan-level write actions ---
     def test_advance_pipeline_called_through_loop(self) -> None:
         out, transport = self._run(
@@ -683,7 +639,6 @@ class TestSystemPromptUpdate:
         "control actions",
         "dispatch",
         "interrupt",
-        "approve_merge",
         "subject to server-side gates",
         "do NOT attempt to bypass it",
     ]

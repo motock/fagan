@@ -40,6 +40,12 @@ class DecisionRequest(BaseModel):
     context: str = ""
     decided_by: str = "human"
 
+class StoryDecisionRequest(BaseModel):
+    question: str
+    options: list[str]
+    context: str = ""
+    decided_by: str = "human"
+
 # config_provenance is a read-only leaf: its only non-stdlib import is
 # app.role_registry (see both modules' docstrings), so pulling it in does
 # NOT drag the orchestrator's write surface (pipeline.server /
@@ -61,6 +67,12 @@ WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).exp
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
+
+@app.post("/api/plans/{plan_name}/stories/{story_key}/decisions")
+def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRequest) -> dict[str, Any]:
+    if not body.options:
+        raise HTTPException(status_code=422, detail="options must not be empty")
+    return _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
 _service = PipelineService()
 def _manifest_path(plan_name: str) -> Path:
     return PLAN_DIR / f"{plan_name}.manifest.json"

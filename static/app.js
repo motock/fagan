@@ -1476,6 +1476,7 @@ function renderOverview(plansPayload, healthPayload) {
 // Navigate back to the fleet Overview landing view. Clears the selected
 // plan and re-renders the sidebar so the Overview item shows as active.
 function selectOverview() {
+  state.commsActive = false;
   state.selectedPlan = null;
   updateHash();
   const nav = document.getElementById("plan-list");
@@ -1493,7 +1494,25 @@ function selectOverview() {
   );
 }
 
+function selectComms() {
+  state.commsActive = true;
+  state.selectedPlan = null;
+  updateHash();
+  const nav = document.getElementById("plan-list");
+  if (nav) {
+    for (const child of nav.children) {
+      const isComms = child.dataset && child.dataset.comms === "true";
+      child.classList.toggle("active", isComms);
+    }
+  }
+  renderOverview(
+    state.lastPlans || { plans: [] },
+    state.lastHealth || null,
+  );
+}
+
 async function selectPlan(name) {
+  state.commsActive = false;
   state.selectedPlan = name;
   updateHash();
   await refresh();

@@ -315,6 +315,7 @@ window.state = {
   refreshIndicatorTimer: null,
   filters: defaultFilters(),
   showArchived: false,
+    commsActive: true,
 };
 // Local alias keeps the rest of the file terse.
 const state = window.state;

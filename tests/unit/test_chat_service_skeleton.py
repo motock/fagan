@@ -8,9 +8,10 @@ yet exist, so they import app.chat and assert the documented behavior.
 """
 from __future__ import annotations
 
-import app.chat as chat_module
 import httpx
 import pytest
+
+import app.chat as chat_module
 from app.chat import SYSTEM_PROMPT, ChatService
 
 

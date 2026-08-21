@@ -1707,15 +1707,10 @@ function renderToolTraceHtml(toolCalls) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return '';
   let html = '';
   for (const call of toolCalls) {
-    const chip = document.createElement('button');
-    chip.className = 'trace-chip';
-    const argsStr = JSON.stringify(call.args);
-    chip.textContent = `${call.name}(${argsStr})`;
-    chip.addEventListener('click', () => chip.classList.toggle('expanded'));
-    const detail = document.createElement('div');
-    detail.className = 'trace-detail';
-    detail.textContent = JSON.stringify(call.result);
-    html += chip.outerHTML + detail.outerHTML;
+    const label = `${call.name}(${escapeHtml(JSON.stringify(call.args))})`;
+    const resultStr = escapeHtml(JSON.stringify(call.result));
+    html += `<button type="button" class="trace-chip" onclick="this.classList.toggle('expanded')">${label}</button>`;
+    html += `<div class="trace-detail">${resultStr}</div>`;
   }
   return html;
 }
@@ -1779,57 +1774,7 @@ function appendCommsMessage(role, html) {
   }
 }
 
-function renderToolTraceHtml(toolCalls) {
-  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return '';
-  let html = '';
-  for (const call of toolCalls) {
-    const chip = document.createElement('button');
-    chip.className = 'trace-chip';
-    const argsStr = JSON.stringify(call.args);
-    chip.textContent = `${call.name}(${argsStr})`;
-    chip.addEventListener('click', () => chip.classList.toggle('expanded'));
-    const detail = document.createElement('div');
-    detail.className = 'trace-detail';
-    detail.textContent = JSON.stringify(call.result);
-    html += chip.outerHTML + detail.outerHTML;
-  }
-  return html;
-}
-
-async function sendCommsMessage(text) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  appendCommsMessage('user', escapeHtml(trimmed));
-  const sendBtn = document.getElementById('comms-send');
-  const onAir = document.getElementById('on-air');
-  sendBtn.disabled = true;
-  onAir.classList.add('live');
-  const promise = (async () => {
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: null })
-      });
-      if (!res.ok) throw new Error('non-2xx');
-      const data = await res.json();
-      const hasError = Array.isArray(data.tool_calls) && data.tool_calls.some(c => c.result && c.result.error);
-      const role = hasError ? 'tower denied' : 'tower';
-      const bubbleHtml = escapeHtml(data.reply) + renderToolTraceHtml(data.tool_calls);
-      appendCommsMessage(role, bubbleHtml);
-    } catch (e) {
-      appendCommsMessage('tower denied', escapeHtml("Couldn't reach the tower - try again."));
-    } finally {
-      sendBtn.disabled = false;
-      onAir.classList.remove('live');
-    }
-    return globalThis.__commsThread.appendedClasses;
-  })();
-  promise.toJSON = () => globalThis.__commsThread.appendedClasses;
-  return promise;
-}
-
-// Duplicate UI event wiring removed
+// Removed duplicate renderToolTraceHtml and sendCommsMessage blocks
 
 
 async function refresh() {

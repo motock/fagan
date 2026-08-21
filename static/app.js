@@ -1724,12 +1724,17 @@ function renderOverview(plansPayload, healthPayload) {
 
       <section class="overview-section">
         <h3 class="overview-section-title">Plans</h3>
-        <ul class="overview-plan-list"></ul>
+        <ul class="overview-plan-list" id="overview-plan-list"></ul>
       </section>
     </div>
   `;
 
-  _diffOverviewPlanRows(section.querySelector(".overview-plan-list"), plans);
+  // Looked up via getElementById (not section.querySelector), mirroring
+  // how _renderPlanListFull locates its own list via
+  // document.getElementById("plan-list") rather than a parent-relative
+  // query — section stubs in some test shims only implement
+  // querySelectorAll, not querySelector.
+  _diffOverviewPlanRows(document.getElementById("overview-plan-list"), plans);
 }
 
 // Shared builder for the overview compact plan-row `.overview-plan-meta`

@@ -579,3 +579,42 @@ def test_pinned_overview_active_class_untouched_when_no_plan_selected():
     classes = _run_app_js(expr)
     assert "active" in classes
     assert "overview-item" in classes
+
+
+def test_pinned_active_classes_update_after_state_change_between_calls():
+    """Regression test: the pinned Comms/Overview .active classes must be
+    re-toggled on EVERY renderPlanList call, not just the first (full
+    rebuild) one. Before the fix, the diff path (second and later calls)
+    never re-toggled these classes, so selecting Comms or navigating away
+    from a plan never updated the sidebar highlighting after the initial
+    load. This must fail if the toggle is moved back inside the
+    `planListRowsByName === null` branch."""
+    plans = [_plan("alpha", done=1, total=3)]
+    expr = (
+        "(() => {"
+        " const nav = document.getElementById('plan-list');"
+        " const findPinned = () => {"
+        "  let overview = null, comms = null;"
+        "  const walk = (node) => { for (const c of (node.__children || [])) {"
+        "   if (c.dataset && c.dataset['overview'] === 'true') overview = c;"
+        "   if (c.dataset && c.dataset['comms'] === 'true') comms = c;"
+        "   walk(c);"
+        "  } };"
+        "  walk(nav);"
+        "  return { overview: overview.className, comms: comms.className };"
+        " };"
+        " state.selectedPlan = null;"
+        " state.commsActive = false;"
+        f" renderPlanList({json.dumps(plans)});"
+        " const before = findPinned();"
+        " state.commsActive = true;"
+        f" renderPlanList({json.dumps(plans)});"
+        " const after = findPinned();"
+        " return { before, after };"
+        " })()"
+    )
+    res = _run_app_js(expr)
+    assert "active" in res["before"]["overview"]
+    assert "active" not in res["before"]["comms"]
+    assert "active" not in res["after"]["overview"]
+    assert "active" in res["after"]["comms"]

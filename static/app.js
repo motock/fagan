@@ -17,7 +17,66 @@ const RISK_RANK = { high: 3, medium: 2, low: 1 };
 // without re-fetching.
 const STALE_IN_PROGRESS_MINUTES = 30;
 const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
-const FILTERS_KEY = "pipeline-dashboard-filters";
+
+// Toast state and helpers
+let lastSeenNotificationByPlan = new Map();
+let hasSeededNotifications = false;
+
+// Pure function to pick new notifications
+function pickNewNotifications(plans, seenMap) {
+  const newNotifs = [];
+  for (const plan of plans) {
+    const rec = plan.latest_notification;
+    if (!rec || rec.dedup_key == null) continue;
+    const seen = seenMap.get(plan.name);
+    if (seen !== rec.dedup_key) {
+      newNotifs.push({ plan, record: rec });
+    }
+  }
+  return newNotifs;
+}
+
+// Push a toast to stack
+function pushToast({ severity, planName, storyKey, message }) {
+  const stack = document.getElementById("toast-stack");
+  if (!stack) return;
+  const node = document.createElement("div");
+  node.className = "toast";
+  const stripe = NOTIF_SEVERITY_COLOR[severity] || NOTIF_SEVERITY_COLOR["info"];
+  node.style.setProperty("--stripe", stripe);
+  node.innerHTML = `
+    <div class="toast-row">
+      <span class="toast-key">${escapeHtml(planName)}</span>
+      <span class="toast-msg">${escapeHtml(message)}</span>
+      <button class="toast-dismiss" aria-label="Dismiss">✕</button>
+    </div>
+    <div class="toast-actions"></div>
+  `;
+  const dismiss = node.querySelector(".toast-dismiss");
+  dismiss.addEventListener("click", () => node.remove());
+  const actions = node.querySelector(".toast-actions");
+  if (severity === "error" || severity === "warning") {
+    const ask = document.createElement("button");
+    ask.className = "toast-ask";
+    ask.textContent = "Ask";
+    ask.addEventListener("click", () => {
+      selectComms();
+      const input = document.getElementById("comms-input");
+      if (input) {
+        input.value = `${storyKey} ${severity === "error" ? "failed" : "is parked"} - what happened?`;
+        input.focus();
+      }
+      node.remove();
+    });
+    actions.appendChild(ask);
+  } else {
+    setTimeout(() => node.remove(), 6000);
+  }
+  stack.appendChild(node);
+}
+
+
+
 const window = globalThis.window;
 // removed redundant window definition
 let notifSeverityFilter = "all";
@@ -324,6 +383,60 @@ window.state = {
   showArchived: false,
   commsActive: true,
 };
+
+// Pure function to pick new notifications
+function pickNewNotifications(plans, seenMap) {
+  const newNotifs = [];
+  for (const plan of plans) {
+    const rec = plan.latest_notification;
+    if (!rec || rec.dedup_key == null) continue;
+    const seen = seenMap.get(plan.name);
+    if (seen !== rec.dedup_key) {
+      newNotifs.push({ plan, record: rec });
+    }
+  }
+  return newNotifs;
+}
+
+// Push a toast to the stack
+function pushToast({ severity, planName, storyKey, message }) {
+  const stack = document.getElementById("toast-stack");
+  if (!stack) return;
+  const node = document.createElement("div");
+  node.className = "toast";
+  const stripe = NOTIF_SEVERITY_COLOR[severity] || NOTIF_SEVERITY_COLOR["info"];
+  node.style.setProperty("--stripe", stripe);
+  node.innerHTML = `
+    <div class="toast-row">
+      <span class="toast-key">${escapeHtml(planName)}</span>
+      <span class="toast-msg">${escapeHtml(message)}</span>
+      <button class="toast-dismiss" aria-label="Dismiss">✕</button>
+    </div>
+    <div class="toast-actions"></div>
+  `;
+  const dismiss = node.querySelector(".toast-dismiss");
+  dismiss.addEventListener("click", () => node.remove());
+  const actions = node.querySelector(".toast-actions");
+  if (severity === "error" || severity === "warning") {
+    const ask = document.createElement("button");
+    ask.className = "toast-ask";
+    ask.textContent = "Ask";
+    ask.addEventListener("click", () => {
+      selectComms();
+      const input = document.getElementById("comms-input");
+      if (input) {
+        input.value = `${storyKey} ${severity === "error" ? "failed" : "is parked"} - what happened?`;
+        input.focus();
+      }
+      node.remove();
+    });
+    actions.appendChild(ask);
+  } else {
+    setTimeout(() => node.remove(), 6000);
+  }
+  stack.appendChild(node);
+}
+
 // Local alias keeps the rest of the file terse.
 const state = window.state;
 
@@ -1797,6 +1910,44 @@ async function refresh() {
   state.lastPlans = { plans };
   renderPlanList(plans);
 
+  // Toast handling: pick new notifications and push toasts
+  if (!hasSeededNotifications) {
+    // Seed seen map without pushing toasts
+    for (const plan of plans) {
+      const rec = plan.latest_notification;
+      if (rec && rec.dedup_key != null) {
+        lastSeenNotificationByPlan.set(plan.name, rec.dedup_key);
+      }
+    }
+    hasSeededNotifications = true;
+  } else {
+    const newNotifs = pickNewNotifications(plans, lastSeenNotificationByPlan);
+    for (const { plan, record } of newNotifs) {
+      pushToast({ severity: record.severity, planName: plan.name, storyKey: record.story_key, message: record.message });
+      lastSeenNotificationByPlan.set(plan.name, record.dedup_key);
+    }
+  }
+
+
+  // Toast handling: pick new notifications and push toasts
+  if (!hasSeededNotifications) {
+    // Seed seen map without pushing toasts
+    for (const plan of plans) {
+      const rec = plan.latest_notification;
+      if (rec && rec.dedup_key != null) {
+        lastSeenNotificationByPlan.set(plan.name, rec.dedup_key);
+      }
+    }
+    hasSeededNotifications = true;
+  } else {
+    const newNotifs = pickNewNotifications(plans, lastSeenNotificationByPlan);
+    for (const { plan, record } of newNotifs) {
+      pushToast({ severity: record.severity, planName: plan.name, storyKey: record.story_key, message: record.message });
+      lastSeenNotificationByPlan.set(plan.name, record.dedup_key);
+    }
+  }
+
+
   // Fleet dispatch health is consumed by the Overview landing view. Fetch
   // it every refresh so the headline rates stay live alongside the plan
   // list. Failure here must not block the rest of the refresh — we
@@ -1955,6 +2106,8 @@ if (typeof module !== "undefined" && module.exports) {
     renderNotifications,
     renderChecklist,
     filterNotifications,
+    pickNewNotifications,
+    pushToast,
 
     selectComms,
     _applyActiveView,

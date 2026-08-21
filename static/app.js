@@ -1513,10 +1513,6 @@ function selectOverview() {
       child.classList.toggle("active", isOverview);
     }
   }
-      const isOverview = child.dataset && child.dataset.overview === "true";
-      child.classList.toggle("active", isOverview);
-    }
-  }
   // Render with whatever data we already have in state so the click is
   // instant. The next refresh() will swap in fresh numbers.
   renderOverview(

@@ -39,10 +39,18 @@ def _run_app_js(expr, fetch_impl=None, extra_setup=""):
     object must expose `.ok` (boolean) and a `.json()` method returning a
     Promise (or a plain value; the shim's helper awaits it).
     """
-    shim_fetch = (
+    # app.js calls refresh() once at top-level module load (pre-existing,
+    # unrelated dashboard bootstrap behavior outside this story's scope).
+    # That call must not be observed by a test's fetch_impl - only fetch()
+    # calls made *after* app.js has finished loading (i.e. by the code the
+    # test is actually driving, like sendCommsMessage) should hit it. So
+    # the shim always loads app.js against the default never-resolving
+    # stub, then swaps in the test's fetch_impl right after.
+    shim_fetch_default = "globalThis.fetch = () => new Promise(() => {});"
+    shim_fetch_swap = (
         "globalThis.fetch = " + fetch_impl + ";"
         if fetch_impl is not None
-        else "globalThis.fetch = () => new Promise(() => {});"
+        else ""
     )
     shim = (
         """
@@ -148,7 +156,7 @@ def _run_app_js(expr, fetch_impl=None, extra_setup=""):
         };
         globalThis.localStorage = { getItem: () => null, setItem: noop };
         """
-        + shim_fetch
+        + shim_fetch_default
         + """
         process.on("unhandledRejection", () => {});
         globalThis.setInterval = () => 0;
@@ -161,7 +169,9 @@ def _run_app_js(expr, fetch_impl=None, extra_setup=""):
         + "const fs = require('fs');"
         + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
         + "globalThis.state = globalThis.window.state;"
-        + "process.stdout.write(JSON.stringify((async () => { return await eval(" + json.dumps(expr) + "); })()));"
+        + shim_fetch_swap
+        + "(async () => { const __result = await eval(" + json.dumps(expr) + "); "
+        + "process.stdout.write(JSON.stringify(__result === undefined ? null : __result)); })();"
     )
     proc = subprocess.run(
         ["node", "-e", script],
@@ -174,8 +184,15 @@ def _run_app_js(expr, fetch_impl=None, extra_setup=""):
 def _run_app_js_async(expr, fetch_impl=None, extra_setup=""):
     """Like _run_app_js but awaits the expression (for async code paths
     that drive fetch). The expression is wrapped in an async IIFE whose
-    awaited result is JSON-stringified."""
-    wrapped = "(async () => { return (" + expr + "); })()"
+    awaited result is JSON-stringified.
+
+    `expr` is evaluated via a nested `eval()` (rather than spliced directly
+    into `return (...)`) so callers may pass a `;`-separated statement list
+    (e.g. `"state.x = 1; sendCommsMessage('hi')"`) - splicing such an expr
+    into `return (...)` is a JS syntax error, since parens only admit a
+    single expression, not a statement list.
+    """
+    wrapped = "(async () => { return eval(" + json.dumps(expr) + "); })()"
     return _run_app_js(wrapped, fetch_impl=fetch_impl, extra_setup=extra_setup)
 
 

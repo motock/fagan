@@ -515,6 +515,14 @@ function _insertPlanRow(nav, div) {
 function renderPlanList(plans) {
   const nav = document.getElementById("plan-list");
 
+  // The pinned Comms/Overview items are built once by _renderPlanListFull,
+  // but their .active class must track state on every call (not just a
+  // full rebuild), since refresh() calls renderPlanList on every poll tick.
+  const commsItem = nav.querySelector && nav.querySelector("[data-comms]");
+  if (commsItem) commsItem.classList.toggle("active", state.commsActive);
+  const overviewItem = nav.querySelector && nav.querySelector("[data-overview]");
+  if (overviewItem) overviewItem.classList.toggle("active", !state.selectedPlan && !state.commsActive);
+
   if (planListRowsByName === null) {
     _renderPlanListFull(plans);
     planListRowsByName = new Map();
@@ -1703,7 +1711,6 @@ function _applyActiveView() {
 
 // Comms helper functions
 
-// global export moved below function definition
 function renderToolTraceHtml(toolCalls) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return '';
   let html = '';
@@ -1715,35 +1722,22 @@ function renderToolTraceHtml(toolCalls) {
   }
   return html;
 }
-// removed stray brace
 
-async function sendCommsMessage(text) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-  appendCommsMessage('user', escapeHtml(trimmed));
-  const sendBtn = document.getElementById('comms-send');
-  const onAir = document.getElementById('on-air');
-  sendBtn.disabled = true;
-  onAir.classList.add('live');
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: null })
-    });
-    if (!res.ok) throw new Error('non-2xx');
-    const data = await res.json();
-    const hasError = Array.isArray(data.tool_calls) && data.tool_calls.some(c => c.result && c.result.error);
-    const role = hasError ? 'tower denied' : 'tower';
-    const bubbleHtml = escapeHtml(data.reply) + renderToolTraceHtml(data.tool_calls);
-    appendCommsMessage(role, bubbleHtml);
-  } catch (e) {
-    appendCommsMessage('tower denied', escapeHtml("Couldn't reach the tower - try again."));
-  } finally {
-    sendBtn.disabled = false;
-    onAir.classList.remove('live');
+function appendCommsMessage(role, html) {
+  const thread = document.getElementById('comms-thread');
+  const landing = document.getElementById('comms-landing');
+  const el = document.createElement('div');
+  el.className = `msg ${role}`;
+  el.innerHTML = html;
+  const first = thread.children.length === 0;
+  thread.appendChild(el);
+  if (first) {
+    landing.style.display = 'none';
+    thread.style.display = 'flex';
   }
 }
+
+async function sendCommsMessage(text) {
   const trimmed = text.trim();
   if (!trimmed) return;
   appendCommsMessage('user', escapeHtml(trimmed));
@@ -1786,28 +1780,6 @@ commsInput.addEventListener('keydown', (e) => {
     commsInput.value = '';
   }
 });
-
-// Comms helper functions
-globalThis.appendCommsMessage = appendCommsMessage;
-  const thread = document.getElementById('comms-thread');
-  const landing = document.getElementById('comms-landing');
-  const el = document.createElement('div');
-  el.className = `msg ${role}`;
-  el.innerHTML = html;
-  const first = thread.children.length === 0;
-  thread.appendChild(el);
-  if (first) {
-    landing.style.display = 'none';
-    thread.style.display = 'flex';
-  }
-}
-
-// Global exports for test harness
-globalThis.appendCommsMessage = appendCommsMessage;
-globalThis.renderToolTraceHtml = renderToolTraceHtml;
-globalThis.sendCommsMessage = sendCommsMessage;
-
-// Removed duplicate renderToolTraceHtml and sendCommsMessage blocks
 
 
 async function refresh() {

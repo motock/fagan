@@ -1702,7 +1702,6 @@ function _applyActiveView() {
 }
 
 // Comms helper functions
-}
 
 function renderToolTraceHtml(toolCalls) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return '';

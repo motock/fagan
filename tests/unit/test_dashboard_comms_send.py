@@ -161,7 +161,7 @@ def _run_app_js(expr, fetch_impl=None, extra_setup=""):
         + "const fs = require('fs');"
         + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
         + "globalThis.state = globalThis.window.state;"
-        + "process.stdout.write(JSON.stringify(await eval(" + json.dumps(expr) + ")));"
+        + "process.stdout.write(JSON.stringify((async () => { return await eval(" + json.dumps(expr) + "); })()));"
     )
     proc = subprocess.run(
         ["node", "-e", script],

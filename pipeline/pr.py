@@ -30,8 +30,15 @@ def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
         f"Automated PR for {story_key} produced by the agent pipeline."
     )
 
+    # --force-with-lease: this branch is rebased onto the default branch
+    # before every resumed dispatch (see _rebase_onto_master), which rewrites
+    # its commit SHAs. If review_story already pushed once (e.g. an earlier
+    # APPROVE opened a PR, then a later rework round rebased again), a plain
+    # push is rejected as non-fast-forward on every subsequent retry - the
+    # branch is exclusively owned by this pipeline's own dispatched agent, so
+    # there's no external pusher to race and a force-with-lease push is safe.
     subprocess.run(
-        ["git", "push", "-u", "origin", branch],
+        ["git", "push", "--force-with-lease", "-u", "origin", branch],
         cwd=worktree, check=True, capture_output=True, text=True,
     )
     try:

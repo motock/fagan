@@ -1878,6 +1878,38 @@ def test_open_pr_pushes_branch_before_creating_pr(monkeypatch, tmp_path):
     assert "agent/s1" in push_calls[0]
 
 
+def test_open_pr_force_pushes_with_lease_to_survive_a_prior_rebase(monkeypatch, tmp_path):
+    """A story's agent/<key> branch is rebased onto origin/master before every
+    resumed dispatch (see _rebase_onto_master / the "worktree base predates
+    origin/master" notification path). If review_story already pushed once
+    for an earlier PR (e.g. review APPROVEd, PR opened, then a later rework
+    round rebased the branch again), the rebase rewrites local commit SHAs so
+    they diverge from what's already on the remote. A plain (non-force) `git
+    push` is then rejected as non-fast-forward every single time review_story
+    retries - reproduced live 2026-08-21 on story 24cfe47f: 100+ identical
+    "review APPROVEd but could not open PR (CalledProcessError)" notifications
+    over 2+ hours, the story permanently stuck at tests_passed. Since this
+    branch is exclusively owned by the pipeline's own dispatched agent (no
+    external pusher to race), a force-with-lease push - the same pattern
+    already used by _rebase_and_push_for_merge - is safe and must be used
+    here too so a legitimately-rebased branch can still be pushed."""
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        class Result:
+            stdout = "https://gh/pr/1\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+    push_calls = [c for c in calls if c[:2] == ["git", "push"]]
+    assert push_calls, "expected the branch to be pushed before opening a PR"
+    assert "--force-with-lease" in push_calls[0]
+
+
 def test_open_pr_reuses_existing_pr_when_one_already_exists(monkeypatch, tmp_path):
     """A dispatched agent may have already run `gh pr create` itself before
     review_story gets to it. _open_pr must recover the existing PR's URL

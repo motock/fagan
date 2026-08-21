@@ -520,16 +520,21 @@ class OllamaDriver:
             f"model={resolved_model} ===\n",
         )
         preamble = (
-            "You are reviewing code in the current directory, READ-ONLY. First use "
-            "the bash tool to run the test suite and inspect the changes (e.g. "
-            "`git diff`, `git log -p -1`), and view_file to read files — do not edit "
-            "anything. Then call submit_review exactly once with verdict APPROVE or "
-            "REQUEST_CHANGES (REQUEST_CHANGES if the tests fail). Always call a tool; "
-            "do not answer in prose.\n\n"
-            "For large diffs: bash output is truncated to 3000 chars per call, so a "
-            "bare `git diff` may silently cut off the end. Start with `git diff --stat` "
-            "to see the scope, then use `git diff -- <file>` per file for the parts you "
-            "need, and `view_file <path>` for surrounding context. Do NOT rely on a "
+            "You are reviewing code in the current directory, READ-ONLY - do not "
+            "edit anything. If the review request below already includes the full "
+            "diff (marked '--- git diff ... ---'), do NOT re-run `git diff` to "
+            "fetch it again — read it directly and use bash/view_file only for "
+            "context not already shown (e.g. surrounding lines in a file, or a "
+            "related file the diff doesn't touch). If it does NOT already include "
+            "the diff, first use the bash tool to inspect the changes (e.g. `git "
+            "diff`, `git log -p -1`), and view_file to read files. Then call "
+            "submit_review exactly once with verdict APPROVE or REQUEST_CHANGES. "
+            "Always call a tool; do not answer in prose.\n\n"
+            "For a diff not already included above: bash output is truncated to "
+            "3000 chars per call, so a bare `git diff` may silently cut off the "
+            "end. Start with `git diff --stat` to see the scope, then use "
+            "`git diff -- <file>` per file for the parts you need, and "
+            "`view_file <path>` for surrounding context. Do NOT rely on a "
             "single `git diff` for a multi-file change."
         )
         system_content = preamble + ("\n\n" + system if system else "")

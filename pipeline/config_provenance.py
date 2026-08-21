@@ -216,6 +216,7 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX", "0"),
     EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX_MAX_FILES", "1"),
     EnvVarSpec("PIPELINE_REVIEWER_AUTO_FIX_MAX_LINES", "40"),
+    EnvVarSpec("PIPELINE_REVIEWER_INLINE_DIFF_MAX_CHARS", "40000"),
     # Extra vars
     EnvVarSpec("PIPELINE_BACKEND_DISPATCH", "claude"),
     EnvVarSpec("PIPELINE_LOCAL_PROVIDER", "ollama"),

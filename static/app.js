@@ -465,18 +465,6 @@ async function togglePlanArchived(planName, currentlyArchived) {
   await refresh();
 }
 
-function _applyActiveView() {
-  const commsEl = document.getElementById("comms-view");
-  const planDetailEl = document.getElementById("plan-detail");
-  if (state.commsActive) {
-    commsEl.classList.remove("hidden");
-    planDetailEl.classList.add("hidden");
-  } else {
-    commsEl.classList.add("hidden");
-    planDetailEl.classList.remove("hidden");
-  }
-}
-
 function riskRank(story) {
   return RISK_RANK[story.risk] || 0;
 }
@@ -1571,8 +1559,10 @@ function renderUsage(usage) {
   }
 }
 
+const COMMS_VIEW_ID = "comms-view";
+
 function _applyActiveView() {
-  const commsEl = document.getElementById("comms-view");
+  const commsEl = document.getElementById(COMMS_VIEW_ID);
   const planDetailEl = document.getElementById("plan-detail");
   if (!commsEl || !planDetailEl) return;
   if (state.commsActive) {

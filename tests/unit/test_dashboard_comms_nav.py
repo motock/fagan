@@ -42,7 +42,7 @@ def _run_app_js(expr):
         globalThis.document = {
             addEventListener: noop,
             documentElement: { dataset: {} },
-            getElementById: () => ({ ...fakeEl, dataset: {}, addEventListener: noop }),
+            getElementById: () => ({ ...fakeEl, dataset: {}, addEventListener: noop, children: [] }),
             createElement: () => ({ ...fakeEl, classList: { add: noop, remove: noop, contains: () => false } }),
         };
         globalThis.window = {

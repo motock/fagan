@@ -438,6 +438,7 @@ function pushToast({ severity, planName, storyKey, message }) {
 }
 
 // Local alias keeps the rest of the file terse.
+const FILTERS_KEY = "pipeline-dashboard-filters";
 const state = window.state;
 
 function loadFilters() {
@@ -1929,23 +1930,7 @@ async function refresh() {
   }
 
 
-  // Toast handling: pick new notifications and push toasts
-  if (!hasSeededNotifications) {
-    // Seed seen map without pushing toasts
-    for (const plan of plans) {
-      const rec = plan.latest_notification;
-      if (rec && rec.dedup_key != null) {
-        lastSeenNotificationByPlan.set(plan.name, rec.dedup_key);
-      }
-    }
-    hasSeededNotifications = true;
-  } else {
-    const newNotifs = pickNewNotifications(plans, lastSeenNotificationByPlan);
-    for (const { plan, record } of newNotifs) {
-      pushToast({ severity: record.severity, planName: plan.name, storyKey: record.story_key, message: record.message });
-      lastSeenNotificationByPlan.set(plan.name, record.dedup_key);
-    }
-  }
+
 
 
   // Fleet dispatch health is consumed by the Overview landing view. Fetch

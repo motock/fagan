@@ -1729,11 +1729,11 @@ function renderOverview(plansPayload, healthPayload) {
     </div>
   `;
 
-  // Looked up via getElementById (not section.querySelector), mirroring
-  // how _renderPlanListFull locates its own list via
-  // document.getElementById("plan-list") rather than a parent-relative
-  // query — section stubs in some test shims only implement
-  // querySelectorAll, not querySelector.
+  // Looked up via getElementById (not section.querySelector): section here
+  // comes from document.getElementById, and some DOM shims (see
+  // tests/unit/test_dashboard_comms_nav.py, which drives this function via
+  // selectComms()/selectOverview()) only implement querySelectorAll, not
+  // querySelector.
   _diffOverviewPlanRows(document.getElementById("overview-plan-list"), plans);
 }
 

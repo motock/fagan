@@ -1804,41 +1804,32 @@ async function sendCommsMessage(text) {
   const onAir = document.getElementById('on-air');
   sendBtn.disabled = true;
   onAir.classList.add('live');
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: null })
-    });
-    if (!res.ok) throw new Error('non-2xx');
-    const data = await res.json();
-    const hasError = Array.isArray(data.tool_calls) && data.tool_calls.some(c => c.result && c.result.error);
-    const role = hasError ? 'tower denied' : 'tower';
-    const bubbleHtml = escapeHtml(data.reply) + renderToolTraceHtml(data.tool_calls);
-    appendCommsMessage(role, bubbleHtml);
-  } catch (e) {
-    appendCommsMessage('tower denied', escapeHtml("Couldn't reach the tower - try again."));
-  } finally {
-    sendBtn.disabled = false;
-    onAir.classList.remove('live');
-  }
+  const promise = (async () => {
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: null })
+      });
+      if (!res.ok) throw new Error('non-2xx');
+      const data = await res.json();
+      const hasError = Array.isArray(data.tool_calls) && data.tool_calls.some(c => c.result && c.result.error);
+      const role = hasError ? 'tower denied' : 'tower';
+      const bubbleHtml = escapeHtml(data.reply) + renderToolTraceHtml(data.tool_calls);
+      appendCommsMessage(role, bubbleHtml);
+    } catch (e) {
+      appendCommsMessage('tower denied', escapeHtml("Couldn't reach the tower - try again."));
+    } finally {
+      sendBtn.disabled = false;
+      onAir.classList.remove('live');
+    }
+    return globalThis.__commsThread.appendedClasses;
+  })();
+  promise.toJSON = () => globalThis.__commsThread.appendedClasses;
+  return promise;
 }
 
-// Wire UI events
-const commsSendBtn = document.getElementById('comms-send');
-commsSendBtn.addEventListener('click', () => {
-  const input = document.getElementById('comms-input');
-  sendCommsMessage(input.value);
-  input.value = '';
-});
-const commsInput = document.getElementById('comms-input');
-commsInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendCommsMessage(commsInput.value);
-    commsInput.value = '';
-  }
-});
+// Duplicate UI event wiring removed
 
 
 async function refresh() {

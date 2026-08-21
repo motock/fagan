@@ -1103,8 +1103,8 @@ function _renderStoryModalBody(planName, story, key, notificationRecords) {
   const deps = story.dependencies;
   const depsText = Array.isArray(deps) ? deps.join(", ") : "";
   const depsShow = Array.isArray(deps) && deps.length > 0 ? depsText : null;
-const storyNotifications = filterStoryNotifications(notificationRecords, key);
-
+  const storyNotifications = filterStoryNotifications(notificationRecords, key);
+  body.innerHTML = storyNotifications;
   // Track which plan/story the modal is currently showing so the async
   // log fetch can resolve into the right slot and so a stale fetch that
   // resolves after the user opened a different story can't write into the

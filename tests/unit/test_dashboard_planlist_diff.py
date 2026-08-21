@@ -556,12 +556,14 @@ def test_pinned_overview_item_still_present_after_diff():
 
 def test_pinned_overview_active_class_untouched_when_no_plan_selected():
     """The pinned Overview .active class logic must remain exactly as today:
-    when state.selectedPlan is falsy, Overview is active. This is not part of
-    the per-plan diff and must not be disturbed by it."""
+    when state.selectedPlan is falsy AND Comms is not active, Overview is
+    active. This is not part of the per-plan diff and must not be disturbed
+    by it."""
     plans = [_plan("alpha", done=1, total=3)]
     expr = (
         "(() => {"
         " state.selectedPlan = null;"
+        " state.commsActive = false;"
         " const nav = document.getElementById('plan-list');"
         f" renderPlanList({json.dumps(plans)});"
         f" renderPlanList({json.dumps(plans)});"

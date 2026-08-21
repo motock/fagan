@@ -322,7 +322,7 @@ window.state = {
   refreshIndicatorTimer: null,
   filters: defaultFilters(),
   showArchived: false,
-    commsActive: true,
+  commsActive: true,
 };
 // Local alias keeps the rest of the file terse.
 const state = window.state;
@@ -511,7 +511,9 @@ function _insertPlanRow(nav, div) {
 // call diffs `plans` against that map so unchanged rows are updated in place
 // (preserving in-progress interaction like an open right-click menu or a
 // focused Dismiss button) instead of being torn down and rebuilt each poll
-// tick. Pinned Overview/Comms items are not part of this diff.
+// tick. The pinned Comms/Overview items aren't part of the per-plan diff,
+// but their .active class still depends on state that can change between
+// polls, so it's refreshed here on every call (not just the first).
 function renderPlanList(plans) {
   const nav = document.getElementById("plan-list");
 

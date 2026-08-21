@@ -8,6 +8,7 @@ sites use bare names -> re-export -> patch lands.
 
 import os
 import shlex
+import subprocess
 from pathlib import Path
 
 from app import backend, role_registry
@@ -17,8 +18,52 @@ from .config import (
     DEFAULT_MODEL,
     REVIEWER_AUTO_FIX_MAX_FILES,
     REVIEWER_AUTO_FIX_MAX_LINES,
+    REVIEWER_INLINE_DIFF_MAX_CHARS,
 )
 from .persona import _persona_body, _persona_default_model
+
+
+def _review_git(worktree: str, args: list[str], timeout: int = 15) -> str | None:
+    """Run a read-only git command in `worktree`. Returns None on any failure
+    (missing worktree, non-repo directory, git absent, non-zero exit, or
+    timeout) so callers can fall back to the reviewer discovering the diff
+    itself rather than crashing the review."""
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=worktree, check=False,
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _first_review_base(worktree: str) -> str | None:
+    """The commit this branch diverged from, for a first (non-rework)
+    review's full diff. Tries common default-branch names/remotes in order,
+    since the pipeline operates across repos that differ on default-branch
+    naming and on whether a remote exists at all (mirrors rebrief.py's
+    _base_commit, duplicated rather than imported to keep review.py's diff
+    materialization independent of rebrief's private helpers)."""
+    for candidate in ("origin/HEAD", "origin/main", "origin/master", "main", "master"):
+        merge_base = _review_git(worktree, ["merge-base", "HEAD", candidate])
+        if merge_base and merge_base.strip():
+            return merge_base.strip()
+    return None
+
+
+def _materialize_review_diff(worktree: str, base_ref: str) -> str | None:
+    """Return `git diff {base_ref}..HEAD`, or None if it can't be fetched,
+    is empty, or exceeds REVIEWER_INLINE_DIFF_MAX_CHARS. Never truncates a
+    diff that's too large - a silently cut-off diff can look complete while
+    hiding changes, which is worse than falling back to letting the reviewer
+    discover it itself via its existing tool-based flow."""
+    diff = _review_git(worktree, ["diff", base_ref, "HEAD"])
+    if not diff or not diff.strip():
+        return None
+    if len(diff) > REVIEWER_INLINE_DIFF_MAX_CHARS:
+        return None
+    return diff
 
 
 def _run_reviewer(
@@ -130,16 +175,52 @@ def _run_reviewer(
     # ONLY the new commits since the last REQUEST_CHANGES; on a first review
     # (None) it reviews the full branch diff. The substantive criteria block
     # below is shared by both.
+    #
+    # Diff pre-materialization: fetch the diff here, server-side, and embed
+    # it directly rather than making the reviewer discover it turn-by-turn
+    # (git diff --stat -> per-file git diff -> view_file). On a backend with
+    # no prompt caching, each of those turns re-bills the whole growing
+    # transcript from scratch - see REVIEWER_INLINE_DIFF_MAX_CHARS's config.py
+    # comment for the measured cost this addresses. base_ref/inline_diff stay
+    # None on any failure (bad worktree, no common base, diff over budget),
+    # which falls through to the exact prior explore-yourself instructions.
+    base_ref = since_sha or _first_review_base(worktree)
+    inline_diff = _materialize_review_diff(worktree, base_ref) if base_ref else None
     if since_sha:
+        if inline_diff:
+            lead = (
+                f"Review ONLY the new changes pushed since your last review "
+                f"(commit {shlex.quote(since_sha)}). The implementer addressed "
+                f"your prior feedback; do NOT re-review files that were already "
+                f"approved and have not changed since. The full diff since your "
+                f"last review is included below - do NOT re-run `git diff` to "
+                f"fetch it again; Bash/view_file remain available for anything "
+                f"not shown here (e.g. surrounding lines in a file, or a related "
+                f"file the diff doesn't touch).\n\n"
+                f"--- git diff {since_sha}..HEAD ---\n{inline_diff}\n"
+                f"--- end diff ---\n\n"
+            )
+        else:
+            lead = (
+                f"Review ONLY the new changes pushed since your last review "
+                f"(commit {shlex.quote(since_sha)}). The implementer addressed "
+                f"your prior feedback; do NOT re-review files that were already "
+                f"approved and have not changed since. See the new diff with: "
+                f"git diff {shlex.quote(since_sha)}..HEAD\n"
+                f"(start with `git diff --stat {shlex.quote(since_sha)}..HEAD` "
+                f"for scope, then `git diff {shlex.quote(since_sha)}..HEAD -- "
+                f"<file>` per file, and `view_file` for surrounding context).\n\n"
+            )
+    elif inline_diff:
         lead = (
-            f"Review ONLY the new changes pushed since your last review "
-            f"(commit {shlex.quote(since_sha)}). The implementer addressed "
-            f"your prior feedback; do NOT re-review files that were already "
-            f"approved and have not changed since. See the new diff with: "
-            f"git diff {shlex.quote(since_sha)}..HEAD\n"
-            f"(start with `git diff --stat {shlex.quote(since_sha)}..HEAD` "
-            f"for scope, then `git diff {shlex.quote(since_sha)}..HEAD -- "
-            f"<file>` per file, and `view_file` for surrounding context).\n\n"
+            f"Review the changes on branch {branch} in this worktree against "
+            f"our standards. The full diff against the branch's base is "
+            f"included below - do NOT re-run `git diff` to fetch it again; "
+            f"Bash/view_file remain available for anything not shown here "
+            f"(e.g. surrounding lines in a file, or a related file the diff "
+            f"doesn't touch).\n\n"
+            f"--- git diff {base_ref}..HEAD ---\n{inline_diff}\n"
+            f"--- end diff ---\n\n"
         )
     else:
         lead = (
@@ -198,15 +279,36 @@ def _run_reviewer(
         )
     else:
         prior_findings_note = ""
+    # Irrelevant once the full diff is already embedded in `lead` above -
+    # nothing was truncated, so there's nothing to warn about re-fetching.
+    large_diff_note = "" if inline_diff else (
+        "For large diffs: bash output is truncated to 3000 chars per call, "
+        "so a bare `git diff` may silently cut off. Start with "
+        "`git diff --stat` to see the scope, then use `git diff -- <file>` "
+        "per file (or `git diff <commit>` for a range), and `view_file` "
+        "for surrounding context. Do NOT rely on a single `git diff` for "
+        "a multi-file change. "
+    )
+    if inline_diff:
+        bash_purpose_note = (
+            "The diff has already been provided above - do not re-fetch it. "
+            "Bash/view_file are available only for context beyond it (e.g. "
+            "surrounding lines in a file, or a related file the diff doesn't "
+            "touch). Use them for nothing else.\n"
+        )
+    else:
+        bash_purpose_note = (
+            "Bash is provided ONLY for reading the diff: `git diff --stat`, "
+            "`git diff -- <file>`, `git diff <commit> HEAD`, and `view_file` "
+            "for context. Use it for nothing else.\n"
+        )
     no_rerun_note = (
         "The full test suite is ALREADY green (CI ran it; that is the "
         "precondition for this review). Do NOT run the test suite, do NOT "
         "run pytest, and do NOT build or install the project. Re-running it "
         "is duplicate spend that risks exhausting your step budget without "
         "reaching a verdict.\n"
-        "Bash is provided ONLY for reading the diff: `git diff --stat`, "
-        "`git diff -- <file>`, `git diff <commit> HEAD`, and `view_file` "
-        "for context. Use it for nothing else.\n"
+        f"{bash_purpose_note}"
         "python is NOT on PATH in this worktree (the venv interpreter lives "
         "in the venv's bin directory, not on PATH); any `python ...` command "
         "will fail with 'command not found' and waste your step budget. "
@@ -240,12 +342,8 @@ def _run_reviewer(
         f"Suggestion, not a blocker - note it in your summary but don't "
         f"REQUEST_CHANGES for that reason alone if the code itself is "
         f"correct and tested.\n\n"
-        f"For large diffs: bash output is truncated to 3000 chars per call, "
-        f"so a bare `git diff` may silently cut off. Start with "
-        f"`git diff --stat` to see the scope, then use `git diff -- <file>` "
-        f"per file (or `git diff <commit>` for a range), and `view_file` "
-        f"for surrounding context. Do NOT rely on a single `git diff` for "
-        f"a multi-file change. End with your VERDICT line; if you APPROVE, "
+        f"{large_diff_note}"
+        f"End with your VERDICT line; if you APPROVE, "
         f"also include a PR title and body."
     )
     # cell_dir points at the worktree's parent directory. In production

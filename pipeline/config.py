@@ -268,6 +268,21 @@ PIPELINE_REVIEWER_AUTO_FIX = os.environ.get("PIPELINE_REVIEWER_AUTO_FIX", "0") =
 REVIEWER_AUTO_FIX_MAX_FILES = int(os.environ.get("PIPELINE_REVIEWER_AUTO_FIX_MAX_FILES", "1"))
 REVIEWER_AUTO_FIX_MAX_LINES = int(os.environ.get("PIPELINE_REVIEWER_AUTO_FIX_MAX_LINES", "40"))
 
+# Reviewer diff pre-materialization: the harness computes `git diff` itself
+# and embeds it directly in the review prompt, instead of having the
+# reviewer discover it turn-by-turn via `git diff --stat` -> per-file `git
+# diff` -> `view_file`. On a backend with no prompt caching (the local/cloud-
+# open-source review path), each of those turns re-bills the entire growing
+# transcript from scratch, so collapsing diff discovery into the initial
+# prompt is the single biggest lever on review-role token spend (see
+# review_token_costs.jsonl analysis, 2026-08-21: ~8.6 turns/review average,
+# ~64K cumulative input tokens vs ~6.7K for the final turn alone). Bounded so
+# a large diff is never silently truncated into the prompt - a diff over
+# budget falls back to the existing explore-yourself flow unchanged.
+REVIEWER_INLINE_DIFF_MAX_CHARS = int(
+    os.environ.get("PIPELINE_REVIEWER_INLINE_DIFF_MAX_CHARS", "40000")
+)
+
 
 __all__ = [
     "DAILY_REQUEST_THRESHOLD",
@@ -286,6 +301,7 @@ __all__ = [
     "PLANE_MAX_ATTEMPTS",
     "REVIEWER_AUTO_FIX_MAX_FILES",
     "REVIEWER_AUTO_FIX_MAX_LINES",
+    "REVIEWER_INLINE_DIFF_MAX_CHARS",
     "REVIEW_INCONCLUSIVE_MAX",
     "REWORK_MAX_ATTEMPTS",
     "REWORK_MAX_ATTEMPTS_ESCALATED",

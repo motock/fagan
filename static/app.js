@@ -1204,7 +1204,7 @@ function renderStoryModalNotifications(records) {
     return `<div class="log-line">`
       + `<span class="badge" style="--badge-color: var(${color})">${escapeHtml(severity)}</span>`
       + countBadge
-      + ` ${escapeHtml((r && r.message) || "")}</div>`;
+      + ` ${escapeHtml(r.message)}</div>`;
   }).join("");
 }
 

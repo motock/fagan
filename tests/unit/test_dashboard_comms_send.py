@@ -316,6 +316,18 @@ def test_render_tool_trace_html_includes_trace_detail_with_result():
     assert "shipped" in result, "trace-detail must contain the stringified result"
 
 
+def test_render_tool_trace_html_escapes_html_in_tool_name():
+    """call.name originates from unvalidated LLM tool-call text and is
+    interpolated into innerHTML-bound markup; it must be escaped just like
+    args/result are, or a prompt-injected name renders as live HTML."""
+    call = json.dumps({
+        "name": "<img src=x onerror=alert(1)>", "args": {}, "result": {},
+    })
+    result = _run_app_js(f"renderToolTraceHtml([{call}])")
+    assert "&lt;img" in result, result
+    assert "<img" not in result, result
+
+
 def test_render_tool_trace_html_two_calls_have_two_chips():
     """Boundary: two tool calls produce exactly two trace-chip occurrences."""
     c1 = json.dumps({"name": "get_plan", "args": {}, "result": {}})

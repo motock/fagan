@@ -1335,7 +1335,7 @@ function renderStoryModalNotifications(records) {
     return `<div class="log-line">`
       + `<span class="badge" style="--badge-color: var(${color})">${escapeHtml(severity)}</span>`
       + countBadge
-      + ` ${escapeHtml(r.message)}</div>`;
+      + ` ${escapeHtml((r && r.message) || "")}</div>`;
   }).join("");
 }
 
@@ -1905,7 +1905,7 @@ function renderToolTraceHtml(toolCalls) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return '';
   let html = '';
   for (const call of toolCalls) {
-    const label = `${call.name}(${escapeHtml(JSON.stringify(call.args))})`;
+    const label = `${escapeHtml(call.name)}(${escapeHtml(JSON.stringify(call.args))})`;
     const resultStr = escapeHtml(JSON.stringify(call.result));
     html += `<button type="button" class="trace-chip" onclick="this.classList.toggle('expanded')">${label}</button>`;
     html += `<div class="trace-detail">${resultStr}</div>`;

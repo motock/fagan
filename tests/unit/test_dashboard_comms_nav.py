@@ -334,3 +334,21 @@ def test_module_exports_contains_apply_active_view():
     end = src.index("};", start) + 2
     block = src[start:end]
     assert "_applyActiveView" in block, "module.exports must include _applyActiveView"
+
+
+# === selectComms() must not crash rendering the overview plan-row list ====
+
+def test_select_comms_does_not_crash_rendering_overview_plan_rows():
+    """selectComms() calls renderOverview(), which looks up its plan-row
+    <ul> to hand to _diffOverviewPlanRows(). In this file's DOM shim, an
+    element from document.getElementById only implements querySelectorAll
+    (not querySelector) - so renderOverview must locate the list via
+    document.getElementById("overview-plan-list"), not
+    section.querySelector(".overview-plan-list"), or this throws
+    TypeError: section.querySelector is not a function."""
+    result = _run_app_js(
+        "state.lastPlans = { plans: [{ name: 'demo', story_count: 1, "
+        "status_counts: { done: 1 } }] }; selectComms(); "
+        "({ commsActive: state.commsActive })"
+    )
+    assert result["commsActive"] is True

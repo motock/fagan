@@ -85,6 +85,13 @@ let notifSeverityFilter = "all";
 // ticks instead of being torn down and rebuilt every 4s. `null` means the
 // sidebar has never been rendered (first call does a full rebuild).
 let planListRowsByName = null;
+// Keyed-diff state for _diffOverviewPlanRows: maps each plan name to its
+// live `.overview-plan-row` DOM node, mirroring planListRowsByName above.
+// renderOverview rebuilds the rest of the section's markup (including a
+// fresh empty `.overview-plan-list` <ul>) every poll tick, so this map -
+// not the <ul>'s own children - is the only thing that lets a row survive
+// across ticks: existing rows are moved (not recreated) into the new <ul>.
+let overviewPlanRowsByName = new Map();
 function filterNotifications(records, severity) {
   if (!records) return [];
   if (!severity || severity === "all") return records.slice();
@@ -1328,7 +1335,7 @@ function renderStoryModalNotifications(records) {
     return `<div class="log-line">`
       + `<span class="badge" style="--badge-color: var(${color})">${escapeHtml(severity)}</span>`
       + countBadge
-      + ` ${escapeHtml(r.message)}</div>`;
+      + ` ${escapeHtml((r && r.message) || "")}</div>`;
   }).join("");
 }
 
@@ -1647,22 +1654,6 @@ function renderOverview(plansPayload, healthPayload) {
     `;
   }
 
-  // Compact plan list — every plan with done/total and a paused flag.
-  const planListHtml = plans.length
-    ? plans.map((plan) => {
-        const total = plan.story_count || 0;
-        const done = (plan.status_counts && plan.status_counts.done) || 0;
-        const pausedTag = plan.paused
-          ? ` <span class="plan-paused">paused</span>`
-          : "";
-        return `
-        <li class="overview-plan-row" data-plan="${escapeHtml(plan.name)}">
-          <span class="overview-plan-name">${escapeHtml(plan.name)}</span>
-          <span class="overview-plan-meta">${done}/${total}${pausedTag}</span>
-        </li>`;
-      }).join("")
-    : `<li class="overview-empty">No plans yet.</li>`;
-
   section.innerHTML = `
     <div class="overview">
       <h2 class="overview-title">Fleet Overview</h2>
@@ -1733,10 +1724,93 @@ function renderOverview(plansPayload, healthPayload) {
 
       <section class="overview-section">
         <h3 class="overview-section-title">Plans</h3>
-        <ul class="overview-plan-list">${planListHtml}</ul>
+        <ul class="overview-plan-list" id="overview-plan-list"></ul>
       </section>
     </div>
   `;
+
+  // Looked up via getElementById (not section.querySelector): section here
+  // comes from document.getElementById, and some DOM shims (see
+  // tests/unit/test_dashboard_comms_nav.py, which drives this function via
+  // selectComms()/selectOverview()) only implement querySelectorAll, not
+  // querySelector.
+  _diffOverviewPlanRows(document.getElementById("overview-plan-list"), plans);
+}
+
+// Shared builder for the overview compact plan-row `.overview-plan-meta`
+// line, mirroring _planMetaMarkup so both branches of _diffOverviewPlanRows
+// (new row / in-place update) produce byte-identical markup.
+function _overviewPlanMetaMarkup(plan) {
+  const total = plan.story_count || 0;
+  const done = (plan.status_counts && plan.status_counts.done) || 0;
+  const pausedTag = plan.paused
+    ? ` <span class="plan-paused">paused</span>`
+    : "";
+  return `${done}/${total}${pausedTag}`;
+}
+
+// Build a single `.overview-plan-row` <li>. Used by _diffOverviewPlanRows
+// to create exactly one new row for a plan that isn't in
+// overviewPlanRowsByName yet.
+function _buildOverviewPlanRow(plan) {
+  const li = document.createElement("li");
+  li.className = "overview-plan-row";
+  li.setAttribute("data-plan", plan.name);
+  li.innerHTML = `
+    <span class="overview-plan-name">${escapeHtml(plan.name)}</span>
+    <span class="overview-plan-meta">${_overviewPlanMetaMarkup(plan)}</span>
+  `;
+  return li;
+}
+
+// Keyed-diff for renderOverview's compact plan-row list, mirroring
+// renderPlanList's per-plan add/update/remove-by-name pattern (see
+// planListRowsByName): existing rows are updated in place and moved into
+// the freshly-built <ul> rather than recreated, keyed by plan name via
+// each row's data-plan attribute. renderOverview rebuilds the rest of the
+// section every poll tick, so overviewPlanRowsByName (not listEl's own
+// prior children) is what lets a row's node identity survive across ticks.
+function _diffOverviewPlanRows(listEl, plans) {
+  if (!listEl) return;
+
+  if (!plans.length) {
+    for (const [, el] of overviewPlanRowsByName) el.remove();
+    overviewPlanRowsByName.clear();
+    const empty = document.createElement("li");
+    empty.className = "overview-empty";
+    empty.textContent = "No plans yet.";
+    listEl.appendChild(empty);
+    return;
+  }
+
+  const seen = new Set();
+  for (const plan of plans) {
+    seen.add(plan.name);
+    const existing = overviewPlanRowsByName.get(plan.name);
+    if (existing) {
+      // Reuse the existing node: update its meta text in place, then move
+      // it (appendChild on an already-attached node relocates it) into the
+      // current listEl so row order still matches server-sorted `plans`.
+      const meta = existing.querySelector(".overview-plan-meta");
+      if (meta) {
+        meta.textContent = _overviewPlanMetaMarkup(plan);
+        meta.innerHTML = _overviewPlanMetaMarkup(plan);
+      }
+      listEl.appendChild(existing);
+    } else {
+      const row = _buildOverviewPlanRow(plan);
+      listEl.appendChild(row);
+      overviewPlanRowsByName.set(plan.name, row);
+    }
+  }
+
+  // Drop rows for plans no longer present.
+  for (const [name, el] of overviewPlanRowsByName) {
+    if (!seen.has(name)) {
+      el.remove();
+      overviewPlanRowsByName.delete(name);
+    }
+  }
 }
 
 // Navigate back to the fleet Overview landing view. Clears the selected
@@ -1831,7 +1905,7 @@ function renderToolTraceHtml(toolCalls) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return '';
   let html = '';
   for (const call of toolCalls) {
-    const label = `${call.name}(${escapeHtml(JSON.stringify(call.args))})`;
+    const label = `${escapeHtml(call.name)}(${escapeHtml(JSON.stringify(call.args))})`;
     const resultStr = escapeHtml(JSON.stringify(call.result));
     html += `<button type="button" class="trace-chip" onclick="this.classList.toggle('expanded')">${label}</button>`;
     html += `<div class="trace-detail">${resultStr}</div>`;
@@ -2088,6 +2162,7 @@ if (typeof module !== "undefined" && module.exports) {
     filterStoryNotifications, renderStoryModalNotifications,
     renderOverview, selectOverview, refresh, state,
     renderPlanList, _renderPlanListFull,
+    _diffOverviewPlanRows,
     renderNotifications,
     renderChecklist,
     filterNotifications,

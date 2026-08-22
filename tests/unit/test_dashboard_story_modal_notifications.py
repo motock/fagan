@@ -153,6 +153,15 @@ def test_render_story_modal_notifications_escapes_html_in_message():
     assert "<img" not in html, html
 
 
+def test_render_story_modal_notifications_handles_null_array_element():
+    """A null element in the records array must not crash the render and
+    must not print the literal string "undefined" for the missing message."""
+    expr = "renderStoryModalNotifications([null, {severity: 'info', message: 'ok'}])"
+    html = _run_app_js(expr)
+    assert "undefined" not in html, html
+    assert "ok" in html, html
+
+
 def test_render_story_modal_notifications_newest_first():
     records = [
         {"severity": "info", "message": "first-chronologically"},

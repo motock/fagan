@@ -90,6 +90,14 @@ let planListRowsByName = null;
 // not the <ul>'s own children - is the only thing that lets a row survive
 // across ticks: existing rows are moved (not recreated) into the new <ul>.
 let overviewPlanRowsByName = new Map();
+
+// The plan object passed to the most recent renderPlanDetail call. The
+// board's card-click listener is delegated (attached once to `.board`,
+// not per-card — see renderPlanDetail) so it can't close over the `plan`
+// argument from the render call that created it; it reads this instead,
+// so a click always resolves against the freshest poll's data even though
+// the listener itself was bound on an earlier render.
+let currentPlanDetailData = null;
 function filterNotifications(records, severity) {
   if (!records) return [];
   if (!severity || severity === "all") return records.slice();
@@ -508,33 +516,9 @@ function _renderPlanListFull(plans) {
   const nav = document.getElementById("plan-list");
   nav.innerHTML = "";
 
-  // "Overview" always sits at the top of the plan sidebar so the user has
-  // a one-click escape hatch back to the fleet landing view, independent
-  // of the currently selected plan.
-// "Comms" pinned item
-const comms = document.createElement("div");
-comms.className = "plan-item comms-item" + (state.commsActive ? " active" : "");
-comms.setAttribute("data-comms", "true");
-comms.innerHTML = `
-  <div class="plan-name">Comms</div>
-  <div class="plan-meta">chat</div>
-`;
-comms.addEventListener("click", () => selectComms());
-nav.appendChild(comms);
-
-// "Overview" always sits at the top of the plan sidebar so the user has
-// a one-click escape hatch back to the fleet landing view, independent
-// of the currently selected plan.
-const overview = document.createElement("div");
-overview.className = "plan-item overview-item" + (!state.selectedPlan && !state.commsActive ? " active" : "");
-overview.setAttribute("data-overview", "true");
-overview.innerHTML = `
-  <div class="plan-name">Overview</div>
-  <div class="plan-meta">fleet landing</div>
-`;
-overview.addEventListener("click", () => selectOverview());
-nav.appendChild(overview);
-
+  // The pinned Comms/Overview items are appended by renderPlanList after
+  // calling this function, so they aren't rebuilt as part of the diffable
+  // per-plan rows below.
   for (const plan of plans) {
     const div = document.createElement("div");
     div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
@@ -654,7 +638,27 @@ function renderPlanList(plans) {
         planListRowsByName.set(el.getAttribute("data-plan-name"), el);
       }
     }
-    return;
+  // Comms pinned item
+  const comms = document.createElement("div");
+  comms.className = "plan-item comms-item" + (state.commsActive ? " active" : "");
+  comms.setAttribute("data-comms", "true");
+  comms.innerHTML = `
+    <div class="plan-name">Comms</div>
+    <div class="plan-meta">chat</div>
+  `;
+  comms.addEventListener("click", () => selectComms());
+  nav.appendChild(comms);
+
+  const overview = document.createElement("div");
+  overview.className = "plan-item overview-item" + (!state.selectedPlan ? " active" : "");
+  overview.setAttribute("data-overview", "true");
+  overview.innerHTML = `
+    <div class="plan-name">Overview</div>
+    <div class="plan-meta">fleet landing</div>
+  `;
+  overview.addEventListener("click", () => selectOverview());
+  nav.appendChild(overview);
+  return;
   }
 
   const seen = new Set();
@@ -760,7 +764,17 @@ function applyFilters(entries) {
   return filtered;
 }
 
-function renderBoard(stories) {
+// `existingBoardEl`, when given, is a live `.board` element from a PRIOR
+// renderPlanDetail call for the SAME plan. In that mode renderBoard updates
+// the columns already inside it in place (see _tryUpdateBoardInPlace) —
+// keyed by data-key via _diffBoardCards — instead of tearing the whole
+// board down and rebuilding it as an HTML string, so unchanged `.card`
+// nodes survive a poll tick (no flicker, no lost scroll/focus/selection).
+// Called with a single argument (no live board yet — first render of a
+// plan, or the set of visible status columns just changed), it falls back
+// to the original full string-build path and returns markup for the
+// caller to assign via innerHTML.
+function renderBoard(stories, existingBoardEl) {
   // Total story count for the whole plan — used by the done column's
   // completion hint so the user sees "2/5 done" instead of just "2",
   // without changing the filter logic (we still count filtered cards
@@ -768,85 +782,212 @@ function renderBoard(stories) {
   // work in every column map.
   const planTotal = Object.keys(stories).length;
 
-  const columns = state.filters.statuses
+  const statuses = state.filters.statuses
     .filter((status) => STATUS_COLUMNS.includes(status))
-    .sort((a, b) => STATUS_COLUMNS.indexOf(a) - STATUS_COLUMNS.indexOf(b))
-    .map((status) => {
-      const entries = applyFilters(
-        Object.entries(stories).filter(([, s]) => s.status === status));
-      const cards = entries.map(([key, s]) => {
-        // Per-card decorations: age label when last_activity exists, and
-        // a stale class on aged in_progress stories so the user can see
-        // at a glance which agents are wedged. Both are derived from
-        // story.last_activity (server-supplied) using client-side time
-        // so they stay correct between polls.
-        const ageLabel = ageLabelFor(s.last_activity);
-        const stale = isStaleInProgress(s);
-        const classes = ["card"];
-        if (stale) classes.push("stale");
-        // Backend / escalation badges. A story without a `backend` field
-        // is treated as local and gets no claude badge; a non-escalated
-        // story gets no escalated badge. Keeping these conditional means
-        // most cards stay visually quiet — the badges surface the
-        // *interesting* cases (claude-bound, escalated) rather than
-        // repeating what the status stripe already conveys.
-        const badges = [];
-        if (s.backend === "claude") {
-          badges.push(`<span class="card-badge card-badge-claude" title="Backend: claude">claude</span>`);
-        }
-        if (s.escalated) {
-          badges.push(`<span class="card-badge card-badge-escalated" title="Escalated to claude">escalated</span>`);
-        }
-        const badgesHtml = badges.length
-          ? `<div class="card-badges">${badges.join("")}</div>`
-          : "";
-        // Progress bar for in_progress stories with checklist data
-        const pct = (s.status === "in_progress" && s.progress && s.progress.total > 0)
-          ? Math.round(s.progress.done / s.progress.total * 100) : 0;
-        const progressHtml = (s.status === "in_progress" && s.progress && s.progress.total > 0)
-          ? `<div class="card-progress">
-               <div class="card-progress-track"><div class="card-progress-fill" style="width: ${pct}%"></div></div>
-               <span class="card-progress-label">${s.progress.done}/${s.progress.total}</span>
-             </div>`
-          : "";
-        return `
-        <div class="${classes.join(" ")}" style="--badge-color: var(--c-${status})" data-key="${escapeHtml(key)}">
-          <div class="card-key">${escapeHtml(key)}</div>
-          <div class="card-summary">${escapeHtml(s.summary || "(no summary)")}</div>
-          ${badgesHtml}${progressHtml}
-          ${ageLabel ? `<div class="card-age${stale ? " stale" : ""}">${escapeHtml(ageLabel)}</div>` : ""}
-        </div>
-`;
-      }).join("");
-      // Thin completion hint for the done column: shows done / plan-total
-      // so the user sees plan-wide progress at a glance. We use planTotal
-      // (not entries.length) so the fraction stays meaningful even when
-      // persona/risk filters narrow the visible cards. Hidden when the
-      // plan has no stories yet to avoid "0/0".
-      const completion = (status === "done" && planTotal > 0)
-        ? `<div class="column-completion">${entries.length}/${planTotal}</div>`
+    .sort((a, b) => STATUS_COLUMNS.indexOf(a) - STATUS_COLUMNS.indexOf(b));
+
+  if (existingBoardEl && _tryUpdateBoardInPlace(existingBoardEl, statuses, stories, planTotal)) {
+    return null;
+  }
+
+  const columns = statuses.map((status) => {
+    const entries = applyFilters(
+      Object.entries(stories).filter(([, s]) => s.status === status));
+    const cards = entries.map(([key, s]) => {
+      // Per-card decorations: age label when last_activity exists, and
+      // a stale class on aged in_progress stories so the user can see
+      // at a glance which agents are wedged. Both are derived from
+      // story.last_activity (server-supplied) using client-side time
+      // so they stay correct between polls.
+      const ageLabel = ageLabelFor(s.last_activity);
+      const stale = isStaleInProgress(s);
+      const classes = ["card"];
+      if (stale) classes.push("stale");
+      // Backend / escalation badges. A story without a `backend` field
+      // is treated as local and gets no claude badge; a non-escalated
+      // story gets no escalated badge. Keeping these conditional means
+      // most cards stay visually quiet — the badges surface the
+      // *interesting* cases (claude-bound, escalated) rather than
+      // repeating what the status stripe already conveys.
+      const badges = [];
+      if (s.backend === "claude") {
+        badges.push(`<span class="card-badge card-badge-claude" title="Backend: claude">claude</span>`);
+      }
+      if (s.escalated) {
+        badges.push(`<span class="card-badge card-badge-escalated" title="Escalated to claude">escalated</span>`);
+      }
+      const badgesHtml = badges.length
+        ? `<div class="card-badges">${badges.join("")}</div>`
+        : "";
+      // Progress bar for in_progress stories with checklist data
+      const pct = (s.status === "in_progress" && s.progress && s.progress.total > 0)
+        ? Math.round(s.progress.done / s.progress.total * 100) : 0;
+      const progressHtml = (s.status === "in_progress" && s.progress && s.progress.total > 0)
+        ? `<div class="card-progress">
+             <div class="card-progress-track"><div class="card-progress-fill" style="width: ${pct}%"></div></div>
+             <span class="card-progress-label">${s.progress.done}/${s.progress.total}</span>
+           </div>`
         : "";
       return `
-        <div class="column">
-          <div class="column-header">
-            <span>${status}</span>
-            <span class="badge" style="--badge-color: var(--c-${status})">${entries.length}</span>
-          </div>
-          ${completion}
-          <div class="column-body">${cards}</div>
-        </div>
-      `;
+      <div class="${classes.join(" ")}" style="--badge-color: var(--c-${status})" data-key="${escapeHtml(key)}">
+        <div class="card-key">${escapeHtml(key)}</div>
+        <div class="card-summary">${escapeHtml(s.summary || "(no summary)")}</div>
+        ${badgesHtml}${progressHtml}
+        ${ageLabel ? `<div class="card-age${stale ? " stale" : ""}">${escapeHtml(ageLabel)}</div>` : ""}
+      </div>
+`;
     }).join("");
+    // Thin completion hint for the done column: shows done / plan-total
+    // so the user sees plan-wide progress at a glance. We use planTotal
+    // (not entries.length) so the fraction stays meaningful even when
+    // persona/risk filters narrow the visible cards. Hidden when the
+    // plan has no stories yet to avoid "0/0".
+    const completion = (status === "done" && planTotal > 0)
+      ? `<div class="column-completion">${entries.length}/${planTotal}</div>`
+      : "";
+    return `
+      <div class="column" data-status="${escapeHtml(status)}">
+        <div class="column-header">
+          <span>${status}</span>
+          <span class="badge" style="--badge-color: var(--c-${status})">${entries.length}</span>
+        </div>
+        ${completion}
+        <div class="column-body">${cards}</div>
+      </div>
+    `;
+  }).join("");
 
+  let inner;
   if (!columns) {
-    return '<div class="board"><p class="empty-state">No statuses selected.</p></div>';
+    inner = '<p class="empty-state">No statuses selected.</p>';
+  } else {
+    const term = (state.filters.search || "").trim();
+    const anyCards = columns.includes('data-key="');
+    inner = (term && !anyCards)
+      ? `<div class="board-empty">No matches for "${escapeHtml(term)}"</div>`
+      : columns;
   }
-  const term = (state.filters.search || "").trim();
-  const anyCards = columns.includes('data-key="');
-  if (term && !anyCards) {
-    return `<div class="board"><div class="board-empty">No matches for "${escapeHtml(term)}"</div></div>`;
+
+  if (existingBoardEl) {
+    existingBoardEl.innerHTML = inner;
+    return null;
   }
-  return `<div class="board">${columns}</div>`;
+  return `<div class="board">${inner}</div>`;
+}
+
+// In-place update path for renderBoard: reuses the `.column` elements
+// already inside `existingBoardEl` when the set of visible status columns
+// is unchanged from the last render, updating each column's count badge
+// and completion hint in place and diffing its cards via _diffBoardCards
+// (keyed by data-key, so unchanged cards are never torn down). Returns
+// false — doing nothing — when the column set changed (a status filter was
+// toggled, or this is the very first populated render), leaving the caller
+// to fall back to a full rebuild; that's a rare, user-triggered event, not
+// the steady poll-tick case this diff targets.
+function _tryUpdateBoardInPlace(existingBoardEl, statuses, stories, planTotal) {
+  const currentColumns = Array.from(existingBoardEl.querySelectorAll(".column"));
+  const currentStatuses = currentColumns.map((el) => el.dataset.status);
+  const sameColumnSet = currentStatuses.length === statuses.length
+    && currentStatuses.length > 0
+    && currentStatuses.every((s, i) => s === statuses[i]);
+  if (!sameColumnSet) return false;
+
+  for (let i = 0; i < statuses.length; i++) {
+    const status = statuses[i];
+    const columnEl = currentColumns[i];
+    const entries = applyFilters(
+      Object.entries(stories).filter(([, s]) => s.status === status));
+
+    const badgeEl = columnEl.querySelectorAll(".badge")[0];
+    if (badgeEl) {
+      badgeEl.textContent = String(entries.length);
+      badgeEl.innerHTML = String(entries.length);
+    }
+
+    let completionEl = columnEl.querySelectorAll(".column-completion")[0];
+    if (status === "done" && planTotal > 0) {
+      const label = `${entries.length}/${planTotal}`;
+      if (completionEl) {
+        completionEl.textContent = label;
+        completionEl.innerHTML = label;
+      } else {
+        completionEl = document.createElement("div");
+        completionEl.className = "column-completion";
+        completionEl.textContent = label;
+        completionEl.innerHTML = label;
+        const bodyEl = columnEl.querySelectorAll(".column-body")[0];
+        if (bodyEl && typeof columnEl.insertBefore === "function") {
+          columnEl.insertBefore(completionEl, bodyEl);
+        } else if (typeof columnEl.appendChild === "function") {
+          columnEl.appendChild(completionEl);
+        }
+      }
+    } else if (completionEl && typeof completionEl.remove === "function") {
+      completionEl.remove();
+    }
+
+    const bodyEl = columnEl.querySelectorAll(".column-body")[0];
+    if (bodyEl) _diffBoardCards(bodyEl, entries);
+  }
+  return true;
+}
+
+// Diffable card rendering for a single column body.
+// `columnBodyEl` is the `.column-body` element.
+// `storiesForColumn` is an array of [key, story] tuples, already sorted.
+function _diffBoardCards(columnBodyEl, storiesForColumn) {
+  // Map existing cards by data-key.
+const existing = Array.from(columnBodyEl.querySelectorAll('.card')).reduce((m, el) => {
+    m[el.dataset.key] = el;
+    return m;
+  }, {});
+  const newKeys = new Set();
+  for (const [key, s] of storiesForColumn) {
+    const status = s.status;
+    const ageLabel = ageLabelFor(s.last_activity);
+    const stale = isStaleInProgress(s);
+    const classes = ['card'];
+    if (stale) classes.push('stale');
+    const badges = [];
+    if (s.backend === 'claude') {
+      badges.push(`<span class="card-badge card-badge-claude" title="Backend: claude">claude</span>`);
+    }
+    if (s.escalated) {
+      badges.push(`<span class="card-badge card-badge-escalated" title="Escalated to claude">escalated</span>`);
+    }
+    const badgesHtml = badges.length
+      ? `<div class="card-badges">${badges.join('')}</div>`
+      : '';
+    const pct = (s.status === 'in_progress' && s.progress && s.progress.total > 0)
+      ? Math.round(s.progress.done / s.progress.total * 100)
+      : 0;
+    const progressHtml = (s.status === 'in_progress' && s.progress && s.progress.total > 0)
+      ? `<div class="card-progress"><div class="card-progress-track"><div class="card-progress-fill" style="width: ${pct}%"></div></div><span class="card-progress-label">${s.progress.done}/${s.progress.total}</span></div>`
+      : '';
+     const cardInnerHtml = `
+           <div class="card-key">${escapeHtml(key)}</div>
+           <div class="card-summary">${escapeHtml(s.summary || '(no summary)')}</div>
+           ${badgesHtml}${progressHtml}
+           ${ageLabel ? `<div class="card-age${stale ? ' stale' : ''}">${escapeHtml(ageLabel)}</div>` : ''}`;
+     let cardEl = existing[key];
+     if (!cardEl) {
+       cardEl = document.createElement('div');
+       cardEl.dataset.key = key;
+       columnBodyEl.appendChild(cardEl);
+     }
+     // Refresh outer node's class/style
+     cardEl.className = classes.join(' ');
+     cardEl.style.setProperty('--badge-color', `var(--c-${status})`);
+     cardEl.innerHTML = cardInnerHtml;
+     newKeys.add(key);
+    newKeys.add(key);
+  }
+  // Remove cards not in new set.
+  for (const key in existing) {
+    if (!newKeys.has(key)) {
+      existing[key].remove();
+    }
+  }
 }
 
 function chip(dim, value, label, active, color) {
@@ -969,22 +1110,19 @@ function renderDecisions(decisions) {
   `).join("");
 }
 
-function renderPlanDetail(plan) {
-  const section = document.getElementById("plan-detail");
-
-  // Snapshot the detail section's state so we can restore it after the full
-  // re-render: scroll position, and any focused filter chip. Capturing a
-  // stable identity (data-dim + data-value) — rather than the raw DOM node —
-  // lets us re-focus the matching chip if it survives the re-render.
-  const snapshot = capturePlanDetailState(section);
-
-  section.innerHTML = `
+// The header + filter bar + side panels — everything in the detail section
+// EXCEPT the card board. Rebuilt wholesale on every renderPlanDetail call
+// (fresh render or in-place update alike): none of this needs to persist
+// across polls the way the board's cards do, so a plain innerHTML rebuild
+// is simplest and matches the brief ("filter bar and side panels ... may
+// remain full string-rebuild for now").
+function _planChromeHtml(plan) {
+  return `
     <div class="plan-header">
       <h2>${escapeHtml(plan.name)}</h2>
       ${plan.paused ? '<span class="badge" style="--badge-color: var(--c-parked)">paused</span>' : ""}
     </div>
     ${renderFilterBar(plan.stories)}
-    ${renderBoard(plan.stories)}
     <div class="panels">
       <div class="panel">
         <h3>Notifications</h3>
@@ -996,10 +1134,70 @@ function renderPlanDetail(plan) {
       </div>
     </div>
   `;
+}
 
-  section.querySelectorAll(".card").forEach((card) => {
-    card.addEventListener("click", () => showStoryModal(plan.name, plan.stories[card.dataset.key], card.dataset.key, plan.notification_records));
-  });
+function renderPlanDetail(plan) {
+  const section = document.getElementById("plan-detail");
+  // The board's delegated click listener (attached once, below) can't close
+  // over this call's `plan` — it fires on a later poll's click against a
+  // listener bound on an earlier render — so it reads this module-level
+  // reference instead, kept in sync on every render.
+  currentPlanDetailData = plan;
+
+  // Snapshot the detail section's state so we can restore it after
+  // rebuilding the chrome: scroll position, and any focused filter chip.
+  // Capturing a stable identity (data-dim + data-value) — rather than the
+  // raw DOM node — lets us re-focus the matching chip if it survives.
+  const snapshot = capturePlanDetailState(section);
+
+  // Reuse the board from the previous render only when it's the SAME plan:
+  // section.dataset.planName is stamped the first time a plan renders, and
+  // survives across polls because (unlike before) we stop reassigning
+  // section.innerHTML wholesale once a plan's board exists. Switching to a
+  // different plan (or the very first render) still does a full teardown.
+  const sameView = !!(section.dataset && section.dataset.planName === plan.name);
+  let boardEl = (sameView && typeof section.querySelectorAll === "function")
+    ? section.querySelectorAll(".board")[0]
+    : null;
+
+  if (boardEl) {
+    const chromeEl = section.querySelectorAll(".plan-chrome")[0];
+    if (chromeEl) chromeEl.innerHTML = _planChromeHtml(plan);
+    // Diffs the existing column-body elements in place (see
+    // _tryUpdateBoardInPlace / _diffBoardCards) instead of rebuilding the
+    // board as a string — this is what keeps unchanged `.card` nodes alive
+    // (and their scroll/focus/selection) across a poll tick.
+    renderBoard(plan.stories, boardEl);
+  } else {
+    if (section.dataset) section.dataset.planName = plan.name;
+    section.innerHTML = `
+      <div class="plan-chrome">${_planChromeHtml(plan)}</div>
+      ${renderBoard(plan.stories)}
+    `;
+    boardEl = typeof section.querySelectorAll === "function"
+      ? section.querySelectorAll(".board")[0]
+      : null;
+    // Delegated click listener: attached ONCE per fresh board (not per
+    // card), since cards now persist across polls — attaching a fresh
+    // listener to every `.card` on every render (the old approach) would
+    // stack duplicate listeners on cards that survive a diff.
+    if (boardEl && typeof boardEl.addEventListener === "function") {
+      boardEl.addEventListener("click", (event) => {
+        const target = event && event.target;
+        const card = target && typeof target.closest === "function"
+          ? target.closest(".card")
+          : (target && target.classList && target.classList.contains("card") ? target : null);
+        if (!card || !currentPlanDetailData) return;
+        const key = card.dataset.key;
+        showStoryModal(
+          currentPlanDetailData.name,
+          currentPlanDetailData.stories[key],
+          key,
+          currentPlanDetailData.notification_records,
+        );
+      });
+    }
+  }
 
   section.querySelectorAll(".filter-chip").forEach((el) => {
     el.addEventListener("click", () => {
@@ -2167,10 +2365,14 @@ if (typeof module !== "undefined" && module.exports) {
     pickNewNotifications,
     pushToast,
 
+    renderBoard,
+
     selectComms,
     _applyActiveView,
     sendCommsMessage,
     appendCommsMessage,
     renderToolTraceHtml,
+    _diffBoardCards,
   };
 }
+

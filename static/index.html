@@ -9,65 +9,92 @@
 <body>
   <header>
     <h1>Agent Pipeline Dashboard</h1>
-    <div class="header-right">
-      <span id="refresh-indicator" class="refresh-indicator" aria-live="polite"></span>
-      <span id="last-updated"></span>
-      <button id="theme-toggle" class="theme-toggle" type="button"
-              aria-label="Toggle color theme" title="Toggle color theme">
-        <span class="icon-sun" aria-hidden="true">☀</span>
-        <span class="icon-moon" aria-hidden="true">☾</span>
-      </button>
+    <div class="toolbar">
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme"><span class="icon-moon" aria-hidden="true">☾</span><span class="icon-sun" aria-hidden="true">☀</span></button>
+      <div class="refresh-indicator" id="refresh-indicator" aria-live="polite"><span class="dot"></span></div>
+      <span class="last-updated" id="last-updated"></span>
     </div>
   </header>
-
-<div class="toast-stack" id="toast-stack" aria-live="polite"></div>
-
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
   <div id="usage-banner" class="usage-banner hidden"></div>
-
   <main>
     <nav id="plan-list" aria-label="Plans"></nav>
-
+    <nav id="config-nav" aria-label="Configuration"></nav>
     <section id="plan-detail">
       <p class="empty-state">Select a plan to see its story lifecycle.</p>
     </section>
-
+    <section id="config-view" class="hidden">
+      <h2>Configuration</h2>
+      <div class="config-section">
+        <h3>Roles</h3>
+        <table id="roles-table" class="config-table">
+          <thead>
+            <tr>
+              <th>Role</th>
+              <th>Provider</th>
+              <th>Model</th>
+              <th>Provider Source</th>
+              <th>Model Source</th>
+              <th>Restart Required</th>
+              <th>Edit</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="config-section">
+        <h3>Environment Variables</h3>
+        <table id="env-vars-table" class="config-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Effective Value</th>
+              <th>Source</th>
+              <th>Restart Required</th>
+              <th>Conflict</th>
+              <th>Layers</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="config-section ignored-vars">
+        <h3>Ignored Environment Variables</h3>
+        <div id="ignored-vars-panel" class="ignored-vars-panel"></div>
+      </div>
+    </section>
     <section id="comms-view" class="hidden">
       <div class="comms-head">
-        <div class="comms-title">
-          <span class="on-air" id="on-air"></span>
-          <div>
-            <div class="label">Comms</div>
-            <div class="comms-sub" id="comms-sub">chat</div>
+        <div class="comms-title"><span class="on-air" id="on-air"></span><div><div class="label">Comms</div><div class="comms-sub" id="comms-sub">chat</div></div></div>
+        <div class="comms-body">
+          <div class="comms-thread" id="comms-thread" style="display:none" aria-live="polite"></div>
+          <div class="comms-landing" id="comms-landing"><h3>Welcome</h3><p>Type your message below and press Send.</p></div>
+          <div class="comms-input-row">
+            <textarea id="comms-input" class="comms-input" placeholder="Type a message..." rows="3" aria-label="Message input"></textarea>
+            <button id="comms-send" class="comms-send" type="button" aria-label="Send message" title="Send">Send</button>
           </div>
-        </div>
-      </div>
-      <div class="comms-body" id="comms-body">
-        <div class="comms-thread" id="comms-thread" style="display:none;"></div>
-        <div class="comms-landing" id="comms-landing">
-          <h3>Ask the tower.</h3>
-          <p>Describe a goal to draft a plan, ask what's blocked or why a
-          story failed, or answer a decision the overlord is waiting on.
-          Every action still runs through the same gated API the board
-          buttons call.</p>
-        </div>
-      </div>
-      <div class="comms-foot">
-        <div class="comms-input-row">
-          <textarea class="comms-input" id="comms-input" rows="1"
-            placeholder="Ask about a plan, describe a goal, or answer a decision..."></textarea>
-          <button class="comms-send" id="comms-send" type="button">Transmit</button>
         </div>
       </div>
     </section>
   </main>
-
   <div id="story-modal" class="modal hidden dsh-modal" role="dialog" aria-modal="true">
     <div class="modal-content">
       <button id="story-modal-close" class="modal-close" aria-label="Close">&times;</button>
       <div id="story-modal-body"></div>
+      <div id="backend-selector" class="backend-selector">
+        <label for="backend-select">Backend:</label>
+        <select id="backend-select" name="backend">
+          <option value="claude">claude</option>
+          <option value="local">local</option>
+          <option value="ollama">ollama</option>
+          <option value="lmstudio">lmstudio</option>
+          <option value="mlx">mlx</option>
+          <option value="auto">auto</option>
+        </select>
+      </div>
     </div>
   </div>
-
   <script src="/app.js"></script>
 </body>
 </html>

@@ -349,7 +349,7 @@ def test_sync_polling_visible_with_active_handle_is_noop():
         "const handleBefore = state.pollHandle;"
         "document.hidden = false;"
         "syncPollingWithVisibility();"
-        "JSON.stringify({ same: state.pollHandle === handleBefore, truthy: !!state.pollHandle });"
+        "({ same: state.pollHandle === handleBefore, truthy: !!state.pollHandle });"
     )
     assert result["truthy"] is True
     assert result["same"] is True, (

@@ -2361,6 +2361,6 @@ if (typeof module !== "undefined" && module.exports) {
     appendCommsMessage,
     renderToolTraceHtml,
     _diffBoardCards,
-  };
-}
+
+
 

@@ -842,7 +842,7 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
 
 @app.get("/api/plans/{plan_name}")
 def get_plan(plan_name: str) -> dict[str, Any]:
-    manifest = _service.get_manifest_or_none(plan_name)
+    manifest = _read_manifest(plan_name)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     stories = manifest.get("stories", {})

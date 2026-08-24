@@ -2315,6 +2315,9 @@ function syncPollingWithVisibility() {
 }
   globalThis.syncPollingWithVisibility = syncPollingWithVisibility;
 
+const DEFAULT_THEME = 'light';
+const VALID_THEMES = new Set(['light','dark']);
+
 function writeStoredTheme(theme) {
   try {
     localStorage.setItem(THEME_KEY, theme);
@@ -2332,6 +2335,8 @@ function applyTheme(theme) {
     btn.title = t === "dark" ? "Switch to light theme" : "Switch to dark theme";
   }
 }
+
+function readStoredTheme() { try { return localStorage.getItem(THEME_KEY) || DEFAULT_THEME; } catch { return DEFAULT_THEME; } }
 
 function initTheme() {
   applyTheme(readStoredTheme());

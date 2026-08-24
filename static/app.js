@@ -2408,6 +2408,7 @@ if (typeof module !== "undefined" && module.exports) {
     filterNotifications,
     pickNewNotifications,
     pushToast,
+    renderBoard,
 
     renderBoard,
 

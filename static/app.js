@@ -1211,24 +1211,27 @@ function renderPlanDetail(plan) {
 // attributes survive innerHTML replacement, so we can look the chip back up
 // in the new DOM.
 function capturePlanDetailState(section) {
-   // Capture search input state if it is focused
-   const ae = document.activeElement;
-   let searchValue;
-   let searchSelectionStart;
-   let searchSelectionEnd;
-   if (ae && ae !== document.body && section.contains(ae) && ae.classList && typeof ae.classList.contains === 'function' && ae.classList.contains('filter-search')) {
-     searchValue = ae.value;
-     searchSelectionStart = ae.selectionStart;
-     searchSelectionEnd = ae.selectionEnd;
-   }
-   // existing logic
-   let focusKey = null;
-   if (ae && ae !== document.body && section.contains(ae) && ae.dataset
-       && ae.dataset.dim !== undefined && ae.dataset.value !== undefined) {
-     focusKey = `${ae.dataset.dim}\u0000${ae.dataset.value}`;
-   }
-
-return { scrollTop: section.scrollTop || 0, focusKey, searchValue, searchSelectionStart, searchSelectionEnd };
+  if (!section) return { scrollTop: 0, focusKey: null };
+  const ae = document.activeElement;
+  let focusKey = null;
+  if (ae && ae !== document.body && section.contains(ae) && ae.dataset
+      && ae.dataset.dim !== undefined && ae.dataset.value !== undefined) {
+    focusKey = `${ae.dataset.dim}\u0000${ae.dataset.value}`;
+  }
+  const snap = { scrollTop: section.scrollTop || 0, focusKey };
+  // Capture search input state if it is focused. The `.filter-search` input is
+  // an <input> element, so it carries a mutable `.value`; a focused filter chip
+  // (which also exposes classList.contains) must not be mistaken for it.
+  if (ae && ae !== document.body && section.contains(ae) && ae.classList
+      && typeof ae.classList.contains === 'function'
+      && ae.classList.contains('filter-search')
+      && ae.value !== undefined) {
+    snap.searchValue = ae.value;
+    snap.searchSelectionStart = ae.selectionStart;
+    snap.searchSelectionEnd = ae.selectionEnd;
+  }
+  return snap;
+}
 
 // Restore scrollTop, and re-focus the matching chip if it still exists.
 // Negative/boundary case: focusKey is null (nothing was focused) or the chip
@@ -2361,6 +2364,5 @@ if (typeof module !== "undefined" && module.exports) {
     appendCommsMessage,
     renderToolTraceHtml,
     _diffBoardCards,
-
-
-
+  };
+}

@@ -253,7 +253,7 @@ def test_capture_no_searchValue_when_search_input_not_focused():
     # We require the key be ABSENT (undefined). JSON.stringify drops undefined
     # keys, so 'searchValue' in snap being false means it was never set.
     assert result["hasSearchValue"] is False
-    assert result["searchValue"] is None  # JSON-serialized undefined -> null
+    assert result.get("searchValue") is None  # JSON-serialized undefined -> null
     # Existing fields intact.
     assert "scrollTop" in result
     assert result["focusKey"] is None
@@ -402,7 +402,7 @@ def test_restore_chip_focus_still_works_without_searchValue():
         "   if (sel && sel.indexOf('.filter-chip') === 0) return chip;"
         "   return null;"
         " };"
-        " const snap = { scrollTop: 0, focusKey: 'status\u0000done' };"
+        " const snap = { scrollTop: 0, focusKey: 'status\\u0000done' };"
         " let threw = false;"
         " try { restorePlanDetailState(section, snap); } catch (e) { threw = true; }"
         " return {"

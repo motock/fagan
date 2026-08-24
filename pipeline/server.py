@@ -865,19 +865,16 @@ class FileStore:
         except (json.JSONDecodeError, OSError):
             return []
 
-    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
-        path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
-        if not path.exists():
-            return False, []
-        try:
-            raw = json.loads(path.read_text(errors="replace"))
-        except json.JSONDecodeError:
-            return False, []
-        if not isinstance(raw, list) or not raw:
-            return False, []
-        entries = [e for e in raw if isinstance(e, dict)]
-        if not entries:
-            return False, []
+        return False, []
+        normalized = []
+        for e in entries:
+            normalized.append({
+                "ts": e.get("ts"),
+                "step": e.get("step"),
+                "summary": e.get("summary"),
+                "next_hint": e.get("next_hint"),
+            })
+        return True, normalized
         normalized = []
         for e in entries:
             normalized.append({

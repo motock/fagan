@@ -2356,7 +2356,7 @@ loadFilters();
 // re-selects plans / re-applies filters without a full reload.
 applyHashToState();
 window.addEventListener("hashchange", applyHashToState);
-setTimeout(() => refresh(), 0);
+refresh();
 
 // Expose helpers for node-based smoke tests. Guarded so the file still works
 // as a plain browser <script>.

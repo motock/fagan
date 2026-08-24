@@ -1043,7 +1043,6 @@ function renderNotifications(records) {
     parts.push('</div>');
     return parts.join(' ');
   }).join('');
-}
 
 // Incrementally append new notification rows based on dedup_key
 function _diffNotificationsPanel(panelBodyEl, records) {

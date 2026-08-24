@@ -2292,8 +2292,6 @@ async function refresh() {
     `updated ${new Date().toLocaleTimeString()}`;
 
   // Visible liveness: a brief indicator flash on each successful refresh,
-  // gated by the auto-refresh checkbox so manual, indicator-free refreshes
-  // remain possible while polling is disabled.
   if (state.pollHandle) flashRefreshIndicator();
 }
 
@@ -2311,10 +2309,7 @@ function stopPolling() {
 // DOM that nobody is looking at. Resume on visibilitychange, but only if the
 // user has auto-refresh enabled — visibility never overrides the checkbox.
 function syncPollingWithVisibility() {
-  const auto = document.getElementById("auto-refresh");
-  if (!auto || !auto.checked) return;
-  if (document.hidden) {
-    stopPolling();
+  // No checkbox gating; visibility controls polling only
   } else if (!state.pollHandle) {
     startPolling();
     // Catch up on one immediate refresh so the user sees fresh data the

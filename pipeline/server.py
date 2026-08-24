@@ -870,15 +870,16 @@ class FileStore:
         if not path.exists():
             return False, []
         try:
-            entries = json.loads(path.read_text(errors="replace"))
+            raw = json.loads(path.read_text(errors="replace"))
         except json.JSONDecodeError:
             return False, []
-        if not isinstance(entries, list):
+        if not isinstance(raw, list) or not raw:
+            return False, []
+        entries = [e for e in raw if isinstance(e, dict)]
+        if not entries:
             return False, []
         normalized = []
         for e in entries:
-            if not isinstance(e, dict):
-                continue
             normalized.append({
                 "ts": e.get("ts"),
                 "step": e.get("step"),
@@ -886,7 +887,6 @@ class FileStore:
                 "next_hint": e.get("next_hint"),
             })
         return True, normalized
-
     def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
         path = _journal_path(plan_name, story_key)
         if not path.exists():
@@ -967,37 +967,7 @@ class FileStore:
         return {"available": True, "text": text}
         return empty
         return {"available": True, "text": text}
-
-
-
-    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
-        empty = {"available": False, "text": ""}
-        if not isinstance(story, dict):
-            return empty
-        if not isinstance(filename, str) or not filename:
-            return empty
-        if "/" in filename or "\\" in filename or filename == ".." or filename == ".":
-            return empty
-        raw_wt = story.get("worktree")
-        if not isinstance(raw_wt, str) or not raw_wt:
-            return empty
-        wt_path = Path(raw_wt)
-        if not wt_path.is_absolute():
-            return empty
-        target = wt_path / filename
-        try:
-            target = target.resolve(strict=False)
-            root = WORKTREE_ROOT.resolve()
-            if target != root and not target.is_relative_to(root):
-                return empty
-        except OSError:
-            return empty
-        if not target.exists() or not target.is_file():
-            return empty
-        try:
-            text = target.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return empty
+        return empty
         return {"available": True, "text": text}
 
     def get_manifest_or_none(self, plan_name: str) -> dict | None:

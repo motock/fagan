@@ -996,6 +996,18 @@ class PipelineService:
         path = _decisions_path(plan_name)
         return json.loads(path.read_text()) if path.exists() else []
 
+    def get_notifications(self, plan_name: str) -> list[str]:
+        return _store.get_notifications(plan_name)
+
+    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:
+        return _store.get_notification_records(plan_name, limit)
+
+    def get_decisions(self, plan_name: str) -> list[dict]:
+        return _store.get_decisions(plan_name)
+
+    def get_manifest_or_none(self, plan_name: str) -> dict | None:
+        return _store.get_manifest_or_none(plan_name)
+
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]
 

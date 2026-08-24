@@ -866,7 +866,7 @@ class FileStore:
             return []
 
     def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
-        path = _journal_path(plan_name, story_key)
+        path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
         if not path.exists():
             return False, []
         try:
@@ -964,10 +964,6 @@ class FileStore:
             text = target.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return empty
-        return {"available": True, "text": text}
-        return empty
-        return {"available": True, "text": text}
-        return empty
         return {"available": True, "text": text}
 
     def get_manifest_or_none(self, plan_name: str) -> dict | None:

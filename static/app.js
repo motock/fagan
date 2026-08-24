@@ -1230,14 +1230,7 @@ function capturePlanDetailState(section) {
 -   return { scrollTop: section.scrollTop || 0, focusKey };
 +   return { scrollTop: section.scrollTop || 0, focusKey, searchValue, searchSelectionStart, searchSelectionEnd };
 
-  if (!section) return { scrollTop: 0, focusKey: null };
-  const ae = document.activeElement;
-  let focusKey = null;
-  if (ae && ae !== document.body && section.contains(ae) && ae.dataset
-      && ae.dataset.dim !== undefined && ae.dataset.value !== undefined) {
-    focusKey = `${ae.dataset.dim}\u0000${ae.dataset.value}`;
-  }
-  return { scrollTop: section.scrollTop || 0, focusKey };
+
 }
 
 // Restore scrollTop, and re-focus the matching chip if it still exists.

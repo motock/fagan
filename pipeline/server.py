@@ -799,6 +799,54 @@ class PipelineService:
     def get_effective_config(self, plan_name: str | None = None) -> dict[str, Any]:
         return _get_effective_config_impl(plan_name)
 
+    def set_role_default(
+        self, role: str, provider: str | None, model: str | None
+    ) -> dict[str, Any]:
+        """Set a role's global default (provider, model) in model_registry.json.
+
+        Security-sensitive: a bad edit retargets a pipeline role to an
+        arbitrary model, so we validate against the registry BEFORE writing —
+        a typo must never reach disk. Fails closed (returns ``{ok: False}``
+        without touching the file) on any unknown role, provider, or model,
+        and writes atomically only to the registry path.
+        """
+        if role not in config_provenance.PIPELINE_ROLES:
+            return {"ok": False, "error": f"unknown role {role!r}"}
+        if not provider or not model:
+            return {
+                "ok": False,
+                "error": f"provider and model must be non-empty (got provider={provider!r}, model={model!r})",
+            }
+
+        registry = role_registry.load_registry()
+        providers = registry.get("providers", {})
+        if provider not in providers:
+            return {
+                "ok": False,
+                "error": f"unknown provider {provider!r}: not declared under providers",
+            }
+        if model not in providers[provider].get("models", {}):
+            return {
+                "ok": False,
+                "error": (
+                    f"unknown model {model!r}: not declared under "
+                    f"providers.{provider}.models"
+                ),
+            }
+
+        registry.setdefault("roles", {})[role] = {"provider": provider, "model": model}
+
+        path = role_registry._registry_path()
+        tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+        try:
+            tmp.write_text(json.dumps(registry, indent=2))
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+        return {"ok": True, "role": role, "provider": provider, "model": model}
+
     def pause_plan(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
         return _set_plan_paused(plan_name, True)

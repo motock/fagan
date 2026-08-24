@@ -237,11 +237,10 @@ from .paths import (  # noqa: F401
 # plan_dir fixture in the test suite patches both p.PLAN_DIR and
 # pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
 # reads both see the same temp dir.
-from .persistence import (  # noqa: F401
+from .persistence import (
     _append_decision,
     _append_journal,
     _decisions_path,
-    _journal_path,
     _notify_user,
     _plan_role_config,
     _read_journal,
@@ -718,6 +717,10 @@ class Store(Protocol):
     def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]: ...
     def get_decisions(self, plan_name: str) -> list[dict]: ...
     def get_manifest_or_none(self, plan_name: str) -> dict | None: ...
+    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]: ...
+    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None: ...
+    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]: ...
+    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]: ...
 
 
 class _TransactionLock:
@@ -864,6 +867,115 @@ class FileStore:
             return json.loads(path.read_text(errors="replace"))
         except (json.JSONDecodeError, OSError):
             return []
+
+    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
+        """Return (available, entries) for a story's checkpoint journal,
+        mirroring dashboard._read_journal. Never raises."""
+        path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+        if not path.exists():
+            return False, []
+        try:
+            raw = json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return False, []
+        if not isinstance(raw, list) or not raw:
+            return False, []
+        entries = [e for e in raw if isinstance(e, dict)]
+        if not entries:
+            return False, []
+        normalized: list[dict] = []
+        for e in entries:
+            normalized.append({
+                **e,
+                "step": e.get("step"),
+                "summary": e.get("summary"),
+                "next_hint": e.get("next_hint"),
+            })
+        return True, normalized
+
+    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
+        path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+        if not path.exists():
+            return None
+        try:
+            entries = json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(entries, list) or not entries:
+            return None
+        last = entries[-1]
+        if isinstance(last, dict):
+            return last.get("ts")
+        return None
+
+    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]:
+        empty = {"available": False, "lines": []}
+        if not isinstance(lines, int) or lines < 1:
+            lines = 200
+        lines = min(lines, 500)
+        stories = manifest.get("stories") if isinstance(manifest, dict) else None
+        if not isinstance(stories, dict):
+            return empty
+        story = stories.get(story_key)
+        if not isinstance(story, dict):
+            return empty
+        raw_log = story.get("log")
+        if not isinstance(raw_log, str) or not raw_log:
+            return empty
+        log_path = Path(raw_log)
+        if log_path.is_absolute():
+            # Manifest stores log paths relative to PLAN_DIR historically; an
+            # absolute path is a corrupt/hand-edited manifest we fail closed
+            # on (resolving an absolute path under a CWD we don't control
+            # would be unsafe).
+            return empty
+        log_path = PLAN_DIR / raw_log
+        try:
+            log_path = log_path.resolve(strict=False)
+            plan_dir_resolved = PLAN_DIR.resolve()
+            if log_path != plan_dir_resolved and not log_path.is_relative_to(plan_dir_resolved):
+                return empty
+        except OSError:
+            return empty
+        if not log_path.exists() or not log_path.is_file():
+            return empty
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return empty
+        all_lines = text.splitlines()
+        tail = all_lines[-lines:]
+        return {"available": True, "lines": tail}
+
+    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
+        empty = {"available": False, "text": ""}
+        if not isinstance(story, dict):
+            return empty
+        if not isinstance(filename, str) or not filename:
+            return empty
+        if "/" in filename or "\\" in filename or filename == ".." or filename == ".":
+            return empty
+        raw_wt = story.get("worktree")
+        if not isinstance(raw_wt, str) or not raw_wt:
+            return empty
+        wt_path = Path(raw_wt)
+        if not wt_path.is_absolute():
+            return empty
+        target = wt_path / filename
+        try:
+            target = target.resolve(strict=False)
+            root = WORKTREE_ROOT.resolve()
+            if target != root and not target.is_relative_to(root):
+                return empty
+        except OSError:
+            return empty
+        if not target.exists() or not target.is_file():
+            return empty
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return empty
+        return {"available": True, "text": text}
 
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
         """Return manifest or None on missing/corrupt."""
@@ -1234,6 +1346,18 @@ class PipelineService:
             )
             roles[role] = {"provider": resolution.provider, "model": resolution.model}
         return {"ok": True, "roles": roles}
+
+    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
+        return _store.get_journal(plan_name, story_key)
+
+    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
+        return _store.get_journal_final_ts(plan_name, story_key)
+
+    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]:
+        return _store.get_story_log(plan_name, story_key, manifest, lines=lines)
+
+    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
+        return _store.get_worktree_file(story, filename)
 
     def decompose_plan(self, request: str) -> dict[str, Any]:
         text = _run_decompose(request)

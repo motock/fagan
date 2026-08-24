@@ -1714,6 +1714,15 @@ function _renderStoryModalBody(planName, story, key, notificationRecords) {
   `;
   modal.classList.remove("hidden");
 
+  // Reflect the story's current backend in the per-story backend selector so
+  // the user sees the resolved value before editing it.
+  const backendSelect = document.getElementById("backend-select");
+  if (backendSelect && story && story.backend) {
+    backendSelect.value = story.backend;
+  }
+  const backendError = document.getElementById("backend-error");
+  if (backendError) backendError.textContent = "";
+
   // Fire-and-forget journal fetch. The empty-state placeholder is already
   // in the DOM so the modal opens immediately; the slot is updated by
   // loadStoryJournal once the response arrives (or stays as the empty
@@ -2403,73 +2412,283 @@ if (typeof module !== "undefined" && module.exports) {
     renderOverview, selectOverview, refresh, state,
     renderPlanList, _renderPlanListFull,
     _diffOverviewPlanRows,
-};
-
-function renderConfigView() {
-  const section = document.getElementById("config-view");
-  if (!section) return;
-  section.classList.remove("hidden");
-  document.getElementById("plan-detail").classList.add("hidden");
-  // TODO: fetch and render config tables
-}
-
     renderNotifications,
     _diffNotificationsPanel,
     renderChecklist,
     filterNotifications,
     pickNewNotifications,
     pushToast,
-
-    // ---------- Configuration view ----------
-    // Render the configuration view and wire edit controls.
-
-    // ---------- Configuration view ----------
-    // Render the configuration view and wire edit controls.
-    // This is a stub; real implementation will fetch /api/config and render tables.
+    renderBoard,
+    selectComms,
+    _applyActiveView,
     sendCommsMessage,
     appendCommsMessage,
     renderToolTraceHtml,
     _diffBoardCards,
+    renderConfigView,
+    _renderConfigRoles,
+    _renderConfigEnv,
+    _renderConfigIgnored,
+    _saveRoleConfig,
+    _wireBackendSelector,
+  };
+}
 
-  // ---------- Configuration view ----------
-  // Render the configuration view and wire edit controls.
-  // This is a stub; real implementation will fetch /api/config and render tables.
-  function renderConfigView() {
-    const section = document.getElementById("config-view");
-    if (!section) return;
-    section.classList.remove("hidden");
-    document.getElementById("plan-detail").classList.add("hidden");
-    // TODO: fetch and render config tables
+// ---------------------------------------------------------------------------
+// Configuration view (W3b-B4b)
+// ---------------------------------------------------------------------------
+// Fetch GET /api/config (optionally layered with ?plan=<selectedPlan>) and
+// render the Roles / Environment Variables / Ignored Env Vars tables. Wire
+// each role's edit Save button to the B3 write endpoints and surface 400
+// validation errors inline. The registry (model_registry.json) supplies the
+// provider/model dropdown options; if it is unreachable we degrade to the
+// providers already present in the effective config so the edit controls
+// never render empty.
 
-};
-
-function renderConfigView() {
+async function renderConfigView() {
   const section = document.getElementById("config-view");
   if (!section) return;
   section.classList.remove("hidden");
-  document.getElementById("plan-detail").classList.add("hidden");
-  // TODO: fetch and render config tables
+  const planDetail = document.getElementById("plan-detail");
+  if (planDetail) planDetail.classList.add("hidden");
+  const commsView = document.getElementById("comms-view");
+  if (commsView) commsView.classList.add("hidden");
+
+  const plan = state.selectedPlan || null;
+  const url = plan
+    ? `/api/config?plan=${encodeURIComponent(plan)}`
+    : "/api/config";
+  let cfg;
+  try {
+    cfg = await fetchJson(url);
+  } catch (e) {
+    renderConfigError(section, `Failed to load configuration: ${e.message}`);
+    return;
+  }
+  const registry = await loadRegistry();
+  _renderConfigRoles(section, cfg.roles || [], registry, plan);
+  _renderConfigEnv(section, cfg.env || []);
+  _renderConfigIgnored(section, cfg.ignored_env_vars || []);
 }
 
-  // ---------- Configuration view ----------
-  // Render the configuration view and wire edit controls.
-  // This is a stub; real implementation will fetch /api/config and render tables.
-  // Render the configuration view and wire edit controls.
-  // This is a stub; real implementation will fetch /api/config and render tables.
-};
-
-function renderConfigView() {
-  const section = document.getElementById("config-view");
-  if (!section) return;
-  section.classList.remove("hidden");
-  document.getElementById("plan-detail").classList.add("hidden");
-  // TODO: fetch and render config tables
+function renderConfigError(section, message) {
+  const rolesBody = section.querySelector("#roles-table tbody");
+  if (rolesBody) {
+    rolesBody.innerHTML =
+      `<tr><td colspan="8" class="config-error">${escapeHtml(message)}</td></tr>`;
+  }
 }
 
-function renderConfigView() {
-  const section = document.getElementById("config-view");
-  if (!section) return;
-  section.classList.remove("hidden");
-  document.getElementById("plan-detail").classList.add("hidden");
-  // TODO: fetch and render config tables
+async function loadRegistry() {
+  try {
+    const res = await fetch("/model_registry.json");
+    if (!res.ok) return {};
+    return await res.json();
+  } catch {
+    return {};
+  }
 }
+
+function _renderConfigRoles(section, roles, registry, plan) {
+  const tbody = section.querySelector("#roles-table tbody");
+  if (!tbody) return;
+  if (!Array.isArray(roles) || roles.length === 0) {
+    tbody.innerHTML =
+      `<tr><td colspan="8" class="empty-state">No roles configured.</td></tr>`;
+    return;
+  }
+  const providers = (registry && registry.providers) || {};
+  tbody.innerHTML = roles.map((role) => {
+    const immediate = role.provider_source === "plan_role_config";
+    const restartBadge = role.restart_required
+      ? `<span class="restart-required" title="A restart is required for this change to take effect">restart required</span>`
+      : (immediate
+          ? `<span class="config-immediate" title="Takes effect immediately">immediate</span>`
+          : "");
+    const errorCell = role.error
+      ? `<span class="config-error" title="${escapeHtml(role.error)}">${escapeHtml(role.error)}</span>`
+      : "";
+    const edit = renderRoleEdit(role, providers);
+    return `<tr data-role="${escapeHtml(role.role)}">
+      <td>${escapeHtml(role.role)}</td>
+      <td>${escapeHtml(role.provider || "—")}</td>
+      <td>${escapeHtml(role.model || "—")}</td>
+      <td>${escapeHtml(role.provider_source || "—")}</td>
+      <td>${escapeHtml(role.model_source || "—")}</td>
+      <td>${restartBadge}</td>
+      <td>${edit}</td>
+      <td>${errorCell}</td>
+    </tr>`;
+  }).join("");
+
+  tbody.querySelectorAll("[data-save-role]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = btn.closest("tr");
+      const role = row.dataset.role;
+      const provider = row.querySelector(".edit-provider").value;
+      const model = row.querySelector(".edit-model").value;
+      const errorEl = row.querySelector(".edit-error");
+      _saveRoleConfig(role, provider, model, plan, errorEl);
+    });
+  });
+}
+
+function renderRoleEdit(role, providers) {
+  const providerNames = Object.keys(providers || {});
+  const currentProvider = role.provider || "";
+  if (providerNames.indexOf(currentProvider) === -1 && currentProvider) {
+    providerNames.unshift(currentProvider);
+  }
+  const providerOpts = providerNames.map((p) =>
+    `<option value="${escapeHtml(p)}" ${p === currentProvider ? "selected" : ""}>${escapeHtml(p)}</option>`
+  ).join("");
+  const models = (providers[currentProvider] && providers[currentProvider].models) || {};
+  const modelNames = Object.keys(models);
+  const currentModel = role.model || "";
+  if (modelNames.indexOf(currentModel) === -1 && currentModel) {
+    modelNames.unshift(currentModel);
+  }
+  const modelOpts = modelNames.map((m) =>
+    `<option value="${escapeHtml(m)}" ${m === currentModel ? "selected" : ""}>${escapeHtml(m)}</option>`
+  ).join("");
+  return `
+    <select class="edit-provider" aria-label="Provider for ${escapeHtml(role.role)}">${providerOpts}</select>
+    <select class="edit-model" aria-label="Model for ${escapeHtml(role.role)}">${modelOpts}</select>
+    <button type="button" class="edit-save" data-save-role>Save</button>
+    <span class="edit-error config-error"></span>
+  `;
+}
+
+async function _saveRoleConfig(role, provider, model, plan, errorEl) {
+  const url = plan
+    ? `/api/config/plans/${encodeURIComponent(plan)}/roles/${encodeURIComponent(role)}`
+    : `/api/config/roles/${encodeURIComponent(role)}`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, model }),
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body && body.detail) detail = body.detail;
+      } catch { /* non-JSON error body */ }
+      if (errorEl) errorEl.textContent = detail;
+      return;
+    }
+    if (errorEl) errorEl.textContent = "";
+    // Re-fetch so the effective config reflects the new value.
+    renderConfigView();
+  } catch (e) {
+    if (errorEl) errorEl.textContent = e.message;
+  }
+}
+
+function _renderConfigEnv(section, env) {
+  const tbody = section.querySelector("#env-vars-table tbody");
+  if (!tbody) return;
+  if (!Array.isArray(env) || env.length === 0) {
+    tbody.innerHTML =
+      `<tr><td colspan="6" class="empty-state">No environment variables cataloged.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = env.map((v) => {
+    const restartBadge = v.restart_required
+      ? `<span class="restart-required" title="A restart is required for this change to take effect">restart required</span>`
+      : "";
+    const conflict = v.conflict
+      ? `<span class="config-conflict" title="Conflicting values across config layers">conflict</span>`
+      : "";
+    const layers = Array.isArray(v.layers) && v.layers.length
+      ? v.layers.map((l) => `${escapeHtml(l.layer)}${l.restart_required ? " (restart)" : ""}`).join(" → ")
+      : "";
+    const value = v.masked
+      ? "***"
+      : (v.effective === undefined || v.effective === null
+          ? "—"
+          : escapeHtml(String(v.effective)));
+    return `<tr>
+      <td>${escapeHtml(v.name)}</td>
+      <td class="mono">${value}</td>
+      <td>${escapeHtml(v.source || "—")}</td>
+      <td>${restartBadge}</td>
+      <td>${conflict}</td>
+      <td>${escapeHtml(layers)}</td>
+    </tr>`;
+  }).join("");
+}
+
+function _renderConfigIgnored(section, ignored) {
+  const panel = section.querySelector("#ignored-vars-panel");
+  if (!panel) return;
+  if (!Array.isArray(ignored) || ignored.length === 0) {
+    panel.innerHTML =
+      `<p class="empty-state">No ignored environment variables present.</p>`;
+    return;
+  }
+  panel.innerHTML = ignored.map((v) => `
+    <div class="ignored-card">
+      <strong>${escapeHtml(v.name)}</strong>
+      <p>Use <code>${escapeHtml(v.use_instead || "")}</code> instead.</p>
+      <p class="muted">${escapeHtml(v.reason || "")}</p>
+    </div>
+  `).join("");
+}
+
+// ---------------------------------------------------------------------------
+// Per-story backend selector (W3b-B4b)
+// ---------------------------------------------------------------------------
+// The story modal carries a <select id="backend-select">. On change we PATCH
+// the story via POST /api/plans/{plan}/stories/{story}/patch with
+// {backend: <value>} and surface a 400 inline. The current backend is set on
+// the select whenever the modal opens (see _renderStoryModalBody).
+
+function _wireBackendSelector() {
+  const select = document.getElementById("backend-select");
+  if (!select) return;
+  select.addEventListener("change", async () => {
+    const modal = document.getElementById("story-modal");
+    const plan = modal.dataset.plan;
+    const key = modal.dataset.story;
+    const errorEl = document.getElementById("backend-error");
+    if (!plan || !key) return;
+    const backend = select.value;
+    try {
+      const res = await fetch(
+        `/api/plans/${encodeURIComponent(plan)}/stories/${encodeURIComponent(key)}/patch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ backend }),
+        }
+      );
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (body && body.detail) detail = body.detail;
+        } catch { /* non-JSON error body */ }
+        if (errorEl) errorEl.textContent = detail;
+        return;
+      }
+      if (errorEl) errorEl.textContent = "";
+    } catch (e) {
+      if (errorEl) errorEl.textContent = e.message;
+    }
+  });
+}
+
+// Wire the Configuration nav item (in #config-nav) to open the config view.
+(function wireConfigNav() {
+  const nav = document.getElementById("config-nav");
+  if (!nav) return;
+  const item = document.createElement("div");
+  item.className = "plan-item config-item";
+  item.innerHTML = `<div class="plan-name">Config</div><div class="plan-meta">roles &amp; env</div>`;
+  item.addEventListener("click", () => renderConfigView());
+  nav.appendChild(item);
+})();
+
+wireBackendSelector();

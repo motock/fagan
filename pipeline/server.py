@@ -715,8 +715,33 @@ class Store(Protocol):
     ) -> None: ...
 
 
+class _TransactionLock:
+    """Class-based context manager wrapping ``_plan_lock``.
+
+    Behaviourally identical to ``_plan_lock`` for the ``with`` statement
+    (``__enter__`` yields whether the lock was acquired; ``__exit__`` releases
+    it). The class form additionally makes a *fresh, never-entered* instance's
+    ``__exit__`` a safe no-op (returns False) rather than raising a
+    "generator didn't stop" error — which matters for test helpers that
+    delegate ``__exit__`` to a freshly constructed transaction.
+    """
+
+    def __init__(self, plan_name: str):
+        self._plan_name = plan_name
+        self._cm = None
+
+    def __enter__(self):
+        self._cm = _plan_lock(self._plan_name)
+        return self._cm.__enter__()
+
+    def __exit__(self, *exc):
+        if self._cm is None:
+            return False
+        return self._cm.__exit__(*exc)
+
+
 class FileStore:
-    """The JSON-files-in-PLAN_DIR Store, behaviourally identical to the raw
+    """A JSON-files-in-PLAN_DIR Store, behaviourally identical to the raw
     path construction it replaces.
 
     Methods deliberately read this module's globals (``PLAN_DIR``,
@@ -749,7 +774,7 @@ class FileStore:
         a non-blocking, flock-based, thread-reentrant context manager that
         yields whether the lock was acquired. Callers MUST check the yielded
         bool and skip all work when it is False."""
-        return _plan_lock(plan_name)
+        return _TransactionLock(plan_name)
 
     list_plans = lambda self: [f.stem for f in PLAN_DIR.glob("*.json")]
 
@@ -846,6 +871,56 @@ class PipelineService:
             raise
 
         return {"ok": True, "role": role, "provider": provider, "model": model}
+
+    def set_plan_role_config(
+        self,
+        plan_name: str,
+        role: str,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        """Set a per-plan role_config override (provider/model) for one role.
+
+        Takes effect immediately (no restart) because get_effective_config /
+        _plan_role_config read the manifest fresh on every call. Validates the
+        NEW role_config against the registry BEFORE saving — a typo'd or
+        undeclared model must never reach disk. Writes atomically via
+        _store.transaction so it's atomic w.r.t. the scheduler's 60s tick.
+        """
+        _validate_key(plan_name)
+        with _store.transaction(plan_name) as acquired:
+            if not acquired:
+                return {"ok": True, "skipped": "locked"}
+            if not _store.manifest_path(plan_name).exists():
+                return {"ok": False, "error": f"No such plan {plan_name!r}"}
+            manifest = _store.get_manifest(plan_name)
+            new_role_config = {
+                **(manifest.get("role_config") or {}),
+                role: {
+                    k: v
+                    for k, v in {"provider": provider, "model": model}.items()
+                    if v is not None
+                },
+            }
+            # Validate the NEW role_config pre-save: an undeclared model must
+            # never reach disk.
+            try:
+                role_registry.resolve_role(
+                    role,
+                    plan_role_config=new_role_config,
+                    registry=role_registry.load_registry(),
+                    model_fallback=lambda: "sonnet",
+                )
+            except role_registry.RoleRegistryError as exc:
+                return {"ok": False, "error": str(exc)}
+            manifest["role_config"] = new_role_config
+            _store.save_manifest(plan_name, manifest)
+            return {
+                "ok": True,
+                "plan": plan_name,
+                "role": role,
+                "role_config": new_role_config.get(role),
+            }
 
     def pause_plan(self, plan_name: str) -> dict[str, Any]:
         _validate_key(plan_name)
@@ -1104,6 +1179,15 @@ class PipelineService:
                 "ok": False,
                 "error": f"cannot patch field(s) {sorted(unknown)}: "
                 f"only {sorted(_PATCHABLE_STORY_FIELDS)} are editable",
+            }
+
+        if "backend" in fields and fields["backend"] not in _VALID_STORY_BACKENDS:
+            return {
+                "ok": False,
+                "error": (
+                    f"invalid backend {fields['backend']!r}: must be one of "
+                    f"{sorted(_VALID_STORY_BACKENDS)}"
+                ),
             }
 
         with _store.transaction(plan_name) as acquired:
@@ -3211,7 +3295,15 @@ _PATCHABLE_STORY_FIELDS = frozenset(
         "pr_url",
         "summary",
         "tdd_split",
+        "backend",
     )
+)
+
+# The documented allowlist of valid story `backend` values
+# (see pipeline-story-schema.md). patch_story validates against this BEFORE
+# writing so an invalid value fails closed and leaves the manifest unchanged.
+_VALID_STORY_BACKENDS = frozenset(
+    {"claude", "local", "ollama", "lmstudio", "mlx", "auto"}
 )
 
 # Every status value the pipeline itself assigns to a story (see the

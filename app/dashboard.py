@@ -900,7 +900,7 @@ def get_story_journal(plan_name: str, story_key: str) -> dict[str, Any]:
         wrote them) so the UI can render them top-to-bottom as a
         vertical timeline.
     """
-    manifest = _read_manifest(plan_name)
+    manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(
             status_code=404, detail=f"No manifest for plan '{plan_name}'"
@@ -911,7 +911,7 @@ def get_story_journal(plan_name: str, story_key: str) -> dict[str, Any]:
             status_code=404,
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
-    available, entries = _read_journal(plan_name, story_key)
+    available, entries = _store.get_journal(plan_name, story_key)
     return {"available": available, "entries": entries}
 
 
@@ -936,7 +936,7 @@ def get_story_log(
       * file gone -> available=False, lines=[] (no 500).
       * non-UTF-8 bytes -> decoded with replacement chars.
     """
-    manifest = _read_manifest(plan_name)
+    manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(
             status_code=404, detail=f"No manifest for plan '{plan_name}'"
@@ -947,7 +947,7 @@ def get_story_log(
             status_code=404,
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
-    return _read_story_log(plan_name, story_key, manifest, lines=lines)
+    return _store.get_story_log(plan_name, story_key, manifest, lines=lines)
 
 
 @app.get("/api/plans/{plan_name}/stories/{story_key}/checklist")
@@ -968,7 +968,7 @@ def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
     normal available:false state, never a 500. See _read_worktree_file for the
     containment contract.
     """
-    manifest = _read_manifest(plan_name)
+    manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(
             status_code=404, detail=f"No manifest for plan '{plan_name}'"
@@ -980,8 +980,8 @@ def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
     story = stories[story_key]
-    plan_file = _read_worktree_file(story, ".agent_plan.md")
-    scratch_file = _read_worktree_file(story, ".agent_scratchpad.md")
+    plan_file = _store.get_worktree_file(story, ".agent_plan.md")
+    scratch_file = _store.get_worktree_file(story, ".agent_scratchpad.md")
     progress = None
     if plan_file["available"] and scratch_file["available"]:
         progress = _parse_progress(plan_file["text"], scratch_file["text"])
@@ -1017,7 +1017,7 @@ def effective_config(plan: str | None = None) -> dict[str, Any]:
     plan_role_config = None
     if plan:
         try:
-            manifest = _read_manifest(plan)
+            manifest = _service.get_manifest_or_none(plan)
         except (json.JSONDecodeError, OSError):
             manifest = None
         plan_role_config = (manifest or {}).get("role_config") or None
@@ -1087,7 +1087,7 @@ def set_plan_role_config_route(
     result = _service.set_plan_role_config(plan_name, role, body.provider, body.model)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
-    manifest = _read_manifest(plan_name) or {}
+    manifest = _service.get_manifest_or_none(plan_name) or {}
     plan_role_config = manifest.get("role_config") or None
     effective = config_provenance.resolve_role_provenance(
         role,

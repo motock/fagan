@@ -23,6 +23,8 @@ from app import dashboard as d
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
+    from pipeline import server as _srv
+    monkeypatch.setattr(_srv, "PLAN_DIR", tmp_path)
     return tmp_path
 
 
@@ -302,13 +304,13 @@ def test_endpoint_empty_jsonl_returns_empty_list(client, plan_dir):
 
 
 def test_call_site_wires_collapse_after_tail():
-    """The single call site must wrap _tail_notification_records with
+    """The single call site must wrap the notification-records read with
     _collapse_duplicate_notifications (tail first, then collapse)."""
     import inspect
     text = inspect.getsource(d)
     assert (
         '"notification_records": _collapse_duplicate_notifications(\n'
-        '            _tail_notification_records(plan_name)\n'
+        '            _store.get_notification_records(plan_name)\n'
         '        ),'
     ) in text
 

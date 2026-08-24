@@ -24,6 +24,8 @@ from app import dashboard as d
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
+    from pipeline import server as _srv
+    monkeypatch.setattr(_srv, "PLAN_DIR", tmp_path)
     return tmp_path
 
 

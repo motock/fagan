@@ -17,6 +17,8 @@ from pipeline import config_provenance
 @pytest.fixture
 def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(d, "PLAN_DIR", tmp_path)
+    from pipeline import server as _srv
+    monkeypatch.setattr(_srv, "PLAN_DIR", tmp_path)
     return tmp_path
 
 
@@ -1938,6 +1940,8 @@ def worktree_dir(tmp_path, monkeypatch):
     wt_root = tmp_path / "worktrees"
     wt_root.mkdir()
     monkeypatch.setattr(d, "WORKTREE_ROOT", wt_root)
+    from pipeline import server as _srv
+    monkeypatch.setattr(_srv, "WORKTREE_ROOT", wt_root)
     return wt_root
 
 

@@ -865,6 +865,138 @@ class FileStore:
         except (json.JSONDecodeError, OSError):
             return []
 
+    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
+        path = _journal_path(plan_name, story_key)
+        if not path.exists():
+            return False, []
+        try:
+            entries = json.loads(path.read_text(errors="replace"))
+        except json.JSONDecodeError:
+            return False, []
+        if not isinstance(entries, list):
+            return False, []
+        normalized = []
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            normalized.append({
+                "ts": e.get("ts"),
+                "step": e.get("step"),
+                "summary": e.get("summary"),
+                "next_hint": e.get("next_hint"),
+            })
+        return True, normalized
+
+    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
+        path = _journal_path(plan_name, story_key)
+        if not path.exists():
+            return None
+        try:
+            entries = json.loads(path.read_text(errors="replace"))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(entries, list) or not entries:
+            return None
+        last = entries[-1]
+        if isinstance(last, dict):
+            return last.get("ts")
+        return None
+
+    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]:
+        if not isinstance(lines, int) or lines < 1:
+            lines = 200
+        lines = min(lines, 500)
+        stories = manifest.get("stories") if isinstance(manifest, dict) else None
+        if not isinstance(stories, dict):
+            return {"available": False, "lines": []}
+        story = stories.get(story_key)
+        if not isinstance(story, dict):
+            return {"available": False, "lines": []}
+        raw_log = story.get("log")
+        if not isinstance(raw_log, str) or not raw_log:
+            return {"available": False, "lines": []}
+        log_path = Path(raw_log)
+        if not log_path.is_absolute():
+            log_path = PLAN_DIR / raw_log
+        try:
+            log_path = log_path.resolve(strict=False)
+            plan_dir_resolved = PLAN_DIR.resolve()
+            if log_path != plan_dir_resolved and not log_path.is_relative_to(plan_dir_resolved):
+                return {"available": False, "lines": []}
+        except OSError:
+            return {"available": False, "lines": []}
+        if not log_path.exists() or not log_path.is_file():
+            return {"available": False, "lines": []}
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return {"available": False, "lines": []}
+        all_lines = text.splitlines()
+        tail = all_lines[-lines:]
+        return {"available": True, "lines": tail}
+
+    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
+        empty = {"available": False, "text": ""}
+        if not isinstance(story, dict):
+            return empty
+        if not isinstance(filename, str) or not filename:
+            return empty
+        if "/" in filename or "\\" in filename or filename == ".." or filename == ".":
+            return empty
+        raw_wt = story.get("worktree")
+        if not isinstance(raw_wt, str) or not raw_wt:
+            return empty
+        wt_path = Path(raw_wt)
+        if not wt_path.is_absolute():
+            return empty
+        target = wt_path / filename
+        try:
+            target = target.resolve(strict=False)
+            root = WORKTREE_ROOT.resolve()
+            if target != root and not target.is_relative_to(root):
+                return empty
+        except OSError:
+            return empty
+        if not target.exists() or not target.is_file():
+            return empty
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return empty
+        return {"available": True, "text": text}
+
+
+
+    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
+        empty = {"available": False, "text": ""}
+        if not isinstance(story, dict):
+            return empty
+        if not isinstance(filename, str) or not filename:
+            return empty
+        if "/" in filename or "\\" in filename or filename == ".." or filename == ".":
+            return empty
+        raw_wt = story.get("worktree")
+        if not isinstance(raw_wt, str) or not raw_wt:
+            return empty
+        wt_path = Path(raw_wt)
+        if not wt_path.is_absolute():
+            return empty
+        target = wt_path / filename
+        try:
+            target = target.resolve(strict=False)
+            root = WORKTREE_ROOT.resolve()
+            if target != root and not target.is_relative_to(root):
+                return empty
+        except OSError:
+            return empty
+        if not target.exists() or not target.is_file():
+            return empty
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return empty
+        return {"available": True, "text": text}
+
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
         """Return manifest or None on missing/corrupt."""
         try:
@@ -1234,6 +1366,18 @@ class PipelineService:
             )
             roles[role] = {"provider": resolution.provider, "model": resolution.model}
         return {"ok": True, "roles": roles}
+
+    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
+        return _store.get_journal(plan_name, story_key)
+
+    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
+        return _store.get_journal_final_ts(plan_name, story_key)
+
+    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]:
+        return _store.get_story_log(plan_name, story_key, manifest, lines=lines)
+
+    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
+        return _store.get_worktree_file(story, filename)
 
     def decompose_plan(self, request: str) -> dict[str, Any]:
         text = _run_decompose(request)

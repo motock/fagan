@@ -2420,3 +2420,34 @@ if (typeof module !== "undefined" && module.exports) {
     _diffBoardCards,
   };
 }
+startPolling();
+
+// Expose helpers for node-based smoke tests. Guarded so the file still works
+// as a plain browser <script>.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
+    startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+    showStoryModal, _renderStoryModalBody, handleCopyClick,
+    filterStoryNotifications, renderStoryModalNotifications,
+    renderOverview, selectOverview, refresh, state,
+    renderPlanList, _renderPlanListFull,
+    _diffOverviewPlanRows,
+    renderNotifications,
+    _diffNotificationsPanel,
+    renderChecklist,
+    filterNotifications,
+    pickNewNotifications,
+    pushToast,
+    renderBoard,
+
+    renderBoard,
+
+    selectComms,
+    _applyActiveView,
+    sendCommsMessage,
+    appendCommsMessage,
+    renderToolTraceHtml,
+    _diffBoardCards,
+  };
+}

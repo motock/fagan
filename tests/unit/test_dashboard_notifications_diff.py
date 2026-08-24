@@ -459,6 +459,23 @@ def test_same_records_second_call_appends_nothing():
     assert result["beforeCount"] == result["afterCount"]
 
 
+def test_special_char_dedup_key_second_call_appends_nothing():
+    """A dedup_key containing HTML special characters (`&`, `<`, `>`, `"`)
+    must still dedup correctly: a second _diffNotificationsPanel call with the
+    same records appends zero new rows. This guards against a regression that
+    re-introduces escapeHtml on the comparison key (which would never match the
+    unescaped getAttribute value and append duplicates)."""
+    recs = [
+        _rec('a&b<c>d"e', message="first"),
+    ]
+    result = _run_app_js(_diff_twice_expr(json.dumps(recs), json.dumps(recs)))
+    assert result["appendedCount"] == 0, (
+        f"expected 0 appended nodes for special-char dedup_key, "
+        f"got {result['appendedCount']}"
+    )
+    assert result["beforeCount"] == result["afterCount"]
+
+
 def test_existing_rows_not_recreated_on_second_call():
     """The 2 existing rows' `__testId` values are unchanged (not recreated)
     when the second call passes the same records. The diff must NOT remove

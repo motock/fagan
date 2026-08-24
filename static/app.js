@@ -437,6 +437,12 @@ function escapeHtml(s) {
   }[c]));
 }
 
+function decodeHtmlEntities(s) {
+  return String(s).replace(/&(amp|lt|gt|quot|#39);/g, (m, name) => ({
+    "amp": "&", "lt": "<", "gt": ">", "quot": '"', "#39": "'",
+  }[name]));
+}
+
 async function fetchJson(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url} -> ${res.status}`);
@@ -1055,7 +1061,7 @@ function _diffNotificationsPanel(panelBodyEl, records) {
   if (!panelBodyEl || !records) return;
   const existing = new Set(
     Array.from(panelBodyEl.querySelectorAll('[data-dedup-key]')).map(
-      (el) => el.getAttribute('data-dedup-key')
+      (el) => decodeHtmlEntities(el.getAttribute('data-dedup-key'))
     )
   );
   for (const r of records) {
@@ -1161,7 +1167,15 @@ function renderPlanDetail(plan) {
         // intact so _diffNotificationsPanel (called from refresh()) can append
         // only new rows; only the decisions panel is rebuilt here.
         const decisionsPanel = panelsEl.querySelectorAll(".panel")[1];
-        if (decisionsPanel) decisionsPanel.innerHTML = _decisionsPanelHtml(plan);
+        if (decisionsPanel) {
+          // Rebuild only the decisions panel's inner content (heading + body),
+          // not a full .panel wrapper, to avoid nesting a second bordered
+          // .panel inside the existing one.
+          decisionsPanel.innerHTML =
+            '<h3>Overlord decisions</h3><div class="panel-body">' +
+            renderDecisions(plan.decisions) +
+            '</div>';
+        }
       } else {
         // First render or a deliberate user action (e.g. severity-filter
         // change): rebuild the whole panels, including notifications.

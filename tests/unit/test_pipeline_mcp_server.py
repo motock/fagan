@@ -12498,6 +12498,11 @@ def test_advance_pipeline_retries_review_for_orphaned_tests_passed_story(plan_di
                "worktree": "/x", "risk": "low"},
     })
 
+    # Pin the review resource gate open so the test exercises the orphan-retry
+    # logic, not the configured review backend's runtime availability (which
+    # depends on the live model_registry.json review provider and free memory).
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+
     reviewed = []
     monkeypatch.setattr(
         p, "review_story",
@@ -13974,6 +13979,11 @@ def test_advance_pipeline_reports_review_deferred_on_rate_limit(plan_dir, agents
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
     })
+    # Pin the review resource gate open so the test exercises the rate-limit
+    # deferral path, not the configured review backend's runtime availability
+    # (which depends on the live model_registry.json review provider and free
+    # memory).
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: _RATE_LIMIT_MSG)
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on defer")))

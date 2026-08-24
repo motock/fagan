@@ -903,18 +903,19 @@ class FileStore:
         return None
 
     def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]:
+        empty = {"available": False, "lines": []}
         if not isinstance(lines, int) or lines < 1:
             lines = 200
         lines = min(lines, 500)
         stories = manifest.get("stories") if isinstance(manifest, dict) else None
         if not isinstance(stories, dict):
-            return {"available": False, "lines": []}
+            return empty
         story = stories.get(story_key)
         if not isinstance(story, dict):
-            return {"available": False, "lines": []}
+            return empty
         raw_log = story.get("log")
         if not isinstance(raw_log, str) or not raw_log:
-            return {"available": False, "lines": []}
+            return empty
         log_path = Path(raw_log)
         if not log_path.is_absolute():
             log_path = PLAN_DIR / raw_log
@@ -922,15 +923,15 @@ class FileStore:
             log_path = log_path.resolve(strict=False)
             plan_dir_resolved = PLAN_DIR.resolve()
             if log_path != plan_dir_resolved and not log_path.is_relative_to(plan_dir_resolved):
-                return {"available": False, "lines": []}
+                return empty
         except OSError:
-            return {"available": False, "lines": []}
+            return empty
         if not log_path.exists() or not log_path.is_file():
-            return {"available": False, "lines": []}
+            return empty
         try:
             text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            return {"available": False, "lines": []}
+            return empty
         all_lines = text.splitlines()
         tail = all_lines[-lines:]
         return {"available": True, "lines": tail}
@@ -963,6 +964,8 @@ class FileStore:
             text = target.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return empty
+        return {"available": True, "text": text}
+        return empty
         return {"available": True, "text": text}
 
 

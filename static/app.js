@@ -1028,7 +1028,7 @@ function renderNotifications(records) {
     var color = NOTIF_SEVERITY_COLOR[r.severity] || "--c-unknown";
     var sev = escapeHtml(r.severity || "");
     var parts = [];
-    parts.push('<div class="log-line">');
+    parts.push('<div class="log-line" data-dedup-key="${r.dedup_key || (r.ts + "-" + r.message)}">');
     parts.push('<span class="badge" style="--badge-color: var(' + color + ')">' + sev + '</span>');
     if (r.story_key) {
       parts.push('<span class="mono">' + escapeHtml(r.story_key) + '</span>');
@@ -1043,6 +1043,24 @@ function renderNotifications(records) {
     parts.push('</div>');
     return parts.join(' ');
   }).join('');
+}
+
+// Incrementally append new notification rows based on dedup_key
+function _diffNotificationsPanel(panelBodyEl, records) {
+  if (!panelBodyEl) return;
+  const existing = new Set(
+    Array.from(panelBodyEl.querySelectorAll('.log-line[data-dedup-key]')).map(
+      (el) => el.dataset.dedupKey
+    )
+  );
+  for (const r of records) {
+    const key = r.dedup_key || (r.ts + '-' + r.message);
+    if (existing.has(key)) continue;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = renderNotifications([r]);
+    const node = tmp.firstElementChild;
+    if (node) panelBodyEl.appendChild(node);
+  }
 }
 
 function renderDecisions(decisions) {

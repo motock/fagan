@@ -1028,7 +1028,7 @@ function renderNotifications(records) {
     var color = NOTIF_SEVERITY_COLOR[r.severity] || "--c-unknown";
     var sev = escapeHtml(r.severity || "");
     var parts = [];
-    parts.push('<div class="log-line" data-dedup-key="' + (r.dedup_key || (r.ts + '-' + r.message)) + '">');
+    parts.push('<div class="log-line" data-dedup-key="' + escapeHtml(r.dedup_key || (r.ts + '-' + r.message)) + '">');
     parts.push('<span class="badge" style="--badge-color: var(' + color + ')">' + sev + '</span>');
     if (r.story_key) {
       parts.push('<span class="mono">' + escapeHtml(r.story_key) + '</span>');
@@ -1047,14 +1047,14 @@ function renderNotifications(records) {
 
 // Incrementally append new notification rows based on dedup_key
 function _diffNotificationsPanel(panelBodyEl, records) {
-  if (!panelBodyEl) return;
+  if (!panelBodyEl || !records) return;
   const existing = new Set(
     Array.from(panelBodyEl.querySelectorAll('[data-dedup-key]')).map(
-      (el) => el.dataset.dedupKey
+      (el) => el.getAttribute('data-dedup-key')
     )
   );
   for (const r of records) {
-    const key = r.dedup_key || (r.ts + '-' + r.message);
+    const key = escapeHtml(r.dedup_key || (r.ts + '-' + r.message));
     if (existing.has(key)) continue;
     const tmp = document.createElement('div');
     tmp.innerHTML = renderNotifications([r]);
@@ -2228,6 +2228,10 @@ async function refresh() {
     try {
       const plan = await fetchJson(`/api/plans/${encodeURIComponent(state.selectedPlan)}`);
       renderPlanDetail(plan);
+      // Poll-triggered update: append only new notification rows to the
+      // already-rendered notifications panel body instead of rebuilding it.
+      const notifPanelBody = document.querySelector('#plan-detail .panel .panel-body');
+      if (notifPanelBody) _diffNotificationsPanel(notifPanelBody, plan.notification_records);
     } catch {
       state.selectedPlan = null;
     }

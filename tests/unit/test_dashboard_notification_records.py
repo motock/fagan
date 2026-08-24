@@ -11,7 +11,6 @@ The implementation does not exist yet on this branch, so this file is
 intentionally RED until a later dispatch adds it.
 """
 import json
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,16 +54,6 @@ def _write_jsonl(plan_dir, name, records):
 # --- the new helper exists and is wired -----------------------------------
 
 
-def test_notifications_jsonl_path_helper_exists():
-    """The tiny path helper is duplicated next to _notifications_path."""
-    assert hasattr(d, "_notifications_jsonl_path")
-    path = d._notifications_jsonl_path("demo")
-    assert isinstance(path, Path)
-    assert path == d.PLAN_DIR / "demo.notifications.jsonl"
-
-
-def test_tail_notification_records_helper_exists():
-    assert hasattr(d, "_tail_notification_records")
 
 
 def test_get_plan_returns_notification_records(client, plan_dir):
@@ -295,29 +284,3 @@ def test_empty_jsonl_file_returns_empty_list(client, plan_dir):
     assert res.json()["notification_records"] == []
 
 
-def test_helper_directly_missing_file_returns_empty_list(plan_dir):
-    """The helper itself returns [] for a missing file (unit-level)."""
-    assert d._tail_notification_records("nope") == []
-
-
-def test_helper_directly_tails_to_limit(plan_dir):
-    """The helper returns the last `limit` records, oldest-first."""
-    _write_jsonl(plan_dir, "h", [
-        {"ts": f"t{i:03d}", "message": f"m{i}", "severity": "info"}
-        for i in range(10)
-    ])
-    out = d._tail_notification_records("h", limit=3)
-    assert [r["message"] for r in out] == ["m7", "m8", "m9"]
-
-
-def test_helper_directly_normalizes_unknown_severity(plan_dir):
-    _write_jsonl(plan_dir, "h", [{"message": "x", "severity": "boom"}])
-    out = d._tail_notification_records("h")
-    assert out[0]["severity"] == "info"
-
-
-def test_helper_directly_skips_non_dict(plan_dir):
-    _write_jsonl(plan_dir, "h", ["[1,2,3]", json.dumps({"message": "keep"})])
-    out = d._tail_notification_records("h")
-    assert len(out) == 1
-    assert out[0]["message"] == "keep"

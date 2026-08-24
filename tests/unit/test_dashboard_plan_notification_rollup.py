@@ -120,7 +120,7 @@ def test_list_plans_latest_notification_is_most_recent_record(plan_dir, client):
     # it from the same helpers the implementation must call, so the test
     # does not re-invent the record shape.
     collapsed = d._collapse_duplicate_notifications(
-        d._tail_notification_records(plan, limit=5)
+        d._store.get_notification_records(plan, limit=5)
     )
     assert collapsed, "expected non-empty collapsed notifications"
     expected = collapsed[-1]

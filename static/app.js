@@ -2305,26 +2305,6 @@ function stopPolling() {
   state.pollHandle = null;
 }
 
-// Pause polling while the tab is hidden so we don't burn requests / re-render
-// DOM that nobody is looking at. Resume on visibilitychange, but only if the
-// Visibility controls polling only
-  // No checkbox gating; visibility controls polling only
-  } else if (!state.pollHandle) {
-    startPolling();
-    // Catch up on one immediate refresh so the user sees fresh data the
-    // moment they return to the tab instead of waiting up to 4s for the
-    // next tick.
-    refresh();
-  }
-}
-
-document.getElementById("story-modal-close").addEventListener("click", hideStoryModal);
-document.getElementById("story-modal-body").addEventListener("click", handleCopyClick);
-document.getElementById("story-modal").addEventListener("click", (e) => {
-  // Click on the backdrop (outside the modal-content) closes the modal.
-  if (e.target.id === "story-modal") hideStoryModal();
-});
-
 function syncPollingWithVisibility() {
   if (document.hidden) {
     stopPolling();
@@ -2333,25 +2313,7 @@ function syncPollingWithVisibility() {
     refresh();
   }
 }
-
-// === Theme toggle =========================================================
-// Persists choice in localStorage under THEME_KEY. Defaults to "dark" when
-// unset/empty. Wrapped in try/catch so a locked-down browser (or any
-// document without Storage permission) doesn't break the page.
-const THEME_KEY = "pipeline-dashboard-theme";
-const DEFAULT_THEME = "dark";
-const VALID_THEMES = new Set(["dark", "light"]);
-
-function readStoredTheme() {
-  try {
-    const raw = localStorage.getItem(THEME_KEY);
-    if (!raw) return DEFAULT_THEME;
-    const value = String(raw).trim().toLowerCase();
-    return VALID_THEMES.has(value) ? value : DEFAULT_THEME;
-  } catch {
-    return DEFAULT_THEME;
-  }
-}
+  globalThis.syncPollingWithVisibility = syncPollingWithVisibility;
 
 function writeStoredTheme(theme) {
   try {

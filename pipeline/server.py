@@ -241,7 +241,6 @@ from .persistence import (
     _append_decision,
     _append_journal,
     _decisions_path,
-    _journal_path,
     _notify_user,
     _plan_role_config,
     _read_journal,
@@ -868,27 +867,33 @@ class FileStore:
         except (json.JSONDecodeError, OSError):
             return []
 
-        return False, []
-        normalized = []
+    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
+        """Return (available, entries) for a story's checkpoint journal,
+        mirroring dashboard._read_journal. Never raises."""
+        path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+        if not path.exists():
+            return False, []
+        try:
+            raw = json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return False, []
+        if not isinstance(raw, list) or not raw:
+            return False, []
+        entries = [e for e in raw if isinstance(e, dict)]
+        if not entries:
+            return False, []
+        normalized: list[dict] = []
         for e in entries:
             normalized.append({
-                "ts": e.get("ts"),
+                **e,
                 "step": e.get("step"),
                 "summary": e.get("summary"),
                 "next_hint": e.get("next_hint"),
             })
         return True, normalized
-        normalized = []
-        for e in entries:
-            normalized.append({
-                "ts": e.get("ts"),
-                "step": e.get("step"),
-                "summary": e.get("summary"),
-                "next_hint": e.get("next_hint"),
-            })
-        return True, normalized
+
     def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
-        path = _journal_path(plan_name, story_key)
+        path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
         if not path.exists():
             return None
         try:
@@ -917,8 +922,13 @@ class FileStore:
         if not isinstance(raw_log, str) or not raw_log:
             return empty
         log_path = Path(raw_log)
-        if not log_path.is_absolute():
-            log_path = PLAN_DIR / raw_log
+        if log_path.is_absolute():
+            # Manifest stores log paths relative to PLAN_DIR historically; an
+            # absolute path is a corrupt/hand-edited manifest we fail closed
+            # on (resolving an absolute path under a CWD we don't control
+            # would be unsafe).
+            return empty
+        log_path = PLAN_DIR / raw_log
         try:
             log_path = log_path.resolve(strict=False)
             plan_dir_resolved = PLAN_DIR.resolve()

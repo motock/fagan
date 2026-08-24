@@ -1720,7 +1720,7 @@ function _renderStoryModalBody(planName, story, key, notificationRecords) {
   if (backendSelect && story && story.backend) {
     backendSelect.value = story.backend;
   }
-  const backendError = document.getElementById("backend-error");
+  const backendError = _backendErrorEl();
   if (backendError) backendError.textContent = "";
 
   // Fire-and-forget journal fetch. The empty-state placeholder is already
@@ -2645,6 +2645,19 @@ function _renderConfigIgnored(section, ignored) {
 // {backend: <value>} and surface a 400 inline. The current backend is set on
 // the select whenever the modal opens (see _renderStoryModalBody).
 
+function _backendErrorEl() {
+  let el = document.getElementById("backend-error");
+  if (!el) {
+    const selector = document.getElementById("backend-selector");
+    if (!selector) return null;
+    el = document.createElement("span");
+    el.id = "backend-error";
+    el.className = "config-error";
+    selector.appendChild(el);
+  }
+  return el;
+}
+
 function _wireBackendSelector() {
   const select = document.getElementById("backend-select");
   if (!select) return;
@@ -2652,7 +2665,7 @@ function _wireBackendSelector() {
     const modal = document.getElementById("story-modal");
     const plan = modal.dataset.plan;
     const key = modal.dataset.story;
-    const errorEl = document.getElementById("backend-error");
+    const errorEl = _backendErrorEl();
     if (!plan || !key) return;
     const backend = select.value;
     try {
@@ -2691,4 +2704,4 @@ function _wireBackendSelector() {
   nav.appendChild(item);
 })();
 
-wireBackendSelector();
+_wireBackendSelector();

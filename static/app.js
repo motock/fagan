@@ -399,6 +399,7 @@ window.state = {
   filters: defaultFilters(),
   showArchived: false,
   commsActive: true,
+  configActive: false,
 };
 
 // Local alias keeps the rest of the file terse.
@@ -1715,10 +1716,23 @@ function _renderStoryModalBody(planName, story, key, notificationRecords) {
   modal.classList.remove("hidden");
 
   // Reflect the story's current backend in the per-story backend selector so
-  // the user sees the resolved value before editing it.
+  // the user sees the resolved value before editing it. If the story's backend
+  // is not one of the static <option> values, add it dynamically so the select
+  // shows the actual resolved value instead of silently falling back to the
+  // first option.
   const backendSelect = document.getElementById("backend-select");
   if (backendSelect && story && story.backend) {
-    backendSelect.value = story.backend;
+    const backend = String(story.backend);
+    const hasOption = Array.from(backendSelect.options).some(
+      (o) => o.value === backend
+    );
+    if (!hasOption) {
+      const opt = document.createElement("option");
+      opt.value = backend;
+      opt.textContent = backend;
+      backendSelect.appendChild(opt);
+    }
+    backendSelect.value = backend;
   }
   const backendError = _backendErrorEl();
   if (backendError) backendError.textContent = "";
@@ -2074,6 +2088,7 @@ function _diffOverviewPlanRows(listEl, plans) {
 // plan and re-renders the sidebar so the Overview item shows as active.
 function selectOverview() {
   state.commsActive = false;
+  state.configActive = false;
   state.selectedPlan = null;
   updateHash();
   const nav = document.getElementById("plan-list");
@@ -2093,6 +2108,7 @@ function selectOverview() {
 
 function selectComms() {
   state.commsActive = true;
+  state.configActive = false;
   state.selectedPlan = null;
   updateHash();
   const nav = document.getElementById("plan-list");
@@ -2110,6 +2126,7 @@ function selectComms() {
 
 async function selectPlan(name) {
   state.commsActive = false;
+  state.configActive = false;
   state.selectedPlan = name;
   updateHash();
   await refresh();
@@ -2146,11 +2163,18 @@ const COMMS_VIEW_ID = "comms-view";
 function _applyActiveView() {
   const commsEl = document.getElementById(COMMS_VIEW_ID);
   const planDetailEl = document.getElementById("plan-detail");
-  if (!commsEl || !planDetailEl) return;
-  if (state.commsActive) {
+  const configEl = document.getElementById("config-view");
+  if (!commsEl || !planDetailEl || !configEl) return;
+  if (state.configActive) {
+    configEl.classList.remove("hidden");
+    commsEl.classList.add("hidden");
+    planDetailEl.classList.add("hidden");
+  } else if (state.commsActive) {
+    configEl.classList.add("hidden");
     commsEl.classList.remove("hidden");
     planDetailEl.classList.add("hidden");
   } else {
+    configEl.classList.add("hidden");
     commsEl.classList.add("hidden");
     planDetailEl.classList.remove("hidden");
   }
@@ -2448,11 +2472,9 @@ if (typeof module !== "undefined" && module.exports) {
 async function renderConfigView() {
   const section = document.getElementById("config-view");
   if (!section) return;
-  section.classList.remove("hidden");
-  const planDetail = document.getElementById("plan-detail");
-  if (planDetail) planDetail.classList.add("hidden");
-  const commsView = document.getElementById("comms-view");
-  if (commsView) commsView.classList.add("hidden");
+  state.configActive = true;
+  state.commsActive = false;
+  _applyActiveView();
 
   const plan = state.selectedPlan || null;
   const url = plan
@@ -2663,6 +2685,7 @@ function _wireBackendSelector() {
   if (!select) return;
   select.addEventListener("change", async () => {
     const modal = document.getElementById("story-modal");
+    if (!modal) return;
     const plan = modal.dataset.plan;
     const key = modal.dataset.story;
     const errorEl = _backendErrorEl();

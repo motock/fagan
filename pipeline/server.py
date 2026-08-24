@@ -954,6 +954,47 @@ class PipelineService:
         _store.transaction so it's atomic w.r.t. the scheduler's 60s tick.
         """
         _validate_key(plan_name)
+        # Fail closed at the boundary BEFORE taking the lock or touching disk:
+        # an unknown role, empty provider/model, or undeclared provider/model
+        # must never reach the manifest. This mirrors set_role_default's
+        # validation so the two write paths enforce the same contract.
+        if role not in config_provenance.PIPELINE_ROLES:
+            return {"ok": False, "error": f"unknown role {role!r}"}
+        # None means "not specified" (a partial entry is allowed, matching the
+        # overrides contract); an empty/whitespace STRING is an explicit bad
+        # value that must be rejected before it reaches disk.
+        if provider is not None and not str(provider).strip():
+            return {
+                "ok": False,
+                "error": f"provider must be non-empty (got provider={provider!r})",
+            }
+        if model is not None and not str(model).strip():
+            return {
+                "ok": False,
+                "error": f"model must be non-empty (got model={model!r})",
+            }
+        registry = role_registry.load_registry()
+        providers = registry.get("providers", {})
+        if provider is not None and provider not in providers:
+            return {
+                "ok": False,
+                "error": f"unknown provider {provider!r}: not declared under providers",
+            }
+        # Only validate the model against a provider's declared models when a
+        # provider is given; a model-only partial (provider=None) is resolved
+        # and validated by resolve_role below against the effective provider.
+        if (
+            provider is not None
+            and model is not None
+            and model not in providers[provider].get("models", {})
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    f"unknown model {model!r}: not declared under "
+                    f"providers.{provider}.models"
+                ),
+            }
         with _store.transaction(plan_name) as acquired:
             if not acquired:
                 return {"ok": True, "skipped": "locked"}

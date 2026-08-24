@@ -2325,21 +2325,8 @@ document.getElementById("story-modal").addEventListener("click", (e) => {
   // Click on the backdrop (outside the modal-content) closes the modal.
   if (e.target.id === "story-modal") hideStoryModal();
 });
-document.getElementById("auto-refresh").addEventListener("change", (e) => {
-  if (e.target.checked) {
-    // Respect the tab-hidden state on initial enable: don't start polling
-    // into a hidden tab just because the user toggled the checkbox.
-    if (document.hidden) return;
-    startPolling();
-  } else {
-    stopPolling();
-  }
-});
-
-// Pause / resume the polling loop around tab visibility. visibilitychange
-// fires on tab switch, minimize, and on some browsers when the window
-// loses focus to the OS — exactly the moments we want to stop polling.
-document.addEventListener("visibilitychange", syncPollingWithVisibility);
+  // Auto-refresh checkbox removed; no change listener
+  // Visibility change handled by syncPollingWithVisibility without checkbox gating
 
 // === Theme toggle =========================================================
 // Persists choice in localStorage under THEME_KEY. Defaults to "dark" when

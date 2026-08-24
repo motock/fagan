@@ -1230,9 +1230,6 @@ function capturePlanDetailState(section) {
 
 return { scrollTop: section.scrollTop || 0, focusKey, searchValue, searchSelectionStart, searchSelectionEnd };
 
-
-}
-
 // Restore scrollTop, and re-focus the matching chip if it still exists.
 // Negative/boundary case: focusKey is null (nothing was focused) or the chip
 // with that identity was removed by the re-render — in both cases we simply

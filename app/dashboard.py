@@ -46,13 +46,23 @@ class StoryDecisionRequest(BaseModel):
     context: str = ""
     decided_by: str = "human"
 
+
+class RoleDefaultBody(BaseModel):
+    provider: str
+    model: str
+
+
+class PlanRoleConfigBody(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+
 # config_provenance is a read-only leaf: its only non-stdlib import is
 # app.role_registry (see both modules' docstrings), so pulling it in does
 # NOT drag the orchestrator's write surface (pipeline.server /
 # app.pipeline_mcp_server / app.backend) into the dashboard's import graph.
 from app import role_registry
 from pipeline import config_provenance
-from pipeline.server import PipelineService
+from pipeline.server import PipelineService, _store
 
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
 USAGE_STATE_PATH = Path(
@@ -1042,6 +1052,51 @@ def effective_config(plan: str | None = None) -> dict[str, Any]:
     }
 
 
+@app.post("/api/config/roles/{role}")
+def set_role_default_route(role: str, body: RoleDefaultBody) -> dict[str, Any]:
+    """Delegates to _service.set_role_default(role, body.provider, body.model).
+
+    On success returns the service result plus the updated effective config for
+    that role (via config_provenance.resolve_role_provenance). Validation
+    failures surface as HTTP 400 with the service's error message.
+    """
+    result = _service.set_role_default(role, body.provider, body.model)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
+    effective = config_provenance.resolve_role_provenance(
+        role, registry=role_registry.load_registry()
+    )
+    return {**result, "effective_config": effective}
+
+
+@app.post("/api/config/plans/{plan_name}/roles/{role}")
+def set_plan_role_config_route(
+    plan_name: str, role: str, body: PlanRoleConfigBody
+) -> dict[str, Any]:
+    """Delegates to _service.set_plan_role_config(plan_name, role, body.provider,
+    body.model).
+
+    404 if the plan does not exist; 400 on validation failure; on success
+    returns the service result plus the updated per-plan effective config (the
+    plan's role_config layered into resolve_role_provenance).
+    """
+    if plan_name not in _store.list_manifests():
+        raise HTTPException(status_code=404, detail=f"No such plan {plan_name!r}")
+    if role not in config_provenance.PIPELINE_ROLES:
+        raise HTTPException(status_code=400, detail=f"unknown role {role!r}")
+    result = _service.set_plan_role_config(plan_name, role, body.provider, body.model)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
+    manifest = _read_manifest(plan_name) or {}
+    plan_role_config = manifest.get("role_config") or None
+    effective = config_provenance.resolve_role_provenance(
+        role,
+        plan_role_config=plan_role_config,
+        registry=role_registry.load_registry(),
+    )
+    return {**result, "effective_config": effective}
+
+
 @app.post("/api/plans/{plan_name}/stories/{story_key}/dispatch")
 def dispatch_story_route(plan_name: str, story_key: str) -> dict[str, Any]:
     """Delegates to _service.dispatch_story(plan_name, story_key)."""
@@ -1082,6 +1137,7 @@ class StoryPatchBody(BaseModel):
     pr_url: str | None = None
     summary: str | None = None
     tdd_split: str | None = None
+    backend: str | None = None
 
 
 @app.post("/api/plans/{plan_name}/stories/{story_key}/interrupt")
@@ -1119,7 +1175,7 @@ def patch_story_route(
     result = _service.patch_story(plan_name, story_key, fields=fields)
     if not result.get("ok"):
         raise HTTPException(
-            status_code=404,
+            status_code=400,
             detail=result.get("error", "Unknown error when patching story"),
         )
     return result

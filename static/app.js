@@ -2307,8 +2307,7 @@ function stopPolling() {
 
 // Pause polling while the tab is hidden so we don't burn requests / re-render
 // DOM that nobody is looking at. Resume on visibilitychange, but only if the
-// user has auto-refresh enabled — visibility never overrides the checkbox.
-function syncPollingWithVisibility() {
+// Visibility controls polling only
   // No checkbox gating; visibility controls polling only
   } else if (!state.pollHandle) {
     startPolling();

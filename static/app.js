@@ -2422,25 +2422,6 @@ function renderConfigView() {
 
     // ---------- Configuration view ----------
     // Render the configuration view and wire edit controls.
-    // This is a stub; real implementation will fetch /api/config and render tables.
-    function renderConfigView() {
-      const section = document.getElementById("config-view");
-      if (!section) return;
-      section.classList.remove("hidden");
-      document.getElementById("plan-detail").classList.add("hidden");
-      // TODO: fetch and render config tables
-    }
-    renderBoard,
-    selectComms,
-};
-
-function renderConfigView() {
-  const section = document.getElementById("config-view");
-  if (!section) return;
-  section.classList.remove("hidden");
-  document.getElementById("plan-detail").classList.add("hidden");
-  // TODO: fetch and render config tables
-}
 
     // ---------- Configuration view ----------
     // Render the configuration view and wire edit controls.
@@ -2449,7 +2430,6 @@ function renderConfigView() {
     appendCommsMessage,
     renderToolTraceHtml,
     _diffBoardCards,
-  };
 
   // ---------- Configuration view ----------
   // Render the configuration view and wire edit controls.
@@ -2460,7 +2440,6 @@ function renderConfigView() {
     section.classList.remove("hidden");
     document.getElementById("plan-detail").classList.add("hidden");
     // TODO: fetch and render config tables
-  }
 
 };
 

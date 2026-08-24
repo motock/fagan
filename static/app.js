@@ -77,6 +77,11 @@ function pushToast({ severity, planName, storyKey, message }) {
 
 
 let notifSeverityFilter = "all";
+// When true, renderPlanDetail's same-plan update path keeps the notifications
+// panel body intact so _diffNotificationsPanel (called from refresh()) can
+// append only new rows instead of rebuilding the whole panel. Set only around
+// the poll-triggered render; filter-click re-renders leave it false.
+let diffNotificationsOnPoll = false;
 // Keyed-diff state for renderPlanList: maps each plan name to its live
 // `.plan-item` DOM node so per-plan rows are updated in place across poll
 // ticks instead of being torn down and rebuilt every 4s. `null` means the
@@ -1054,7 +1059,7 @@ function _diffNotificationsPanel(panelBodyEl, records) {
     )
   );
   for (const r of records) {
-    const key = escapeHtml(r.dedup_key || (r.ts + '-' + r.message));
+    const key = r.dedup_key || (r.ts + '-' + r.message);
     if (existing.has(key)) continue;
     const tmp = document.createElement('div');
     tmp.innerHTML = renderNotifications([r]);
@@ -1095,17 +1100,29 @@ function _planChromeHtml(plan) {
 // Overlord decisions). Kept as a separate wholesale rebuild from
 // _planChromeHtml so the two can sandwich the persistent board element in
 // their original above/below positions instead of both landing before it.
+function _notificationsPanelHtml(plan) {
+  return `
+    <div class="panel">
+      <h3>Notifications</h3>
+      <div class="panel-body">${renderNotifications(plan.notification_records)}</div>
+    </div>
+  `;
+}
+
+function _decisionsPanelHtml(plan) {
+  return `
+    <div class="panel">
+      <h3>Overlord decisions</h3>
+      <div class="panel-body">${renderDecisions(plan.decisions)}</div>
+    </div>
+  `;
+}
+
 function _planPanelsHtml(plan) {
   return `
     <div class="panels">
-      <div class="panel">
-        <h3>Notifications</h3>
-        <div class="panel-body">${renderNotifications(plan.notification_records)}</div>
-      </div>
-      <div class="panel">
-        <h3>Overlord decisions</h3>
-        <div class="panel-body">${renderDecisions(plan.decisions)}</div>
-      </div>
+      ${_notificationsPanelHtml(plan)}
+      ${_decisionsPanelHtml(plan)}
     </div>
   `;
 }
@@ -1138,7 +1155,19 @@ function renderPlanDetail(plan) {
     const chromeEl = section.querySelectorAll(".plan-chrome")[0];
     if (chromeEl) chromeEl.innerHTML = _planChromeHtml(plan);
     const panelsEl = section.querySelectorAll(".plan-panels")[0];
-    if (panelsEl) panelsEl.innerHTML = _planPanelsHtml(plan);
+    if (panelsEl) {
+      if (diffNotificationsOnPoll) {
+        // Poll-triggered same-plan update: keep the notifications panel body
+        // intact so _diffNotificationsPanel (called from refresh()) can append
+        // only new rows; only the decisions panel is rebuilt here.
+        const decisionsPanel = panelsEl.querySelectorAll(".panel")[1];
+        if (decisionsPanel) decisionsPanel.innerHTML = _decisionsPanelHtml(plan);
+      } else {
+        // First render or a deliberate user action (e.g. severity-filter
+        // change): rebuild the whole panels, including notifications.
+        panelsEl.innerHTML = _planPanelsHtml(plan);
+      }
+    }
     // Diffs the existing column-body elements in place (see
     // _tryUpdateBoardInPlace / _diffBoardCards) instead of rebuilding the
     // board as a string — this is what keeps unchanged `.card` nodes alive
@@ -2227,7 +2256,12 @@ async function refresh() {
   if (state.selectedPlan) {
     try {
       const plan = await fetchJson(`/api/plans/${encodeURIComponent(state.selectedPlan)}`);
-      renderPlanDetail(plan);
+      diffNotificationsOnPoll = true;
+      try {
+        renderPlanDetail(plan);
+      } finally {
+        diffNotificationsOnPoll = false;
+      }
       // Poll-triggered update: append only new notification rows to the
       // already-rendered notifications panel body instead of rebuilding it.
       const notifPanelBody = document.querySelector('#plan-detail .panel .panel-body');

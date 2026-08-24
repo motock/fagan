@@ -26,10 +26,95 @@
 
   <main>
     <nav id="plan-list" aria-label="Plans"></nav>
+    <nav id="config-nav" aria-label="Configuration"></nav>
 
-    <section id="plan-detail">
-      <p class="empty-state">Select a plan to see its story lifecycle.</p>
-    </section>
+    <section id="config-view" class="hidden">
+  <h2>Configuration</h2>
+  <div class="config-section">
+    <h3>Roles</h3>
+    <table id="roles-table" class="config-table">
+      <thead>
+        <tr>
+          <th>Role</th>
+          <th>Provider</th>
+          <th>Model</th>
+          <th>Provider Source</th>
+          <th>Model Source</th>
+          <th>Restart Required</th>
+          <th>Edit</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="config-section">
+    <h3>Environment Variables</h3>
+    <table id="env-vars-table" class="config-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Effective Value</th>
+          <th>Source</th>
+          <th>Restart Required</th>
+          <th>Conflict</th>
+          <th>Layers</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="config-section ignored-vars">
+    <h3>Ignored Environment Variables</h3>
+    <div id="ignored-vars-panel" class="ignored-vars-panel"></div>
+  </div>
+</section>
+       <p class="empty-state">Select a plan to see its story lifecycle.</p>
+     </section>
+
+     <section id="config-view" class="hidden">
+       <h2>Configuration</h2>
+       <div class="config-section">
+         <h3>Roles</h3>
+         <table id="roles-table" class="config-table">
+           <thead>
+             <tr>
+               <th>Role</th>
+               <th>Provider</th>
+               <th>Model</th>
+               <th>Provider Source</th>
+               <th>Model Source</th>
+               <th>Restart Required</th>
+               <th>Edit</th>
+               <th>Error</th>
+             </tr>
+           </thead>
+           <tbody></tbody>
+         </table>
+       </div>
+       <div class="config-section">
+         <h3>Environment Variables</h3>
+         <table id="env-vars-table" class="config-table">
+           <thead>
+             <tr>
+               <th>Name</th>
+               <th>Effective Value</th>
+               <th>Source</th>
+               <th>Restart Required</th>
+               <th>Conflict</th>
+               <th>Layers</th>
+             </tr>
+           </thead>
+           <tbody></tbody>
+         </table>
+       </div>
+       <div class="config-section ignored-vars">
+         <h3>Ignored Environment Variables</h3>
+         <div id="ignored-vars-panel" class="ignored-vars-panel"></div>
+       </div>
+     </section>
+
+     <section id="comms-view" class="hidden">
 
     <section id="comms-view" class="hidden">
       <div class="comms-head">
@@ -64,7 +149,17 @@
   <div id="story-modal" class="modal hidden dsh-modal" role="dialog" aria-modal="true">
     <div class="modal-content">
       <button id="story-modal-close" class="modal-close" aria-label="Close">&times;</button>
-      <div id="story-modal-body"></div>
+      <div id="backend-selector" class="backend-selector">
+  <label for="backend-select">Backend:</label>
+  <select id="backend-select" name="backend">
+    <option value="claude">claude</option>
+    <option value="local">local</option>
+    <option value="ollama">ollama</option>
+    <option value="lmstudio">lmstudio</option>
+    <option value="mlx">mlx</option>
+    <option value="auto">auto</option>
+  </select>
+</div>
     </div>
   </div>
 

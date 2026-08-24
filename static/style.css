@@ -882,4 +882,15 @@ main {
 .trace-chip .dot {}
 .trace-detail {}
 .trace-chip.expanded + .trace-detail { display: block; }
-
+/* Config view styles */
+.config-table { width: 100%; border-collapse: collapse; }
+.config-table th, .config-table td { padding: var(--sp-2); border: 1px solid var(--border); }
+.config-table th { background: var(--panel-2); text-align: left; }
+.config-section { margin-top: var(--sp-4); }
+.config-section h3 { margin-bottom: var(--sp-2); }
+.restart-required { display: inline-block; padding: 2px 6px; background: var(--c-failed); color: var(--text); border-radius: var(--radius-sm); font-size: var(--fs-xs); }
+.ignored-vars-panel { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ignored-vars-panel .ignored-card { background: var(--panel-2); padding: var(--sp-2); border-radius: var(--radius-md); }
+.backend-selector { margin-top: var(--sp-3); }
+.backend-selector label { margin-right: var(--sp-1); }
+.backend-selector select { padding: var(--sp-1); border: 1px solid var(--border); border-radius: var(--radius-sm); }

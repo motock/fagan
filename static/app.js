@@ -2369,6 +2369,7 @@ if (typeof module !== "undefined" && module.exports) {
     renderPlanList, _renderPlanListFull,
     _diffOverviewPlanRows,
     renderNotifications,
+    _diffNotificationsPanel,
     renderChecklist,
     filterNotifications,
     pickNewNotifications,

@@ -842,21 +842,16 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
 
 @app.get("/api/plans/{plan_name}")
 def get_plan(plan_name: str) -> dict[str, Any]:
-    manifest = _service.get_manifest_or_none(plan_name)
+    manifest = _read_manifest(plan_name)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     stories = manifest.get("stories", {})
-    # Decorate each story with a server-derived last_activity timestamp the
-    # UI can read to render age labels / staleness without us doing the
-    # math server-side (age is computed client-side from this timestamp).
-    # Existing fields are preserved verbatim — we never rewrite the story.
     decorated_stories: dict[str, Any] = {}
     for story_key, story in stories.items():
         if not isinstance(story, dict):
             decorated_stories[story_key] = story
             continue
         last_activity = _story_last_activity(plan_name, story_key, story)
-        # Parse progress for in_progress stories with a worktree
         progress = None
         if story.get("status") == "in_progress":
             plan_file = _read_worktree_file(story, ".agent_plan.md")

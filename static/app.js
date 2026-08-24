@@ -1218,7 +1218,19 @@ function capturePlanDetailState(section) {
       && ae.dataset.dim !== undefined && ae.dataset.value !== undefined) {
     focusKey = `${ae.dataset.dim}\u0000${ae.dataset.value}`;
   }
-  return { scrollTop: section.scrollTop || 0, focusKey };
+  const snap = { scrollTop: section.scrollTop || 0, focusKey };
+  // Capture search input state if it is focused. The `.filter-search` input is
+  // an <input> element, so it carries a mutable `.value`; a focused filter chip
+  // (which also exposes classList.contains) must not be mistaken for it.
+  if (ae && ae !== document.body && section.contains(ae) && ae.classList
+      && typeof ae.classList.contains === 'function'
+      && ae.classList.contains('filter-search')
+      && ae.value !== undefined) {
+    snap.searchValue = ae.value;
+    snap.searchSelectionStart = ae.selectionStart;
+    snap.searchSelectionEnd = ae.selectionEnd;
+  }
+  return snap;
 }
 
 // Restore scrollTop, and re-focus the matching chip if it still exists.
@@ -1226,16 +1238,36 @@ function capturePlanDetailState(section) {
 // with that identity was removed by the re-render — in both cases we simply
 // skip focusing, never throw.
 function restorePlanDetailState(section, snapshot) {
-  if (!section || !snapshot) return;
-  section.scrollTop = snapshot.scrollTop || 0;
-  if (!snapshot.focusKey) return;
-  const [dim, value] = snapshot.focusKey.split("\u0000");
-  const target = section.querySelector(
-    `.filter-chip[data-dim="${CSS.escape(dim)}"][data-value="${CSS.escape(value)}"]`);
-  if (target && typeof target.focus === "function") {
-    target.focus();
-  }
+   if (!section || !snapshot) return;
+   section.scrollTop = snapshot.scrollTop || 0;
+   if (!snapshot.focusKey) {
+     // restore search input if present
+     if (snapshot.searchValue !== undefined) {
+       try {
+         const searchInput = section.querySelector('.filter-search');
+         if (searchInput && typeof searchInput.focus === 'function') {
+           searchInput.value = snapshot.searchValue;
+           searchInput.focus();
+           if (typeof searchInput.setSelectionRange === 'function') {
+             const start = snapshot.searchSelectionStart !== undefined ? snapshot.searchSelectionStart : 0;
+             const end = snapshot.searchSelectionEnd !== undefined ? snapshot.searchSelectionEnd : 0;
+             searchInput.setSelectionRange(start, end);
+           }
+         }
+       } catch {
+         /* ignore errors restoring search input */
+       }
+     }
+     return;
+   }
+   const [dim, value] = snapshot.focusKey.split("\u0000");
+   const target = section.querySelector(
+     `.filter-chip[data-dim="${CSS.escape(dim)}"][data-value="${CSS.escape(value)}"]`);
+   if (target && typeof target.focus === "function") {
+     target.focus();
+   }
 }
+
 
 // Flash the header refresh indicator. Called once per successful refresh so
 // the user sees liveness without staring at the clock. The .flashing class
@@ -2334,4 +2366,3 @@ if (typeof module !== "undefined" && module.exports) {
     _diffBoardCards,
   };
 }
-

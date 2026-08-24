@@ -1028,7 +1028,7 @@ function renderNotifications(records) {
     var color = NOTIF_SEVERITY_COLOR[r.severity] || "--c-unknown";
     var sev = escapeHtml(r.severity || "");
     var parts = [];
-    parts.push('<div class="log-line" data-dedup-key="${r.dedup_key || (r.ts + "-" + r.message)}">');
+    parts.push('<div class="log-line" data-dedup-key="' + (r.dedup_key || (r.ts + '-' + r.message)) + '">');
     parts.push('<span class="badge" style="--badge-color: var(' + color + ')">' + sev + '</span>');
     if (r.story_key) {
       parts.push('<span class="mono">' + escapeHtml(r.story_key) + '</span>');
@@ -1043,13 +1043,13 @@ function renderNotifications(records) {
     parts.push('</div>');
     return parts.join(' ');
   }).join('');
-
+}
 
 // Incrementally append new notification rows based on dedup_key
 function _diffNotificationsPanel(panelBodyEl, records) {
   if (!panelBodyEl) return;
   const existing = new Set(
-    Array.from(panelBodyEl.querySelectorAll('.log-line[data-dedup-key]')).map(
+    Array.from(panelBodyEl.querySelectorAll('[data-dedup-key]')).map(
       (el) => el.dataset.dedupKey
     )
   );
@@ -1059,40 +1059,6 @@ function _diffNotificationsPanel(panelBodyEl, records) {
     const tmp = document.createElement('div');
     tmp.innerHTML = renderNotifications([r]);
     const node = tmp.querySelector('.log-line');
-    if (node) panelBodyEl.appendChild(node);
-  }
-}
-function _diffNotificationsPanel(panelBodyEl, records) {
-  if (!panelBodyEl) return;
-  const existing = new Set(
-    Array.from(panelBodyEl.querySelectorAll('.log-line[data-dedup-key]')).map(
-      (el) => el.dataset.dedupKey
-    )
-  );
-  for (const r of records) {
-    const key = r.dedup_key || (r.ts + '-' + r.message);
-    if (existing.has(key)) continue;
-    const tmp = document.createElement('div');
-    tmp.innerHTML = renderNotifications([r]);
-    const node = tmp.querySelector('.log-line');
-    if (node) panelBodyEl.appendChild(node);
-  }
-}
-
-// Incrementally append new notification rows based on dedup_key
-function _diffNotificationsPanel(panelBodyEl, records) {
-  if (!panelBodyEl) return;
-  const existing = new Set(
-    Array.from(panelBodyEl.querySelectorAll('.log-line[data-dedup-key]')).map(
-      (el) => el.dataset.dedupKey
-    )
-  );
-  for (const r of records) {
-    const key = r.dedup_key || (r.ts + '-' + r.message);
-    if (existing.has(key)) continue;
-    const tmp = document.createElement('div');
-    tmp.innerHTML = renderNotifications([r]);
-    const node = tmp.firstElementChild;
     if (node) panelBodyEl.appendChild(node);
   }
 }
@@ -2409,40 +2375,6 @@ if (typeof module !== "undefined" && module.exports) {
     pickNewNotifications,
     pushToast,
     renderBoard,
-
-    renderBoard,
-
-    selectComms,
-    _applyActiveView,
-    sendCommsMessage,
-    appendCommsMessage,
-    renderToolTraceHtml,
-    _diffBoardCards,
-  };
-}
-startPolling();
-
-// Expose helpers for node-based smoke tests. Guarded so the file still works
-// as a plain browser <script>.
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = {
-    capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
-    startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
-    showStoryModal, _renderStoryModalBody, handleCopyClick,
-    filterStoryNotifications, renderStoryModalNotifications,
-    renderOverview, selectOverview, refresh, state,
-    renderPlanList, _renderPlanListFull,
-    _diffOverviewPlanRows,
-    renderNotifications,
-    _diffNotificationsPanel,
-    renderChecklist,
-    filterNotifications,
-    pickNewNotifications,
-    pushToast,
-    renderBoard,
-
-    renderBoard,
-
     selectComms,
     _applyActiveView,
     sendCommsMessage,

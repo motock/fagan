@@ -1228,7 +1228,7 @@ function capturePlanDetailState(section) {
      focusKey = `${ae.dataset.dim}\u0000${ae.dataset.value}`;
    }
 
-+   return { scrollTop: section.scrollTop || 0, focusKey, searchValue, searchSelectionStart, searchSelectionEnd };
+return { scrollTop: section.scrollTop || 0, focusKey, searchValue, searchSelectionStart, searchSelectionEnd };
 
 
 }

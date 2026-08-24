@@ -706,8 +706,8 @@ def dispatch_health() -> dict[str, Any]:
     fleet_merge = 0
     fleet_failure_reasons: dict[str, int] = {}
     fleet_by_backend: dict[str, int] = {}
-    for name in _list_plan_names():
-        manifest = _read_manifest(name)
+    for name in _store.list_manifests():
+        manifest = _service.get_manifest_or_none(name)
         if manifest is None:
             continue
         stories = manifest.get("stories", {})
@@ -761,8 +761,8 @@ def usage() -> dict[str, Any]:
 def list_plans(include_archived: bool = False) -> dict[str, Any]:
     archived_plans = _read_archived_plans()
     plans = []
-    for name in _list_plan_names():
-        manifest = _read_manifest(name)
+    for name in _store.list_manifests():
+        manifest = _service.get_manifest_or_none(name)
         if manifest is None:
             continue
         if not include_archived and name in archived_plans:
@@ -842,7 +842,7 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
 
 @app.get("/api/plans/{plan_name}")
 def get_plan(plan_name: str) -> dict[str, Any]:
-    manifest = _read_manifest(plan_name)
+    manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     stories = manifest.get("stories", {})

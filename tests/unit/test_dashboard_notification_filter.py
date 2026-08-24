@@ -254,8 +254,31 @@ const plan = {{
   notification_records: {json.dumps(records)},
 }};
 
+// renderPlanDetail reuses the SAME `.plan-detail` section across same-plan
+// re-renders (P3-diff-board-cards: the board's `.card` nodes must survive a
+// poll instead of being torn down), rebuilding only its in-place children —
+// `.plan-chrome` (header + filter-bar, above the board) and `.plan-panels`
+// (Notifications + decisions, below the board) — rather than the outer
+// section. This mock's innerHTML getter is a cached raw string that only
+// updates on the exact element `.innerHTML =` was called on (a real
+// browser's innerHTML getter re-serializes live descendants on every read,
+// so this distinction doesn't exist there) — so reading the OUTER element's
+// cached string after an in-place update returns stale content. Read both
+// in-place children and concatenate, so callers see the full chrome+panels
+// picture (chip labels AND notification content) regardless of which panel
+// an assertion targets. Falls back to the outer section on the very first
+// render, before either child's cache is populated.
+function currentHtml() {{
+  const chrome = planDetailEl.querySelectorAll('.plan-chrome')[0];
+  const panels = planDetailEl.querySelectorAll('.plan-panels')[0];
+  const parts = [];
+  if (chrome && chrome.innerHTML) parts.push(chrome.innerHTML);
+  if (panels && panels.innerHTML) parts.push(panels.innerHTML);
+  return parts.length ? parts.join(' ') : planDetailEl.innerHTML;
+}}
+
 renderPlanDetail(plan);
-const beforeHtml = planDetailEl.innerHTML;
+const beforeHtml = currentHtml();
 const beforeSetItemCount = setItemCalls.length;
 const beforeHash = globalThis.window.location.hash;
 const beforeFiltersJson = JSON.stringify(state.filters);
@@ -265,7 +288,7 @@ const errChip = planDetailEl.querySelectorAll(
 const chipFound = !!errChip;
 if (errChip) errChip.click();
 
-const afterHtml = planDetailEl.innerHTML;
+const afterHtml = currentHtml();
 const afterSetItemCount = setItemCalls.length;
 const afterHash = globalThis.window.location.hash;
 const afterFiltersJson = JSON.stringify(state.filters);

@@ -2333,8 +2333,6 @@ function syncPollingWithVisibility() {
     refresh();
   }
 }
-  // Auto-refresh checkbox removed; no change listener
-  // Visibility change handled by syncPollingWithVisibility without checkbox gating
 
 // === Theme toggle =========================================================
 // Persists choice in localStorage under THEME_KEY. Defaults to "dark" when

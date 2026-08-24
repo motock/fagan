@@ -87,28 +87,6 @@ def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRe
     if not result.get("ok", True):
         raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
     return result
-def _manifest_path(plan_name: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.manifest.json"
-
-
-def _notifications_path(plan_name: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.notifications.log"
-def _notifications_jsonl_path(plan_name: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.notifications.jsonl"
-
-def _decisions_path(plan_name: str) -> Path:
-    return PLAN_DIR / f"{plan_name}.decisions.json"
-
-
-def _journal_path(plan_name: str, story_key: str) -> Path:
-    """Path to a story's checkpoint journal (mirrors pipeline_mcp_server.py).
-
-    The same naming convention is used by both processes: pipeline_mcp_server
-    *writes* `<plan>.<story_key>.journal.json` and the dashboard *reads* it
-    via /api/plans/{plan}/stories/{story}/journal. Locking the naming here
-    keeps the two sides from drifting silently to a 404 in the UI.
-    """
-    return PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
 
 
 def _dashboard_ui_state_path() -> Path:
@@ -147,16 +125,6 @@ def _write_archived_plans(archived: set[str]) -> None:
         raise
 
 
-def _list_plan_names() -> list[str]:
-    suffix = ".manifest.json"
-    return sorted(p.name[: -len(suffix)] for p in PLAN_DIR.glob(f"*{suffix}"))
-
-
-def _read_manifest(plan_name: str) -> dict[str, Any] | None:
-    path = _manifest_path(plan_name)
-    if not path.exists():
-        return None
-    return json.loads(path.read_text())
 
 
 def _status_counts(stories: dict[str, Any]) -> dict[str, int]:
@@ -231,45 +199,6 @@ def _aggregate_stories(stories: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _tail_notifications(plan_name: str, limit: int = 100) -> list[str]:
-    path = _notifications_path(plan_name)
-    if not path.exists():
-        return []
-    lines = path.read_text().splitlines()
-    return lines[-limit:]
-def _tail_notification_records(plan_name: str, limit: int = 100) -> list[dict[str, Any]]:
-    path = _notifications_jsonl_path(plan_name)
-    if not path.exists():
-        return []
-    records: list[dict[str, Any]] = []
-    for line in path.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        ts = str(obj.get("ts", ""))
-        message = str(obj.get("message", ""))
-        severity = obj.get("severity")
-        if severity not in ("info", "warning", "error"):
-            severity = "info"
-        else:
-            severity = str(severity)
-        story_key = obj.get("story_key")
-        event = obj.get("event")
-        dedup_key = obj.get("dedup_key")
-        records.append({
-            "ts": ts,
-            "message": message,
-            "severity": severity,
-            "story_key": story_key,
-            "event": event,
-            "dedup_key": dedup_key,
-        })
-    return records[-limit:]
 
 def _collapse_duplicate_notifications(records: list[dict]) -> list[dict]:
     if not records:
@@ -299,11 +228,6 @@ def _collapse_duplicate_notifications(records: list[dict]) -> list[dict]:
     return result
 
 
-def _read_decisions(plan_name: str) -> list[dict[str, Any]]:
-    path = _decisions_path(plan_name)
-    if not path.exists():
-        return []
-    return json.loads(path.read_text())
 
 
 # Default line cap when the modal fetches the log tail. Capped at
@@ -314,147 +238,8 @@ _LOG_TAIL_DEFAULT = 200
 _LOG_TAIL_CAP = 500
 
 
-def _read_story_log(
-    plan_name: str,
-    story_key: str,
-    manifest: dict[str, Any],
-    lines: int = _LOG_TAIL_DEFAULT,
-) -> dict[str, Any]:
-    """Tail the on-disk log recorded in story['log'] for the redesigned
-    modal. Returns {"available": bool, "lines": [str...]}.
-
-    Hard-restricted to story['log'] in the manifest: a missing or absent
-    'log' field is a normal state and degrades to available=False; a
-    recorded log whose file is missing on disk (deleted, never written)
-    also degrades to available=False. Either path MUST NOT raise 500,
-    because the in-modal log viewer needs to render an "No log available"
-    empty state regardless of why the file isn't there.
-
-    The recorded path is resolved under PLAN_DIR and the resolved target
-    is contained-checked to PLAN_DIR so a manifest that was hand-edited
-    with `../outside.log` cannot be used to read arbitrary files. We do
-    NOT honour a path supplied by the request: only the manifest is
-    trusted.
-
-    Non-UTF-8 bytes are decoded with errors='replace' so the dashboard
-    can still surface whatever was on disk rather than 500'ing on a
-    binary log line.
-    """
-    if not isinstance(lines, int) or lines < 1:
-        lines = _LOG_TAIL_DEFAULT
-    lines = min(lines, _LOG_TAIL_CAP)
-
-    stories = manifest.get("stories") if isinstance(manifest, dict) else None
-    if not isinstance(stories, dict):
-        return {"available": False, "lines": []}
-
-    story = stories.get(story_key)
-    if not isinstance(story, dict):
-        # Plan exists but story key does not. The route layer turns this
-        # into 404 before we ever get here; defended for safety only.
-        return {"available": False, "lines": []}
-
-    raw_log = story.get("log")
-    if not isinstance(raw_log, str) or not raw_log:
-        return {"available": False, "lines": []}
-
-    # Manifest stores paths relative to PLAN_DIR historically; also
-    # accept absolute paths but contain-check them so a hand-edited
-    # manifest pointing outside PLAN_DIR cannot read arbitrary files.
-    log_path = Path(raw_log)
-    if not log_path.is_absolute():
-        log_path = PLAN_DIR / raw_log
-
-    try:
-        log_path = log_path.resolve(strict=False)
-        plan_dir_resolved = PLAN_DIR.resolve()
-        # Path.is_relative_to (3.9+) — also works for the equal-root edge
-        # case. We require the resolved log to live strictly under PLAN_DIR
-        # so an empty/equal path cannot be smuggled in.
-        if log_path != plan_dir_resolved and not log_path.is_relative_to(plan_dir_resolved):
-            return {"available": False, "lines": []}
-    except OSError:
-        return {"available": False, "lines": []}
-
-    if not log_path.exists() or not log_path.is_file():
-        return {"available": False, "lines": []}
-
-    try:
-        # errors="replace" so binary garbage in a log file degrades to a
-        # U+FFFD-per-byte line rather than 500'ing the endpoint. The UI
-        # escapes the result, so replacement chars render harmlessly.
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return {"available": False, "lines": []}
-
-    all_lines = text.splitlines()
-    tail = all_lines[-lines:]
-    return {"available": True, "lines": tail}
 
 
-def _read_worktree_file(story: dict[str, Any], filename: str) -> dict[str, Any]:
-    """Read a named agent artifact (e.g. .agent_plan.md, .agent_scratchpad.md)
-    from a dispatched story's worktree, for the dashboard's per-story progress
-    view (DASHBOARD_STORY_PROGRESS_PLAN.md Tier 0).
-
-    Mirrors _read_story_log's containment discipline but roots the read at the
-    story's worktree (story['worktree'], an absolute path the orchestrator
-    records under WORKTREE_ROOT) rather than PLAN_DIR. A worktree is routinely
-    deleted after merge/cleanup, so "gone" is a NORMAL state -> available=False,
-    never a 500.
-
-    Containment / path safety:
-      - The worktree path is taken ONLY from the manifest (story['worktree']);
-        the request supplies nothing the helper trusts.
-      - filename is a fixed artifact name passed by the endpoint. It is
-        hardened here regardless: a name with a path separator, a '..'
-        component, or an absolute path is rejected so a future caller can't
-        escape the worktree dir via this helper (a '..' filename would
-        otherwise reach a sibling worktree's file while still staying under
-        WORKTREE_ROOT, a mild cross-story leak).
-      - The resolved target is contain-checked under WORKTREE_ROOT, so a
-        hand-edited manifest pointing worktree outside WORKTREE_ROOT (e.g.
-        '/etc') cannot read arbitrary files.
-
-    Non-UTF-8 bytes decode with errors='replace' (same as _read_story_log) so
-    a binary-corrupt artifact degrades to replacement chars, not a 500.
-
-    Returns {"available": bool, "text": str}. Never raises.
-    """
-    empty = {"available": False, "text": ""}
-    if not isinstance(story, dict):
-        return empty
-    # Reject any filename that could escape the worktree directory. A plain
-    # artifact name like ".agent_plan.md" passes; "../x", "/etc/passwd", and
-    # "a/b" do not.
-    if not isinstance(filename, str) or not filename:
-        return empty
-    if "/" in filename or "\\" in filename or filename == ".." or filename == ".":
-        return empty
-    raw_wt = story.get("worktree")
-    if not isinstance(raw_wt, str) or not raw_wt:
-        return empty
-    wt_path = Path(raw_wt)
-    # The orchestrator records an absolute worktree; a relative value is a
-    # corrupt manifest we fail closed on (resolving a relative path under a
-    # CWD we don't control would be unsafe).
-    if not wt_path.is_absolute():
-        return empty
-    target = wt_path / filename
-    try:
-        target = target.resolve(strict=False)
-        root = WORKTREE_ROOT.resolve()
-        if target != root and not target.is_relative_to(root):
-            return empty
-    except OSError:
-        return empty
-    if not target.exists() or not target.is_file():
-        return empty
-    try:
-        text = target.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return empty
-    return {"available": True, "text": text}
 
 def _parse_progress(plan_text: str | None, scratchpad_text: str | None) -> dict | None:
     """Parse progress from the tech-lead checklist and executor scratchpad.
@@ -483,7 +268,7 @@ def _plan_summary(
 ) -> dict[str, Any]:
     stories = manifest.get("stories", {})
     try:
-        updated_at = _manifest_path(plan_name).stat().st_mtime
+        updated_at = _store.manifest_path(plan_name).stat().st_mtime
     except OSError:
         # Manifest existed a moment ago (caller just read it) but vanished
         # under a race with a concurrent write - sort it last rather than
@@ -491,7 +276,7 @@ def _plan_summary(
         updated_at = 0.0
     latest_notification = None
     if include_notification_summary:
-        records = _collapse_duplicate_notifications(_tail_notification_records(plan_name, limit=5))
+        records = _collapse_duplicate_notifications(_store.get_notification_records(plan_name, limit=5))
         latest_notification = records[-1] if records else None
     return {
         "name": plan_name,
@@ -527,65 +312,6 @@ def _parse_iso(ts: str | None) -> datetime | None:
         return None
 
 
-def _journal_final_ts(plan_name: str, story_key: str) -> str | None:
-    """Return the ISO timestamp of the last entry in the story's
-    checkpoint journal, or None if the journal is missing/empty/unreadable.
-
-    The journal file is named '<plan>.<story_key>.journal.json' and
-    contains a list of checkpoint records; only the last entry's 'ts'
-    is consulted, because that's the most recent observable activity
-    the agent left on disk before being interrupted/resumed."""
-    path = _journal_path(plan_name, story_key)
-    if not path.exists():
-        return None
-    try:
-        entries = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(entries, list) or not entries:
-        return None
-    final = entries[-1]
-    return final.get("ts") if isinstance(final, dict) else None
-
-
-def _read_journal(plan_name: str, story_key: str) -> tuple[bool, list[dict[str, Any]]]:
-    """Read a story's checkpoint journal safely.
-
-    Returns (available, entries):
-      - available=False, entries=[]  when the journal file is missing,
-        unreadable (malformed JSON / OSError), or empty (an empty list is
-        surfaced the same way as no file at all — see test).
-      - available=True, entries=[...] when the file parses to a non-empty
-        list. Entries are returned in file order; only entries that are
-        dicts are kept so a stray non-object row can't crash the renderer.
-
-    This function never raises — a stray corrupt file in PLAN_DIR must
-    not 500 the dashboard, the same way a missing file mustn't 404."""
-    path = _journal_path(plan_name, story_key)
-    if not path.exists():
-        return False, []
-    try:
-        raw = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return False, []
-    if not isinstance(raw, list) or not raw:
-        return False, []
-    entries = [e for e in raw if isinstance(e, dict)]
-    if not entries:
-        return False, []
-    # Normalize optional fields to None so the UI always sees consistent
-    # keys; this lets the render template use `e.next_hint` without a
-    # `hasOwnProperty` guard, matching the test that asserts the key is
-    # still present (not stripped) when an entry lacks it.
-    normalized: list[dict[str, Any]] = []
-    for e in entries:
-        normalized.append({
-            **e,
-            "step": e.get("step"),
-            "summary": e.get("summary"),
-            "next_hint": e.get("next_hint"),
-        })
-    return True, normalized
 
 
 def _story_last_activity(plan_name: str, story_key: str, story: dict[str, Any]) -> str | None:
@@ -604,7 +330,7 @@ def _story_last_activity(plan_name: str, story_key: str, story: dict[str, Any]) 
     client (UI computes age_seconds = now - last_activity client-side)."""
     candidates: list[str] = []
 
-    journal_ts = _journal_final_ts(plan_name, story_key)
+    journal_ts = _store.get_journal_final_ts(plan_name, story_key)
     if isinstance(journal_ts, str) and journal_ts:
         candidates.append(journal_ts)
 
@@ -1276,49 +1002,6 @@ def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result
 
-
-# Mounted last so it never shadows the /api/* routes above; html=True serves
-# static/index.html for "/".
-# @app.get("/api/plans/{plan_name}/events")
-# async def stream_plan_events(plan_name: str, request: Request):
-#     path = _notifications_jsonl_path(plan_name)
-# 
-#     async def event_generator():
-#         last_pos = 0
-#         if path.exists():
-#             last_pos = path.stat().st_size
-# 
-#         def read_new_lines(current_pos: int):
-#             new_lines: list[str] = []
-#             with open(path, "r") as f:
-#                 f.seek(current_pos)
-#                 while True:
-#                     line = f.readline()
-#                     if not line:
-#                         break
-#                     new_lines.append(line)
-#             return new_lines, f.tell()
-# 
-#         while True:
-#             if await request.is_disconnected():
-#                 break
-#             if path.exists():
-#                 new_lines, next_pos = await asyncio.to_thread(read_new_lines, last_pos)
-#                 for line in new_lines:
-#                     line = line.strip()
-#                     if not line:
-#                         continue
-#                     try:
-#                         record = json.loads(line)
-#                         if not isinstance(record, dict):
-#                             continue
-#                         yield f"data: {json.dumps(record)}\n\n"
-#                     except json.JSONDecodeError:
-#                         continue
-#                 last_pos = next_pos
-#             await asyncio.sleep(1)
-# 
-#     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 # Mount static files for the dashboard UI.
 app.include_router(chat.chat_router, prefix="/api")

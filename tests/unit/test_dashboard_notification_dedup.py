@@ -315,11 +315,3 @@ def test_call_site_wires_collapse_after_tail():
     ) in text
 
 
-def test_tail_notification_records_is_unchanged():
-    """The collapse helper must be a NEW function; _tail_notification_records
-    itself must not be edited to do collapsing."""
-    import inspect
-    src = inspect.getsource(d._tail_notification_records)
-    assert "count" not in src
-    assert "last_ts" not in src
-    assert "_collapse_duplicate_notifications" not in src

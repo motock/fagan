@@ -742,22 +742,6 @@ def test_journal_endpoint_empty_entries_array_means_unavailable(client, plan_dir
     assert res.json() == {"available": False, "entries": []}
 
 
-def test_journal_path_helper_mirrors_pipeline_mcp_naming(plan_dir):
-    """The helper must produce the same '<plan>.<story>.journal.json' path
-    pipeline_mcp_server.py uses, since both processes read the same file.
-    Locking this in as a test so a refactor that splits naming conventions
-    fails loudly instead of silently producing a 404 in the UI."""
-    name, key = "demo", "8cad8e4d-8f0f-4f6e-8d68-86bacb908bcc"
-    assert d._journal_path(name, key) == (
-        plan_dir / f"{name}.{key}.journal.json"
-    )
-
-
-def test_journal_path_helper_uses_journal_dir_from_dashboard(plan_dir):
-    """Boundary: the helper reads PLAN_DIR at call time (not import time),
-    so monkeypatching PLAN_DIR in fixtures like `plan_dir` is reflected —
-    keeps the test suite's PLAN_DIR substitution pattern viable."""
-    assert d._journal_path("p", "s") == plan_dir / "p.s.journal.json"
 
 
 def test_journal_endpoint_passes_through_unknown_extra_fields(client, plan_dir):
@@ -2090,31 +2074,6 @@ def test_read_worktree_file_rejects_relative_worktree_path(client, plan_dir, wor
     assert body["scratchpad"]["available"] is False
 
 
-def test_read_worktree_file_rejects_filename_with_traversal(worktree_dir):
-    """The filename is fixed by the endpoint, but _read_worktree_file guards
-    against a '..' / absolute / separator-bearing filename so a future caller
-    can't escape the worktree dir via the helper. A traversal filename must
-    return unavailable even when a matching file exists under WORKTREE_ROOT."""
-    wt = worktree_dir / "S1"
-    wt.mkdir()
-    (wt / ".agent_plan.md").write_text("plan\n")
-    # A sibling worktree whose file a '..' filename would reach.
-    sibling = worktree_dir / "S2"
-    sibling.mkdir()
-    (sibling / ".agent_plan.md").write_text("OTHER")
-    story = {"worktree": str(wt)}
-    assert d._read_worktree_file(story, "../S2/.agent_plan.md")["available"] is False
-    assert d._read_worktree_file(story, "/etc/passwd")["available"] is False
-
-
-def test_read_worktree_file_helper_reads_named_artifact(worktree_dir):
-    """Positive: the helper returns the named artifact's text from the
-    worktree, contain-checked under WORKTREE_ROOT."""
-    wt = worktree_dir / "S1"
-    wt.mkdir()
-    (wt / ".agent_scratchpad.md").write_text("running notes")
-    out = d._read_worktree_file({"worktree": str(wt)}, ".agent_scratchpad.md")
-    assert out == {"available": True, "text": "running notes"}
 
 
 # ---------------------------------------------------------------------------

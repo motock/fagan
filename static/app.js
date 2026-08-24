@@ -2318,6 +2318,8 @@ function syncPollingWithVisibility() {
 const DEFAULT_THEME = 'light';
 const VALID_THEMES = new Set(['light','dark']);
 
+const THEME_KEY = 'pipeline-dashboard-theme';
+
 function writeStoredTheme(theme) {
   try {
     localStorage.setItem(THEME_KEY, theme);

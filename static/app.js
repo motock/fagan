@@ -1044,7 +1044,24 @@ function renderNotifications(records) {
     return parts.join(' ');
   }).join('');
 
+
 // Incrementally append new notification rows based on dedup_key
+function _diffNotificationsPanel(panelBodyEl, records) {
+  if (!panelBodyEl) return;
+  const existing = new Set(
+    Array.from(panelBodyEl.querySelectorAll('.log-line[data-dedup-key]')).map(
+      (el) => el.dataset.dedupKey
+    )
+  );
+  for (const r of records) {
+    const key = r.dedup_key || (r.ts + '-' + r.message);
+    if (existing.has(key)) continue;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = renderNotifications([r]);
+    const node = tmp.querySelector('.log-line');
+    if (node) panelBodyEl.appendChild(node);
+  }
+}
 function _diffNotificationsPanel(panelBodyEl, records) {
   if (!panelBodyEl) return;
   const existing = new Set(

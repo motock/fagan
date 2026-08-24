@@ -312,7 +312,7 @@ def test_sync_polling_resumes_when_visible_without_checkbox():
         "document.hidden = false;"
         "syncPollingWithVisibility();"
         "const after = !!state.pollHandle;"
-        "JSON.stringify({ before: before, after: after });"
+        "({ before: before, after: after });"
     )
     assert result["before"] is False, "pollHandle should be falsy before sync"
     assert result["after"] is True, (

@@ -19,7 +19,7 @@
   <div id="usage-banner" class="usage-banner hidden"></div>
   <main>
     <nav id="plan-list" aria-label="Plans"></nav>
-    <nav id="config-nav" aria-label="Configuration"></nav>
+    
     <section id="plan-detail">
       <p class="empty-state">Select a plan to see its story lifecycle.</p>
     </section>
@@ -82,17 +82,6 @@
     <div class="modal-content">
       <button id="story-modal-close" class="modal-close" aria-label="Close">&times;</button>
       <div id="story-modal-body"></div>
-      <div id="backend-selector" class="backend-selector">
-        <label for="backend-select">Backend:</label>
-        <select id="backend-select" name="backend">
-          <option value="claude">claude</option>
-          <option value="local">local</option>
-          <option value="ollama">ollama</option>
-          <option value="lmstudio">lmstudio</option>
-          <option value="mlx">mlx</option>
-          <option value="auto">auto</option>
-        </select>
-      </div>
     </div>
   </div>
   <script src="/app.js"></script>

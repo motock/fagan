@@ -806,6 +806,65 @@ class FileStore:
         _append_journal(plan_name, story_key, record)
 
 
+    def get_notifications(self, plan_name: str) -> list[str]:
+        """Return last 100 lines of <plan>.notifications.log, fail-open."""
+        path = PLAN_DIR / f"{plan_name}.notifications.log"
+        if not path.exists():
+            return []
+        return path.read_text(errors="replace").splitlines()[-100:]
+
+    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:
+        """Return last `limit` records from <plan>.notifications.jsonl, fail-open."""
+        path = PLAN_DIR / f"{plan_name}.notifications.jsonl"
+        if not path.exists():
+            return []
+        records: list[dict] = []
+        for line in path.read_text(errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            ts = str(obj.get("ts", ""))
+            message = str(obj.get("message", ""))
+            severity = obj.get("severity")
+            if severity not in ("info", "warning", "error"):
+                severity = "info"
+            else:
+                severity = str(severity)
+            story_key = obj.get("story_key")
+            event = obj.get("event")
+            dedup_key = obj.get("dedup_key")
+            records.append({
+                "ts": ts,
+                "message": message,
+                "severity": severity,
+                "story_key": story_key,
+                "event": event,
+                "dedup_key": dedup_key,
+            })
+        return records[-limit:]
+
+    def get_decisions(self, plan_name: str) -> list[dict]:
+        """Return decisions JSON, fail-open."""
+        path = PLAN_DIR / f"{plan_name}.decisions.json"
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def get_manifest_or_none(self, plan_name: str) -> dict | None:
+        """Return manifest or None on missing/corrupt."""
+        try:
+            return self.get_manifest(plan_name)
+        except (json.JSONDecodeError, OSError):
+            return None
+
 _store = FileStore()
 
 class PipelineService:

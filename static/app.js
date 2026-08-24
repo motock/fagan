@@ -2364,6 +2364,7 @@ loadFilters();
 applyHashToState();
 window.addEventListener("hashchange", applyHashToState);
 refresh();
+startPolling();
 
 // Expose helpers for node-based smoke tests. Guarded so the file still works
 // as a plain browser <script>.

@@ -76,7 +76,6 @@ function pushToast({ severity, planName, storyKey, message }) {
 }
 
 
-
 let notifSeverityFilter = "all";
 // Keyed-diff state for renderPlanList: maps each plan name to its live
 // `.plan-item` DOM node so per-plan rows are updated in place across poll
@@ -396,59 +395,6 @@ window.state = {
   showArchived: false,
   commsActive: true,
 };
-
-// Pure function to pick new notifications
-function pickNewNotifications(plans, seenMap) {
-  const newNotifs = [];
-  for (const plan of plans) {
-    const rec = plan.latest_notification;
-    if (!rec || rec.dedup_key == null) continue;
-    const seen = seenMap.get(plan.name);
-    if (seen !== rec.dedup_key) {
-      newNotifs.push({ plan, record: rec });
-    }
-  }
-  return newNotifs;
-}
-
-// Push a toast to the stack
-function pushToast({ severity, planName, storyKey, message }) {
-  const stack = document.getElementById("toast-stack");
-  if (!stack) return;
-  const node = document.createElement("div");
-  node.className = "toast";
-  const stripe = NOTIF_SEVERITY_COLOR[severity] || NOTIF_SEVERITY_COLOR["info"];
-  node.style.setProperty("--stripe", stripe);
-  node.innerHTML = `
-    <div class="toast-row">
-      <span class="toast-key">${escapeHtml(planName)}</span>
-      <span class="toast-msg">${escapeHtml(message)}</span>
-      <button class="toast-dismiss" aria-label="Dismiss">✕</button>
-    </div>
-    <div class="toast-actions"></div>
-  `;
-  const dismiss = node.querySelector(".toast-dismiss");
-  dismiss.addEventListener("click", () => node.remove());
-  const actions = node.querySelector(".toast-actions");
-  if (severity === "error" || severity === "warning") {
-    const ask = document.createElement("button");
-    ask.className = "toast-ask";
-    ask.textContent = "Ask";
-    ask.addEventListener("click", () => {
-      selectComms();
-      const input = document.getElementById("comms-input");
-      if (input) {
-        input.value = `${storyKey} ${severity === "error" ? "failed" : "is parked"} - what happened?`;
-        input.focus();
-      }
-      node.remove();
-    });
-    actions.appendChild(ask);
-  } else {
-    setTimeout(() => node.remove(), 6000);
-  }
-  stack.appendChild(node);
-}
 
 // Local alias keeps the rest of the file terse.
 const FILTERS_KEY = "pipeline-dashboard-filters";
@@ -973,14 +919,16 @@ const existing = Array.from(columnBodyEl.querySelectorAll('.card')).reduce((m, e
      if (!cardEl) {
        cardEl = document.createElement('div');
        cardEl.dataset.key = key;
-       columnBodyEl.appendChild(cardEl);
      }
      // Refresh outer node's class/style
      cardEl.className = classes.join(' ');
      cardEl.style.setProperty('--badge-color', `var(--c-${status})`);
      cardEl.innerHTML = cardInnerHtml;
+     // appendChild on an already-attached node relocates it, so both new
+     // and reused cards land at the correct sorted position (mirrors
+     // _diffOverviewPlanRows' reposition-on-reuse pattern).
+     columnBodyEl.appendChild(cardEl);
      newKeys.add(key);
-    newKeys.add(key);
   }
   // Remove cards not in new set.
   for (const key in existing) {
@@ -1110,12 +1058,11 @@ function renderDecisions(decisions) {
   `).join("");
 }
 
-// The header + filter bar + side panels — everything in the detail section
-// EXCEPT the card board. Rebuilt wholesale on every renderPlanDetail call
-// (fresh render or in-place update alike): none of this needs to persist
-// across polls the way the board's cards do, so a plain innerHTML rebuild
-// is simplest and matches the brief ("filter bar and side panels ... may
-// remain full string-rebuild for now").
+// The header + filter bar — everything ABOVE the card board. Rebuilt
+// wholesale on every renderPlanDetail call (fresh render or in-place update
+// alike): none of this needs to persist across polls the way the board's
+// cards do, so a plain innerHTML rebuild is simplest and matches the brief
+// ("filter bar and side panels ... may remain full string-rebuild for now").
 function _planChromeHtml(plan) {
   return `
     <div class="plan-header">
@@ -1123,6 +1070,15 @@ function _planChromeHtml(plan) {
       ${plan.paused ? '<span class="badge" style="--badge-color: var(--c-parked)">paused</span>' : ""}
     </div>
     ${renderFilterBar(plan.stories)}
+  `;
+}
+
+// The side panels — everything BELOW the card board (Notifications,
+// Overlord decisions). Kept as a separate wholesale rebuild from
+// _planChromeHtml so the two can sandwich the persistent board element in
+// their original above/below positions instead of both landing before it.
+function _planPanelsHtml(plan) {
+  return `
     <div class="panels">
       <div class="panel">
         <h3>Notifications</h3>
@@ -1163,6 +1119,8 @@ function renderPlanDetail(plan) {
   if (boardEl) {
     const chromeEl = section.querySelectorAll(".plan-chrome")[0];
     if (chromeEl) chromeEl.innerHTML = _planChromeHtml(plan);
+    const panelsEl = section.querySelectorAll(".plan-panels")[0];
+    if (panelsEl) panelsEl.innerHTML = _planPanelsHtml(plan);
     // Diffs the existing column-body elements in place (see
     // _tryUpdateBoardInPlace / _diffBoardCards) instead of rebuilding the
     // board as a string — this is what keeps unchanged `.card` nodes alive
@@ -1173,6 +1131,7 @@ function renderPlanDetail(plan) {
     section.innerHTML = `
       <div class="plan-chrome">${_planChromeHtml(plan)}</div>
       ${renderBoard(plan.stories)}
+      <div class="plan-panels">${_planPanelsHtml(plan)}</div>
     `;
     boardEl = typeof section.querySelectorAll === "function"
       ? section.querySelectorAll(".board")[0]

@@ -61,6 +61,36 @@ def test_get_notification_records_malformed(plan_dir):
     store = FileStore()
     assert store.get_notification_records(plan) == []
 
+# Test notification records limit=0 does not return all records
+def test_get_notification_records_limit_zero(plan_dir):
+    plan = "lim0"
+    jsonl_path = plan_dir / f"{plan}.notifications.jsonl"
+    records = [
+        {"ts": str(i), "message": f"msg{i}", "severity": "info", "story_key": "k", "event": "e", "dedup_key": "d"}
+        for i in range(150)
+    ]
+    write_file(jsonl_path, "\n".join(json.dumps(r) for r in records))
+    store = FileStore()
+    # limit=0 must not return all records; it is coerced to the default 100
+    result = store.get_notification_records(plan, limit=0)
+    assert len(result) == 100
+    assert result != records
+
+# Test notification records negative limit does not return all records
+def test_get_notification_records_negative_limit(plan_dir):
+    plan = "limneg"
+    jsonl_path = plan_dir / f"{plan}.notifications.jsonl"
+    records = [
+        {"ts": str(i), "message": f"msg{i}", "severity": "info", "story_key": "k", "event": "e", "dedup_key": "d"}
+        for i in range(150)
+    ]
+    write_file(jsonl_path, "\n".join(json.dumps(r) for r in records))
+    store = FileStore()
+    # negative limit must not return all records; it is coerced to the default 100
+    result = store.get_notification_records(plan, limit=-5)
+    assert len(result) == 100
+    assert result != records
+
 # Test decisions happy
 def test_get_decisions_happy(plan_dir):
     plan = "dec"

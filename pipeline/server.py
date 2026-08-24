@@ -820,6 +820,8 @@ class FileStore:
 
     def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:
         """Return last `limit` records from <plan>.notifications.jsonl, fail-open."""
+        if limit <= 0:
+            limit = 100
         path = PLAN_DIR / f"{plan_name}.notifications.jsonl"
         if not path.exists():
             return []
@@ -1006,12 +1008,15 @@ class PipelineService:
         return _store.get_notifications(plan_name)
 
     def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:
+        _validate_key(plan_name)
         return _store.get_notification_records(plan_name, limit)
 
     def get_decisions(self, plan_name: str) -> list[dict]:
+        _validate_key(plan_name)
         return _store.get_decisions(plan_name)
 
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
+        _validate_key(plan_name)
         return _store.get_manifest_or_none(plan_name)
 
     def list_plans(self) -> list[str]:

@@ -1264,8 +1264,7 @@ function restorePlanDetailState(section, snapshot) {
      target.focus();
    }
 }
-  }
-}
+
 
 // Flash the header refresh indicator. Called once per successful refresh so
 // the user sees liveness without staring at the clock. The .flashing class

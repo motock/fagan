@@ -1211,6 +1211,25 @@ function renderPlanDetail(plan) {
 // attributes survive innerHTML replacement, so we can look the chip back up
 // in the new DOM.
 function capturePlanDetailState(section) {
+   // Capture search input state if it is focused
+   const ae = document.activeElement;
+   let searchValue;
+   let searchSelectionStart;
+   let searchSelectionEnd;
+   if (ae && ae !== document.body && section.contains(ae) && ae.classList && typeof ae.classList.contains === 'function' && ae.classList.contains('filter-search')) {
+     searchValue = ae.value;
+     searchSelectionStart = ae.selectionStart;
+     searchSelectionEnd = ae.selectionEnd;
+   }
+   // existing logic
+   let focusKey = null;
+   if (ae && ae !== document.body && section.contains(ae) && ae.dataset
+       && ae.dataset.dim !== undefined && ae.dataset.value !== undefined) {
+     focusKey = `${ae.dataset.dim}\u0000${ae.dataset.value}`;
+   }
+-   return { scrollTop: section.scrollTop || 0, focusKey };
++   return { scrollTop: section.scrollTop || 0, focusKey, searchValue, searchSelectionStart, searchSelectionEnd };
+
   if (!section) return { scrollTop: 0, focusKey: null };
   const ae = document.activeElement;
   let focusKey = null;
@@ -1226,14 +1245,35 @@ function capturePlanDetailState(section) {
 // with that identity was removed by the re-render — in both cases we simply
 // skip focusing, never throw.
 function restorePlanDetailState(section, snapshot) {
-  if (!section || !snapshot) return;
-  section.scrollTop = snapshot.scrollTop || 0;
-  if (!snapshot.focusKey) return;
-  const [dim, value] = snapshot.focusKey.split("\u0000");
-  const target = section.querySelector(
-    `.filter-chip[data-dim="${CSS.escape(dim)}"][data-value="${CSS.escape(value)}"]`);
-  if (target && typeof target.focus === "function") {
-    target.focus();
+   if (!section || !snapshot) return;
+   section.scrollTop = snapshot.scrollTop || 0;
+   if (!snapshot.focusKey) {
+     // restore search input if present
+     if (snapshot.searchValue !== undefined) {
+       try {
+         const searchInput = section.querySelector('.filter-search');
+         if (searchInput && typeof searchInput.focus === 'function') {
+           searchInput.value = snapshot.searchValue;
+           searchInput.focus();
+           if (typeof searchInput.setSelectionRange === 'function') {
+             const start = snapshot.searchSelectionStart !== undefined ? snapshot.searchSelectionStart : 0;
+             const end = snapshot.searchSelectionEnd !== undefined ? snapshot.searchSelectionEnd : 0;
+             searchInput.setSelectionRange(start, end);
+           }
+         }
+       } catch {
+         /* ignore errors restoring search input */
+       }
+     }
+     return;
+   }
+   const [dim, value] = snapshot.focusKey.split("\u0000");
+   const target = section.querySelector(
+     `.filter-chip[data-dim="${CSS.escape(dim)}"][data-value="${CSS.escape(value)}"]`);
+   if (target && typeof target.focus === "function") {
+     target.focus();
+   }
+}
   }
 }
 

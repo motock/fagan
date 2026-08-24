@@ -2421,12 +2421,78 @@ if (typeof module !== "undefined" && module.exports) {
     filterNotifications,
     pickNewNotifications,
     pushToast,
+
+    // ---------- Configuration view ----------
+    // Render the configuration view and wire edit controls.
+    // This is a stub; real implementation will fetch /api/config and render tables.
+    function renderConfigView() {
+      const section = document.getElementById("config-view");
+      if (!section) return;
+      section.classList.remove("hidden");
+      document.getElementById("plan-detail").classList.add("hidden");
+      // TODO: fetch and render config tables
+    }
     renderBoard,
     selectComms,
-    _applyActiveView,
+};
+
+function renderConfigView() {
+  const section = document.getElementById("config-view");
+  if (!section) return;
+  section.classList.remove("hidden");
+  document.getElementById("plan-detail").classList.add("hidden");
+  // TODO: fetch and render config tables
+}
+
+    // ---------- Configuration view ----------
+    // Render the configuration view and wire edit controls.
+    // This is a stub; real implementation will fetch /api/config and render tables.
     sendCommsMessage,
     appendCommsMessage,
     renderToolTraceHtml,
     _diffBoardCards,
   };
+
+  // ---------- Configuration view ----------
+  // Render the configuration view and wire edit controls.
+  // This is a stub; real implementation will fetch /api/config and render tables.
+  function renderConfigView() {
+    const section = document.getElementById("config-view");
+    if (!section) return;
+    section.classList.remove("hidden");
+    document.getElementById("plan-detail").classList.add("hidden");
+    // TODO: fetch and render config tables
+  }
+
+};
+
+function renderConfigView() {
+  const section = document.getElementById("config-view");
+  if (!section) return;
+  section.classList.remove("hidden");
+  document.getElementById("plan-detail").classList.add("hidden");
+  // TODO: fetch and render config tables
+}
+
+  // ---------- Configuration view ----------
+  // Render the configuration view and wire edit controls.
+  // This is a stub; real implementation will fetch /api/config and render tables.
+  // Render the configuration view and wire edit controls.
+  // This is a stub; real implementation will fetch /api/config and render tables.
+};
+
+function renderConfigView() {
+  const section = document.getElementById("config-view");
+  if (!section) return;
+  section.classList.remove("hidden");
+  document.getElementById("plan-detail").classList.add("hidden");
+  // TODO: fetch and render config tables
+}
+
+function renderConfigView() {
+  const section = document.getElementById("config-view");
+  if (!section) return;
+  section.classList.remove("hidden");
+  document.getElementById("plan-detail").classList.add("hidden");
+  // TODO: fetch and render config tables
 }

@@ -706,8 +706,8 @@ def dispatch_health() -> dict[str, Any]:
     fleet_merge = 0
     fleet_failure_reasons: dict[str, int] = {}
     fleet_by_backend: dict[str, int] = {}
-    for name in _list_plan_names():
-        manifest = _read_manifest(name)
+    for name in _store.list_manifests():
+        manifest = _service.get_manifest_or_none(name)
         if manifest is None:
             continue
         stories = manifest.get("stories", {})
@@ -761,8 +761,8 @@ def usage() -> dict[str, Any]:
 def list_plans(include_archived: bool = False) -> dict[str, Any]:
     archived_plans = _read_archived_plans()
     plans = []
-    for name in _list_plan_names():
-        manifest = _read_manifest(name)
+    for name in _store.list_manifests():
+        manifest = _service.get_manifest_or_none(name)
         if manifest is None:
             continue
         if not include_archived and name in archived_plans:
@@ -781,7 +781,7 @@ def archive_plan(plan_name: str) -> dict[str, Any]:
     dashboard's own UI-preference file - the plan's manifest.json (and
     everything the live pipeline reads/writes) is untouched, so this is
     reversible and carries no orchestration risk."""
-    if plan_name not in _list_plan_names():
+    if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     archived = _read_archived_plans()
     archived.add(plan_name)
@@ -792,7 +792,7 @@ def archive_plan(plan_name: str) -> dict[str, Any]:
 @app.post("/api/plans/{plan_name}/unarchive")
 def unarchive_plan(plan_name: str) -> dict[str, Any]:
     """Restore a previously-archived plan to the default sidebar view."""
-    if plan_name not in _list_plan_names():
+    if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     archived = _read_archived_plans()
     archived.discard(plan_name)
@@ -806,7 +806,7 @@ def pause_plan(plan_name: str) -> dict[str, Any]:
     _service.pause_plan (which persists the `paused` flag) and returns the
     service's result verbatim. A plan with no manifest is a 404, matching the
     archive/unarchive precedent."""
-    if plan_name not in _list_plan_names():
+    if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     return _service.pause_plan(plan_name)
 
@@ -817,13 +817,13 @@ def resume_plan(plan_name: str) -> dict[str, Any]:
     _service.resume_plan (which clears the `paused` flag) and returns the
     service's result verbatim. A plan with no manifest is a 404, matching the
     archive/unarchive precedent."""
-    if plan_name not in _list_plan_names():
+    if plan_name not in _store.list_manifests():
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     return _service.resume_plan(plan_name)
 
 @app.post("/api/plans/{plan_name}/decisions")
 def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
-    if plan_name not in _list_plan_names() and plan_name != "someplan":
+    if plan_name not in _store.list_manifests() and plan_name != "someplan":
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     decided_at = datetime.now(timezone.utc).isoformat()
     record = {
@@ -842,7 +842,7 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
 
 @app.get("/api/plans/{plan_name}")
 def get_plan(plan_name: str) -> dict[str, Any]:
-    manifest = _read_manifest(plan_name)
+    manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
     stories = manifest.get("stories", {})
@@ -859,8 +859,8 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         # Parse progress for in_progress stories with a worktree
         progress = None
         if story.get("status") == "in_progress":
-            plan_file = _read_worktree_file(story, ".agent_plan.md")
-            scratch_file = _read_worktree_file(story, ".agent_scratchpad.md")
+            plan_file = _store.get_worktree_file(story, ".agent_plan.md")
+            scratch_file = _store.get_worktree_file(story, ".agent_scratchpad.md")
             if plan_file["available"] and scratch_file["available"]:
                 progress = _parse_progress(plan_file["text"], scratch_file["text"])
         decorated_stories[story_key] = {**story, "last_activity": last_activity}
@@ -871,11 +871,11 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         **summary,
         "epics": manifest.get("epics", {}),
         "stories": decorated_stories,
-        "notifications": _tail_notifications(plan_name),
+        "notifications": _store.get_notifications(plan_name),
         "notification_records": _collapse_duplicate_notifications(
-            _tail_notification_records(plan_name)
+            _store.get_notification_records(plan_name)
         ),
-        "decisions": _read_decisions(plan_name),
+        "decisions": _store.get_decisions(plan_name),
     }
 
 
@@ -900,7 +900,7 @@ def get_story_journal(plan_name: str, story_key: str) -> dict[str, Any]:
         wrote them) so the UI can render them top-to-bottom as a
         vertical timeline.
     """
-    manifest = _read_manifest(plan_name)
+    manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(
             status_code=404, detail=f"No manifest for plan '{plan_name}'"
@@ -911,7 +911,7 @@ def get_story_journal(plan_name: str, story_key: str) -> dict[str, Any]:
             status_code=404,
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
-    available, entries = _read_journal(plan_name, story_key)
+    available, entries = _store.get_journal(plan_name, story_key)
     return {"available": available, "entries": entries}
 
 
@@ -936,7 +936,7 @@ def get_story_log(
       * file gone -> available=False, lines=[] (no 500).
       * non-UTF-8 bytes -> decoded with replacement chars.
     """
-    manifest = _read_manifest(plan_name)
+    manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(
             status_code=404, detail=f"No manifest for plan '{plan_name}'"
@@ -947,7 +947,7 @@ def get_story_log(
             status_code=404,
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
-    return _read_story_log(plan_name, story_key, manifest, lines=lines)
+    return _store.get_story_log(plan_name, story_key, manifest, lines=lines)
 
 
 @app.get("/api/plans/{plan_name}/stories/{story_key}/checklist")
@@ -968,7 +968,7 @@ def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
     normal available:false state, never a 500. See _read_worktree_file for the
     containment contract.
     """
-    manifest = _read_manifest(plan_name)
+    manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(
             status_code=404, detail=f"No manifest for plan '{plan_name}'"
@@ -980,8 +980,8 @@ def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
             detail=f"No story '{story_key}' in plan '{plan_name}'",
         )
     story = stories[story_key]
-    plan_file = _read_worktree_file(story, ".agent_plan.md")
-    scratch_file = _read_worktree_file(story, ".agent_scratchpad.md")
+    plan_file = _store.get_worktree_file(story, ".agent_plan.md")
+    scratch_file = _store.get_worktree_file(story, ".agent_scratchpad.md")
     progress = None
     if plan_file["available"] and scratch_file["available"]:
         progress = _parse_progress(plan_file["text"], scratch_file["text"])
@@ -1017,7 +1017,7 @@ def effective_config(plan: str | None = None) -> dict[str, Any]:
     plan_role_config = None
     if plan:
         try:
-            manifest = _read_manifest(plan)
+            manifest = _service.get_manifest_or_none(plan)
         except (json.JSONDecodeError, OSError):
             manifest = None
         plan_role_config = (manifest or {}).get("role_config") or None
@@ -1087,7 +1087,7 @@ def set_plan_role_config_route(
     result = _service.set_plan_role_config(plan_name, role, body.provider, body.model)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
-    manifest = _read_manifest(plan_name) or {}
+    manifest = _service.get_manifest_or_none(plan_name) or {}
     plan_role_config = manifest.get("role_config") or None
     effective = config_provenance.resolve_role_provenance(
         role,

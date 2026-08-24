@@ -2324,6 +2324,15 @@ document.getElementById("story-modal").addEventListener("click", (e) => {
   // Click on the backdrop (outside the modal-content) closes the modal.
   if (e.target.id === "story-modal") hideStoryModal();
 });
+
+function syncPollingWithVisibility() {
+  if (document.hidden) {
+    stopPolling();
+  } else if (!state.pollHandle) {
+    startPolling();
+    refresh();
+  }
+}
   // Auto-refresh checkbox removed; no change listener
   // Visibility change handled by syncPollingWithVisibility without checkbox gating
 

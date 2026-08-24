@@ -10,8 +10,8 @@
   <header>
     <h1>Agent Pipeline Dashboard</h1>
     <div class="toolbar">
-      <button id="theme-toggle" class="theme-toggle"><span class="icon-moon"></span><span class="icon-sun"></span></button>
-      <div class="refresh-indicator" id="refresh-indicator"><span class="dot"></span></div>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme"><span class="icon-moon" aria-hidden="true"></span><span class="icon-sun" aria-hidden="true"></span></button>
+      <div class="refresh-indicator" id="refresh-indicator" aria-live="polite"><span class="dot"></span></div>
       <span class="last-updated" id="last-updated"></span>
     </div>
   </header>
@@ -68,11 +68,11 @@
       <div class="comms-head">
         <div class="comms-title"><span class="on-air" id="on-air"></span><div><div class="label">Comms</div><div class="comms-sub" id="comms-sub">chat</div></div></div>
         <div class="comms-body">
-          <div class="comms-thread" id="comms-thread"></div>
-          <div class="comms-landing" id="comms-landing"><h3>Welcome</h3></div>
+          <div class="comms-thread" id="comms-thread" style="display:none" aria-live="polite"></div>
+          <div class="comms-landing" id="comms-landing"><h3>Welcome</h3><p>Type your message below and press Send.</p></div>
           <div class="comms-input-row">
-            <input type="text" id="comms-input" class="comms-input" placeholder="Type a message..." />
-            <button id="comms-send" class="comms-send">Send</button>
+            <textarea id="comms-input" class="comms-input" placeholder="Type a message..." rows="3" aria-label="Message input"></textarea>
+            <button id="comms-send" class="comms-send" type="button" aria-label="Send message" title="Send">Send</button>
           </div>
         </div>
       </div>

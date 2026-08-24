@@ -2292,8 +2292,6 @@ async function refresh() {
     `updated ${new Date().toLocaleTimeString()}`;
 
   // Visible liveness: a brief indicator flash on each successful refresh,
-  // gated by the auto-refresh checkbox so manual, indicator-free refreshes
-  // remain possible while polling is disabled.
   if (state.pollHandle) flashRefreshIndicator();
 }
 
@@ -2307,12 +2305,7 @@ function stopPolling() {
   state.pollHandle = null;
 }
 
-// Pause polling while the tab is hidden so we don't burn requests / re-render
-// DOM that nobody is looking at. Resume on visibilitychange, but only if the
-// user has auto-refresh enabled — visibility never overrides the checkbox.
 function syncPollingWithVisibility() {
-  const auto = document.getElementById("auto-refresh");
-  if (!auto || !auto.checked) return;
   if (document.hidden) {
     stopPolling();
   } else if (!state.pollHandle) {
@@ -2329,16 +2322,6 @@ document.getElementById("story-modal-body").addEventListener("click", handleCopy
 document.getElementById("story-modal").addEventListener("click", (e) => {
   // Click on the backdrop (outside the modal-content) closes the modal.
   if (e.target.id === "story-modal") hideStoryModal();
-});
-document.getElementById("auto-refresh").addEventListener("change", (e) => {
-  if (e.target.checked) {
-    // Respect the tab-hidden state on initial enable: don't start polling
-    // into a hidden tab just because the user toggled the checkbox.
-    if (document.hidden) return;
-    startPolling();
-  } else {
-    stopPolling();
-  }
 });
 
 // Pause / resume the polling loop around tab visibility. visibilitychange

@@ -185,8 +185,6 @@ header h1 {
   font-size: var(--fs-sm);
   color: var(--text-dim);
 }
-.auto-refresh { display: flex; align-items: center; gap: var(--sp-1); cursor: pointer; }
-
 /* Theme toggle: sun/moon glyph, persistent across reloads via app.js */
 .theme-toggle {
   display: inline-flex;

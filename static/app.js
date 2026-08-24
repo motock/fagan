@@ -77,8 +77,6 @@ function pushToast({ severity, planName, storyKey, message }) {
 
 
 
-const window = globalThis.window;
-// removed redundant window definition
 let notifSeverityFilter = "all";
 // Keyed-diff state for renderPlanList: maps each plan name to its live
 // `.plan-item` DOM node so per-plan rows are updated in place across poll

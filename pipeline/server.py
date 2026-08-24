@@ -237,7 +237,7 @@ from .paths import (  # noqa: F401
 # plan_dir fixture in the test suite patches both p.PLAN_DIR and
 # pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
 # reads both see the same temp dir.
-from .persistence import (  # noqa: F401
+from .persistence import (
     _append_decision,
     _append_journal,
     _decisions_path,

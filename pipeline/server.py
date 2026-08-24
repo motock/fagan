@@ -714,6 +714,11 @@ class Store(Protocol):
         self, plan_name: str, story_key: str, record: dict[str, Any]
     ) -> None: ...
 
+    def get_notifications(self, plan_name: str) -> list[str]: ...
+    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]: ...
+    def get_decisions(self, plan_name: str) -> list[dict]: ...
+    def get_manifest_or_none(self, plan_name: str) -> dict | None: ...
+
 
 class _TransactionLock:
     """Class-based context manager wrapping ``_plan_lock``.
@@ -805,6 +810,67 @@ class FileStore:
     ) -> None:
         _append_journal(plan_name, story_key, record)
 
+
+    def get_notifications(self, plan_name: str) -> list[str]:
+        """Return last 100 lines of <plan>.notifications.log, fail-open."""
+        path = PLAN_DIR / f"{plan_name}.notifications.log"
+        if not path.exists():
+            return []
+        return path.read_text(errors="replace").splitlines()[-100:]
+
+    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:
+        """Return last `limit` records from <plan>.notifications.jsonl, fail-open."""
+        if limit <= 0:
+            limit = 100
+        path = PLAN_DIR / f"{plan_name}.notifications.jsonl"
+        if not path.exists():
+            return []
+        records: list[dict] = []
+        for line in path.read_text(errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            ts = str(obj.get("ts", ""))
+            message = str(obj.get("message", ""))
+            severity = obj.get("severity")
+            if severity not in ("info", "warning", "error"):
+                severity = "info"
+            else:
+                severity = str(severity)
+            story_key = obj.get("story_key")
+            event = obj.get("event")
+            dedup_key = obj.get("dedup_key")
+            records.append({
+                "ts": ts,
+                "message": message,
+                "severity": severity,
+                "story_key": story_key,
+                "event": event,
+                "dedup_key": dedup_key,
+            })
+        return records[-limit:]
+
+    def get_decisions(self, plan_name: str) -> list[dict]:
+        """Return decisions JSON, fail-open."""
+        path = PLAN_DIR / f"{plan_name}.decisions.json"
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def get_manifest_or_none(self, plan_name: str) -> dict | None:
+        """Return manifest or None on missing/corrupt."""
+        try:
+            return self.get_manifest(plan_name)
+        except (json.JSONDecodeError, OSError):
+            return None
 
 _store = FileStore()
 
@@ -936,6 +1002,22 @@ class PipelineService:
         _validate_key(plan_name)
         path = _decisions_path(plan_name)
         return json.loads(path.read_text()) if path.exists() else []
+
+    def get_notifications(self, plan_name: str) -> list[str]:
+        _validate_key(plan_name)
+        return _store.get_notifications(plan_name)
+
+    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:
+        _validate_key(plan_name)
+        return _store.get_notification_records(plan_name, limit)
+
+    def get_decisions(self, plan_name: str) -> list[dict]:
+        _validate_key(plan_name)
+        return _store.get_decisions(plan_name)
+
+    def get_manifest_or_none(self, plan_name: str) -> dict | None:
+        _validate_key(plan_name)
+        return _store.get_manifest_or_none(plan_name)
 
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]

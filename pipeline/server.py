@@ -1002,6 +1002,7 @@ class PipelineService:
         return json.loads(path.read_text()) if path.exists() else []
 
     def get_notifications(self, plan_name: str) -> list[str]:
+        _validate_key(plan_name)
         return _store.get_notifications(plan_name)
 
     def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:

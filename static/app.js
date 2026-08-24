@@ -2403,6 +2403,18 @@ if (typeof module !== "undefined" && module.exports) {
     renderOverview, selectOverview, refresh, state,
     renderPlanList, _renderPlanListFull,
     _diffOverviewPlanRows,
+
+  // ---------- Configuration view ----------
+  // Render the configuration view and wire edit controls.
+  // This is a stub; real implementation will fetch /api/config and render tables.
+  function renderConfigView() {
+    const section = document.getElementById("config-view");
+    if (!section) return;
+    section.classList.remove("hidden");
+    document.getElementById("plan-detail").classList.add("hidden");
+    // TODO: fetch and render config tables
+  }
+
     renderNotifications,
     _diffNotificationsPanel,
     renderChecklist,

@@ -305,7 +305,11 @@ async function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
   // Load app.js as an ES module (static/package.json sets {"type":"module"}),
   // which resolves its ./app/* imports and exposes its named exports. The
   // module's top-level code runs during import against the globals above.
-  const app = await import("../static/app.js");
+  // A cache-busting query param forces a fresh module instance per test so
+  // the top-level listener registrations (visibilitychange, auto-refresh
+  // change handler, etc.) attach to THIS test's document rather than the
+  // first test's document.
+  const app = await import("../static/app.js?t=" + Date.now());
   Object.assign(global, app);
   // Mirror the captured window.state onto the module exports so callers see it.
   if (capturedState) app.state = capturedState;

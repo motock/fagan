@@ -283,7 +283,7 @@ class FileStore:
         if not log_path.exists() or not log_path.is_file():
             return empty
         try:
-            text = log_path.read_text(errors="replace")
+            text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return empty
         all_lines = text.splitlines()

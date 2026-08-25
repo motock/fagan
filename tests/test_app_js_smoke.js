@@ -415,12 +415,12 @@ await test("missing focused chip is silently skipped (no throw)", async () => {
 await test("flashRefreshIndicator populates the indicator element", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = await loadApp(doc, { fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
 
-  const ind = makeElement("span", { attrs: { id: "refresh-indicator" } });
+  const ind = makeEl("span", { attrs: { id: "refresh-indicator" } });
   doc.register("refresh-indicator", ind);
 
-  api(flashRefreshIndicator());
+  api.flashRefreshIndicator();
   assert.ok(ind.innerHTML.includes("dot"), "indicator should render a dot");
   assert.ok(ind.innerHTML.includes("updating"), "indicator should say updating");
   assert.ok(ind.classList.contains("flashing"), "flashing class should be set");

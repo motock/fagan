@@ -1,10 +1,17 @@
 """Storage seam for pipeline state (W1b).
 
 ``Store``, ``_TransactionLock`` and ``FileStore`` were extracted verbatim from
-``pipeline/server.py``. They read this module's re-imported globals (``PLAN_DIR``,
+``pipeline/server.py``. They read this module's re-exported globals (``PLAN_DIR``,
 ``_plan_lock``, ``_append_decision``, ...) as free variables, and the test suite
 patches ``pipeline.server`` for those names, so ``pipeline/server.py`` re-exports
 everything it needs (see PIPELINE_MCP_DECOMPOSITION_PLAN.md).
+
+The free-variable names (``PLAN_DIR``, ``WORKTREE_ROOT``, ``_plan_lock``,
+``_append_decision``, ``_append_journal``) are resolved at call time through the
+``_ServerRef`` bindings below, which delegate to ``pipeline.server`` so
+``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands. They are
+intentionally not imported here (a module-load copy would freeze the real
+~/.claude/plans path into every test run).
 """
 
 import json
@@ -12,11 +19,43 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
-from .concurrency import _plan_lock
-from .paths import PLAN_DIR, WORKTREE_ROOT
-from .persistence import _append_decision, _append_journal
-
 __all__ = ["FileStore", "Store", "_TransactionLock"]
+
+
+class _ServerRef:
+    """Delegates to the *current* ``pipeline.server`` binding for a name.
+
+    The class bodies below reference ``PLAN_DIR``, ``WORKTREE_ROOT``,
+    ``_plan_lock``, ``_append_decision`` and ``_append_journal`` as bare module
+    globals. The test suite patches ``pipeline.server`` for those names (e.g.
+    ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)``), so these
+    bindings must read the live ``pipeline.server`` value at call time rather
+    than hold a copy imported at module load (which would freeze the real
+    ~/.claude/plans path into every test run).
+    """
+
+    def __init__(self, name: str):
+        self._name = name
+
+    def _value(self):
+        from . import server as _server
+        return getattr(_server, self._name)
+
+    def __getattr__(self, attr: str):
+        return getattr(self._value(), attr)
+
+    def __call__(self, *args, **kwargs):
+        return self._value()(*args, **kwargs)
+
+    def __truediv__(self, other):
+        return self._value() / other
+
+
+PLAN_DIR = _ServerRef("PLAN_DIR")
+WORKTREE_ROOT = _ServerRef("WORKTREE_ROOT")
+_plan_lock = _ServerRef("_plan_lock")
+_append_decision = _ServerRef("_append_decision")
+_append_journal = _ServerRef("_append_journal")
 
 
 class Store(Protocol):

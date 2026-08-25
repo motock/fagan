@@ -238,6 +238,8 @@ from .paths import (  # noqa: F401
 # pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
 # reads both see the same temp dir.
 from .persistence import (
+    _append_decision,  # noqa: F401  (re-exported for pipeline.store free vars)
+    _append_journal,  # noqa: F401  (re-exported for pipeline.store free vars)
     _decisions_path,
     _notify_user,
     _plan_role_config,

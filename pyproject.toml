@@ -26,3 +26,9 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments"
 # in place without breaking that guarantee, so import-sort/format is exempted
 # here instead. Only I001; other rules (undefined names, syntax) still apply.
 "tests/acceptance_*.py" = ["I001"]
+# pipeline/server.py re-exports many names for test monkeypatching and keeps
+# `import fcntl` (asserted verbatim by test_server_module_imports_hashlib) even
+# though the merge helpers that used it moved to pipeline/merge.py. F401 is
+# ignored file-wide (the existing `# noqa: F401` re-export comments become
+# redundant, hence RUF100 too).
+"pipeline/server.py" = ["F401", "RUF100"]

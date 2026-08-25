@@ -1,16 +1,34 @@
 import {
-  state, defaultFilters, loadFilters, saveFilters, toggleFilter, resetState,
+  state, loadFilters, resetState,
   STATUS_COLUMNS, SORT_OPTIONS, VALID_SORTS, BACKEND_VALUES, ESCALATED_VALUES,
 } from "./app/state.js";
-import { fetchJson, postJson } from "./app/api.js";
+import { fetchJson } from "./app/api.js";
 import {
   HASH_KEYS, hashStateFrom, encodeHashState, parseHash, updateHash, clearHash, applyHashToState,
 } from "./app/routing.js";
 import {
-  escapeHtml, chip, renderBoard, renderFilterBar,
+  escapeHtml, chip, renderBoard,
 } from "./app/render/board.js";
+import {
+  renderPlanList, _renderPlanListFull, resetPlanListState, initPlanList,
+} from "./app/render/plan-list.js";
+import {
+  renderPlanDetail, capturePlanDetailState, restorePlanDetailState,
+  setDiffNotificationsOnPoll, resetPlanDetailState, initPlanDetail, renderChecklist,
+  loadStoryJournal, loadStoryChecklist, renderCopyButton, handleCopyClick, copyValues,
+} from "./app/render/plan-detail.js";
 
 const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
+
+// plan-list.js/plan-detail.js can't statically import back from app.js (see
+// their own comments on this) without breaking under the test harness's
+// cache-busted app.js URL, so this wires their few app.js-level dependencies
+// via injection instead. Safe to call immediately: selectPlan, selectComms,
+// selectOverview, refresh, showStoryModal, renderNotifications,
+// renderDecisions, and setNotifSeverityFilter are all hoisted function
+// declarations, available before this line runs regardless of source order.
+initPlanList({ selectPlan, selectComms, selectOverview, refresh });
+initPlanDetail({ showStoryModal, renderNotifications, renderDecisions, setNotifSeverityFilter });
 
 // Toast state and helpers
 let lastSeenNotificationByPlan = new Map();
@@ -71,31 +89,21 @@ function pushToast({ severity, planName, storyKey, message }) {
 
 
 let notifSeverityFilter = "all";
-// When true, renderPlanDetail's same-plan update path keeps the notifications
-// panel body intact so _diffNotificationsPanel (called from refresh()) can
-// append only new rows instead of rebuilding the whole panel. Set only around
-// the poll-triggered render; filter-click re-renders leave it false.
-let diffNotificationsOnPoll = false;
-// Keyed-diff state for renderPlanList: maps each plan name to its live
-// `.plan-item` DOM node so per-plan rows are updated in place across poll
-// ticks instead of being torn down and rebuilt every 4s. `null` means the
-// sidebar has never been rendered (first call does a full rebuild).
-let planListRowsByName = null;
+// plan-detail.js's renderPlanDetail can't reassign this module's `let`
+// binding directly (ES module bindings are read-only to importers), so it
+// calls this setter instead when the notif-severity filter chip is clicked.
+function setNotifSeverityFilter(value) {
+  notifSeverityFilter = value;
+}
 // Keyed-diff state for _diffOverviewPlanRows: maps each plan name to its
-// live `.overview-plan-row` DOM node, mirroring planListRowsByName above.
-// renderOverview rebuilds the rest of the section's markup (including a
-// fresh empty `.overview-plan-list` <ul>) every poll tick, so this map -
-// not the <ul>'s own children - is the only thing that lets a row survive
-// across ticks: existing rows are moved (not recreated) into the new <ul>.
+// live `.overview-plan-row` DOM node, mirroring plan-list.js's
+// planListRowsByName. renderOverview rebuilds the rest of the section's
+// markup (including a fresh empty `.overview-plan-list` <ul>) every poll
+// tick, so this map - not the <ul>'s own children - is the only thing that
+// lets a row survive across ticks: existing rows are moved (not recreated)
+// into the new <ul>.
 let overviewPlanRowsByName = new Map();
 
-// The plan object passed to the most recent renderPlanDetail call. The
-// board's card-click listener is delegated (attached once to `.board`,
-// not per-card — see renderPlanDetail) so it can't close over the `plan`
-// argument from the render call that created it; it reads this instead,
-// so a click always resolves against the freshest poll's data even though
-// the listener itself was bound on an earlier render.
-let currentPlanDetailData = null;
 function filterNotifications(records, severity) {
   if (!records) return [];
   if (!severity || severity === "all") return records.slice();
@@ -106,233 +114,6 @@ function decodeHtmlEntities(s) {
   return String(s).replace(/&(amp|lt|gt|quot|#39);/g, (m, name) => ({
     "amp": "&", "lt": "<", "gt": ">", "quot": '"', "#39": "'",
   }[name]));
-}
-
-// Plans come back from /api/plans already sorted newest-first by the
-// server (by manifest mtime) and, by default, with archived plans excluded
-// - state.showArchived controls whether refresh() asks for them too (see
-// the include_archived query param built there).
-// Shared builder for the `.plan-meta` line, used by all three render paths
-// (_renderPlanListFull, _buildPlanRow, and the keyed-diff in-place update) so
-// they produce byte-identical markup — including the styled
-// `<span class="plan-paused">paused</span>` badge for paused plans.
-function _planMetaMarkup(plan) {
-  const total = plan.story_count || 0;
-  const done = (plan.status_counts && plan.status_counts.done) || 0;
-  return `${done}/${total} done${plan.paused ? ' <span class="plan-paused">paused</span>' : ""}`;
-}
-
-function _renderPlanListFull(plans) {
-  const nav = document.getElementById("plan-list");
-  nav.innerHTML = "";
-
-  // The pinned Comms/Overview items are appended by renderPlanList after
-  // calling this function, so they aren't rebuilt as part of the diffable
-  // per-plan rows below.
-  for (const plan of plans) {
-    const div = document.createElement("div");
-    div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
-      + (plan.archived ? " plan-archived" : "");
-    div.setAttribute("data-plan-name", plan.name);
-    div.innerHTML = `
-      <div class="plan-item-row">
-        <div class="plan-item-main">
-          <div class="plan-name">${escapeHtml(plan.name)}</div>
-          <div class="plan-meta">${_planMetaMarkup(plan)}</div>
-        </div>
-        <button type="button" class="plan-archive-btn" title="${plan.archived ? "Restore" : "Dismiss"}">
-          ${plan.archived ? "Restore" : "Dismiss"}
-        </button>
-      </div>
-    `;
-    div.addEventListener("click", () => selectPlan(plan.name));
-    div.querySelector(".plan-archive-btn").addEventListener("click", (event) => {
-      // Don't let the archive/restore click also select the plan.
-      event.stopPropagation();
-      togglePlanArchived(plan.name, plan.archived);
-    });
-    nav.appendChild(div);
-  }
-
-  // Built with direct DOM calls, not an innerHTML string: a bare
-  // <input type="checkbox"> has no closing tag, and this file's lightweight
-  // test-only DOM stubs parse innerHTML by matching open/close tag pairs -
-  // a self-closing input embedded in an innerHTML string would silently
-  // fail to parse into a real, listenable element under test.
-  const toggle = document.createElement("div");
-  toggle.className = "plan-list-footer";
-  const label = document.createElement("label");
-  label.className = "show-archived-toggle";
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.checked = state.showArchived;
-  checkbox.addEventListener("change", (event) => {
-    state.showArchived = event.target.checked;
-    refresh();
-  });
-  label.appendChild(checkbox);
-  const labelText = document.createElement("span");
-  labelText.textContent = "Show dismissed plans";
-  label.appendChild(labelText);
-  toggle.appendChild(label);
-  nav.appendChild(toggle);
-}
-
-// Build a single per-plan `.plan-item` row (the same markup the full-rebuild
-// loop in _renderPlanListFull produces) and return it. Used by the keyed-diff
-// wrapper to create exactly one new row for a plan that isn't in the map yet.
-function _buildPlanRow(plan) {
-  const div = document.createElement("div");
-  div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
-    + (plan.archived ? " plan-archived" : "");
-  div.setAttribute("data-plan-name", plan.name);
-  div.innerHTML = `
-    <div class="plan-item-row">
-      <div class="plan-item-main">
-        <div class="plan-name">${escapeHtml(plan.name)}</div>
-        <div class="plan-meta">${_planMetaMarkup(plan)}</div>
-      </div>
-      <button type="button" class="plan-archive-btn" title="${plan.archived ? "Restore" : "Dismiss"}">
-        ${plan.archived ? "Restore" : "Dismiss"}
-      </button>
-    </div>
-  `;
-  div.addEventListener("click", () => selectPlan(plan.name));
-  div.querySelector(".plan-archive-btn").addEventListener("click", (event) => {
-    // Don't let the archive/restore click also select the plan.
-    event.stopPropagation();
-    togglePlanArchived(plan.name, plan.archived);
-  });
-  return div;
-}
-
-// Insert a freshly-built plan row into the sidebar. New rows go just above
-// the pinned footer toggle (which _renderPlanListFull always appends last),
-// so plan rows stay grouped together; fall back to appending if the footer
-// isn't present (e.g. a test shim without insertBefore).
-function _insertPlanRow(nav, div) {
-  const footer = nav.querySelector(".plan-list-footer");
-  if (footer && typeof nav.insertBefore === "function") {
-    nav.insertBefore(div, footer);
-  } else {
-    nav.appendChild(div);
-  }
-}
-
-// Keyed-diff wrapper around _renderPlanListFull. The first call ever does a
-// full rebuild and records each plan row in planListRowsByName; every later
-// call diffs `plans` against that map so unchanged rows are updated in place
-// (preserving in-progress interaction like an open right-click menu or a
-// focused Dismiss button) instead of being torn down and rebuilt each poll
-// tick. The pinned Comms/Overview items aren't part of the per-plan diff,
-// but their .active class still depends on state that can change between
-// polls, so it's refreshed here on every call (not just the first).
-function renderPlanList(plans) {
-  const nav = document.getElementById("plan-list");
-
-  // The pinned Comms/Overview items are built once by _renderPlanListFull,
-  // but their .active class must track state on every call (not just a
-  // full rebuild), since refresh() calls renderPlanList on every poll tick.
-  const commsItem = nav.querySelector && nav.querySelector("[data-comms]");
-  if (commsItem) commsItem.classList.toggle("active", state.commsActive);
-  const overviewItem = nav.querySelector && nav.querySelector("[data-overview]");
-  if (overviewItem) overviewItem.classList.toggle("active", !state.selectedPlan && !state.commsActive);
-
-  if (planListRowsByName === null) {
-    _renderPlanListFull(plans);
-    planListRowsByName = new Map();
-    // Query all .plan-item rows and keep only the per-plan ones (the pinned
-    // Overview item also carries .plan-item but has no data-plan-name).
-    for (const el of nav.querySelectorAll(".plan-item")) {
-      if (el.getAttribute("data-plan-name")) {
-        planListRowsByName.set(el.getAttribute("data-plan-name"), el);
-      }
-    }
-  // Comms pinned item
-  const comms = document.createElement("div");
-  comms.className = "plan-item comms-item" + (state.commsActive ? " active" : "");
-  comms.setAttribute("data-comms", "true");
-  comms.innerHTML = `
-    <div class="plan-name">Comms</div>
-    <div class="plan-meta">chat</div>
-  `;
-  comms.addEventListener("click", () => selectComms());
-  nav.appendChild(comms);
-
-  const overview = document.createElement("div");
-  overview.className = "plan-item overview-item" + (!state.selectedPlan ? " active" : "");
-  overview.setAttribute("data-overview", "true");
-  overview.innerHTML = `
-    <div class="plan-name">Overview</div>
-    <div class="plan-meta">fleet landing</div>
-  `;
-  overview.addEventListener("click", () => selectOverview());
-  nav.appendChild(overview);
-  return;
-  }
-
-  const seen = new Set();
-  for (let i = 0; i < plans.length; i++) {
-    const plan = plans[i];
-    seen.add(plan.name);
-    const existing = planListRowsByName.get(plan.name);
-    if (existing) {
-      // Plan already rendered: update only the mutable fields on the EXISTING
-      // node. Never recreate it — its event listeners are already bound to
-      // the right plan.name closure from creation time.
-      const meta = existing.querySelector(".plan-meta");
-      if (meta) {
-        // Set textContent first (so text-only DOM stubs that read
-        // textContent see the updated meta), then innerHTML to the same
-        // markup the builders emit — preserving the styled
-        // <span class="plan-paused">paused</span> badge for paused plans.
-        meta.textContent = _planMetaMarkup(plan);
-        meta.innerHTML = _planMetaMarkup(plan);
-      }
-      existing.classList.toggle("active", plan.name === state.selectedPlan);
-      existing.classList.toggle("plan-archived", !!plan.archived);
-    } else {
-      // New plan: build exactly one row and insert it at its server-sorted
-      // (newest-first) position — before the row of the next plan in `plans`
-      // that already exists, so the sidebar keeps the same order the
-      // full-rebuild path renders. If it's the last new plan, append at the
-      // end (just above the pinned footer).
-      const div = _buildPlanRow(plan);
-      let ref = null;
-      for (let j = i + 1; j < plans.length; j++) {
-        const nextRow = planListRowsByName.get(plans[j].name);
-        if (nextRow) { ref = nextRow; break; }
-      }
-      if (ref) {
-        nav.insertBefore(div, ref);
-      } else {
-        _insertPlanRow(nav, div);
-      }
-      planListRowsByName.set(plan.name, div);
-    }
-  }
-
-  // Drop rows for plans no longer present.
-  for (const [name, el] of planListRowsByName) {
-    if (!seen.has(name)) {
-      el.remove();
-      planListRowsByName.delete(name);
-    }
-  }
-}
-
-// Archive/unarchive is fire-and-forget from the UI's perspective: on
-// success, refresh() re-fetches /api/plans so the sidebar reflects the new
-// archived set (and re-sorts/re-filters) rather than us hand-patching the
-// DOM in place. A failed request leaves the list as-is; the user can retry.
-async function togglePlanArchived(planName, currentlyArchived) {
-  const action = currentlyArchived ? "unarchive" : "archive";
-  try {
-    await postJson(`/api/plans/${encodeURIComponent(planName)}/${action}`);
-  } catch {
-    return;
-  }
-  await refresh();
 }
 
 function renderNotifications(records) {
@@ -400,248 +181,6 @@ function renderDecisions(decisions) {
   `).join("");
 }
 
-// The header + filter bar — everything ABOVE the card board. Rebuilt
-// wholesale on every renderPlanDetail call (fresh render or in-place update
-// alike): none of this needs to persist across polls the way the board's
-// cards do, so a plain innerHTML rebuild is simplest and matches the brief
-// ("filter bar and side panels ... may remain full string-rebuild for now").
-function _planChromeHtml(plan) {
-  return `
-    <div class="plan-header">
-      <h2>${escapeHtml(plan.name)}</h2>
-      ${plan.paused ? '<span class="badge" style="--badge-color: var(--c-parked)">paused</span>' : ""}
-    </div>
-    ${renderFilterBar(plan.stories)}
-  `;
-}
-
-// The side panels — everything BELOW the card board (Notifications,
-// Overlord decisions). Kept as a separate wholesale rebuild from
-// _planChromeHtml so the two can sandwich the persistent board element in
-// their original above/below positions instead of both landing before it.
-function _notificationsPanelHtml(plan) {
-  return `
-    <div class="panel">
-      <h3>Notifications</h3>
-      <div class="panel-body">${renderNotifications(plan.notification_records)}</div>
-    </div>
-  `;
-}
-
-function _decisionsPanelHtml(plan) {
-  return `
-    <div class="panel">
-      <h3>Overlord decisions</h3>
-      <div class="panel-body">${renderDecisions(plan.decisions)}</div>
-    </div>
-  `;
-}
-
-function _planPanelsHtml(plan) {
-  return `
-    <div class="panels">
-      ${_notificationsPanelHtml(plan)}
-      ${_decisionsPanelHtml(plan)}
-    </div>
-  `;
-}
-
-function renderPlanDetail(plan) {
-  const section = document.getElementById("plan-detail");
-  // The board's delegated click listener (attached once, below) can't close
-  // over this call's `plan` — it fires on a later poll's click against a
-  // listener bound on an earlier render — so it reads this module-level
-  // reference instead, kept in sync on every render.
-  currentPlanDetailData = plan;
-
-  // Snapshot the detail section's state so we can restore it after
-  // rebuilding the chrome: scroll position, and any focused filter chip.
-  // Capturing a stable identity (data-dim + data-value) — rather than the
-  // raw DOM node — lets us re-focus the matching chip if it survives.
-  const snapshot = capturePlanDetailState(section);
-
-  // Reuse the board from the previous render only when it's the SAME plan:
-  // section.dataset.planName is stamped the first time a plan renders, and
-  // survives across polls because (unlike before) we stop reassigning
-  // section.innerHTML wholesale once a plan's board exists. Switching to a
-  // different plan (or the very first render) still does a full teardown.
-  const sameView = !!(section.dataset && section.dataset.planName === plan.name);
-  let boardEl = (sameView && typeof section.querySelectorAll === "function")
-    ? section.querySelectorAll(".board")[0]
-    : null;
-
-  if (boardEl) {
-    const chromeEl = section.querySelectorAll(".plan-chrome")[0];
-    if (chromeEl) chromeEl.innerHTML = _planChromeHtml(plan);
-    const panelsEl = section.querySelectorAll(".plan-panels")[0];
-    if (panelsEl) {
-      if (diffNotificationsOnPoll) {
-        // Poll-triggered same-plan update: keep the notifications panel body
-        // intact so _diffNotificationsPanel (called from refresh()) can append
-        // only new rows; only the decisions panel is rebuilt here.
-        const decisionsPanel = panelsEl.querySelectorAll(".panel")[1];
-        if (decisionsPanel) {
-          // Rebuild only the decisions panel's inner content (heading + body),
-          // not a full .panel wrapper, to avoid nesting a second bordered
-          // .panel inside the existing one.
-          decisionsPanel.innerHTML =
-            '<h3>Overlord decisions</h3><div class="panel-body">' +
-            renderDecisions(plan.decisions) +
-            '</div>';
-        }
-      } else {
-        // First render or a deliberate user action (e.g. severity-filter
-        // change): rebuild the whole panels, including notifications.
-        panelsEl.innerHTML = _planPanelsHtml(plan);
-      }
-    }
-    // Diffs the existing column-body elements in place (see
-    // _tryUpdateBoardInPlace / _diffBoardCards) instead of rebuilding the
-    // board as a string — this is what keeps unchanged `.card` nodes alive
-    // (and their scroll/focus/selection) across a poll tick.
-    renderBoard(plan.stories, boardEl);
-  } else {
-    if (section.dataset) section.dataset.planName = plan.name;
-    section.innerHTML = `
-      <div class="plan-chrome">${_planChromeHtml(plan)}</div>
-      ${renderBoard(plan.stories)}
-      <div class="plan-panels">${_planPanelsHtml(plan)}</div>
-    `;
-    boardEl = typeof section.querySelectorAll === "function"
-      ? section.querySelectorAll(".board")[0]
-      : null;
-    // Delegated click listener: attached ONCE per fresh board (not per
-    // card), since cards now persist across polls — attaching a fresh
-    // listener to every `.card` on every render (the old approach) would
-    // stack duplicate listeners on cards that survive a diff.
-    if (boardEl && typeof boardEl.addEventListener === "function") {
-      boardEl.addEventListener("click", (event) => {
-        const target = event && event.target;
-        const card = target && typeof target.closest === "function"
-          ? target.closest(".card")
-          : (target && target.classList && target.classList.contains("card") ? target : null);
-        if (!card || !currentPlanDetailData) return;
-        const key = card.dataset.key;
-        showStoryModal(
-          currentPlanDetailData.name,
-          currentPlanDetailData.stories[key],
-          key,
-          currentPlanDetailData.notification_records,
-        );
-      });
-    }
-  }
-
-  section.querySelectorAll(".filter-chip").forEach((el) => {
-    el.addEventListener("click", () => {
-      const { dim, value } = el.dataset;
-      if (dim === "sort") {
-        state.filters.sort = value;
-        saveFilters();
-      } else {
-        toggleFilter(dim, value);
-      }
-      updateHash();
-      renderPlanDetail(plan);
-    });
-  });
-  section.querySelectorAll('.filter-chip[data-dim="notif-severity"]').forEach((el) => {
-    el.addEventListener("click", () => {
-      notifSeverityFilter = el.dataset.value;
-      renderPlanDetail(plan);
-    });
-  });
-  const searchInput = section.querySelector && section.querySelector(".filter-search");
-  if (searchInput) {
-    searchInput.addEventListener("input", () => {
-      state.filters.search = searchInput.value;
-      saveFilters();
-      updateHash();
-      renderPlanDetail(plan);
-    });
-  }
-  const resetBtn = section.querySelector && section.querySelector(".filter-reset");
-  if (resetBtn) {
-    resetBtn.addEventListener("click", () => {
-      state.filters = defaultFilters();
-      saveFilters();
-      updateHash();
-      renderPlanDetail(plan);
-    });
-  }
-
-  // Restore scroll + focus. Wrapped in try/catch defensively: a missing
-  // focused element or a DOM that didn't survive the re-render must NOT throw.
-  try {
-    restorePlanDetailState(section, snapshot);
-  } catch {
-    /* snapshot stale or focus target gone; nothing to restore */
-  }
-}
-
-// Capture the scroll position and the focused element's identity from the
-// detail section. The identity is just the data-dim + data-value pair of the
-// focused filter chip (or null if nothing meaningful is focused). Plain data
-// attributes survive innerHTML replacement, so we can look the chip back up
-// in the new DOM.
-function capturePlanDetailState(section) {
-  if (!section) return { scrollTop: 0, focusKey: null };
-  const ae = document.activeElement;
-  let focusKey = null;
-  if (ae && ae !== document.body && section.contains(ae) && ae.dataset
-      && ae.dataset.dim !== undefined && ae.dataset.value !== undefined) {
-    focusKey = `${ae.dataset.dim}\u0000${ae.dataset.value}`;
-  }
-  const snap = { scrollTop: section.scrollTop || 0, focusKey };
-  // Capture search input state if it is focused. The `.filter-search` input is
-  // an <input> element, so it carries a mutable `.value`; a focused filter chip
-  // (which also exposes classList.contains) must not be mistaken for it.
-  if (ae && ae !== document.body && section.contains(ae) && ae.classList
-      && typeof ae.classList.contains === 'function'
-      && ae.classList.contains('filter-search')
-      && ae.value !== undefined) {
-    snap.searchValue = ae.value;
-    snap.searchSelectionStart = ae.selectionStart;
-    snap.searchSelectionEnd = ae.selectionEnd;
-  }
-  return snap;
-}
-
-// Restore scrollTop, and re-focus the matching chip if it still exists.
-// Negative/boundary case: focusKey is null (nothing was focused) or the chip
-// with that identity was removed by the re-render — in both cases we simply
-// skip focusing, never throw.
-function restorePlanDetailState(section, snapshot) {
-   if (!section || !snapshot) return;
-   section.scrollTop = snapshot.scrollTop || 0;
-   if (!snapshot.focusKey) {
-     // restore search input if present
-     if (snapshot.searchValue !== undefined) {
-       try {
-         const searchInput = section.querySelector('.filter-search');
-         if (searchInput && typeof searchInput.focus === 'function') {
-           searchInput.value = snapshot.searchValue;
-           searchInput.focus();
-           if (typeof searchInput.setSelectionRange === 'function') {
-             const start = snapshot.searchSelectionStart !== undefined ? snapshot.searchSelectionStart : 0;
-             const end = snapshot.searchSelectionEnd !== undefined ? snapshot.searchSelectionEnd : 0;
-             searchInput.setSelectionRange(start, end);
-           }
-         }
-       } catch {
-         /* ignore errors restoring search input */
-       }
-     }
-     return;
-   }
-   const [dim, value] = snapshot.focusKey.split("\u0000");
-   const target = section.querySelector(
-     `.filter-chip[data-dim="${CSS.escape(dim)}"][data-value="${CSS.escape(value)}"]`);
-   if (target && typeof target.focus === "function") {
-     target.focus();
-   }
-}
-
 
 // Flash the header refresh indicator. Called once per successful refresh so
 // the user sees liveness without staring at the clock. The .flashing class
@@ -676,206 +215,6 @@ function isLongValue(value) {
   const s = String(value == null ? "" : value);
   if (s.length > 60) return true;
   return /[\\/\n]/.test(s);
-}
-
-// Map of copy-button field name -> rendered value for the currently-open
-// story modal. Populated by showStoryModal and consumed by handleCopyClick
-// so the click handler can resolve the value without walking detached DOM
-// (which the test fixtures simulate) or re-deriving from HTML.
-const copyValues = new Map();
-
-// Currently-open story in the modal: { plan, key } or null. Tracked so the
-// async journal fetch (which races with the user opening a different story
-// or closing the modal) can drop stale responses without racing in late
-// DOM writes. Without this guard, a slow fetch from a prior open could
-// overwrite the new story's journal section with the previous one.
-const openStoryRef = { plan: null, key: null };
-
-// Render a single timeline entry as HTML. Defensive defaults for fields the
-// server may or may not have (entry missing `next_hint` must render nothing,
-// never the literal string 'undefined'). Returns "" for entries with no
-// step AND no summary so corrupt rows leave no visual artifact.
-function renderJournalEntry(entry) {
-  if (!entry || typeof entry !== "object") return "";
-  const step = entry.step ? String(entry.step) : "";
-  const summary = entry.summary ? String(entry.summary) : "";
-  const nextHint = entry.next_hint ? String(entry.next_hint) : "";
-  const ts = entry.ts ? String(entry.ts) : "";
-  if (!step && !summary) return "";
-  // next_hint is muted/caption-tone because it's metadata about what comes
-  // NEXT (process hint), not part of the current entry's narrative. We omit
-  // the block entirely when missing rather than emitting an empty <p>.
-  const nextHtml = nextHint
-    ? `<div class="timeline-next muted">next: ${escapeHtml(nextHint)}</div>`
-    : "";
-  const tsHtml = ts
-    ? `<div class="timeline-ts muted">${escapeHtml(ts)}</div>`
-    : "";
-  return `
-    <li class="timeline-item">
-      <div class="timeline-step">${escapeHtml(step || "(no step)")}</div>
-      <div class="timeline-summary">${escapeHtml(summary)}</div>
-      ${nextHtml}
-      ${tsHtml}
-    </li>
-  `;
-}
-
-// Render the entire Journal section for the story modal. `data` matches the
-// /api/plans/{plan}/stories/{story}/journal response: {available, entries}.
-// The empty state is shown when (a) the file is missing/malformed, or
-// (b) the entries array is empty — both are visually indistinguishable in
-// the UI, matching the endpoint's contract (test: empty list == unavailable).
-function renderJournal(data) {
-  if (!data || !data.available || !Array.isArray(data.entries) || data.entries.length === 0) {
-    return `
-      <h3 class="modal-section">Journal</h3>
-      <p class="modal-empty" data-journal-empty>No journal yet.</p>
-    `;
-  }
-  const items = data.entries.map(renderJournalEntry).filter(Boolean).join("");
-  return `
-    <h3 class="modal-section">Journal</h3>
-    <ol class="timeline" data-journal-list>${items}</ol>
-  `;
-}
-
-// Render the per-story Checklist section (DASHBOARD_STORY_PROGRESS_PLAN.md
-// Tier 0): the tech-lead's ordered checklist (.agent_plan.md) and the
-// executor's running scratchpad (.agent_scratchpad.md), both fetched from the
-// story's worktree. `data` matches the /checklist endpoint response:
-//   { plan: {available, text}, scratchpad: {available, text} }
-//
-// These artifacts only exist for stories run under PIPELINE_DECOMPOSE; every
-// other story (the common case) gets the "No checklist" empty state. The
-// agent writes both files, so their text is HTML-escaped (never trusted) —
-// mirroring renderJournal's escaping contract.
-function renderChecklist(data) {
-  const empty = `
-    <h3 class="modal-section">Checklist</h3>
-    <p class="modal-empty" data-checklist-empty>No checklist (story not run with guided decomposition).</p>
-  `;
-  if (!data) return empty;
-  const plan = (data.plan && typeof data.plan === "object") ? data.plan : {};
-  const scratch = (data.scratchpad && typeof data.scratchpad === "object") ? data.scratchpad : {};
-  if (!plan.available && !scratch.available) return empty;
-  const parts = [`<h3 class="modal-section">Checklist</h3>`];
-  if (plan.available) {
-    parts.push(
-      `<pre class="dsh-checklist-plan mono" data-checklist-plan>${escapeHtml(plan.text || "")}</pre>`
-    );
-  }
-  if (scratch.available) {
-    parts.push(`<h4 class="modal-subsection">Progress notes</h4>`);
-    parts.push(
-      `<pre class="dsh-checklist-scratch mono" data-checklist-scratch>${escapeHtml(scratch.text || "")}</pre>`
-    );
-  }
-  return parts.join("");
-}
-
-// Fetch the journal for the currently-open story and inject the rendered
-// HTML into the modal body. Guards against races with modal close /
-// re-open by checking `openStoryRef` before mutating DOM. Failures (network
-// down, server 500) are silently swallowed — the empty state shows by
-// default. The journal is informational, not critical, so it must never
-// block opening the modal or throw an unhandled promise rejection.
-async function loadStoryJournal(plan, key, container) {
-  if (!plan || !key || !container) return;
-  openStoryRef.plan = plan;
-  openStoryRef.key = key;
-  try {
-    const data = await fetchJson(
-      `/api/plans/${encodeURIComponent(plan)}/stories/${encodeURIComponent(key)}/journal`
-    );
-    // Drop the response if the user closed the modal or opened a
-    // different story in the meantime — late writes would overwrite
-    // the new view with stale data.
-    if (openStoryRef.plan !== plan || openStoryRef.key !== key) return;
-    const html = renderJournal(data);
-    const slot = container.querySelector("[data-journal-slot]");
-    if (slot) slot.innerHTML = html;
-  } catch {
-    // 404 (story/plan gone) or transient network error: keep the empty
-    // state placeholder. Don't rethrow — the modal stays usable.
-    if (openStoryRef.plan !== plan || openStoryRef.key !== key) return;
-    const slot = container.querySelector("[data-journal-slot]");
-    if (slot) {
-      slot.innerHTML = `
-        <h3 class="modal-section">Journal</h3>
-        <p class="modal-empty">No journal yet.</p>
-      `;
-    }
-  }
-}
-
-// Fetch the checklist + scratchpad for the currently-open story and inject
-// the rendered HTML into the modal's checklist slot. Same race-guard
-// contract as loadStoryJournal (openStoryRef): a slow fetch that resolves
-// after the user opened a different story is dropped, never overwriting the
-// new view. Failures (network, 500) fall back to the empty state, never
-// throw — the checklist is informational, like the journal.
-async function loadStoryChecklist(plan, key, container) {
-  if (!plan || !key || !container) return;
-  openStoryRef.plan = plan;
-  openStoryRef.key = key;
-  try {
-    const data = await fetchJson(
-      `/api/plans/${encodeURIComponent(plan)}/stories/${encodeURIComponent(key)}/checklist`
-    );
-    if (openStoryRef.plan !== plan || openStoryRef.key !== key) return;
-    const slot = container.querySelector("[data-checklist-slot]");
-    if (slot) slot.innerHTML = renderChecklist(data);
-  } catch {
-    if (openStoryRef.plan !== plan || openStoryRef.key !== key) return;
-    const slot = container.querySelector("[data-checklist-slot]");
-    if (slot) slot.innerHTML = renderChecklist(null);
-  }
-}
-
-
-// Build a small "copy" button. The data-copy attribute carries the field
-// name; handleCopyClick resolves the value from `copyValues` so the markup
-// stays a single tiny token and so copy click events for the currently-open
-// story work consistently.
-function renderCopyButton(fieldName, value) {
-  copyValues.set(fieldName, String(value == null ? "" : value));
-  return `<button type="button" class="copy-btn" data-copy="${escapeHtml(fieldName)}" aria-label="Copy ${escapeHtml(fieldName)}">copy</button>`;
-}
-
-// Click handler for `.copy-btn` elements within the story modal. Attached
-// once at module load via event delegation; we don't rebind on every open.
-// Silently swallows clipboard errors and environments where
-// navigator.clipboard is undefined, so the button never throws.
-function handleCopyClick(e) {
-  const btn = e.target.closest && e.target.closest(".copy-btn");
-  if (!btn) return;
-  const field = btn.getAttribute("data-copy") || "";
-  const text = copyValues.get(field) || "";
-  if (!text) return;
-  // navigator.clipboard requires a secure context; guard both the API
-  // presence and the writeText call. In environments where the API is
-  // unavailable (older browsers, insecure contexts, Node smoke tests)
-  // the click is a silent no-op — never throws.
-  if (typeof navigator === "undefined" || !navigator.clipboard
-      || typeof navigator.clipboard.writeText !== "function") {
-    return;
-  }
-  navigator.clipboard.writeText(text).then(
-    () => {
-      const prev = btn.textContent;
-      btn.textContent = "copied";
-      btn.classList.add("copied");
-      setTimeout(() => {
-        btn.textContent = prev;
-        btn.classList.remove("copied");
-      }, 1200);
-    },
-    () => {
-      // Swallow rejection (denied permission, etc.) — feature detection
-      // already passed so we treat this as a transient user-side issue.
-    }
-  );
 }
 
 function filterStoryNotifications(records, storyKey) {
@@ -1619,11 +958,11 @@ async function refresh() {
   if (state.selectedPlan) {
     try {
       const plan = await fetchJson(`/api/plans/${encodeURIComponent(state.selectedPlan)}`);
-      diffNotificationsOnPoll = true;
+      setDiffNotificationsOnPoll(true);
       try {
         renderPlanDetail(plan);
       } finally {
-        diffNotificationsOnPoll = false;
+        setDiffNotificationsOnPoll(false);
       }
       // Poll-triggered update: append only new notification rows to the
       // already-rendered notifications panel body instead of rebuilding it.
@@ -1733,6 +1072,8 @@ function toggleTheme() {
 
 initTheme();
 resetState();
+resetPlanListState();
+resetPlanDetailState();
 loadFilters();
 // Apply the URL hash (if any) before the first refresh — hash wins over
 // localStorage. Also wire the browser's hashchange event so back/forward
@@ -2057,18 +1398,26 @@ export {
 
 export {
   NOTIF_SEVERITY_COLOR,
-  _applyActiveView, _buildPlanRow,
+  _applyActiveView,
   _diffNotificationsPanel, _diffOverviewPlanRows,
-  _renderPlanListFull, _renderStoryModalBody, appendCommsMessage,
-  capturePlanDetailState,
+  _renderStoryModalBody, appendCommsMessage,
   filterNotifications,
-  filterStoryNotifications, flashRefreshIndicator, handleCopyClick,
-  notifSeverityFilter,
-  pickNewNotifications, planListRowsByName, pushToast, refresh,
-  renderChecklist, renderJournal,
-  renderJournalEntry, renderNotifications, renderOverview, renderPlanDetail,
-  renderPlanList, renderStoryModalNotifications, renderToolTraceHtml,
-  restorePlanDetailState, selectComms, selectOverview, selectPlan,
+  filterStoryNotifications, flashRefreshIndicator,
+  notifSeverityFilter, setNotifSeverityFilter,
+  pickNewNotifications, pushToast, refresh,
+  renderDecisions, renderNotifications, renderOverview,
+  renderStoryModalNotifications, renderToolTraceHtml,
+  selectComms, selectOverview, selectPlan,
   sendCommsMessage, showStoryModal, startPolling, stopPolling,
-  syncPollingWithVisibility, togglePlanArchived,
+  syncPollingWithVisibility,
 };
+
+export {
+  renderPlanList, _renderPlanListFull, _buildPlanRow, togglePlanArchived,
+  planListRowsByName,
+} from "./app/render/plan-list.js";
+
+export {
+  renderPlanDetail, capturePlanDetailState, restorePlanDetailState,
+  renderChecklist, renderJournal, renderJournalEntry, handleCopyClick,
+} from "./app/render/plan-detail.js";

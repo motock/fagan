@@ -20,6 +20,10 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# renderPlanDetail's notifications-panel call site was relocated out of
+# static/app.js into this dedicated render module (server-app-file-split
+# plan); the static-source assertion below follows it here.
+PLAN_DETAIL_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-detail.js")
 
 
 def _run_app_js(expr):
@@ -260,8 +264,9 @@ def test_render_plan_detail_without_notification_records_does_not_throw():
 
 def test_render_plan_detail_uses_notification_records_key():
     """The call site inside renderPlanDetail must read plan.notification_records
-    (not the old plan.notifications)."""
-    js = _app_js_source()
+    (not the old plan.notifications). (Now in static/app/render/plan-detail.js.)"""
+    with open(PLAN_DETAIL_JS, encoding="utf-8") as fh:
+        js = fh.read()
     assert "renderNotifications(plan.notification_records)" in js
     # The old call site must be gone.
     assert "renderNotifications(plan.notifications)" not in js

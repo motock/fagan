@@ -32,6 +32,10 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# capturePlanDetailState/restorePlanDetailState were relocated out of
+# static/app.js into this dedicated render module (server-app-file-split
+# plan); the static-source assertions below follow them here.
+PLAN_DETAIL_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-detail.js")
 
 
 def _app_js_source():
@@ -165,16 +169,19 @@ def test_source_exports_both_functions():
 def test_source_existing_fields_not_removed():
     """The existing `scrollTop` and `focusKey` fields must NOT be removed or
     renamed — the story says only ADD to the snapshot object. Assert both
-    names still appear in the source."""
-    src = _app_js_source()
+    names still appear in the source. (Now in
+    static/app/render/plan-detail.js.)"""
+    with open(PLAN_DETAIL_JS, encoding="utf-8") as fh:
+        src = fh.read()
     assert "scrollTop" in src
     assert "focusKey" in src
 
 
 def test_source_new_fields_present():
     """The three new snapshot fields must appear by name in the source (the
-    implementer must add them)."""
-    src = _app_js_source()
+    implementer must add them). (Now in static/app/render/plan-detail.js.)"""
+    with open(PLAN_DETAIL_JS, encoding="utf-8") as fh:
+        src = fh.read()
     assert "searchValue" in src
     assert "searchSelectionStart" in src
     assert "searchSelectionEnd" in src
@@ -182,8 +189,10 @@ def test_source_new_fields_present():
 
 def test_source_uses_setSelectionRange_and_filter_search_selector():
     """The restore path must query `.filter-search` and call
-    `.setSelectionRange(...)`; assert both tokens appear in the source."""
-    src = _app_js_source()
+    `.setSelectionRange(...)`; assert both tokens appear in the source.
+    (Now in static/app/render/plan-detail.js.)"""
+    with open(PLAN_DETAIL_JS, encoding="utf-8") as fh:
+        src = fh.read()
     assert ".filter-search" in src
     assert "setSelectionRange" in src
 

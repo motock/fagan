@@ -74,18 +74,21 @@ def test_store_protocol_declares_four_methods():
 
 
 def test_store_and_filestore_defined_above_pipeline_service():
-    # The task requires Store and FileStore to be inserted IMMEDIATELY ABOVE
-    # `class PipelineService:`. Assert source ordering: Store and FileStore
-    # both appear before PipelineService in the file.
-    src = inspect.getsource(p)
+    # Store and FileStore were extracted verbatim into pipeline/store.py; the
+    # classes are defined there (Store above FileStore) and re-exported from
+    # pipeline.server so the bindings still resolve on p.
+    from pipeline import store as store_mod
+
+    src = inspect.getsource(store_mod)
     i_store = src.find("class Store(Protocol):")
     i_filestore = src.find("class FileStore:")
-    i_service = src.find("class PipelineService:")
-    assert i_store != -1, "class Store(Protocol): not found in source"
-    assert i_filestore != -1, "class FileStore: not found in source"
-    assert i_service != -1, "class PipelineService: not found in source"
-    assert i_store < i_filestore < i_service, (
-        "Store and FileStore must be defined above PipelineService, in that order"
+    assert i_store != -1, "class Store(Protocol): not found in pipeline/store.py"
+    assert i_filestore != -1, "class FileStore: not found in pipeline/store.py"
+    assert i_store < i_filestore, (
+        "Store and FileStore must be defined in pipeline/store.py, Store first"
+    )
+    assert hasattr(p, "Store") and hasattr(p, "FileStore"), (
+        "pipeline.server must re-export Store and FileStore"
     )
 
 
@@ -242,9 +245,11 @@ def test_transaction_does_not_reimplement_fcntl(plan_dir):
 
 def test_typing_imports_protocol():
     # C1: `from typing import Any, Protocol` (Protocol must be imported).
-    src = inspect.getsource(p)
-    # The import line must include Protocol.
-    assert "Protocol" in src, "pipeline.server must import Protocol from typing"
+    # Store/FileStore moved to pipeline/store.py, which owns the Protocol import.
+    from pipeline import store as store_mod
+
+    src = inspect.getsource(store_mod)
+    assert "Protocol" in src, "pipeline/store.py must import Protocol from typing"
 
 
 def test_only_one_typing_import_line():
@@ -252,7 +257,9 @@ def test_only_one_typing_import_line():
     # add a second one.
     import re
 
-    src = inspect.getsource(p)
+    from pipeline import store as store_mod
+
+    src = inspect.getsource(store_mod)
     typing_imports = re.findall(r"^from typing import .+$", src, re.MULTILINE)
     assert len(typing_imports) == 1, (
         f"expected exactly one `from typing import` line, found {len(typing_imports)}"

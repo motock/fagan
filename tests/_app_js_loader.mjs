@@ -30,9 +30,15 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
   const win = dom.window || dom;
   if (_ESM_RE.test(src)) {
     const appFileUrl = pathToFileURL(_APP_JS).href;
-    const mod = await import(appFileUrl);
-    Object.assign(win, mod);
-    return mod;
+    const _prevWindow = globalThis.window;
+    globalThis.window = win;
+    try {
+      const mod = await import(appFileUrl);
+      Object.assign(win, mod);
+      return mod;
+    } finally {
+      globalThis.window = _prevWindow;
+    }
   }
   // CJS path (today): evaluate inside the target window.
   win.eval(src);

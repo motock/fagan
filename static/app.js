@@ -1,14 +1,3 @@
-const STATUS_COLUMNS = [
-  "todo", "in_progress", "tests_passed", "pr_open", "done",
-  "changes_requested", "interrupted", "parked", "failed",
-];
-
-const SORT_OPTIONS = [
-  ["key", "Key"],
-  ["risk", "Risk"],
-  ["activity", "Activity"],
-];
-
 const RISK_RANK = { high: 3, medium: 2, low: 1 };
 
 // Stale threshold (minutes) for the in_progress "aged" indicator on cards.

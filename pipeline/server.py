@@ -59,8 +59,11 @@ from .build_detect import (  # noqa: F401
     _build_command_for,
     _is_pytest_cmd,
     _isolation_only_acceptance_warning,
+    _last_done_summary,
+    _module_level_function_names,
     _platform_locked_fixture_warning,
     _provision_worktree_venv,
+    _run_lint_gate,
     _scope_test_cmd_to_acceptance,
     _test_command_for,
     _venv_python_for,
@@ -84,13 +87,20 @@ from .checkpoint import (
 # REPO_ROOT via a lazy import from this module (Option B - see
 # PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
 from .ci import (  # noqa: F401
+    _PATCHABLE_STORY_FIELDS,
+    _VALID_STORY_STATUSES,
     PIPELINE_MERGE_BUILD_GATE,
     PIPELINE_MERGE_CI_GATE,
     PIPELINE_MERGE_CI_TIMEOUT,
     _acceptance_tampered,
+    _ci_pending_expired,
     _ci_rerun,
     _ci_status,
     _ci_status_once,
+    _get_effective_config_impl,
+    _mark_story_done_impl,
+    _parse_pytest_excerpt,
+    _record_retro_pending,
     _repo_has_ci_configured,
     _reverify_acceptance,
     _reverify_build,
@@ -396,15 +406,6 @@ REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
 PIPELINE_SELF_REPO_ROOT = Path(__file__).resolve().parent.parent
 RETRO_PENDING_PATH = PIPELINE_SELF_REPO_ROOT / "retros" / "PENDING.md"
 
-def _record_retro_pending(plan_name: str, story_count: int) -> None:
-    RETRO_PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    existing_lines = RETRO_PENDING_PATH.read_text().splitlines() if RETRO_PENDING_PATH.exists() else []
-    marker = f"- {plan_name} "
-    if any(line.startswith(marker) for line in existing_lines):
-        return
-    date = datetime.now(timezone.utc).date().isoformat()
-    with RETRO_PENDING_PATH.open("a") as f:
-        f.write(f"- {plan_name} \u2014 completed {date}, {story_count} stories\n")
 
 PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -424,21 +425,6 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 # latter via the dashboard/notification summary, the former is for
 # tail-grepping the orchestrator log).
 logging.getLogger("pipeline")
-
-
-def _ci_pending_expired(since_iso: str) -> bool:
-    """True once a story has waited on pending CI longer than the total
-    patience the blocking gate used to provide (MERGE_MAX_ATTEMPTS
-    attempts x PIPELINE_MERGE_CI_TIMEOUT each)."""
-    try:
-        since = datetime.fromisoformat(since_iso)
-    except (TypeError, ValueError):
-        return False
-    now = datetime.now(timezone.utc)
-    if since.tzinfo is None:
-        since = since.replace(tzinfo=timezone.utc)
-    elapsed = (now - since).total_seconds()
-    return elapsed >= MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
 
 
 
@@ -634,49 +620,6 @@ def get_effective_config(
     than raising."""
     return _service.get_effective_config(plan_name)
 
-def _get_effective_config_impl(
-    plan_name: str | None = None,
-) -> dict[str, Any]:
-    plan_role_config = _plan_role_config(plan_name) if plan_name else None
-    model_fallbacks = {
-        "overlord": lambda: _persona_default_model("overlord") or "opus",
-        "planner": lambda: DEFAULT_MODEL,
-        "dispatch": lambda: DEFAULT_MODEL,
-        "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
-        "decompose": lambda: _persona_default_model("product-analyst") or "opus",
-        "security": lambda: _persona_default_model("security-engineer") or DEFAULT_MODEL,
-    }
-    try:
-        registry = role_registry.load_registry()
-    except role_registry.RoleRegistryError:
-        registry = {}
-
-    roles = config_provenance.effective_role_config(
-        plan_role_config=plan_role_config,
-        registry=registry,
-        model_fallbacks=model_fallbacks,
-    )
-    env = config_provenance.effective_env_config()
-    ignored_env_vars = config_provenance.ignored_env_vars_present()
-
-    plist_path = config_provenance._scheduler_plist_path()
-    mcp_env_path = config_provenance._claude_json_path()
-    registry_path = role_registry._registry_path()
-
-    sources = {
-        "launchd_plist": {"path": str(plist_path), "exists": plist_path.exists()},
-        "mcp_server_env": {"path": str(mcp_env_path), "exists": mcp_env_path.exists()},
-        "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
-    }
-
-    return {
-        "ok": True,
-        "roles": roles,
-        "env": env,
-        "ignored_env_vars": ignored_env_vars,
-        "sources": sources,
-    }
-
 
 @mcp.tool()
 def decompose_plan(request: str) -> dict[str, Any]:
@@ -802,65 +745,6 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     return _service.dispatch_story(plan_name, story_key)
 
 
-@mcp.tool()
-def _last_done_summary(agent_log: Path) -> str:
-    """Return the summary text from the LAST "] DONE:" line in agent.log, or
-    "" if the agent never reached done. Only the final DONE line reflects
-    the current run - a resumed agent appends to the same log across ticks
-    (mirrors _last_nonempty_line's resumed-log caution for STEP_CAP_MARKERS).
-    local_agent.py's `done` tool prints its summary argument verbatim as
-    "[step N] DONE: <summary>"; this is that real signal, not a fictitious
-    exit protocol."""
-    if not agent_log.exists():
-        return ""
-    marker = "] DONE:"
-    last = ""
-    with open(agent_log, "rb") as fh:
-        for raw in fh:
-            line = raw.decode("utf-8", errors="replace").strip()
-            idx = line.find(marker)
-            if idx != -1:
-                last = line[idx + len(marker) :].strip()
-    return last
-
-
-def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
-    lint = detect_lint_command(worktree)
-    if lint is None:
-        return None
-    lint_dir, cmd = lint
-    try:
-        result = subprocess.run(
-            cmd, check=False, cwd=lint_dir, capture_output=True, text=True, env=test_env
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return {
-        "cmd": cmd,
-        "returncode": result.returncode,
-        "stdout_tail": (result.stdout or "")[-2000:],
-        "stderr_tail": (result.stderr or "")[-2000:],
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-def _module_level_function_names(source: str) -> set[str]:
-    """Top-level (module-scope) function names defined in `source`. Ignores
-    nested defs, closures, and class methods - only a bare module-level
-    `def` is a candidate for _find_dead_new_functions, since that's the
-    shape of an independently-callable production symbol a call site is
-    expected to reference by name."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return set()
-    return {
-        node.name
-        for node in ast.iter_child_nodes(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-
-
 from pipeline.story_status import check_story_status
 
 
@@ -905,51 +789,6 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     return _service.mark_story_done(plan_name, story_key)
 
-def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
-    """
-    Transition the ticket to Done and update the local manifest.
-    Use after you've reviewed and merged the agent's PR.
-    """
-    _validate_key(plan_name)
-    _validate_key(story_key)
-    get_ticket_provider().set_state(story_key, LogicalState.DONE, plan_name)
-
-    manifest = _store.get_manifest(plan_name)
-    manifest["stories"][story_key]["status"] = "done"
-    manifest["stories"][story_key].pop("parked_reason", None)
-    _store.save_manifest(plan_name, manifest)
-
-    # Check if all stories are now done
-    all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
-    if all_done:
-        if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):
-            _record_retro_pending(plan_name, len(manifest["stories"]))
-        return {
-            "ok": True,
-            "plan_completed": True,
-            "stories": list(manifest["stories"].keys()),
-        }
-    return {"ok": True}
-
-
-# Story fields patch_story may edit. Deliberately excludes "status" (use
-# set_story_status), "worktree", "pid", "review_verdict" and other
-# pipeline-owned runtime state - this tool is for correcting what the plan
-# authored, not for mechanically bypassing the review/merge gates.
-_PATCHABLE_STORY_FIELDS = frozenset(
-    (
-        "agent_instructions",
-        "model",
-        "persona",
-        "risk",
-        "dependencies",
-        "acceptance",
-        "pr_url",
-        "summary",
-        "tdd_split",
-        "backend",
-    )
-)
 
 # The documented allowlist of valid story `backend` values
 # (see pipeline-story-schema.md). patch_story validates against this BEFORE
@@ -958,88 +797,6 @@ _VALID_STORY_BACKENDS = frozenset(
     {"claude", "local", "ollama", "lmstudio", "mlx", "auto"}
 )
 
-# Every status value the pipeline itself assigns to a story (see the
-# "status"] = / "status": literal assignments throughout this file). Kept as
-# an explicit allowlist so set_story_status can't be used to invent a status
-# the rest of the code doesn't know how to handle.
-_VALID_STORY_STATUSES = frozenset(
-    (
-        "todo",
-        "in_progress",
-        "running",
-        "interrupted",
-        "failed",
-        "tests_passed",
-        "pr_open",
-        "changes_requested",
-        "parked",
-        "done",
-        "done",
-    )
-)
-
-
-def _parse_pytest_excerpt(gate_error: str) -> str | None:
-    """Best-effort extract of a pytest failure excerpt from ``gate_error``.
-
-    Looks for a literal ``<file>.py:<line>: <Exception>: <assertion>`` pattern
-    and, only when the whole pattern is found, returns a short
-    ``On {file}:{line}, {assertion} fails`` string built from the exact file,
-    line, and assertion substrings captured from ``gate_error``. Returns
-    ``None`` when nothing recognizable parses -- it never fabricates a
-    file/line/assertion that is not literally present in ``gate_error``.
-    """
-    if not gate_error:
-        return None
-    match = re.search(
-        r"(?P<file>[\w./-]+\.py):(?P<line>\d+):\s+"
-        r"(?P<exc>[A-Za-z_]+Error):\s*(?P<assertion>.+)",
-        gate_error,
-    )
-    if not match:
-        return None
-    return (
-        f"On {match.group('file')}:{match.group('line')}, "
-        f"{match.group('assertion')} fails"
-    )
-
-
-def _ci_rework_feedback(gate_error: str, attempts: int) -> str:
-    """Generate review feedback for merge-gate CI failures.
-
-    ``attempts`` is the current rework round number (1 for the first rework).
-    Round 1 is byte-identical to the pre-round-escalation wording. From round 2
-    onward a ``PREVIOUS REWORK ATTEMPT {attempts-1} DID NOT FIX THIS.`` prefix
-    is prepended, and when a pytest excerpt is parseable from ``gate_error`` it
-    is appended (in addition to the verbatim ``Gate error:`` line) along with
-    the full-suite done-bar instruction.
-    """
-    lint_keywords = ("lint", "ruff", "eslint", "clippy", "golangci")
-    lower = gate_error.lower()
-    if any(k in lower for k in lint_keywords):
-        base = (
-            f"The merge-gate CI check failed on your submitted branch "
-            f"Gate error: {gate_error}\n\n"
-            "This is a LINT failure, not a test failure - the test suite may already pass, so re-running tests alone proves nothing. Run the project's lint command (e.g. `ruff check .` for Python) from the repo root, fix every finding, and commit.\n\n"
-            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
-        )
-    else:
-        base = (
-            f"The merge-gate CI check failed on your submitted branch "
-            f"Gate error: {gate_error}\n\n"
-            "The bug could be in the implementation OR in a test file you wrote; re-examine both against the spec and make a targeted fix.\n\n"
-            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
-        )
-    if attempts < 2:
-        return base
-    msg = f"PREVIOUS REWORK ATTEMPT {attempts - 1} DID NOT FIX THIS. " + base
-    excerpt = _parse_pytest_excerpt(gate_error)
-    if excerpt is not None:
-        msg = (
-            f"{msg}\n\n{excerpt}\n"
-            "Do not call done until the full suite passes."
-        )
-    return msg
 
 
 @mcp.tool()
@@ -1206,6 +963,20 @@ def advance_all_plans() -> dict[str, Any]:
     one-shot cleanup (e.g. tests, ops CLI) but is NOT wired in here.
     """
     return _service.advance_all_plans()
+
+
+def _ci_rework_feedback(gate_error: str, attempts: int) -> str:
+    """Generate review feedback for merge-gate CI failures.
+
+    Thin delegating wrapper over :func:`pipeline.ci._ci_rework_feedback`
+    (the implementation lives in ``pipeline/ci.py``). Kept here so the
+    ``pipeline.server`` binding stays the monkeypatch target the test suite
+    patches, and so the call site in ``pipeline/advance.py`` (which reads
+    this name via ``_ServerRef``) resolves to the live server binding.
+    """
+    from .ci import _ci_rework_feedback as _impl
+
+    return _impl(gate_error, attempts)
 
 
 if __name__ == "__main__":

@@ -7,10 +7,13 @@ p._scope_test_cmd_to_acceptance(...), etc., which resolve through the
 re-export in pipeline_mcp_server.py.
 """
 
+import ast
 import json
 import re
 import shutil
 import subprocess
+import types
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -562,12 +565,90 @@ def _added_pytest_test_paths(
     return paths
 
 
+def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
+    lint = detect_lint_command(worktree)
+    if lint is None:
+        return None
+    lint_dir, cmd = lint
+    try:
+        result = subprocess.run(
+            cmd, check=False, cwd=lint_dir, capture_output=True, text=True, env=test_env
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {
+        "cmd": cmd,
+        "returncode": result.returncode,
+        "stdout_tail": (result.stdout or "")[-2000:],
+        "stderr_tail": (result.stderr or "")[-2000:],
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _module_level_function_names(source: str) -> set[str]:
+    """Top-level (module-scope) function names defined in `source`. Ignores
+    nested defs, closures, and class methods - only a bare module-level
+    `def` is a candidate for _find_dead_new_functions, since that's the
+    shape of an independently-callable production symbol a call site is
+    expected to reference by name."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    return {
+        node.name
+        for node in ast.iter_child_nodes(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _last_done_summary(agent_log: Path) -> str:
+    """Return the summary text from the LAST "] DONE:" line in agent.log, or
+    "" if the agent never reached done. Only the final DONE line reflects
+    the current run - a resumed agent appends to the same log across ticks
+    (mirrors _last_nonempty_line's resumed-log caution for STEP_CAP_MARKERS).
+    local_agent.py's `done` tool prints its summary argument verbatim as
+    "[step N] DONE: <summary>"; this is that real signal, not a fictitious
+    exit protocol."""
+    if not agent_log.exists():
+        return ""
+    marker = "] DONE:"
+    last = ""
+    with open(agent_log, "rb") as fh:
+        for raw in fh:
+            line = raw.decode("utf-8", errors="replace").strip()
+            idx = line.find(marker)
+            if idx != -1:
+                last = line[idx + len(marker) :].strip()
+    return last
+
+
+# Rebind _run_lint_gate's globals to pipeline.server's namespace so that
+# bare-name reads inside the body (e.g. `detect_lint_command`) resolve against
+# pipeline.server at call time. This preserves the original behavior where the
+# function lived in pipeline.server and saw monkeypatched module globals
+# (LOAD_GLOBAL does not consult a module-level __getattr__, so a plain
+# re-export would not).
+from . import server as _server
+
+_run_lint_gate = types.FunctionType(
+    _run_lint_gate.__code__,
+    _server.__dict__,
+    _run_lint_gate.__name__,
+    _run_lint_gate.__defaults__,
+    _run_lint_gate.__closure__,
+)
+
+
 __all__ = [
     "_acceptance_rel_paths",
     "_added_pytest_test_paths",
     "_build_command_for",
     "_is_pytest_cmd",
+    "_last_done_summary",
+    "_module_level_function_names",
     "_provision_worktree_venv",
+    "_run_lint_gate",
     "_scope_test_cmd_to_acceptance",
     "_test_command_for",
     "_venv_python_for",

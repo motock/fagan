@@ -121,9 +121,38 @@ _persona_default_model = _ServerRef("_persona_default_model")
 DEFAULT_MODEL = _ServerRef("DEFAULT_MODEL")
 _run_decompose = _ServerRef("_run_decompose")
 _extract_json_block = _ServerRef("_extract_json_block")
-_VALID_STORY_STATUSES = _ServerRef("_VALID_STORY_STATUSES")
-_PATCHABLE_STORY_FIELDS = _ServerRef("_PATCHABLE_STORY_FIELDS")
-_VALID_STORY_BACKENDS = _ServerRef("_VALID_STORY_BACKENDS")
+_VALID_STORY_STATUSES = frozenset(
+    (
+        "todo",
+        "in_progress",
+        "running",
+        "interrupted",
+        "failed",
+        "tests_passed",
+        "pr_open",
+        "changes_requested",
+        "parked",
+        "done",
+        "done",
+    )
+)
+_PATCHABLE_STORY_FIELDS = frozenset(
+    (
+        "agent_instructions",
+        "model",
+        "persona",
+        "risk",
+        "dependencies",
+        "acceptance",
+        "pr_url",
+        "summary",
+        "tdd_split",
+        "backend",
+    )
+)
+_VALID_STORY_BACKENDS = frozenset(
+    {"claude", "local", "ollama", "lmstudio", "mlx", "auto"}
+)
 _dispatch_story_impl = _ServerRef("_dispatch_story_impl")
 _original_review_story = _ServerRef("_original_review_story")
 _advance_pipeline_locked = _ServerRef("_advance_pipeline_locked")

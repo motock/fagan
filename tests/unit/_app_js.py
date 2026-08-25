@@ -54,6 +54,7 @@ def run_app_js(expr, app_js=_APP_JS_DEFAULT, shim=""):
     script = (
         shim
         + f"\nconst fs=require('fs');eval(fs.readFileSync({json.dumps(app_js)},'utf8'));"
-        + f"\nprocess.stdout.write(JSON.stringify(eval({json.dumps(expr)})));"
+        + "\nif (globalThis.window) globalThis.state = globalThis.window.state;"
+        + f"\n(async () => {{ process.stdout.write(JSON.stringify(await eval({json.dumps(expr)}))); }})();"
     )
     return subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)

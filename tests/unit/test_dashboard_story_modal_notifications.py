@@ -17,6 +17,8 @@ import json
 import os
 import subprocess
 
+from _app_js import run_app_js
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
 

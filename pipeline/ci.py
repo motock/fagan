@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app import role_registry
+
 # Import helpers for test detection and scoping.  These imports are used in
 # :func:`_reverify_acceptance` below; the ``noqa`` comments were removed as
 # they were incorrect.
@@ -29,7 +31,16 @@ from .build_detect import (
     detect_test_command,
 )
 from .concurrency import _heavy_lock, _is_heavy
-from .config import MERGE_MAX_ATTEMPTS
+from .config import DEFAULT_MODEL, MERGE_MAX_ATTEMPTS
+from .config_provenance import (
+    _claude_json_path,
+    _scheduler_plist_path,
+    effective_env_config,
+    effective_role_config,
+    ignored_env_vars_present,
+)
+from .persistence import _plan_role_config
+from .persona import _persona_default_model
 
 # ---------- CI env-var gates ----------
 PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
@@ -627,6 +638,50 @@ def _ci_rework_feedback(gate_error: str, attempts: int) -> str:
     return msg
 
 
+def _get_effective_config_impl(
+    plan_name: str | None = None,
+) -> dict[str, Any]:
+    plan_role_config = _plan_role_config(plan_name) if plan_name else None
+    model_fallbacks = {
+        "overlord": lambda: _persona_default_model("overlord") or "opus",
+        "planner": lambda: DEFAULT_MODEL,
+        "dispatch": lambda: DEFAULT_MODEL,
+        "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
+        "decompose": lambda: _persona_default_model("product-analyst") or "opus",
+        "security": lambda: _persona_default_model("security-engineer") or DEFAULT_MODEL,
+    }
+    try:
+        registry = role_registry.load_registry()
+    except role_registry.RoleRegistryError:
+        registry = {}
+
+    roles = effective_role_config(
+        plan_role_config=plan_role_config,
+        registry=registry,
+        model_fallbacks=model_fallbacks,
+    )
+    env = effective_env_config()
+    ignored_env_vars = ignored_env_vars_present()
+
+    plist_path = _scheduler_plist_path()
+    mcp_env_path = _claude_json_path()
+    registry_path = role_registry._registry_path()
+
+    sources = {
+        "launchd_plist": {"path": str(plist_path), "exists": plist_path.exists()},
+        "mcp_server_env": {"path": str(mcp_env_path), "exists": mcp_env_path.exists()},
+        "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
+    }
+
+    return {
+        "ok": True,
+        "roles": roles,
+        "env": env,
+        "ignored_env_vars": ignored_env_vars,
+        "sources": sources,
+    }
+
+
 # ---------- Story-done + story-field allowlists (folded from server.py) ----------
 # ``_mark_story_done_impl`` and the story-field allowlists were moved here from
 # ``pipeline/server.py`` (behavior-preserving refactor). The function body reads
@@ -758,6 +813,7 @@ __all__ = [
     "_ci_status",
     "_ci_status_once",
     "_fetch_ci_failure_excerpt",
+    "_get_effective_config_impl",
     "_mark_story_done_impl",
     "_parse_pytest_excerpt",
     "_record_retro_pending",

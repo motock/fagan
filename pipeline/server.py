@@ -95,9 +95,9 @@ from .ci import (  # noqa: F401
     _acceptance_tampered,
     _ci_pending_expired,
     _ci_rerun,
-    _ci_rework_feedback,
     _ci_status,
     _ci_status_once,
+    _get_effective_config_impl,
     _mark_story_done_impl,
     _parse_pytest_excerpt,
     _record_retro_pending,
@@ -160,7 +160,6 @@ from .config import (  # noqa: F401
     WEEK_RESUME_THRESHOLD,
     WEEKLY_REQUEST_THRESHOLD,
 )
-from .config_provenance import _get_effective_config_impl  # noqa: F401
 
 # Escalation helpers. Read REPO_ROOT / PLAN_DIR via lazy imports from the
 # server (circular-avoidance).
@@ -964,6 +963,20 @@ def advance_all_plans() -> dict[str, Any]:
     one-shot cleanup (e.g. tests, ops CLI) but is NOT wired in here.
     """
     return _service.advance_all_plans()
+
+
+def _ci_rework_feedback(gate_error: str, attempts: int) -> str:
+    """Generate review feedback for merge-gate CI failures.
+
+    Thin delegating wrapper over :func:`pipeline.ci._ci_rework_feedback`
+    (the implementation lives in ``pipeline/ci.py``). Kept here so the
+    ``pipeline.server`` binding stays the monkeypatch target the test suite
+    patches, and so the call site in ``pipeline/advance.py`` (which reads
+    this name via ``_ServerRef``) resolves to the live server binding.
+    """
+    from .ci import _ci_rework_feedback as _impl
+
+    return _impl(gate_error, attempts)
 
 
 if __name__ == "__main__":

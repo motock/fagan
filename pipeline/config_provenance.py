@@ -21,13 +21,6 @@ import pathlib
 import plistlib
 import xml.parsers.expat
 from dataclasses import dataclass
-from typing import Any
-
-from app import role_registry
-
-from .config import DEFAULT_MODEL
-from .persistence import _plan_role_config
-from .persona import _persona_default_model
 
 Path = pathlib.Path
 
@@ -529,47 +522,3 @@ def effective_role_config(*, plan_role_config=None, registry=None, model_fallbac
         )
         results.append(result)
     return results
-
-
-def _get_effective_config_impl(
-    plan_name: str | None = None,
-) -> dict[str, Any]:
-    plan_role_config = _plan_role_config(plan_name) if plan_name else None
-    model_fallbacks = {
-        "overlord": lambda: _persona_default_model("overlord") or "opus",
-        "planner": lambda: DEFAULT_MODEL,
-        "dispatch": lambda: DEFAULT_MODEL,
-        "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
-        "decompose": lambda: _persona_default_model("product-analyst") or "opus",
-        "security": lambda: _persona_default_model("security-engineer") or DEFAULT_MODEL,
-    }
-    try:
-        registry = role_registry.load_registry()
-    except role_registry.RoleRegistryError:
-        registry = {}
-
-    roles = effective_role_config(
-        plan_role_config=plan_role_config,
-        registry=registry,
-        model_fallbacks=model_fallbacks,
-    )
-    env = effective_env_config()
-    ignored_env_vars = ignored_env_vars_present()
-
-    plist_path = _scheduler_plist_path()
-    mcp_env_path = _claude_json_path()
-    registry_path = role_registry._registry_path()
-
-    sources = {
-        "launchd_plist": {"path": str(plist_path), "exists": plist_path.exists()},
-        "mcp_server_env": {"path": str(mcp_env_path), "exists": mcp_env_path.exists()},
-        "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
-    }
-
-    return {
-        "ok": True,
-        "roles": roles,
-        "env": env,
-        "ignored_env_vars": ignored_env_vars,
-        "sources": sources,
-    }

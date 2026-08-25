@@ -434,7 +434,7 @@ await test("flashRefreshIndicator populates the indicator element", async () => 
 await test("auto-refresh checkbox uncheck stops polling via change handler", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = await loadApp(doc, { fakeTimers: ft, autoRefreshChecked: true });
+  const api = await loadAppJs({ doc, fakeTimers: ft, autoRefreshChecked: true });
 
   assert.notStrictEqual(api.state.pollHandle, null,
     "polling should be active when auto-refresh starts checked");

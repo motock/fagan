@@ -8,10 +8,12 @@ Extracted verbatim from pipeline/server.py (behavior-preserving file move).
 import os
 import subprocess
 import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pipeline import server as _server
 from pipeline.dispatch import _find_dead_new_functions
 
 from .build_detect import (
@@ -677,6 +679,16 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
-def __getattr__(name: str):
-    import pipeline.server
-    return getattr(pipeline.server, name)
+# Rebind the function's globals to pipeline.server's namespace so that
+# bare-name reads inside the body (e.g. `detect_test_command`,
+# `_worktree_has_new_commits`, `_store`) resolve against pipeline.server at
+# call time. This preserves the original behavior where the function lived in
+# pipeline.server and saw monkeypatched module globals (LOAD_GLOBAL does not
+# consult a module-level __getattr__, so a plain re-export would not).
+check_story_status = types.FunctionType(
+    check_story_status.__code__,
+    _server.__dict__,
+    check_story_status.__name__,
+    check_story_status.__defaults__,
+    check_story_status.__closure__,
+)

@@ -476,4 +476,3 @@ await test("visibilitychange stops polling when hidden, resumes when visible", a
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
 })();
-process.exit(fail === 0 ? 0 : 1);

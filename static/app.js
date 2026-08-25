@@ -2,6 +2,7 @@ import {
   state, defaultFilters, loadFilters, saveFilters, toggleFilter, resetState,
   STATUS_COLUMNS, SORT_OPTIONS, VALID_SORTS, BACKEND_VALUES, ESCALATED_VALUES,
 } from "./app/state.js";
+import { fetchJson, postJson } from "./app/api.js";
 
 const RISK_RANK = { high: 3, medium: 2, low: 1 };
 
@@ -371,18 +372,6 @@ function decodeHtmlEntities(s) {
   return String(s).replace(/&(amp|lt|gt|quot|#39);/g, (m, name) => ({
     "amp": "&", "lt": "<", "gt": ">", "quot": '"', "#39": "'",
   }[name]));
-}
-
-async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-  return res.json();
-}
-
-async function postJson(url) {
-  const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-  return res.json();
 }
 
 // Plans come back from /api/plans already sorted newest-first by the

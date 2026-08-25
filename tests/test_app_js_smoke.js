@@ -242,12 +242,16 @@ function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
   ar.checked = autoRefreshChecked;
   const lu = makeEl("span", { attrs: { id: "last-updated" } });
   const ub = makeEl("div", { attrs: { id: "usage-banner" } });
+  const cs = makeEl("button", { attrs: { id: "comms-send" } });
+  const ci = makeEl("input", { attrs: { id: "comms-input" } });
   doc.register("story-modal-close", close);
   doc.register("story-modal", modal);
   doc.register("story-modal-body", body);
   doc.register("auto-refresh", ar);
   doc.register("last-updated", lu);
   doc.register("usage-banner", ub);
+  doc.register("comms-send", cs);
+  doc.register("comms-input", ci);
 }
 
 // Inject globals the production code touches at top level, then require

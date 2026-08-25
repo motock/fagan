@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -626,10 +627,130 @@ def _ci_rework_feedback(gate_error: str, attempts: int) -> str:
     return msg
 
 
+# ---------- Story-done + story-field allowlists (folded from server.py) ----------
+# ``_mark_story_done_impl`` and the story-field allowlists were moved here from
+# ``pipeline/server.py`` (behavior-preserving refactor). The function body reads
+# server-sourced module globals (``_store``, ``_validate_key``,
+# ``get_ticket_provider``, ``LogicalState``, ``PIPELINE_SELF_REPO_ROOT``,
+# ``_record_retro_pending``) as free variables. The test suite monkeypatches
+# those names on ``pipeline.server``, so the function is rebound below to
+# ``pipeline.server``'s namespace at call time (LOAD_GLOBAL does not consult a
+# module-level __getattr__, so a plain re-export would not).
+
+
+def _record_retro_pending(plan_name: str, story_count: int) -> None:
+    RETRO_PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)  # noqa: F821
+    existing_lines = (
+        RETRO_PENDING_PATH.read_text().splitlines()  # noqa: F821
+        if RETRO_PENDING_PATH.exists()  # noqa: F821
+        else []
+    )
+    marker = f"- {plan_name} "
+    if any(line.startswith(marker) for line in existing_lines):
+        return
+    date = datetime.now(timezone.utc).date().isoformat()
+    with RETRO_PENDING_PATH.open("a") as f:  # noqa: F821
+        f.write(f"- {plan_name} \u2014 completed {date}, {story_count} stories\n")
+
+
+def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
+    """
+    Transition the ticket to Done and update the local manifest.
+    Use after you've reviewed and merged the agent's PR.
+    """
+    _validate_key(plan_name)  # noqa: F821
+    _validate_key(story_key)  # noqa: F821
+    get_ticket_provider().set_state(  # noqa: F821
+        story_key, LogicalState.DONE, plan_name  # noqa: F821
+    )
+
+    manifest = _store.get_manifest(plan_name)  # noqa: F821
+    manifest["stories"][story_key]["status"] = "done"
+    manifest["stories"][story_key].pop("parked_reason", None)
+    _store.save_manifest(plan_name, manifest)  # noqa: F821
+
+    # Check if all stories are now done
+    all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
+    if all_done:
+        if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):  # noqa: F821
+            _record_retro_pending(plan_name, len(manifest["stories"]))
+        return {
+            "ok": True,
+            "plan_completed": True,
+            "stories": list(manifest["stories"].keys()),
+        }
+    return {"ok": True}
+
+
+# Story fields patch_story may edit. Deliberately excludes "status" (use
+# set_story_status), "worktree", "pid", "review_verdict" and other
+# pipeline-owned runtime state - this tool is for correcting what the plan
+# authored, not for mechanically bypassing the review/merge gates.
+_PATCHABLE_STORY_FIELDS = frozenset(
+    (
+        "agent_instructions",
+        "model",
+        "persona",
+        "risk",
+        "dependencies",
+        "acceptance",
+        "pr_url",
+        "summary",
+        "tdd_split",
+        "backend",
+    )
+)
+
+# Every status value the pipeline itself assigns to a story (see the
+# "status"] = / "status": literal assignments throughout this file). Kept as
+# an explicit allowlist so set_story_status can't be used to invent a status
+# the rest of the code doesn't know how to handle.
+_VALID_STORY_STATUSES = frozenset(
+    (
+        "todo",
+        "in_progress",
+        "running",
+        "interrupted",
+        "failed",
+        "tests_passed",
+        "pr_open",
+        "changes_requested",
+        "parked",
+        "done",
+        "done",
+    )
+)
+
+
+# Rebind the functions' globals to pipeline.server's namespace so that
+# bare-name reads inside the bodies (e.g. ``_store``, ``_validate_key``,
+# ``get_ticket_provider``, ``_record_retro_pending``) resolve against
+# pipeline.server at call time. This preserves the original behavior where the
+# functions lived in pipeline.server and saw monkeypatched module globals.
+from . import server as _server
+
+_mark_story_done_impl = types.FunctionType(
+    _mark_story_done_impl.__code__,
+    _server.__dict__,
+    _mark_story_done_impl.__name__,
+    _mark_story_done_impl.__defaults__,
+    _mark_story_done_impl.__closure__,
+)
+_record_retro_pending = types.FunctionType(
+    _record_retro_pending.__code__,
+    _server.__dict__,
+    _record_retro_pending.__name__,
+    _record_retro_pending.__defaults__,
+    _record_retro_pending.__closure__,
+)
+
+
 __all__ = [
     "PIPELINE_MERGE_BUILD_GATE",
     "PIPELINE_MERGE_CI_GATE",
     "PIPELINE_MERGE_CI_TIMEOUT",
+    "_PATCHABLE_STORY_FIELDS",
+    "_VALID_STORY_STATUSES",
     "_acceptance_tampered",
     "_ci_pending_expired",
     "_ci_rerun",
@@ -637,7 +758,9 @@ __all__ = [
     "_ci_status",
     "_ci_status_once",
     "_fetch_ci_failure_excerpt",
+    "_mark_story_done_impl",
     "_parse_pytest_excerpt",
+    "_record_retro_pending",
     "_repo_has_ci_configured",
     "_reverify_acceptance",
     "_reverify_build",

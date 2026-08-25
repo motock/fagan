@@ -87,6 +87,8 @@ from .checkpoint import (
 # REPO_ROOT via a lazy import from this module (Option B - see
 # PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
 from .ci import (  # noqa: F401
+    _PATCHABLE_STORY_FIELDS,
+    _VALID_STORY_STATUSES,
     PIPELINE_MERGE_BUILD_GATE,
     PIPELINE_MERGE_CI_GATE,
     PIPELINE_MERGE_CI_TIMEOUT,
@@ -96,7 +98,9 @@ from .ci import (  # noqa: F401
     _ci_rework_feedback,
     _ci_status,
     _ci_status_once,
+    _mark_story_done_impl,
     _parse_pytest_excerpt,
+    _record_retro_pending,
     _repo_has_ci_configured,
     _reverify_acceptance,
     _reverify_build,
@@ -403,15 +407,6 @@ REPO_ROOT = Path(os.environ.get("REPO_ROOT", ".")).resolve()
 PIPELINE_SELF_REPO_ROOT = Path(__file__).resolve().parent.parent
 RETRO_PENDING_PATH = PIPELINE_SELF_REPO_ROOT / "retros" / "PENDING.md"
 
-def _record_retro_pending(plan_name: str, story_count: int) -> None:
-    RETRO_PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    existing_lines = RETRO_PENDING_PATH.read_text().splitlines() if RETRO_PENDING_PATH.exists() else []
-    marker = f"- {plan_name} "
-    if any(line.startswith(marker) for line in existing_lines):
-        return
-    date = datetime.now(timezone.utc).date().isoformat()
-    with RETRO_PENDING_PATH.open("a") as f:
-        f.write(f"- {plan_name} \u2014 completed {date}, {story_count} stories\n")
 
 PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -795,51 +790,6 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     return _service.mark_story_done(plan_name, story_key)
 
-def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
-    """
-    Transition the ticket to Done and update the local manifest.
-    Use after you've reviewed and merged the agent's PR.
-    """
-    _validate_key(plan_name)
-    _validate_key(story_key)
-    get_ticket_provider().set_state(story_key, LogicalState.DONE, plan_name)
-
-    manifest = _store.get_manifest(plan_name)
-    manifest["stories"][story_key]["status"] = "done"
-    manifest["stories"][story_key].pop("parked_reason", None)
-    _store.save_manifest(plan_name, manifest)
-
-    # Check if all stories are now done
-    all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
-    if all_done:
-        if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):
-            _record_retro_pending(plan_name, len(manifest["stories"]))
-        return {
-            "ok": True,
-            "plan_completed": True,
-            "stories": list(manifest["stories"].keys()),
-        }
-    return {"ok": True}
-
-
-# Story fields patch_story may edit. Deliberately excludes "status" (use
-# set_story_status), "worktree", "pid", "review_verdict" and other
-# pipeline-owned runtime state - this tool is for correcting what the plan
-# authored, not for mechanically bypassing the review/merge gates.
-_PATCHABLE_STORY_FIELDS = frozenset(
-    (
-        "agent_instructions",
-        "model",
-        "persona",
-        "risk",
-        "dependencies",
-        "acceptance",
-        "pr_url",
-        "summary",
-        "tdd_split",
-        "backend",
-    )
-)
 
 # The documented allowlist of valid story `backend` values
 # (see pipeline-story-schema.md). patch_story validates against this BEFORE
@@ -848,25 +798,6 @@ _VALID_STORY_BACKENDS = frozenset(
     {"claude", "local", "ollama", "lmstudio", "mlx", "auto"}
 )
 
-# Every status value the pipeline itself assigns to a story (see the
-# "status"] = / "status": literal assignments throughout this file). Kept as
-# an explicit allowlist so set_story_status can't be used to invent a status
-# the rest of the code doesn't know how to handle.
-_VALID_STORY_STATUSES = frozenset(
-    (
-        "todo",
-        "in_progress",
-        "running",
-        "interrupted",
-        "failed",
-        "tests_passed",
-        "pr_open",
-        "changes_requested",
-        "parked",
-        "done",
-        "done",
-    )
-)
 
 
 @mcp.tool()

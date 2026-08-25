@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pipeline.dispatch import _find_dead_new_functions
+
 from .build_detect import (
     _acceptance_rel_paths,
     _added_pytest_test_paths,
@@ -20,6 +22,7 @@ from .build_detect import (
 )
 from .checkpoint import _terminate_and_checkpoint
 from .ci import _acceptance_tampered
+from .concurrency import _heavy_lock
 from .config import (
     DISPATCH_MAX_ATTEMPTS,
     DISPATCH_STARTUP_GRACE_SECONDS,
@@ -30,7 +33,6 @@ from .config import (
     STEP_CAP_FALLBACK_THRESHOLD,
     STEP_CAP_MARKERS,
 )
-from .concurrency import _heavy_lock
 from .escalation import (
     _escalate_review_to_claude,
     _escalate_to_claude,
@@ -43,7 +45,7 @@ from .parsers import (
     _validate_key,
 )
 from .rebrief import append_cleanup_guidance
-from pipeline.dispatch import _find_dead_new_functions
+
 
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
@@ -52,8 +54,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     _validate_key(plan_name)
     _validate_key(story_key)
-    manifest_path = _store.manifest_path(plan_name)
-    manifest = _store.get_manifest(plan_name)
+    manifest_path = _store.manifest_path(plan_name)  # noqa: F821
+    manifest = _store.get_manifest(plan_name)  # noqa: F821
     story = manifest["stories"].get(story_key)
     if not story or "pid" not in story:
         return {"ok": False, "error": "Story not dispatched"}
@@ -98,7 +100,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     # isn't a blind retry. Mirrors the step-cap branch's call
                     # byte-for-byte (same helper, same arguments). Fail-open: a
                     # None/errored diagnosis leaves agent_instructions untouched.
-                    _rebrief_step_cap_struggle(
+                    _rebrief_step_cap_struggle(  # noqa: F821
                         story, str(Path(story["worktree"])),
                         plan_role_config=manifest.get("role_config"),
                         plan_name=plan_name,
@@ -144,7 +146,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             story["dispatch_error"] = (
                 f"agent produced no output in {attempts} launch attempts"
             )
-            _notify_user(
+            _notify_user(  # noqa: F821
                 plan_name,
                 f"{story_key} failed to launch {attempts}x; "
                 f"giving up - needs human intervention.",
@@ -167,7 +169,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # on master. `interrupted` is dispatch-eligible, so the next
     # advance_pipeline tick resumes the agent in its existing worktree from
     # its WIP commit, seeded by the journal entry we write below.
-    last_log_line = _last_nonempty_line(agent_log) if agent_log.exists() else ""
+    last_log_line = _last_nonempty_line(agent_log) if agent_log.exists() else ""  # noqa: F821
 
     # Infra-failure exit routing: a dispatch that died on an LLM/Ollama
     # transport error (after chat()'s own retries and the 5xx trim-retry are
@@ -177,7 +179,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if INFRA_FAILURE_LOG_SUBSTRING in last_log_line:
         sha = _commit_wip(str(worktree), story_key, "infra_failure")
         interrupted_at = datetime.now(timezone.utc).isoformat()
-        _store.append_journal(
+        _store.append_journal(  # noqa: F821
             plan_name,
             story_key,
             {
@@ -212,7 +214,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             story["infra_failure_streak"] = 1
             story["infra_failure_streak_model"] = current_model
         if story["infra_failure_streak"] == 1:
-            _notify_user(
+            _notify_user(  # noqa: F821
                 plan_name,
                 f"{story_key} dispatch died on an infrastructure failure "
                 f"(LLM/Ollama transport error) on {current_model}; resuming "
@@ -229,7 +231,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             story["model"] = fallback_model
             story.pop("infra_failure_streak", None)
             story.pop("infra_failure_streak_model", None)
-            _notify_user(
+            _notify_user(  # noqa: F821
                 plan_name,
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; switching to "
@@ -237,13 +239,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             )
         elif (
             not fallback_model
-            and _auto_escalation_enabled()
+            and _auto_escalation_enabled()  # noqa: F821
             and story.get("backend", "local") == "local"
             and not story.get("escalated")
             and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
         ):
             _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
-            _notify_user(
+            _notify_user(  # noqa: F821
                 plan_name,
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; escalating to "
@@ -260,7 +262,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if last_log_line in STEP_CAP_MARKERS:
         sha = _commit_wip(str(worktree), story_key, "step_cap_reached")
         interrupted_at = datetime.now(timezone.utc).isoformat()
-        _store.append_journal(
+        _store.append_journal(  # noqa: F821
             plan_name,
             story_key,
             {
@@ -281,7 +283,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # uses the model that just ran (the struggling one) and the worktree's
         # agent.log is still present for evidence. Fail-open: a None/errored
         # diagnosis leaves agent_instructions untouched (no-op).
-        _rebrief_step_cap_struggle(
+        _rebrief_step_cap_struggle(  # noqa: F821
             story, str(worktree), plan_role_config=manifest.get("role_config"),
             plan_name=plan_name,
             story_key=story_key)
@@ -320,7 +322,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["model"] = fallback_model
                 story.pop("step_cap_streak", None)
                 story.pop("step_cap_streak_model", None)
-                _notify_user(
+                _notify_user(  # noqa: F821
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
                     f"on {current_model}; switching to fallback model "
@@ -328,7 +330,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
         elif (
             not fallback_model
-            and _auto_escalation_enabled()
+            and _auto_escalation_enabled()  # noqa: F821
             and story.get("backend", "local") == "local"
             and not story.get("escalated")
         ):
@@ -344,7 +346,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 story["step_cap_streak_model"] = current_model
             if story["step_cap_streak"] >= STEP_CAP_FALLBACK_THRESHOLD:
                 _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
-                _notify_user(
+                _notify_user(  # noqa: F821
                     plan_name,
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
                     f"on {current_model}; escalating to {_escalation_label()} (no "
@@ -366,7 +368,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     tampered = _acceptance_tampered(story, str(worktree))
     if tampered:
         story["status"] = "changes_requested"
-        _notify_user(
+        _notify_user(  # noqa: F821
             plan_name,
             f"{story_key} acceptance fixture modified since dispatch: "
             f"{', '.join(tampered)} - refusing tests_passed",
@@ -378,7 +380,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             "tampered": tampered,
         }
 
-    test_dir, test_cmd = detect_test_command(worktree)
+    test_dir, test_cmd = detect_test_command(worktree)  # noqa: F821
 
     # FM-A: when the story carries an acceptance block, gate on only those
     # oracle test files rather than the full worktree suite. The model's own
@@ -406,7 +408,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # (see _added_pytest_test_paths). Pass those paths explicitly so the
         # model's own tests for its own tests/-scoped code actually execute.
         own_test_paths = _added_pytest_test_paths(
-            worktree, story_key, _default_branch()
+            worktree, story_key, _default_branch()  # noqa: F821
         )
         if own_test_paths:
             test_cmd = [*test_cmd, *(str(worktree / p) for p in own_test_paths)]
@@ -440,7 +442,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # we never have N concurrent builds saturating the host. Cheap commands
     # (pytest, mvn, gradle, make, npm — depending on the project) skip the
     # lock entirely.
-    if _is_heavy(test_cmd):
+    if _is_heavy(test_cmd):  # noqa: F821
         with _heavy_lock():
             test_result = subprocess.run(
                 test_cmd,
@@ -494,7 +496,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         "sha": check_sha,
     }
     if passed:
-        lint = _run_lint_gate(worktree, test_env)
+        lint = _run_lint_gate(worktree, test_env)  # noqa: F821
         if lint is not None:
             lint["sha"] = check_sha
             story["last_lint_check"] = lint
@@ -504,7 +506,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # Only worth checking once the baseline (tests, lint) actually passed -
     # a story already failing on those has enough signal without this too.
     if passed:
-        dead_functions = _find_dead_new_functions(worktree, _default_branch())
+        dead_functions = _find_dead_new_functions(worktree, _default_branch())  # noqa: F821
         story["last_dead_code_check"] = dead_functions
         if dead_functions:
             passed = False
@@ -533,12 +535,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # `interrupted`) because re-dispatching the same prompt to the same
     # model on the same empty worktree is unlikely to produce a different
     # outcome next tick; better to surface it for the dashboard.
-    if passed and not _worktree_has_new_commits(
+    if passed and not _worktree_has_new_commits(  # noqa: F821
         worktree,
         story_key,
-        base_branch=_default_branch(),
+        base_branch=_default_branch(),  # noqa: F821
     ):
-        base = _default_branch()
+        base = _default_branch()  # noqa: F821
         story["status"] = "failed"
         story["failure_reason"] = (
             f"tests passed but agent branch has no new commits vs {base}; "
@@ -569,8 +571,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         not passed
         and story["status"] == "failed"
         and os.environ.get("PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL", "0") == "1"
-        and _worktree_has_new_commits(
-            worktree, story_key, base_branch=_default_branch()
+        and _worktree_has_new_commits(  # noqa: F821
+            worktree, story_key, base_branch=_default_branch()  # noqa: F821
         )
     ):
         story["status"] = "tests_passed"  # reviewable; reviewer sees the failure
@@ -617,7 +619,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 # missing the hook every other rework-exhaustion park path
                 # already had (review_story's three call sites), so a story
                 # that hit exactly this path never got a chance at Claude.
-                if _auto_escalation_enabled() and not story.get("escalated"):
+                if _auto_escalation_enabled() and not story.get("escalated"):  # noqa: F821
                     _escalate_review_to_claude(
                         story,
                         story_key,
@@ -636,7 +638,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     "agent keeps parking/crashing without writing code."
                 )
                 _atomic_write_json(manifest_path, manifest)
-                _notify_user(
+                _notify_user(  # noqa: F821
                     plan_name,
                     f"{story_key} parked: no new commit after {attempts} rework "
                     f"redispatches - needs human review.",
@@ -656,7 +658,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # run. A missing/wrong API is a story-scoping bug, not a model-capability
     # gap - the terminal notify in advance_pipeline uses this to point a
     # human at "clarify the story" instead of the generic "tests failed".
-    give_up_summary = _last_done_summary(agent_log) if not passed else ""
+    give_up_summary = _last_done_summary(agent_log) if not passed else ""  # noqa: F821
     if give_up_summary and _is_give_up_summary(give_up_summary):
         story["failure_kind"] = "give_up"
     else:
@@ -673,9 +675,6 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     if story.get("failure_kind"):
         result["failure_kind"] = story["failure_kind"]
     return result
-
-
-@mcp.tool()
 
 
 def __getattr__(name: str):

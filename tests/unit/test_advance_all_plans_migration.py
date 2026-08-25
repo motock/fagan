@@ -131,12 +131,18 @@ def test_module_level_advance_all_plans_signature_unchanged():
 # ---------- C3: exactly two def advance_all_plans in the file ----------
 
 def test_exactly_two_advance_all_plans_definitions():
-    src = p.__file__
-    with open(src) as fh:
-        text = fh.read()
-    count = len(re.findall(r"def advance_all_plans\b", text))
+    # The method lives on PipelineService in pipeline/service.py; the
+    # @mcp.tool() wrapper lives in pipeline/server.py. Exactly one each.
+    import pathlib
+    server_text = pathlib.Path(p.__file__).read_text()
+    service_text = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = (
+        len(re.findall(r"def advance_all_plans\b", server_text))
+        + len(re.findall(r"def advance_all_plans\b", service_text))
+    )
     assert count == 2, (
-        f"expected exactly 2 `def advance_all_plans` (method + tool), got {count}"
+        f"expected exactly 2 `def advance_all_plans` (method in service.py "
+        f"+ tool wrapper in server.py), got {count}"
     )
 
 
@@ -366,10 +372,10 @@ def test_method_does_not_carry_the_tool_docstring():
 # ---------- R8: only pipeline/server.py changed is not testable here, but
 # the method must live in pipeline/server.py (same file as the class) ----------
 
-def test_method_defined_in_pipeline_server_module():
+def test_method_defined_in_pipeline_service_module():
     mod = p.PipelineService.advance_all_plans.__module__
-    assert mod == "pipeline.server", (
-        f"advance_all_plans method must live in pipeline.server, got {mod}"
+    assert mod == "pipeline.service", (
+        f"advance_all_plans method must live in pipeline.service, got {mod}"
     )
 
 

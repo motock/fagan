@@ -15,7 +15,8 @@ dispatch implements the four anchored edits described in the story.
 """
 import json
 import os
-import subprocess
+
+from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
@@ -63,18 +64,9 @@ def _run_app_js(expr):
         globalThis.setInterval = () => 0;
         globalThis.setTimeout = (fn, _ms) => { if (typeof fn === "function") { /* dropped */ } return 0; };
     """
-    script = (
-        shim
-        + "const fs = require('fs');"
-        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
-        + "globalThis.state = globalThis.window.state;"
-        + "process.stdout.write(JSON.stringify(" + expr + "));"
-    )
-    proc = subprocess.run(
-        ["node", "-e", script],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+    proc = _shared_run_app_js(expr, shim=shim)
+    if proc.returncode != 0:
+        raise AssertionError(f"node failed: {proc.stderr}")
     return json.loads(proc.stdout)
 
 

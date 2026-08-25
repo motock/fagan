@@ -252,7 +252,7 @@ function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
 
 // Inject globals the production code touches at top level, then require
 // app.js as a Node module via a tiny shim.
-function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
+async function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
   // Set up the browser-like globals app.js reads at module load.
   global.document = doc;
   global.CSS = { escape: (s) => String(s).replace(/"/g, '\\"') };
@@ -281,20 +281,6 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
     },
   });
 
-  // Load the file as a string, then append a module.exports block by reading
-  // it from disk. We require it as a module and capture the exports.
-  const fs = require("fs");
-  const path = require("path");
-  const src = fs.readFileSync(
-    path.join(__dirname, "..", "static", "app.js"), "utf8");
-  // Wrap so `module` is available, and so the file's top-level event
-  // listeners attach to our fake document.
-  const wrapped = `${src}\nmodule.exports = {
-    capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
-    startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
-    showStoryModal, handleCopyClick,
-    state,
-  };`;
   // Window stub. The browser app.js hangs state on window and registers a
   // hashchange listener there; under Node neither exists. Provide a tiny
   // shim so the module's top-level runs without ReferenceError.
@@ -315,15 +301,29 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
     set(v) { capturedState = v; },
   });
   const m = { exports: {} };
-  // eslint-disable-next-line no-new-func
-  const fn = new Function("module", "document", "CSS", "setInterval",
-    "clearInterval", "setTimeout", "clearTimeout", "localStorage",
-    "require", "module", "window", wrapped);
-  fn(m, doc, global.CSS, global.setInterval, global.clearInterval,
-    global.setTimeout, global.clearTimeout, global.localStorage,
-    require, m, win);
-  // Mirror the captured state onto the module exports so callers see it.
-  if (capturedState) m.exports.state = capturedState;
+  // CJS eval path: evaluate app.js inside the window via the legacy wrapper
+  // so `module` is available and the file's top-level event listeners attach
+  // to our fake document. The shared loader picks this path when app.js has
+  // no top-level import/export (today's CJS form).
+  win.eval = (src) => {
+    const wrapped = `${src}\nmodule.exports = {
+      capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
+      startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+      showStoryModal, handleCopyClick,
+      state,
+    };`;
+    // eslint-disable-next-line no-new-func
+    const fn = new Function("module", "document", "CSS", "setInterval",
+      "clearInterval", "setTimeout", "clearTimeout", "localStorage",
+      "require", "module", "window", wrapped);
+    fn(m, doc, global.CSS, global.setInterval, global.clearInterval,
+      global.setTimeout, global.clearTimeout, global.localStorage,
+      require, m, win);
+    // Mirror the captured state onto the module exports so callers see it.
+    if (capturedState) m.exports.state = capturedState;
+  };
+  const { loadAppInto } = await import("./_app_js_loader.mjs");
+  await loadAppInto(win);
   return m.exports;
 }
 
@@ -361,15 +361,18 @@ function fakeTimers() {
 
 let pass = 0, fail = 0;
 function test(name, fn) {
-  try { fn(); console.log(`ok  - ${name}`); pass++; }
-  catch (e) { console.log(`FAIL - ${name}: ${e.message}`); fail++; }
+  return Promise.resolve().then(fn).then(
+    () => { console.log(`ok  - ${name}`); pass++; },
+    (e) => { console.log(`FAIL - ${name}: ${e.message}`); fail++; }
+  );
 }
 
 // Case: scroll position survives a refresh when a column is scrolled.
-test("scroll position survives a refresh", () => {
+(async () => {
+await test("scroll position survives a refresh", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
 
   const section = makeEl("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
@@ -385,10 +388,10 @@ test("scroll position survives a refresh", () => {
 });
 
 // Case: focused filter chip retains focus across a refresh.
-test("focused filter chip retains focus across a refresh", () => {
+await test("focused filter chip retains focus across a refresh", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
 
   const section = makeEl("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
@@ -406,10 +409,10 @@ test("focused filter chip retains focus across a refresh", () => {
 
 // Negative case: focused element no longer present after re-render -> focus
 // simply not restored, no throw.
-test("missing focused chip is silently skipped (no throw)", () => {
+await test("missing focused chip is silently skipped (no throw)", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
 
   const section = makeEl("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
@@ -428,10 +431,10 @@ test("missing focused chip is silently skipped (no throw)", () => {
 });
 
 // Case: refresh indicator appears on each successful refresh (via state.pollHandle set).
-test("flashRefreshIndicator populates the indicator element", () => {
+await test("flashRefreshIndicator populates the indicator element", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
 
   const ind = makeEl("span", { attrs: { id: "refresh-indicator" } });
   doc.register("refresh-indicator", ind);
@@ -447,10 +450,10 @@ test("flashRefreshIndicator populates the indicator element", () => {
 // the auto-refresh checkbox is checked (the HTML default). The change
 // handler stops polling when the user unchecks, and the visibilitychange
 // handler suspends it while the tab is hidden.
-test("auto-refresh checkbox uncheck stops polling via change handler", () => {
+await test("auto-refresh checkbox uncheck stops polling via change handler", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft, autoRefreshChecked: true });
+  const api = await loadAppJs({ doc, fakeTimers: ft, autoRefreshChecked: true });
 
   assert.notStrictEqual(api.state.pollHandle, null,
     "polling should be active when auto-refresh starts checked");
@@ -466,10 +469,10 @@ test("auto-refresh checkbox uncheck stops polling via change handler", () => {
 // Case: visibilitychange pauses polling when document.hidden, resumes when
 // visible again. The auto-refresh checkbox stays checked throughout, so
 // visibility alone never disables polling — it only suspends it.
-test("visibilitychange stops polling when hidden, resumes when visible", () => {
+await test("visibilitychange stops polling when hidden, resumes when visible", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft, autoRefreshChecked: true });
+  const api = await loadAppJs({ doc, fakeTimers: ft, autoRefreshChecked: true });
 
   // The module-level startPolling set a handle; capture it so we can
   // confirm it's a fresh handle after resume (not the original).
@@ -491,3 +494,4 @@ test("visibilitychange stops polling when hidden, resumes when visible", () => {
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
+})();

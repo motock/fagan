@@ -7,6 +7,7 @@
 // verified by stubbing fetch + DOM APIs.
 
 import { JSDOM } from "jsdom";
+import { loadAppInto } from "./_app_js_loader.mjs";
 
 const results = [];
 function record(name, ok, detail) {
@@ -52,11 +53,8 @@ function makeEnv({ hash = "", storage = {} } = {}) {
 // doesn't make real network calls.
 async function loadApp(dom) {
   dom.window.fetch = async () => ({ ok: true, json: async () => ({ plans: [] }) });
-  const fs = await import("node:fs/promises");
-  const url = new URL("../static/app.js", import.meta.url);
-  const src = await fs.readFile(url, "utf8");
-  // Evaluate inside the window so consts/functions attach there.
-  dom.window.eval(src);
+  // Load app.js into the window (dual-mode: ESM import or CJS eval).
+  await loadAppInto(dom);
   // Expose the pure helpers we care about for direct testing.
   return {
     encodeHashState: dom.window.encodeHashState,

@@ -24,6 +24,12 @@ const _APP_JS = path.join(
 // Same top-level import/export detection rule the .py loader uses.
 const _ESM_RE = /^\s*(?:import|export)\s/m;
 
+// Monotonic counter for cache-busting dynamic import() calls below.
+// Date.now() can repeat within the same millisecond across the many
+// sequential loadAppInto() calls a single test file makes, which would
+// silently hit Node's module cache and reuse a stale instance.
+let _importSeq = 0;
+
 export async function loadAppInto(dom, { srcOverride } = {}) {
   const src = srcOverride ?? readFileSync(_APP_JS, "utf8");
   // Accept either a jsdom instance (dom.window) or a plain window stub.
@@ -49,7 +55,7 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
     // dynamic import() caches by URL; without a unique query the module's
     // top-level wiring (event listeners, startPolling, window.state) would
     // run only once and leak across tests in the same process.
-    const mod = await import(`${appFileUrl}?t=${Date.now()}`);
+    const mod = await import(`${appFileUrl}?t=${++_importSeq}`);
     Object.assign(win, mod);
     return mod;
   }

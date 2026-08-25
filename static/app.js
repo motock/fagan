@@ -1,5 +1,5 @@
 import {
-  state, defaultFilters, loadFilters, saveFilters, toggleFilter,
+  state, defaultFilters, loadFilters, saveFilters, toggleFilter, resetState,
   STATUS_COLUMNS, SORT_OPTIONS, VALID_SORTS, BACKEND_VALUES, ESCALATED_VALUES,
 } from "./app/state.js";
 
@@ -2349,6 +2349,7 @@ function toggleTheme() {
 })();
 
 initTheme();
+resetState();
 loadFilters();
 // Apply the URL hash (if any) before the first refresh — hash wins over
 // localStorage. Also wire the browser's hashchange event so back/forward

@@ -41,6 +41,21 @@ window.state = {
 const FILTERS_KEY = "pipeline-dashboard-filters";
 const state = window.state;
 
+// Re-establishes a fresh logical state on the shared singleton. Node's
+// dynamic import() caches ./app/state.js by URL, so this module (and its
+// `state` object) is created once per process even when app.js itself is
+// cache-busted and re-imported per test — call this from app.js's init
+// sequence so each load starts from known-default field values.
+function resetState() {
+  state.selectedPlan = null;
+  state.pollHandle = null;
+  state.refreshIndicatorTimer = null;
+  state.filters = defaultFilters();
+  state.showArchived = false;
+  state.commsActive = true;
+  state.configActive = false;
+}
+
 function loadFilters() {
   try {
     const stored = JSON.parse(localStorage.getItem(FILTERS_KEY) || "{}");
@@ -72,6 +87,7 @@ export {
   loadFilters,
   saveFilters,
   toggleFilter,
+  resetState,
   STATUS_COLUMNS,
   SORT_OPTIONS,
   VALID_SORTS,

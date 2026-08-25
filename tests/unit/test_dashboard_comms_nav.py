@@ -23,6 +23,10 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# renderPlanList (and its Comms/Overview pinned-item markup) was relocated
+# out of static/app.js into this dedicated render module (server-app-file-
+# split plan); the static-source assertions below follow it here.
+PLAN_LIST_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-list.js")
 
 _SHIM = r"""
         const noop = () => {};
@@ -216,8 +220,10 @@ def test_render_plan_list_builds_comms_item_via_create_element():
     """renderPlanList must build the Comms .plan-item with
     document.createElement (not an innerHTML string), mirroring how the
     Overview item is built. We assert the source uses createElement for the
-    comms item and does NOT build it via an innerHTML string."""
-    src = _app_js_source()
+    comms item and does NOT build it via an innerHTML string. (Now in
+    static/app/render/plan-list.js.)"""
+    with open(PLAN_LIST_JS, encoding="utf-8") as fh:
+        src = fh.read()
     assert "data-comms" in src, (
         "the Comms nav item must carry data-comms=\"true\" "
         "(mirroring Overview's data-overview)"
@@ -231,8 +237,9 @@ def test_render_plan_list_comms_item_above_overview():
     """The Comms .plan-item must be inserted ABOVE the Overview item in
     renderPlanList. We assert via source ordering: the comms item's
     appendChild must appear before the overview item's appendChild within
-    renderPlanList."""
-    src = _app_js_source()
+    renderPlanList. (Now in static/app/render/plan-list.js.)"""
+    with open(PLAN_LIST_JS, encoding="utf-8") as fh:
+        src = fh.read()
     # Slice the renderPlanList function body.
     start = src.index("function renderPlanList(")
     end = src.index("function togglePlanArchived(", start)
@@ -248,8 +255,10 @@ def test_render_plan_list_comms_item_above_overview():
 
 def test_render_plan_list_overview_active_condition_updated():
     """The Overview item's .active condition must be updated from
-    `!state.selectedPlan` to `!state.selectedPlan && !state.commsActive`."""
-    src = _app_js_source()
+    `!state.selectedPlan` to `!state.selectedPlan && !state.commsActive`.
+    (Now in static/app/render/plan-list.js.)"""
+    with open(PLAN_LIST_JS, encoding="utf-8") as fh:
+        src = fh.read()
     start = src.index("function renderPlanList(")
     end = src.index("function togglePlanArchived(", start)
     body = src[start:end]

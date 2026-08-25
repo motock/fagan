@@ -47,6 +47,11 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# renderPlanDetail (and the notif-severity filter-chip click handler) were
+# relocated out of static/app.js into this dedicated render module
+# (server-app-file-split plan); the static-source assertions below follow
+# them here. renderNotifications/_diffNotificationsPanel stayed in app.js.
+PLAN_DETAIL_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-detail.js")
 
 
 # A self-contained, richer DOM shim. Built once as a Python string and
@@ -381,8 +386,10 @@ def test_severity_filter_click_still_calls_full_render_plan_detail():
     FULL `renderPlanDetail` re-render exactly as today — this story's diff
     path applies ONLY to the automatic poll-triggered path, not to a
     user's explicit filter click. Assert the notif-severity click handler
-    still calls renderPlanDetail (unchanged)."""
-    js = _app_js_source()
+    still calls renderPlanDetail (unchanged). (Now in
+    static/app/render/plan-detail.js.)"""
+    with open(PLAN_DETAIL_JS, encoding="utf-8") as fh:
+        js = fh.read()
     # The existing handler: querySelectorAll('.filter-chip[data-dim="notif-severity"]')
     # ... addEventListener("click", () => { notifSeverityFilter = ...; renderPlanDetail(plan); })
     assert 'data-dim="notif-severity"' in js
@@ -856,7 +863,11 @@ def test_render_plan_detail_unchanged_beyond_targeted_addition():
     renderPlanDetail or renderNotifications beyond adding the one new call
     site and the new data-dedup-key attribute; make the smallest possible
     anchored edits. Assert renderPlanDetail and renderNotifications still
-    exist with their original signatures (no rename, no signature change)."""
+    exist with their original signatures (no rename, no signature change).
+    (renderPlanDetail is now in static/app/render/plan-detail.js;
+    renderNotifications stayed in static/app.js.)"""
+    with open(PLAN_DETAIL_JS, encoding="utf-8") as fh:
+        plan_detail_js = fh.read()
+    assert "function renderPlanDetail(plan)" in plan_detail_js
     js = _app_js_source()
-    assert "function renderPlanDetail(plan)" in js
     assert "function renderNotifications(records)" in js

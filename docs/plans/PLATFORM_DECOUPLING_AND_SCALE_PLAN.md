@@ -1,12 +1,17 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **In execution (last updated 2026-08-17).** W3a, W1a, W1b, and W1c
-> are done; W2 and W3b are scoped, ingested, and paused (W2:
-> `W2_CHAT_ENTRY_POINT_PLAN`, 6 stories; W3b: `w3b-dashboard-config-ui`,
-> 7 stories), queued behind the active overload-failure-triage plan. See
-> "Suggested sequencing" below for the live state of each workstream. This doc exists to capture the target shape
-> and the real scope of each move, so the workstreams can be sequenced
-> deliberately rather than discovered mid-implementation.
+> Status: **In execution (last updated 2026-08-24).** W3a, W1a, W1b, W1c, W2,
+> and W3b are all done and merged. The chat entry point (W2, 9 stories,
+> PRs #391-#398 + #406) and the writable dashboard + config UI (W3b, 11
+> stories, PRs #421-#432) landed since the prior update. The active workstream
+> is `server-app-file-split` (ingested, paused, 16 stories) — splitting the
+> now-5,466-line `pipeline/server.py` and 2,730-line `static/app.js` into
+> modules under 1,000 lines, the continuation of scaling concern #5 below.
+> W4 (multi-tenant) remains deferred until there's a real second deployment to
+> validate against. See "Suggested sequencing" below for the live state of
+> each workstream. This doc exists to capture the target shape and the real
+> scope of each move, so the workstreams can be sequenced deliberately rather
+> than discovered mid-implementation.
 >
 > Supersedes/absorbs the two standalone idea notes: "dashboard env config" and
 > "dashboard agent chatbot".
@@ -59,10 +64,12 @@ a deployment where Claude may not be available or licensed at all.
 
 ### The MCP tool layer and the state machine are the same module
 
-`pipeline/server.py` is 4,132 lines and mixes the `@mcp.tool()` decorated
+`pipeline/server.py` is 5,466 lines and mixes the `@mcp.tool()` decorated
 entrypoints with the state machine, gating, dispatch, review, and merge logic
-they call. There is no `PipelineService` object a second adapter (HTTP, queue
-consumer) could call. Extracting one is the single largest piece of work in this
+they call. The `PipelineService` and `Store`/`FileStore` seams W1a/W1b extracted
+now exist, but the file itself has *grown* (~1,300 lines) since W1 landed as the
+chat and dashboard workstreams piled behavior onto it — the `server-app-file-split`
+workstream is the direct response. Extracting one is the single largest piece of work in this
 plan.
 
 Mitigating factor: the decomposition already started —
@@ -88,13 +95,16 @@ one filesystem, and does not survive leaving either.**
 
 ### The dashboard is import-decoupled but storage-coupled
 
-`app/dashboard.py` (842 lines, 10 endpoints) deliberately does *not* import
+`app/dashboard.py` (1,008 lines, 31 route handlers) deliberately does *not* import
 `pipeline_mcp_server` — it re-reads `PLAN_DIR`/`WORKTREE_ROOT` from env and
 parses the file layout itself. That keeps the write surface out of its import
 graph, but it means **the manifest's on-disk shape is a de facto public API with
-two independent parsers.** It's read-only except one write
-(`/api/plans/{name}/archive`, a view preference). No auth; binds `127.0.0.1` by
-default via `scripts/dashboard.sh`.
+two independent parsers.** It was read-only except one write
+(`/api/plans/{name}/archive`, a view preference) until W3b rerouted the GET
+handlers through `Store`/`PipelineService` (W3b-A2) and retired the local parse
+helpers (W3b-A2b), and added the config-write surface (W3b-B1..B5) — so the
+second parser is now retired and the dashboard reads/writes through the service.
+No auth; binds `127.0.0.1` by default via `scripts/dashboard.sh`.
 
 ### Configuration has three sources that can silently disagree
 
@@ -173,6 +183,22 @@ applied deliberately rather than discovered per-test.
 
 ## Workstream W2 — The chat entry point
 
+> **DONE 2026-08-20** — plan `W2_CHAT_ENTRY_POINT_PLAN`, 9/9 stories merged
+> (W2-01..W2-06, PRs #391-#398 + #406; W2-02 was split into W2-02a..d during
+> rework for local dispatch). The `chat` role is in `model_registry.json`;
+> `ChatService` (`app/chat.py`) runs the agent loop with a `TOOL_CALL`/
+> `TOOL_RESULT` parsing protocol; read-only ops tools, plan-authoring tools
+> (wired to `POST /api/decompose`), and decision-answering tools (`POST
+> /api/plans/{plan}/decisions`) are registered; `POST /api/chat` is mounted
+> into `app/dashboard.py`. W2-06 was the security gate: chat tool calls route
+> through the HTTP API with no `PipelineService` backdoor, and `approve_merge`/
+> `set_story_status`/the `risk` field are excluded from the chat tool registry
+> so a prompt-injected chatbot cannot widen its own authority. Follow-on
+> hardening (`chat-security-hardening`, `chat-ingest-risk-lock`) landed in
+> PRs #402-#407. The direct-repair worktree file-read/propose-patch/apply
+> surface this doc's open question raised is **not** part of W2 and remains a
+> scoped follow-on (see Open questions).
+
 The UI chatbot is **a client of W1's API**, and its own agent loop. It is not a
 new orchestrator, and it must not grow its own copy of the state machine.
 
@@ -215,6 +241,19 @@ duplicating file parsing, both of which are dead ends.
 ---
 
 ## Workstream W3 — Dashboard decoupling + configuration UI
+
+> **DONE 2026-08-24** — plan `w3b-dashboard-config-ui`, 11/11 stories merged
+> (PRs #421-#432). W3b-A1a/A1b added `Store`/`PipelineService` read accessors
+> (notifications, decisions, manifest, journal, story log, worktree file);
+> W3b-A2/A2a/A2b rerouted every dashboard GET handler through the service and
+> retired `app/dashboard.py`'s local `PLAN_DIR` parse helpers (with a regression
+> guard); W3b-B1/B2/B3 added the config-write service + HTTP endpoints for
+> global role defaults, per-plan `role_config`, and per-story `backend`;
+> W3b-B4a/B4b shipped the frontend configuration view (HTML/CSS + app.js
+> fetch/render/edit); W3b-B5 was the security-engineer gate (boundary
+> validation + negative tests). The second manifest parser is retired — the
+> on-disk layout is private again — and config is editable in the UI with
+> effective-value + provenance display.
 
 ### Decoupling
 
@@ -362,12 +401,19 @@ atomic write prevents *torn* files, not *lost updates* — two writers between r
 and write silently drop one record. Today the `_plan_lock` makes this mostly
 moot; it stops being moot with any concurrency the flock doesn't cover.
 
-### 5. `pipeline/server.py` at 4,132 lines is itself a scaling limit
+### 5. `pipeline/server.py` at 5,466 lines is itself a scaling limit
 
 Not runtime scaling — *change* scaling. It's the file every workstream here has
 to touch, it's already the hardest file for a local model to edit safely
 (documented repeatedly in the failure-mode log), and it's the reason a second
-adapter can't be added cheaply.
+adapter can't be added cheaply. It has *grown* ~1,300 lines since W1 extracted
+`PipelineService`/`Store`, because the chat (W2) and dashboard (W3b)
+workstreams piled new behavior onto it rather than into new modules. The
+`server-app-file-split` plan (ingested, paused, 16 stories) is the direct
+response: extract the remaining `_*_impl` bodies, merge helpers, ingest/dispatch/
+review/advance orchestration, and `check_story_status` into `pipeline/` leaf
+modules, plus split `static/app.js` (2,730 lines) into ES modules, with every
+file under 1,000 lines as the success bar.
 
 ### Not a concern
 
@@ -404,27 +450,39 @@ The dependency order is fairly rigid:
    included — write routes trust the same localhost-only bind
    (`DASHBOARD_HOST=127.0.0.1` default) the dashboard already relies on;
    real auth is W4's job.
-5. **W2 — chat entry point** on the HTTP API. **SCOPED 2026-08-17** — plan
-   `W2_CHAT_ENTRY_POINT_PLAN`, 6 stories (W2-01 adds a `chat` role to the
-   registry; W2-02 a `ChatService` adapter skeleton + `POST /api/chat`;
-   W2-03 plan-authoring tools + `POST /api/decompose`; W2-04 ops control
-   tools; W2-05 decision tools + `POST /api/plans/{plan}/decisions`; W2-06
-   a security gate, risk=high / security-engineer, with an acceptance
-   fixture asserting all tool calls route through the HTTP API and no
-   `PipelineService` backdoor). Ingested and paused, queued behind the
-   active overload-failure-triage plan.
-6. **W3b — dashboard reads the API**, config becomes editable. **SCOPED
-   2026-08-17** — plan `w3b-dashboard-config-ui`, 7 stories (A1/A2 finish
-   decoupling the dashboard from the in-process service; B1-B5 add the
-   config-write UI surface with a security-engineer gate on B5).
-   Ingested and paused, queued behind W2.
-7. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
+5. ~~**W2 — chat entry point** on the HTTP API.~~ **DONE 2026-08-20** — plan
+   `W2_CHAT_ENTRY_POINT_PLAN`, 9/9 stories merged (PRs #391-#398 + #406;
+   W2-02 split into W2-02a..d for local dispatch). The `chat` role,
+   `ChatService` + agent loop, read/ops/plan-authoring/decision tool
+   registries, `POST /api/chat` + `POST /api/decompose` + `POST
+   /api/plans/{plan}/decisions`, and the W2-06 security gate (all tool calls
+   route through the HTTP API; `approve_merge`/`set_story_status`/`risk`
+   excluded from the chat registry) all landed. Follow-on hardening in PRs
+   #402-#407.
+6. ~~**W3b — dashboard reads the API**, config becomes editable.~~ **DONE
+   2026-08-24** — plan `w3b-dashboard-config-ui`, 11/11 stories merged (PRs
+   #421-#432). Dashboard GET handlers reroute through `Store`/`PipelineService`
+   and the local `PLAN_DIR` parse helpers are retired (A1/A2); the config-write
+   service + HTTP endpoints + frontend config view landed (B1-B4); B5 was the
+   security-engineer gate. The second manifest parser is gone; config is
+   editable in the UI with effective-value + provenance.
+7. **`server-app-file-split` — split the two monolith files.** **SCOPED +
+   INGESTED 2026-08-24, paused** — 16 stories. `pipeline/server.py` grew to
+   5,466 lines and `static/app.js` to 2,730 as W2/W3b piled behavior onto them;
+   this extracts the `_*_impl` bodies, merge/ingest/dispatch/review/advance
+   orchestration, and `check_story_status` into `pipeline/` leaf modules and
+   splits `app.js` into ES modules, with every file under 1,000 lines as the
+   success bar. The continuation of scaling concern #5. Pinned to
+   `ollama/deepseek-v4-flash` for local dispatch while Claude is weekly-capped.
+8. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
    only where there's a real second deployment to validate against. Building it
    speculatively against an imagined tenant is exactly the over-engineering the
    project's own standards warn about.
 
-Steps 1–5 are worth doing even if enterprise never happens: they're what make the
-system usable without a Claude Code session open, which is the stated goal.
+Steps 1–6 are worth doing even if enterprise never happens: they're what make the
+system usable without a Claude Code session open, which is the stated goal. Step 7
+is the change-scaling debt those workstreams accrued, and is worth doing on the
+same grounds — it's what keeps the file every future workstream touches editable.
 
 ---
 
@@ -444,12 +502,14 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
 ### Where the two docs disagree, and what to do about it
 
 - **The service extraction (W1) is missing from the maturity plan entirely.**
-  B4 and most of B3 are listed as if independently startable. They are not:
-  both need a `PipelineService` seam that does not exist today, because the
-  `@mcp.tool()` entrypoints and the state machine are the same 4,132-line
-  module. This is the difference between B4 being a UI task and B4 being a
-  refactor-plus-UI task. Noted in the maturity doc as a prerequisite line under
-  both B3 and B4.
+  B4 and most of B3 were listed as if independently startable. They were not:
+  both needed a `PipelineService` seam that did not exist until W1a/W1b landed
+  (2026-08-12/15) — the `@mcp.tool()` entrypoints and the state machine were
+  the same module (then 4,132 lines; now 5,466). That seam now exists, B4
+  (writable dashboard) is DONE via W3b, and B3's prerequisite is satisfied —
+  what remains under B3 is the genuine multi-tenant work (W4), not the
+  refactor. The maturity doc records this as a prerequisite line under both
+  B3 and B4.
 - **B1's "abstract the agent runner" conflates two axes.** The *inference
   provider* axis is already abstracted (`Backend` protocol; Claude/Ollama/
   LM Studio/MLX). The *harness* axis (Claude Code vs. Codex vs. Aider vs.
@@ -465,15 +525,17 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   **DONE 2026-08-09, PRs #247-#258** → ~~W1a (extract `PipelineService`, the
   keystone)~~ **DONE 2026-08-12, PRs #263-#286** → ~~W1b (`Store` protocol)~~
   **DONE 2026-08-15, PRs #315-#349** → ~~**W1c (HTTP adapter)**~~ **DONE
-  2026-08-17, PRs #350, #360-#366** → **W2 (chat entry point — SCOPED
-  2026-08-17, plan `W2_CHAT_ENTRY_POINT_PLAN`, 6 stories, ingested+paused)**
-  → **W3b (writable dashboard — SCOPED 2026-08-17, plan
-  `w3b-dashboard-config-ui`, 7 stories, ingested+paused)** → W4
-  (multi-tenant), with B1 (sandboxing) and B5 (export the
-  moat) picked up after the service seam exists rather than before it.
-  Rationale: B1/B5 don't unblock anything else, while W1 is the single
+  2026-08-17, PRs #350, #360-#366** → ~~**W2 (chat entry point)**~~ **DONE
+  2026-08-20, 9/9 stories, PRs #391-#398 + #406** → ~~**W3b (writable
+  dashboard — closes B4)**~~ **DONE 2026-08-24, 11/11 stories, PRs #421-#432**
+  → **`server-app-file-split` (split the two monolith files — INGESTED
+  2026-08-24, 16 stories, paused)** → W4 (multi-tenant, closes B3), with B1
+  (sandboxing) and B5 (export the moat) picked up after the service seam
+  exists rather than before it — the seam now exists (W1a/W1b landed), so
+  B1/B5 are unblocked whenever they're prioritized ahead of W4.
+  Rationale: B1/B5 don't unblock anything else, while W1 was the single
   prerequisite blocking B3, B4, and the UI-entry-point goal simultaneously —
-  front-loading it retires the most dependent work fastest.
+  front-loading it retired the most dependent work fastest.
 
 ### Items each doc has that the other should borrow
 
@@ -490,13 +552,25 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
 
 ## Open questions
 
-- **Does the chat entrypoint need to replace Claude Code for *implementation*
-  supervision, or only for planning and control?** Today a human in Claude Code
-  handles direct-repair of a stuck worktree fairly often. If the UI must cover
-  that, it needs a file-editing surface, which is a substantially bigger ask.
-- **Single binary or split services?** A local install probably wants one process
-  serving API + dashboard + chat; enterprise wants them split. Deciding this up
-  front affects the W1c adapter design.
+- ~~**Does the chat entrypoint need to replace Claude Code for *implementation*
+  supervision, or only for planning and control?**~~ **RESOLVED 2026-08-20** —
+  yes, chat must cover direct-repair of a stuck worktree, not just planning and
+  control. This is a substantially bigger ask than W2's read/control tool
+  registry: it needs a worktree file-read + propose-patch + apply HTTP surface
+  (no such route or chat tool exists yet), and — because it's a prompt-reachable
+  arbitrary-write path — it needs its own security review per this doc's
+  existing constraint that "a prompt-injected chatbot must not be able to widen
+  its own authority." Sequencing: ship the Comms UI (nav promotion + toasts)
+  first since it's scoped against tools that already exist; scope the
+  direct-repair tool surface as its own follow-on workstream with a
+  security-engineer gate before any implementation stories are written.
+- ~~**Single binary or split services?**~~ **RESOLVED for local 2026-08-15**
+  — W1c decided to extend the existing `app/dashboard.py` FastAPI app rather
+  than stand up a second service (simplest for a single local-install process;
+  chat's `POST /api/chat` and the config routes mount into the same app).
+  The enterprise half (split services) stays open and is a W4 decision, not a
+  W1c one — deferred until there's a real multi-host deployment to validate
+  against.
 - **How much history to keep?** Event-sourcing story state is compelling but
   unbounded. Retention policy should be decided before, not after.
 - **Auth model for enterprise** — is a plan owned by a user, a team, or a repo?

@@ -8,11 +8,11 @@ A self-assessment TODO list, not a specification. Two halves:
 
 Each item is a TODO with a *why* and a rough priority — no design detail yet.
 
-> **See also:** `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (2026-08-05) carries the
-> design detail for A2, B1's remote-exec, B3, and B4, and adds a service-extraction
-> workstream this doc has no item for. Overlaps, disagreements, and an unresolved
-> ordering conflict are mapped in that doc's "Relationship to
-> MATURITY_AND_UNIQUENESS_PLANS.md" section.
+> **See also:** `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (2026-08-05; updated
+> 2026-08-24) carries the design detail for A2, B1's remote-exec, B3, and B4,
+> and adds a service-extraction workstream (W1) this doc has no item for.
+> Overlaps, disagreements, and a since-resolved ordering conflict are mapped in
+> that doc's "Relationship to MATURITY_AND_UNIQUENESS_PLANS.md" section.
 
 ---
 
@@ -512,8 +512,9 @@ stories (TDD-split stays strictly read-only). Tests in
       the removal report, closing the gap the old unscoped
       `confirm_removals=true` escape hatch left. See memory
       `project_dispatch_failure_modes` Modes 54/55 for full detail.
-- [ ] **Get CI to an enforced green baseline and tag a real release.** 263
-      commits, no release tags — adoption starts with "what version."
+- [ ] **Get CI to an enforced green baseline and tag a real release.** 703
+      commits, no real release tags (only a `w1c02-backup` checkpoint tag) —
+      adoption starts with "what version."
 
 ### A4. Make it usable by someone who isn't the author
 
@@ -569,12 +570,15 @@ stories (TDD-split stays strictly read-only). Tests in
 
 ### B3. Scale & multi-tenancy
 
-> **Prerequisite (added 2026-08-05):** every item below needs a service seam
-> that does not exist yet — the `@mcp.tool()` entrypoints and the state machine
-> are the same 4,132-line `pipeline/server.py`, with no `PipelineService` a
-> non-MCP caller could drive and no `Store` abstraction over the `PLAN_DIR`
-> JSON files. Treat B3 as *refactor-then-feature*, not a feature. Design detail
-> and sequencing in `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (W1, W4).
+> **Prerequisite (added 2026-08-05; SATISFIED 2026-08-17):** every item below
+> needed a service seam — the `@mcp.tool()` entrypoints and the state machine
+> were the same `pipeline/server.py` (then 4,132 lines; now 5,466), with no
+> `PipelineService` a non-MCP caller could drive and no `Store` abstraction
+> over the `PLAN_DIR` JSON files. **That seam now exists:** W1a extracted
+> `PipelineService` (2026-08-12) and W1b added the `Store` protocol + `FileStore`
+> (2026-08-15). So B3 is no longer *refactor-then-feature* — the refactor is
+> done; what remains under B3 is the genuine multi-tenant work (W4 in
+> `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`). Design detail and sequencing there.
 >
 > Also note the single-host assumption is load-bearing in ~6 places, not one:
 > `fcntl.flock` plan locking, `os.kill(pid, 0)` slot accounting, the single
@@ -596,13 +600,17 @@ stories (TDD-split stays strictly read-only). Tests in
 
 ### B4. Observability & control surfaces
 
-> **Prerequisite (added 2026-08-05):** the writable dashboard is a
-> refactor-plus-UI task, not a UI task. `app/dashboard.py` is deliberately
-> import-decoupled from the orchestrator but re-parses the `PLAN_DIR` file
-> layout itself — so the manifest's on-disk shape is a de facto public API with
-> two independent parsers. Adding writes on top of that second parser entrenches
-> it. The dashboard should read/write through the same service API every other
-> client uses. See `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (W1, W3b).
+> **Prerequisite (added 2026-08-05; SATISFIED 2026-08-24):** the writable
+> dashboard was a refactor-plus-UI task, not a UI task. `app/dashboard.py` was
+> deliberately import-decoupled from the orchestrator but re-parsed the
+> `PLAN_DIR` file layout itself — so the manifest's on-disk shape was a de
+> facto public API with two independent parsers. Adding writes on top of that
+> second parser would have entrenched it. **This is now done:** W3b rerouted
+> the dashboard GET handlers through `Store`/`PipelineService`, retired the
+> local parse helpers, and added the config-write surface through the same
+> service API every other client uses (PRs #421-#432). The second parser is
+> gone; the on-disk layout is private again. See
+> `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (W1, W3b).
 
 - [~] **Structured logs + a correlation ID carried across the whole story
       lifecycle** (dispatch → review → rework → merge, including into the agent
@@ -624,10 +632,19 @@ stories (TDD-split stays strictly read-only). Tests in
       `agent.log` (the dispatched agent subprocess's own transcript) is not on
       the bus — only orchestrator-side notifications are. The remaining gap is
       narrower than before this landed, not gone.
-- [ ] **Writable dashboard / control plane.** Current dashboard is read-only
+- [x] **Writable dashboard / control plane.** Current dashboard is read-only
       by design (good safety instinct). Add an explicit, audit-logged action
       surface (pause/resume/approve/reroute) so overlord decisions are
       reviewable and overridable from the UI.
+      **DONE 2026-08-24** via W3b (plan `w3b-dashboard-config-ui`, 11/11
+      stories, PRs #421-#432): dashboard GET handlers reroute through
+      `Store`/`PipelineService` and the local `PLAN_DIR` parse helpers are
+      retired; config is editable in the UI (global role defaults, per-plan
+      `role_config`, per-story `backend`) with effective-value + provenance
+      display and a security-engineer gate (W3b-B5). The action surface
+      (pause/resume/approve/reroute) flows through the same gated service
+      methods every other client uses. The chat entry point (W2, PRs
+      #391-#398 + #406) is the conversational control surface on the same API.
 - [ ] **Replay UI for failed runs.** The checkpoint journal + `review.log`
       already capture enough to reconstruct a run; surface it.
 - [ ] **Stuck-agent / wedge detection** as a first-class health signal
@@ -680,13 +697,16 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > #263-#286** → ~~W1b (`Store` protocol — `FileStore` as the only
 > implementation)~~ **DONE 2026-08-15 — 20/20 stories, PRs #315-#349** →
 > ~~W1c (HTTP adapter + SSE event stream)~~ **DONE 2026-08-17 — 9/9
-> stories, PRs #350, #360-#366** → W2 (chat entry point — SCOPED
-> 2026-08-17, plan `W2_CHAT_ENTRY_POINT_PLAN`, 6 stories, ingested+paused)
-> → W3b (writable dashboard, closes B4 — SCOPED 2026-08-17, plan
-> `w3b-dashboard-config-ui`, 7 stories, ingested+paused) → W4
+> stories, PRs #350, #360-#366** → ~~W2 (chat entry point)~~ **DONE
+> 2026-08-20 — 9/9 stories, PRs #391-#398 + #406** → ~~W3b (writable
+> dashboard, closes B4)~~ **DONE 2026-08-24 — 11/11 stories, PRs
+> #421-#432** → **`server-app-file-split` (split the now-5,466-line
+> `pipeline/server.py` + 2,730-line `static/app.js` into modules under
+> 1,000 lines — INGESTED 2026-08-24, 16 stories, paused)** → W4
 > (multi-tenant, closes B3). B1 (sandbox) and B5 (export the moat) are
-> picked up once the service seam exists, not before — see that doc's own
-> "Ordering conflict" section for the full rationale.
+> picked up once the service seam exists, not before — the seam now exists
+> (W1a/W1b landed), so B1/B5 are unblocked whenever prioritized ahead of
+> W4. See that doc's own "Ordering conflict" section for the full rationale.
 
 Land what's half-done before building new; then extract the service seam
 that everything else — sandboxing included — is cheaper to build behind.

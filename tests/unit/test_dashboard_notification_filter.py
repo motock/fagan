@@ -79,17 +79,7 @@ def _run_app_js(expr):
         globalThis.setInterval = () => 0;
         globalThis.setTimeout = (fn, _ms) => { if (typeof fn === "function") { /* dropped */ } return 0; };
     """
-    script = (
-        shim
-        + "const fs = require('fs');"
-        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
-        + "globalThis.state = globalThis.window.state;"
-        + "process.stdout.write(JSON.stringify(" + expr + "));"
-    )
-    proc = subprocess.run(
-        ["node", "-e", script],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
+    proc = run_app_js(expr, shim=shim)
     assert proc.returncode == 0, f"node failed: {proc.stderr}"
     return json.loads(proc.stdout)
 

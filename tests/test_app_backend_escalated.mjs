@@ -24,6 +24,7 @@
 
 import { JSDOM } from "jsdom";
 import assert from "node:assert/strict";
+import { loadAppInto } from "./_app_js_loader.mjs";
 
 // JSDOM exposes its own realm: arrays evaluated inside the window have a
 // different Array.prototype than the test's. `node:assert/strict` uses
@@ -85,10 +86,8 @@ async function loadApp(dom) {
     status: 200,
     json: async () => ({ plans: [] }),
   });
-  const fs = await import("node:fs/promises");
-  const url = new URL("../static/app.js", import.meta.url);
-  const src = await fs.readFile(url, "utf8");
-  dom.window.eval(src);
+  // Load app.js into the window (dual-mode: ESM import or CJS eval).
+  await loadAppInto(dom);
   // Expose the fresh, window-bound helpers so each test sees its own state.
   return {
     BACKEND_VALUES: dom.window.BACKEND_VALUES,

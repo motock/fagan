@@ -254,7 +254,7 @@ function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
 
 // Inject globals the production code touches at top level, then require
 // app.js as a Node module via a tiny shim.
-function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false, localStorage: ls } = {}) {
+async function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false, localStorage: ls } = {}) {
   // Set up the browser-like globals app.js reads at module load.
   global.document = doc;
   global.CSS = { escape: (s) => String(s).replace(/"/g, '\\"') };
@@ -283,23 +283,6 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false, localStorage: 
     },
   });
 
-  // Load the file as a string, then append a module.exports block by reading
-  // it from disk. We require it as a module and capture the exports.
-  const fs = require("fs");
-  const path = require("path");
-  const src = fs.readFileSync(
-    path.join(__dirname, "..", "static", "app.js"), "utf8");
-  // Wrap so `module` is available, and so the file's top-level event
-  // listeners attach to our fake document.
-  const wrapped = `${src}\nmodule.exports = {
-    capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
-    startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
-    showStoryModal, handleCopyClick,
-    defaultFilters, applyFilters, renderBoard, renderFilterBar,
-    encodeHashState, parseHash, saveFilters, updateHash, escapeHtml,
-    FILTERS_KEY,
-    state,
-  };`;
   // Window stub. The browser app.js hangs state on window and registers a
   // hashchange listener there; under Node neither exists. Provide a tiny
   // shim so the module's top-level runs without ReferenceError.
@@ -320,15 +303,32 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false, localStorage: 
     set(v) { capturedState = v; },
   });
   const m = { exports: {} };
-  // eslint-disable-next-line no-new-func
-  const fn = new Function("module", "document", "CSS", "setInterval",
-    "clearInterval", "setTimeout", "clearTimeout", "localStorage",
-    "require", "module", "window", wrapped);
-  fn(m, doc, global.CSS, global.setInterval, global.clearInterval,
-    global.setTimeout, global.clearTimeout, global.localStorage,
-    require, m, win);
-  // Mirror the captured state onto the module exports so callers see it.
-  if (capturedState) m.exports.state = capturedState;
+  // CJS eval path: evaluate app.js inside the window via the legacy wrapper
+  // so `module` is available and the file's top-level event listeners attach
+  // to our fake document. The shared loader picks this path when app.js has
+  // no top-level import/export (today's CJS form).
+  win.eval = (src) => {
+    const wrapped = `${src}\nmodule.exports = {
+      capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
+      startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+      showStoryModal, handleCopyClick,
+      defaultFilters, applyFilters, renderBoard, renderFilterBar,
+      encodeHashState, parseHash, saveFilters, updateHash, escapeHtml,
+      FILTERS_KEY,
+      state,
+    };`;
+    // eslint-disable-next-line no-new-func
+    const fn = new Function("module", "document", "CSS", "setInterval",
+      "clearInterval", "setTimeout", "clearTimeout", "localStorage",
+      "require", "module", "window", wrapped);
+    fn(m, doc, global.CSS, global.setInterval, global.clearInterval,
+      global.setTimeout, global.clearTimeout, global.localStorage,
+      require, m, win);
+    // Mirror the captured state onto the module exports so callers see it.
+    if (capturedState) m.exports.state = capturedState;
+  };
+  const { loadAppInto } = await import("./_app_js_loader.mjs");
+  await loadAppInto(win);
   return m.exports;
 }
 
@@ -366,8 +366,10 @@ function fakeTimers() {
 
 let pass = 0, fail = 0;
 function test(name, fn) {
-  try { fn(); console.log(`ok  - ${name}`); pass++; }
-  catch (e) { console.log(`FAIL - ${name}: ${e.message}`); fail++; }
+  return Promise.resolve().then(fn).then(
+    () => { console.log(`ok  - ${name}`); pass++; },
+    (e) => { console.log(`FAIL - ${name}: ${e.message}`); fail++; }
+  );
 }
 
 // Two-entry fixture used across most cases. applyFilters takes an array of
@@ -380,10 +382,11 @@ function twoEntries() {
 }
 
 // (a) state.filters.search defaults to "" (match all).
-test("defaultFilters exposes search defaulting to empty string", () => {
+(async () => {
+await test("defaultFilters exposes search defaulting to empty string", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   assert.ok(
     Object.prototype.hasOwnProperty.call(api.state.filters, "search"),
     "state.filters should have a search field"
@@ -393,10 +396,10 @@ test("defaultFilters exposes search defaulting to empty string", () => {
 });
 
 // (b) search narrows entries by summary substring.
-test("search narrows by summary substring", () => {
+await test("search narrows by summary substring", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "login";
   const out = api.applyFilters(twoEntries());
   assert.deepStrictEqual(
@@ -407,10 +410,10 @@ test("search narrows by summary substring", () => {
 });
 
 // (c) search is case-insensitive.
-test("search is case-insensitive", () => {
+await test("search is case-insensitive", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "LOGIN";
   const out = api.applyFilters(twoEntries());
   assert.deepStrictEqual(
@@ -421,10 +424,10 @@ test("search is case-insensitive", () => {
 });
 
 // (d) search matches the KEY, not just summary.
-test("search matches the key, not just summary", () => {
+await test("search matches the key, not just summary", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "abc-123";
   const out = api.applyFilters(twoEntries());
   assert.deepStrictEqual(
@@ -435,10 +438,10 @@ test("search matches the key, not just summary", () => {
 });
 
 // (e) clearing search back to "" restores both entries.
-test("clearing search restores all entries", () => {
+await test("clearing search restores all entries", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "login";
   assert.strictEqual(api.applyFilters(twoEntries()).length, 1);
   api.state.filters.search = "";
@@ -451,10 +454,10 @@ test("clearing search restores all entries", () => {
 });
 
 // (f) regex metacharacters are treated as literal text (no RegExp, no throw).
-test("regex metacharacters are literal, not RegExp", () => {
+await test("regex metacharacters are literal, not RegExp", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "a.b*c+";
   let out;
   assert.doesNotThrow(() => {
@@ -465,10 +468,10 @@ test("regex metacharacters are literal, not RegExp", () => {
 });
 
 // (g) composition: persona AND search both must hold.
-test("search composes with persona filter", () => {
+await test("search composes with persona filter", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   // abc-123: persona software-engineer, summary "Add login"
   // def-456: persona designer, summary "Fix CSS"
   // persona=software-engineer keeps only abc-123; search="css" would keep
@@ -494,10 +497,10 @@ test("search composes with persona filter", () => {
 });
 
 // (h) a term matching nothing returns an empty list without throwing.
-test("no-match term returns empty list without throwing", () => {
+await test("no-match term returns empty list without throwing", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "zzz-no-such-story";
   let out;
   assert.doesNotThrow(() => {
@@ -507,10 +510,10 @@ test("no-match term returns empty list without throwing", () => {
 });
 
 // Boundary: whitespace-only term matches all (trimmed to "").
-test("whitespace-only term matches all", () => {
+await test("whitespace-only term matches all", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "   ";
   const out = api.applyFilters(twoEntries());
   assert.deepStrictEqual(
@@ -521,10 +524,10 @@ test("whitespace-only term matches all", () => {
 });
 
 // Boundary: single-character term narrows correctly.
-test("single-character term narrows correctly", () => {
+await test("single-character term narrows correctly", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "x"; // "Fix CSS" contains x; "Add login" does not
   const out = api.applyFilters(twoEntries());
   assert.deepStrictEqual(
@@ -535,10 +538,10 @@ test("single-character term narrows correctly", () => {
 });
 
 // renderFilterBar renders a search input + match count.
-test("renderFilterBar renders a search input and match count", () => {
+await test("renderFilterBar renders a search input and match count", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   const stories = {
     "abc-123": { key: "abc-123", summary: "Add login", persona: "software-engineer", risk: "low", status: "in_progress" },
     "def-456": { key: "def-456", summary: "Fix CSS", persona: "designer", risk: "high", status: "in_progress" },
@@ -562,10 +565,10 @@ test("renderFilterBar renders a search input and match count", () => {
 });
 
 // Match count is pluralized and absent when no term is active.
-test("renderFilterBar omits match count and pluralizes correctly", () => {
+await test("renderFilterBar omits match count and pluralizes correctly", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   const stories = {
     "abc-123": { key: "abc-123", summary: "Add login", persona: "software-engineer", risk: "low", status: "in_progress" },
     "def-456": { key: "def-456", summary: "Fix CSS login", persona: "designer", risk: "high", status: "in_progress" },
@@ -584,10 +587,10 @@ test("renderFilterBar omits match count and pluralizes correctly", () => {
 
 // renderBoard shows a "No matches" empty state (not a blank board) when a
 // search term is active and every column produced zero cards.
-test("renderBoard shows No matches empty state when search yields nothing", () => {
+await test("renderBoard shows No matches empty state when search yields nothing", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   const stories = {
     "abc-123": { key: "abc-123", summary: "Add login", persona: "software-engineer", risk: "low", status: "in_progress" },
   };
@@ -607,10 +610,10 @@ test("renderBoard shows No matches empty state when search yields nothing", () =
 });
 
 // renderBoard still renders cards normally when search matches.
-test("renderBoard renders cards when search matches", () => {
+await test("renderBoard renders cards when search matches", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   const stories = {
     "abc-123": { key: "abc-123", summary: "Add login", persona: "software-engineer", risk: "low", status: "in_progress" },
   };
@@ -626,10 +629,10 @@ test("renderBoard renders cards when search matches", () => {
 // renderBoard does not show the empty state when there is no search term,
 // even if no statuses are selected (that path is the existing "No statuses"
 // state, which must remain intact).
-test("renderBoard empty state only triggers on an active search term", () => {
+await test("renderBoard empty state only triggers on an active search term", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   const stories = {
     "abc-123": { key: "abc-123", summary: "Add login", persona: "software-engineer", risk: "low", status: "in_progress" },
   };
@@ -641,10 +644,10 @@ test("renderBoard empty state only triggers on an active search term", () => {
 });
 
 // renderPlanDetail binds the search input's input event so typing narrows.
-test("renderPlanDetail binds search input input event", () => {
+await test("renderPlanDetail binds search input input event", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   const section = makeEl("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
   const plan = {
@@ -666,10 +669,10 @@ test("renderPlanDetail binds search input input event", () => {
 });
 
 // Typing into the search input updates state.filters.search and re-renders.
-test("search input handler updates state and re-renders", () => {
+await test("search input handler updates state and re-renders", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   const section = makeEl("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
   const plan = {
@@ -689,10 +692,10 @@ test("search input handler updates state and re-renders", () => {
 });
 
 // URL hash round-trip: search term is encoded as &q= and decoded back.
-test("search term round-trips through the URL hash as &q=", () => {
+await test("search term round-trips through the URL hash as &q=", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   // encodeHashState should emit q= for a non-empty search term.
   api.state.filters.search = "add login";
   const encoded = api.encodeHashState();
@@ -706,10 +709,10 @@ test("search term round-trips through the URL hash as &q=", () => {
 });
 
 // Hash round-trip: empty search is NOT emitted (no trailing q=).
-test("empty search term is not emitted to the hash", () => {
+await test("empty search term is not emitted to the hash", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "";
   const encoded = api.encodeHashState();
   assert.ok(!/(^|&)q=/.test(encoded),
@@ -717,10 +720,10 @@ test("empty search term is not emitted to the hash", () => {
 });
 
 // Hash round-trip: malformed encoding is ignored, not thrown.
-test("malformed q= encoding is ignored without throwing", () => {
+await test("malformed q= encoding is ignored without throwing", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   let parsed;
   assert.doesNotThrow(() => {
     parsed = api.parseHash("q=%E0%A4");
@@ -733,12 +736,12 @@ test("malformed q= encoding is ignored without throwing", () => {
 });
 
 // FILTERS_KEY persistence: saveFilters persists search; load restores it.
-test("search term round-trips through FILTERS_KEY persistence", () => {
+await test("search term round-trips through FILTERS_KEY persistence", async () => {
   const store = {};
   const doc = makeDocument();
   const ft = fakeTimers();
   // Override the global localStorage with a real backing store.
-  const api = loadAppJs({
+  const api = await loadAppJs({
     doc, fakeTimers: ft,
     localStorage: {
       getItem: (k) => (k in store ? store[k] : null),
@@ -756,10 +759,10 @@ test("search term round-trips through FILTERS_KEY persistence", () => {
 });
 
 // Reset clears search back to "" (defaultFilters includes search: "").
-test("reset via defaultFilters clears search", () => {
+await test("reset via defaultFilters clears search", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
   api.state.filters.search = "something";
   api.state.filters = api.defaultFilters();
   assert.strictEqual(api.state.filters.search, "",
@@ -768,3 +771,4 @@ test("reset via defaultFilters clears search", () => {
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
+})();

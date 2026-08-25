@@ -215,7 +215,7 @@ function makeFetchSpy({ plans = { plans: [] }, health = null, usage = { availabl
   return { fetch: handler, calls };
 }
 
-function loadAppJs({ doc, ft, fetchImpl }) {
+async function loadAppJs({ doc, ft, fetchImpl }) {
   global.document = doc;
   global.CSS = { escape: (s) => String(s).replace(/"/g, '\\"') };
   global.setInterval = ft.setInterval;
@@ -244,22 +244,27 @@ function loadAppJs({ doc, ft, fetchImpl }) {
   global.window = win;
 
   bootstrapDoc(doc);
-  const fs = require("fs");
-  const path = require("path");
-  const src = fs.readFileSync(
-    path.join(__dirname, "..", "static", "app.js"), "utf8");
-  const wrapped = `${src}\nmodule.exports = {
-    capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
-    startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
-    renderOverview, selectOverview, refresh, state,
-  };`;
   const m = { exports: {} };
-  const fn = new Function("module", "document", "window", "CSS", "setInterval",
-    "clearInterval", "setTimeout", "clearTimeout", "localStorage",
-    "require", "module", wrapped);
-  fn(m, doc, win, global.CSS, global.setInterval, global.clearInterval,
-    global.setTimeout, global.clearTimeout, global.localStorage,
-    require, m);
+  // CJS eval path: evaluate app.js inside the window via the legacy wrapper
+  // so `module` is available and the file's top-level event listeners attach
+  // to our fake document. The shared loader picks this path when app.js has
+  // no top-level import/export (today's CJS form).
+  win.eval = (src) => {
+    const wrapped = `${src}\nmodule.exports = {
+      capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
+      startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
+      renderOverview, selectOverview, refresh, state,
+    };`;
+    // eslint-disable-next-line no-new-func
+    const fn = new Function("module", "document", "window", "CSS", "setInterval",
+      "clearInterval", "setTimeout", "clearTimeout", "localStorage",
+      "require", "module", wrapped);
+    fn(m, doc, win, global.CSS, global.setInterval, global.clearInterval,
+      global.setTimeout, global.clearTimeout, global.localStorage,
+      require, m);
+  };
+  const { loadAppInto } = await import("./_app_js_loader.mjs");
+  await loadAppInto(win);
   return m.exports;
 }
 
@@ -288,7 +293,7 @@ function test(name, fn) {
     const doc = makeDocument();
     const ft = fakeTimers();
     const spy = makeFetchSpy({ health: EMPTY_HEALTH });
-    const api = loadAppJs({ doc, ft, fetchImpl: spy.fetch });
+    const api = await loadAppJs({ doc, ft, fetchImpl: spy.fetch });
     const section = makeEl("section", { attrs: { id: "plan-detail" } });
     doc.register("plan-detail", section);
     await api.refresh();
@@ -301,7 +306,7 @@ function test(name, fn) {
     const doc = makeDocument();
     const ft = fakeTimers();
     const spy = makeFetchSpy({ health: EMPTY_HEALTH });
-    const api = loadAppJs({ doc, ft, fetchImpl: spy.fetch });
+    const api = await loadAppJs({ doc, ft, fetchImpl: spy.fetch });
     const section = makeEl("section", { attrs: { id: "plan-detail" } });
     doc.register("plan-detail", section);
 
@@ -319,7 +324,7 @@ function test(name, fn) {
     const doc = makeDocument();
     const ft = fakeTimers();
     const spy = makeFetchSpy({ health: EMPTY_HEALTH });
-    const api = loadAppJs({ doc, ft, fetchImpl: spy.fetch });
+    const api = await loadAppJs({ doc, ft, fetchImpl: spy.fetch });
     const section = makeEl("section", { attrs: { id: "plan-detail" } });
     doc.register("plan-detail", section);
 
@@ -342,7 +347,7 @@ function test(name, fn) {
       health: EMPTY_HEALTH,
       plans: { plans: [{ name: "empty-plan", story_count: 0, status_counts: {}, paused: false }] },
     });
-    const api = loadAppJs({ doc, ft, fetchImpl: spy.fetch });
+    const api = await loadAppJs({ doc, ft, fetchImpl: spy.fetch });
     const section = makeEl("section", { attrs: { id: "plan-detail" } });
     doc.register("plan-detail", section);
 
@@ -362,7 +367,7 @@ function test(name, fn) {
     const doc = makeDocument();
     const ft = fakeTimers();
     const spy = makeFetchSpy({ health: EMPTY_HEALTH });
-    const api = loadAppJs({ doc, ft, fetchImpl: spy.fetch });
+    const api = await loadAppJs({ doc, ft, fetchImpl: spy.fetch });
     const section = makeEl("section", { attrs: { id: "plan-detail" } });
     doc.register("plan-detail", section);
     // Make sure no plan is selected.
@@ -382,7 +387,7 @@ function test(name, fn) {
     const doc = makeDocument();
     const ft = fakeTimers();
     const spy = makeFetchSpy({ health: EMPTY_HEALTH });
-    const api = loadAppJs({ doc, ft, fetchImpl: spy.fetch });
+    const api = await loadAppJs({ doc, ft, fetchImpl: spy.fetch });
     const section = makeEl("section", { attrs: { id: "plan-detail" } });
     doc.register("plan-detail", section);
     api.state.selectedPlan = "some-plan";
@@ -402,7 +407,7 @@ function test(name, fn) {
     const doc = makeDocument();
     const ft = fakeTimers();
     const spy = makeFetchSpy({ health: EMPTY_HEALTH });
-    const api = loadAppJs({ doc, ft, fetchImpl: spy.fetch });
+    const api = await loadAppJs({ doc, ft, fetchImpl: spy.fetch });
     const section = makeEl("section", { attrs: { id: "plan-detail" } });
     doc.register("plan-detail", section);
 
@@ -440,7 +445,7 @@ function test(name, fn) {
         },
       },
     });
-    const api = loadAppJs({ doc, ft, fetchImpl: spy.fetch });
+    const api = await loadAppJs({ doc, ft, fetchImpl: spy.fetch });
     const section = makeEl("section", { attrs: { id: "plan-detail" } });
     doc.register("plan-detail", section);
 

@@ -85,14 +85,17 @@ def test_module_level_save_plan_still_exists_and_is_mcp_tool():
 
 
 def test_save_plan_definition_count_is_two():
-    """C3: exactly two ``def save_plan`` in pipeline/server.py -- the method
-    plus the tool function. Not 1 (deleted), not 3 (duplicated body)."""
+    """C3: exactly two ``def save_plan`` -- the method on PipelineService in
+    pipeline/service.py plus the tool function in pipeline/server.py. Not 1
+    (deleted), not 3 (duplicated body)."""
     import pathlib
 
-    src = pathlib.Path(p.__file__).read_text()
-    assert src.count("def save_plan(") == 2, (
-        "expected exactly 2 `def save_plan(` (method + tool), got "
-        f"{src.count('def save_plan(')}"
+    server_src = pathlib.Path(p.__file__).read_text()
+    service_src = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = server_src.count("def save_plan(") + service_src.count("def save_plan(")
+    assert count == 2, (
+        "expected exactly 2 `def save_plan(` (method in service.py + tool), "
+        f"got {count}"
     )
 
 

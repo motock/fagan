@@ -103,13 +103,15 @@ def test_module_level_tool_function_still_exists():
 
 
 def test_exactly_two_definitions_of_decompose_plan():
-    """C3: grep -c 'def decompose_plan' pipeline/server.py returns exactly 2."""
-    source = p.__file__
-    with open(source) as fh:
-        text = fh.read()
-    count = text.count("def decompose_plan")
+    """C3: exactly 2 'def decompose_plan' -- method on PipelineService in
+    pipeline/service.py + @mcp.tool() wrapper in pipeline/server.py."""
+    import pathlib
+    server_text = pathlib.Path(p.__file__).read_text()
+    service_text = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = server_text.count("def decompose_plan") + service_text.count("def decompose_plan")
     assert count == 2, (
-        f"expected exactly 2 'def decompose_plan' (method + tool), got {count}"
+        f"expected exactly 2 'def decompose_plan' (method in service.py "
+        f"+ tool wrapper in server.py), got {count}"
     )
 
 
@@ -456,13 +458,13 @@ def test_tool_delegates_to_method_result(agents_dir, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_method_defined_in_pipeline_server_module():
-    """R8: the method is defined in pipeline/server.py, not a new file."""
+def test_method_defined_in_pipeline_service_module():
+    """R8: the method is defined in pipeline/service.py (PipelineService's home)."""
     method = _method_on_class()
     if method is None:
         pytest.fail("PipelineService.decompose_plan does not exist yet")
-    assert method.__module__ == "pipeline.server", (
-        f"method must live in pipeline.server, got {method.__module__!r}"
+    assert method.__module__ == "pipeline.service", (
+        f"method must live in pipeline.service, got {method.__module__!r}"
     )
 
 

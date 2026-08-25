@@ -119,19 +119,28 @@ def test_module_resume_plan_still_exists():
 
 
 def test_pause_plan_definition_count_is_two():
-    # C3: exactly 2 definitions (method + tool function).
-    src = inspect.getsource(p)
-    assert src.count("def pause_plan") == 2, (
-        "expected exactly 2 'def pause_plan' (method + tool), got "
-        f"{src.count('def pause_plan')}"
+    # C3: exactly 2 definitions -- method on PipelineService in
+    # pipeline/service.py + @mcp.tool() wrapper in pipeline/server.py.
+    import pathlib
+    server_src = inspect.getsource(p)
+    service_src = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = server_src.count("def pause_plan") + service_src.count("def pause_plan")
+    assert count == 2, (
+        "expected exactly 2 'def pause_plan' (method in service.py + tool), "
+        f"got {count}"
     )
 
 
 def test_resume_plan_definition_count_is_two():
-    src = inspect.getsource(p)
-    assert src.count("def resume_plan") == 2, (
-        "expected exactly 2 'def resume_plan' (method + tool), got "
-        f"{src.count('def resume_plan')}"
+    # C3: exactly 2 definitions -- method on PipelineService in
+    # pipeline/service.py + @mcp.tool() wrapper in pipeline/server.py.
+    import pathlib
+    server_src = inspect.getsource(p)
+    service_src = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = server_src.count("def resume_plan") + service_src.count("def resume_plan")
+    assert count == 2, (
+        "expected exactly 2 'def resume_plan' (method in service.py + tool), "
+        f"got {count}"
     )
 
 
@@ -398,8 +407,10 @@ def test_pipeline_service_methods_are_not_mcp_tools():
 # implementer; here we assert the class is defined inside pipeline.server.
 # ---------------------------------------------------------------------------
 
-def test_pipeline_service_defined_in_pipeline_server():
-    assert p.PipelineService.__module__ == "pipeline.server"
+def test_pipeline_service_defined_in_pipeline_service_module():
+    # PipelineService was extracted into pipeline/service.py by the
+    # server-app-file-split plan and re-exported into pipeline.server.
+    assert p.PipelineService.__module__ == "pipeline.service"
 
 
 def test_service_singleton_is_module_attribute():
@@ -412,10 +423,15 @@ def test_service_singleton_is_module_attribute():
 # ---------------------------------------------------------------------------
 
 def test_class_placed_above_tools_banner():
+    # PipelineService now lives in pipeline/service.py; pipeline/server.py
+    # imports it and instantiates the `_service` singleton above the Tools
+    # banner so the @mcp.tool() wrappers can delegate to it.
     src = inspect.getsource(p)
     banner = src.index("# ---------- Tools ----------")
-    class_idx = src.index("class PipelineService:")
-    assert class_idx < banner, "PipelineService must be defined above the Tools banner"
+    import_idx = src.index("from pipeline.service import PipelineService")
+    assert import_idx < banner, (
+        "PipelineService must be imported above the Tools banner"
+    )
 
 
 def test_singleton_assignment_present():

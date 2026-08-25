@@ -166,11 +166,18 @@ def test_module_level_list_ready_stories_body_is_single_delegation():
 # ---------- C3: exactly two definitions ----------
 
 def test_exactly_two_list_ready_stories_definitions():
-    """C3: ``grep -c "def list_ready_stories" pipeline/server.py`` == 2."""
-    server_src = inspect.getsource(p)
-    count = len(re.findall(r"\bdef list_ready_stories\b", server_src))
+    """C3: exactly 2 `def list_ready_stories` -- method on PipelineService in
+    pipeline/service.py + @mcp.tool() wrapper in pipeline/server.py."""
+    import pathlib
+    server_src = pathlib.Path(p.__file__).read_text()
+    service_src = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = (
+        len(re.findall(r"\bdef list_ready_stories\b", server_src))
+        + len(re.findall(r"\bdef list_ready_stories\b", service_src))
+    )
     assert count == 2, (
-        f"expected exactly 2 `def list_ready_stories` (method + tool), got {count}"
+        f"expected exactly 2 `def list_ready_stories` (method in service.py "
+        f"+ tool wrapper in server.py), got {count}"
     )
 
 

@@ -283,22 +283,32 @@ def test_store_singleton_constructed_at_import():
 # ---------------------------------------------------------------------------
 
 def test_no_call_site_was_migrated():
-    # C6: `manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"` must
-    # appear 9 times -- this branch migrated three call sites (review_story,
-    # _advance_pipeline_locked, _approve_merge_impl) and deleted one
-    # dead-code occurrence in _repo_root_for.
+    # C6 guard: the W1b Store-routing epic routed manifest reads through
+    # FileStore, so the number of *live* (uncommented) raw
+    # `manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"` constructions
+    # in pipeline/server.py must not GROW -- i.e. no new raw constructions are
+    # reintroduced alongside the Store helpers. The server-app-file-split plan
+    # then progressively MOVES the remaining ones into extracted modules
+    # (service.py, merge.py, advance.py, ...), so the live count only shrinks.
+    #
+    # Count UNCOMMENTED occurrences only. A prior form of this test used a bare
+    # `grep -c` that matched commented lines too, which let dead `# manifest_path
+    # = ...` lines be appended to satisfy an exact `== 9` pin -- a hack that
+    # accumulated across the W1b epic. Commented lines do not count.
     import subprocess
 
     result = subprocess.run(
-        ["grep", "-c", 'manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"',
+        ["grep", 'manifest_path = PLAN_DIR / f"{plan_name}.manifest.json"',
          "pipeline/server.py"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=False,
     )
-    count = int(result.stdout.strip())
-    assert count == 9, (
-        f"expected 9 raw manifest_path constructions, found {count}; "
-        "this branch migrated review_story, _advance_pipeline_locked, and "
-        "_approve_merge_impl, and deleted one dead-code occurrence"
+    # grep exits 1 when there are no matches -- that is count 0, not an error.
+    live = [ln for ln in result.stdout.splitlines() if not ln.lstrip().startswith("#")]
+    count = len(live)
+    assert count <= 2, (
+        f"expected at most 2 live (uncommented) raw manifest_path "
+        f"constructions in pipeline/server.py, found {count}; a new raw "
+        "construction was reintroduced instead of routing through FileStore"
     )
 
 

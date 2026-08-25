@@ -183,11 +183,14 @@ def test_module_level_get_role_config_body_is_single_delegation():
 # ---------- C3: exactly two definitions ----------
 
 def test_exactly_two_get_role_config_definitions():
-    """C3: ``grep -c "def get_role_config" pipeline/server.py`` == 2."""
-    text = pathlib.Path(p.__file__).read_text()
-    count = text.count("def get_role_config")
+    """C3: exactly 2 `def get_role_config` -- method on PipelineService in
+    pipeline/service.py + @mcp.tool() wrapper in pipeline/server.py."""
+    server_text = pathlib.Path(p.__file__).read_text()
+    service_text = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = server_text.count("def get_role_config") + service_text.count("def get_role_config")
     assert count == 2, (
-        f"expected exactly 2 `def get_role_config` (method + tool), got {count}"
+        f"expected exactly 2 `def get_role_config` (method in service.py "
+        f"+ tool wrapper in server.py), got {count}"
     )
 
 

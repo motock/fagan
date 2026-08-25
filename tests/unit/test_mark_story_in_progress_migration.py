@@ -123,12 +123,18 @@ def test_module_level_tool_body_is_single_delegation():
 
 
 def test_exactly_two_definitions_of_mark_story_in_progress():
-    """C3: grep -c 'def mark_story_in_progress' pipeline/server.py == 2."""
-    src = inspect.getsource(p)
-    count = src.count("def mark_story_in_progress")
+    """C3: exactly 2 'def mark_story_in_progress' -- method on PipelineService
+    in pipeline/service.py + @mcp.tool() wrapper in pipeline/server.py."""
+    import pathlib
+    server_src = pathlib.Path(p.__file__).read_text()
+    service_src = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = (
+        server_src.count("def mark_story_in_progress")
+        + service_src.count("def mark_story_in_progress")
+    )
     assert count == 2, (
-        f"expected exactly 2 'def mark_story_in_progress' (method + tool), "
-        f"got {count}"
+        f"expected exactly 2 'def mark_story_in_progress' (method in "
+        f"service.py + tool wrapper in server.py), got {count}"
     )
 
 

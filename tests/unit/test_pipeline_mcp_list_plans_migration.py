@@ -67,10 +67,13 @@ def test_list_plans_method_return_annotation_is_list_of_str():
 
 
 def test_exactly_two_list_plans_definitions():
-    """C3: ``grep -c 'def list_plans'`` must return exactly 2 -- the method on
-    PipelineService plus the module-level @mcp.tool() wrapper."""
-    source = inspect.getsource(p)
-    count = source.count("def list_plans")
+    """C3: exactly 2 `def list_plans` -- the method on PipelineService in
+    pipeline/service.py plus the module-level @mcp.tool() wrapper in
+    pipeline/server.py."""
+    import pathlib
+    server_src = pathlib.Path(p.__file__).read_text()
+    service_src = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = server_src.count("def list_plans") + service_src.count("def list_plans")
     assert count == 2, (
         f"Expected exactly 2 `def list_plans` definitions (method + tool), "
         f"found {count}"

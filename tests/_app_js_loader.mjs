@@ -46,6 +46,18 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
       globalThis[k] = win[k];
     }
     const mod = await import(appFileUrl);
+    // Reset module-level state so each loadAppInto call gets a fresh state.
+    // The ESM module is cached by Node, so `state` (a module singleton in
+    // state.js) would otherwise leak across tests in the same process.
+    if (mod.state) {
+      mod.state.selectedPlan = null;
+      mod.state.pollHandle = null;
+      mod.state.refreshIndicatorTimer = null;
+      mod.state.filters = mod.defaultFilters();
+      mod.state.showArchived = false;
+      mod.state.commsActive = true;
+      mod.state.configActive = false;
+    }
     Object.assign(win, mod);
     return mod;
   }

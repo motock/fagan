@@ -42,6 +42,10 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# renderBoard / _diffBoardCards were relocated out of static/app.js into this
+# dedicated render module (server-app-file-split plan); the static-source
+# assertions below follow them here.
+BOARD_JS = os.path.join(REPO_ROOT, "static", "app", "render", "board.js")
 
 
 # A self-contained, richer DOM shim. Built once as a Python string and
@@ -349,9 +353,11 @@ def _story(key, status="todo", summary="a story", backend=None, escalated=False,
 
 def test_diff_board_cards_function_exists():
     """A new function `_diffBoardCards(columnBodyEl, storiesForColumn)` must
-    exist in static/app.js. It is the diffable unit extracted from
-    renderBoard's per-column card-building loop."""
-    js = _app_js_source()
+    exist (now in static/app/render/board.js, alongside renderBoard, after
+    the server-app-file-split extraction). It is the diffable unit extracted
+    from renderBoard's per-column card-building loop."""
+    with open(BOARD_JS, encoding="utf-8") as fh:
+        js = fh.read()
     assert "_diffBoardCards" in js
     # The function must be declared with the documented two-parameter
     # signature (column body element + the array of [key, story] pairs for
@@ -365,17 +371,19 @@ def test_render_board_calls_diff_board_cards():
     chunk. The column HEADER/count and completion hint may stay inline
     (they are cheap and stateless); only the cards within a column-body are
     diffed."""
-    js = _app_js_source()
+    with open(BOARD_JS, encoding="utf-8") as fh:
+        js = fh.read()
     assert "_diffBoardCards(" in js
     # The old single big template-string card chunk (the per-card return
     # inside renderBoard's entries.map) must no longer be the way cards are
     # produced for a column. The card markup builder may move into
     # _diffBoardCards (or a helper it calls). Assert the diff function is
-    # referenced from within renderBoard's body by checking the call appears
-    # after the renderBoard declaration and before renderPlanDetail.
+    # referenced somewhere at/after renderBoard's own declaration within
+    # board.js (renderBoard and _diffBoardCards now live in the same
+    # extracted module, so there is no longer a renderPlanDetail boundary
+    # to bound the search against).
     rb_start = js.index("function renderBoard(")
-    rpd_start = js.index("function renderPlanDetail(")
-    calls = [i for i in range(rb_start, rpd_start) if js[i:i + 16] == "_diffBoardCards("]
+    calls = [i for i in range(rb_start, len(js)) if js[i:i + 16] == "_diffBoardCards("]
     assert calls, "renderBoard must call _diffBoardCards within its body"
 
 

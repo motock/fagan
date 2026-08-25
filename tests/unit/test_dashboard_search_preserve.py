@@ -27,7 +27,8 @@ search input — all WITHOUT removing or renaming the existing `scrollTop`/
 """
 import json
 import os
-import subprocess
+
+from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
@@ -143,18 +144,9 @@ def _run_app_js(expr):
     """Evaluate a JS expression inside an environment where static/app.js has
     been loaded against the richer DOM shim above. Returns the JSON-serialized
     result."""
-    script = (
-        _SHIM
-        + "const fs = require('fs');"
-        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
-        + "globalThis.state = globalThis.window.state;"
-        + "process.stdout.write(JSON.stringify(" + expr + "));"
-    )
-    proc = subprocess.run(
-        ["node", "-e", script],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+    proc = _shared_run_app_js(expr, shim=_SHIM)
+    if proc.returncode != 0:
+        raise AssertionError(f"node failed: {proc.stderr}")
     return json.loads(proc.stdout)
 
 

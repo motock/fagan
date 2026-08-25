@@ -18,43 +18,15 @@ These tests are RED until the implementation lands.
 """
 import json
 import os
-import subprocess
+
+from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
 INDEX_HTML = os.path.join(REPO_ROOT, "static", "index.html")
 
 
-def _run_app_js(expr, fetch_impl=None, extra_setup=""):
-    """Evaluate a JS expression inside an environment where static/app.js
-    has been loaded. Returns the JSON-serialized result.
-
-    Copied verbatim from test_dashboard_comms_send.py so this file is
-    self-contained. The shim is extended (in THIS file only) so a test can
-    supply a canned `fetch` implementation via `fetch_impl` (a JS source
-    string evaluating to a function) and so #comms-thread's appendChild is
-    observable.
-
-    `fetch_impl`, when provided, must be a JS expression evaluating to a
-    function `(url, opts) => Promise<Response-like>`. The Response-like
-    object must expose `.ok` (boolean) and a `.json()` method returning a
-    Promise (or a plain value; the shim's helper awaits it).
-    """
-    # app.js calls refresh() once at top-level module load (pre-existing,
-    # unrelated dashboard bootstrap behavior outside this story's scope).
-    # That call must not be observed by a test's fetch_impl - only fetch()
-    # calls made *after* app.js has finished loading (i.e. by the code the
-    # test is actually driving) should hit it. So the shim always loads
-    # app.js against the default never-resolving stub, then swaps in the
-    # test's fetch_impl right after.
-    shim_fetch_default = "globalThis.fetch = () => new Promise(() => {});"
-    shim_fetch_swap = (
-        "globalThis.fetch = " + fetch_impl + ";"
-        if fetch_impl is not None
-        else ""
-    )
-    shim = (
-        """
+_SHIM = r"""
         const noop = () => {};
         const fakeEl = {
             innerHTML: "",
@@ -158,30 +130,51 @@ def _run_app_js(expr, fetch_impl=None, extra_setup=""):
             addEventListener: noop,
         };
         globalThis.localStorage = { getItem: () => null, setItem: noop };
-        """
-        + shim_fetch_default
-        + """
+"""
+
+_SHIM_FETCH_DEFAULT = "globalThis.fetch = () => new Promise(() => {});"
+
+_SHIM_TAIL = """
         process.on("unhandledRejection", () => {});
         globalThis.setInterval = () => 1;
         globalThis.setTimeout = (fn, _ms) => { if (typeof fn === "function") { /* dropped */ } return 0; };
         globalThis.clearInterval = (h) => { /* no-op */ };
-        """
+"""
+
+
+def _run_app_js(expr, fetch_impl=None, extra_setup=""):
+    """Evaluate a JS expression inside an environment where static/app.js
+    has been loaded. Returns the JSON-serialized result.
+
+    Copied verbatim from test_dashboard_comms_send.py so this file is
+    self-contained. The shim is extended (in THIS file only) so a test can
+    supply a canned `fetch` implementation via `fetch_impl` (a JS source
+    string evaluating to a function) and so #comms-thread's appendChild is
+    observable.
+
+    `fetch_impl`, when provided, must be a JS expression evaluating to a
+    function `(url, opts) => Promise<Response-like>`. The Response-like
+    object must expose `.ok` (boolean) and a `.json()` method returning a
+    Promise (or a plain value; the shim's helper awaits it).
+    """
+    # app.js calls refresh() once at top-level module load (pre-existing,
+    # unrelated dashboard bootstrap behavior outside this story's scope).
+    # That call must not be observed by a test's fetch_impl - only fetch()
+    # calls made *after* app.js has finished loading (i.e. by the code the
+    # test is actually driving) should hit it. So the shim always loads
+    # app.js against the default never-resolving stub, then swaps in the
+    # test's fetch_impl right after (prepended to the expr, which the shared
+    # loader evaluates after app.js has loaded).
+    shim_fetch_swap = (
+        "globalThis.fetch = " + fetch_impl + ";"
+        if fetch_impl is not None
+        else ""
     )
-    script = (
-        shim
-        + extra_setup
-        + "const fs = require('fs');"
-        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
-        + "globalThis.state = globalThis.window.state;"
-        + shim_fetch_swap
-        + "(async () => { const __result = await eval(" + json.dumps(expr) + "); "
-        + "process.stdout.write(JSON.stringify(__result === undefined ? null : __result)); })();"
-    )
-    proc = subprocess.run(
-        ["node", "-e", script],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+    built_shim = _SHIM + _SHIM_FETCH_DEFAULT + _SHIM_TAIL + extra_setup
+    expr = shim_fetch_swap + expr
+    proc = _shared_run_app_js(expr, shim=built_shim)
+    if proc.returncode != 0:
+        raise AssertionError(f"node failed: {proc.stderr}")
     return json.loads(proc.stdout)
 
 

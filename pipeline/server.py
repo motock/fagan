@@ -59,6 +59,7 @@ from .build_detect import (  # noqa: F401
     _build_command_for,
     _is_pytest_cmd,
     _isolation_only_acceptance_warning,
+    _last_done_summary,
     _module_level_function_names,
     _platform_locked_fixture_warning,
     _provision_worktree_venv,
@@ -625,49 +626,6 @@ def get_effective_config(
     than raising."""
     return _service.get_effective_config(plan_name)
 
-def _get_effective_config_impl(
-    plan_name: str | None = None,
-) -> dict[str, Any]:
-    plan_role_config = _plan_role_config(plan_name) if plan_name else None
-    model_fallbacks = {
-        "overlord": lambda: _persona_default_model("overlord") or "opus",
-        "planner": lambda: DEFAULT_MODEL,
-        "dispatch": lambda: DEFAULT_MODEL,
-        "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
-        "decompose": lambda: _persona_default_model("product-analyst") or "opus",
-        "security": lambda: _persona_default_model("security-engineer") or DEFAULT_MODEL,
-    }
-    try:
-        registry = role_registry.load_registry()
-    except role_registry.RoleRegistryError:
-        registry = {}
-
-    roles = config_provenance.effective_role_config(
-        plan_role_config=plan_role_config,
-        registry=registry,
-        model_fallbacks=model_fallbacks,
-    )
-    env = config_provenance.effective_env_config()
-    ignored_env_vars = config_provenance.ignored_env_vars_present()
-
-    plist_path = config_provenance._scheduler_plist_path()
-    mcp_env_path = config_provenance._claude_json_path()
-    registry_path = role_registry._registry_path()
-
-    sources = {
-        "launchd_plist": {"path": str(plist_path), "exists": plist_path.exists()},
-        "mcp_server_env": {"path": str(mcp_env_path), "exists": mcp_env_path.exists()},
-        "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
-    }
-
-    return {
-        "ok": True,
-        "roles": roles,
-        "env": env,
-        "ignored_env_vars": ignored_env_vars,
-        "sources": sources,
-    }
-
 
 @mcp.tool()
 def decompose_plan(request: str) -> dict[str, Any]:
@@ -791,28 +749,6 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     agent deaths logged in 2026-06-27's e2e-decentralized-messaging run.
     """
     return _service.dispatch_story(plan_name, story_key)
-
-
-@mcp.tool()
-def _last_done_summary(agent_log: Path) -> str:
-    """Return the summary text from the LAST "] DONE:" line in agent.log, or
-    "" if the agent never reached done. Only the final DONE line reflects
-    the current run - a resumed agent appends to the same log across ticks
-    (mirrors _last_nonempty_line's resumed-log caution for STEP_CAP_MARKERS).
-    local_agent.py's `done` tool prints its summary argument verbatim as
-    "[step N] DONE: <summary>"; this is that real signal, not a fictitious
-    exit protocol."""
-    if not agent_log.exists():
-        return ""
-    marker = "] DONE:"
-    last = ""
-    with open(agent_log, "rb") as fh:
-        for raw in fh:
-            line = raw.decode("utf-8", errors="replace").strip()
-            idx = line.find(marker)
-            if idx != -1:
-                last = line[idx + len(marker) :].strip()
-    return last
 
 
 from pipeline.story_status import check_story_status

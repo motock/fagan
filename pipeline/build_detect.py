@@ -601,11 +601,33 @@ def _module_level_function_names(source: str) -> set[str]:
     }
 
 
+def _last_done_summary(agent_log: Path) -> str:
+    """Return the summary text from the LAST "] DONE:" line in agent.log, or
+    "" if the agent never reached done. Only the final DONE line reflects
+    the current run - a resumed agent appends to the same log across ticks
+    (mirrors _last_nonempty_line's resumed-log caution for STEP_CAP_MARKERS).
+    local_agent.py's `done` tool prints its summary argument verbatim as
+    "[step N] DONE: <summary>"; this is that real signal, not a fictitious
+    exit protocol."""
+    if not agent_log.exists():
+        return ""
+    marker = "] DONE:"
+    last = ""
+    with open(agent_log, "rb") as fh:
+        for raw in fh:
+            line = raw.decode("utf-8", errors="replace").strip()
+            idx = line.find(marker)
+            if idx != -1:
+                last = line[idx + len(marker) :].strip()
+    return last
+
+
 __all__ = [
     "_acceptance_rel_paths",
     "_added_pytest_test_paths",
     "_build_command_for",
     "_is_pytest_cmd",
+    "_last_done_summary",
     "_module_level_function_names",
     "_provision_worktree_venv",
     "_run_lint_gate",

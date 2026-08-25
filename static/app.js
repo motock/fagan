@@ -351,49 +351,6 @@ function applyHashToState() {
   saveFilters();
 }
 
-// `state` is intentionally attached to `window` so deep-link helpers
-// (applyHashToState / updateHash / clearHash) can mutate it from any caller,
-// and so test harnesses can inspect it via dom.window.state.
-window.state = {
-  selectedPlan: null,
-  pollHandle: null,
-  refreshIndicatorTimer: null,
-  filters: defaultFilters(),
-  showArchived: false,
-  commsActive: true,
-  configActive: false,
-};
-
-// Local alias keeps the rest of the file terse.
-const FILTERS_KEY = "pipeline-dashboard-filters";
-const state = window.state;
-
-function loadFilters() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(FILTERS_KEY) || "{}");
-    state.filters = { ...defaultFilters(), ...stored };
-  } catch {
-    state.filters = defaultFilters();
-  }
-}
-
-function saveFilters() {
-  try {
-    localStorage.setItem(FILTERS_KEY, JSON.stringify(state.filters));
-  } catch {
-    /* localStorage unavailable; filters simply won't persist */
-  }
-}
-
-// Toggle a value in one of the array-valued filter dimensions, then persist.
-function toggleFilter(dimension, value) {
-  const list = state.filters[dimension];
-  const idx = list.indexOf(value);
-  if (idx === -1) list.push(value);
-  else list.splice(idx, 1);
-  saveFilters();
-}
-
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",

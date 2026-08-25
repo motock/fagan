@@ -453,7 +453,7 @@ await test("auto-refresh checkbox uncheck stops polling via change handler", asy
 await test("visibilitychange stops polling when hidden, resumes when visible", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = await loadApp(doc, { fakeTimers: ft, autoRefreshChecked: true });
+  const api = await loadAppJs({ doc, fakeTimers: ft, autoRefreshChecked: true });
 
   // The module-level startPolling set a handle; capture it so we can
   // confirm it's a fresh handle after resume (not the original).

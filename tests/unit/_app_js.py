@@ -45,7 +45,8 @@ def run_app_js(expr, app_js=_APP_JS_DEFAULT, shim=""):
             shim
             + f"\nconst __app = await import({json.dumps(app_url)});"
             + "\nObject.assign(globalThis, __app);"
-            + f"\nprocess.stdout.write(JSON.stringify(eval({json.dumps(expr)})));"
+            + "\nglobalThis.module = { exports: __app };"
+            + f"\nprocess.stdout.write(JSON.stringify(await eval({json.dumps(expr)})));"
         )
         return subprocess.run(
             ["node", "--input-type=module", "-e", script],

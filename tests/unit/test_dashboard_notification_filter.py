@@ -226,8 +226,9 @@ process.on("unhandledRejection", () => {});
 globalThis.setInterval = () => 0;
 globalThis.setTimeout = (fn, _ms) => { return 0; };
 
-const fs = require('fs');
-eval(fs.readFileSync(%(app_js_path)s, 'utf8'));
+const __app = await import(%(app_js_url)s);
+Object.assign(globalThis, __app);
+globalThis.module = { exports: __app };
 globalThis.state = globalThis.window.state;
 """
 

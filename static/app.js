@@ -2458,3 +2458,34 @@ function _wireBackendSelector() {
 })();
 
 _wireBackendSelector();
+
+// Named exports for the ESM test harness (tests/unit/_app_js.py does
+// Object.assign(globalThis, await import(app.js))). Every function the
+// dashboard .py tests call as a bare name must be exported here.
+export {
+  _applyActiveView,
+  _diffBoardCards,
+  _diffNotificationsPanel,
+  _diffOverviewPlanRows,
+  ageLabelFor,
+  applyFilters,
+  capturePlanDetailState,
+  filterNotifications,
+  filterStoryNotifications,
+  isStaleInProgress,
+  pickNewNotifications,
+  pushToast,
+  refresh,
+  relativeAgeLabel,
+  renderBoard,
+  renderChecklist,
+  renderJournal,
+  renderJournalEntry,
+  renderNotifications,
+  renderPlanDetail,
+  renderPlanList,
+  renderStoryModalNotifications,
+  renderToolTraceHtml,
+  restorePlanDetailState,
+  showStoryModal,
+};

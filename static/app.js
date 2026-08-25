@@ -2463,10 +2463,12 @@ _wireBackendSelector();
 // Object.assign(globalThis, await import(app.js))). Every function the
 // dashboard .py tests call as a bare name must be exported here.
 export {
+  _applyActiveView,
   _diffBoardCards,
   _diffNotificationsPanel,
   _diffOverviewPlanRows,
   ageLabelFor,
+  appendCommsMessage,
   applyFilters,
   defaultFilters,
   encodeHashState,
@@ -2493,6 +2495,9 @@ export {
   renderToolTraceHtml,
   restorePlanDetailState,
   saveFilters,
+  selectComms,
+  selectOverview,
+  sendCommsMessage,
   showStoryModal,
   startPolling,
   stopPolling,

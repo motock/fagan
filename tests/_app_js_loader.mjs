@@ -30,31 +30,24 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
   const win = dom.window || dom;
   if (_ESM_RE.test(src)) {
     const appFileUrl = pathToFileURL(_APP_JS).href;
-    // Expose the browser globals app.js/state.js read at top level (window,
-    // document, localStorage, fetch) on globalThis so the ESM module
-    // evaluates under Node. Propagate the caller's existing globals onto win
-    // first so we never clobber a test's setup with an undefined win stub.
-    const _prev = {
-      window: globalThis.window,
-      document: globalThis.document,
-      localStorage: globalThis.localStorage,
-      fetch: globalThis.fetch,
-    };
+    // Expose browser globals on globalThis for BOTH the ESM module's
+    // top-level reads AND its call-time reads. app.js functions read
+    // window.location / document / localStorage / fetch when INVOKED by
+    // tests, not just at import time, so these MUST STAY SET for the
+    // process lifetime -- do NOT restore them in a finally block (that was
+    // a prior brief's bug: it set globalThis.window back to undefined and
+    // broke every call-time window.location read). Each loadAppInto call
+    // re-points these at its own win. Propagate the caller's existing
+    // globals onto win first so we never clobber a test's setup (e.g. a
+    // test that set global.document = doc) with an undefined win stub.
     globalThis.window = win;
     for (const k of ["document", "localStorage", "fetch"]) {
       if (win[k] === undefined && globalThis[k] !== undefined) win[k] = globalThis[k];
       globalThis[k] = win[k];
     }
-    try {
-      const mod = await import(appFileUrl);
-      Object.assign(win, mod);
-      return mod;
-    } finally {
-      globalThis.window = _prev.window;
-      globalThis.document = _prev.document;
-      globalThis.localStorage = _prev.localStorage;
-      globalThis.fetch = _prev.fetch;
-    }
+    const mod = await import(appFileUrl);
+    Object.assign(win, mod);
+    return mod;
   }
   // CJS path: evaluate inside the target window.
   win.eval(src);

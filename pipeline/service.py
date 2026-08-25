@@ -70,6 +70,18 @@ class _ServerRef:
             return self._value() == other._value()
         return self._value() == other
 
+    def __lt__(self, other):
+        return self._value() < other
+
+    def __le__(self, other):
+        return self._value() <= other
+
+    def __gt__(self, other):
+        return self._value() > other
+
+    def __ge__(self, other):
+        return self._value() >= other
+
     def __hash__(self):
         return hash(self._value())
 

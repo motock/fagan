@@ -164,19 +164,11 @@ def _run_app_js(expr, fetch_impl=None, extra_setup=""):
         globalThis.setTimeout = (fn, _ms) => { if (typeof fn === "function") { /* dropped */ } return 0; };
         """
     )
-    script = (
-        shim
-        + extra_setup
-        + "const fs = require('fs');"
-        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
-        + "globalThis.state = globalThis.window.state;"
-        + shim_fetch_swap
-        + "(async () => { const __result = await eval(" + json.dumps(expr) + "); "
-        + "process.stdout.write(JSON.stringify(__result === undefined ? null : __result)); })();"
-    )
-    proc = subprocess.run(
-        ["node", "-e", script],
-        check=False, capture_output=True, text=True, timeout=10,
+    proc = run_app_js(
+        expr,
+        shim=shim + extra_setup,
+        after_load=shim_fetch_swap,
+        async_eval=True,
     )
     assert proc.returncode == 0, f"node failed: {proc.stderr}"
     return json.loads(proc.stdout)

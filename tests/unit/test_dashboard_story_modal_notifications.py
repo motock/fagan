@@ -15,7 +15,6 @@ dispatch implements the four anchored edits described in the story.
 """
 import json
 import os
-import subprocess
 
 from _app_js import run_app_js
 

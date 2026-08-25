@@ -32,7 +32,6 @@ Per-project overrides (set in project .mcp.json env block):
 """
 
 import ast
-import fcntl
 import hashlib
 import json
 import logging
@@ -95,18 +94,6 @@ from .ci import (  # noqa: F401
     _reverify_acceptance,
     _reverify_build,
 )
-
-# Merge adjudication helpers (moved to pipeline/merge.py). Re-exported so
-# tests that monkeypatch pipeline.server.<name> still resolve.
-from .merge import (
-    _approve_merge_impl,
-    _merge_decision,
-    _merge_gate_ci_status,
-    _rebase_and_push_for_merge,
-    _set_plan_paused,
-    _try_acquire_git_lock,
-)
-
 
 # Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
 # PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
@@ -180,6 +167,17 @@ from .git_ops import (
     _test_names_in_file,
     _worktree_has_new_commits,
     _worktree_has_non_wip_commits,  # noqa: F401 (re-exported for test patching)
+)
+
+# Merge adjudication helpers (moved to pipeline/merge.py). Re-exported so
+# tests that monkeypatch pipeline.server.<name> still resolve.
+from .merge import (  # noqa: F401
+    _approve_merge_impl,
+    _merge_decision,
+    _merge_gate_ci_status,
+    _rebase_and_push_for_merge,
+    _set_plan_paused,
+    _try_acquire_git_lock,
 )
 
 # Pre-dispatch acceptance-oracle validation (a broken oracle costs an

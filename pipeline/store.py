@@ -326,3 +326,4 @@ class FileStore:
             return self.get_manifest(plan_name)
         except (json.JSONDecodeError, OSError):
             return None
+

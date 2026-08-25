@@ -32,6 +32,7 @@ Per-project overrides (set in project .mcp.json env block):
 """
 
 import ast
+import fcntl
 import hashlib
 import json
 import logging
@@ -4362,6 +4363,7 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
 
 
 
+@mcp.tool()
 def pause_plan(plan_name: str) -> dict[str, Any]:
     """
     Stop advance_pipeline/advance_all_plans from touching this one plan -

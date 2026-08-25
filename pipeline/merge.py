@@ -1,10 +1,12 @@
 """Merge adjudication helpers extracted from pipeline/server.py.
 
-These functions were moved verbatim from the server module. Names that are
-defined only in pipeline/server.py (REPO_ROOT, _default_branch,
-_scoped_repo_root, _store) are read via lazy imports inside the function
-bodies to avoid a circular import (server.py imports this module at top
-level). Tests monkeypatch the re-exported names on pipeline.server.
+These functions were moved verbatim from the server module. Tests monkeypatch
+module globals on ``pipeline.server`` (e.g. ``p._ci_status_once``,
+``p.PIPELINE_AUTONOMY``), so every external name these functions read is
+resolved via a lazy ``from .server import ...`` inside the function body at
+call time - the same circular-avoidance pattern used by pipeline/rebase.py and
+pipeline/pr.py. This keeps the re-exported bindings on ``pipeline.server`` the
+single source of truth that monkeypatches land on.
 """
 
 import fcntl
@@ -13,31 +15,6 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-
-from .ci import (
-    _ci_rerun,
-    _ci_status,
-    _ci_status_once,
-    _reverify_acceptance,
-    _reverify_build,
-)
-from .config import (
-    _RISK_ORDER,
-    PIPELINE_AUTONOMY,
-    PIPELINE_RISK_THRESHOLD,
-)
-from .parsers import (
-    _atomic_write_json,
-    _validate_key,
-)
-from .persistence import _notify_user
-from .pr import _merge_pr
-from .rebase import _rebase_onto_master
-from .self_modification import (
-    _mcp_restart_notice,
-    _mcp_self_source_touched,
-)
-from .ticketing import _mark_plane_done
 
 _lock_state = {}
 
@@ -51,11 +28,13 @@ def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
     longer used by the merge gate, so the S5 non-blocking CI-pending behaviour
     is the production default rather than a test-only code path.
     """
+    from .server import _ci_status_once
+
     return _ci_status_once(branch, sha=sha)
 
 
 def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
-    from .server import REPO_ROOT, _default_branch
+    from .server import REPO_ROOT, _default_branch, _notify_user, _rebase_onto_master
 
     rb = _rebase_onto_master(worktree, branch)
     if rb.get("auto_resolved"):
@@ -143,6 +122,8 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
     Honors PIPELINE_AUTONOMY and PIPELINE_RISK_THRESHOLD. high-risk work is
     always parked for human review regardless of autonomy level.
     """
+    from .server import _RISK_ORDER, PIPELINE_AUTONOMY, PIPELINE_RISK_THRESHOLD
+
     if story.get("review_verdict") != "APPROVE":
         return {"action": "park", "reason": "not approved"}
     if PIPELINE_AUTONOMY == "dry-run":
@@ -169,7 +150,24 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
 
 
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
-    from .server import REPO_ROOT, _default_branch, _scoped_repo_root, _store
+    from .server import (
+        REPO_ROOT,
+        _atomic_write_json,
+        _ci_rerun,
+        _ci_status,
+        _default_branch,
+        _mark_plane_done,
+        _mcp_restart_notice,
+        _mcp_self_source_touched,
+        _merge_pr,
+        _notify_user,
+        _rebase_onto_master,
+        _reverify_acceptance,
+        _reverify_build,
+        _scoped_repo_root,
+        _store,
+        _validate_key,
+    )
 
     _validate_key(plan_name)
     _validate_key(story_key)

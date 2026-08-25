@@ -170,13 +170,20 @@ def test_module_level_checkpoint_body_is_single_delegation():
 
 
 def test_exactly_two_checkpoint_definitions():
-    """C3: exactly two `def checkpoint` definitions (method + tool)."""
+    """C3: exactly two `def checkpoint` definitions -- method on
+    PipelineService in pipeline/service.py + @mcp.tool() wrapper in
+    pipeline/server.py."""
+    import pathlib
     import re
-    with open(p.__file__) as fh:
-        text = fh.read()
-    count = len(re.findall(r"\bdef checkpoint\b", text))
+    server_text = pathlib.Path(p.__file__).read_text()
+    service_text = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    count = (
+        len(re.findall(r"\bdef checkpoint\b", server_text))
+        + len(re.findall(r"\bdef checkpoint\b", service_text))
+    )
     assert count == 2, (
-        f"expected exactly 2 `def checkpoint` definitions, found {count}"
+        f"expected exactly 2 `def checkpoint` definitions (method in "
+        f"service.py + tool wrapper in server.py), found {count}"
     )
 
 

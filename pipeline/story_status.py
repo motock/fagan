@@ -679,16 +679,92 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
-# Rebind the function's globals to pipeline.server's namespace so that
-# bare-name reads inside the body (e.g. `detect_test_command`,
-# `_worktree_has_new_commits`, `_store`) resolve against pipeline.server at
-# call time. This preserves the original behavior where the function lived in
-# pipeline.server and saw monkeypatched module globals (LOAD_GLOBAL does not
-# consult a module-level __getattr__, so a plain re-export would not).
+def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
+    """
+    Transition the ticket to Done and update the local manifest.
+    Use after you've reviewed and merged the agent's PR.
+    """
+    _validate_key(plan_name)
+    _validate_key(story_key)
+    get_ticket_provider().set_state(story_key, LogicalState.DONE, plan_name)
+
+    manifest = _store.get_manifest(plan_name)
+    manifest["stories"][story_key]["status"] = "done"
+    manifest["stories"][story_key].pop("parked_reason", None)
+    _store.save_manifest(plan_name, manifest)
+
+    # Check if all stories are now done
+    all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
+    if all_done:
+        if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):
+            _record_retro_pending(plan_name, len(manifest["stories"]))
+        return {
+            "ok": True,
+            "plan_completed": True,
+            "stories": list(manifest["stories"].keys()),
+        }
+    return {"ok": True}
+
+
+# Story fields patch_story may edit. Deliberately excludes "status" (use
+# set_story_status), "worktree", "pid", "review_verdict" and other
+# pipeline-owned runtime state - this tool is for correcting what the plan
+# authored, not for mechanically bypassing the review/merge gates.
+_PATCHABLE_STORY_FIELDS = frozenset(
+    (
+        "agent_instructions",
+        "model",
+        "persona",
+        "risk",
+        "dependencies",
+        "acceptance",
+        "pr_url",
+        "summary",
+        "tdd_split",
+        "backend",
+    )
+)
+
+# Every status value the pipeline itself assigns to a story (see the
+# "status"] = / "status": literal assignments throughout this file). Kept as
+# an explicit allowlist so set_story_status can't be used to invent a status
+# the rest of the code doesn't know how to handle.
+_VALID_STORY_STATUSES = frozenset(
+    (
+        "todo",
+        "in_progress",
+        "running",
+        "interrupted",
+        "failed",
+        "tests_passed",
+        "pr_open",
+        "changes_requested",
+        "parked",
+        "done",
+        "done",
+    )
+)
+
+
+# Rebind the functions' globals to pipeline.server's namespace so that
+# bare-name reads inside the bodies (e.g. `detect_test_command`,
+# `_worktree_has_new_commits`, `_store`, `_validate_key`,
+# `get_ticket_provider`, `_record_retro_pending`) resolve against
+# pipeline.server at call time. This preserves the original behavior where the
+# functions lived in pipeline.server and saw monkeypatched module globals
+# (LOAD_GLOBAL does not consult a module-level __getattr__, so a plain
+# re-export would not).
 check_story_status = types.FunctionType(
     check_story_status.__code__,
     _server.__dict__,
     check_story_status.__name__,
     check_story_status.__defaults__,
     check_story_status.__closure__,
+)
+_mark_story_done_impl = types.FunctionType(
+    _mark_story_done_impl.__code__,
+    _server.__dict__,
+    _mark_story_done_impl.__name__,
+    _mark_story_done_impl.__defaults__,
+    _mark_story_done_impl.__closure__,
 )

@@ -238,8 +238,6 @@ from .paths import (  # noqa: F401
 # pipeline_persistence.PLAN_DIR so server-side reads and persistence-module
 # reads both see the same temp dir.
 from .persistence import (
-    _append_decision,
-    _append_journal,
     _decisions_path,
     _notify_user,
     _plan_role_config,
@@ -332,7 +330,6 @@ from .self_modification import (  # noqa: F401
     _mcp_restart_notice,
     _mcp_self_source_touched,
 )
-
 from .store import FileStore, Store, _TransactionLock  # noqa: F401
 
 # Ticketing backend. Tests patch the pipeline_ticketing module directly

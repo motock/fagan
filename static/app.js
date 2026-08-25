@@ -2162,19 +2162,23 @@ async function sendCommsMessage(text) {
 
 // Wire UI events
 const commsSendBtn = document.getElementById('comms-send');
-commsSendBtn.addEventListener('click', () => {
-  const input = document.getElementById('comms-input');
-  sendCommsMessage(input.value);
-  input.value = '';
-});
+if (commsSendBtn) {
+  commsSendBtn.addEventListener('click', () => {
+    const input = document.getElementById('comms-input');
+    sendCommsMessage(input.value);
+    input.value = '';
+  });
+}
 const commsInput = document.getElementById('comms-input');
-commsInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendCommsMessage(commsInput.value);
-    commsInput.value = '';
-  }
-});
+if (commsInput) {
+  commsInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendCommsMessage(commsInput.value);
+      commsInput.value = '';
+    }
+  });
+}
 
 
 async function refresh() {

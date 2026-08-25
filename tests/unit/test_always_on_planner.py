@@ -1020,7 +1020,9 @@ def test_server_module_defines_plan_hash_sidecar_path():
     path literal and the new guard variable appear in the server source."""
     import inspect
 
-    source = inspect.getsource(p)
+    from pipeline import dispatch
+
+    source = inspect.getsource(dispatch)
     assert 'plan_hash_path = worktree_path / ".agent_plan_src_hash"' in source
     # The new guard variable name from the fix.
     assert "checklist_is_fresh" in source

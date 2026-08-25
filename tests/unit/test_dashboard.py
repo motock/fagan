@@ -2251,17 +2251,17 @@ def test_get_plan_does_not_decorate_done_story_with_progress(client, plan_dir, w
 # ---------------------------------------------------------------------------
 
 def test_server_scratchpad_prompt_requires_progress_line():
-    """The scratchpad instruction in pipeline/server.py must instruct the
+    """The scratchpad instruction in pipeline/dispatch.py must instruct the
     executor to write a PROGRESS: <done>/<total> line as the FIRST line of
     .agent_scratchpad.md."""
     import inspect
 
-    import pipeline.server as srv
+    from pipeline import dispatch
 
     # The instruction is built inside a function; inspect the source of the
     # module so we assert on the literal string content the implementer must
     # keep in sync with the plan.
-    source = inspect.getsource(srv)
+    source = inspect.getsource(dispatch)
     assert "PROGRESS: <done>/<total>" in source, (
         "scratchpad prompt must mention 'PROGRESS: <done>/<total>'"
     )

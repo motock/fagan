@@ -250,9 +250,15 @@ def test_module_exports_contains_three_new_names():
 # === escapeHtml reuse (no duplication) ===================================
 
 def test_escape_html_not_duplicated():
-    """escapeHtml already exists at the top of the file; this story must
-    reuse it, not redefine it. There must be exactly one definition."""
+    """escapeHtml already exists; this story must reuse it, not redefine it.
+    There must be exactly one definition across app.js and the modules it
+    imports from. escapeHtml itself now lives in static/app/render/board.js
+    (server-app-file-split extraction) with app.js importing the single
+    definition, rather than defining its own copy."""
     src = _app_js_source()
+    board_js = os.path.join(REPO_ROOT, "static", "app", "render", "board.js")
+    with open(board_js, encoding="utf-8") as fh:
+        src += fh.read()
     assert src.count("function escapeHtml") == 1, (
         "escapeHtml must not be duplicated; reuse the existing definition"
     )

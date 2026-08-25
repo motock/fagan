@@ -32,9 +32,6 @@ from .config import (
     PIPELINE_LOCAL_MAX_RISK,
     SESSION_PAUSE_THRESHOLD,
     SESSION_RESUME_THRESHOLD,
-    USAGE_BLIND_LOG_INTERVAL,
-    USAGE_BLIND_PAUSE_AFTER_SECONDS,
-    USAGE_STALE_AFTER_SECONDS,
     WEEK_PAUSE_THRESHOLD,
     WEEK_RESUME_THRESHOLD,
     WEEKLY_REQUEST_THRESHOLD,
@@ -165,9 +162,15 @@ def _check_usage_impl() -> dict[str, Any]:
     parse - measured_at is carried forward unchanged across fallback calls
     so the staleness clock keeps counting from the last real measurement.
     """
+    # Lazy import: tests monkeypatch _run_usage_probe and the USAGE_* gate
+    # constants on pipeline.server (the historical home of this function), so
+    # read them from there at call time to honour those patches. Importing
+    # server at module load would be circular (server imports this module).
+    from pipeline import server as _server
+
     prev = _read_usage_state()
     try:
-        state = _run_usage_probe()
+        state = _server._run_usage_probe()
     except ValueError:
         if not prev:
             raise
@@ -186,7 +189,7 @@ def _check_usage_impl() -> dict[str, Any]:
             if measured_at
             else None
         )
-        if age is not None and age > USAGE_STALE_AFTER_SECONDS:
+        if age is not None and age > _server.USAGE_STALE_AFTER_SECONDS:
             state["stale"] = True
             state["gate_blind"] = True
             first_blind = not prev.get("gate_blind")
@@ -199,7 +202,7 @@ def _check_usage_impl() -> dict[str, Any]:
                 if blind_since
                 else None
             )
-            if blind_age is not None and blind_age > USAGE_BLIND_PAUSE_AFTER_SECONDS:
+            if blind_age is not None and blind_age > _server.USAGE_BLIND_PAUSE_AFTER_SECONDS:
                 # Prolonged blindness: fail-closed so a permanent CLI-format
                 # change can't leave spend unguarded indefinitely.
                 state["paused"] = True
@@ -207,7 +210,7 @@ def _check_usage_impl() -> dict[str, Any]:
                 state["paused"] = False
 
             failures = state["consecutive_parse_failures"]
-            should_log = first_blind or (failures % USAGE_BLIND_LOG_INTERVAL == 0)
+            should_log = first_blind or (failures % _server.USAGE_BLIND_LOG_INTERVAL == 0)
             if should_log:
                 status = (
                     "pausing (fail-closed)"

@@ -2653,20 +2653,22 @@ function _wireBackendSelector() {
 
 _wireBackendSelector();
 
+export { state, defaultFilters, loadFilters, saveFilters, STATUS_COLUMNS, BACKEND_VALUES, ESCALATED_VALUES, FILTERS_KEY } from "./app/state.js";
+
 export {
-  BACKEND_VALUES, ESCALATED_VALUES, FILTERS_KEY, NOTIF_SEVERITY_COLOR,
-  STALE_IN_PROGRESS_MINUTES, STATUS_COLUMNS, _applyActiveView, _buildPlanRow,
+  NOTIF_SEVERITY_COLOR,
+  STALE_IN_PROGRESS_MINUTES, _applyActiveView, _buildPlanRow,
   _diffBoardCards, _diffNotificationsPanel, _diffOverviewPlanRows,
   _renderPlanListFull, _renderStoryModalBody, ageLabelFor, appendCommsMessage,
   applyFilters, applyHashToState, capturePlanDetailState, chip, clearHash,
-  defaultFilters, encodeHashState, escapeHtml, filterNotifications,
+  encodeHashState, escapeHtml, filterNotifications,
   filterStoryNotifications, flashRefreshIndicator, handleCopyClick,
-  hashStateFrom, isStaleInProgress, loadFilters, notifSeverityFilter,
+  hashStateFrom, isStaleInProgress, notifSeverityFilter,
   parseHash, pickNewNotifications, planListRowsByName, pushToast, refresh,
   relativeAgeLabel, renderBoard, renderChecklist, renderFilterBar, renderJournal,
   renderJournalEntry, renderNotifications, renderOverview, renderPlanDetail,
   renderPlanList, renderStoryModalNotifications, renderToolTraceHtml,
-  restorePlanDetailState, saveFilters, selectComms, selectOverview, selectPlan,
-  sendCommsMessage, showStoryModal, startPolling, state, stopPolling,
+  restorePlanDetailState, selectComms, selectOverview, selectPlan,
+  sendCommsMessage, showStoryModal, startPolling, stopPolling,
   syncPollingWithVisibility, togglePlanArchived, updateHash,
 };

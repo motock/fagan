@@ -238,7 +238,8 @@ def _run_click_flow(records):
     'error' severity chip, and return a dict describing before/after state.
     Requires `errChip` to exist in the initial render (data-dim="notif-severity"
     data-value="error"); callers should design fixtures accordingly."""
-    dom_shim = _DOM_SHIM % {"app_js_path": json.dumps(APP_JS)}
+    app_js_url = "file:" + urllib.parse.quote(os.path.abspath(APP_JS))
+    dom_shim = _DOM_SHIM % {"app_js_url": json.dumps(app_js_url)}
     script = dom_shim + f"""
 const plan = {{
   name: "Test plan",

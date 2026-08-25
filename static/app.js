@@ -1,13 +1,27 @@
-const STATUS_COLUMNS = [
-  "todo", "in_progress", "tests_passed", "pr_open", "done",
-  "changes_requested", "interrupted", "parked", "failed",
-];
+import {
+  state,
+  STATUS_COLUMNS,
+  SORT_OPTIONS,
+  VALID_SORTS,
+  BACKEND_VALUES,
+  ESCALATED_VALUES,
+  defaultFilters,
+  loadFilters,
+  saveFilters,
+  toggleFilter,
+} from "./app/state.js";
+import {
+  HASH_KEYS,
+  hashStateFrom,
+  encodeHashState,
+  parseHash,
+  updateHash,
+  clearHash,
+  applyHashToState,
+} from "./app/routing.js";
+import { fetchJson, postJson } from "./app/api.js";
 
-const SORT_OPTIONS = [
-  ["key", "Key"],
-  ["risk", "Risk"],
-  ["activity", "Activity"],
-];
+export { state } from "./app/state.js";
 
 const RISK_RANK = { high: 3, medium: 2, low: 1 };
 
@@ -157,280 +171,8 @@ function isStaleInProgress(story) {
   return ageMin > STALE_IN_PROGRESS_MINUTES;
 }
 
-const VALID_SORTS = new Set(SORT_OPTIONS.map(([v]) => v));
 
-// Backend filter chip values. Stories whose `backend` field is missing are
-// treated as "local" (the default semantic — the orchestrator hasn't picked
-// anything else yet). Keeps the filter and the badge logic consistent: a
-// story without a backend never shows a "claude" badge and matches the
-// "local" chip, so neither surface ever leaks "undefined" to the user.
-const BACKEND_VALUES = ["local", "claude"];
-const ESCALATED_VALUES = ["yes", "no"];
-// Expose the value lists on `window` so the test harness (and any other
-// out-of-realm consumer) can reference them via dom.window.BACKEND_VALUES
-// rather than relying on the test running inside the same script realm.
-window.BACKEND_VALUES = BACKEND_VALUES;
-window.ESCALATED_VALUES = ESCALATED_VALUES;
 
-function defaultFilters() {
-  return {
-    statuses: [...STATUS_COLUMNS], // enabled statuses; default = all
-    personas: [], // [] = no persona filter (show all)
-    risks: [], // [] = no risk filter (show all)
-    backends: [], // [] = no backend filter (show all); "local" | "claude"
-    escalated: [], // [] = no escalation filter (show all); "yes" | "no"
-    sort: "key", // "key" | "risk" | "activity"
-    search: "", // free-text search term; "" = match all
-  };
-}
-
-// ---------- URL hash deep-linking ----------
-//
-// The hash encodes the plan + active filters so a view is shareable via URL
-// and survives reload / browser back-forward. Defaults are omitted to keep
-// URLs short. Unknown values are silently dropped (graceful fallback to
-// defaults). localStorage remains a secondary store for when the URL has no
-// hash at all (e.g. a fresh tab that previously set filters).
-
-// Map of hash key -> filter dimension key. Keep the URL form stable.
-const HASH_KEYS = {
-  plan: "plan",
-  status: "statuses",
-  persona: "personas",
-  risk: "risks",
-  backend: "backends",
-  escalated: "escalated",
-  sort: "sort",
-  q: "search",
-};
-
-// Build a `{plan, filters}` snapshot from current state, suitable for either
-// encoding into the hash or comparing for idempotency. Preserve user order
-// for array-valued filters so encode -> parse is a clean round-trip.
-function hashStateFrom(s) {
-  return {
-    selectedPlan: s.selectedPlan || null,
-    filters: {
-      statuses: [...s.filters.statuses],
-      personas: [...s.filters.personas],
-      risks: [...s.filters.risks],
-      backends: [...s.filters.backends],
-      escalated: [...s.filters.escalated],
-      sort: s.filters.sort,
-      search: s.filters.search,
-    },
-  };
-}
-
-// Serialize current state to a hash fragment (no leading "#"). Returns ""
-// when every value is at its default, keeping a bare URL on default views.
-function encodeHashState() {
-  const snap = hashStateFrom(state);
-  const parts = [];
-
-  if (snap.selectedPlan) {
-    parts.push(`plan=${encodeURIComponent(snap.selectedPlan)}`);
-  }
-
-  // statuses: only emit if not the default "all". Compare as sets so order in
-  // the user-visible list doesn't change the URL form (set comparison is
-  // robust to reordering, duplicates already removed).
-  const allStatuses = new Set(STATUS_COLUMNS);
-  const currentStatuses = new Set(snap.filters.statuses);
-  const isAllStatuses = allStatuses.size === currentStatuses.size
-    && [...allStatuses].every((s) => currentStatuses.has(s));
-  if (currentStatuses.size && !isAllStatuses) {
-    parts.push(`status=${snap.filters.statuses.map(encodeURIComponent).join(",")}`);
-  }
-
-  if (snap.filters.personas.length) {
-    parts.push(`persona=${snap.filters.personas.map(encodeURIComponent).join(",")}`);
-  }
-  if (snap.filters.risks.length) {
-    parts.push(`risk=${snap.filters.risks.map(encodeURIComponent).join(",")}`);
-  }
-  if (snap.filters.backends.length) {
-    parts.push(`backend=${snap.filters.backends.map(encodeURIComponent).join(",")}`);
-  }
-  if (snap.filters.escalated.length) {
-    parts.push(`escalated=${snap.filters.escalated.map(encodeURIComponent).join(",")}`);
-  }
-  if (snap.filters.sort !== "key") {
-    parts.push(`sort=${encodeURIComponent(snap.filters.sort)}`);
-  }
-  if (snap.filters.search) {
-    parts.push(`q=${encodeURIComponent(snap.filters.search)}`);
-  }
-
-  return parts.join("&");
-}
-
-// Parse a hash fragment (no leading "#") into a partial state overlay.
-// Returns a {selectedPlan, filters} object; unknown values are silently
-// dropped, malformed input falls back to defaults. Never throws.
-function parseHash(raw) {
-  const defaults = defaultFilters();
-  const out = {
-    selectedPlan: null,
-    filters: defaults,
-  };
-  if (!raw) return out;
-  // Strip leading "#" defensively; tolerate either form.
-  const body = String(raw).replace(/^#/, "");
-  if (!body) return out;
-
-  let pairs;
-  try {
-    pairs = body.split("&").filter(Boolean);
-  } catch {
-    return out;
-  }
-
-  for (const pair of pairs) {
-    const eq = pair.indexOf("=");
-    if (eq <= 0) continue; // skip empty key or no value
-    const key = pair.slice(0, eq).trim().toLowerCase();
-    const value = pair.slice(eq + 1);
-    if (!Object.prototype.hasOwnProperty.call(HASH_KEYS, key)) continue;
-    const dim = HASH_KEYS[key];
-
-    if (dim === "plan") {
-      try {
-        const plan = decodeURIComponent(value);
-        if (plan) out.selectedPlan = plan;
-      } catch {
-        /* malformed encoding -> ignore */
-      }
-      continue;
-    }
-
-    if (dim === "sort") {
-      try {
-        const sort = decodeURIComponent(value).trim();
-        if (VALID_SORTS.has(sort)) out.filters.sort = sort;
-      } catch {
-        /* ignore */
-      }
-      continue;
-    }
-
-    if (dim === "search") {
-      try {
-        const q = decodeURIComponent(value);
-        if (q) out.filters.search = q;
-      } catch { /* malformed encoding -> ignore */ }
-      continue;
-    }
-
-    // Array-valued dimensions.
-    let items;
-    try {
-      items = value.split(",").map((v) => {
-        try { return decodeURIComponent(v); } catch { return null; }
-      }).filter((v) => v !== null && v !== "");
-    } catch {
-      continue;
-    }
-    if (dim === "statuses") {
-      const valid = new Set(STATUS_COLUMNS);
-      out.filters.statuses = items.filter((s) => valid.has(s));
-      if (!out.filters.statuses.length) out.filters.statuses = [...STATUS_COLUMNS];
-    } else if (dim === "personas" || dim === "risks") {
-      out.filters[dim] = items;
-    } else if (dim === "backends") {
-      const valid = new Set(BACKEND_VALUES);
-      out.filters.backends = items.filter((v) => valid.has(v));
-    } else if (dim === "escalated") {
-      const valid = new Set(ESCALATED_VALUES);
-      out.filters.escalated = items.filter((v) => valid.has(v));
-    }
-  }
-
-  return out;
-}
-
-// Re-derive window.location.hash from state. Uses replaceState-like behavior:
-// we set the hash via the Location API so a hashchange fires once and a
-// back-button can pop to the previous URL. We only rewrite when the parsed
-// hash differs from current state, to avoid redundant hashchange loops.
-function updateHash() {
-  const desired = encodeHashState();
-  const current = window.location.hash.replace(/^#/, "");
-  if (desired === current) return;
-  // Using location.hash assignment is the simplest path; for "no selection"
-  // we clear it (hashchange fires once with the empty hash).
-  if (desired) {
-    window.location.hash = desired;
-  } else if (window.location.hash) {
-    // Setting to "" removes the fragment entirely.
-    window.location.hash = "";
-  }
-}
-
-function clearHash() {
-  if (window.location.hash) window.location.hash = "";
-}
-
-// Apply the current window.location.hash onto `state`. Idempotent: callers
-// may invoke it on init and again on hashchange without recursion.
-//
-// Hash-only contract: this function only mutates state when there is a
-// non-empty hash. A bare URL is a no-op so loadFilters() (or whatever
-// restore path ran before us) keeps the localStorage-derived state.
-function applyHashToState() {
-  const raw = window.location.hash;
-  // Nothing in the URL -> nothing to apply.
-  if (!raw) return;
-  const parsed = parseHash(raw);
-  if (parsed.selectedPlan !== null) {
-    state.selectedPlan = parsed.selectedPlan;
-  }
-  state.filters = parsed.filters;
-  saveFilters();
-}
-
-// `state` is intentionally attached to `window` so deep-link helpers
-// (applyHashToState / updateHash / clearHash) can mutate it from any caller,
-// and so test harnesses can inspect it via dom.window.state.
-window.state = {
-  selectedPlan: null,
-  pollHandle: null,
-  refreshIndicatorTimer: null,
-  filters: defaultFilters(),
-  showArchived: false,
-  commsActive: true,
-  configActive: false,
-};
-
-// Local alias keeps the rest of the file terse.
-const FILTERS_KEY = "pipeline-dashboard-filters";
-const state = window.state;
-
-function loadFilters() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(FILTERS_KEY) || "{}");
-    state.filters = { ...defaultFilters(), ...stored };
-  } catch {
-    state.filters = defaultFilters();
-  }
-}
-
-function saveFilters() {
-  try {
-    localStorage.setItem(FILTERS_KEY, JSON.stringify(state.filters));
-  } catch {
-    /* localStorage unavailable; filters simply won't persist */
-  }
-}
-
-// Toggle a value in one of the array-valued filter dimensions, then persist.
-function toggleFilter(dimension, value) {
-  const list = state.filters[dimension];
-  const idx = list.indexOf(value);
-  if (idx === -1) list.push(value);
-  else list.splice(idx, 1);
-  saveFilters();
-}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
@@ -442,18 +184,6 @@ function decodeHtmlEntities(s) {
   return String(s).replace(/&(amp|lt|gt|quot|#39);/g, (m, name) => ({
     "amp": "&", "lt": "<", "gt": ">", "quot": '"', "#39": "'",
   }[name]));
-}
-
-async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-  return res.json();
-}
-
-async function postJson(url) {
-  const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-  return res.json();
 }
 
 // Plans come back from /api/plans already sorted newest-first by the

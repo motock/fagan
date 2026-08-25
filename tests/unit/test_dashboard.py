@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app import dashboard as d
 from pipeline import config_provenance
+from _app_js import run_app_js
 
 
 @pytest.fixture

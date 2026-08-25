@@ -74,3 +74,4 @@ if a precise date is needed when writing one of these up.
 - local_agent_syntax_validation — completed 2026-08-13, 2 stories
 - w1a-extract-pipelineservice — completed 2026-08-12, 22 stories
 - harness-guard-hardening-mode52-55 — completed 2026-08-13, 3 stories
+- chat-ingest-risk-lock — completed 2026-08-20, 1 stories

@@ -5,26 +5,26 @@
 // `state` binding is the single shared object — never reassign it; mutate it
 // in place so every importer sees the same reference.
 
-const STATUS_COLUMNS = [
+export const STATUS_COLUMNS = [
   "todo", "in_progress", "tests_passed", "pr_open", "done",
   "changes_requested", "interrupted", "parked", "failed",
 ];
 
-const SORT_OPTIONS = [
+export const SORT_OPTIONS = [
   ["key", "Key"],
   ["risk", "Risk"],
   ["activity", "Activity"],
 ];
 
-const VALID_SORTS = new Set(SORT_OPTIONS.map(([v]) => v));
+export const VALID_SORTS = new Set(SORT_OPTIONS.map(([v]) => v));
 
 // Backend filter chip values. Stories whose `backend` field is missing are
 // treated as "local" (the default semantic — the orchestrator hasn't picked
 // anything else yet). Keeps the filter and the badge logic consistent: a
 // story without a backend never shows a "claude" badge and matches the
 // "local" chip, so neither surface ever leaks "undefined" to the user.
-const BACKEND_VALUES = ["local", "claude"];
-const ESCALATED_VALUES = ["yes", "no"];
+export const BACKEND_VALUES = ["local", "claude"];
+export const ESCALATED_VALUES = ["yes", "no"];
 
 export function defaultFilters() {
   return {

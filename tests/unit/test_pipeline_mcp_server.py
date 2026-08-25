@@ -35,6 +35,7 @@ from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import planner as pplanner
 from pipeline import server as p
+from pipeline import story_status as pstory_status
 from pipeline import ticketing as pt
 from pipeline import usage as pusage
 
@@ -6030,11 +6031,12 @@ def test_check_story_status_watchdog_timeout_diagnosis_lands_in_agent_instructio
 def test_check_story_status_watchdog_timeout_two_rebrief_call_sites(
     plan_dir, tmp_path, monkeypatch,
 ):
-    """Mechanically-checkable guard: pipeline/server.py must contain exactly
-    two call sites of _rebrief_step_cap_struggle after this change - the
-    pre-existing step-cap branch and the new watchdog branch - not one."""
+    """Mechanically-checkable guard: the module that defines
+    check_story_status must contain exactly two call sites of
+    _rebrief_step_cap_struggle after this change - the pre-existing step-cap
+    branch and the new watchdog branch - not one."""
     import re
-    src = Path(p.__file__).read_text()
+    src = Path(pstory_status.__file__).read_text()
     # Count call sites: occurrences of the helper name that are not the def
     # line and not a comment/docstring-only mention. The def line is
     # `def _rebrief_step_cap_struggle(`; call sites are bare invocations.

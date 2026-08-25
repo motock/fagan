@@ -30,15 +30,21 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
   const win = dom.window || dom;
   if (_ESM_RE.test(src)) {
     const appFileUrl = pathToFileURL(_APP_JS).href;
-    const _prevWindow = globalThis.window;
+    // Expose the browser globals app.js's top-level code reads (window,
+    // document, localStorage, fetch) on globalThis so the ESM module
+    // evaluates under Node. Mirror the .py loader's shim. These stay set
+    // for the lifetime of the process because module functions reference
+    // them at call time (e.g. updateHash reads window.location), not just
+    // at import time; each loadAppInto call re-points them at its own win.
     globalThis.window = win;
-    try {
-      const mod = await import(appFileUrl);
-      Object.assign(win, mod);
-      return mod;
-    } finally {
-      globalThis.window = _prevWindow;
-    }
+    // Fall back to any pre-existing global (e.g. the smoke test sets
+    // global.document directly) when the target window lacks the property.
+    globalThis.document = win.document || globalThis.document;
+    globalThis.localStorage = win.localStorage || globalThis.localStorage;
+    globalThis.fetch = win.fetch || globalThis.fetch;
+    const mod = await import(appFileUrl);
+    Object.assign(win, mod);
+    return mod;
   }
   // CJS path (today): evaluate inside the target window.
   win.eval(src);

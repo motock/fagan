@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import subprocess
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -620,6 +621,23 @@ def _last_done_summary(agent_log: Path) -> str:
             if idx != -1:
                 last = line[idx + len(marker) :].strip()
     return last
+
+
+# Rebind _run_lint_gate's globals to pipeline.server's namespace so that
+# bare-name reads inside the body (e.g. `detect_lint_command`) resolve against
+# pipeline.server at call time. This preserves the original behavior where the
+# function lived in pipeline.server and saw monkeypatched module globals
+# (LOAD_GLOBAL does not consult a module-level __getattr__, so a plain
+# re-export would not).
+from . import server as _server
+
+_run_lint_gate = types.FunctionType(
+    _run_lint_gate.__code__,
+    _server.__dict__,
+    _run_lint_gate.__name__,
+    _run_lint_gate.__defaults__,
+    _run_lint_gate.__closure__,
+)
 
 
 __all__ = [

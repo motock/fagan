@@ -19,6 +19,7 @@ both see the same isolated temp path.
 import json
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,6 +32,9 @@ from .config import (
     PIPELINE_LOCAL_MAX_RISK,
     SESSION_PAUSE_THRESHOLD,
     SESSION_RESUME_THRESHOLD,
+    USAGE_BLIND_LOG_INTERVAL,
+    USAGE_BLIND_PAUSE_AFTER_SECONDS,
+    USAGE_STALE_AFTER_SECONDS,
     WEEK_PAUSE_THRESHOLD,
     WEEK_RESUME_THRESHOLD,
     WEEKLY_REQUEST_THRESHOLD,
@@ -135,6 +139,101 @@ def _usage_gate(prev_paused: bool, session_pct: int, week_pct: int) -> bool:
     if session_pct >= SESSION_PAUSE_THRESHOLD or week_pct >= WEEK_PAUSE_THRESHOLD:
         return True
     return bool(prev_paused and (session_pct >= SESSION_RESUME_THRESHOLD or week_pct >= WEEK_RESUME_THRESHOLD))
+
+
+def _check_usage_impl() -> dict[str, Any]:
+    """
+    Probe current subscription usage (current session + current week) via a
+    headless `/cost` call and persist it to USAGE_STATE_PATH.
+
+    Intended to be called every ~60s by an external poller (cron/launchd or
+    /loop). advance_pipeline reads the persisted state rather than probing
+    itself, decoupling the pipeline's tick cadence from the poller's.
+
+    The CLI occasionally omits the percentage summary lines (observed near
+    session-reset boundaries) without erroring, so a parse failure falls
+    back to the last persisted reading rather than crashing the caller's
+    tick - unless there is no prior reading to fall back to. If that frozen
+    reading is older than USAGE_STALE_AFTER_SECONDS, it's no longer trusted
+    as evidence of being over threshold, so the gate fails open instead of
+    blocking the pipeline indefinitely on a permanent CLI output change.
+
+    Staleness is measured from "measured_at" (the last time a probe actually
+    succeeded), not "checked_at" (bumped on every call, success or fallback).
+    A poller calling this every ~60s would otherwise perpetually look fresh
+    by checked_at's measure alone, even after hours of the CLI refusing to
+    parse - measured_at is carried forward unchanged across fallback calls
+    so the staleness clock keeps counting from the last real measurement.
+    """
+    prev = _read_usage_state()
+    try:
+        state = _run_usage_probe()
+    except ValueError:
+        if not prev:
+            raise
+        now_iso = datetime.now(timezone.utc).isoformat()
+        state = dict(prev)
+        state["checked_at"] = now_iso
+        # Count how many polls in a row have failed to parse, so the blind
+        # window is visible (and quantifiable) rather than a silent stderr line.
+        state["consecutive_parse_failures"] = (
+            prev.get("consecutive_parse_failures", 0) + 1
+        )
+        measured_at = prev.get("measured_at", prev.get("checked_at"))
+        state["measured_at"] = measured_at
+        age = (
+            _usage_state_age_seconds({"checked_at": measured_at})
+            if measured_at
+            else None
+        )
+        if age is not None and age > USAGE_STALE_AFTER_SECONDS:
+            state["stale"] = True
+            state["gate_blind"] = True
+            first_blind = not prev.get("gate_blind")
+            if first_blind:
+                state["blind_since"] = now_iso
+
+            blind_since = state.get("blind_since")
+            blind_age = (
+                _usage_state_age_seconds({"checked_at": blind_since})
+                if blind_since
+                else None
+            )
+            if blind_age is not None and blind_age > USAGE_BLIND_PAUSE_AFTER_SECONDS:
+                # Prolonged blindness: fail-closed so a permanent CLI-format
+                # change can't leave spend unguarded indefinitely.
+                state["paused"] = True
+            else:
+                state["paused"] = False
+
+            failures = state["consecutive_parse_failures"]
+            should_log = first_blind or (failures % USAGE_BLIND_LOG_INTERVAL == 0)
+            if should_log:
+                status = (
+                    "pausing (fail-closed)"
+                    if state["paused"]
+                    else "failing the gate OPEN"
+                )
+                print(
+                    f"check_usage: usage data is {age:.0f}s stale and the CLI is "
+                    f"still not parseable ({failures} consecutive failures) - "
+                    f"{status}; cost gate is now BLIND since {state.get('blind_since')}",
+                    file=sys.stderr,
+                )
+        _write_usage_state(state)
+        return state
+    state["measured_at"] = state["checked_at"]
+    state["paused"] = _usage_gate(
+        prev.get("paused", False),
+        state["session_pct"],
+        state["week_pct"],
+    )
+    # A real measurement clears any blind/stale state from prior failures.
+    state["consecutive_parse_failures"] = 0
+    state["gate_blind"] = False
+    state["stale"] = False
+    _write_usage_state(state)
+    return state
 
 
 # ---------- Dispatch routing / resource gate ----------
@@ -257,6 +356,7 @@ __all__ = [
     "_SESSION_USAGE_RE",
     "_WEEKLY_REQ_RE",
     "_WEEK_USAGE_RE",
+    "_check_usage_impl",
     "_parse_usage_output",
     "_read_usage_state",
     "_role_resource_ok",

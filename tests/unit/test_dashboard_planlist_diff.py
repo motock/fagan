@@ -32,6 +32,10 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# renderPlanList / _renderPlanListFull / planListRowsByName were relocated
+# out of static/app.js into this dedicated render module (server-app-file-
+# split plan); the static-source assertions below follow them here.
+PLAN_LIST_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-list.js")
 
 
 # A self-contained, richer DOM shim. Built once as a Python string and
@@ -236,8 +240,11 @@ def _plan(name, done=0, total=0, archived=False, paused=False):
 # === Static-source rename-and-delegate assertions ===========================
 
 def test_render_plan_list_full_implementation_renamed():
-    """The current full-rebuild body must be renamed to _renderPlanListFull."""
-    js = _app_js_source()
+    """The current full-rebuild body must be renamed to _renderPlanListFull
+    (now in static/app/render/plan-list.js, alongside renderPlanList, after
+    the server-app-file-split extraction)."""
+    with open(PLAN_LIST_JS, encoding="utf-8") as fh:
+        js = fh.read()
     assert "function _renderPlanListFull(plans)" in js
     # The old single-function full rebuild must no longer be the public
     # entry point: there must be a NEW wrapper named renderPlanList that
@@ -246,9 +253,11 @@ def test_render_plan_list_full_implementation_renamed():
 
 
 def test_plan_list_rows_by_name_module_state_exists():
-    """A module-level `let planListRowsByName = null;` must exist to track
-    the first-call vs subsequent-call state."""
-    js = _app_js_source()
+    """A module-level `let planListRowsByName = null;` must exist (now in
+    static/app/render/plan-list.js) to track the first-call vs
+    subsequent-call state."""
+    with open(PLAN_LIST_JS, encoding="utf-8") as fh:
+        js = fh.read()
     assert "planListRowsByName" in js
     assert "let planListRowsByName = null" in js
 
@@ -279,8 +288,10 @@ def test_render_plan_list_full_is_exported():
 
 def test_plan_item_rows_carry_data_plan_name_attribute():
     """Each per-plan .plan-item row must carry a data-plan-name attribute so
-    the diff can key rows by plan name robustly (not positional indexing)."""
-    js = _app_js_source()
+    the diff can key rows by plan name robustly (not positional indexing).
+    (Now in static/app/render/plan-list.js.)"""
+    with open(PLAN_LIST_JS, encoding="utf-8") as fh:
+        js = fh.read()
     assert "data-plan-name" in js
 
 

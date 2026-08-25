@@ -252,7 +252,7 @@ function bootstrapDoc(doc, { autoRefreshChecked = false } = {}) {
 
 // Inject globals the production code touches at top level, then require
 // app.js as a Node module via a tiny shim.
-function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
+async function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
   // Set up the browser-like globals app.js reads at module load.
   global.document = doc;
   global.CSS = { escape: (s) => String(s).replace(/"/g, '\\"') };
@@ -262,7 +262,7 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
   global.clearTimeout = fakeTimers.clearTimeout;
   global.localStorage = { getItem: () => null, setItem: () => {} };
 
-  // Bootstrap the DOM elements app.js attaches top-level listeners to so
+  // Bootstrap the DOM shim app.js attaches top-level listeners to so
   // loading the module doesn't throw on a null addEventListener. The
   // auto-refresh checkbox defaults to unchecked; tests that exercise the
   // polling path opt in via autoRefreshChecked: true.
@@ -281,50 +281,31 @@ function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false }) {
     },
   });
 
-  // Load the file as a string, then append a module.exports block by reading
-  // it from disk. We require it as a module and capture the exports.
-  const fs = require("fs");
-  const path = require("path");
-  const src = fs.readFileSync(
-    path.join(__dirname, "..", "static", "app.js"), "utf8");
-  // Wrap so `module` is available, and so the file's top-level event
-  // listeners attach to our fake document.
-  const wrapped = `${src}\nmodule.exports = {
-    capturePlanDetailState, restorePlanDetailState, flashRefreshIndicator,
-    startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
-    showStoryModal, handleCopyClick,
-    state,
-  };`;
-  // Window stub. The browser app.js hangs state on window and registers a
-  // hashchange listener there; under Node neither exists. Provide a tiny
-  // shim so the module's top-level runs without ReferenceError.
+  // Window shim. app.js hangs state on window and registers a hashchange
+  // listener there; under Node neither exists. Provide a tiny shim so the
+  // module's top-level runs without ReferenceError, and capture the state
+  // assignment so callers can read it on the returned exports.
+  let capturedState = null;
   const win = {
     addEventListener() {},
     removeEventListener() {},
     location: { hash: "" },
-    state: undefined,
   };
-  // Window state is populated by app.js (`window.state = { ... }`).
-  // Forward that assignment onto our local `state` export by giving window
-  // a setter-on-state that captures into a closure. Simpler: monkey-patch
-  // via Object.defineProperty so we can mirror the assignment.
-  let capturedState = null;
   Object.defineProperty(win, "state", {
     configurable: true,
     get() { return capturedState; },
     set(v) { capturedState = v; },
   });
-  const m = { exports: {} };
-  // eslint-disable-next-line no-new-func
-  const fn = new Function("module", "document", "CSS", "setInterval",
-    "clearInterval", "setTimeout", "clearTimeout", "localStorage",
-    "require", "module", "window", wrapped);
-  fn(m, doc, global.CSS, global.setInterval, global.clearInterval,
-    global.setTimeout, global.clearTimeout, global.localStorage,
-    require, m, win);
-  // Mirror the captured state onto the module exports so callers see it.
-  if (capturedState) m.exports.state = capturedState;
-  return m.exports;
+  global.window = win;
+
+  // Load app.js as an ES module (static/package.json sets {"type":"module"}),
+  // which resolves its ./app/* imports and exposes its named exports. The
+  // module's top-level code runs during import against the globals above.
+  const app = await import("../static/app.js");
+  Object.assign(global, app);
+  // Mirror the captured window.state onto the module exports so callers see it.
+  if (capturedState) app.state = capturedState;
+  return app;
 }
 
 // --------- helpers ---------

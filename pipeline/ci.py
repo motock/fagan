@@ -9,8 +9,10 @@ directly.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,7 @@ from .build_detect import (
     detect_test_command,
 )
 from .concurrency import _heavy_lock, _is_heavy
+from .config import MERGE_MAX_ATTEMPTS
 
 # ---------- CI env-var gates ----------
 PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
@@ -545,15 +548,96 @@ def _reverify_build(worktree: str) -> dict[str, str]:
     return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
 
 
+def _ci_pending_expired(since_iso: str) -> bool:
+    """True once a story has waited on pending CI longer than the total
+    patience the blocking gate used to provide (MERGE_MAX_ATTEMPTS
+    attempts x PIPELINE_MERGE_CI_TIMEOUT each)."""
+    try:
+        since = datetime.fromisoformat(since_iso)
+    except (TypeError, ValueError):
+        return False
+    now = datetime.now(timezone.utc)
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    elapsed = (now - since).total_seconds()
+    return elapsed >= MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+
+
+def _parse_pytest_excerpt(gate_error: str) -> str | None:
+    """Best-effort extract of a pytest failure excerpt from ``gate_error``.
+
+    Looks for a literal ``<file>.py:<line>: <Exception>: <assertion>`` pattern
+    and, only when the whole pattern is found, returns a short
+    ``On {file}:{line}, {assertion} fails`` string built from the exact file,
+    line, and assertion substrings captured from ``gate_error``. Returns
+    ``None`` when nothing recognizable parses -- it never fabricates a
+    file/line/assertion that is not literally present in ``gate_error``.
+    """
+    if not gate_error:
+        return None
+    match = re.search(
+        r"(?P<file>[\w./-]+\.py):(?P<line>\d+):\s+"
+        r"(?P<exc>[A-Za-z_]+Error):\s*(?P<assertion>.+)",
+        gate_error,
+    )
+    if not match:
+        return None
+    return (
+        f"On {match.group('file')}:{match.group('line')}, "
+        f"{match.group('assertion')} fails"
+    )
+
+
+def _ci_rework_feedback(gate_error: str, attempts: int) -> str:
+    """Generate review feedback for merge-gate CI failures.
+
+    ``attempts`` is the current rework round number (1 for the first rework).
+    Round 1 is byte-identical to the pre-round-escalation wording. From round 2
+    onward a ``PREVIOUS REWORK ATTEMPT {attempts-1} DID NOT FIX THIS.`` prefix
+    is prepended, and when a pytest excerpt is parseable from ``gate_error`` it
+    is appended (in addition to the verbatim ``Gate error:`` line) along with
+    the full-suite done-bar instruction.
+    """
+    lint_keywords = ("lint", "ruff", "eslint", "clippy", "golangci")
+    lower = gate_error.lower()
+    if any(k in lower for k in lint_keywords):
+        base = (
+            f"The merge-gate CI check failed on your submitted branch "
+            f"Gate error: {gate_error}\n\n"
+            "This is a LINT failure, not a test failure - the test suite may already pass, so re-running tests alone proves nothing. Run the project's lint command (e.g. `ruff check .` for Python) from the repo root, fix every finding, and commit.\n\n"
+            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
+        )
+    else:
+        base = (
+            f"The merge-gate CI check failed on your submitted branch "
+            f"Gate error: {gate_error}\n\n"
+            "The bug could be in the implementation OR in a test file you wrote; re-examine both against the spec and make a targeted fix.\n\n"
+            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
+        )
+    if attempts < 2:
+        return base
+    msg = f"PREVIOUS REWORK ATTEMPT {attempts - 1} DID NOT FIX THIS. " + base
+    excerpt = _parse_pytest_excerpt(gate_error)
+    if excerpt is not None:
+        msg = (
+            f"{msg}\n\n{excerpt}\n"
+            "Do not call done until the full suite passes."
+        )
+    return msg
+
+
 __all__ = [
     "PIPELINE_MERGE_BUILD_GATE",
     "PIPELINE_MERGE_CI_GATE",
     "PIPELINE_MERGE_CI_TIMEOUT",
     "_acceptance_tampered",
+    "_ci_pending_expired",
     "_ci_rerun",
+    "_ci_rework_feedback",
     "_ci_status",
     "_ci_status_once",
     "_fetch_ci_failure_excerpt",
+    "_parse_pytest_excerpt",
     "_repo_has_ci_configured",
     "_reverify_acceptance",
     "_reverify_build",

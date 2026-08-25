@@ -7,10 +7,12 @@ p._scope_test_cmd_to_acceptance(...), etc., which resolve through the
 re-export in pipeline_mcp_server.py.
 """
 
+import ast
 import json
 import re
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -562,12 +564,51 @@ def _added_pytest_test_paths(
     return paths
 
 
+def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:
+    lint = detect_lint_command(worktree)
+    if lint is None:
+        return None
+    lint_dir, cmd = lint
+    try:
+        result = subprocess.run(
+            cmd, check=False, cwd=lint_dir, capture_output=True, text=True, env=test_env
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {
+        "cmd": cmd,
+        "returncode": result.returncode,
+        "stdout_tail": (result.stdout or "")[-2000:],
+        "stderr_tail": (result.stderr or "")[-2000:],
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _module_level_function_names(source: str) -> set[str]:
+    """Top-level (module-scope) function names defined in `source`. Ignores
+    nested defs, closures, and class methods - only a bare module-level
+    `def` is a candidate for _find_dead_new_functions, since that's the
+    shape of an independently-callable production symbol a call site is
+    expected to reference by name."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    return {
+        node.name
+        for node in ast.iter_child_nodes(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
 __all__ = [
     "_acceptance_rel_paths",
     "_added_pytest_test_paths",
     "_build_command_for",
     "_is_pytest_cmd",
+    "_module_level_function_names",
     "_provision_worktree_venv",
+    "_run_lint_gate",
     "_scope_test_cmd_to_acceptance",
     "_test_command_for",
     "_venv_python_for",

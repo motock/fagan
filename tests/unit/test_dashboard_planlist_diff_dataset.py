@@ -216,9 +216,13 @@ def _run_app_js(expr):
     """Evaluate a JS expression inside an environment where static/app.js
     has been loaded. Returns the JSON-serialized result.
 
-    The shared loader evals app.js source so its module-level `let`
-    declarations (e.g. `planListRowsByName`) live in the same scope as the
-    test expression, letting tests inspect or reset that diff state."""
+    The shared loader evals app.js source separately from the test
+    expression, so module-level `let` declarations (e.g.
+    `planListRowsByName`) are scoped to the app.js eval and are NOT
+    accessible from the test expression. This test relies on the first
+    render correctly populating the eval-scoped map via
+    `getAttribute('data-plan-name')` (Bug 1 fixed), so the second render
+    takes the in-place diff branch without any manual reset."""
     proc = _shared_run_app_js(expr, shim=_SHIM)
     if proc.returncode != 0:
         raise AssertionError(f"node failed: {proc.stderr}")
@@ -361,11 +365,9 @@ def test_paused_badge_survives_in_place_update():
         + _collect_rows_js()
         + f" renderPlanList({json.dumps(plans)});"
         " const r1 = collect();"
-        " planListRowsByName = new Map();"
-        " const nav2 = document.getElementById('plan-list');"
-        " for (const el of nav2.querySelectorAll('.plan-item')) {"
-        "  if (el.dataset.planName) planListRowsByName.set(el.dataset.planName, el);"
-        " }"
+        # No manual reset needed: first render populates the eval-scoped
+        # planListRowsByName via data-plan-name (Bug 1 fixed); second render
+        # takes the in-place branch.
         + f" renderPlanList({json.dumps(plans)});"
         " const r2 = collect();"
         " return { r1, r2 };"

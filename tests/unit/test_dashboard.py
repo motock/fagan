@@ -1025,7 +1025,6 @@ def _run_app_js(expr):
     if proc.returncode != 0:
         raise AssertionError(f"node failed: {proc.stderr}")
     return json.loads(proc.stdout)
-    return json.loads(proc.stdout)
 
 
 def _iso(seconds_ago):

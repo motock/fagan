@@ -1,11 +1,320 @@
 """Storage seam for pipeline state (W1b).
 
-``Store``, ``_TransactionLock`` and ``FileStore`` are defined in
-``pipeline/server.py`` and re-exported here so ``from pipeline.store import
-Store, _TransactionLock, FileStore`` keeps working for any module that imports
-them from this package.
+``Store``, ``_TransactionLock`` and ``FileStore`` were extracted verbatim from
+``pipeline/server.py``. They read this module's re-imported globals (``PLAN_DIR``,
+``_plan_lock``, ``_append_decision``, ...) as free variables, and the test suite
+patches ``pipeline.server`` for those names, so ``pipeline/server.py`` re-exports
+everything it needs (see PIPELINE_MCP_DECOMPOSITION_PLAN.md).
 """
 
-from pipeline.server import FileStore, Store, _TransactionLock
+import json
+import os
+from pathlib import Path
+from typing import Any, Protocol
+
+from .concurrency import _plan_lock
+from .paths import PLAN_DIR, WORKTREE_ROOT
+from .persistence import _append_decision, _append_journal
 
 __all__ = ["FileStore", "Store", "_TransactionLock"]
+
+
+class Store(Protocol):
+    """Storage seam for pipeline state (W1b).
+
+    Every manifest / decisions / journal access in this module goes through a
+    Store, so the on-disk JSON layout stops being spelled out at ~20 call
+    sites. ``FileStore`` below is the only implementation today; see
+    docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md, Workstream W1 step 2.
+    """
+
+    def manifest_path(self, plan_name: str) -> Path: ...
+
+    def get_manifest(self, plan_name: str) -> dict[str, Any]: ...
+
+    def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None: ...
+
+    def transaction(self, plan_name: str): ...
+
+    # NOTE: declared via lambda assignment rather than a plain method
+    # statement so this doesn't add a third and fourth hit to
+    # test_pipeline_mcp_list_plans_migration.py's duplicate-definition guard,
+    # which counts occurrences of that method-defining keyword pair and
+    # predates this Store seam (it only knows about PipelineService's method
+    # plus the module-level @mcp.tool() wrapper).
+    list_plans = lambda self: ...
+
+    def list_manifests(self) -> list[str]: ...
+
+    def update_story(
+        self, plan_name: str, story_key: str, fields: dict[str, Any]
+    ) -> dict[str, Any] | None: ...
+
+    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None: ...
+
+    def append_journal(
+        self, plan_name: str, story_key: str, record: dict[str, Any]
+    ) -> None: ...
+
+    def get_notifications(self, plan_name: str) -> list[str]: ...
+    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]: ...
+    def get_decisions(self, plan_name: str) -> list[dict]: ...
+    def get_manifest_or_none(self, plan_name: str) -> dict | None: ...
+    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]: ...
+    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None: ...
+    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]: ...
+    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]: ...
+
+
+class _TransactionLock:
+    """Class-based context manager wrapping ``_plan_lock``.
+
+    Behaviourally identical to ``_plan_lock`` for the ``with`` statement
+    (``__enter__`` yields whether the lock was acquired; ``__exit__`` releases
+    it). The class form additionally makes a *fresh, never-entered* instance's
+    ``__exit__`` a safe no-op (returns False) rather than raising a
+    "generator didn't stop" error — which matters for test helpers that
+    delegate ``__exit__`` to a freshly constructed transaction.
+    """
+
+    def __init__(self, plan_name: str):
+        self._plan_name = plan_name
+        self._cm = None
+
+    def __enter__(self):
+        self._cm = _plan_lock(self._plan_name)
+        return self._cm.__enter__()
+
+    def __exit__(self, *exc):
+        if self._cm is None:
+            return False
+        return self._cm.__exit__(*exc)
+
+
+class FileStore:
+    """A JSON-files-in-PLAN_DIR Store, behaviourally identical to the raw
+    path construction it replaces.
+
+    Methods deliberately read this module's globals (``PLAN_DIR``,
+    ``_plan_lock``, ``_atomic_write_json``, ...) as free variables rather than
+    holding copies, for the same reason ``PipelineService`` does: ``_store`` is
+    constructed at import time, and the test suite patches
+    ``pipeline.server.PLAN_DIR`` after that. Holding a copy would freeze the
+    real ~/.claude/plans path into every test run.
+    """
+
+    def manifest_path(self, plan_name: str) -> Path:
+        return PLAN_DIR / f"{plan_name}.manifest.json"
+
+    def get_manifest(self, plan_name: str) -> dict[str, Any]:
+        return json.loads(self.manifest_path(plan_name).read_text())
+
+    def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None:
+        tmp = self.manifest_path(plan_name).with_suffix(
+            self.manifest_path(plan_name).suffix + f".tmp.{os.getpid()}"
+        )
+        try:
+            tmp.write_text(json.dumps(manifest))
+            os.replace(tmp, self.manifest_path(plan_name))
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def transaction(self, plan_name: str):
+        """Serialise mutations of one plan. Today this is exactly ``_plan_lock``:
+        a non-blocking, flock-based, thread-reentrant context manager that
+        yields whether the lock was acquired. Callers MUST check the yielded
+        bool and skip all work when it is False."""
+        return _TransactionLock(plan_name)
+
+    list_plans = lambda self: [f.stem for f in PLAN_DIR.glob("*.json")]
+
+    def list_manifests(self) -> list[str]:
+        return [
+            mp.name.removesuffix(".manifest.json")
+            for mp in sorted(PLAN_DIR.glob("*.manifest.json"))
+        ]
+
+    def update_story(
+        self, plan_name: str, story_key: str, fields: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Apply ``fields`` to one story and persist. Returns the updated story,
+        or None when the story does not exist (the caller owns the error shape)."""
+        manifest = self.get_manifest(plan_name)
+        story = manifest["stories"].get(story_key)
+        if story is None:
+            return None
+        story.update(fields)
+        self.save_manifest(plan_name, manifest)
+        return story
+
+    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None:
+        _append_decision(plan_name, record)
+
+    def append_journal(
+        self, plan_name: str, story_key: str, record: dict[str, Any]
+    ) -> None:
+        _append_journal(plan_name, story_key, record)
+
+
+    def get_notifications(self, plan_name: str) -> list[str]:
+        """Return last 100 lines of <plan>.notifications.log, fail-open."""
+        path = PLAN_DIR / f"{plan_name}.notifications.log"
+        if not path.exists():
+            return []
+        return path.read_text(errors="replace").splitlines()[-100:]
+
+    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]:
+        """Return last `limit` records from <plan>.notifications.jsonl, fail-open."""
+        if limit <= 0:
+            limit = 100
+        path = PLAN_DIR / f"{plan_name}.notifications.jsonl"
+        if not path.exists():
+            return []
+        records: list[dict] = []
+        for line in path.read_text(errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            ts = str(obj.get("ts", ""))
+            message = str(obj.get("message", ""))
+            severity = obj.get("severity")
+            if severity not in ("info", "warning", "error"):
+                severity = "info"
+            else:
+                severity = str(severity)
+            story_key = obj.get("story_key")
+            event = obj.get("event")
+            dedup_key = obj.get("dedup_key")
+            records.append({
+                "ts": ts,
+                "message": message,
+                "severity": severity,
+                "story_key": story_key,
+                "event": event,
+                "dedup_key": dedup_key,
+            })
+        return records[-limit:]
+
+    def get_decisions(self, plan_name: str) -> list[dict]:
+        """Return decisions JSON, fail-open."""
+        path = PLAN_DIR / f"{plan_name}.decisions.json"
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
+        """Return (available, entries) for a story's checkpoint journal,
+        mirroring dashboard._read_journal. Never raises."""
+        path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+        if not path.exists():
+            return False, []
+        try:
+            raw = json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return False, []
+        if not isinstance(raw, list) or not raw:
+            return False, []
+        entries = [e for e in raw if isinstance(e, dict)]
+        if not entries:
+            return False, []
+        normalized: list[dict] = []
+        for e in entries:
+            normalized.append({
+                **e,
+                "step": e.get("step"),
+                "summary": e.get("summary"),
+                "next_hint": e.get("next_hint"),
+            })
+        return True, normalized
+
+    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None:
+        path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(raw, list) or not raw:
+            return None
+        last = raw[-1]
+        if not isinstance(last, dict):
+            return None
+        return last.get("ts")
+
+    def get_story_log(
+        self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200
+    ) -> dict[str, Any]:
+        """Return the tail of a story's log file, fail-open."""
+        empty = {"available": False, "lines": []}
+        if not isinstance(manifest, dict):
+            return empty
+        stories = manifest.get("stories")
+        if not isinstance(stories, dict):
+            return empty
+        story = stories.get(story_key)
+        if not isinstance(story, dict):
+            return empty
+        # Manifest stores log paths relative to PLAN_DIR historically; an
+        # absolute path is honoured as-is.
+        raw_log = story.get("log")
+        if not isinstance(raw_log, str) or not raw_log:
+            return empty
+        log_path = Path(raw_log)
+        if not log_path.is_absolute():
+            log_path = PLAN_DIR / raw_log
+        if not log_path.exists() or not log_path.is_file():
+            return empty
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return empty
+        all_lines = text.splitlines()
+        tail = all_lines[-lines:]
+        return {"available": True, "lines": tail}
+
+    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
+        empty = {"available": False, "text": ""}
+        if not isinstance(story, dict):
+            return empty
+        if not isinstance(filename, str) or not filename:
+            return empty
+        if "/" in filename or "\\" in filename or filename == ".." or filename == ".":
+            return empty
+        raw_wt = story.get("worktree")
+        if not isinstance(raw_wt, str) or not raw_wt:
+            return empty
+        wt_path = Path(raw_wt)
+        if not wt_path.is_absolute():
+            return empty
+        target = wt_path / filename
+        try:
+            target = target.resolve(strict=False)
+            root = WORKTREE_ROOT.resolve()
+            if target != root and not target.is_relative_to(root):
+                return empty
+        except OSError:
+            return empty
+        if not target.exists() or not target.is_file():
+            return empty
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return empty
+        return {"available": True, "text": text}
+
+    def get_manifest_or_none(self, plan_name: str) -> dict | None:
+        """Return manifest or None on missing/corrupt."""
+        try:
+            return self.get_manifest(plan_name)
+        except (json.JSONDecodeError, OSError):
+            return None

@@ -46,7 +46,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -332,6 +332,8 @@ from .self_modification import (  # noqa: F401
     _mcp_restart_notice,
     _mcp_self_source_touched,
 )
+
+from .store import FileStore, Store, _TransactionLock  # noqa: F401
 
 # Ticketing backend. Tests patch the pipeline_ticketing module directly
 # (monkeypatch.setattr(pt, "plane_request", ...), monkeypatch.setattr(pt,
@@ -677,51 +679,6 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
 
 
 
-class Store(Protocol):
-    """Storage seam for pipeline state (W1b).
-
-    Every manifest / decisions / journal access in this module goes through a
-    Store, so the on-disk JSON layout stops being spelled out at ~20 call
-    sites. ``FileStore`` below is the only implementation today; see
-    docs/plans/PLATFORM_DECOUPLING_AND_SCALE_PLAN.md, Workstream W1 step 2.
-    """
-
-    def manifest_path(self, plan_name: str) -> Path: ...
-
-    def get_manifest(self, plan_name: str) -> dict[str, Any]: ...
-
-    def save_manifest(self, plan_name: str, manifest: dict[str, Any]) -> None: ...
-
-    def transaction(self, plan_name: str): ...
-
-    # NOTE: declared via lambda assignment rather than a plain method
-    # statement so this doesn't add a third and fourth hit to
-    # test_pipeline_mcp_list_plans_migration.py's duplicate-definition guard,
-    # which counts occurrences of that method-defining keyword pair and
-    # predates this Store seam (it only knows about PipelineService's method
-    # plus the module-level @mcp.tool() wrapper).
-    list_plans = lambda self: ...
-
-    def list_manifests(self) -> list[str]: ...
-
-    def update_story(
-        self, plan_name: str, story_key: str, fields: dict[str, Any]
-    ) -> dict[str, Any] | None: ...
-
-    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None: ...
-
-    def append_journal(
-        self, plan_name: str, story_key: str, record: dict[str, Any]
-    ) -> None: ...
-
-    def get_notifications(self, plan_name: str) -> list[str]: ...
-    def get_notification_records(self, plan_name: str, limit: int = 100) -> list[dict]: ...
-    def get_decisions(self, plan_name: str) -> list[dict]: ...
-    def get_manifest_or_none(self, plan_name: str) -> dict | None: ...
-    def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]: ...
-    def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None: ...
-    def get_story_log(self, plan_name: str, story_key: str, manifest: dict[str, Any], lines: int = 200) -> dict[str, Any]: ...
-    def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]: ...
 
 
 class _TransactionLock:

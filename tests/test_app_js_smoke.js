@@ -393,18 +393,18 @@ await test("focused filter chip retains focus across a refresh", async () => {
 await test("missing focused chip is silently skipped (no throw)", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = await loadApp(doc, { fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
 
-  const section = makeElement("section", { attrs: { id: "plan-detail" } });
+  const section = makeEl("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
   // Pretend a custom chip is focused that won't exist after re-render.
-  const ghost = makeElement("button", { dataset: { dim: "statuses", value: "ghost" } });
+  const ghost = makeEl("button", { dataset: { dim: "statuses", value: "ghost" } });
   ghost.classList.add("filter-chip");
   section.appendChild(ghost);
   doc.setActiveElement(ghost);
 
   assert.doesNotThrow(() => {
-    api(renderPlanDetail({ name: "p", stories: {}, notifications: [], decisions: [] }));
+    api.renderPlanDetail({ name: "p", stories: {}, notifications: [], decisions: [] });
   });
   // Focus is simply not restored; active element stays where it was.
   assert.strictEqual(doc.activeElement, ghost,

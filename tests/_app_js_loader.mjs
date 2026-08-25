@@ -30,13 +30,7 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
   const win = dom.window || dom;
   if (_ESM_RE.test(src)) {
     const appFileUrl = pathToFileURL(_APP_JS).href;
-    // Bust the module cache so each loadApp call re-evaluates app.js. The
-    // .py loader gets this for free by running each test in a fresh
-    // subprocess; the .mjs loader shares one process, so a cached module
-    // would otherwise skip its top-level DOM wiring (listener registration,
-    // state init) on every load after the first.
-    const cacheBust = `?t=${Date.now()}-${Math.random()}`;
-    const mod = await import(`${appFileUrl}${cacheBust}`);
+    const mod = await import(appFileUrl);
     // Expose the browser globals app.js's top-level code reads (window,
     // document, localStorage, fetch) on globalThis so the ESM module
     // evaluates under Node. Mirror the .py loader's shim. These stay set

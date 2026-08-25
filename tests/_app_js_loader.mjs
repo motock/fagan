@@ -45,7 +45,11 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
       if (win[k] === undefined && globalThis[k] !== undefined) win[k] = globalThis[k];
       globalThis[k] = win[k];
     }
-    const mod = await import(appFileUrl);
+    // Cache-bust so each loadAppInto call re-evaluates the module. Node's
+    // dynamic import() caches by URL; without a unique query the module's
+    // top-level wiring (event listeners, startPolling, window.state) would
+    // run only once and leak across tests in the same process.
+    const mod = await import(`${appFileUrl}?t=${Date.now()}`);
     Object.assign(win, mod);
     return mod;
   }

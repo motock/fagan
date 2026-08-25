@@ -346,18 +346,15 @@ def test_existing_rows_reused_not_recreated_across_polls():
 # === Bug 2: in-place meta update drops the plan-paused span =================
 
 def test_paused_badge_survives_in_place_update():
-    """Bug 2: `_renderPlanListFull` and `_buildPlanRow` render a paused plan's
-    meta as `... done <span class="plan-paused">paused</span>`. The diff
-    path's in-place update overwrites `meta.textContent` with the plain string
-    `"... paused"`, destroying that span on the second poll tick.
+    """Paused badge survives an in-place update across two renders.
 
-    This test isolates Bug 2 from Bug 1 (the dataset-key mismatch): after the
-    first full render it manually re-populates the module-level
-    `planListRowsByName` map using the CORRECT `dataset.planName` accessor
-    (the way the fixed population loop would), so the second renderPlanList
-    call takes the in-place update branch instead of treating the plan as
-    new. The in-place branch must emit the same `<span class="plan-paused">`
-    markup the builders emit, not a plain " paused" text string.
+    The first full render populates the eval-scoped planListRowsByName map
+    via the data-plan-name attribute (Bug 1 fixed), so the second
+    renderPlanList call takes the in-place update branch instead of
+    treating the plan as new. No manual reset of planListRowsByName is
+    performed. The in-place branch must emit the same
+    `<span class="plan-paused">` markup the builders emit, not a plain
+    " paused" text string.
     """
     plans = [_plan("alpha", done=1, total=3, paused=True)]
     expr = (

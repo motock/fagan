@@ -9,10 +9,15 @@ directly.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
+import types
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from app import role_registry
 
 # Import helpers for test detection and scoping.  These imports are used in
 # :func:`_reverify_acceptance` below; the ``noqa`` comments were removed as
@@ -26,6 +31,16 @@ from .build_detect import (
     detect_test_command,
 )
 from .concurrency import _heavy_lock, _is_heavy
+from .config import DEFAULT_MODEL, MERGE_MAX_ATTEMPTS
+from .config_provenance import (
+    _claude_json_path,
+    _scheduler_plist_path,
+    effective_env_config,
+    effective_role_config,
+    ignored_env_vars_present,
+)
+from .persistence import _plan_role_config
+from .persona import _persona_default_model
 
 # ---------- CI env-var gates ----------
 PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
@@ -545,15 +560,263 @@ def _reverify_build(worktree: str) -> dict[str, str]:
     return {"state": "fail", "error": (r.stdout + r.stderr).strip()[-500:]}
 
 
+def _ci_pending_expired(since_iso: str) -> bool:
+    """True once a story has waited on pending CI longer than the total
+    patience the blocking gate used to provide (MERGE_MAX_ATTEMPTS
+    attempts x PIPELINE_MERGE_CI_TIMEOUT each)."""
+    try:
+        since = datetime.fromisoformat(since_iso)
+    except (TypeError, ValueError):
+        return False
+    now = datetime.now(timezone.utc)
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    elapsed = (now - since).total_seconds()
+    return elapsed >= MERGE_MAX_ATTEMPTS * PIPELINE_MERGE_CI_TIMEOUT
+
+
+def _parse_pytest_excerpt(gate_error: str) -> str | None:
+    """Best-effort extract of a pytest failure excerpt from ``gate_error``.
+
+    Looks for a literal ``<file>.py:<line>: <Exception>: <assertion>`` pattern
+    and, only when the whole pattern is found, returns a short
+    ``On {file}:{line}, {assertion} fails`` string built from the exact file,
+    line, and assertion substrings captured from ``gate_error``. Returns
+    ``None`` when nothing recognizable parses -- it never fabricates a
+    file/line/assertion that is not literally present in ``gate_error``.
+    """
+    if not gate_error:
+        return None
+    match = re.search(
+        r"(?P<file>[\w./-]+\.py):(?P<line>\d+):\s+"
+        r"(?P<exc>[A-Za-z_]+Error):\s*(?P<assertion>.+)",
+        gate_error,
+    )
+    if not match:
+        return None
+    return (
+        f"On {match.group('file')}:{match.group('line')}, "
+        f"{match.group('assertion')} fails"
+    )
+
+
+def _ci_rework_feedback(gate_error: str, attempts: int) -> str:
+    """Generate review feedback for merge-gate CI failures.
+
+    ``attempts`` is the current rework round number (1 for the first rework).
+    Round 1 is byte-identical to the pre-round-escalation wording. From round 2
+    onward a ``PREVIOUS REWORK ATTEMPT {attempts-1} DID NOT FIX THIS.`` prefix
+    is prepended, and when a pytest excerpt is parseable from ``gate_error`` it
+    is appended (in addition to the verbatim ``Gate error:`` line) along with
+    the full-suite done-bar instruction.
+    """
+    lint_keywords = ("lint", "ruff", "eslint", "clippy", "golangci")
+    lower = gate_error.lower()
+    if any(k in lower for k in lint_keywords):
+        base = (
+            f"The merge-gate CI check failed on your submitted branch "
+            f"Gate error: {gate_error}\n\n"
+            "This is a LINT failure, not a test failure - the test suite may already pass, so re-running tests alone proves nothing. Run the project's lint command (e.g. `ruff check .` for Python) from the repo root, fix every finding, and commit.\n\n"
+            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
+        )
+    else:
+        base = (
+            f"The merge-gate CI check failed on your submitted branch "
+            f"Gate error: {gate_error}\n\n"
+            "The bug could be in the implementation OR in a test file you wrote; re-examine both against the spec and make a targeted fix.\n\n"
+            "A NEW COMMIT on your branch is REQUIRED - CI runs on your pushed commits, and exiting without committing a change cannot alter the CI result."
+        )
+    if attempts < 2:
+        return base
+    msg = f"PREVIOUS REWORK ATTEMPT {attempts - 1} DID NOT FIX THIS. " + base
+    excerpt = _parse_pytest_excerpt(gate_error)
+    if excerpt is not None:
+        msg = (
+            f"{msg}\n\n{excerpt}\n"
+            "Do not call done until the full suite passes."
+        )
+    return msg
+
+
+def _get_effective_config_impl(
+    plan_name: str | None = None,
+) -> dict[str, Any]:
+    plan_role_config = _plan_role_config(plan_name) if plan_name else None
+    model_fallbacks = {
+        "overlord": lambda: _persona_default_model("overlord") or "opus",
+        "planner": lambda: DEFAULT_MODEL,
+        "dispatch": lambda: DEFAULT_MODEL,
+        "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
+        "decompose": lambda: _persona_default_model("product-analyst") or "opus",
+        "security": lambda: _persona_default_model("security-engineer") or DEFAULT_MODEL,
+    }
+    try:
+        registry = role_registry.load_registry()
+    except role_registry.RoleRegistryError:
+        registry = {}
+
+    roles = effective_role_config(
+        plan_role_config=plan_role_config,
+        registry=registry,
+        model_fallbacks=model_fallbacks,
+    )
+    env = effective_env_config()
+    ignored_env_vars = ignored_env_vars_present()
+
+    plist_path = _scheduler_plist_path()
+    mcp_env_path = _claude_json_path()
+    registry_path = role_registry._registry_path()
+
+    sources = {
+        "launchd_plist": {"path": str(plist_path), "exists": plist_path.exists()},
+        "mcp_server_env": {"path": str(mcp_env_path), "exists": mcp_env_path.exists()},
+        "model_registry": {"path": str(registry_path), "exists": registry_path.exists()},
+    }
+
+    return {
+        "ok": True,
+        "roles": roles,
+        "env": env,
+        "ignored_env_vars": ignored_env_vars,
+        "sources": sources,
+    }
+
+
+# ---------- Story-done + story-field allowlists (folded from server.py) ----------
+# ``_mark_story_done_impl`` and the story-field allowlists were moved here from
+# ``pipeline/server.py`` (behavior-preserving refactor). The function body reads
+# server-sourced module globals (``_store``, ``_validate_key``,
+# ``get_ticket_provider``, ``LogicalState``, ``PIPELINE_SELF_REPO_ROOT``,
+# ``_record_retro_pending``) as free variables. The test suite monkeypatches
+# those names on ``pipeline.server``, so the function is rebound below to
+# ``pipeline.server``'s namespace at call time (LOAD_GLOBAL does not consult a
+# module-level __getattr__, so a plain re-export would not).
+
+
+def _record_retro_pending(plan_name: str, story_count: int) -> None:
+    RETRO_PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)  # noqa: F821
+    existing_lines = (
+        RETRO_PENDING_PATH.read_text().splitlines()  # noqa: F821
+        if RETRO_PENDING_PATH.exists()  # noqa: F821
+        else []
+    )
+    marker = f"- {plan_name} "
+    if any(line.startswith(marker) for line in existing_lines):
+        return
+    date = datetime.now(timezone.utc).date().isoformat()
+    with RETRO_PENDING_PATH.open("a") as f:  # noqa: F821
+        f.write(f"- {plan_name} \u2014 completed {date}, {story_count} stories\n")
+
+
+def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
+    """
+    Transition the ticket to Done and update the local manifest.
+    Use after you've reviewed and merged the agent's PR.
+    """
+    _validate_key(plan_name)  # noqa: F821
+    _validate_key(story_key)  # noqa: F821
+    get_ticket_provider().set_state(  # noqa: F821
+        story_key, LogicalState.DONE, plan_name  # noqa: F821
+    )
+
+    manifest = _store.get_manifest(plan_name)  # noqa: F821
+    manifest["stories"][story_key]["status"] = "done"
+    manifest["stories"][story_key].pop("parked_reason", None)
+    _store.save_manifest(plan_name, manifest)  # noqa: F821
+
+    # Check if all stories are now done
+    all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
+    if all_done:
+        if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):  # noqa: F821
+            _record_retro_pending(plan_name, len(manifest["stories"]))
+        return {
+            "ok": True,
+            "plan_completed": True,
+            "stories": list(manifest["stories"].keys()),
+        }
+    return {"ok": True}
+
+
+# Story fields patch_story may edit. Deliberately excludes "status" (use
+# set_story_status), "worktree", "pid", "review_verdict" and other
+# pipeline-owned runtime state - this tool is for correcting what the plan
+# authored, not for mechanically bypassing the review/merge gates.
+_PATCHABLE_STORY_FIELDS = frozenset(
+    (
+        "agent_instructions",
+        "model",
+        "persona",
+        "risk",
+        "dependencies",
+        "acceptance",
+        "pr_url",
+        "summary",
+        "tdd_split",
+        "backend",
+    )
+)
+
+# Every status value the pipeline itself assigns to a story (see the
+# "status"] = / "status": literal assignments throughout this file). Kept as
+# an explicit allowlist so set_story_status can't be used to invent a status
+# the rest of the code doesn't know how to handle.
+_VALID_STORY_STATUSES = frozenset(
+    (
+        "todo",
+        "in_progress",
+        "running",
+        "interrupted",
+        "failed",
+        "tests_passed",
+        "pr_open",
+        "changes_requested",
+        "parked",
+        "done",
+        "done",
+    )
+)
+
+
+# Rebind the functions' globals to pipeline.server's namespace so that
+# bare-name reads inside the bodies (e.g. ``_store``, ``_validate_key``,
+# ``get_ticket_provider``, ``_record_retro_pending``) resolve against
+# pipeline.server at call time. This preserves the original behavior where the
+# functions lived in pipeline.server and saw monkeypatched module globals.
+from . import server as _server
+
+_mark_story_done_impl = types.FunctionType(
+    _mark_story_done_impl.__code__,
+    _server.__dict__,
+    _mark_story_done_impl.__name__,
+    _mark_story_done_impl.__defaults__,
+    _mark_story_done_impl.__closure__,
+)
+_record_retro_pending = types.FunctionType(
+    _record_retro_pending.__code__,
+    _server.__dict__,
+    _record_retro_pending.__name__,
+    _record_retro_pending.__defaults__,
+    _record_retro_pending.__closure__,
+)
+
+
 __all__ = [
     "PIPELINE_MERGE_BUILD_GATE",
     "PIPELINE_MERGE_CI_GATE",
     "PIPELINE_MERGE_CI_TIMEOUT",
+    "_PATCHABLE_STORY_FIELDS",
+    "_VALID_STORY_STATUSES",
     "_acceptance_tampered",
+    "_ci_pending_expired",
     "_ci_rerun",
+    "_ci_rework_feedback",
     "_ci_status",
     "_ci_status_once",
     "_fetch_ci_failure_excerpt",
+    "_get_effective_config_impl",
+    "_mark_story_done_impl",
+    "_parse_pytest_excerpt",
+    "_record_retro_pending",
     "_repo_has_ci_configured",
     "_reverify_acceptance",
     "_reverify_build",

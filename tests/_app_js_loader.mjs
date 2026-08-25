@@ -24,17 +24,42 @@ const _APP_JS = path.join(
 // Same top-level import/export detection rule the .py loader uses.
 const _ESM_RE = /^\s*(?:import|export)\s/m;
 
+// Monotonic counter for cache-busting dynamic import() calls below.
+// Date.now() can repeat within the same millisecond across the many
+// sequential loadAppInto() calls a single test file makes, which would
+// silently hit Node's module cache and reuse a stale instance.
+let _importSeq = 0;
+
 export async function loadAppInto(dom, { srcOverride } = {}) {
   const src = srcOverride ?? readFileSync(_APP_JS, "utf8");
   // Accept either a jsdom instance (dom.window) or a plain window stub.
   const win = dom.window || dom;
   if (_ESM_RE.test(src)) {
     const appFileUrl = pathToFileURL(_APP_JS).href;
-    const mod = await import(appFileUrl);
+    // Expose browser globals on globalThis for BOTH the ESM module's
+    // top-level reads AND its call-time reads. app.js functions read
+    // window.location / document / localStorage / fetch when INVOKED by
+    // tests, not just at import time, so these MUST STAY SET for the
+    // process lifetime -- do NOT restore them in a finally block (that was
+    // a prior brief's bug: it set globalThis.window back to undefined and
+    // broke every call-time window.location read). Each loadAppInto call
+    // re-points these at its own win. Propagate the caller's existing
+    // globals onto win first so we never clobber a test's setup (e.g. a
+    // test that set global.document = doc) with an undefined win stub.
+    globalThis.window = win;
+    for (const k of ["document", "localStorage", "fetch"]) {
+      if (win[k] === undefined && globalThis[k] !== undefined) win[k] = globalThis[k];
+      globalThis[k] = win[k];
+    }
+    // Cache-bust so each loadAppInto call re-evaluates the module. Node's
+    // dynamic import() caches by URL; without a unique query the module's
+    // top-level wiring (event listeners, startPolling, window.state) would
+    // run only once and leak across tests in the same process.
+    const mod = await import(`${appFileUrl}?t=${++_importSeq}`);
     Object.assign(win, mod);
     return mod;
   }
-  // CJS path (today): evaluate inside the target window.
+  // CJS path: evaluate inside the target window.
   win.eval(src);
   return win;
 }

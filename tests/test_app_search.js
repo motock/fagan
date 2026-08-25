@@ -328,8 +328,10 @@ async function loadAppJs({ doc, fakeTimers, autoRefreshChecked = false, localSto
     if (capturedState) m.exports.state = capturedState;
   };
   const { loadAppInto } = await import("./_app_js_loader.mjs");
-  await loadAppInto(win);
-  return m.exports;
+  const mod = await loadAppInto(win);
+  // ESM path: the loader returns the module namespace (all named exports).
+  // CJS path: exports land on m.exports via the win.eval wrapper above.
+  return { ...m.exports, ...mod };
 }
 
 // --------- helpers ---------

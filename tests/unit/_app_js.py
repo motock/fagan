@@ -57,6 +57,11 @@ def run_app_js(expr, app_js=_APP_JS_DEFAULT, shim="", after_load="", async_eval=
             shim
             + f"\nconst __app = await import({json.dumps(app_url)});"
             + "\nObject.assign(globalThis, __app);"
+            # Mirror the module's named exports onto `module.exports` so the
+            # legacy CommonJS-style tests that read `module.exports.<name>`
+            # keep working now that app.js is a real ES module (in ESM mode
+            # `module` is otherwise undefined).
+            + "\nglobalThis.module = { exports: __app };"
             + after_load
             + "\n" + eval_expr
         )

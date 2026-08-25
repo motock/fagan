@@ -34,6 +34,7 @@ functions (defaultFilters/loadFilters/saveFilters/hashStateFrom/encodeHashState/
 import json
 import os
 import subprocess
+import urllib.parse
 
 from _app_js import run_app_js
 

@@ -33,7 +33,8 @@ functions (defaultFilters/loadFilters/saveFilters/hashStateFrom/encodeHashState/
 """
 import json
 import os
-import subprocess
+
+from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
@@ -47,10 +48,7 @@ def _app_js_source():
 
 # === Simple harness (copied verbatim from test_dashboard_notifications_ui.py) ==
 
-def _run_app_js(expr):
-    """Evaluate a JS expression inside an environment where static/app.js
-    has been loaded. Returns the JSON-serialized result."""
-    shim = """
+_SHIM = r"""
         const noop = () => {};
         const fakeEl = {
             innerHTML: "",
@@ -76,19 +74,15 @@ def _run_app_js(expr):
         process.on("unhandledRejection", () => {});
         globalThis.setInterval = () => 0;
         globalThis.setTimeout = (fn, _ms) => { if (typeof fn === "function") { /* dropped */ } return 0; };
-    """
-    script = (
-        shim
-        + "const fs = require('fs');"
-        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
-        + "globalThis.state = globalThis.window.state;"
-        + "process.stdout.write(JSON.stringify(" + expr + "));"
-    )
-    proc = subprocess.run(
-        ["node", "-e", script],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+"""
+
+
+def _run_app_js(expr):
+    """Evaluate a JS expression inside an environment where static/app.js
+    has been loaded. Returns the JSON-serialized result."""
+    proc = _shared_run_app_js(expr, shim=_SHIM)
+    if proc.returncode != 0:
+        raise AssertionError(f"node failed: {proc.stderr}")
     return json.loads(proc.stdout)
 
 
@@ -244,8 +238,11 @@ def _run_click_flow(records):
     'error' severity chip, and return a dict describing before/after state.
     Requires `errChip` to exist in the initial render (data-dim="notif-severity"
     data-value="error"); callers should design fixtures accordingly."""
+    # The shared loader evals app.js and aliases globalThis.state itself, so
+    # strip those trailing lines from the DOM shim before delegating.
     dom_shim = _DOM_SHIM % {"app_js_path": json.dumps(APP_JS)}
-    script = dom_shim + f"""
+    shim = dom_shim.rsplit("const fs = require('fs');", 1)[0]
+    expr = f"""
 const plan = {{
   name: "Test plan",
   stories: {{}},
@@ -298,7 +295,7 @@ const errChipAfter = planDetailEl.querySelectorAll(
 const allChipAfter = planDetailEl.querySelectorAll(
   '.filter-chip[data-dim="notif-severity"][data-value="all"]')[0];
 
-process.stdout.write(JSON.stringify({{
+({{
   chipFound,
   beforeHtml, afterHtml,
   setItemCallsDelta: afterSetItemCount - beforeSetItemCount,
@@ -306,13 +303,11 @@ process.stdout.write(JSON.stringify({{
   filtersChanged: beforeFiltersJson !== afterFiltersJson,
   errChipActiveAfter: errChipAfter ? errChipAfter.classList.contains("active") : null,
   allChipActiveAfter: allChipAfter ? allChipAfter.classList.contains("active") : null,
-}}));
+}});
 """
-    proc = subprocess.run(
-        ["node", "-e", script],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+    proc = _shared_run_app_js(expr, shim=shim)
+    if proc.returncode != 0:
+        raise AssertionError(f"node failed: {proc.stderr}")
     return json.loads(proc.stdout)
 
 

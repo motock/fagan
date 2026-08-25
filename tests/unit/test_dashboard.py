@@ -970,22 +970,14 @@ def test_story_log_endpoint_garbage_bytes_decode_replacement(client, plan_dir):
 # tests exercise the pure helpers exposed by app.js by shelling out to Node
 # in a subprocess — no JS test runner / jsdom dependency, just plain pytest.
 import os
-import subprocess
+
+from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
 
 
-def _run_app_js(expr):
-    """Evaluate a JS expression inside an environment where static/app.js
-    has been loaded (so its top-level consts + functions are available).
-    Returns the JSON-serialized result. Keeps the assertion surface area
-    in Python where the rest of the suite already lives.
-
-    app.js touches `document`/`window` at module load to wire DOM event
-    listeners; we stub those out so the pure helpers below are testable
-    without pulling in jsdom."""
-    shim = """
+_SHIM = r"""
         const noop = () => {};
         const fakeEl = {
             innerHTML: "",
@@ -1017,23 +1009,22 @@ def _run_app_js(expr):
         // override so the process can exit naturally.
         globalThis.setInterval = () => 0;
         globalThis.setTimeout = (fn, _ms) => { if (typeof fn === "function") { /* dropped */ } return 0; };
-    """
-    script = (
-        shim
-        + "const fs = require('fs');"
-        + f"eval(fs.readFileSync({json.dumps(APP_JS)}, 'utf8'));"
-        # After eval, app.js has populated window.state. Alias it as a bare
-        # `state` global so test expressions can write `state.filters.X = ...`
-        # without going through window. (Stripped from JSON output by
-        # JSON.stringify which only sees the test expression's return value.)
-        + "globalThis.state = globalThis.window.state;"
-        + "process.stdout.write(JSON.stringify(" + expr + "));"
-    )
-    proc = subprocess.run(
-        ["node", "-e", script],
-        check=False, capture_output=True, text=True, timeout=10,
-    )
-    assert proc.returncode == 0, f"node failed: {proc.stderr}"
+"""
+
+
+def _run_app_js(expr):
+    """Evaluate a JS expression inside an environment where static/app.js
+    has been loaded (so its top-level consts + functions are available).
+    Returns the JSON-serialized result. Keeps the assertion surface area
+    in Python where the rest of the suite already lives.
+
+    app.js touches `document`/`window` at module load to wire DOM event
+    listeners; we stub those out so the pure helpers below are testable
+    without pulling in jsdom."""
+    proc = _shared_run_app_js(expr, shim=_SHIM)
+    if proc.returncode != 0:
+        raise AssertionError(f"node failed: {proc.stderr}")
+    return json.loads(proc.stdout)
     return json.loads(proc.stdout)
 
 

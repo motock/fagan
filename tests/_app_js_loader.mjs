@@ -37,12 +37,22 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
     // them at call time (e.g. updateHash reads window.location), not just
     // at import time; each loadAppInto call re-points them at its own win.
     globalThis.window = win;
-    // Fall back to any pre-existing global (e.g. the smoke test sets
-    // global.document directly) when the target window lacks the property.
-    globalThis.document = win.document || globalThis.document;
-    globalThis.localStorage = win.localStorage || globalThis.localStorage;
-    globalThis.fetch = win.fetch || globalThis.fetch;
+    for (const k of ["document", "localStorage", "fetch"]) {
+      if (win[k] === undefined && globalThis[k] !== undefined) win[k] = globalThis[k];
+      globalThis[k] = win[k];
+    }
     const mod = await import(appFileUrl);
+    // Reset module-level state so each loadApp call starts from a clean
+    // slate. The .py loader gets this for free by running each test in a
+    // fresh subprocess; the .mjs loader shares one process, so the cached
+    // module's `state` object would otherwise leak between tests.
+    if (mod.state && typeof mod.defaultFilters === "function") {
+      mod.state.filters = mod.defaultFilters();
+      mod.state.selectedPlan = null;
+      mod.state.showArchived = false;
+      mod.state.commsActive = true;
+      mod.state.configActive = false;
+    }
     Object.assign(win, mod);
     return mod;
   }

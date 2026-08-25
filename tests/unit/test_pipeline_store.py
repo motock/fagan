@@ -245,9 +245,11 @@ def test_transaction_does_not_reimplement_fcntl(plan_dir):
 
 def test_typing_imports_protocol():
     # C1: `from typing import Any, Protocol` (Protocol must be imported).
-    src = inspect.getsource(p)
-    # The import line must include Protocol.
-    assert "Protocol" in src, "pipeline.server must import Protocol from typing"
+    # Store/FileStore moved to pipeline/store.py, which owns the Protocol import.
+    from pipeline import store as store_mod
+
+    src = inspect.getsource(store_mod)
+    assert "Protocol" in src, "pipeline/store.py must import Protocol from typing"
 
 
 def test_only_one_typing_import_line():
@@ -255,7 +257,9 @@ def test_only_one_typing_import_line():
     # add a second one.
     import re
 
-    src = inspect.getsource(p)
+    from pipeline import store as store_mod
+
+    src = inspect.getsource(store_mod)
     typing_imports = re.findall(r"^from typing import .+$", src, re.MULTILINE)
     assert len(typing_imports) == 1, (
         f"expected exactly one `from typing import` line, found {len(typing_imports)}"

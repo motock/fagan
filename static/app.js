@@ -346,8 +346,13 @@ function clearHash() {
 // restore path ran before us) keeps the localStorage-derived state.
 function applyHashToState() {
   const raw = window.location.hash;
-  // Nothing in the URL -> nothing to apply.
-  if (!raw) return;
+  // Nothing in the URL -> reset plan selection and restore filters from
+  // localStorage (defaults when nothing is stored).
+  if (!raw) {
+    state.selectedPlan = null;
+    loadFilters();
+    return;
+  }
   const parsed = parseHash(raw);
   if (parsed.selectedPlan !== null) {
     state.selectedPlan = parsed.selectedPlan;

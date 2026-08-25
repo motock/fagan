@@ -45,13 +45,15 @@ export async function loadAppInto(dom, { srcOverride } = {}) {
     // Reset module-level state so each loadApp call starts from a clean
     // slate. The .py loader gets this for free by running each test in a
     // fresh subprocess; the .mjs loader shares one process, so the cached
-    // module's `state` object would otherwise leak between tests.
+    // module's `state` object would otherwise leak between tests. Re-run
+    // loadFilters() so the current test's (fresh) localStorage is applied.
     if (mod.state && typeof mod.defaultFilters === "function") {
       mod.state.filters = mod.defaultFilters();
       mod.state.selectedPlan = null;
       mod.state.showArchived = false;
       mod.state.commsActive = true;
       mod.state.configActive = false;
+      if (typeof mod.loadFilters === "function") mod.loadFilters();
     }
     Object.assign(win, mod);
     return mod;

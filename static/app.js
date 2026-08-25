@@ -2472,6 +2472,8 @@ export {
   capturePlanDetailState,
   filterNotifications,
   filterStoryNotifications,
+  flashRefreshIndicator,
+  handleCopyClick,
   isStaleInProgress,
   pickNewNotifications,
   pushToast,
@@ -2488,4 +2490,7 @@ export {
   renderToolTraceHtml,
   restorePlanDetailState,
   showStoryModal,
+  startPolling,
+  stopPolling,
+  syncPollingWithVisibility,
 };

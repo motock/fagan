@@ -342,15 +342,18 @@ function fakeTimers() {
 
 let pass = 0, fail = 0;
 function test(name, fn) {
-  try { fn(); console.log(`ok  - ${name}`); pass++; }
-  catch (e) { console.log(`FAIL - ${name}: ${e.message}`); fail++; }
+  return Promise.resolve().then(fn).then(
+    () => { console.log(`ok  - ${name}`); pass++; },
+    (e) => { console.log(`FAIL - ${name}: ${e.message}`); fail++; }
+  );
 }
 
+(async () => {
 // Case: scroll position survives a refresh when a column is scrolled.
-test("scroll position survives a refresh", () => {
+await test("scroll position survives a refresh", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
 
   const section = makeEl("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
@@ -366,10 +369,10 @@ test("scroll position survives a refresh", () => {
 });
 
 // Case: focused filter chip retains focus across a refresh.
-test("focused filter chip retains focus across a refresh", () => {
+await test("focused filter chip retains focus across a refresh", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadAppJs({ doc, fakeTimers: ft });
 
   const section = makeEl("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
@@ -387,21 +390,21 @@ test("focused filter chip retains focus across a refresh", () => {
 
 // Negative case: focused element no longer present after re-render -> focus
 // simply not restored, no throw.
-test("missing focused chip is silently skipped (no throw)", () => {
+await test("missing focused chip is silently skipped (no throw)", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadApp(doc, { fakeTimers: ft });
 
-  const section = makeEl("section", { attrs: { id: "plan-detail" } });
+  const section = makeElement("section", { attrs: { id: "plan-detail" } });
   doc.register("plan-detail", section);
   // Pretend a custom chip is focused that won't exist after re-render.
-  const ghost = makeEl("button", { dataset: { dim: "statuses", value: "ghost" } });
+  const ghost = makeElement("button", { dataset: { dim: "statuses", value: "ghost" } });
   ghost.classList.add("filter-chip");
   section.appendChild(ghost);
   doc.setActiveElement(ghost);
 
   assert.doesNotThrow(() => {
-    api.renderPlanDetail({ name: "p", stories: {}, notifications: [], decisions: [] });
+    api(renderPlanDetail({ name: "p", stories: {}, notifications: [], decisions: [] }));
   });
   // Focus is simply not restored; active element stays where it was.
   assert.strictEqual(doc.activeElement, ghost,
@@ -409,15 +412,15 @@ test("missing focused chip is silently skipped (no throw)", () => {
 });
 
 // Case: refresh indicator appears on each successful refresh (via state.pollHandle set).
-test("flashRefreshIndicator populates the indicator element", () => {
+await test("flashRefreshIndicator populates the indicator element", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft });
+  const api = await loadApp(doc, { fakeTimers: ft });
 
-  const ind = makeEl("span", { attrs: { id: "refresh-indicator" } });
+  const ind = makeElement("span", { attrs: { id: "refresh-indicator" } });
   doc.register("refresh-indicator", ind);
 
-  api.flashRefreshIndicator();
+  api(flashRefreshIndicator());
   assert.ok(ind.innerHTML.includes("dot"), "indicator should render a dot");
   assert.ok(ind.innerHTML.includes("updating"), "indicator should say updating");
   assert.ok(ind.classList.contains("flashing"), "flashing class should be set");
@@ -428,10 +431,10 @@ test("flashRefreshIndicator populates the indicator element", () => {
 // the auto-refresh checkbox is checked (the HTML default). The change
 // handler stops polling when the user unchecks, and the visibilitychange
 // handler suspends it while the tab is hidden.
-test("auto-refresh checkbox uncheck stops polling via change handler", () => {
+await test("auto-refresh checkbox uncheck stops polling via change handler", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft, autoRefreshChecked: true });
+  const api = await loadApp(doc, { fakeTimers: ft, autoRefreshChecked: true });
 
   assert.notStrictEqual(api.state.pollHandle, null,
     "polling should be active when auto-refresh starts checked");
@@ -447,10 +450,10 @@ test("auto-refresh checkbox uncheck stops polling via change handler", () => {
 // Case: visibilitychange pauses polling when document.hidden, resumes when
 // visible again. The auto-refresh checkbox stays checked throughout, so
 // visibility alone never disables polling — it only suspends it.
-test("visibilitychange stops polling when hidden, resumes when visible", () => {
+await test("visibilitychange stops polling when hidden, resumes when visible", async () => {
   const doc = makeDocument();
   const ft = fakeTimers();
-  const api = loadAppJs({ doc, fakeTimers: ft, autoRefreshChecked: true });
+  const api = await loadApp(doc, { fakeTimers: ft, autoRefreshChecked: true });
 
   // The module-level startPolling set a handle; capture it so we can
   // confirm it's a fresh handle after resume (not the original).
@@ -471,4 +474,6 @@ test("visibilitychange stops polling when hidden, resumes when visible", () => {
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail === 0 ? 0 : 1);
+})();
 process.exit(fail === 0 ? 0 : 1);

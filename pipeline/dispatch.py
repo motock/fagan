@@ -666,6 +666,30 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{plan_path.read_text()}\n\n"
                 f"Work through these steps in order.{scratchpad_instruction}"
             )
+        elif scratchpad_on:
+            # Prompt-only parity for non-local-family backends (Claude): no
+            # tech-lead checklist exists here (that phase stays local-only),
+            # so there is no numbered-step total to report progress against
+            # -- do not reuse the "PROGRESS: <done>/<total>" line from above.
+            spec["prompt"] = (
+                f"{spec['prompt']}\n\n"
+                "As you work, keep .agent_scratchpad.md up to date with a "
+                "short running summary of what you've done and what's next "
+                "(create_file for the first note, str_replace to rewrite it "
+                "after that)."
+            )
+        elif scratchpad_on:
+            # Prompt-only parity for non-local-family backends (Claude): no
+            # tech-lead checklist exists here (that phase stays local-only),
+            # so there is no numbered-step total to report progress against
+            # -- do not reuse the "PROGRESS: <done>/<total>" line from above.
+            spec["prompt"] = (
+                f"{spec['prompt']}\n\n"
+                "As you work, keep .agent_scratchpad.md up to date with a "
+                "short running summary of what you've done and what's next "
+                "(create_file for the first note, str_replace to rewrite it "
+                "after that)."
+            )
 
         # Referencing the test-author marker is independent of the phase
         # having run THIS dispatch (mirrors plan_path.exists() above): a

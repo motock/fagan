@@ -274,6 +274,15 @@ function startPolling() {
 
 function stopPolling() {
   if (state.pollHandle) clearInterval(state.pollHandle);
+  state.pollHandle = null;
+}
+
+function syncPollingWithVisibility() {
+  if (document.hidden) {
+    stopPolling();
+  } else if (!state.pollHandle) {
+    startPolling();
+  }
 }
 
 export { state, defaultFilters, loadFilters, saveFilters, STATUS_COLUMNS, BACKEND_VALUES, ESCALATED_VALUES, FILTERS_KEY } from "./state.js";

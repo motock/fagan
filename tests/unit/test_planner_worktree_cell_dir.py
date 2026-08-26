@@ -44,11 +44,11 @@ parameter and the ``cell_dir``/``role`` wiring are absent) and PASS after.
 import json
 
 import pytest
-from test_pipeline_mcp_server import _FakeProc, _write_manifest
 
 from app import backend
 from pipeline import server as p
 from pipeline import ticketing as pt
+from tests.unit._pipeline_mcp_server_test_helpers import _FakeProc, _write_manifest
 
 # --------------------------------------------------------------------------- #
 # Unit-level helpers (mirror test_always_on_planner.py's _FakePlannerBackend)

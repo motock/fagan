@@ -872,7 +872,7 @@ main {
   .toast { animation: none; }
 }
 .toast-row { display: flex; align-items: center; gap: var(--sp-2); }
-.toast-key { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+.toast-key { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--stripe, var(--text-muted)); }
 .toast-msg { flex: 1; }
 .toast-dismiss {
   background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer;
@@ -882,6 +882,7 @@ main {
 .toast-actions { display: flex; gap: var(--sp-2); }
 .toast-ask {
   background: none; border: 1px solid var(--accent); color: var(--accent); padding: var(--sp-1) var(--sp-2); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em;
 }
 .toast-ask:hover { background: var(--accent-soft); color: var(--accent); }
 .toast-ask:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

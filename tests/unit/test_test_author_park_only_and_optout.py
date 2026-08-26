@@ -35,16 +35,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from test_pipeline_mcp_server import (
-    _already_reaped_pid,
-    _FakeTestAuthorBackend,
-    _make_worktree_repo,
-)
 
 from app import backend
 from pipeline import server as p
 from pipeline import test_author as ptest_author
 from pipeline.git_ops import _commit_wip, _worktree_has_non_wip_commits
+from tests.unit._pipeline_mcp_server_test_helpers import (
+    _already_reaped_pid,
+    _FakeTestAuthorBackend,
+    _make_worktree_repo,
+)
 
 
 @pytest.fixture(autouse=True)

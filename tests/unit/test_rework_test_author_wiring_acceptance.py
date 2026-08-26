@@ -21,15 +21,15 @@ later.
 import json
 
 import pytest
-from test_pipeline_mcp_server import (
-    _FakeProc,
-    _read_manifest,
-    _write_manifest,
-)
 
 from app import backend
 from pipeline import server as p
 from pipeline import ticketing as pt
+from tests.unit._pipeline_mcp_server_test_helpers import (
+    _FakeProc,
+    _read_manifest,
+    _write_manifest,
+)
 
 
 # ---------- Fixtures (mirror test_pipeline_mcp_server.py / test_tdd_split_

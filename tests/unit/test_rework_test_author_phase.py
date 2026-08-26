@@ -14,16 +14,16 @@ test_rework_test_author_wiring_acceptance.py.
 import subprocess
 
 import pytest
-from test_pipeline_mcp_server import (
+
+from app import backend
+from pipeline import planner as ppl
+from pipeline import server as p
+from tests.unit._pipeline_mcp_server_test_helpers import (
     _already_reaped_pid,
     _FakePlannerBackend,
     _FakeTestAuthorBackend,
     _make_worktree_repo,
 )
-
-from app import backend
-from pipeline import planner as ppl
-from pipeline import server as p
 
 
 # `agents_dir` is defined locally (mirroring test_pipeline_mcp_server.py /

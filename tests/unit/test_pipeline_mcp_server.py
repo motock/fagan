@@ -16092,6 +16092,117 @@ def test_dispatch_story_decompose_skips_for_claude_backend(
     assert not (worktree_root / "S1" / ".agent_plan.md").exists()
 
 
+def test_dispatch_story_claude_backend_gets_scratchpad_instruction(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The scratchpad-maintenance instruction is independent of the
+    tech-lead checklist crutch: a Claude dispatch (the default when
+    PIPELINE_BACKEND_DISPATCH is unset, and with PIPELINE_DECOMPOSE_SCRATCHPAD
+    also left at its "on" default) must still be told to keep
+    .agent_scratchpad.md up to date, even though it never gets the
+    checklist-from-your-tech-lead framing (that phase stays local-only)."""
+    _write_manifest(plan_dir, "clscratchon", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("planner must not run for a Claude dispatch")
+
+    monkeypatch.setattr(p, "_run_planner", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, **kw):
+        popen_calls.append({"cmd": cmd})
+        return _FakeProc(9101)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("clscratchon", "S1")
+
+    assert result["ok"] is True
+    prompt = popen_calls[0]["cmd"][2]
+    assert ".agent_scratchpad.md" in prompt
+    assert "Implementation checklist from your tech lead" not in prompt
+
+
+def test_dispatch_story_claude_backend_scratchpad_off_omits_instruction(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """H3-ablation parity for Claude: PIPELINE_DECOMPOSE_SCRATCHPAD=off must
+    suppress the scratchpad instruction for a Claude dispatch exactly as it
+    does for local-family dispatch."""
+    monkeypatch.setenv("PIPELINE_DECOMPOSE_SCRATCHPAD", "off")
+    _write_manifest(plan_dir, "clscratchoff", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    def _boom(*a, **k):
+        raise AssertionError("planner must not run for a Claude dispatch")
+
+    monkeypatch.setattr(p, "_run_planner", _boom)
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, **kw):
+        popen_calls.append({"cmd": cmd})
+        return _FakeProc(9102)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("clscratchoff", "S1")
+
+    assert result["ok"] is True
+    prompt = popen_calls[0]["cmd"][2]
+    assert ".agent_scratchpad.md" not in prompt
+
+
+def test_dispatch_story_local_backend_checklist_unaffected_by_claude_change(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Regression guard: the new Claude-only scratchpad branch must be
+    mutually exclusive with the existing `if checklist_is_fresh:` branch -
+    local-family dispatch keeps its checklist framing AND the
+    PROGRESS: <done>/<total> checklist-total format, unchanged."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "localcheckunaffected", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+    monkeypatch.setattr(p, "_run_test_author_phase", lambda *a, **k: False)
+    monkeypatch.setattr(p, "_run_planner", lambda *a, **k: "1. Step one.")
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+
+    popen_calls = []
+
+    def _fake_popen(cmd, env, **kw):
+        popen_calls.append({"cmd": cmd, "env": env})
+        return _FakeProc(9103)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(pt, "plane_request",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    result = p.dispatch_story("localcheckunaffected", "S1")
+
+    assert result["ok"] is True
+    task = popen_calls[0]["env"]["LOCAL_AGENT_TASK"]
+    assert ".agent_scratchpad.md" in task
+    assert "Implementation checklist from your tech lead" in task
+    assert "PROGRESS: <done>/<total>" in task
+
+
 def test_dispatch_story_decompose_fails_open_when_planner_returns_none(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):

@@ -15,6 +15,7 @@ import pytest
 from app import backend as b
 from app import backend_claude as bc
 from app import backend_ollama as bo
+from app import ollama_prompt_utils as bo_tuning
 
 
 # _chat was widened to return the full /api/chat envelope (not just the
@@ -2723,7 +2724,7 @@ def test_chat_uses_tuned_table_values_when_present_and_no_env_override(monkeypat
     monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING",
+        bo_tuning, "_LOCAL_MODEL_TUNING",
         {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
     )
 
@@ -2753,7 +2754,7 @@ def test_dispatch_uses_tuned_table_values_when_present_and_no_env_override(
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING",
+        bo_tuning, "_LOCAL_MODEL_TUNING",
         {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
     )
 
@@ -2779,7 +2780,7 @@ def test_chat_env_override_wins_over_tuned_table(monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_NUM_CTX", "32768")
     monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "1.0")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING",
+        bo_tuning, "_LOCAL_MODEL_TUNING",
         {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
     )
 
@@ -2805,7 +2806,7 @@ def test_dispatch_env_override_wins_over_tuned_table(tmp_path, monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_TEMPERATURE", "1.0")
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING",
+        bo_tuning, "_LOCAL_MODEL_TUNING",
         {"fake-model:1b": {"temperature": 0.5, "num_ctx": 8192}},
     )
 
@@ -2903,14 +2904,14 @@ def test_tuned_think_returns_none_when_absent_from_env_and_table(monkeypatch):
     model/deployment with no opinion should get an unchanged request body,
     so absent-everywhere resolves to None, not some default level."""
     monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
-    monkeypatch.setattr(bo, "_LOCAL_MODEL_TUNING", {})
+    monkeypatch.setattr(bo_tuning, "_LOCAL_MODEL_TUNING", {})
     assert bo._tuned_think("fake-model:1b") is None
 
 
 def test_tuned_think_reads_bool_env_override(monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_THINK", "false")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
     )
     assert bo._tuned_think("fake-model:1b") is False
 
@@ -2918,7 +2919,7 @@ def test_tuned_think_reads_bool_env_override(monkeypatch):
 def test_tuned_think_reads_level_env_override(monkeypatch):
     monkeypatch.setenv("PIPELINE_LOCAL_THINK", "high")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
     )
     assert bo._tuned_think("fake-model:1b") == "high"
 
@@ -2929,7 +2930,7 @@ def test_tuned_think_invalid_env_value_falls_through_to_table(monkeypatch):
     think - fall through to the table instead of coercing to a bogus value."""
     monkeypatch.setenv("PIPELINE_LOCAL_THINK", "yes")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
     )
     assert bo._tuned_think("fake-model:1b") == "medium"
 
@@ -2937,7 +2938,7 @@ def test_tuned_think_invalid_env_value_falls_through_to_table(monkeypatch):
 def test_tuned_think_reads_table_entry_when_no_env(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "low"}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "low"}},
     )
     assert bo._tuned_think("fake-model:1b") == "low"
 
@@ -2945,7 +2946,7 @@ def test_tuned_think_reads_table_entry_when_no_env(monkeypatch):
 def test_chat_passes_tuned_think_to_provider(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
     )
     captured = {}
     monkeypatch.setattr(
@@ -2960,7 +2961,7 @@ def test_chat_passes_tuned_think_to_provider(monkeypatch):
 
 def test_chat_omits_think_when_not_tuned(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
-    monkeypatch.setattr(bo, "_LOCAL_MODEL_TUNING", {})
+    monkeypatch.setattr(bo_tuning, "_LOCAL_MODEL_TUNING", {})
     captured = {}
     monkeypatch.setattr(
         b.httpx, "post",
@@ -2980,7 +2981,7 @@ def test_dispatch_uses_tuned_table_think_level(tmp_path, monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_THINK", raising=False)
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
     )
     captured = {}
     monkeypatch.setattr(
@@ -3002,7 +3003,7 @@ def test_dispatch_env_level_override_wins_over_tuned_table_think(
     monkeypatch.setenv("PIPELINE_LOCAL_THINK", "high")
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"think": "medium"}},
     )
     captured = {}
     monkeypatch.setattr(
@@ -3024,7 +3025,7 @@ def test_chat_partial_table_entry_only_overrides_the_key_present(monkeypatch):
     monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"temperature": 0.5}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"temperature": 0.5}},
     )
 
     captured = {}
@@ -3052,7 +3053,7 @@ def test_dispatch_partial_table_entry_only_overrides_the_key_present(
     monkeypatch.delenv("PIPELINE_LOCAL_TEMPERATURE", raising=False)
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "fake-model:1b")
     monkeypatch.setattr(
-        bo, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"num_ctx": 8192}},
+        bo_tuning, "_LOCAL_MODEL_TUNING", {"fake-model:1b": {"num_ctx": 8192}},
     )
 
     captured = {}
@@ -3255,8 +3256,10 @@ def test_review_loop_preamble_mentions_diff_stat():
         "bash-output cap"
     )
     # Sanity: confirm _run_readonly_tool actually truncates bash output,
-    # so the preamble's advice is grounded in real behavior.
-    assert "(pr.stdout + pr.stderr)[:3000]" in module_src
+    # so the preamble's advice is grounded in real behavior. _run_readonly_tool
+    # itself lives in app/ollama_prompt_utils.py, not this module.
+    tool_src = open(bo_tuning.__file__).read()  # noqa: SIM115 (mirrors module_src above)
+    assert "(pr.stdout + pr.stderr)[:3000]" in tool_src
 
 
 def test_claude_reviewer_prompt_mentions_diff_stat():

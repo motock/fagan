@@ -351,8 +351,12 @@ if (typeof module !== "undefined" && module.exports) {
     _renderConfigIgnored,
     _saveRoleConfig,
     _wireBackendSelector,
+    loadRegistry,
   };
 }
+
+export { loadRegistry };
+
 
 // ---------------------------------------------------------------------------
 // Configuration view (W3b-B4b)
@@ -399,9 +403,10 @@ function renderConfigError(section, message) {
 
 async function loadRegistry() {
   try {
-    const res = await fetch("/model_registry.json");
+    const res = await fetch("/api/config/providers");
     if (!res.ok) return {};
-    return await res.json();
+    const data = await res.json();
+    return { providers: data.providers || {} };
   } catch {
     return {};
   }

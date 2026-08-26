@@ -13,6 +13,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+from scripts import local_agent_guards as lag
+from scripts import local_agent_repair as lar
+
 os.environ.setdefault("LOCAL_AGENT_MODEL", "test-model")
 _spec = importlib.util.spec_from_file_location(
     "local_agent", str(Path(__file__).parent.parent.parent / "scripts" / "local_agent.py")
@@ -301,7 +304,9 @@ def test_create_file_auto_repairs_decorator_dedent_and_writes(tmp_path, monkeypa
     REPAIRED content to disk (not reject it into the death-loop) and tell the
     model what it did - no silent mutation."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     broken = (
         "class C:\n"
         "    @property\n"
@@ -322,7 +327,9 @@ def test_create_file_does_not_auto_repair_non_indentation_error(tmp_path, monkey
     uses compile() not ast.parse()) must still be rejected, not silently
     rewritten."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad = "def foo():\n    x = 1\nfor i in range(3):\n    return i\n"
     result = la.run_tool("create_file", {"path": "mod.py", "content": bad})
     assert result.startswith("ERROR")
@@ -346,7 +353,9 @@ def test_str_replace_auto_repairs_indentation(tmp_path, monkeypatch):
     """The same auto-repair applies to str_replace edits that produce an
     indentation error - the repaired result is written, not rejected."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     (tmp_path / "mod.py").write_text("class C:\n    def m(self):\n        return 1\n")
     result = la.run_tool("str_replace", {
         "path": "mod.py",
@@ -852,7 +861,9 @@ def test_syntax_error_message_includes_lineno_and_offending_line(tmp_path, monke
     offending line plus up to 2 lines of context either side, verbatim from
     the content the model actually submitted — not a repaired version."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = (
         "def foo():\n"
         "    return 1\n"
@@ -879,7 +890,9 @@ def test_second_consecutive_syntax_rejection_same_path_carries_escalation(tmp_pa
     must escalate from the second consecutive rejection onward, telling the
     model to regenerate from scratch rather than retry the same content."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = "+def foo():\n+    return 1\n"
     first = la.run_tool("create_file", {"path": "escalate.py", "content": bad_content})
     assert "do not resubmit" not in first.lower()
@@ -897,7 +910,9 @@ def test_second_consecutive_str_replace_rejection_on_large_file_suggests_anchore
     the untouched majority of it. It should get a smaller-anchored-edit
     nudge instead."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     lines = [f"x{i} = {i}\n" for i in range(600)]
     lines.append("def marker():\n    return 1\n")
     (tmp_path / "big.py").write_text("".join(lines))
@@ -915,7 +930,9 @@ def test_rejection_for_different_path_does_not_inherit_escalation(tmp_path, monk
     """SYNTAX-NUDGE boundary case: a rejection for a DIFFERENT path in
     between must not carry the escalation — the counter is per-path."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = "+def foo():\n+    return 1\n"
     la.run_tool("create_file", {"path": "a.py", "content": bad_content})
     result_b = la.run_tool("create_file", {"path": "b.py", "content": bad_content})
@@ -929,7 +946,9 @@ def test_successful_write_resets_syntax_rejection_counter(tmp_path, monkeypatch)
     consecutive-rejection counter, so a later rejection for that same path
     starts fresh (no escalation) instead of carrying over stale state."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = "+def foo():\n+    return 1\n"
     la.run_tool("create_file", {"path": "reset.py", "content": bad_content})
     good = la.run_tool("create_file", {"path": "reset.py", "content": "def foo():\n    return 1\n"})
@@ -949,7 +968,9 @@ def test_syntax_rejection_never_writes_file_even_with_escalation(tmp_path, monke
     not the submitted content, not a repaired version — even once escalated.
     Guards against silently reintroducing auto-repair."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = "+def foo():\n+    return 1\n"
     la.run_tool("create_file", {"path": "guard.py", "content": bad_content})
     result = la.run_tool("create_file", {"path": "guard.py", "content": bad_content})
@@ -962,7 +983,9 @@ def test_valid_python_writes_never_trigger_escalation_text(tmp_path, monkeypatch
     """SYNTAX-NUDGE: valid .py content must remain entirely unaffected by the
     new rejection-message/escalation machinery."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(la, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(lar, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     result1 = la.run_tool("create_file", {"path": "ok.py", "content": "x = 1\n"})
     assert result1 == "created ok.py"
     result2 = la.run_tool("str_replace", {"path": "ok.py", "old_str": "x = 1", "new_str": "x = 2"})
@@ -4056,7 +4079,7 @@ def test_churn_guard_nudges_then_parks_on_same_path_edits_with_no_test_run(
     guard ever fired (each success resets every other guard's state). This
     is a new guard - not present before this fix at all."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "CHURN_SAME_PATH_MAX_EDITS", 3)
+    monkeypatch.setattr(lag, "CHURN_SAME_PATH_MAX_EDITS", 3)
     (tmp_path / "pow.rs").write_text("// stub\nfn x() {}\n")
     responses = [
         ("str_replace", {"path": "pow.rs", "old_str": "// stub", "new_str": "// stub 1"}),
@@ -4082,7 +4105,7 @@ def test_churn_guard_does_not_fire_when_pytest_runs_between_edits(tmp_path, monk
     """A model that DOES verify its work between edits (runs pytest) must
     not be treated as blind churn — the streak resets on a pytest call."""
     monkeypatch.setattr(la, "CWD", tmp_path)
-    monkeypatch.setattr(la, "CHURN_SAME_PATH_MAX_EDITS", 3)
+    monkeypatch.setattr(lag, "CHURN_SAME_PATH_MAX_EDITS", 3)
     (tmp_path / "pow.rs").write_text("// stub\nfn x() {}\n")
     responses = [
         ("str_replace", {"path": "pow.rs", "old_str": "// stub", "new_str": "// stub 1"}),

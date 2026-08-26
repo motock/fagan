@@ -16,10 +16,9 @@ function initNotifications({ selectComms }) {
 const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
 
 function notificationKey(rec) {
-  return rec.dedup_key || (rec.ts + "-" + rec.message);
+  return rec.dedup_key || (rec.ts + '-' + rec.message);
 }
 
-// Pure function to pick new notifications
 function pickNewNotifications(plans, seenMap) {
   const newNotifs = [];
   for (const plan of plans) {

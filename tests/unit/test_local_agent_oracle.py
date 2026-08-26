@@ -18,6 +18,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+from scripts import local_agent_oracle_repair as laor
+
 
 @pytest.fixture(autouse=True)
 def _isolate_environ():
@@ -164,7 +166,9 @@ def test_oracle_try_repair_indentation_fixes_multiple_dedented_decorators():
 def test_oracle_create_file_auto_repairs_decorator_dedent_and_writes(tmp_path, monkeypatch):
     """Mirrors test_local_agent.test_create_file_auto_repairs_decorator_dedent_and_writes."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     broken = (
         "class C:\n"
         "    @property\n"
@@ -183,7 +187,9 @@ def test_oracle_create_file_does_not_auto_repair_non_indentation_error(tmp_path,
     """Mirrors test_local_agent.test_create_file_does_not_auto_repair_non_indentation_error
     - auto-repair is scoped to IndentationError only."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad = "def foo():\n    x = 1\nfor i in range(3):\n    return i\n"
     result = lao.run_tool("create_file", {"path": "mod.py", "content": bad})
     assert result.startswith("ERROR")
@@ -202,7 +208,9 @@ def test_oracle_try_repair_indentation_returns_none_for_valid_content():
 def test_oracle_str_replace_auto_repairs_indentation(tmp_path, monkeypatch):
     """Mirrors test_local_agent.test_str_replace_auto_repairs_indentation."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     (tmp_path / "mod.py").write_text("class C:\n    def m(self):\n        return 1\n")
     result = lao.run_tool("str_replace", {
         "path": "mod.py",
@@ -592,7 +600,9 @@ def test_oracle_syntax_error_message_includes_lineno_and_offending_line(tmp_path
     name the exact line and quote the offending line plus up to 2 lines of
     context either side, verbatim from the content the model submitted."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = (
         "def foo():\n"
         "    return 1\n"
@@ -619,7 +629,9 @@ def test_oracle_second_consecutive_syntax_rejection_same_path_carries_escalation
     same broken content for the same path must escalate from the second
     consecutive rejection onward."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = "+def foo():\n+    return 1\n"
     first = lao.run_tool("create_file", {"path": "escalate.py", "content": bad_content})
     assert "do not resubmit" not in first.lower()
@@ -636,7 +648,9 @@ def test_oracle_second_consecutive_str_replace_rejection_on_large_file_suggests_
     must NOT get the 'regenerate the entire file' nudge and should get a
     smaller-anchored-edit nudge instead."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     lines = [f"x{i} = {i}\n" for i in range(600)]
     lines.append("def marker():\n    return 1\n")
     (tmp_path / "big.py").write_text("".join(lines))
@@ -654,7 +668,9 @@ def test_oracle_rejection_for_different_path_does_not_inherit_escalation(tmp_pat
     """SYNTAX-NUDGE boundary case: a rejection for a DIFFERENT path in
     between must not carry the escalation — the counter is per-path."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = "+def foo():\n+    return 1\n"
     lao.run_tool("create_file", {"path": "a.py", "content": bad_content})
     result_b = lao.run_tool("create_file", {"path": "b.py", "content": bad_content})
@@ -668,7 +684,9 @@ def test_oracle_successful_write_resets_syntax_rejection_counter(tmp_path, monke
     consecutive-rejection counter, so a later rejection for that same path
     starts fresh (no escalation) instead of carrying over stale state."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = "+def foo():\n+    return 1\n"
     lao.run_tool("create_file", {"path": "reset.py", "content": bad_content})
     good = lao.run_tool("create_file", {"path": "reset.py", "content": "def foo():\n    return 1\n"})
@@ -688,7 +706,9 @@ def test_oracle_syntax_rejection_never_writes_file_even_with_escalation(tmp_path
     not the submitted content, not a repaired version — even once escalated.
     Guards against silently reintroducing auto-repair."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     bad_content = "+def foo():\n+    return 1\n"
     lao.run_tool("create_file", {"path": "guard.py", "content": bad_content})
     result = lao.run_tool("create_file", {"path": "guard.py", "content": bad_content})
@@ -701,7 +721,9 @@ def test_oracle_valid_python_writes_never_trigger_escalation_text(tmp_path, monk
     """SYNTAX-NUDGE: valid .py content must remain entirely unaffected by the
     new rejection-message/escalation machinery."""
     monkeypatch.setattr(lao, "CWD", tmp_path)
-    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", {})
+    _fresh_syntax_reject_counts = {}
+    monkeypatch.setattr(lao, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
+    monkeypatch.setattr(laor, "_SYNTAX_REJECT_COUNTS", _fresh_syntax_reject_counts)
     result1 = lao.run_tool("create_file", {"path": "ok.py", "content": "x = 1\n"})
     assert result1 == "created ok.py"
     result2 = lao.run_tool("str_replace", {"path": "ok.py", "old_str": "x = 1", "new_str": "x = 2"})

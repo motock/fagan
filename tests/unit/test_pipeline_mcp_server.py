@@ -33,9 +33,9 @@ from pipeline import ci as pci
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import persona as pper
-from pipeline import planner as pplanner
 from pipeline import server as p
 from pipeline import story_status as pstory_status
+from pipeline import test_author as ptest_author
 from pipeline import ticketing as pt
 from pipeline import usage as pusage
 
@@ -15388,7 +15388,7 @@ def test_test_author_prompt_instructs_committing_the_test_file():
 
 def test_run_test_author_phase_skips_when_role_unconfigured(monkeypatch, tmp_path):
     monkeypatch.delenv("PIPELINE_BACKEND_TEST_AUTHOR", raising=False)
-    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(ptest_author, "_notify_user", lambda *a, **k: None)
 
     def _boom(*a, **k):
         raise AssertionError("dispatch must not be reached when unconfigured")
@@ -15416,7 +15416,7 @@ def test_run_test_author_phase_returns_true_on_successful_commit(monkeypatch, tm
     fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
-    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(ptest_author, "_notify_user", lambda *a, **k: None)
 
     result = p._run_test_author_phase(
         {"agent_instructions": "Build it."}, story_key="S1",
@@ -15439,7 +15439,7 @@ def test_run_test_author_phase_returns_false_when_no_new_commit(monkeypatch, tmp
     fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
-    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(ptest_author, "_notify_user", lambda *a, **k: None)
 
     result = p._run_test_author_phase(
         {"agent_instructions": "Build it."}, story_key="S1",
@@ -15454,7 +15454,7 @@ def test_run_test_author_phase_returns_false_when_dispatch_raises(monkeypatch, t
     monkeypatch.setenv("PIPELINE_BACKEND_TEST_AUTHOR", "mlx")
     fake = _FakeTestAuthorBackend(pid=0, raises=RuntimeError("endpoint unreachable"))
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
-    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(ptest_author, "_notify_user", lambda *a, **k: None)
 
     result = p._run_test_author_phase(
         {"agent_instructions": "Build it."}, story_key="S1",
@@ -15470,7 +15470,7 @@ def test_run_test_author_phase_returns_false_on_timeout(monkeypatch, tmp_path):
     fake = _FakeTestAuthorBackend(pid=_already_reaped_pid())
     monkeypatch.setattr(backend, "get_backend", lambda role, *, name=None: fake)
     monkeypatch.setattr(p, "_wait_for_agent_exit", lambda *a, **k: False)
-    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(ptest_author, "_notify_user", lambda *a, **k: None)
 
     def _boom(*a, **k):
         raise AssertionError("must not check for commits when the dispatch timed out")

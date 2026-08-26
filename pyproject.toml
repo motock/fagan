@@ -32,3 +32,11 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments"
 # ignored file-wide (the existing `# noqa: F401` re-export comments become
 # redundant, hence RUF100 too).
 "pipeline/server.py" = ["F401", "RUF100"]
+# test_always_on_planner.py was split into test_always_on_planner_*.py files
+# (line-count target) that import pytest fixtures (agents_dir, plan_dir,
+# worktree_root) from a shared tests/unit/_always_on_planner_helpers.py
+# module. Standard pytest fixture-sharing pattern: each fixture name is also
+# used as a same-named test-function parameter, which ruff's F811 flags as a
+# "redefinition" - a false positive, since pytest resolves the parameter to
+# the imported fixture, not a real name collision.
+"tests/unit/test_always_on_planner_*.py" = ["F811"]

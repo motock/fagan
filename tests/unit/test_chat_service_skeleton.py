@@ -193,8 +193,9 @@ class TestLazyResolution:
             seen["registry_arg_passed"] = registry is not None
             return _FakeResolution()
 
-        def fake_get_backend(provider, **kwargs):
-            seen["provider"] = provider
+        def fake_get_backend(role, *, name=None, **kwargs):
+            seen["backend_role"] = role
+            seen["provider"] = name
             return driver
 
         monkeypatch.setattr(
@@ -207,6 +208,7 @@ class TestLazyResolution:
         assert seen["role"] == "chat"
         assert seen["provider"] == "claude"
         assert seen["registry_arg_passed"] is True
+        assert seen["backend_role"] == "chat"
         assert result == {
             "reply": "resolved-reply",
             "tool_calls": [],
@@ -228,7 +230,7 @@ class TestLazyResolution:
             call_count["resolve"] += 1
             return _FakeResolution()
 
-        def fake_get_backend(provider, **kwargs):
+        def fake_get_backend(role, *, name=None, **kwargs):
             call_count["backend"] += 1
             return driver
 
@@ -244,6 +246,30 @@ class TestLazyResolution:
         assert call_count["backend"] == 1
         # Both turns used the same cached driver.
         assert [c["prompt"] for c in driver.calls] == ["first", "second"]
+
+    def test_resolves_non_claude_provider_by_name(self, monkeypatch) -> None:
+        driver = _FakeDriver(reply="r")
+        seen: dict = {}
+
+        class _FakeResolution:
+            provider = "ollama"
+            model = "gpt-oss-20b-high"
+
+        def fake_resolve_role(role, *, registry=None, **kwargs):
+            return _FakeResolution()
+
+        def fake_get_backend(role, *, name=None, **kwargs):
+            seen["role"] = role
+            seen["name"] = name
+            return driver
+
+        monkeypatch.setattr("app.role_registry.resolve_role", fake_resolve_role)
+        monkeypatch.setattr("app.backend.get_backend", fake_get_backend)
+
+        svc = ChatService()
+        svc.execute_turn("hello")
+        assert seen["role"] == "chat"
+        assert seen["name"] == "ollama"
 
 
 # --------------------------------------------------------------------------- #

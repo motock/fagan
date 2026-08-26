@@ -27,6 +27,10 @@ APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
 # out of static/app.js into this dedicated render module (server-app-file-
 # split plan); the static-source assertions below follow it here.
 PLAN_LIST_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-list.js")
+# selectComms/selectOverview/_applyActiveView/refresh and module.exports
+# were relocated out of static/app.js into static/app/main.js (server-app-
+# file-split plan); the static-source assertions below follow them here.
+MAIN_JS = os.path.join(REPO_ROOT, "static", "app", "main.js")
 
 _SHIM = r"""
         const noop = () => {};
@@ -73,13 +77,21 @@ def _app_js_source():
         return fh.read()
 
 
+def _main_js_source():
+    """Read static/app/main.js source for static-source assertions (the new
+    home for selectComms/selectOverview/_applyActiveView/refresh and
+    module.exports, relocated out of static/app.js)."""
+    with open(MAIN_JS, encoding="utf-8") as fh:
+        return fh.read()
+
+
 # === state.commsActive initialization (default true) ======================
 
 def test_state_comms_active_default_true():
     """The module-level state object must initialize commsActive to true so
     Comms is the default landing view on a fresh load with no plan in the
     URL hash."""
-    src = _app_js_source()
+    src = _main_js_source()
     assert "commsActive" in src, "state.commsActive must be added to the state object"
     # The default must be true (Comms is the landing view).
     val = _run_app_js("state.commsActive")
@@ -142,7 +154,7 @@ def test_select_plan_clears_comms():
     brief's fallback when selectPlan is async / not directly drivable), but
     we also assert the source wires selectPlan to clear commsActive so the
     real click path is covered."""
-    src = _app_js_source()
+    src = _main_js_source()
     # The selectPlan function body must set state.commsActive = false.
     assert "state.commsActive = false" in src, (
         "selectPlan must set state.commsActive = false"
@@ -273,7 +285,7 @@ def test_render_plan_list_overview_active_condition_updated():
 def test_refresh_uses_apply_active_view_helper():
     """refresh() must call _applyActiveView() near its top (the brief says
     via a small new helper, not scattered inline hidden-class toggling)."""
-    src = _app_js_source()
+    src = _main_js_source()
     start = src.index("async function refresh(")
     end = src.index("function startPolling(", start)
     body = src[start:end]
@@ -286,7 +298,7 @@ def test_apply_active_view_references_comms_view_and_plan_detail():
     """_applyActiveView() must toggle #comms-view and #plan-detail (the
     brief: if commsActive, show #comms-view / hide #plan-detail; otherwise
     hide #comms-view / show #plan-detail)."""
-    src = _app_js_source()
+    src = _main_js_source()
     assert "comms-view" in src, (
         "_applyActiveView must reference the #comms-view section"
     )
@@ -295,7 +307,7 @@ def test_apply_active_view_references_comms_view_and_plan_detail():
 
 def test_apply_active_view_helper_defined():
     """_applyActiveView must be defined as a function in the source."""
-    src = _app_js_source()
+    src = _main_js_source()
     assert "function _applyActiveView" in src, (
         "_applyActiveView must be defined as a function"
     )
@@ -303,7 +315,7 @@ def test_apply_active_view_helper_defined():
 
 def test_select_comms_function_defined():
     """selectComms must be defined as a function in the source."""
-    src = _app_js_source()
+    src = _main_js_source()
     assert "function selectComms" in src, (
         "selectComms must be defined as a function"
     )
@@ -313,7 +325,7 @@ def test_select_comms_function_defined():
 
 def test_module_exports_contains_select_comms():
     """module.exports must list selectComms."""
-    src = _app_js_source()
+    src = _main_js_source()
     start = src.index("module.exports = {")
     end = src.index("};", start) + 2
     block = src[start:end]
@@ -322,7 +334,7 @@ def test_module_exports_contains_select_comms():
 
 def test_module_exports_contains_select_overview():
     """module.exports must list selectOverview (added by this story)."""
-    src = _app_js_source()
+    src = _main_js_source()
     start = src.index("module.exports = {")
     end = src.index("};", start) + 2
     block = src[start:end]
@@ -331,7 +343,7 @@ def test_module_exports_contains_select_overview():
 
 def test_module_exports_contains_apply_active_view():
     """module.exports must list _applyActiveView."""
-    src = _app_js_source()
+    src = _main_js_source()
     start = src.index("module.exports = {")
     end = src.index("};", start) + 2
     block = src[start:end]

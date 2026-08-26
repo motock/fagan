@@ -36,11 +36,22 @@ APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
 # static/app.js into this dedicated render module (server-app-file-split
 # plan); the static-source assertions below follow them here.
 PLAN_DETAIL_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-detail.js")
+# module.exports itself was later relocated out of static/app.js into
+# static/app/main.js (server-app-file-split plan); the static-source
+# assertion below follows it here.
+MAIN_JS = os.path.join(REPO_ROOT, "static", "app", "main.js")
 
 
 def _app_js_source():
     """Read static/app.js source for static-source assertions."""
     with open(APP_JS, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _main_js_source():
+    """Read static/app/main.js source for static-source assertions (the new
+    home for module.exports, relocated out of static/app.js)."""
+    with open(MAIN_JS, encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -159,7 +170,7 @@ def _run_app_js(expr):
 def test_source_exports_both_functions():
     """Both functions must remain exported (the harness reaches them via
     module.exports). A rename or accidental drop would break every test below."""
-    src = _app_js_source()
+    src = _main_js_source()
     assert "capturePlanDetailState" in src
     assert "restorePlanDetailState" in src
     # They must still be listed in the module.exports block.

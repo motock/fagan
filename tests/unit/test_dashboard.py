@@ -1137,8 +1137,10 @@ def test_style_css_defines_light_theme_tokens(client):
 
 def test_app_js_persists_theme_under_documented_key(client):
     """The toggle contract: localStorage key 'pipeline-dashboard-theme',
-    try/catch-wrapped so a locked-down storage backend doesn't throw."""
-    js = client.get("/app.js").text
+    try/catch-wrapped so a locked-down storage backend doesn't throw.
+    (Theme toggle code was relocated out of static/app.js into
+    static/app/main.js as part of the server-app-file-split plan.)"""
+    js = client.get("/app/main.js").text
     assert '"pipeline-dashboard-theme"' in js or "pipeline-dashboard-theme" in js
     # localStorage access must be guarded (read AND write sides)
     assert "localStorage.getItem" in js

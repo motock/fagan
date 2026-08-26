@@ -32,6 +32,10 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# renderOverview/_diffOverviewPlanRows were relocated out of static/app.js
+# into this dedicated render module (server-app-file-split plan); the
+# static-source assertions below follow them here.
+OVERVIEW_JS = os.path.join(REPO_ROOT, "static", "app", "render", "overview.js")
 
 
 # A self-contained, richer DOM shim. Built once as a Python string and
@@ -226,7 +230,8 @@ def _plan(name, done=0, total=0, paused=False):
 # === Static-source assertions ===============================================
 
 def test_diff_overview_plan_rows_function_exists():
-    js = _app_js_source()
+    with open(OVERVIEW_JS, encoding="utf-8") as fh:
+        js = fh.read()
     assert "function _diffOverviewPlanRows(listEl, plans)" in js
 
 
@@ -243,8 +248,9 @@ def test_diff_overview_plan_rows_is_exported():
 def test_render_overview_no_longer_builds_planlisthtml_join_string():
     """renderOverview must no longer build a joined planListHtml string
     assigned via innerHTML for the plan-row list; it delegates to
-    _diffOverviewPlanRows instead."""
-    js = _app_js_source()
+    _diffOverviewPlanRows instead. (Now in static/app/render/overview.js.)"""
+    with open(OVERVIEW_JS, encoding="utf-8") as fh:
+        js = fh.read()
     assert "const planListHtml" not in js
     assert "_diffOverviewPlanRows(" in js
 

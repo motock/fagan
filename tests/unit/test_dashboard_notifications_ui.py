@@ -24,6 +24,11 @@ APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
 # static/app.js into this dedicated render module (server-app-file-split
 # plan); the static-source assertion below follows it here.
 PLAN_DETAIL_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-detail.js")
+# renderNotifications/NOTIF_SEVERITY_COLOR were themselves later relocated
+# out of static/app.js into this dedicated render module
+# (server-app-file-split plan); the static-source assertions below follow
+# them here.
+NOTIFICATIONS_JS = os.path.join(REPO_ROOT, "static", "app", "render", "notifications.js")
 
 
 def _run_app_js(expr):
@@ -71,6 +76,12 @@ def _render(records):
 def _app_js_source():
     """Read static/app.js source for static-source assertions."""
     with open(APP_JS, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _notifications_js_source():
+    """Read static/app/render/notifications.js source for static-source assertions."""
+    with open(NOTIFICATIONS_JS, encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -131,7 +142,7 @@ def test_missing_severity_falls_back():
 def test_severity_color_constant_exists_at_module_scope():
     """The lookup object NOTIF_SEVERITY_COLOR must be declared at module
     scope so it can be referenced by the implementation and inspected here."""
-    js = _app_js_source()
+    js = _notifications_js_source()
     assert "NOTIF_SEVERITY_COLOR" in js
     assert '"error": "--c-failed"' in js or "'error': '--c-failed'" in js
     assert '"warning": "--c-parked"' in js or "'warning': '--c-parked'" in js
@@ -289,7 +300,7 @@ def test_render_notifications_signature_takes_records_not_lines():
     records argument. Assert the source no longer documents the old shape
     and that the empty-state guard handles falsy input (not .length on a
     possibly-undefined value)."""
-    js = _app_js_source()
+    js = _notifications_js_source()
     # The guard must short-circuit on falsy records before touching .length,
     # otherwise renderNotifications(undefined) throws.
     assert "function renderNotifications(records)" in js

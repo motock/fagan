@@ -52,6 +52,11 @@ APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
 # (server-app-file-split plan); the static-source assertions below follow
 # them here. renderNotifications/_diffNotificationsPanel stayed in app.js.
 PLAN_DETAIL_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-detail.js")
+# renderNotifications/_diffNotificationsPanel were themselves later relocated
+# out of static/app.js into this dedicated render module
+# (server-app-file-split plan); the static-source assertions below follow
+# them here. The call site in refresh()'s poll path stayed in app.js.
+NOTIFICATIONS_JS = os.path.join(REPO_ROOT, "static", "app", "render", "notifications.js")
 
 
 # A self-contained, richer DOM shim. Built once as a Python string and
@@ -304,6 +309,12 @@ def _app_js_source():
         return fh.read()
 
 
+def _notifications_js_source():
+    """Read static/app/render/notifications.js source for static-source assertions."""
+    with open(NOTIFICATIONS_JS, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def _rec(dedup_key, message="msg", severity="info", ts="2024-01-01T00:00:00Z"):
     """Build a notification record dict shaped like plan.notification_records."""
     return {
@@ -318,9 +329,9 @@ def _rec(dedup_key, message="msg", severity="info", ts="2024-01-01T00:00:00Z"):
 
 def test_diff_notifications_panel_function_exists():
     """A new function `_diffNotificationsPanel(panelBodyEl, records)` must
-    exist in static/app.js. It is the incremental-append unit for the
-    notifications panel body."""
-    js = _app_js_source()
+    exist in static/app/render/notifications.js. It is the incremental-append
+    unit for the notifications panel body."""
+    js = _notifications_js_source()
     assert "_diffNotificationsPanel" in js
     assert "function _diffNotificationsPanel(" in js
 
@@ -328,7 +339,7 @@ def test_diff_notifications_panel_function_exists():
 def test_diff_notifications_panel_signature_two_params():
     """The function must be declared with the documented two-parameter
     signature (panel body element + records array)."""
-    js = _app_js_source()
+    js = _notifications_js_source()
     assert "function _diffNotificationsPanel(panelBodyEl, records)" in js
 
 
@@ -350,7 +361,7 @@ def test_render_notifications_row_carries_data_dedup_key_attribute():
     already-rendered keys off the DOM. The existing renderNotifications
     function (used for the FIRST render and the severity-filter re-render)
     must remain otherwise untouched."""
-    js = _app_js_source()
+    js = _notifications_js_source()
     assert "data-dedup-key" in js
 
 
@@ -359,7 +370,7 @@ def test_render_notifications_full_function_still_exists():
     (it is still used for the first render and the severity-filter-change
     re-render). This story adds a diff path, it does not remove the
     full-rebuild function."""
-    js = _app_js_source()
+    js = _notifications_js_source()
     assert "function renderNotifications(records)" in js
 
 
@@ -369,15 +380,19 @@ def test_diff_notifications_panel_wired_into_refresh_poll_path():
     detail), NOT only declared. The brief says this is a targeted addition
     to the poll path. Assert the call appears somewhere in the file after
     the function declaration (i.e. it is actually invoked, not just
-    defined)."""
+    defined). (_diffNotificationsPanel is declared in
+    static/app/render/notifications.js; the call site in refresh()'s poll
+    path stayed in static/app.js, which imports the function.)"""
+    notifications_js = _notifications_js_source()
+    assert "function _diffNotificationsPanel(" in notifications_js
     js = _app_js_source()
-    decl = js.index("function _diffNotificationsPanel(")
-    # Find an invocation (a call site) after the declaration. The
-    # declaration line itself contains "_diffNotificationsPanel(" so skip
-    # past the signature line.
-    after = js[decl + 1:]
+    import_stmt = js.index("_diffNotificationsPanel")
+    # Find an invocation (a call site) after the import. The import
+    # statement itself contains "_diffNotificationsPanel" (no call parens)
+    # so skip past it.
+    after = js[import_stmt + 1:]
     assert "_diffNotificationsPanel(" in after, (
-        "_diffNotificationsPanel must be called somewhere (not just declared)"
+        "_diffNotificationsPanel must be called somewhere (not just imported)"
     )
 
 
@@ -865,9 +880,9 @@ def test_render_plan_detail_unchanged_beyond_targeted_addition():
     anchored edits. Assert renderPlanDetail and renderNotifications still
     exist with their original signatures (no rename, no signature change).
     (renderPlanDetail is now in static/app/render/plan-detail.js;
-    renderNotifications stayed in static/app.js.)"""
+    renderNotifications is now in static/app/render/notifications.js.)"""
     with open(PLAN_DETAIL_JS, encoding="utf-8") as fh:
         plan_detail_js = fh.read()
     assert "function renderPlanDetail(plan)" in plan_detail_js
-    js = _app_js_source()
+    js = _notifications_js_source()
     assert "function renderNotifications(records)" in js

@@ -38,11 +38,21 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# notifSeverityFilter was relocated out of static/app.js into this dedicated
+# render module (server-app-file-split plan); the static-source assertion
+# below follows it here.
+NOTIFICATIONS_JS = os.path.join(REPO_ROOT, "static", "app", "render", "notifications.js")
 
 
 def _app_js_source():
     """Read static/app.js source for static-source assertions."""
     with open(APP_JS, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _notifications_js_source():
+    """Read static/app/render/notifications.js source for static-source assertions."""
+    with open(NOTIFICATIONS_JS, encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -428,7 +438,7 @@ def test_existing_exports_still_present():
 # === module-scope notifSeverityFilter ==========================================
 
 def test_notif_severity_filter_declared_at_module_scope():
-    js = _app_js_source()
+    js = _notifications_js_source()
     assert 'let notifSeverityFilter = "all";' in js
 
 

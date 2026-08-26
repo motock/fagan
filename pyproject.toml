@@ -40,3 +40,8 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments"
 # "redefinition" - a false positive, since pytest resolves the parameter to
 # the imported fixture, not a real name collision.
 "tests/unit/test_always_on_planner_*.py" = ["F811"]
+# Same fixture-sharing pattern as above: test_dashboard.py was split into
+# test_dashboard_*.py files that import the client/plan_dir pytest fixtures
+# from tests/unit/_dashboard_helpers.py and use them as test-function
+# parameters.
+"tests/unit/test_dashboard_*.py" = ["F811"]

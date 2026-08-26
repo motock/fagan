@@ -184,22 +184,29 @@ _REMOVED_DASHBOARD_TESTS = [
 
 
 def test_helper_pinning_tests_removed_from_dashboard_suite():
-    """The four helper-pinning tests must be deleted from test_dashboard.py.
+    """The four helper-pinning tests must be deleted from the dashboard suite.
 
-    Reads the test_dashboard.py source text (not importing it, so a missing
-    helper referenced by a leftover test does not blow up this guard at
-    collection time) and asserts none of the four `def test_...` lines remain.
+    test_dashboard.py (3,117 lines) was later split into test_dashboard_api.py,
+    test_dashboard_frontend.py, and test_dashboard_checklist_config.py to keep
+    each file under the project's line-count target - reads each split file's
+    source text (not importing them, so a missing helper referenced by a
+    leftover test does not blow up this guard at collection time) and asserts
+    none of the four `def test_...` lines remain in any of them.
     """
     from pathlib import Path
 
-    test_file = Path(__file__).with_name("test_dashboard.py")
-    src = test_file.read_text(encoding="utf-8")
+    dashboard_test_files = [
+        Path(__file__).with_name("test_dashboard_api.py"),
+        Path(__file__).with_name("test_dashboard_frontend.py"),
+        Path(__file__).with_name("test_dashboard_checklist_config.py"),
+    ]
+    src = "\n".join(f.read_text(encoding="utf-8") for f in dashboard_test_files)
     remaining = [
         name
         for name in _REMOVED_DASHBOARD_TESTS
         if re.search(r"^def " + re.escape(name) + r"\b", src, re.MULTILINE)
     ]
     assert remaining == [], (
-        "tests/unit/test_dashboard.py still defines helper-pinning tests that "
+        "the dashboard test suite still defines helper-pinning tests that "
         "should have been deleted: " + ", ".join(remaining)
     )

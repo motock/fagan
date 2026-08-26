@@ -80,6 +80,7 @@ function _wireBackendSelector() {
     }
   });
 }
+
 // plan-list.js/plan-detail.js/story-modal.js/notifications.js can't
 // statically import back from app.js (see their own comments on this)
 // without breaking under the test harness's cache-busted app.js URL, so this
@@ -99,8 +100,8 @@ initNotifications({ selectComms });
 let lastSeenNotificationByPlan = new Map();
 let hasSeededNotifications = false;
 
-// Flash the header refresh indicator. Called once per successful refresh so
-// the user sees liveness without staring at the clock. The .flashing class
+// Flash the header refresh indicator. Called once per successful refresh
+// so the user sees liveness without staring at the clock. The .flashing class
 // drives the dot's pulse animation. We toggle it off after the animation so the element returns to its idle (invisible) state.
 function flashRefreshIndicator() {
   const el = document.getElementById("refresh-indicator");
@@ -258,4 +259,68 @@ async function refresh() {
     // No plan selected -> render the fleet Overview into #plan-detail.
     renderOverview({ plans }, health);
   }
+
+  document.getElementById("last-updated").textContent =
+    `updated ${new Date().toLocaleTimeString()}`;
+
+  // Visible liveness: a brief indicator flash on each successful refresh,
+  if (state.pollHandle) flashRefreshIndicator();
 }
+
+function startPolling() {
+  if (state.pollHandle) clearInterval(state.pollHandle);
+  state.pollHandle = setInterval(refresh, 4000);
+}
+
+function stopPolling() {
+  if (state.pollHandle) clearInterval(state.pollHandle);
+}
+
+export { state, defaultFilters, loadFilters, saveFilters, STATUS_COLUMNS, BACKEND_VALUES, ESCALATED_VALUES, FILTERS_KEY } from "./state.js";
+
+export { hashStateFrom, encodeHashState, parseHash, updateHash, clearHash, applyHashToState } from "./routing.js";
+
+export {
+  STALE_IN_PROGRESS_MINUTES, _diffBoardCards, ageLabelFor, applyFilters, chip,
+  escapeHtml, isStaleInProgress, relativeAgeLabel, renderBoard, renderFilterBar,
+} from "./render/board.js";
+
+export {
+  _applyActiveView,
+  appendCommsMessage,
+  flashRefreshIndicator,
+  refresh,
+  renderToolTraceHtml,
+  selectComms, selectOverview, selectPlan,
+  sendCommsMessage, startPolling, stopPolling,
+  syncPollingWithVisibility,
+};
+
+export {
+  NOTIF_SEVERITY_COLOR, _diffNotificationsPanel, filterNotifications,
+  notifSeverityFilter, setNotifSeverityFilter, pickNewNotifications,
+  pushToast, renderNotifications,
+} from "./render/notifications.js";
+
+export { renderDecisions } from "./render/decisions.js";
+
+export {
+  _diffOverviewPlanRows, renderOverview,
+} from "./render/overview.js";
+
+export {
+  renderPlanList, _renderPlanListFull, _buildPlanRow, togglePlanArchived,
+  planListRowsByName,
+} from "./render/plan-list.js";
+
+export {
+  renderPlanDetail, capturePlanDetailState, restorePlanDetailState,
+  renderChecklist, renderJournal, renderJournalEntry, handleCopyClick,
+} from "./render/plan-detail.js";
+
+export {
+  filterStoryNotifications, renderStoryModalNotifications,
+  showStoryModal, _renderStoryModalBody,
+} from "./render/story-modal.js";
+
+export { renderUsage } from "./usage.js";

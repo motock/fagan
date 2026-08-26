@@ -42,14 +42,14 @@ from test_pipeline_mcp_server import (
 )
 
 from app import backend
-from pipeline import planner as pplanner
 from pipeline import server as p
+from pipeline import test_author as ptest_author
 from pipeline.git_ops import _commit_wip, _worktree_has_non_wip_commits
 
 
 @pytest.fixture(autouse=True)
 def _quiet_notify(monkeypatch):
-    monkeypatch.setattr(pplanner, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(ptest_author, "_notify_user", lambda *a, **k: None)
 
 
 # ======================= _worktree_has_non_wip_commits =======================
@@ -185,7 +185,7 @@ def test_phase_opts_out_via_no_new_tests_sentinel(monkeypatch, tmp_path):
             "_resolve_test_author_backend must not be called for a "
             "[no-new-tests] story")
 
-    monkeypatch.setattr(pplanner, "_resolve_test_author_backend", _boom_resolve)
+    monkeypatch.setattr(ptest_author, "_resolve_test_author_backend", _boom_resolve)
 
     result = p._run_test_author_phase(
         {"agent_instructions": "Move decompose_plan body onto PipelineService; "

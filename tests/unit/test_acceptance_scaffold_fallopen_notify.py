@@ -7,7 +7,7 @@ stories lost their TDD-split crutch this way with no operator-visible signal.
 """
 import inspect
 
-from pipeline import planner
+from pipeline import planner, test_author
 
 
 def test_the_phase_takes_a_plan_name():
@@ -19,9 +19,13 @@ def test_the_phase_takes_a_plan_name():
 
 def test_dispatch_start_failure_notifies(monkeypatch):
     seen = []
-    monkeypatch.setattr(planner, "_notify_user", lambda plan, msg: seen.append((plan, msg)))
+    # _run_test_author_phase's body lives in pipeline.test_author and resolves
+    # _notify_user/_resolve_test_author_backend as bare names against that
+    # module's own globals - patch test_author directly, not its planner
+    # re-export, so the patch actually lands on the real call site.
+    monkeypatch.setattr(test_author, "_notify_user", lambda plan, msg: seen.append((plan, msg)))
     monkeypatch.setattr(
-        planner, "_resolve_test_author_backend", lambda *a, **k: ("claude", "sonnet")
+        test_author, "_resolve_test_author_backend", lambda *a, **k: ("claude", "sonnet")
     )
 
     class Boom:
@@ -45,8 +49,8 @@ def test_dispatch_start_failure_notifies(monkeypatch):
 
 def test_unconfigured_role_notifies(monkeypatch):
     seen = []
-    monkeypatch.setattr(planner, "_notify_user", lambda plan, msg: seen.append((plan, msg)))
-    monkeypatch.setattr(planner, "_resolve_test_author_backend", lambda *a, **k: (None, None))
+    monkeypatch.setattr(test_author, "_notify_user", lambda plan, msg: seen.append((plan, msg)))
+    monkeypatch.setattr(test_author, "_resolve_test_author_backend", lambda *a, **k: (None, None))
 
     result = planner._run_test_author_phase(
         {"agent_instructions": "x"},

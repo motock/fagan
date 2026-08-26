@@ -193,6 +193,47 @@ def test_plan_role_config_route_registered_as_post():
 
 
 # =========================================================================== #
+# GET /api/config/providers
+# =========================================================================== #
+def test_config_providers_returns_stubbed_registry_providers_exactly(client, monkeypatch):
+    stub_registry = {
+        "providers": {
+            "claude": {
+                "models": {
+                    "opus": {"tag": "opus"},
+                    "sonnet": {"tag": "sonnet"},
+                }
+            },
+            "ollama": {
+                "models": {
+                    "glm": {"tag": "glm-5.2:cloud"},
+                    "devstral": {"tag": "devstral:24b"},
+                }
+            },
+        },
+        "roles": {"review": {"provider": "ollama", "model": "glm"}},
+    }
+    monkeypatch.setattr(d.role_registry, "load_registry", lambda *a, **k: stub_registry)
+
+    res = client.get("/api/config/providers")
+
+    assert res.status_code == 200
+    assert res.json() == {"providers": stub_registry["providers"]}
+
+
+def test_config_providers_returns_empty_catalog_on_registry_error(client, monkeypatch):
+    def _raise(*a, **k):
+        raise role_registry.RoleRegistryError("boom")
+
+    monkeypatch.setattr(d.role_registry, "load_registry", _raise)
+
+    res = client.get("/api/config/providers")
+
+    assert res.status_code == 200
+    assert res.json() == {"providers": {}}
+
+
+# =========================================================================== #
 # Body model classes exist on the dashboard module
 # =========================================================================== #
 def test_role_default_body_model_exists_with_required_fields():

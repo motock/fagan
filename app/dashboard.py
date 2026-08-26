@@ -778,6 +778,22 @@ def effective_config(plan: str | None = None) -> dict[str, Any]:
     }
 
 
+@app.get("/api/config/providers")
+def config_providers() -> dict[str, Any]:
+    """Read-only provider/model catalog from model_registry.json, for the
+    Configuration view's provider/model dropdowns. load_registry() is
+    already tolerant of a missing/malformed registry (raises
+    RoleRegistryError), degrading to an empty catalog rather than
+    500ing, mirroring how /api/config's effective_config() already
+    handles the same exception a few lines above.
+    """
+    try:
+        registry = role_registry.load_registry()
+    except role_registry.RoleRegistryError:
+        registry = {}
+    return {"providers": registry.get("providers", {})}
+
+
 @app.post("/api/config/roles/{role}")
 def set_role_default_route(role: str, body: RoleDefaultBody) -> dict[str, Any]:
     """Delegates to _service.set_role_default(role, body.provider, body.model).

@@ -15,14 +15,19 @@ function initNotifications({ selectComms }) {
 
 const NOTIF_SEVERITY_COLOR = { "error": "--c-failed", "warning": "--c-parked", "info": "--c-unknown" };
 
+function notificationKey(rec) {
+  return rec.dedup_key || (rec.ts + "-" + rec.message);
+}
+
 // Pure function to pick new notifications
 function pickNewNotifications(plans, seenMap) {
   const newNotifs = [];
   for (const plan of plans) {
     const rec = plan.latest_notification;
-    if (!rec || rec.dedup_key == null) continue;
+    if (!rec) continue;
+    const key = notificationKey(rec);
     const seen = seenMap.get(plan.name);
-    if (seen !== rec.dedup_key) {
+    if (seen !== key) {
       newNotifs.push({ plan, record: rec });
     }
   }
@@ -151,4 +156,5 @@ export {
   decodeHtmlEntities,
   renderNotifications,
   _diffNotificationsPanel,
+  notificationKey,
 };

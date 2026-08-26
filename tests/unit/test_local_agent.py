@@ -1183,6 +1183,174 @@ def test_net_progress_guard_park_disabled_renudges_instead_of_terminating(
     )
 
 
+# ---------- scratchpad-maintenance nudge guard (2026-08-26) ----------
+# dispatch.py appends a ONE-TIME instruction to the initial prompt telling
+# local-family-dispatched agents to keep .agent_scratchpad.md updated with a
+# running PROGRESS: n/m line, but nothing in the step loop ever reinforces
+# it again. A weak model drops that single early instruction over a long
+# transcript even while still making real edits elsewhere, so
+# NET_PROGRESS_MAX_STEPS's own counter (which only tracks "any successful
+# mutation") never fires. This guard tracks touches to the scratchpad file
+# specifically, and — unlike every other guard here — must NEVER park or
+# return early: it only injects a reminder and lets the run continue.
+
+def test_scratchpad_nudge_constants_have_expected_defaults():
+    """SCRATCHPAD_NUDGE_STEPS defaults to 15 (env LOCAL_AGENT_SCRATCHPAD_NUDGE_STEPS)
+    and SCRATCHPAD_ON defaults to True unless PIPELINE_DECOMPOSE_SCRATCHPAD is
+    explicitly set to "off"."""
+    assert la.SCRATCHPAD_NUDGE_STEPS == 15
+    assert la.SCRATCHPAD_ON is True
+
+
+def test_scratchpad_nudge_fires_after_threshold_steps_with_no_scratchpad_touch(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "SCRATCHPAD_NUDGE_STEPS", 3)
+    monkeypatch.setattr(la, "SCRATCHPAD_ON", True)
+    # Large so the other step-drift guards don't also fire and confuse the signal.
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 1000)
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    responses = [
+        ("create_file", {"path": f"other_{i}.py", "content": "# x"}) for i in range(5)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    out = capsys.readouterr().out
+
+    assert "[step 3] no scratchpad update in 3 steps; nudging" in out, f"output: {out!r}"
+
+    # calls[i] all alias the SAME underlying transcript list once main()
+    # returns (chat() is fed one continuously-mutated list, not a fresh one
+    # per call) so any calls[i] reflects the final transcript here.
+    messages = calls[-1]
+    nudge_indices = [
+        i for i, m in enumerate(messages)
+        if m.get("role") == "user"
+        and "You haven't updated .agent_scratchpad.md" in (m.get("content") or "")
+    ]
+    assert len(nudge_indices) == 1, (
+        f"expected exactly one scratchpad nudge (threshold=3, no scratchpad "
+        f"touch across 5 distinct-file steps), got {len(nudge_indices)}: {messages!r}"
+    )
+
+    create_file_indices = [
+        i for i, m in enumerate(messages)
+        if m.get("role") == "assistant"
+        and any(
+            tc.get("function", {}).get("name") == "create_file"
+            for tc in (m.get("tool_calls") or [])
+        )
+    ]
+    assert len(create_file_indices) >= 4, f"expected at least 4 create_file turns: {messages!r}"
+
+    # Boundary: must not fire on step 0 (last_scratchpad_step=0, step=0,
+    # 0-0 < SCRATCHPAD_NUDGE_STEPS) -- the nudge must sit after at least the
+    # first 3 create_file turns (steps 0,1,2), not before them.
+    assert nudge_indices[0] > create_file_indices[2], (
+        f"nudge fired before 3 scratchpad-free steps had elapsed "
+        f"(fired too early, e.g. at step 0): {messages!r}"
+    )
+
+
+def test_scratchpad_nudge_resets_when_scratchpad_is_touched(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "SCRATCHPAD_NUDGE_STEPS", 3)
+    monkeypatch.setattr(la, "SCRATCHPAD_ON", True)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 1000)
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    # Step 1 touches the scratchpad, resetting its counter's baseline to 1.
+    # Steps continue to step 3 -- past the ORIGINAL (baseline-0) threshold of
+    # 3 -- then the script ends via "done" before step 4, which is where the
+    # reset baseline's own next trip (4 - 1 >= 3) would legitimately fire
+    # again. This isolates "did the touch suppress the stale threshold" from
+    # "does the guard re-arm periodically" (a separate, expected behavior).
+    responses = [
+        ("create_file", {"path": "other_0.py", "content": "# x"}),
+        ("create_file", {"path": ".agent_scratchpad.md", "content": "PROGRESS: 1/3\n"}),
+        ("create_file", {"path": "other_2.py", "content": "# x"}),
+        ("done", {"summary": "finished before the next scheduled nudge"}),
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc == 0, f"expected a clean finish, got rc={rc}\noutput: {out!r}"
+    assert "no scratchpad update" not in out, (
+        f"the touch at step 1 must suppress the stale step-0-baseline nudge "
+        f"that would otherwise fire at step 3; output: {out!r}"
+    )
+    messages = calls[-1]
+    assert not any(
+        m.get("role") == "user"
+        and "You haven't updated .agent_scratchpad.md" in (m.get("content") or "")
+        for m in messages
+    ), f"no nudge message should be present: {messages!r}"
+
+
+def test_scratchpad_nudge_suppressed_when_scratchpad_off(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "SCRATCHPAD_NUDGE_STEPS", 3)
+    monkeypatch.setattr(la, "SCRATCHPAD_ON", False)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 1000)
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    responses = [
+        ("create_file", {"path": f"other_{i}.py", "content": "# x"}) for i in range(6)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    la.main()
+    out = capsys.readouterr().out
+
+    assert "no scratchpad update" not in out, f"output: {out!r}"
+    messages = calls[-1]
+    assert not any(
+        m.get("role") == "user"
+        and "You haven't updated .agent_scratchpad.md" in (m.get("content") or "")
+        for m in messages
+    ), f"SCRATCHPAD_ON=False must suppress the nudge entirely: {messages!r}"
+
+
+def test_scratchpad_nudge_never_parks(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.setattr(la, "SCRATCHPAD_NUDGE_STEPS", 3)
+    monkeypatch.setattr(la, "SCRATCHPAD_ON", True)
+    monkeypatch.setattr(la, "NET_PROGRESS_MAX_STEPS", 1000)
+    monkeypatch.setattr(la, "READ_HEAVY_WINDOW", 1000)
+    # 8 distinct-file steps with threshold 3 crosses the guard's trip point
+    # twice (steps 3 and 6) -- it must re-fire each time (mirroring the
+    # net-progress guard's own re-nudge shape) without ever parking.
+    responses = [
+        ("create_file", {"path": f"other_{i}.py", "content": "# x"}) for i in range(8)
+    ]
+    fake, calls = _sequence_chat(responses)
+    monkeypatch.setattr(la, "chat", fake)
+
+    rc = la.main()
+    out = capsys.readouterr().out
+
+    assert rc != 3, (
+        f"the scratchpad nudge guard alone must never park/terminate the "
+        f"run; got rc={rc}\noutput: {out!r}"
+    )
+    assert rc == 0, f"expected the run to finish cleanly, got rc={rc}\noutput: {out!r}"
+    messages = calls[-1]
+    nudge_count = sum(
+        1 for m in messages
+        if m.get("role") == "user"
+        and "You haven't updated .agent_scratchpad.md" in (m.get("content") or "")
+    )
+    assert nudge_count >= 2, (
+        f"expected the guard to re-fire on both trips (steps 3 and 6), "
+        f"got {nudge_count}: {messages!r}"
+    )
+
+
 # ---------- view_file range-aware repetition signature (2026-07-22) ----------
 # Reading several DIFFERENT regions of one large file (routine when orienting
 # in a multi-hundred-line function) must not share a signature with

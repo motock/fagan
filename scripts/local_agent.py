@@ -287,6 +287,15 @@ READ_HEAVY_DISTINCT_WINDOWS = int(os.environ.get("LOCAL_AGENT_READ_HEAVY_DISTINC
 # the pattern that guard CANNOT see: edits interleaved with unproductive
 # investigation, which resets that guard's window every time.
 NET_PROGRESS_MAX_STEPS = int(os.environ.get("LOCAL_AGENT_NET_PROGRESS_MAX_STEPS", "30"))
+# Scratchpad-maintenance nudge: SEPARATE from NET_PROGRESS_MAX_STEPS above,
+# which only tracks "any successful mutation" and stays silent while a model
+# keeps editing OTHER files but has stopped touching .agent_scratchpad.md.
+# Nudge-only: unlike the net-progress guard, this NEVER parks or returns
+# early -- it only injects a reminder message and lets the run continue.
+SCRATCHPAD_NUDGE_STEPS = int(os.environ.get("LOCAL_AGENT_SCRATCHPAD_NUDGE_STEPS", "15"))
+SCRATCHPAD_ON = (
+    os.environ.get("PIPELINE_DECOMPOSE_SCRATCHPAD", "on").strip().lower() != "off"
+)
 # Once a turn's measured prompt_eval_count reaches this fraction of NUM_CTX,
 # trim the transcript BEFORE the next turn instead of waiting for a request
 # to overflow and 500. Complements (does not replace) the reactive 5xx
@@ -1713,6 +1722,7 @@ def _main_impl() -> int:
     nudged_sr_fail: set[str] = set()
     sr_fail_since_nudge: dict[str, int] = {}
     last_progress_step = 0
+    last_scratchpad_step = 0
     start_time = time.monotonic()
     # Off-task-drift guard (Mode 31): a dispatched agent once abandoned its
     # assigned task and spent 20+ steps of real, coherent tool calls on a
@@ -1748,6 +1758,15 @@ def _main_impl() -> int:
                 last_progress_step = step
             else:
                 return 3
+        if SCRATCHPAD_ON and step - last_scratchpad_step >= SCRATCHPAD_NUDGE_STEPS:
+            print(f"[step {step}] no scratchpad update in "
+                  f"{step - last_scratchpad_step} steps; nudging", flush=True)
+            messages.append({"role": "user", "content": (
+                "You haven't updated .agent_scratchpad.md in a while. "
+                "Before your next tool call, str_replace it with a short "
+                "running summary of what you've done and what's next "
+                "(create_file first if it doesn't exist yet).")})
+            last_scratchpad_step = step
         try:
             m = chat(messages)
         except httpx.HTTPStatusError as e:
@@ -2006,6 +2025,8 @@ def _main_impl() -> int:
                     if fn not in ("str_replace", "replace_lines"):
                         seen[sig] = current
                     last_progress_step = step
+                    if str(args.get("path", "")) .endswith(".agent_scratchpad.md"):
+                        last_scratchpad_step = step
                     # A genuinely successful mutation invalidates the staleness
                     # that armed these guards too, not just `seen` — without
                     # this, a run that already made real progress since its

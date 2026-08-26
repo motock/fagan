@@ -25,7 +25,7 @@ import {
 import {
   initNotifications, NOTIF_SEVERITY_COLOR, pickNewNotifications, pushToast,
   setNotifSeverityFilter, renderNotifications, _diffNotificationsPanel,
-  filterNotifications,
+  filterNotifications, notificationKey,
 } from "./render/notifications.js";
 import { renderDecisions } from "./render/decisions.js";
 import { renderOverview, _diffOverviewPlanRows } from "./render/overview.js";
@@ -165,8 +165,8 @@ async function refresh() {
     // Seed seen map without pushing toasts
     for (const plan of plans) {
       const rec = plan.latest_notification;
-      if (rec && rec.dedup_key != null) {
-        lastSeenNotificationByPlan.set(plan.name, rec.dedup_key);
+      if (rec) {
+        lastSeenNotificationByPlan.set(plan.name, notificationKey(rec));
       }
     }
     hasSeededNotifications = true;
@@ -174,7 +174,7 @@ async function refresh() {
     const newNotifs = pickNewNotifications(plans, lastSeenNotificationByPlan);
     for (const { plan, record } of newNotifs) {
       pushToast({ severity: record.severity, planName: plan.name, storyKey: record.story_key, message: record.message });
-      lastSeenNotificationByPlan.set(plan.name, record.dedup_key);
+      lastSeenNotificationByPlan.set(plan.name, notificationKey(record));
     }
   }
 

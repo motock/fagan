@@ -40,10 +40,10 @@ function pushToast({ severity, planName, storyKey, message }) {
   const node = document.createElement("div");
   node.className = "toast";
   const stripe = NOTIF_SEVERITY_COLOR[severity] || NOTIF_SEVERITY_COLOR["info"];
-  node.style.setProperty("--stripe", stripe);
+  node.style.setProperty("--stripe", `var(${stripe})`);
   node.innerHTML = `
     <div class="toast-row">
-      <span class="toast-key">${escapeHtml(planName)}</span>
+      <span class="toast-key">${escapeHtml(storyKey || planName)}</span>
       <span class="toast-msg">${escapeHtml(message)}</span>
       <button class="toast-dismiss" aria-label="Dismiss">✕</button>
     </div>
@@ -55,7 +55,7 @@ function pushToast({ severity, planName, storyKey, message }) {
   if (severity === "error" || severity === "warning") {
     const ask = document.createElement("button");
     ask.className = "toast-ask";
-    ask.textContent = "Ask";
+    ask.textContent = "Ask Tower";
     ask.addEventListener("click", () => {
       _selectComms();
       const input = document.getElementById("comms-input");

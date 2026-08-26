@@ -666,7 +666,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{plan_path.read_text()}\n\n"
                 f"Work through these steps in order.{scratchpad_instruction}"
             )
-        elif scratchpad_on:
+        elif scratchpad_on and plan_text:
             # Prompt-only parity for non-local-family backends (Claude): no
             # tech-lead checklist exists here (that phase stays local-only),
             # so there is no numbered-step total to report progress against

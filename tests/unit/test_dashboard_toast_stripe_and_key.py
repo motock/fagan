@@ -1,25 +1,40 @@
-"""Behavioral tests for the toast-stack wiring added to static/app.js:
-`pickNewNotifications` (dedup-by-key pure helper) and `pushToast` (DOM
-toast creation, dismiss, auto-fade, and the Ask-Tower jump into Comms).
+"""Tests for three toast fixes bundled into one story:
 
-Mirrors the node-eval harness pattern in tests/unit/test_dashboard_board_diff.py:
+1. pushToast() set `--stripe` to a bare CSS custom-property NAME (e.g.
+   "--c-failed") instead of a var() reference. style.css's `.toast` rule
+   reads `border-left: 3px solid var(--stripe, var(--text-muted))` -- a
+   bare name there produces invalid CSS (`3px solid --c-failed`), so the
+   whole declaration is dropped and toasts never show a severity color.
+   The fix wraps the stored value: `var(${stripe})`.
+2. The `.toast-key` badge showed the plan name instead of the story key.
+   The fix prefers `storyKey`, falling back to `planName` only when
+   `storyKey` is falsy/empty so the badge is never left blank.
+3. The Ask button's label changes from "Ask" to "Ask Tower".
+4. style.css: `.toast-key` must pick up the stripe color (falling back to
+   `--text-muted`), and `.toast-ask` must gain mono/uppercase/letter-spacing
+   styling to match the pill-button design.
+
+Mirrors the node-eval harness pattern in tests/unit/test_dashboard_toast_behavior.py:
 builds a minimal DOM shim, evals static/app.js under `node -e`, and
 JSON-stringifies the result of a test expression. The shim is copied +
 trimmed here (rather than imported) so this file stands alone.
 
-This story's review flagged that the toast feature (pickNewNotifications,
-pushToast, and the refresh() wiring that pushes/dedupes/auto-fades toasts)
-shipped with zero test coverage anywhere on the branch — nothing ever
-executed this code, which is how a duplicate-declaration bug slipped
-through undetected. These tests close that gap.
+These tests are RED until the implementation lands: `--stripe` is still set
+to a bare custom-property name, `.toast-key` still always shows planName,
+the Ask button still reads "Ask", and style.css's `.toast-key`/`.toast-ask`
+rules haven't been updated.
 """
 import json
 import os
+from pathlib import Path
+
+import pytest
 
 from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+STATIC_DIR = Path(REPO_ROOT) / "static"
+STYLE_CSS = STATIC_DIR / "style.css"
 
 
 _SHIM = r"""
@@ -221,8 +236,6 @@ _SHIM = r"""
     globalThis.fetch = () => new Promise(() => {});
     process.on("unhandledRejection", () => {});
     globalThis.setInterval = () => 0;
-    // Auto-fade timers are captured (not dropped) so tests can trigger them
-    // deterministically instead of racing a real 6-second timeout.
     globalThis.__pendingTimers = [];
     globalThis.setTimeout = (fn, ms) => {
         globalThis.__pendingTimers.push({ fn, ms });
@@ -245,194 +258,183 @@ def _run_app_js(expr):
     return json.loads(proc.stdout)
 
 
-def _plan(name, dedup_key, severity="error", message="oops", story_key="S1"):
-    return {
-        "name": name,
-        "latest_notification": {
-            "dedup_key": dedup_key,
-            "severity": severity,
-            "message": message,
-            "story_key": story_key,
-        },
-    }
-
-
-# === pickNewNotifications: dedup-by-key ====================================
-
-def test_pick_new_notifications_returns_unseen_record():
-    plans = [_plan("demo", "k1")]
-    expr = "pickNewNotifications(" + json.dumps(plans) + ", new Map())"
-    res = _run_app_js(expr)
-    assert len(res) == 1
-    assert res[0]["plan"]["name"] == "demo"
-    assert res[0]["record"]["dedup_key"] == "k1"
-
-
-def test_pick_new_notifications_dedups_already_seen_key():
-    """A plan whose latest dedup_key matches the seen map must NOT be
-    returned again — this is the dedup-by-key contract the toast pipeline
-    relies on to avoid re-toasting the same notification every poll."""
-    plans = [_plan("demo", "k1")]
-    expr = (
-        "pickNewNotifications(" + json.dumps(plans) + ", new Map([['demo', 'k1']]))"
-    )
-    res = _run_app_js(expr)
-    assert res == []
-
-
-def test_pick_new_notifications_returns_new_key_after_previous_seen():
-    """A plan advancing to a NEW dedup_key (different from what's seen) must
-    be returned even though an older key for the same plan was already
-    seen."""
-    plans = [_plan("demo", "k2")]
-    expr = (
-        "pickNewNotifications(" + json.dumps(plans) + ", new Map([['demo', 'k1']]))"
-    )
-    res = _run_app_js(expr)
-    assert len(res) == 1
-    assert res[0]["record"]["dedup_key"] == "k2"
-
-
-def test_pick_new_notifications_skips_plan_with_no_notification():
-    """Negative/boundary case: a plan with no latest_notification (or a null
-    dedup_key) must be silently skipped, not raise or produce a bogus toast."""
-    plans = [{"name": "demo", "latest_notification": None}]
-    expr = "pickNewNotifications(" + json.dumps(plans) + ", new Map())"
-    res = _run_app_js(expr)
-    assert res == []
-
-
-def test_pick_new_notifications_empty_plans_returns_empty():
-    expr = "pickNewNotifications([], new Map())"
-    res = _run_app_js(expr)
-    assert res == []
-
-
-# === pushToast: DOM creation, dismiss, auto-fade, Ask button ===============
-
-def test_push_toast_appends_node_to_stack():
+def _push_and_get_stripe(severity):
     expr = (
         "(() => {"
-        " pushToast({ severity: 'info', planName: 'demo', storyKey: 'S1', message: 'hello' });"
-        " const stack = document.getElementById('toast-stack');"
-        " return { count: stack.__children.length, cls: stack.__children[0].className };"
-        " })()"
-    )
-    res = _run_app_js(expr)
-    assert res["count"] == 1
-    assert res["cls"] == "toast"
-
-
-def test_push_toast_dismiss_button_removes_node():
-    expr = (
-        "(() => {"
-        " pushToast({ severity: 'info', planName: 'demo', storyKey: 'S1', message: 'hello' });"
+        f" pushToast({{ severity: '{severity}', planName: 'demo', storyKey: 'S1', message: 'x' }});"
         " const stack = document.getElementById('toast-stack');"
         " const node = stack.__children[0];"
-        " const dismiss = node.querySelector('.toast-dismiss');"
-        " dismiss.__fire('click');"
-        " return { countAfter: stack.__children.length };"
+        " return { stripe: node.style.getPropertyValue('--stripe') };"
         " })()"
     )
-    res = _run_app_js(expr)
-    assert res["countAfter"] == 0
+    return _run_app_js(expr)["stripe"]
 
 
-def test_push_toast_info_severity_auto_fades_after_timeout():
-    """A non-error/warning toast must schedule an auto-remove timer instead
-    of waiting on the user to dismiss it."""
+def _push_and_get_toast_key(story_key, plan_name):
+    story_key_js = json.dumps(story_key)
+    plan_name_js = json.dumps(plan_name)
     expr = (
         "(() => {"
-        " pushToast({ severity: 'info', planName: 'demo', storyKey: 'S1', message: 'hello' });"
+        f" pushToast({{ severity: 'info', planName: {plan_name_js}, storyKey: {story_key_js}, message: 'x' }});"
         " const stack = document.getElementById('toast-stack');"
-        " const beforeTimers = globalThis.__pendingTimers.length;"
-        " globalThis.__runTimers();"
-        " return { beforeTimers, countAfter: stack.__children.length };"
+        " const node = stack.__children[0];"
+        " const keyEl = node.querySelector('.toast-key');"
+        " return { text: keyEl ? keyEl.textContent : null };"
         " })()"
     )
-    res = _run_app_js(expr)
-    assert res["beforeTimers"] == 1, "info-severity toast did not schedule an auto-fade timer"
-    assert res["countAfter"] == 0, "auto-fade timer did not remove the toast node"
+    return _run_app_js(expr)["text"]
 
 
-def test_push_toast_error_severity_does_not_auto_fade():
-    """Negative/boundary case: error/warning toasts require an explicit
-    dismiss or Ask click — they must NOT be silently auto-removed, since
-    they represent something the user needs to act on."""
+# === Fix 1: --stripe must be a var() reference, not a bare custom-prop name
+
+
+def test_push_toast_error_stripe_is_var_reference():
+    assert _push_and_get_stripe("error") == "var(--c-failed)"
+
+
+def test_push_toast_warning_stripe_is_var_reference():
+    assert _push_and_get_stripe("warning") == "var(--c-parked)"
+
+
+def test_push_toast_info_stripe_is_var_reference():
+    assert _push_and_get_stripe("info") == "var(--c-unknown)"
+
+
+def test_push_toast_stripe_is_not_bare_custom_property_name():
+    """Negative case: the old buggy value must not reappear -- a bare name
+    like '--c-failed' (no var() wrapper) produces invalid CSS and silently
+    drops the whole border-left declaration."""
+    stripe = _push_and_get_stripe("error")
+    assert stripe != "--c-failed"
+    assert stripe.startswith("var(") and stripe.endswith(")")
+
+
+# === Fix 2: .toast-key shows storyKey, falling back to planName ===========
+
+
+def test_push_toast_key_shows_story_key():
+    assert _push_and_get_toast_key(story_key="S1", plan_name="demo") == "S1"
+
+
+def test_push_toast_key_falls_back_to_plan_name_when_story_key_empty():
+    """Negative/boundary case: an empty-string storyKey (e.g. a plan-level
+    notification with no associated story) must fall back to planName so
+    the badge is never left blank."""
+    assert _push_and_get_toast_key(story_key="", plan_name="demo") == "demo"
+
+
+def test_push_toast_key_falls_back_to_plan_name_when_story_key_omitted():
+    """Boundary case: storyKey entirely absent from the call (undefined)
+    must also fall back to planName."""
     expr = (
         "(() => {"
-        " pushToast({ severity: 'error', planName: 'demo', storyKey: 'S1', message: 'boom' });"
-        " return { pendingTimers: globalThis.__pendingTimers.length };"
+        " pushToast({ severity: 'info', planName: 'demo', message: 'x' });"
+        " const stack = document.getElementById('toast-stack');"
+        " const node = stack.__children[0];"
+        " const keyEl = node.querySelector('.toast-key');"
+        " return { text: keyEl ? keyEl.textContent : null };"
         " })()"
     )
-    res = _run_app_js(expr)
-    assert res["pendingTimers"] == 0
+    assert _run_app_js(expr)["text"] == "demo"
 
 
-def test_push_toast_error_severity_shows_ask_button():
+# === Fix 3: Ask button label changes to "Ask Tower" ========================
+
+
+def test_push_toast_ask_button_says_ask_tower():
     expr = (
         "(() => {"
         " pushToast({ severity: 'error', planName: 'demo', storyKey: 'S1', message: 'boom' });"
         " const stack = document.getElementById('toast-stack');"
         " const node = stack.__children[0];"
         " const ask = node.querySelector('.toast-ask');"
-        " return { hasAsk: !!ask, askText: ask ? ask.textContent : null };"
+        " return { askText: ask ? ask.textContent : null };"
         " })()"
     )
     res = _run_app_js(expr)
-    assert res["hasAsk"] is True
     assert res["askText"] == "Ask Tower"
 
 
-def test_push_toast_info_severity_has_no_ask_button():
-    """Negative/boundary case: routine info toasts don't warrant the
-    Ask-Tower jump into Comms — only error/warning severities do."""
+def test_push_toast_ask_button_no_longer_says_bare_ask():
+    """Negative case: the old bare 'Ask' label must not reappear."""
     expr = (
         "(() => {"
-        " pushToast({ severity: 'info', planName: 'demo', storyKey: 'S1', message: 'fyi' });"
-        " const stack = document.getElementById('toast-stack');"
-        " const node = stack.__children[0];"
-        " return { hasAsk: !!node.querySelector('.toast-ask') };"
-        " })()"
-    )
-    res = _run_app_js(expr)
-    assert res["hasAsk"] is False
-
-
-def test_push_toast_ask_button_jumps_to_comms_and_fills_input():
-    """Clicking Ask must switch into the Comms view (state.commsActive) and
-    pre-fill the comms input with a question referencing the story key, then
-    dismiss the toast."""
-    expr = (
-        "(() => {"
-        " pushToast({ severity: 'error', planName: 'demo', storyKey: 'S1', message: 'boom' });"
+        " pushToast({ severity: 'warning', planName: 'demo', storyKey: 'S1', message: 'parked' });"
         " const stack = document.getElementById('toast-stack');"
         " const node = stack.__children[0];"
         " const ask = node.querySelector('.toast-ask');"
-        " ask.__fire('click');"
-        " const input = document.getElementById('comms-input');"
-        " return { commsActive: state.commsActive, inputValue: input.value, countAfter: stack.__children.length };"
+        " return { askText: ask ? ask.textContent : null };"
         " })()"
     )
     res = _run_app_js(expr)
-    assert res["commsActive"] is True
-    assert "S1" in res["inputValue"]
-    assert res["countAfter"] == 0
+    assert res["askText"] != "Ask"
 
 
-def test_push_toast_missing_stack_element_is_a_noop():
-    """Boundary case: if #toast-stack doesn't exist in the DOM, pushToast
-    must not throw."""
-    expr = (
-        "(() => {"
-        " const original = document.getElementById;"
-        " document.getElementById = (id) => (id === 'toast-stack' ? null : original(id));"
-        " let threw = false;"
-        " try { pushToast({ severity: 'info', planName: 'demo', storyKey: 'S1', message: 'hi' }); }"
-        " catch (e) { threw = true; }"
-        " document.getElementById = original;"
-        " return { threw };"
-        " })()"
+# === Fix 4: style.css -- .toast-key stripe color, .toast-ask pill styling =
+
+
+@pytest.fixture(scope="module")
+def css_text():
+    return STYLE_CSS.read_text()
+
+
+def test_toast_key_color_uses_stripe_with_text_muted_fallback(css_text):
+    idx = css_text.find(".toast-key")
+    assert idx != -1, ".toast-key rule must exist in style.css"
+    block = css_text[idx:idx + 300]
+    assert "color: var(--stripe, var(--text-muted))" in block, (
+        ".toast-key must pick up the severity stripe color, falling back "
+        "to --text-muted when no stripe is set"
     )
-    res = _run_app_js(expr)
-    assert res["threw"] is False
+
+
+def test_toast_key_still_backward_compatible_with_text_muted_fallback(css_text):
+    """Boundary/back-compat case: the .toast-key rule must still contain
+    the literal substring 'var(--text-muted)' as the fallback value, so any
+    code path reusing .toast-key without a --stripe value set is unaffected."""
+    idx = css_text.find(".toast-key")
+    block = css_text[idx:idx + 300]
+    assert "var(--text-muted)" in block
+
+
+def test_toast_key_still_mono_and_small(css_text):
+    idx = css_text.find(".toast-key")
+    block = css_text[idx:idx + 300]
+    assert "mono" in block.lower()
+    assert "var(--fs-xs)" in block
+
+
+def test_toast_ask_has_mono_uppercase_pill_styling(css_text):
+    idx = css_text.find(".toast-ask {")
+    assert idx != -1, ".toast-ask rule must exist in style.css"
+    end = css_text.find("}", idx)
+    assert end != -1
+    block = css_text[idx:end]
+    assert "font-family: var(--font-mono)" in block
+    assert "font-size: var(--fs-xs)" in block
+    assert "text-transform: uppercase" in block
+    assert "letter-spacing: 0.04em" in block
+
+
+def test_toast_ask_still_has_original_border_and_color(css_text):
+    """Regression guard: the pre-existing border/color/padding declarations
+    on .toast-ask must survive the styling addition, not be replaced."""
+    idx = css_text.find(".toast-ask {")
+    end = css_text.find("}", idx)
+    block = css_text[idx:end]
+    assert "border: 1px solid var(--accent)" in block
+    assert "color: var(--accent)" in block
+    assert "padding: var(--sp-1) var(--sp-2)" in block
+    assert "border-radius: var(--radius-sm)" in block
+
+
+def test_untouched_toast_rules_unaffected(css_text):
+    """Sanity/boundary check: the story explicitly must not touch .toast,
+    .toast-stack, .toast-row, .toast-msg, or .toast-dismiss -- assert those
+    selectors are still present, unmodified in substance, as a smoke check
+    against accidental drift."""
+    assert ".toast {" in css_text
+    assert ".toast-stack" in css_text
+    assert ".toast-row" in css_text
+    assert ".toast-msg" in css_text
+    assert ".toast-dismiss" in css_text

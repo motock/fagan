@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import pipeline.server as _server
 from app import backend
 
 from .service import _ServerRef
@@ -42,78 +41,29 @@ compose_rebriefed_instructions = _ServerRef("compose_rebriefed_instructions")
 validate_acceptance_fixtures = _ServerRef("validate_acceptance_fixtures")
 
 
-def _notify_user(*args, **kwargs):
-    """Delegate to pipeline.server._notify_user so monkeypatches on
-    pipeline.server are visible to the moved functions at call time."""
-    return _server._notify_user(*args, **kwargs)
-
-
-def _atomic_write_json(*args, **kwargs):
-    return _server._atomic_write_json(*args, **kwargs)
-
-
-def _count_in_progress_agents(*args, **kwargs):
-    return _server._count_in_progress_agents(*args, **kwargs)
-
-
-def _default_branch(*args, **kwargs):
-    return _server._default_branch(*args, **kwargs)
-
-
-def _rebase_onto_master(*args, **kwargs):
-    return _server._rebase_onto_master(*args, **kwargs)
-
-
-def _rework_requires_new_tests(*args, **kwargs):
-    return _server._rework_requires_new_tests(*args, **kwargs)
-
-
-def _run_planner(*args, **kwargs):
-    return _server._run_planner(*args, **kwargs)
-
-
-def _run_rework_planner(*args, **kwargs):
-    return _server._run_rework_planner(*args, **kwargs)
-
-
-def _run_rework_test_author_phase(*args, **kwargs):
-    return _server._run_rework_test_author_phase(*args, **kwargs)
-
-
-def _run_test_author_phase(*args, **kwargs):
-    return _server._run_test_author_phase(*args, **kwargs)
-
-
-def _test_files_added_on_branch(*args, **kwargs):
-    return _server._test_files_added_on_branch(*args, **kwargs)
-
-
-def _test_names_in_file(*args, **kwargs):
-    return _server._test_names_in_file(*args, **kwargs)
-
-
-def _validate_key(*args, **kwargs):
-    return _server._validate_key(*args, **kwargs)
-
-
-def collect_attempt_facts(*args, **kwargs):
-    return _server.collect_attempt_facts(*args, **kwargs)
-
-
-def collect_failure_evidence(*args, **kwargs):
-    return _server.collect_failure_evidence(*args, **kwargs)
-
-
-def detect_unsatisfiable_signal(*args, **kwargs):
-    return _server.detect_unsatisfiable_signal(*args, **kwargs)
-
-
-def diagnose_failure(*args, **kwargs):
-    return _server.diagnose_failure(*args, **kwargs)
-
-
-def get_ticket_provider(*args, **kwargs):
-    return _server.get_ticket_provider(*args, **kwargs)
+# Server-sourced functions the moved code calls as free variables. Same
+# _ServerRef pattern as the block above — resolves the live pipeline.server
+# binding at call time so monkeypatch.setattr(pipeline.server, "NAME", ...)
+# still lands. _ServerRef.__call__ delegates to the live attribute, so it is
+# a drop-in for callables too, not just plain values.
+_notify_user = _ServerRef("_notify_user")
+_atomic_write_json = _ServerRef("_atomic_write_json")
+_count_in_progress_agents = _ServerRef("_count_in_progress_agents")
+_default_branch = _ServerRef("_default_branch")
+_rebase_onto_master = _ServerRef("_rebase_onto_master")
+_rework_requires_new_tests = _ServerRef("_rework_requires_new_tests")
+_run_planner = _ServerRef("_run_planner")
+_run_rework_planner = _ServerRef("_run_rework_planner")
+_run_rework_test_author_phase = _ServerRef("_run_rework_test_author_phase")
+_run_test_author_phase = _ServerRef("_run_test_author_phase")
+_test_files_added_on_branch = _ServerRef("_test_files_added_on_branch")
+_test_names_in_file = _ServerRef("_test_names_in_file")
+_validate_key = _ServerRef("_validate_key")
+collect_attempt_facts = _ServerRef("collect_attempt_facts")
+collect_failure_evidence = _ServerRef("collect_failure_evidence")
+detect_unsatisfiable_signal = _ServerRef("detect_unsatisfiable_signal")
+diagnose_failure = _ServerRef("diagnose_failure")
+get_ticket_provider = _ServerRef("get_ticket_provider")
 
 
 def _resolve_dispatch_backend(story: dict[str, Any], env_backend: str) -> str:

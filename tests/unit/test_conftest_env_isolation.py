@@ -27,7 +27,7 @@ import textwrap
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-_CANARY = "tests/unit/test_local_agent.py::test_local_agent_read_heavy_distinct_constants"
+_CANARY = "tests/unit/test_local_agent_off_task_and_stream_setup.py::test_local_agent_read_heavy_distinct_constants"
 
 
 def _run_pytest(args, env_overrides):

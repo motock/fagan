@@ -57,6 +57,10 @@ PLAN_DETAIL_JS = os.path.join(REPO_ROOT, "static", "app", "render", "plan-detail
 # (server-app-file-split plan); the static-source assertions below follow
 # them here. The call site in refresh()'s poll path stayed in app.js.
 NOTIFICATIONS_JS = os.path.join(REPO_ROOT, "static", "app", "render", "notifications.js")
+# refresh() (the poll loop) was itself later relocated out of static/app.js
+# into static/app/main.js (server-app-file-split plan); the static-source
+# assertions that inspect refresh()'s body follow it here.
+MAIN_JS = os.path.join(REPO_ROOT, "static", "app", "main.js")
 
 
 # A self-contained, richer DOM shim. Built once as a Python string and
@@ -315,6 +319,13 @@ def _notifications_js_source():
         return fh.read()
 
 
+def _main_js_source():
+    """Read static/app/main.js source for static-source assertions (the new
+    home for refresh(), relocated out of static/app.js)."""
+    with open(MAIN_JS, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def _rec(dedup_key, message="msg", severity="info", ts="2024-01-01T00:00:00Z"):
     """Build a notification record dict shaped like plan.notification_records."""
     return {
@@ -385,7 +396,7 @@ def test_diff_notifications_panel_wired_into_refresh_poll_path():
     path stayed in static/app.js, which imports the function.)"""
     notifications_js = _notifications_js_source()
     assert "function _diffNotificationsPanel(" in notifications_js
-    js = _app_js_source()
+    js = _main_js_source()
     import_stmt = js.index("_diffNotificationsPanel")
     # Find an invocation (a call site) after the import. The import
     # statement itself contains "_diffNotificationsPanel" (no call parens)
@@ -829,7 +840,7 @@ def test_diff_called_from_within_refresh_body():
     """`_diffNotificationsPanel` must be invoked from within `refresh`'s
     body (the poll-triggered path), not merely declared. Locate the
     refresh function body and assert a call site appears inside it."""
-    js = _app_js_source()
+    js = _main_js_source()
     # refresh is an async function declared as `async function refresh(...)`
     # or `const refresh = async function ...` or `function refresh`. Find
     # the declaration and scan to the next top-level function/export for the

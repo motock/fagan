@@ -23,6 +23,12 @@ from tests.unit._app_js import run_app_js as _shared_run_app_js
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 APP_JS = os.path.join(REPO_ROOT, "static", "app.js")
+# appendCommsMessage/renderToolTraceHtml/sendCommsMessage (and their DOM
+# wiring) were relocated out of static/app.js into this dedicated module
+# (server-app-file-split plan); the static-source assertions below follow
+# them here. module.exports itself stayed in static/app/main.js.
+COMMS_JS = os.path.join(REPO_ROOT, "static", "app", "comms.js")
+MAIN_JS = os.path.join(REPO_ROOT, "static", "app", "main.js")
 
 
 _SHIM = r"""
@@ -195,11 +201,26 @@ def _app_js_source():
         return fh.read()
 
 
+def _comms_js_source():
+    """Read static/app/comms.js source for static-source assertions (the
+    new home for appendCommsMessage/renderToolTraceHtml/sendCommsMessage,
+    relocated out of static/app.js)."""
+    with open(COMMS_JS, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _main_js_source():
+    """Read static/app/main.js source for static-source assertions (the
+    new home for module.exports, relocated out of static/app.js)."""
+    with open(MAIN_JS, encoding="utf-8") as fh:
+        return fh.read()
+
+
 # === function definitions & exports ======================================
 
 def test_append_comms_message_defined():
     """appendCommsMessage must be defined as a function in the source."""
-    src = _app_js_source()
+    src = _comms_js_source()
     assert "function appendCommsMessage" in src, (
         "appendCommsMessage must be defined as a function"
     )
@@ -207,7 +228,7 @@ def test_append_comms_message_defined():
 
 def test_render_tool_trace_html_defined():
     """renderToolTraceHtml must be defined as a function in the source."""
-    src = _app_js_source()
+    src = _comms_js_source()
     assert "function renderToolTraceHtml" in src, (
         "renderToolTraceHtml must be defined as a function"
     )
@@ -215,7 +236,7 @@ def test_render_tool_trace_html_defined():
 
 def test_send_comms_message_defined():
     """sendCommsMessage must be defined as a function in the source."""
-    src = _app_js_source()
+    src = _comms_js_source()
     assert "function sendCommsMessage" in src, (
         "sendCommsMessage must be defined as a function"
     )
@@ -238,7 +259,7 @@ def test_send_comms_message_exported():
 
 def test_module_exports_contains_three_new_names():
     """module.exports must list all three new functions."""
-    src = _app_js_source()
+    src = _main_js_source()
     start = src.index("module.exports = {")
     end = src.index("};", start) + 2
     block = src[start:end]
@@ -348,7 +369,7 @@ def test_render_tool_trace_html_chip_is_button():
 def test_render_tool_trace_html_chip_click_toggles_expanded():
     """Each chip's click must toggle the 'expanded' class on itself. We
     assert the source wires classList.toggle('expanded') on the chip."""
-    src = _app_js_source()
+    src = _comms_js_source()
     start = src.index("function renderToolTraceHtml")
     # Find the end of the function (next top-level function or module.exports).
     end_candidates = [
@@ -398,7 +419,7 @@ def test_append_comms_message_tower_appends_to_thread():
 def test_append_comms_message_hides_landing_on_first_message():
     """On the first message, #comms-landing must be hidden. We assert the
     source references comms-landing and comms-thread and toggles display."""
-    src = _app_js_source()
+    src = _comms_js_source()
     start = src.index("function appendCommsMessage")
     end_candidates = [
         src.find("\nfunction ", start + 1),
@@ -419,7 +440,7 @@ def test_append_comms_message_uses_escape_html_for_user_text():
     """sendCommsMessage must pass escapeHtml(text) (not raw text) to
     appendCommsMessage for the user bubble. We assert the source calls
     escapeHtml within sendCommsMessage."""
-    src = _app_js_source()
+    src = _comms_js_source()
     start = src.index("function sendCommsMessage")
     end_candidates = [
         src.find("\nfunction ", start + 1),
@@ -587,7 +608,7 @@ def test_send_comms_message_renders_trace_in_bubble():
     """When the response has tool_calls, the trace HTML must be appended
     inside the tower bubble. We assert the source calls
     renderToolTraceHtml within sendCommsMessage."""
-    src = _app_js_source()
+    src = _comms_js_source()
     start = src.index("function sendCommsMessage")
     end_candidates = [
         src.find("\nfunction ", start + 1),
@@ -854,7 +875,7 @@ def test_send_comms_message_trims_before_sending():
 def test_comms_send_click_wired():
     """#comms-send's click must be wired to call sendCommsMessage. We assert
     the source references comms-send and addEventListener('click' ...)."""
-    src = _app_js_source()
+    src = _comms_js_source()
     assert "comms-send" in src, "source must reference #comms-send"
     # There must be a click listener wired to comms-send that calls
     # sendCommsMessage.
@@ -865,7 +886,7 @@ def test_comms_input_enter_wired():
     """#comms-input's Enter-without-Shift keydown must be wired to call
     sendCommsMessage. We assert the source references comms-input and a
     keydown/Enter/Shift guard."""
-    src = _app_js_source()
+    src = _comms_js_source()
     assert "comms-input" in src, "source must reference #comms-input"
     # The Enter-without-Shift guard: must check key === 'Enter' (or
     # event.key) and shiftKey.
@@ -882,7 +903,7 @@ def test_comms_input_clears_after_send():
     """After sending, the input value must be cleared. We assert the source
     clears the input value after the send call (in the click/keydown
     handler)."""
-    src = _app_js_source()
+    src = _comms_js_source()
     # The wiring must clear the input: look for a value = "" assignment near
     # the send wiring. We assert the source contains a value reset pattern
     # referencing the comms input.

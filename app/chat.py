@@ -301,7 +301,7 @@ class ChatService:
         from app import backend, role_registry
 
         resolution = role_registry.resolve_role("chat", registry=role_registry.load_registry())
-        driver = backend.get_backend(resolution.provider)
+        driver = backend.get_backend("chat", name=resolution.provider)
         self._resolved_driver = driver
         self._resolved_model = resolution.model
         return driver, resolution.model

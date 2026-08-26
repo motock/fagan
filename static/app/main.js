@@ -1,1 +1,1 @@
-$(git show 8f8bc34:static/app/main.js)
+$(cat /tmp/orig_main.js)

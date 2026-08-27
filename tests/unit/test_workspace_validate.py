@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from pipeline.workspace import normalize_workspace_path, validate_workspace
 
 

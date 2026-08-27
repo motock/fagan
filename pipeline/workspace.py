@@ -35,6 +35,8 @@ def normalize_workspace_path(raw: str | None) -> Path:
     ValueError
         If any of the safety checks fail.
     """
+    if raw is not None and not isinstance(raw, str):
+        raise ValueError("raw path must be a string or None")
     if raw is None or raw.strip() == "":
         raise ValueError("raw path must not be None or empty")
 

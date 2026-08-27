@@ -540,8 +540,10 @@ def test_send_comms_message_uses_state_selected_plan():
     assert result == "my-plan", f"plan_name must be state.selectedPlan, got {result!r}"
 
 
-def test_send_comms_message_history_is_null():
-    """The body's history must be null (per the brief)."""
+def test_send_comms_message_first_message_history_is_empty_array():
+    """The first message of a conversation has no prior turns, so the
+    body's history must be [] - not null (the old, buggy, always-null
+    behavior this story replaces)."""
     fetch_recorder = (
         "(url, opts) => { globalThis.__fetchCalls = globalThis.__fetchCalls || []; "
         "globalThis.__fetchCalls.push({ url: url, opts: opts }); "
@@ -552,7 +554,40 @@ def test_send_comms_message_history_is_null():
         "sendCommsMessage('hello').then(() => JSON.parse(globalThis.__fetchCalls[0].opts.body).history)",
         fetch_impl=fetch_recorder,
     )
-    assert result is None, f"history must be null, got {result!r}"
+    assert result == [], f"history must be [] on the first message, got {result!r}"
+
+
+def test_send_comms_message_second_message_includes_prior_turn():
+    """After a successful round trip, the next sendCommsMessage call must
+    include the prior user message and assistant reply in its history."""
+    fetch_recorder = (
+        "(url, opts) => { globalThis.__fetchCalls = globalThis.__fetchCalls || []; "
+        "globalThis.__fetchCalls.push({ url: url, opts: opts }); "
+        "return Promise.resolve({ ok: true, status: 200, "
+        "json: () => Promise.resolve({ reply: 'first reply', tool_calls: [], turns: 1 }) }); }"
+    )
+    result = _run_app_js_async(
+        "sendCommsMessage('first message')"
+        ".then(() => sendCommsMessage('second message'))"
+        ".then(() => JSON.parse(globalThis.__fetchCalls[1].opts.body).history)",
+        fetch_impl=fetch_recorder,
+    )
+    assert result == [
+        {"role": "user", "content": "first message"},
+        {"role": "assistant", "content": "first reply"},
+    ], f"expected prior turn in history, got {result!r}"
+
+
+def test_send_comms_message_failed_request_does_not_add_to_history():
+    """A rejected fetch must not record a turn in history - the next send
+    must still see an empty history."""
+    result = _run_app_js_async(
+        "sendCommsMessage('will fail')"
+        ".then(() => sendCommsMessage('next message'))"
+        ".then(() => JSON.parse(globalThis.__fetchCalls[globalThis.__fetchCalls.length - 1].opts.body).history)",
+        fetch_impl="(url, opts) => { globalThis.__fetchCalls = globalThis.__fetchCalls || []; globalThis.__fetchCalls.push({ url: url, opts: opts }); return Promise.reject(new Error('boom')); }",
+    )
+    assert result == [], f"failed turn must not be recorded in history, got {result!r}"
 
 
 def test_send_comms_message_disables_send_and_lives_on_air():

@@ -77,6 +77,15 @@ if (commsInput) {
     }
   });
 }
+const commsChips = typeof document.querySelectorAll === 'function'
+  ? document.querySelectorAll('.comms-chip')
+  : [];
+commsChips.forEach((chip) => {
+  chip.addEventListener('click', () => {
+    const message = chip.dataset.commsChipMessage || chip.textContent;
+    sendCommsMessage(message);
+  });
+});
 
 async function updateCommsSubtitle() {
   const sub = document.getElementById('comms-sub');

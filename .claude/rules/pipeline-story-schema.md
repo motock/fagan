@@ -86,14 +86,16 @@ re-check the fixture, not noise to ignore.
 
 When several stories in a plan each add to the SAME shared artifact in
 sequence — a registry dict, a `__all__` list, a system-prompt string,
-a dispatch table — never let one story's tests assert the artifact's exact
+a dispatch table, or a shared markup/style/script file multiple UI stories
+edit in turn — never let one story's tests assert the artifact's exact
 total contents (equality on a set/list, an exact substring pinned to that
-story's own additions, an exact total count). Assert only what THAT story
+story's own additions, an exact total count, or a byte-for-byte SHA-256 of
+a file/region pinned as "must stay unchanged"). Assert only what THAT story
 added: membership (`"x" in registry`), a sorted/set comparison, or a
 structural relationship to a stable anchor (e.g. "this new entry appears
 before the fixed closing sentence") — never the complete enumeration.
 
-**Why this matters and is not hypothetical:** two documented, independent
+**Why this matters and is not hypothetical:** three documented, independent
 occurrences, same root cause:
 
 - `pipeline/triage.py` (`overlord-failure-triage`, 2026-08-18/20): one shared
@@ -116,6 +118,25 @@ occurrences, same root cause:
   — 14 of the 23 tools ultimately registered were never named anywhere in
   the prompt the chat model actually receives, and no test caught it,
   because the test measured a frozen snapshot instead of the live registry.
+- `comms-ui-design-alignment` (2026-08-27), a chain of UI stories each
+  editing `static/index.html`/`static/style.css`/`static/app/main.js` in
+  turn: each story's test-author phase pinned a SHA-256 hash of the OTHER
+  files it was told not to touch, as a self-guard against its own scope
+  creep (e.g. "`INDEX_HTML_SHA256` = ... as of this dispatch — this story
+  is CSS-only"). Three later sibling stories then legitimately edited those
+  exact files (a subtitle-wiring story touched `main.js`, a landing-hero
+  redesign touched `index.html`, a toast-color fix touched the same
+  `style.css` region), and nothing ever re-pinned the earlier guards.
+  The final story in the chain ("wire suggestion-chip clicks") inherited
+  three permanently-red assertions about files it never touched and had
+  no scope to fix, and parked after 3 rework attempts with zero commits —
+  notable because this dispatch was Claude/sonnet, not a weak local model;
+  the "never modify an existing test without approval" default (CLAUDE.md
+  Step 4) was itself what turned a two-line fix into an unwinnable loop,
+  since a headless dispatch has no user to ask before touching a test file
+  it didn't author. Unblocked by re-pinning the three hashes to the
+  current, correctly-evolved file contents and re-reviewing — the
+  implementation had been correct since the first attempt.
 
 **How to apply at plan-authoring time:**
 - When 3+ stories are chained on a shared production artifact (see the
@@ -137,6 +158,15 @@ occurrences, same root cause:
   programmatically from the registry itself over hand-writing prose that
   can drift — then the test asserts the generator's correctness once,
   and no later story can ever leave it stale.
+- A story's own "must not touch these other files" self-guard is a
+  legitimate scope-discipline test, but never let it pin a SHA-256/byte
+  hash of a file (or region) that a *later sibling* is scheduled to
+  legitimately edit. If the plan already has a follow-up story touching
+  that same file, phrase the guard as a scope statement in
+  `agent_instructions` instead ("do not touch `static/index.html` in this
+  story") and let the test assert something narrower and durable (e.g. a
+  specific string/selector this story must not have introduced), not a
+  hash of the whole file that the next sibling will legitimately break.
 
 ## A blanket "never modify existing tests" instruction breaks when the story legitimately changes a shape an old test pins exactly
 

@@ -38,7 +38,11 @@ COMMS_JS_SHA256 = "803f554f5553d13eb4236a285e1764f1b5c286a1883d89bc4862ee4715bb0
 # before the "Comms view styles" comment, the "Toast stack styles" section
 # that sits between the two halves of the Comms rules, and everything from
 # "Config view styles" onward.
-PREFIX_BEFORE_COMMS_SHA256 = "72782d8a3c838a50d0cdb14908195237389ab709935d2edc1b360cfb4ebde656"
+# Re-pinned by NAV-02 (pinned Comms pill + PLANS section label), which
+# legitimately adds sidebar rules to the plan-list region - that region sits
+# inside this prefix, so the pin must move with it. Only that insertion
+# changed; the rest of the prefix is byte-identical to the prior pin.
+PREFIX_BEFORE_COMMS_SHA256 = "01ef90da65f18c8ca29402fd8b3a0b3bfb95869f95a137caa72cc006b9b1ea65"
 # Re-pinned post-#467 (toast severity stripe color fix) - see note above.
 TOAST_REGION_SHA256 = "dbfb98e7ac5c90643e9560c45faa9d8d04e8487c11ab55c4af82cb7c2593550c"
 SUFFIX_FROM_CONFIG_SHA256 = "bd771ee16eb69d9469a2cee103eadbd9530199bbbd4bfa9971e95704e1b0c5a6"

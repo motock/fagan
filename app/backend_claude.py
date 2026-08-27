@@ -68,11 +68,13 @@ class ClaudeCliDriver:
 
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
-        allowed_tools: str | None = None, cwd: str | None = None,
+        bare: bool = False, allowed_tools: str | None = None, cwd: str | None = None,
         max_tokens: int | None = None, cell_dir: str | None = None,
         role: str = "complete",
     ) -> str:
         cmd = ["claude", "-p", prompt, "--model", model]
+        if bare:
+            cmd += ["--bare"]
         if system:
             cmd += ["--append-system-prompt", system]
         if allowed_tools:

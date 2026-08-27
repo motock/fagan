@@ -481,6 +481,54 @@ def test_complete_strips_provider_redirect_env_vars(monkeypatch):
     assert env["PATH"] == "/usr/bin:/bin"
 
 
+# ---------- bare passthrough: suppress `claude` CLI's own CLAUDE.md auto-discovery ----------
+
+
+def test_complete_passes_bare_flag_when_requested(monkeypatch):
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, env=None):
+        captured["cmd"] = cmd
+        return _FakeCompletedProcess(stdout="ok")
+
+    monkeypatch.setattr(b.subprocess, "run", _fake_run)
+
+    b.ClaudeCliDriver().complete("hi", model="sonnet", bare=True)
+
+    assert "--bare" in captured["cmd"]
+
+
+def test_complete_omits_bare_flag_by_default(monkeypatch):
+    """Regression guard: every existing caller (review, planner, decompose,
+    overlord, test_author, security roles) calls complete() without `bare`
+    and must see identical behavior to before this parameter existed."""
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, env=None):
+        captured["cmd"] = cmd
+        return _FakeCompletedProcess(stdout="ok")
+
+    monkeypatch.setattr(b.subprocess, "run", _fake_run)
+
+    b.ClaudeCliDriver().complete("hi", model="sonnet")
+
+    assert "--bare" not in captured["cmd"]
+
+
+def test_complete_omits_bare_flag_when_explicitly_false(monkeypatch):
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, env=None):
+        captured["cmd"] = cmd
+        return _FakeCompletedProcess(stdout="ok")
+
+    monkeypatch.setattr(b.subprocess, "run", _fake_run)
+
+    b.ClaudeCliDriver().complete("hi", model="sonnet", bare=False)
+
+    assert "--bare" not in captured["cmd"]
+
+
 def test_dispatch_strips_provider_redirect_env_vars(tmp_path, monkeypatch):
     _set_provider_redirect_env(monkeypatch)
     monkeypatch.delenv("PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV", raising=False)

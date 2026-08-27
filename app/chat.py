@@ -313,7 +313,8 @@ class ChatService:
         turns = 0
         while turns < self._max_turns:
             turns += 1
-            response = driver.complete(prompt=current_prompt, system=SYSTEM_PROMPT, model=model_tag)
+            # --bare prevents this repo's own CLAUDE.md - which governs a *different* agent's (the coding agent's) workflow - from silently overriding chat.py's own SYSTEM_PROMPT and tool-confirmation policy
+            response = driver.complete(prompt=current_prompt, system=SYSTEM_PROMPT, model=model_tag, bare=True)
             parsed = _parse_tool_calls(response)
             if not parsed:
                 return {"reply": response, "tool_calls": tool_calls_made, "turns": turns}

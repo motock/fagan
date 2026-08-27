@@ -145,7 +145,7 @@ class OllamaDriver:
 
     def complete(
         self, prompt: str, *, system: str | None = None, model: str,
-        allowed_tools: str | None = None, cwd: str | None = None,
+        bare: bool = False, allowed_tools: str | None = None, cwd: str | None = None,
         max_tokens: int | None = None,
         cell_dir: str | None = None,
         role: str = "complete",

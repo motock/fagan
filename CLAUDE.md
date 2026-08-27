@@ -430,16 +430,20 @@ For bug work, Steps 2 and 3 are a deliberate hand-off. The diagnosis from Step 2
 
 This sequence matters: a bug that is fixed without a reproducing test will likely recur. A test written after the fix cannot be trusted — it was never observed failing.
 
-### Step 4 — Protect existing tests
+### Step 4 — Existing tests may only be changed when warranted, and the change must be justified
 
-**Never modify an existing test without explicit user approval.**
+**The rule against touching existing tests exists to stop an implementer from "gaming" a task — loosening or deleting an inconvenient assertion just to make it pass. It is not a blanket ban on ever updating a test.** A test that pins behavior the task is *legitimately* changing (a documented contract change, an intentional bugfix to previously-wrong behavior, a return-shape change the story asks for) may need its assertion updated to match. The bar is: does the modification reflect a real, requested behavior change, or does it just make an inconvenient test stop failing?
 
-If a change you are making would require altering an existing test:
-- Stop before making the modification.
-- Explain to the user: which test(s) would change, why the change is needed, and what the impact is.
-- Wait for explicit confirmation before proceeding.
+Responsibility for telling these apart splits across two roles — neither is sufficient alone:
 
-This applies to all test files — test logic, assertions, setup/teardown, test data, and test naming. Adding new test cases to an existing test file is permitted; modifying existing ones is not.
+- **The implementer must justify, not silently edit.** Before modifying an existing test, state explicitly: which test/assertion is changing, why the previously-asserted behavior is no longer correct, and what the new expected behavior is. This justification must be visible in the commit message or PR description — never folded into an unrelated diff. If the task's own scope does not require the behavior change the test would need to reflect, do not touch it; find another way to satisfy the test as written.
+- **The reviewer is the actual gate.** Every existing-test modification is a mandatory review checklist item (see **Code Review**): verify the new assertion still tests real, intended behavior — not weakened, loosened, or deleted just to pass — and that it matches a behavior change the task genuinely called for. A modification with no stated justification, or one that merely relaxes a check without a corresponding behavior change, is a **Blocking** finding by default.
+
+This applies to all test files — test logic, assertions, setup/teardown, test data, and test naming. Adding new test cases to an existing test file never needs justification; modifying or removing existing ones always does.
+
+**When a live user is available** (interactive sessions), still stop and explain the proposed change — which test(s), why, and the impact — and wait for explicit confirmation before proceeding. The user is the cheapest, most authoritative check and should be used when present.
+
+**When no user is available** (headless/pipeline dispatch), the reviewer above is the sole gate, since `request_decision` can itself be permission-blocked with nothing to grant it. Plan authors should pre-authorize any test edit they can anticipate directly in `agent_instructions` (name the file, the test, and the literal before/after text) rather than leaving the dispatched agent to guess — see pipeline-story-schema.md's guidance on existing-test conflicts and cumulative shared artifacts. Any modification the plan did not anticipate must still carry the implementer's justification above, so the reviewer has something concrete to check instead of a bare diff.
 
 ### Step 5 — Detect the test runner
 
@@ -524,6 +528,7 @@ Approving a pull request is a statement that the reviewer has verified all of th
 - The implementation is consistent with the architecture and style of the surrounding code
 - The commit message accurately describes the change
 - If the change alters externally visible behavior (API contracts, configuration, CLI flags, user-facing functionality), documentation is updated — request changes and name the specific doc if it's missing, rather than approving with the gap unaddressed
+- If the diff modifies or removes an existing test (see Agent Workflow Step 4), the author's stated justification holds up: the new assertion reflects a real, requested behavior change — not a loosened or deleted check made just to pass. No justification present is itself a **Blocking** finding
 
 An approver who has not checked these items should not approve.
 

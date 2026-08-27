@@ -1,5 +1,5 @@
 # Autonomous SDLC Agent Pipeline
-
+[![CI](https://github.com/fico-jessecarroll/claude-pipeline-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fico-jessecarroll/claude-pipeline-mcp/actions/workflows/ci.yml)
 This is a quickstart guide for the Autonomous SDLC Agent Pipeline, describing the system components and how they interact. For detailed reference material, see [REFERENCE.md](./REFERENCE.md).
 
 ## Components at a glance

@@ -318,7 +318,7 @@ class ChatService:
 
     def execute_turn(self, message, *, plan_name=None, history=None) -> dict:
         driver, model_tag = self._resolve_driver()
-        current_prompt = message
+        current_prompt = _build_chat_prompt(message, history)
         tool_calls_made: list[dict] = []
         turns = 0
         while turns < self._max_turns:

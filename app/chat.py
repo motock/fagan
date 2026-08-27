@@ -259,7 +259,17 @@ def _execute_tool(name: str, args: dict, http_client, api_base_url: str) -> dict
     except Exception as exc:  # pragma: no cover - exercised via tests  # noqa: BLE001
         return {"error": str(exc)}
     return {"result": result}
-
+def _build_chat_prompt(message: str, history: list[dict] | None) -> str:
+    """Render the current message plus any prior turns into the single
+    prompt string the Backend.complete() interface accepts (it has no
+    separate messages-list parameter). When *history* is falsy (None or
+    empty), returns *message* unchanged - this is the compatibility path
+    every existing call site (and every existing test) relies on."""
+    if not history:
+        return message
+    lines = [f"{turn.get('role', 'user')}: {turn.get('content', '')}" for turn in history]
+    lines.append(f"user: {message}")
+    return "\n".join(lines)
 # ---------------------------------------------------------------------------
 # ChatService
 # ---------------------------------------------------------------------------

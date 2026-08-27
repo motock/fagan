@@ -49,11 +49,12 @@ function _planMetaMarkup(plan) {
 
 function _renderPlanListFull(plans) {
   const nav = document.getElementById("plan-list");
-  nav.innerHTML = "";
 
-  // The pinned Comms/Overview items are appended by renderPlanList after
-  // calling this function, so they aren't rebuilt as part of the diffable
-  // per-plan rows below.
+  // This function no longer clears nav.innerHTML. renderPlanList's
+  // first-call branch clears the nav itself and appends the pinned
+  // Comms/Overview items and the "PLANS" section label BEFORE calling
+  // this function, so the per-plan rows and the footer land underneath
+  // them. Clearing here would wipe those pinned items.
   for (const plan of plans) {
     const div = document.createElement("div");
     div.className = "plan-item" + (plan.name === state.selectedPlan ? " active" : "")
@@ -164,36 +165,50 @@ function renderPlanList(plans) {
   if (overviewItem) overviewItem.classList.toggle("active", !state.selectedPlan && !state.commsActive);
 
   if (planListRowsByName === null) {
+    nav.innerHTML = "";
+
+    // Pinned Comms item - FIRST in the sidebar. The design treats it as the
+    // sidebar's header pill (accent border + headset glyph), styled via
+    // .comms-item / .icon-comms in style.css; it deliberately has no
+    // .plan-meta subtitle, unlike the per-plan rows and Overview.
+    const comms = document.createElement("div");
+    comms.className = "plan-item comms-item" + (state.commsActive ? " active" : "");
+    comms.setAttribute("data-comms", "true");
+    comms.innerHTML = `
+      <div class="plan-name"><span class="icon-comms" aria-hidden="true">&#127911;</span>Comms</div>
+    `;
+    comms.addEventListener("click", () => _selectComms());
+    nav.appendChild(comms);
+
+    // Pinned Overview item - SECOND, plain .plan-item styling, unchanged.
+    const overview = document.createElement("div");
+    overview.className = "plan-item overview-item" + (!state.selectedPlan ? " active" : "");
+    overview.setAttribute("data-overview", "true");
+    overview.innerHTML = `
+      <div class="plan-name">Overview</div>
+      <div class="plan-meta">fleet landing</div>
+    `;
+    overview.addEventListener("click", () => _selectOverview());
+    nav.appendChild(overview);
+
+    // "PLANS" section label, between the pinned global nav and the rows.
+    const plansLabel = document.createElement("div");
+    plansLabel.className = "plan-list-section-label";
+    plansLabel.textContent = "PLANS";
+    nav.appendChild(plansLabel);
+
+    // Per-plan rows + the "Show dismissed plans" footer land AFTER the
+    // pinned items because _renderPlanListFull no longer clears the nav.
     _renderPlanListFull(plans);
     planListRowsByName = new Map();
     // Query all .plan-item rows and keep only the per-plan ones (the pinned
-    // Overview item also carries .plan-item but has no data-plan-name).
+    // Comms/Overview items also carry .plan-item but have no data-plan-name).
     for (const el of nav.querySelectorAll(".plan-item")) {
       if (el.getAttribute("data-plan-name")) {
         planListRowsByName.set(el.getAttribute("data-plan-name"), el);
       }
     }
-  // Comms pinned item
-  const comms = document.createElement("div");
-  comms.className = "plan-item comms-item" + (state.commsActive ? " active" : "");
-  comms.setAttribute("data-comms", "true");
-  comms.innerHTML = `
-    <div class="plan-name">Comms</div>
-    <div class="plan-meta">chat</div>
-  `;
-  comms.addEventListener("click", () => _selectComms());
-  nav.appendChild(comms);
-
-  const overview = document.createElement("div");
-  overview.className = "plan-item overview-item" + (!state.selectedPlan ? " active" : "");
-  overview.setAttribute("data-overview", "true");
-  overview.innerHTML = `
-    <div class="plan-name">Overview</div>
-    <div class="plan-meta">fleet landing</div>
-  `;
-  overview.addEventListener("click", () => _selectOverview());
-  nav.appendChild(overview);
-  return;
+    return;
   }
 
   const seen = new Set();

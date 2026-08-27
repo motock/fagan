@@ -858,15 +858,15 @@ main {
 }
 /* new block */
 /* Comms view styles */
-.comms-head {}
-.comms-title {}
-.comms-title .label {}
-.on-air {}
+.comms-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.comms-title { display: flex; align-items: center; gap: var(--sp-2); }
+.comms-title .label { font-size: var(--fs-lg); font-weight: var(--fw-semibold); }
+.on-air { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
 .on-air.live { animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 0%{opacity:.5;} 50%{opacity:1;} 100%{opacity:.5;} }
 @media (prefers-reduced-motion: reduce) { .on-air.live { animation: none; } }
-.comms-sub {}
-.comms-body {}
+.comms-sub { font-size: var(--fs-xs); color: var(--text-muted); font-family: var(--font-mono); }
+.comms-body { flex: 1; overflow-y: auto; padding: var(--sp-5); }
 .comms-thread { width: 100%; max-width: 680px; display: flex; flex-direction: column; gap: var(--sp-4); }
 .comms-landing { width: 100%; max-width: 680px; margin: 0 auto; color: var(--text-dim); }
 .comms-landing h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-md); color: var(--text); font-weight: var(--fw-semibold); }

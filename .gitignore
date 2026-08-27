@@ -4,7 +4,7 @@ __pycache__/
 .pytest_cache/
 *.log
 *.pyc
-node_modules/
+node_modules
 
 # Dashboard start/stop script runtime artifacts (scripts/dashboard.sh)
 .dashboard.*.pid

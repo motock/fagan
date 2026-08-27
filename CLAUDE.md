@@ -120,6 +120,52 @@ Contract tests belong in the same repository as the service they test and must r
 
 ---
 
+## Testing Configuration-Driven Logic and Resource Gates
+
+Additive section (see "How to use this template" above) — two specific
+testing failure modes, generalized from production incidents, that the
+generic Testing section above doesn't call out by name.
+
+### Test the resolution logic, not today's configured values
+- When a test exercises code that resolves a setting from a config file,
+  registry, or environment (e.g. "which provider/model does role X route
+  to"), stub the config source with a synthetic fixture and assert against
+  that fixture — never assert against whatever the real config currently
+  contains.
+- **Why:** an assertion against a live value ties the test to today's
+  configuration. The next legitimate config change breaks every test that
+  asserted the old value, for no defect in the code — and reverting the
+  config later requires reverting the tests too. A registry, flag store, or
+  settings file is meant to be freely reconfigurable; a test suite that
+  breaks every time it's reconfigured has the coupling backwards.
+- The one legitimate exception is a test asserting a *hardcoded fallback
+  invariant* — e.g. "when the registry has no entry for role X, default to
+  the safe built-in provider." Stub the registry as empty for that case and
+  assert the fallback fires; that's a code-level guarantee independent of
+  what's currently configured, not a live-value assertion.
+
+### Validate any gate that can withhold work against the real environment
+- For any check that can refuse or block work — a resource threshold, a
+  rate limit, a quota check, a capacity gate — a green test suite proves
+  the branch logic is correct, not that the threshold is survivable in
+  production. If every test mocks the gate's input to a convenient value,
+  nothing has ever evaluated the gate against a real reading.
+- **Why:** this failure mode is silent by construction — nothing throws,
+  nothing errors, the gate just returns "not ok" forever and the blocked
+  work quietly stops happening. It can pass hundreds or thousands of green,
+  fully-mocked tests while paralyzing the exact thing it was meant to
+  protect, because no test ever fed it a realistic number.
+- Before calling a new withholding gate done, run it against the real host
+  or environment at least once and print the actual measured value next to
+  the threshold. Prefer a stable signal over an instantaneous one (e.g. a
+  resource ceiling that doesn't flap with unrelated concurrent load), and
+  bias the gate toward never blocking something already known to work — if
+  a genuinely-unservable case slips through, a downstream bounded retry or
+  escalation path can catch it at the cost of one cycle; a gate that's
+  wrong in the blocking direction costs everything behind it.
+
+---
+
 ## Security
 
 ### Input validation
@@ -510,6 +556,44 @@ AI-generated code requires the same scrutiny as human-written code. Additionally
 - Check that tests were written before the implementation (per the Agent Workflow), not retrofitted after
 - Be skeptical of plausible-looking code that has not been exercised against the actual system — AI can generate syntactically correct code that is logically wrong
 - Security-sensitive changes (auth, payments, data access) require human review regardless of source or apparent quality
+
+### Merge-gate and AI-review lessons from production incidents
+
+Four specific, non-obvious lessons distilled from real incidents in this
+project's autonomous-dispatch history — general enough to apply to any
+review/CI pipeline gating a merge, AI-driven or not:
+
+- **A green test suite proves the diff's branch logic, not spec-completeness.**
+  An AI executor (and a rushed human) reliably converges to the *minimum*
+  edit that turns its own tests green, then stops — anything not covered by
+  an assertion is liable to be left half-done (a rename applied in one
+  place but not another, a doc comment never updated, a second call site
+  never migrated). Only a reviewer who diffs against the actual requirement
+  — not just "did the tests pass" — catches the gap. When re-reviewing a
+  rework round, require each prior Blocking finding to be discharged
+  individually against the new diff; do not treat "the suite is green now"
+  as evidence a specific named finding was actually fixed.
+- **An AI-authored test can be self-consistently wrong.** A test existing
+  and passing is necessary but not sufficient: an executor that misreads a
+  boundary condition (an off-by-one, an inclusive/exclusive edge) can write
+  a fully green test suite that encodes the *same* mistake as the
+  implementation, so the test confirms the bug instead of catching it.
+  Review sensitive numeric/boundary logic by re-deriving the correct
+  behavior yourself, not by confirming a test exists and is green.
+- **Pin the exact version of any tool whose exit code gates a merge**
+  (linters, formatters, type checkers) — a floor constraint (`>=`) lets an
+  upstream release silently change what "clean" means mid-flight, and a
+  version mismatch between a local environment and CI then gets
+  misdiagnosed as a code or capability problem when it's actually an
+  environment drift problem. Keep the pinned version identical everywhere
+  the check runs.
+- **A stuck agent's own resumed context can be the actual blocker**, not a
+  capability ceiling. If a dispatched agent churns or regresses across
+  repeated rework attempts, try once with a fresh context (a clean restart
+  from the last-known-good state, briefed only on what's left to do) before
+  concluding the model or approach can't do the task — a long, cluttered
+  transcript full of its own prior confusion can itself be what's
+  producing more confusion.
 
 ---
 

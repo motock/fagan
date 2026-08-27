@@ -700,13 +700,16 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > stories, PRs #350, #360-#366** → ~~W2 (chat entry point)~~ **DONE
 > 2026-08-20 — 9/9 stories, PRs #391-#398 + #406** → ~~W3b (writable
 > dashboard, closes B4)~~ **DONE 2026-08-24 — 11/11 stories, PRs
-> #421-#432** → **`server-app-file-split` (split the now-5,466-line
+> #421-#432** → ~~`server-app-file-split` (split the then-5,466-line
 > `pipeline/server.py` + 2,730-line `static/app.js` into modules under
-> 1,000 lines — INGESTED 2026-08-24, 16 stories, paused)** → W4
-> (multi-tenant, closes B3). B1 (sandbox) and B5 (export the moat) are
-> picked up once the service seam exists, not before — the seam now exists
-> (W1a/W1b landed), so B1/B5 are unblocked whenever prioritized ahead of
-> W4. See that doc's own "Ordering conflict" section for the full rationale.
+> 1,000 lines)~~ **DONE 2026-08-25 — 22 stories, PRs #435-#457** →
+> **re-split `scripts/local_agent.py`/`local_agent_oracle.py` (same
+> file-size concern recurring at 1,723/1,599 lines — direct fix in
+> progress 2026-08-27, no plan)** → W4 (multi-tenant, closes B3). B1
+> (sandbox) and B5 (export the moat) are picked up once the service seam
+> exists, not before — the seam now exists (W1a/W1b landed), so B1/B5 are
+> unblocked whenever prioritized ahead of W4. See that doc's own "Ordering
+> conflict" section for the full rationale.
 
 Land what's half-done before building new; then extract the service seam
 that everything else — sandboxing included — is cheaper to build behind.

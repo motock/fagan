@@ -1,12 +1,20 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **In execution (last updated 2026-08-24).** W3a, W1a, W1b, W1c, W2,
-> and W3b are all done and merged. The chat entry point (W2, 9 stories,
-> PRs #391-#398 + #406) and the writable dashboard + config UI (W3b, 11
-> stories, PRs #421-#432) landed since the prior update. The active workstream
-> is `server-app-file-split` (ingested, paused, 16 stories) — splitting the
-> now-5,466-line `pipeline/server.py` and 2,730-line `static/app.js` into
-> modules under 1,000 lines, the continuation of scaling concern #5 below.
+> Status: **In execution (last updated 2026-08-27).** W3a, W1a, W1b, W1c, W2,
+> W3b, and `server-app-file-split` are all done and merged.
+> `server-app-file-split` (22 stories, PRs #435-#457) landed since the prior
+> update: `pipeline/server.py` is down from 5,466 to 992 lines, split into
+> `store.py`/`service.py`/`merge.py`/`ingest.py`/`dispatch.py`/
+> `review_orchestrator.py`/`story_status.py`/`advance.py`/`usage.py`; and
+> `static/app.js` (2,730 lines) is now ES modules
+> (`state.js`/`routing.js`/`api.js`/`render/*.js`/`comms.js`/`usage.js`/
+> `main.js`), every file under 1,000 lines. `comms-ui-design-alignment` (Comms
+> nav/hero/toast polish) also landed on top of the split modules.
+> **New instance of the same scaling concern (#5 below), found 2026-08-27:**
+> `scripts/local_agent.py` (1,723 lines) and `scripts/local_agent_oracle.py`
+> (1,599 lines) are now the two largest files in the repo, both over the
+> 1,000-line guideline — being split directly (outside the pipeline, as a
+> mechanical behavior-preserving move) rather than re-litigated as a plan.
 > W4 (multi-tenant) remains deferred until there's a real second deployment to
 > validate against. See "Suggested sequencing" below for the live state of
 > each workstream. This doc exists to capture the target shape and the real
@@ -401,19 +409,31 @@ atomic write prevents *torn* files, not *lost updates* — two writers between r
 and write silently drop one record. Today the `_plan_lock` makes this mostly
 moot; it stops being moot with any concurrency the flock doesn't cover.
 
-### 5. `pipeline/server.py` at 5,466 lines is itself a scaling limit
+### 5. Large files are themselves a scaling limit — recurring, not one-off
 
-Not runtime scaling — *change* scaling. It's the file every workstream here has
-to touch, it's already the hardest file for a local model to edit safely
-(documented repeatedly in the failure-mode log), and it's the reason a second
-adapter can't be added cheaply. It has *grown* ~1,300 lines since W1 extracted
-`PipelineService`/`Store`, because the chat (W2) and dashboard (W3b)
-workstreams piled new behavior onto it rather than into new modules. The
-`server-app-file-split` plan (ingested, paused, 16 stories) is the direct
-response: extract the remaining `_*_impl` bodies, merge helpers, ingest/dispatch/
-review/advance orchestration, and `check_story_status` into `pipeline/` leaf
-modules, plus split `static/app.js` (2,730 lines) into ES modules, with every
-file under 1,000 lines as the success bar.
+Not runtime scaling — *change* scaling. A file every workstream has to touch is
+the hardest kind for a local model to edit safely (documented repeatedly in the
+failure-mode log), and it's the reason a second adapter can't be added cheaply.
+
+**DONE 2026-08-25** — `pipeline/server.py` had grown to 5,466 lines (from
+chat/W2 and dashboard/W3b piling behavior onto it rather than into new
+modules); the `server-app-file-split` plan (22 stories, PRs #435-#457) split
+it into `store.py`/`service.py`/`merge.py`/`ingest.py`/`dispatch.py`/
+`review_orchestrator.py`/`story_status.py`/`advance.py`/`usage.py`, all under
+1,000 lines, plus split `static/app.js` (2,730 lines) into ES modules the
+same way.
+
+**New instance, found 2026-08-27:** `scripts/local_agent.py` (1,723 lines) and
+`scripts/local_agent_oracle.py` (1,599 lines) — the dispatched agent's own
+tool-calling loop and its acceptance-oracle counterpart — are now the two
+largest files in the repo, both well past the 1,000-line guideline, despite
+already having several helper modules split out (`local_agent_guards.py`,
+`local_agent_repair.py`, `local_agent_oracle_guards.py`,
+`local_agent_oracle_repair.py`, `pipeline/local_agent_common.py`). Being split
+further, directly (mechanical, behavior-preserving, no plan needed) rather
+than re-run through the pipeline. The lesson from `server.py`/`app.js`: this
+class of file — the one every future feature keeps adding a branch to — needs
+a standing size check, not a one-time fix, or it silently regrows.
 
 ### Not a concern
 
@@ -466,23 +486,24 @@ The dependency order is fairly rigid:
    service + HTTP endpoints + frontend config view landed (B1-B4); B5 was the
    security-engineer gate. The second manifest parser is gone; config is
    editable in the UI with effective-value + provenance.
-7. **`server-app-file-split` — split the two monolith files.** **SCOPED +
-   INGESTED 2026-08-24, paused** — 16 stories. `pipeline/server.py` grew to
-   5,466 lines and `static/app.js` to 2,730 as W2/W3b piled behavior onto them;
-   this extracts the `_*_impl` bodies, merge/ingest/dispatch/review/advance
-   orchestration, and `check_story_status` into `pipeline/` leaf modules and
-   splits `app.js` into ES modules, with every file under 1,000 lines as the
-   success bar. The continuation of scaling concern #5. Pinned to
-   `ollama/deepseek-v4-flash` for local dispatch while Claude is weekly-capped.
-8. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
+7. ~~**`server-app-file-split` — split the two monolith files.**~~ **DONE
+   2026-08-25** — 22 stories, PRs #435-#457. `pipeline/server.py` (was 5,466
+   lines) and `static/app.js` (was 2,730) are both now under 1,000 lines per
+   module — see the top-of-doc status note and scaling concern #5.
+8. **Re-split `scripts/local_agent.py`/`local_agent_oracle.py`.** **IN
+   PROGRESS 2026-08-27, direct (no pipeline)** — the same class of concern
+   recurring in the dispatched-agent tool loop and its oracle counterpart
+   (1,723 / 1,599 lines). Mechanical, behavior-preserving.
+9. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
    only where there's a real second deployment to validate against. Building it
    speculatively against an imagined tenant is exactly the over-engineering the
    project's own standards warn about.
 
 Steps 1–6 are worth doing even if enterprise never happens: they're what make the
-system usable without a Claude Code session open, which is the stated goal. Step 7
-is the change-scaling debt those workstreams accrued, and is worth doing on the
-same grounds — it's what keeps the file every future workstream touches editable.
+system usable without a Claude Code session open, which is the stated goal. Steps
+7–8 are the change-scaling debt those workstreams accrued, and are worth doing on
+the same grounds — it's what keeps the files every future workstream touches
+editable.
 
 ---
 
@@ -528,8 +549,10 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   2026-08-17, PRs #350, #360-#366** → ~~**W2 (chat entry point)**~~ **DONE
   2026-08-20, 9/9 stories, PRs #391-#398 + #406** → ~~**W3b (writable
   dashboard — closes B4)**~~ **DONE 2026-08-24, 11/11 stories, PRs #421-#432**
-  → **`server-app-file-split` (split the two monolith files — INGESTED
-  2026-08-24, 16 stories, paused)** → W4 (multi-tenant, closes B3), with B1
+  → ~~**`server-app-file-split` (split the two monolith files)**~~ **DONE
+  2026-08-25, 22 stories, PRs #435-#457** → **re-split
+  `local_agent.py`/`local_agent_oracle.py` (same concern recurring, direct
+  fix in progress 2026-08-27)** → W4 (multi-tenant, closes B3), with B1
   (sandboxing) and B5 (export the moat) picked up after the service seam
   exists rather than before it — the seam now exists (W1a/W1b landed), so
   B1/B5 are unblocked whenever they're prioritized ahead of W4.

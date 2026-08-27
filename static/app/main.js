@@ -29,7 +29,7 @@ import {
 } from "./render/notifications.js";
 import { renderDecisions } from "./render/decisions.js";
 import { renderOverview, _diffOverviewPlanRows } from "./render/overview.js";
-import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage } from "./comms.js";
+import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle } from "./comms.js";
 import { renderUsage } from "./usage.js";
 
 // plan-list.js/plan-detail.js/story-modal.js/notifications.js can't
@@ -103,6 +103,7 @@ function selectComms() {
   state.commsActive = true;
   state.configActive = false;
   state.selectedPlan = null;
+  updateCommsSubtitle();
   updateHash();
   const nav = document.getElementById("plan-list");
   if (nav) {

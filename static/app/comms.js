@@ -1,5 +1,6 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
+import { fetchJson } from "./api.js";
 
 // Comms helper functions
 
@@ -77,4 +78,21 @@ if (commsInput) {
   });
 }
 
-export { renderToolTraceHtml, appendCommsMessage, sendCommsMessage };
+async function updateCommsSubtitle() {
+  const sub = document.getElementById('comms-sub');
+  if (!sub) return;
+  try {
+    const cfg = await fetchJson('/api/config');
+    const roles = Array.isArray(cfg.roles) ? cfg.roles : [];
+    const chatRole = roles.find((r) => r.role === 'chat');
+    if (chatRole && chatRole.provider && chatRole.model) {
+      sub.textContent = `chat -> ${chatRole.provider}/${chatRole.model}`.replace('->', String.fromCharCode(0x2192));
+    } else {
+      sub.textContent = 'chat';
+    }
+  } catch (e) {
+    sub.textContent = 'chat';
+  }
+}
+
+export { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle };

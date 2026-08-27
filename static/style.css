@@ -860,7 +860,7 @@ main {
 /* Comms view styles */
 .comms-head {}
 .comms-title {}
-.comms-title .label { font-size: var(--fs-lg); font-weight: var(--fw-semibold); }
+.comms-title .label {}
 .on-air { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
 .on-air.live { animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 0%{opacity:.5;} 50%{opacity:1;} 100%{opacity:.5;} }

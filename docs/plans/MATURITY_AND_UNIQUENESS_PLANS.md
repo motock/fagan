@@ -704,8 +704,12 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > `pipeline/server.py` + 2,730-line `static/app.js` into modules under
 > 1,000 lines)~~ **DONE 2026-08-25 — 22 stories, PRs #435-#457** →
 > **re-split `scripts/local_agent.py`/`local_agent_oracle.py` (same
-> file-size concern recurring at 1,723/1,599 lines — direct fix in
-> progress 2026-08-27, no plan)** → W4 (multi-tenant, closes B3). B1
+> file-size concern recurring at 1,723/1,599 lines) — PARTIAL 2026-08-27,
+> direct, no plan: config constants + tool schemas extracted to
+> 1,530/1,436 lines; `run_tool`/transport/`_main_impl` remain, needing the
+> same `_ServerRef`-proxy rigor `server-app-file-split` used, applied
+> per-function — scoped follow-up, not force-completed same-session** →
+> W4 (multi-tenant, closes B3). B1
 > (sandbox) and B5 (export the moat) are picked up once the service seam
 > exists, not before — the seam now exists (W1a/W1b landed), so B1/B5 are
 > unblocked whenever prioritized ahead of W4. See that doc's own "Ordering

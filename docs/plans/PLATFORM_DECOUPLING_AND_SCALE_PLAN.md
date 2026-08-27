@@ -12,9 +12,18 @@
 > nav/hero/toast polish) also landed on top of the split modules.
 > **New instance of the same scaling concern (#5 below), found 2026-08-27:**
 > `scripts/local_agent.py` (1,723 lines) and `scripts/local_agent_oracle.py`
-> (1,599 lines) are now the two largest files in the repo, both over the
-> 1,000-line guideline — being split directly (outside the pipeline, as a
-> mechanical behavior-preserving move) rather than re-litigated as a plan.
+> (1,599 lines) were the two largest files in the repo, both over the
+> 1,000-line guideline. **Partial pass done directly, same day**: the
+> environment-derived config constants + TOOLS/HARNESS_RULES schemas (pure
+> data) moved into `scripts/local_agent_config.py` /
+> `scripts/local_agent_oracle_config.py`, bringing the two files to 1,530
+> and 1,436 lines respectively — real but incomplete progress. `run_tool`,
+> the chat/transport functions, and `_main_impl` remain in place: they read
+> mutable module state (`CWD`, `chat`, `time`, several constants) that 40+
+> tests monkeypatch directly on the module object, so moving them requires
+> the same `_ServerRef`-proxy rigor `pipeline/service.py` applies, verified
+> function-by-function — a scoped follow-up, not a same-session mechanical
+> move.
 > W4 (multi-tenant) remains deferred until there's a real second deployment to
 > validate against. See "Suggested sequencing" below for the live state of
 > each workstream. This doc exists to capture the target shape and the real
@@ -425,15 +434,41 @@ same way.
 
 **New instance, found 2026-08-27:** `scripts/local_agent.py` (1,723 lines) and
 `scripts/local_agent_oracle.py` (1,599 lines) — the dispatched agent's own
-tool-calling loop and its acceptance-oracle counterpart — are now the two
+tool-calling loop and its acceptance-oracle counterpart — were the two
 largest files in the repo, both well past the 1,000-line guideline, despite
 already having several helper modules split out (`local_agent_guards.py`,
 `local_agent_repair.py`, `local_agent_oracle_guards.py`,
-`local_agent_oracle_repair.py`, `pipeline/local_agent_common.py`). Being split
-further, directly (mechanical, behavior-preserving, no plan needed) rather
-than re-run through the pipeline. The lesson from `server.py`/`app.js`: this
-class of file — the one every future feature keeps adding a branch to — needs
-a standing size check, not a one-time fix, or it silently regrows.
+`local_agent_oracle_repair.py`, `pipeline/local_agent_common.py`).
+
+**Partial pass done directly, same day:** the config constants + tool
+schemas — pure data, no function bodies — moved into
+`scripts/local_agent_config.py` / `scripts/local_agent_oracle_config.py`,
+landing at 1,530 / 1,436 lines. Verified safe with the full suite: one
+regression surfaced (tests that `exec_module` the file fresh after mutating
+`os.environ`, expecting env-derived constants to recompute, got a stale
+cached copy of the new config module instead) and was fixed by having each
+harness evict its config module from `sys.modules` before importing it, plus
+one source-scan test updated to check both files. Full suite green after
+(5,649 passed, matching baseline) — this is the kind of behavioral edge a
+"just move the code" pass can silently miss without running it.
+
+**Not done, and why:** `run_tool` (~280 lines), the chat/transport functions,
+and `_main_impl` (~600 lines) all remain in place. Every one of them reads
+mutable module-level state (`CWD` alone is monkeypatched 263 times across the
+test suite; `chat`, `time.sleep`, `_measured_chars_per_token`, and several
+constants are also directly patched) that a real reader/writer must resolve
+against the *live* `local_agent`/`local_agent_oracle` module object, not a
+snapshot captured at the new leaf module's import time. Moving them requires
+converting every such reference to a live-lookup proxy — the same
+`_ServerRef` pattern `pipeline/service.py` already uses for exactly this
+problem — applied function-by-function and verified against the full suite,
+which is the same rigor the 22-story `server-app-file-split` epic spent on
+`pipeline/server.py`. That's a scoped, reviewable follow-up, not a
+same-session mechanical move; forcing it through unreviewed risks a subtle
+regression in the production dispatch loop that only a specific monkeypatch
+combination would catch. This class of file — the one every future feature
+keeps adding a branch to — needs a standing size check, not a one-time fix,
+or it silently regrows either way.
 
 ### Not a concern
 
@@ -490,10 +525,12 @@ The dependency order is fairly rigid:
    2026-08-25** — 22 stories, PRs #435-#457. `pipeline/server.py` (was 5,466
    lines) and `static/app.js` (was 2,730) are both now under 1,000 lines per
    module — see the top-of-doc status note and scaling concern #5.
-8. **Re-split `scripts/local_agent.py`/`local_agent_oracle.py`.** **IN
-   PROGRESS 2026-08-27, direct (no pipeline)** — the same class of concern
-   recurring in the dispatched-agent tool loop and its oracle counterpart
-   (1,723 / 1,599 lines). Mechanical, behavior-preserving.
+8. **Re-split `scripts/local_agent.py`/`local_agent_oracle.py`.** **PARTIAL,
+   2026-08-27, direct (no pipeline)** — config constants + tool schemas
+   extracted (1,723→1,530 / 1,599→1,436 lines); `run_tool`/transport/
+   `_main_impl` remain, blocked on the same `_ServerRef`-proxy rigor
+   `server-app-file-split` used, applied per-function. See scaling concern
+   #5 above for detail. Scoped follow-up, not force-completed same-session.
 9. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
    only where there's a real second deployment to validate against. Building it
    speculatively against an imagined tenant is exactly the over-engineering the
@@ -551,8 +588,9 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   dashboard — closes B4)**~~ **DONE 2026-08-24, 11/11 stories, PRs #421-#432**
   → ~~**`server-app-file-split` (split the two monolith files)**~~ **DONE
   2026-08-25, 22 stories, PRs #435-#457** → **re-split
-  `local_agent.py`/`local_agent_oracle.py` (same concern recurring, direct
-  fix in progress 2026-08-27)** → W4 (multi-tenant, closes B3), with B1
+  `local_agent.py`/`local_agent_oracle.py` (same concern recurring; config
+  extracted 2026-08-27, run_tool/`_main_impl` split remains as a scoped
+  follow-up)** → W4 (multi-tenant, closes B3), with B1
   (sandboxing) and B5 (export the moat) picked up after the service seam
   exists rather than before it — the seam now exists (W1a/W1b landed), so
   B1/B5 are unblocked whenever they're prioritized ahead of W4.

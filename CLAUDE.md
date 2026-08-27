@@ -250,6 +250,7 @@ Do not use `ERROR` for expected failure cases (e.g., a user entering a wrong pas
 - Each module, class, or function should have one clear responsibility.
 - Keep business logic separate from infrastructure concerns (I/O, networking, persistence).
 - Avoid leaking implementation details across layer boundaries.
+- Target under 1000 lines per file, new or updated. A file crossing that line is a signal to split by concern, not a hard blocker — but don't add substantial new code to a file already over the limit without splitting it first.
 
 ### Dependencies
 - Depend on abstractions, not concrete implementations, where the flexibility is genuinely needed.

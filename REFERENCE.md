@@ -169,13 +169,6 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
 ### Manual status (kept for the human-driven flow)
 - `mark_story_in_progress(plan_name, story_key)`, `mark_story_done(...)`.
 
-## Scheduler
-
-The advance scheduler runs as a long‑lived daemon. It is configured via the following environment variables:
-
-- `PIPELINE_SCHEDULER_INTERVAL_S`: the interval in seconds between reconciliations (default 60).
-- `PIPELINE_SCHEDULER_HEALTH_PATH`: optional path for a health check endpoint (optional).
-
 ---
 
 ## Status lifecycle

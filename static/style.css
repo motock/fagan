@@ -859,7 +859,7 @@ main {
 /* new block */
 /* Comms view styles */
 .comms-head {}
-.comms-title { display: flex; align-items: center; gap: var(--sp-2); }
+.comms-title {}
 .comms-title .label { font-size: var(--fs-lg); font-weight: var(--fw-semibold); }
 .on-air { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
 .on-air.live { animation: pulse 1s ease-in-out infinite; }

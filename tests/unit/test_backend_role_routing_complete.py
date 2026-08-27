@@ -113,6 +113,21 @@ def test_complete_posts_to_native_chat_endpoint_and_returns_content(monkeypatch)
     ]
 
 
+def test_complete_accepts_and_ignores_bare_kwarg(monkeypatch):
+    """Ollama has no CLAUDE.md-style project-file auto-discovery to suppress;
+    `bare` is accepted purely for interface parity with ClaudeCliDriver
+    (same treatment as max_tokens) and must not raise."""
+    monkeypatch.setenv("PIPELINE_LOCAL_ENDPOINT", "http://localhost:11434")
+    monkeypatch.setattr(
+        b.httpx, "post",
+        lambda url, json, timeout: _FakeResponse({"message": {"content": "ok"}}),
+    )
+
+    result = b.OllamaDriver().complete("hi", model="some-tag", bare=True)
+
+    assert result == "ok"
+
+
 def test_complete_pins_num_ctx_to_avoid_cpu_gpu_split(monkeypatch):
     """Ollama's default context (131072) made devstral:24b's KV cache blow
     past 24GB unified memory, forcing a CPU/GPU split that timed out a single

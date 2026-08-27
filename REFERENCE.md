@@ -608,6 +608,29 @@ against the committed tests rather than rewriting them.
 Set global vars in your shell profile; set per-project overrides in the project's
 `.mcp.json` `env` block.
 
+### Minimal configuration
+
+This repo defines over a hundred `PIPELINE_*`/`LOCAL_AGENT_*` variables, but
+the overwhelming majority are tuning knobs with sane defaults — empirically-set
+timeouts, retry budgets, and per-model overrides that only matter once you're
+running local dispatch at scale. **A first deployment using the default
+`claude` backend for every role needs none of them.** Set these, and leave
+everything else at its default until you have a concrete reason to change it:
+
+| Variable | Why you'd set it on day one |
+|---|---|
+| `REPO_ROOT` | Point the pipeline at the project it should operate on — almost always required; defaults to `.` |
+| `PLAN_DIR` | Only if you don't want plans/manifests in the default `~/.claude/plans` |
+| `PIPELINE_AUTONOMY` | Set to `dry-run` for your first plan on any new deployment (see Autonomy levels below); move to `gated` once you trust it |
+| `PIPELINE_RISK_THRESHOLD` | Leave at `low` until you've watched a `gated` run go well |
+| `PLANE_*` (4 vars) | Only if you're mirroring stories into a Plane project — skip entirely otherwise, the manifest is authoritative regardless |
+| `PIPELINE_BACKEND_DISPATCH` / `_REVIEW` / `_OVERLORD` | Only to opt a role into local-model dispatch (`ollama`/`lmstudio`/`mlx`/`local`/`auto`) instead of the `claude` default |
+
+Everything under `PIPELINE_LOCAL_*`, `LOCAL_AGENT_*`, the per-model tuning
+table, the rework/escalation budgets, and the review-fallback knobs exists to
+tune local-model dispatch once you've opted into it. They're documented in
+full below for when you need them, not because you need to read them first.
+
 **A ticketing backend is optional.** It's an issue-tracker mirror, not
 load-bearing — the manifest (`<plan>.manifest.json`) is the actual source of
 truth for story state. Which backend (if any) is active is resolved by

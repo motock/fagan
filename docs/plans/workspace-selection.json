@@ -1,0 +1,183 @@
+{
+  "repo_root": "/Users/jessecarroll/.claude/mcp-servers/pipeline",
+  "epics": [
+    {
+      "summary": "Workspace resolution core",
+      "stories": [
+        {
+          "key": "WS-01",
+          "summary": "Add pipeline/workspace.py with normalize_workspace_path and validate_workspace",
+          "description": "Pure path-safety + validation functions for selecting an existing project directory. New file, no callers yet.",
+          "agent_instructions": "Create a NEW file `pipeline/workspace.py` containing exactly two public functions. Write the failing tests FIRST in a NEW file `tests/unit/test_workspace_validate.py`; do not add to any existing test file.\n\n1) `normalize_workspace_path(raw: str | None) -> Path` — path safety. Must: reject None/empty/whitespace-only with `ValueError`; reject a relative path with `ValueError` (require absolute after expansion); apply `os.path.expanduser`; resolve to a canonical absolute path via `Path.resolve()`; reject any path containing a `..` segment in the RAW input with `ValueError` (check before resolving, so traversal is refused rather than silently normalized away). Return the resolved `Path`.\n\n2) `validate_workspace(raw: str | None) -> dict` — determine whether a path is a usable existing workspace. Call `normalize_workspace_path` first. Return a dict of shape `{\"ok\": bool, \"path\": str, \"error\": str | None}`. Return ok=False with a descriptive error when: the path does not exist; the path exists but is not a directory; the directory is not a git repository (no reachable `.git` — shell out to `git -C <path> rev-parse --git-dir` and treat a non-zero exit as not-a-repo); the directory is a git repo with ZERO commits (`git -C <path> rev-parse HEAD` exits non-zero on an unborn HEAD). Return ok=True only when it is an existing directory that is a git repo with at least one commit. Never raise for these cases — only `normalize_workspace_path` raises, and `validate_workspace` must catch that `ValueError` and convert it to an ok=False result.\n\nDo NOT create directories, do NOT run `git init`, and do NOT modify any file other than the two named above. Creation is a separate story.\n\nTests to write (positive and negative, all in tests/unit/test_workspace_validate.py):\n- valid: a tmp_path git repo with one commit returns ok=True and the resolved path\n- nonexistent path -> ok=False\n- path that is a FILE not a directory -> ok=False\n- existing directory that is not a git repo -> ok=False\n- git repo with zero commits (git init only, no commit) -> ok=False\n- None, \"\", \"   \" -> ok=False (and normalize_workspace_path raises ValueError for each)\n- relative path e.g. \"foo/bar\" -> ok=False\n- path containing traversal e.g. \"/tmp/../etc\" -> ok=False\n- `~` expansion works (monkeypatch HOME to tmp_path)\n\nSuccess criteria: `pytest tests/unit/test_workspace_validate.py` passes, and `ruff check .` is clean.",
+          "persona": "software-engineer",
+          "risk": "low",
+          "backend": "local"
+        },
+        {
+          "key": "WS-02",
+          "summary": "Add create_workspace to pipeline/workspace.py (mkdir + git init + empty initial commit)",
+          "description": "Creating a brand-new project directory. Deliberately does NOT scaffold a test runner, CLAUDE.md, or CI - that would be runtime language detection, which this repo forbids. The plan's own story #1 does language-appropriate scaffolding instead.",
+          "agent_instructions": "Add ONE new public function `create_workspace(raw: str | None) -> dict` to the EXISTING file `pipeline/workspace.py`. Use an anchored `str_replace` to append it after `validate_workspace`; do not re-indent or rewrite existing functions. Write the failing tests FIRST in a NEW file `tests/unit/test_workspace_create.py`.\n\n`create_workspace` must: call `normalize_workspace_path` (catching `ValueError` into an ok=False result, same contract as `validate_workspace`); create the directory including parents; run `git init`; create an EMPTY initial commit (`git commit --allow-empty -m \"Initial commit\"`) so the repo has a reachable HEAD and a default branch, which the pipeline's branch/rebase/merge machinery requires. Set `user.name`/`user.email` locally for that repo if the commit fails for want of an identity. Return the same `{\"ok\": bool, \"path\": str, \"error\": str | None}` shape as `validate_workspace`.\n\nCRITICAL - do NOT scaffold anything else. No README, no test runner config, no CLAUDE.md, no CI file, no language-specific files. The harness must stay language-agnostic; a scaffolding story authored by `decompose` handles that later.\n\nIf the target directory already exists and is a non-empty directory, return ok=False rather than clobbering it. If it already exists and is an EMPTY directory, proceed (git init into it).\n\nTests to write (all in tests/unit/test_workspace_create.py):\n- happy path: new path under tmp_path -> ok=True, directory exists, is a git repo, `git rev-parse HEAD` succeeds\n- creates missing parent directories\n- target already exists and is non-empty -> ok=False, and the existing contents are untouched\n- target already exists and is empty -> ok=True\n- target exists but is a FILE -> ok=False\n- None/\"\"/relative/traversal inputs -> ok=False (mirror WS-01's negative cases)\n- parent directory not writable -> ok=False and no partial directory left behind (use chmod on a tmp_path subdir; skip the test on root)\n\nSuccess criteria: `pytest tests/unit/test_workspace_create.py tests/unit/test_workspace_validate.py` passes; `ruff check .` clean.",
+          "dependencies": [
+            "Add pipeline/workspace.py with normalize_workspace_path and validate_workspace"
+          ],
+          "persona": "software-engineer",
+          "risk": "low",
+          "backend": "local"
+        }
+      ]
+    },
+    {
+      "summary": "Workspace persistence and service layer",
+      "stories": [
+        {
+          "key": "WS-03",
+          "summary": "Persist a recent-workspaces list in pipeline/store.py",
+          "description": "Storage for explicitly-opened workspace paths. The full recents list is this plus every existing manifest's repo_root, combined in the service layer (WS-04).",
+          "agent_instructions": "Add recents persistence to the EXISTING file `pipeline/store.py` using anchored `str_replace`. Write the failing tests FIRST in a NEW file `tests/unit/test_store_recent_workspaces.py`.\n\nAdd two methods to the existing store class:\n- `get_recent_workspaces() -> list[str]` - read a JSON list of absolute path strings from a `recent_workspaces.json` file alongside the existing plan storage. Return `[]` when the file is absent, empty, or contains malformed JSON (never raise).\n- `add_recent_workspace(path: str) -> None` - prepend the path, de-duplicate preserving most-recent-first order, and cap the list at 20 entries. Write atomically.\n\nRead how the existing store resolves its storage directory and follow that same pattern exactly - do NOT hardcode a path or introduce a new configuration knob.\n\nTests to write (all in tests/unit/test_store_recent_workspaces.py, using a tmp storage dir):\n- get returns [] when the file does not exist\n- get returns [] when the file contains malformed JSON\n- get returns [] when the file contains a non-list JSON value\n- add then get round-trips\n- adding an existing path moves it to the front without duplicating\n- the list caps at 20, dropping the oldest\n- order is most-recent-first\n\nDo NOT touch pipeline/service.py or any route in this story. Success criteria: `pytest tests/unit/test_store_recent_workspaces.py` passes; `ruff check .` clean.",
+          "dependencies": [
+            "Add create_workspace to pipeline/workspace.py (mkdir + git init + empty initial commit)"
+          ],
+          "persona": "software-engineer",
+          "risk": "low",
+          "backend": "local"
+        },
+        {
+          "key": "WS-04",
+          "summary": "Add PipelineService.resolve_workspace and list_workspaces",
+          "description": "Service-layer entry points. Routes stay thin delegators over these, matching how the config write surface is already structured.",
+          "agent_instructions": "Add two methods to `class PipelineService` in the EXISTING file `pipeline/service.py` (class begins at line 163). Use an anchored `str_replace` against a nearby existing method; do NOT re-indent the class. Write the failing tests FIRST in a NEW file `tests/unit/test_service_workspace.py`.\n\n1) `resolve_workspace(self, path: str | None, create: bool = False) -> dict` - when `create` is False, delegate to `pipeline.workspace.validate_workspace`; when True, delegate to `pipeline.workspace.create_workspace`. On an ok=True result, record the path via the store's `add_recent_workspace`. Return the underlying dict unchanged. Do not record on failure.\n\n2) `list_workspaces(self) -> list[dict]` - return the combined recents list, most-recent-first, de-duplicated by resolved path. Sources: the store's `get_recent_workspaces()`, plus the `repo_root` of every existing manifest (reuse the existing manifest-listing helpers this class already uses - read how `list_plans`/`get_manifest_or_none` work and follow that pattern; do not re-implement manifest discovery). Each entry: `{\"path\": str, \"exists\": bool, \"valid\": bool}` where `valid` reflects `validate_workspace(...)[\"ok\"]`. A recorded workspace that has since been deleted or had its .git removed must still be LISTED, with exists/valid False - never silently dropped, so the user can see and clear it.\n\nTests to write (all in tests/unit/test_service_workspace.py):\n- resolve_workspace(create=False) on a valid repo -> ok=True and the path is recorded as recent\n- resolve_workspace(create=False) on an invalid path -> ok=False and NOTHING is recorded\n- resolve_workspace(create=True) creates and records\n- list_workspaces merges store recents with manifest repo_roots\n- list_workspaces de-duplicates a path present in both sources\n- list_workspaces preserves most-recent-first ordering\n- a recorded-but-now-deleted path appears with exists=False, valid=False\n- list_workspaces returns [] when there are no manifests and no recents\n\nStub the store and manifest sources with synthetic values - do NOT assert against the real on-disk plans directory or today's live manifest contents. Do NOT touch app/dashboard.py in this story. Success criteria: `pytest tests/unit/test_service_workspace.py` passes; `ruff check .` clean.",
+          "dependencies": [
+            "Persist a recent-workspaces list in pipeline/store.py"
+          ],
+          "persona": "software-engineer",
+          "risk": "low",
+          "backend": "local"
+        }
+      ]
+    },
+    {
+      "summary": "Workspace HTTP surface",
+      "stories": [
+        {
+          "key": "WS-05",
+          "summary": "Add POST /api/workspace route delegating to PipelineService.resolve_workspace",
+          "description": "Two production files: the request model goes in app/dashboard_models.py (where all request models now live after the dashboard split) and the route in app/dashboard.py. Both edits are small anchored appends.",
+          "agent_instructions": "Add ONE request model and ONE route across TWO existing files. Write the failing tests FIRST in a NEW file `tests/unit/test_dashboard_workspace_route.py`.\n\nSTEP 1 - `app/dashboard_models.py` (66 lines; every dashboard request model lives here since the dashboard split). Append a pydantic model beside the existing ones, matching their style exactly (read `RoleDefaultBody` first):\n\n```\nclass WorkspaceRequest(BaseModel):\n    path: str\n    create: bool = False\n```\n\nSTEP 2 - `app/dashboard.py` (715 lines). Add `WorkspaceRequest` to the existing `from app.dashboard_models import (...)` block near the top of the file. That import list is ALPHABETICALLY SORTED and ruff enforces the ordering - `WorkspaceRequest` sorts LAST, immediately after `StoryStatusBody`. Use an anchored `str_replace` on `    StoryStatusBody,\\n)` to insert it.\n\nSTEP 3 - `app/dashboard.py`. MIRROR THE EXISTING PRECEDENT EXACTLY: read `POST /api/config/roles/{role}` at `app/dashboard.py:507`, which delegates to `_service.set_role_default(...)` and raises `HTTPException(status_code=400, detail=...)` when the service returns a falsy `ok`. Your route follows the same shape - it must contain NO business logic:\n\n```\n@app.post(\"/api/workspace\")\ndef set_workspace_route(request: WorkspaceRequest):\n    result = _service.resolve_workspace(request.path, create=request.create)\n    if not result.get(\"ok\"):\n        raise HTTPException(status_code=400, detail=result.get(\"error\", \"Unknown error\"))\n    return result\n```\n\nUse an anchored `str_replace` keyed on the text of an existing nearby route - do NOT use line-number edits, and do NOT reformat or re-indent any existing code. Touch NO production file other than these two.\n\nTests to write (all in tests/unit/test_dashboard_workspace_route.py, using TestClient with `_service` monkeypatched to a fake):\n- valid path returns 200 and the service result body\n- the route passes `create` through to the service (False by default, True when sent)\n- a service ok=False result returns 400 with the service's error in `detail`\n- a missing `path` field returns 422\n- a non-string `path` returns 422\n- an empty-string path reaches the service and its ok=False becomes a 400\n- the route contains no path validation of its own - assert by giving the fake service a recording spy and checking the raw input reached it unmodified\n\nDo NOT modify any existing test file. Do NOT touch app/chat.py or the frontend. Success criteria: `pytest tests/unit/test_dashboard_workspace_route.py` passes; `ruff check .` clean.",
+          "dependencies": [
+            "Add PipelineService.resolve_workspace and list_workspaces"
+          ],
+          "persona": "software-engineer",
+          "risk": "medium",
+          "backend": "local"
+        },
+        {
+          "key": "WS-06",
+          "summary": "Add GET /api/workspaces route returning the recents list",
+          "description": "Read side of the workspace surface, mirroring GET /api/config/providers. Single production file, pure append.",
+          "agent_instructions": "Add ONE route to the EXISTING file `app/dashboard.py` (715 lines). This story needs NO new request model - a GET takes no body - so `app/dashboard_models.py` must NOT be touched. Write the failing tests FIRST in a NEW file `tests/unit/test_dashboard_workspaces_list_route.py`.\n\nMIRROR the existing read-side precedent `GET /api/config/providers` at `app/dashboard.py:491`. Add:\n\n```\n@app.get(\"/api/workspaces\")\ndef list_workspaces_route():\n    return {\"workspaces\": _service.list_workspaces()}\n```\n\nUse an anchored `str_replace` keyed on nearby existing route text. Do NOT use line-number edits or reformat existing code.\n\nTests to write (all in tests/unit/test_dashboard_workspaces_list_route.py, `_service` monkeypatched to a fake):\n- returns 200 with the service's list under a `workspaces` key\n- returns an empty list (not an error, not 404) when the service returns []\n- entries pass through unmodified, including entries with exists=False/valid=False\n- the route adds no filtering or sorting of its own\n\nDo NOT modify any existing test file. Success criteria: `pytest tests/unit/test_dashboard_workspaces_list_route.py` passes; `ruff check .` clean.",
+          "dependencies": [
+            "Add POST /api/workspace route delegating to PipelineService.resolve_workspace"
+          ],
+          "persona": "software-engineer",
+          "risk": "medium",
+          "backend": "local"
+        },
+        {
+          "key": "WS-07",
+          "summary": "Security review and hardening of the workspace HTTP surface",
+          "description": "POST /api/workspace accepts an arbitrary filesystem path from an unauthenticated local HTTP surface and can create directories. This is the highest-risk story in the plan and gets a dedicated security pass.",
+          "agent_instructions": "Threat-model and harden the workspace HTTP surface added in WS-05/WS-06. Write the failing tests FIRST in a NEW file `tests/unit/test_workspace_path_security.py`.\n\nThe attack surface: `POST /api/workspace` takes an arbitrary path string and, with `create: true`, calls `mkdir` and `git init`. Review and close at least these:\n- Path traversal: `..` segments, encoded variants, and paths that resolve outside any intended root.\n- Symlink attacks: a path whose final or intermediate component is a symlink pointing somewhere sensitive. Decide and document whether symlinked workspaces are permitted; if not, reject them.\n- Writing into sensitive locations: creating a directory inside `/etc`, `/System`, the user's `.ssh`, or the pipeline's own repo root. Add a deny-list check, and fail CLOSED (deny) when a check errors or a value is unexpected.\n- Error messages must not leak internal filesystem structure beyond the path the caller already supplied - no stack traces, no internal paths in the HTTP `detail`.\n- Confirm the created git repo is not initialized with any credential helper, remote, or hook inherited from a template directory (`git init` can honor `init.templateDir`); pass an explicit empty template if that risk is real.\n\nImplement the hardening in `pipeline/workspace.py` (so it applies to every caller, not just the HTTP route) - defense in depth means the service and module enforce it too, not only the endpoint. You may also add a check in the route if warranted, but the module is the primary control.\n\nTests to write (all in tests/unit/test_workspace_path_security.py) must cover each of the above as an explicit NEGATIVE test asserting the request is DENIED, plus at least one positive test confirming an ordinary valid workspace under tmp_path is still accepted (guard against over-blocking).\n\nYou MAY modify `pipeline/workspace.py`. You may add new tests. Do NOT modify any pre-existing test file; if a hardening change would break one, STOP and raise it via request_decision rather than editing it. Success criteria: the new security tests pass, the full suite still passes, and `ruff check .` is clean.",
+          "dependencies": [
+            "Add GET /api/workspaces route returning the recents list"
+          ],
+          "persona": "security-engineer",
+          "risk": "high",
+          "backend": "claude"
+        }
+      ]
+    },
+    {
+      "summary": "Chat integration",
+      "stories": [
+        {
+          "key": "WS-08",
+          "summary": "Prepare test_chat_endpoint.py fake ChatService doubles to accept a workspace kwarg",
+          "description": "Mechanical prep story. tests/unit/test_chat_endpoint.py pins execute_turn's signature in three fake stubs and asserts the captured dict by strict equality, so WS-09 would otherwise break it with no authorization to fix it - the exact failure that parked a prior story with zero commits after two rework cycles. Because the stubs default workspace to None, these edits pass BOTH before and after WS-09 lands.",
+          "agent_instructions": "[no-new-tests]\n\nThis story makes exactly FIVE authorized edits to the EXISTING file `tests/unit/test_chat_endpoint.py` and changes NOTHING else. No production file may be touched. This is a deliberate, pre-authorized exception to the 'never modify an existing test' rule - it is the ONLY file you may edit, and only as specified below.\n\nThere are THREE fake ChatService classes in that file, each defining `execute_turn` with this exact signature and body-prefix:\n\n    def execute_turn(self, message, *, plan_name=None, history=None) -> dict:\n\nand each appending a dict of exactly three keys. For EACH of the three occurrences, make these two changes:\n\nBEFORE:\n    def execute_turn(self, message, *, plan_name=None, history=None) -> dict:\nAFTER:\n    def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:\n\nBEFORE:\n            {\"message\": message, \"plan_name\": plan_name, \"history\": history}\nAFTER:\n            {\"message\": message, \"plan_name\": plan_name, \"history\": history, \"workspace\": workspace}\n\n(The module-level stub uses `self.calls.append(` and the two `_CapturingService` classes use `captured.append(` - the dict literal is the same in all three.)\n\nThen update the TWO strict-equality assertions to include the new key:\n\nBEFORE:\n    assert captured == [\n        {\n            \"message\": \"hello\",\n            \"plan_name\": \"demo\",\n            \"history\": [{\"role\": \"user\", \"content\": \"prev\"}],\n        }\n    ]\nAFTER:\n    assert captured == [\n        {\n            \"message\": \"hello\",\n            \"plan_name\": \"demo\",\n            \"history\": [{\"role\": \"user\", \"content\": \"prev\"}],\n            \"workspace\": None,\n        }\n    ]\n\nBEFORE:\n    assert captured == [{\"message\": \"hello\", \"plan_name\": None, \"history\": None}]\nAFTER:\n    assert captured == [{\"message\": \"hello\", \"plan_name\": None, \"history\": None, \"workspace\": None}]\n\nUse anchored `str_replace` for every edit. After editing, run `grep -c 'workspace=None) -> dict' tests/unit/test_chat_endpoint.py` and confirm it prints exactly 3, and `grep -c '\\\"workspace\\\": workspace' tests/unit/test_chat_endpoint.py` and confirm it prints exactly 3. If either count is wrong you have duplicated or missed an edit - fix it before finishing.\n\nThese tests must PASS after your edits with production code unchanged, because the endpoint does not yet send a workspace and the stubs default it to None. Success criteria: `pytest tests/unit/test_chat_endpoint.py` passes; `ruff check .` clean; `git diff --name-only` shows ONLY tests/unit/test_chat_endpoint.py.",
+          "dependencies": [
+            "Security review and hardening of the workspace HTTP surface"
+          ],
+          "persona": "software-engineer",
+          "risk": "medium",
+          "backend": "claude"
+        },
+        {
+          "key": "WS-09",
+          "summary": "Thread workspace through ChatRequest and ChatService.execute_turn",
+          "description": "Chat is stateless server-side; plan_name is already threaded client -> request -> turn. Workspace follows that identical path. No server-side session state.",
+          "agent_instructions": "Thread a `workspace` value through the chat request path in the EXISTING file `app/chat.py`, copying EXACTLY how `plan_name` already works. Write the failing tests FIRST in a NEW file `tests/unit/test_chat_workspace_threading.py`.\n\nThe three anchors in app/chat.py, all of which already handle `plan_name` - follow each one:\n1. `class ChatRequest(BaseModel)` (~line 334) currently declares `plan_name: str | None = None`. Add `workspace: str | None = None` beside it.\n2. `def execute_turn(self, message, *, plan_name=None, history=None) -> dict:` (~line 309). Add a keyword-only `workspace=None` parameter.\n3. `def chat_endpoint(req: ChatRequest)` (~line 346) currently calls `svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history)`. Add `workspace=req.workspace`.\n\nThen make the workspace visible to the model: when `workspace` is not None, include a sentence in the system prompt for that turn stating the active workspace absolute path and instructing the model to use it as `repo_root` when authoring a plan. When it is None, the prompt must be unchanged from today.\n\nDO NOT add server-side session state, a global, or a cache. The workspace arrives per-request exactly as plan_name does.\n\nDO NOT hand-write a tool list into the prompt - `SYSTEM_PROMPT` is generated from the TOOLS registry via `_available_tools_sentence()` (app/chat.py:209) and must stay that way.\n\nTests to write (all in tests/unit/test_chat_workspace_threading.py):\n- ChatRequest accepts and defaults workspace to None\n- the endpoint forwards workspace to execute_turn (spy on a fake service)\n- omitting workspace forwards None\n- when workspace is set, the prompt passed to the driver contains that absolute path\n- when workspace is None, the prompt contains no workspace sentence\n- an empty-string workspace is treated as absent (no workspace sentence)\n- the prompt is still generated from the TOOLS registry - assert a tool name registered in TOOLS appears in the prompt, by MEMBERSHIP; never assert the total tool list, an exact count, or an exact full-prompt string\n\ntests/unit/test_chat_endpoint.py was already updated by a prior story to accept this kwarg - you must NOT need to edit it. If it fails, STOP and raise via request_decision rather than editing any existing test. Success criteria: `pytest tests/unit/test_chat_workspace_threading.py tests/unit/test_chat_endpoint.py` passes; `ruff check .` clean.",
+          "dependencies": [
+            "Prepare test_chat_endpoint.py fake ChatService doubles to accept a workspace kwarg"
+          ],
+          "persona": "software-engineer",
+          "risk": "medium",
+          "backend": "local"
+        },
+        {
+          "key": "WS-10",
+          "summary": "Register set_workspace and list_workspaces chat tools",
+          "description": "Lets the chat model select or create a workspace and show recents, via the endpoints from WS-05/WS-06.",
+          "agent_instructions": "Add TWO entries to the `TOOLS` dict in the EXISTING file `app/chat.py`. Write the failing tests FIRST in a NEW file `tests/unit/test_chat_workspace_tools.py`.\n\nCopy the shape of the existing neighbouring entries exactly (each is a dict with `description`, `params`, and an `execute` lambda that calls `_resolve_tool_url(http_client, api_base_url, ...)`):\n\n- `set_workspace` - params `{\"path\": \"str\", \"create\": \"bool\"}` - POSTs to `/api/workspace` with body `{\"path\": path, \"create\": create}`.\n- `list_workspaces` - params `{}` - GETs `/api/workspaces`.\n\nUse an anchored `str_replace` against an existing entry's text to insert them. Do NOT reformat the dict or touch other entries.\n\nCRITICAL - `TOOLS` is a CUMULATIVE artifact that other stories also add to. Your tests must assert ONLY what YOU add: use membership (`\"set_workspace\" in TOOLS`) and per-entry structure. NEVER assert the total contents of TOOLS, its exact length, an exact `.keys()` equality, or an exact full-string match of the generated prompt sentence.\n\nTests to write (all in tests/unit/test_chat_workspace_tools.py):\n- `\"set_workspace\" in TOOLS` and `\"list_workspaces\" in TOOLS`\n- each entry has description/params/execute keys\n- set_workspace's execute POSTs to /api/workspace with path and create in the body (fake http_client recording the call)\n- set_workspace defaults create to False when not supplied\n- list_workspaces' execute GETs /api/workspaces\n- both tool names appear in the generated prompt sentence via `_available_tools_sentence()` - assert by MEMBERSHIP of each name in the returned string, not by comparing the whole sentence\n\nDo NOT modify any existing test file. Success criteria: `pytest tests/unit/test_chat_workspace_tools.py` passes; `ruff check .` clean.",
+          "dependencies": [
+            "Thread workspace through ChatRequest and ChatService.execute_turn"
+          ],
+          "persona": "software-engineer",
+          "risk": "medium",
+          "backend": "local"
+        },
+        {
+          "key": "WS-11",
+          "summary": "Validate and inject repo_root server-side in PipelineService.save_plan",
+          "description": "The core fix. Today repo_root is whatever the chat model wrote into the plan JSON blob, which is why a new user's plan is rejected at ingest. Trusting the model one layer up would just move the failure, so the server validates and injects instead.",
+          "agent_instructions": "Change `PipelineService.save_plan` in the EXISTING file `pipeline/service.py` so `repo_root` is established SERVER-SIDE rather than trusted from the model-authored plan JSON. Write the failing tests FIRST in a NEW file `tests/unit/test_service_save_plan_repo_root.py`.\n\nAdd an optional keyword parameter `workspace: str | None = None` to `save_plan`. Behavior:\n- When `workspace` is provided: validate it with `pipeline.workspace.validate_workspace`. If invalid, return `{\"ok\": False, \"error\": ...}` WITHOUT saving. If valid, set the plan JSON's top-level `repo_root` to the validated resolved path, OVERWRITING whatever the model wrote there.\n- When `workspace` is None: preserve today's behavior exactly (save whatever the plan JSON contains). This keeps every existing caller working unchanged.\n- If the plan JSON is not valid JSON or not a JSON object, return an ok=False error rather than raising.\n\nUse an anchored `str_replace` on the existing `save_plan` body. If the existing function is long, prefer the rename-and-delegate shape: rename the existing body to `_save_plan_impl` and make `save_plan` a thin wrapper that does the workspace validation/injection and then calls it - do NOT re-indent the existing body in place.\n\nTests to write (all in tests/unit/test_service_save_plan_repo_root.py):\n- workspace=None preserves the plan JSON's existing repo_root byte-for-byte (regression guard for existing callers)\n- a valid workspace OVERWRITES a wrong repo_root in the plan JSON with the validated path\n- a valid workspace INJECTS repo_root when the plan JSON has none\n- an invalid workspace returns ok=False and writes NOTHING to disk\n- a plan JSON that is not valid JSON returns ok=False, does not raise\n- a plan JSON that is a JSON list, not an object, returns ok=False\n- the injected repo_root is the RESOLVED absolute path, not the raw input string\n\nStub `validate_workspace` with synthetic results - do not depend on real directories beyond tmp_path. Do NOT modify any existing test file; if an existing save_plan test would break, STOP and raise via request_decision. Do NOT change the HTTP route in this story. Success criteria: `pytest tests/unit/test_service_save_plan_repo_root.py` passes, the full suite passes, `ruff check .` clean.",
+          "dependencies": [
+            "Register set_workspace and list_workspaces chat tools"
+          ],
+          "persona": "software-engineer",
+          "risk": "high",
+          "backend": "claude"
+        }
+      ]
+    },
+    {
+      "summary": "Workspace picker UI",
+      "stories": [
+        {
+          "key": "WS-12",
+          "summary": "Add static/app/workspace.js picker module",
+          "description": "New ES module, following the existing static/app/ module layout. A new file rather than surgery inside an existing one.",
+          "agent_instructions": "Create a NEW ES module `static/app/workspace.js`. Write the failing tests FIRST in a NEW file `tests/test_app_workspace.mjs`, using the shared loader `tests/_app_js_loader.mjs` exactly as the existing frontend tests do - read `tests/test_app_hash.mjs` first and follow its structure.\n\nRead `static/app/comms.js` and `static/app/api.js` first and match their conventions (module-level functions, named exports at the bottom, `fetch` for HTTP).\n\nExport three functions:\n- `fetchWorkspaces()` - GET `/api/workspaces`, return the `workspaces` array; return `[]` on a non-2xx or a network error (never throw).\n- `selectWorkspace(path, create)` - POST `/api/workspace` with `{path, create}`; return the parsed result on 2xx; on a non-2xx return an object with an `error` string taken from the response `detail` when present; never throw.\n- `renderWorkspaceList(workspaces)` - return an HTML string for the recents list. Escape all interpolated values. An entry with `valid: false` must be visibly marked as unavailable rather than omitted. An empty array must render an explicit empty-state string, not an empty result.\n\nDo NOT modify `static/app/state.js`, `static/app/comms.js`, `static/app/main.js`, or any existing file in this story - wiring is a separate story. This story adds two NEW files only.\n\nTests to write (all in tests/test_app_workspace.mjs):\n- fetchWorkspaces returns the array on a canned 200\n- fetchWorkspaces returns [] on a 500\n- fetchWorkspaces returns [] when fetch rejects\n- selectWorkspace POSTs path and create in the body\n- selectWorkspace surfaces the server's detail as `error` on a 400\n- selectWorkspace does not throw on a network error\n- renderWorkspaceList escapes HTML metacharacters in a path\n- renderWorkspaceList marks a valid:false entry as unavailable and still includes it\n- renderWorkspaceList renders an empty state for []\n\nSuccess criteria: the new .mjs test passes under the project's node test runner, the full suite passes, and `ruff check .` is clean.",
+          "dependencies": [
+            "Validate and inject repo_root server-side in PipelineService.save_plan"
+          ],
+          "persona": "software-engineer",
+          "risk": "low",
+          "backend": "local"
+        },
+        {
+          "key": "WS-13",
+          "summary": "Wire selectedWorkspace into state.js and send it from comms.js",
+          "description": "Final wiring: the picked workspace becomes per-request state sent with every chat turn, exactly as selectedPlan already is.",
+          "agent_instructions": "Wire the workspace into the chat request path across TWO existing files, copying how `selectedPlan` already works.\n\n1. `static/app/state.js` - the state object currently contains `selectedPlan: null` (~line 32). Add `selectedWorkspace: null` beside it, using an anchored `str_replace`. If there is a reset function that clears `selectedPlan`, clear `selectedWorkspace` there too.\n\n2. `static/app/comms.js` - `sendCommsMessage` (~line 32) currently sends:\n\n    body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: null })\n\nChange it to include the workspace:\n\n    body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: null, workspace: state.selectedWorkspace })\n\nUse an anchored `str_replace` on that exact line. Change nothing else in either file.\n\nWrite the failing tests FIRST in a NEW file `tests/test_app_workspace_wiring.mjs`, using the shared loader `tests/_app_js_loader.mjs`.\n\nTests to write:\n- the state object exposes selectedWorkspace, defaulting to null\n- sendCommsMessage includes a `workspace` key in the POST body\n- the sent workspace equals state.selectedWorkspace when it is set\n- the sent workspace is null when it has not been selected\n- plan_name, message, and history are still sent unchanged (regression guard)\n\n`tests/unit/test_dashboard_comms_send.py` asserts on rendering via a canned fetch shim and does NOT pin the request body, so it must keep passing untouched. Do NOT modify it or any other existing test file; if one breaks, STOP and raise via request_decision. Success criteria: the new .mjs test passes, `pytest tests/unit/test_dashboard_comms_send.py` still passes, the full suite passes, and `ruff check .` is clean.",
+          "dependencies": [
+            "Add static/app/workspace.js picker module"
+          ],
+          "persona": "software-engineer",
+          "risk": "medium",
+          "backend": "local"
+        }
+      ]
+    }
+  ]
+}

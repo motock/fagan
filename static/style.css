@@ -294,16 +294,63 @@ main {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
 }
-.show-archived-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-dim);
-  cursor: pointer;
-}
-
-#plan-detail { flex: 1; overflow-y: auto; padding: 16px 20px; }
+ .show-archived-toggle {
+   display: flex;
+   align-items: center;
+   gap: 6px;
+   font-size: 11px;
+   color: var(--text-dim);
+   cursor: pointer;
+ }
+ 
+ /* === Pinned Comms header pill + PLANS section label === */
+ /* Comms is the sidebar's top-level entry point, so it reads as an active
+    accent pill rather than as one more plan row. The two-class selectors
+    (.plan-item.comms-item) outrank the single-class .plan-item base rules
+    they override; source order below also keeps .active last. Overview
+    deliberately gets no rule of its own - it stays a plain .plan-item. */
+ .plan-item.comms-item {
+   margin: var(--sp-3);
+   padding: var(--sp-2) var(--sp-3);
+   border: 1px solid var(--accent);
+   border-radius: var(--radius-pill);
+   background: var(--accent-soft);
+   color: var(--accent);
+ }
+ .plan-item.comms-item:hover {
+   background: var(--accent-soft);
+   border-color: var(--accent-hover);
+   color: var(--accent-hover);
+ }
+ /* .plan-item.active adds a 3px left border, which would flatten the pill's
+    rounded left edge - keep the pill's own 1px border on all four sides. */
+ .plan-item.comms-item.active {
+   background: var(--accent-soft);
+   border-left: 1px solid var(--accent);
+ }
+ .plan-item.comms-item .plan-name {
+   display: flex;
+   align-items: center;
+   gap: var(--sp-2);
+   color: inherit;
+   text-transform: uppercase;
+   letter-spacing: 0.08em;
+ }
+ .icon-comms {
+   font-size: var(--fs-md);
+   line-height: 1;
+ }
+ 
+ .plan-list-section-label {
+   padding: var(--sp-3) var(--sp-4) var(--sp-1);
+   font-family: var(--font-mono);
+   font-size: var(--fs-xs);
+   letter-spacing: 0.12em;
+   text-transform: uppercase;
+   color: var(--text-dim);
+ }
+ 
+ #plan-detail { flex: 1; overflow-y: auto; padding: 16px 20px; }
 
 .empty-state { color: var(--text-dim); }
 

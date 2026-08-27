@@ -22,6 +22,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).parent.parent.parent
 _LA_PATH = _REPO / "scripts" / "local_agent.py"
+_LA_CONFIG_PATH = _REPO / "scripts" / "local_agent_config.py"
 _PERSISTENCE_PATH = _REPO / "tests" / "unit" / "test_local_agent_persistence.py"
 
 # The three transport-channel vars that story 2 renamed.
@@ -83,11 +84,16 @@ def test_docstring_still_names_preserved_local_agent_vars():
 
 
 def test_production_reads_use_new_transport_names():
-    src = _LA_PATH.read_text()
+    # 2026-08-27: the transport constants moved from local_agent.py into the
+    # sibling scripts/local_agent_config.py (part of splitting local_agent.py
+    # under the 1,000-line guideline) - the read now lives there, imported
+    # back into local_agent.py, so scan both files rather than just the one
+    # this test originally graded.
+    src = _LA_PATH.read_text() + _LA_CONFIG_PATH.read_text()
     for name in _NEW_TRANSPORT:
         assert f'os.environ.get("{name}"' in src or (
             f"os.environ.get('{name}'" in src), (
-            f"local_agent.py must read {name} via os.environ.get")
+            f"local_agent.py (or its local_agent_config.py split) must read {name} via os.environ.get")
 
 
 def test_production_does_not_read_old_transport_names():

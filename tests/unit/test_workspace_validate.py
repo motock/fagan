@@ -183,3 +183,24 @@ class TestValidateWorkspace:
                 "catch normalize_workspace_path's error and return ok=False"
             )
         assert result["ok"] is False
+
+    def test_integer_input_returns_ok_false_not_raise(self):
+        try:
+            result = validate_workspace(123)
+        except (TypeError, AttributeError) as exc:
+            pytest.fail(f"validate_workspace must not raise on non-string input (raised {exc!r})")
+        assert result["ok"] is False
+
+    def test_list_input_returns_ok_false_not_raise(self):
+        try:
+            result = validate_workspace([])
+        except (TypeError, AttributeError) as exc:
+            pytest.fail(f"validate_workspace must not raise on non-string input (raised {exc!r})")
+        assert result["ok"] is False
+
+    def test_bytes_input_returns_ok_false_not_raise(self):
+        try:
+            result = validate_workspace(b"not-a-path")
+        except (TypeError, AttributeError) as exc:
+            pytest.fail(f"validate_workspace must not raise on non-string input (raised {exc!r})")
+        assert result["ok"] is False

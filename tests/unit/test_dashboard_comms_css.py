@@ -20,7 +20,9 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 # static/index.html and static/app/comms.js as of this dispatch (before the
 # CSS-only implementation). This story must not touch either file.
 INDEX_HTML_SHA256 = "d2c30094ac59b22fe27de1e2cd9f31f11a2a2b40a6716def09c4d5a390a5a72e"
-COMMS_JS_SHA256 = "eaaf668a9f6fc3881bf84056f28eed329d2e2d6569a74225ba7c908b9c9f30f6"
+# Updated by the chip-wiring follow-up story, which legitimately added
+# suggestion-chip click handlers to comms.js after this CSS-only story landed.
+COMMS_JS_SHA256 = "803f554f5553d13eb4236a285e1764f1b5c286a1883d89bc4862ee4715bb0680"
 
 # sha256 of the style.css regions this story must not touch: everything
 # before the "Comms view styles" comment, the "Toast stack styles" section

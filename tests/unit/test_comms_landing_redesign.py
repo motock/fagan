@@ -29,7 +29,9 @@ MAIN_JS = STATIC / "app" / "main.js"
 # it is markup/CSS only, so any drift here means a JS file was touched.
 _UNCHANGED_JS_SHA256 = {
     APP_JS: "52e12daba11b07f777764a6b6e3623c7bfd91ec9a0bf10251d903d2319772baa",
-    COMMS_JS: "eaaf668a9f6fc3881bf84056f28eed329d2e2d6569a74225ba7c908b9c9f30f6",
+    # COMMS_JS updated by the chip-wiring follow-up story this test's own
+    # docstring anticipated (suggestion-chip click handlers wired in).
+    COMMS_JS: "803f554f5553d13eb4236a285e1764f1b5c286a1883d89bc4862ee4715bb0680",
     MAIN_JS: "42cec6705236822baee589964e277f887110f834020d93d10abf7b65643e3558",
 }
 

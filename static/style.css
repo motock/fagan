@@ -295,13 +295,13 @@ main {
   border-bottom: 1px solid var(--border);
 }
  .show-archived-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    color: var(--text-dim);
-    cursor: pointer;
-  }
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
 
   /* === Pinned Comms header pill + PLANS section label === */
   /* Comms is the sidebar's top-level entry point, so it reads as an active

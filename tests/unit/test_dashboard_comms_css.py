@@ -19,7 +19,17 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 
 # static/index.html and static/app/comms.js as of this dispatch (before the
 # CSS-only implementation). This story must not touch either file.
-INDEX_HTML_SHA256 = "d2c30094ac59b22fe27de1e2cd9f31f11a2a2b40a6716def09c4d5a390a5a72e"
+#
+# NOTE: these are per-story self-guards, not permanent regression oracles.
+# INDEX_HTML_SHA256 and TOAST_REGION_SHA256 were pinned when this story (#458)
+# ran and have since been superseded twice over by later, legitimately merged
+# sibling stories that touch these exact same shared files: #466 ("Build the
+# Comms landing hero copy...") edited index.html and added CSS near the Comms
+# rules, and #467 ("Fix toast severity stripe color...") edited the toast
+# region directly. Re-pinned below to the current, correct post-merge state
+# rather than left red for every unrelated future story - see the
+# chat-claude-md-leak session's diagnosis of the wired-chip-clicks story.
+INDEX_HTML_SHA256 = "16ebe5c93b697874cab45bbf66e3475a3170a498f1dfbe0338feab69d9b627b7"
 # Updated by the chip-wiring follow-up story, which legitimately added
 # suggestion-chip click handlers to comms.js after this CSS-only story landed.
 COMMS_JS_SHA256 = "803f554f5553d13eb4236a285e1764f1b5c286a1883d89bc4862ee4715bb0680"
@@ -29,7 +39,8 @@ COMMS_JS_SHA256 = "803f554f5553d13eb4236a285e1764f1b5c286a1883d89bc4862ee4715bb0
 # that sits between the two halves of the Comms rules, and everything from
 # "Config view styles" onward.
 PREFIX_BEFORE_COMMS_SHA256 = "72782d8a3c838a50d0cdb14908195237389ab709935d2edc1b360cfb4ebde656"
-TOAST_REGION_SHA256 = "2d8487603f1c1b783be75a766797eda651c98d3e37ccad3e3de230c0978c87ea"
+# Re-pinned post-#467 (toast severity stripe color fix) - see note above.
+TOAST_REGION_SHA256 = "dbfb98e7ac5c90643e9560c45faa9d8d04e8487c11ab55c4af82cb7c2593550c"
 SUFFIX_FROM_CONFIG_SHA256 = "bd771ee16eb69d9469a2cee103eadbd9530199bbbd4bfa9971e95704e1b0c5a6"
 
 # The 21 selectors listed in the story as having empty `{}` bodies. Several

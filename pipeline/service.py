@@ -349,6 +349,71 @@ class PipelineService:
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]
 
+    def resolve_workspace(self, path: str | None, create: bool = False) -> dict:
+        """Resolve a workspace path.
+
+        Delegates to :func:`pipeline.workspace.validate_workspace` or
+        :func:`pipeline.workspace.create_workspace` based on ``create``.
+        If the result has ``ok`` true, records the resolved path via
+        ``self._store.add_recent_workspace``.
+        Returns the result dict unchanged.
+        """
+        import pipeline.workspace as _workspace
+        if create:
+            result = _workspace.create_workspace(path)
+        else:
+            result = _workspace.validate_workspace(path)
+        if result.get("ok"):
+            # The result may or may not contain a path; use the one returned
+            # or fall back to the input.
+            resolved_path = result.get("path") or path
+            if resolved_path:
+                _store.add_recent_workspace(resolved_path)
+        return result
+
+    def list_workspaces(self) -> list[dict]:
+        """Return a combined list of recent and manifest workspaces.
+
+        Each entry is ``{"path": str, "exists": bool, "valid": bool}``.
+        Recents are returned first in the order provided by
+        ``self._store.get_recent_workspaces``.  Manifest-only entries are
+        appended after, preserving the order returned by the manifest
+        discovery helper.  Paths are de‑duplicated by resolved path.
+        """
+        import pipeline.workspace as _workspace
+        seen = set()
+        workspaces: list[dict] = []
+        # Recents first
+        for p in _store.get_recent_workspaces():
+            if p in seen:
+                continue
+            seen.add(p)
+            exists = os.path.exists(p)
+            valid = False
+            if exists:
+                valid = _workspace.validate_workspace(p).get("ok")
+            workspaces.append({"path": p, "exists": exists, "valid": valid})
+        # Manifest-only
+        for plan_name in self.list_plans():
+            # strip any .manifest suffix to match manifest filenames
+            plan_name = plan_name.removesuffix(".manifest")
+            manifest = self.get_manifest_or_none(plan_name)
+            if not manifest:
+                continue
+            repo_root = manifest.get("repo_root")
+            if not repo_root:
+                continue
+            if repo_root in seen:
+                continue
+            seen.add(repo_root)
+            exists = os.path.exists(repo_root)
+            valid = False
+            if exists:
+                valid = _workspace.validate_workspace(repo_root).get("ok")
+            workspaces.append({"path": repo_root, "exists": exists, "valid": valid})
+        return workspaces
+
+
     def approve_merge(self, plan_name: str, story_key: str) -> dict[str, Any]:
         return _approve_merge_impl(plan_name, story_key)
 

@@ -175,11 +175,17 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         and all(d in done for d in v.get("dependencies", []))
     ]
 
-    if PIPELINE_AUTONOMY == "dry-run":
+    # Dereference once: PIPELINE_AUTONOMY is a _ServerRef proxy (comparisons
+    # like `== "dry-run"` work via its __eq__), but the raw proxy object is
+    # not JSON-serializable, so anything embedded in the returned dict must
+    # use the resolved plain string instead.
+    autonomy = PIPELINE_AUTONOMY._value()
+
+    if autonomy == "dry-run":
         return {
             "ok": True,
             "dry_run": True,
-            "autonomy": PIPELINE_AUTONOMY,
+            "autonomy": autonomy,
             # "paused" kept for back-compat = dispatch gated.
             "paused": not dispatch_ok,
             "dispatch_paused": not dispatch_ok,
@@ -193,7 +199,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         }
 
     summary: dict[str, Any] = {
-        "autonomy": PIPELINE_AUTONOMY,
+        "autonomy": autonomy,
         "paused": not dispatch_ok,
         "dispatch_paused": not dispatch_ok,
         "review_paused": not review_ok,

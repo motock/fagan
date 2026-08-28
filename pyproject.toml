@@ -56,3 +56,8 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments"
 # fixtures from tests/unit/_pipeline_mcp_server_test_helpers.py and use them
 # as test-function parameters.
 "tests/unit/test_pipeline_mcp_server_*.py" = ["F811"]
+# Same fixture-sharing pattern as above: test_advance_pipeline_autonomy_serialization.py
+# imports the plan_dir pytest fixture from
+# tests/unit/_pipeline_mcp_server_test_helpers.py and uses it as a
+# test-function parameter.
+"tests/unit/test_advance_pipeline_autonomy_serialization.py" = ["F811"]

@@ -571,7 +571,7 @@ def create_workspace(raw: str | None) -> dict:
             cwd=str(path),
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
         )
     except OSError:
         # Non-fatal: the repo still works; the helper reset is defense in

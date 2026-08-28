@@ -536,9 +536,42 @@ class TestGitInitHardening:
             cwd=repo_path, capture_output=True, text=True, check=False,
         )
         assert proc.stdout.strip() == ""                                # (b) behavioral reset proof
+        assert proc.returncode == 0  # exit 0 = key PRESENT with empty value (helpers disabled); exit 1 would mean the key is absent and inherited helpers still apply
         assert not (repo_path / ".git" / "security-reset").exists()     # (c) indirection file gone
         assert "include.path" not in config_text                        # (d) no include directive
         assert "security-reset" not in config_text
+
+    def test_create_workspace_does_not_raise_when_git_config_fails(
+        self, tmp_path, monkeypatch
+    ):
+        # Regression (review WS-SEC-01): the credential-helper reset must
+        # stay non-fatal.  A non-zero exit from the `git config --local
+        # credential.helper ""` call (read-only .git/config, disk-full ->
+        # exit 128) raises CalledProcessError under check=True, which is a
+        # SubprocessError, NOT an OSError — so the surrounding except
+        # OSError cannot catch it and it would escape create_workspace,
+        # breaking the module's "never raises" contract.
+        real_run = subprocess.run
+
+        def failing_run(cmd, *args, **kwargs):
+            if cmd[:2] == ["git", "config"] and "credential.helper" in cmd:
+                # Emulate exactly what real subprocess.run(check=True) does
+                # on a non-zero exit (read-only .git/config / disk-full ->
+                # exit 128).
+                if kwargs.get("check"):
+                    raise subprocess.CalledProcessError(128, cmd)
+                return subprocess.CompletedProcess(cmd, 128, "", "fatal: could not lock config file")
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", failing_run)
+
+        repo = tmp_path / "repo"
+        ws.create_workspace(str(repo))            # must NOT raise
+        assert repo.exists()
+
+        # Follow-up call: the swallowed failure must not poison anything.
+        ws.create_workspace(str(tmp_path / "repo2"))  # must NOT raise either
+        assert (tmp_path / "repo2").exists()
 
     def test_created_repo_config_has_no_include_path(self, tmp_path):
         repo_path = tmp_path / "ws"

@@ -390,7 +390,7 @@ def test_main_js_import_line_includes_update_comms_subtitle():
     src = _main_js_source()
     assert (
         'import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, '
-        'updateCommsSubtitle } from "./comms.js";' in src
+        'updateCommsSubtitle, resetCommsThread } from "./comms.js";' in src
     ), (
         "main.js's existing import line from ./comms.js must be extended "
         "with updateCommsSubtitle"

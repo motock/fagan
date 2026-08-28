@@ -366,3 +366,55 @@ class TestMaxTurnsBoundaryValidation:
             # If construction wrongly succeeds, calling execute_turn must NOT
             # raise the obscure UnboundLocalError described in the review.
             svc.execute_turn("hello")
+
+
+# --------------------------------------------------------------------------- #
+# execute_turn — history is rendered into the prompt sent to the driver
+# --------------------------------------------------------------------------- #
+class TestExecuteTurnHistory:
+    """``ChatService.execute_turn`` accepts a ``history`` keyword argument but,
+    before this fix, never used it: every turn was sent to the driver with
+    only the current message as the prompt, so multi-turn conversations had
+    zero memory of prior turns. These tests pin the fix: prior turns must be
+    rendered ahead of the current message in the very first prompt sent to
+    the driver, and the no-history path must remain byte-for-byte unchanged
+    for backward compatibility with every existing caller.
+    """
+
+    def test_no_history_prompt_is_unchanged(self) -> None:
+        driver = _ScriptedDriver(replies=["ok"])
+        svc = ChatService(driver=driver, http_client=object(), api_base_url="http://x.test")
+        svc.execute_turn("hello", history=None)
+        assert driver.calls[0]["prompt"] == "hello"
+
+    def test_empty_history_list_prompt_is_unchanged(self) -> None:
+        driver = _ScriptedDriver(replies=["ok"])
+        svc = ChatService(driver=driver, http_client=object(), api_base_url="http://x.test")
+        svc.execute_turn("hello", history=[])
+        assert driver.calls[0]["prompt"] == "hello"
+
+    def test_history_is_rendered_before_current_message(self) -> None:
+        driver = _ScriptedDriver(replies=["ok"])
+        svc = ChatService(driver=driver, http_client=object(), api_base_url="http://x.test")
+        history = [
+            {"role": "user", "content": "what is PIPE-1?"},
+            {"role": "assistant", "content": "PIPE-1 is the login story."},
+        ]
+        svc.execute_turn("is it done yet?", history=history)
+        assert driver.calls[0]["prompt"] == (
+            "user: what is PIPE-1?\n"
+            "assistant: PIPE-1 is the login story.\n"
+            "user: is it done yet?"
+        )
+
+    def test_history_entry_missing_content_key_defaults_to_empty_string(self) -> None:
+        driver = _ScriptedDriver(replies=["ok"])
+        svc = ChatService(driver=driver, http_client=object(), api_base_url="http://x.test")
+        svc.execute_turn("hello", history=[{"role": "user"}])
+        assert driver.calls[0]["prompt"] == "user: \nuser: hello"
+
+    def test_history_entry_missing_role_key_defaults_to_user(self) -> None:
+        driver = _ScriptedDriver(replies=["ok"])
+        svc = ChatService(driver=driver, http_client=object(), api_base_url="http://x.test")
+        svc.execute_turn("hello", history=[{"content": "hi"}])
+        assert driver.calls[0]["prompt"] == "user: hi\nuser: hello"

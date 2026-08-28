@@ -172,7 +172,7 @@ class TestSourceEditShape:
         source = inspect.getsource(chat_module)
         assert (
             "response = driver.complete(prompt=current_prompt, "
-            "system=SYSTEM_PROMPT, model=model_tag, cwd=tempfile.gettempdir())"
+            "system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())"
         ) in source
 
     def test_old_bare_line_no_longer_present(self) -> None:
@@ -186,26 +186,35 @@ class TestSourceEditShape:
         assert source.count("driver.complete(") == 1
 
     def test_explanatory_comment_immediately_precedes_call_site(self) -> None:
+        # WS-09 workspace threading (PR #490) restructured execute_turn so the
+        # cwd-isolation comment sits directly above the `system_prompt =
+        # SYSTEM_PROMPT` assignment it explains, with the per-workspace append
+        # in between; the guard anchors there instead of the call site itself.
         source = inspect.getsource(chat_module)
         lines = source.splitlines()
-        call_line_indices = [
-            i for i, line in enumerate(lines) if "driver.complete(" in line
+        assignment_indices = [
+            i
+            for i, line in enumerate(lines)
+            if line.strip() == "system_prompt = SYSTEM_PROMPT"
         ]
-        assert len(call_line_indices) == 1
-        call_index = call_line_indices[0]
-        preceding_line = lines[call_index - 1].strip()
+        assert len(assignment_indices) == 1
+        assignment_index = assignment_indices[0]
+        preceding_line = lines[assignment_index - 1].strip()
         assert preceding_line.startswith("#"), (
-            "Expected a one-line comment directly above the driver.complete(...) "
-            f"call explaining the cwd isolation rationale, got: {preceding_line!r}"
+            "Expected a one-line comment directly above the system_prompt = "
+            f"SYSTEM_PROMPT assignment explaining the cwd isolation rationale, "
+            f"got: {preceding_line!r}"
         )
 
     def test_explanatory_comment_mentions_cwd_and_claude_md(self) -> None:
         source = inspect.getsource(chat_module)
         lines = source.splitlines()
-        call_line_indices = [
-            i for i, line in enumerate(lines) if "driver.complete(" in line
+        assignment_indices = [
+            i
+            for i, line in enumerate(lines)
+            if line.strip() == "system_prompt = SYSTEM_PROMPT"
         ]
-        preceding_line = lines[call_line_indices[0] - 1].strip().lower()
+        preceding_line = lines[assignment_indices[0] - 1].strip().lower()
         assert "cwd" in preceding_line
         assert "claude.md" in preceding_line
 

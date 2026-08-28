@@ -29,7 +29,7 @@ import {
 } from "./render/notifications.js";
 import { renderDecisions } from "./render/decisions.js";
 import { renderOverview, _diffOverviewPlanRows } from "./render/overview.js";
-import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle } from "./comms.js";
+import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle, resetCommsThread } from "./comms.js";
 import { renderUsage } from "./usage.js";
 
 // plan-list.js/plan-detail.js/story-modal.js/notifications.js can't
@@ -646,6 +646,7 @@ export {
   flashRefreshIndicator,
   refresh,
   renderToolTraceHtml,
+  resetCommsThread,
   selectComms, selectOverview, selectPlan,
   sendCommsMessage, startPolling, stopPolling,
   syncPollingWithVisibility,

@@ -37,12 +37,21 @@ _UNCHANGED_JS_SHA256 = {
     # own final edits to comms.js - so this corrects it to the actual
     # committed file contents.) See test_dashboard_comms_css.py's
     # COMMS_JS_SHA256 comment for the same pin.
-    COMMS_JS: "6724b79e0e76c4780d38e69f2ecaf89c49c4ee497d6f9569a2f9c4310ca3070f",
+    # Re-pinned again for the "reset must also clear commsHistory" fix
+    # (resetCommsThread() left commsHistory populated after clearing the
+    # DOM thread, so a 'reset' conversation silently kept sending old turns
+    # to the backend): commsHistory = [] added to resetCommsThread, and
+    # resetCommsThread added to the module's export list so it's reachable
+    # by the regression test that covers this.
+    COMMS_JS: "3b75f9aff73a5a4b54ca05f6ce88ed78a861a00cab2c00f6cd178802eb882ad3",
     # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
     # subtitle...") legitimately added the updateCommsSubtitle() call to
     # main.js after this story's own pre-implementation baseline was
     # captured. This story never touched main.js itself.
-    MAIN_JS: "a2bc8d996687d18644163af7609a2b5722271b3dd1687598412e41297e7ce5f8",
+    # Re-pinned again alongside the COMMS_JS pin above: resetCommsThread
+    # added to main.js's import-from-comms.js line and re-export block so
+    # the reset-clears-history regression test can call it.
+    MAIN_JS: "772647ab2c9df7eace383d4210a614887e457e09d7eda43f6e8333ac96211269",
 }
 
 EXPECTED_CHIP_MESSAGES = {

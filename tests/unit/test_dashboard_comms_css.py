@@ -41,7 +41,10 @@ INDEX_HTML_SHA256 = "309e95d6cb7086a3c3abd22ee26f3054619e050a4e0a2e0698f8ed2ca86
 # role/timestamp "who" line and wraps content in the (already-styled)
 # .bubble element instead of setting raw innerHTML directly, plus new
 # resetCommsThread()/exportCommsThread() functions and their button wiring.
-COMMS_JS_SHA256 = "f300e0ad087c4d16606488b99cd34a6fed75e1bea02dfc5a5a63c49c7cef496f"
+# (The hash #478 itself re-pinned here was stale - computed before that
+# commit's own final edits to comms.js - so this corrects it to the actual
+# committed file contents.)
+COMMS_JS_SHA256 = "6724b79e0e76c4780d38e69f2ecaf89c49c4ee497d6f9569a2f9c4310ca3070f"
 
 # sha256 of the style.css regions this story must not touch: everything
 # before the "Comms view styles" comment, the "Toast stack styles" section

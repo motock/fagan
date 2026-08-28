@@ -167,7 +167,13 @@ def test_reference_md_preserves_mcp_h3_subsections():
 # README.md retains the conceptual sections, in order, and gains 'Reference'
 # ---------------------------------------------------------------------------
 
+# Re-pinned by the "add quickstart, platform/limitations notes, and repo
+# governance files" docs commit (f53bffe): it legitimately added "Platform
+# support", "Quickstart", and "Reliability & limitations" as new H2 sections
+# ahead of/around the pre-existing conceptual sections below.
 EXPECTED_README_SECTIONS = [
+    "Platform support",
+    "Quickstart",
     "Components at a glance",
     "Architecture",
     "Personas (`~/.claude/agents/`)",
@@ -175,6 +181,7 @@ EXPECTED_README_SECTIONS = [
     "Reference",
     "Prerequisites",
     "Scheduler",
+    "Reliability & limitations",
     "License",
 ]
 
@@ -188,11 +195,11 @@ def test_readme_h2_count_and_order():
     )
 
 
-def test_readme_has_eight_h2_sections():
+def test_readme_has_eleven_h2_sections():
     assert README.is_file(), "README.md must exist at the repo root"
     headings = h2_headings(README.read_text())
-    assert len(headings) == 8, (
-        f"README.md must have exactly 8 H2 sections, got {len(headings)}: {headings}"
+    assert len(headings) == 11, (
+        f"README.md must have exactly 11 H2 sections, got {len(headings)}: {headings}"
     )
 
 
@@ -450,16 +457,31 @@ def _section_body_from_text(text: str, title: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# No internal anchor links were broken (none existed, but guard anyway)
+# Internal anchor links, where present, must resolve to a real H2 heading.
+#
+# README.md had none of these when this guard was written; f53bffe
+# legitimately introduced two ("Reliability & limitations", "Scheduler") as
+# top-of-file navigation for the new Quickstart section. Rather than ban
+# anchors outright, verify any that exist point at a heading that's actually
+# there (GitHub's heading-slug algorithm: lowercase, drop characters other
+# than word chars/spaces/hyphens, spaces to hyphens).
 # ---------------------------------------------------------------------------
 
-def test_readme_has_no_internal_anchor_links():
+def _github_heading_slug(title: str) -> str:
+    slug = title.lower()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    return re.sub(r"\s", "-", slug)
+
+
+def test_readme_internal_anchor_links_resolve():
     assert README.is_file(), "README.md must exist at the repo root"
     text = README.read_text()
     # Markdown inline anchor links look like [text](#anchor).
-    anchors = re.findall(r"\]\(#[^)]+\)", text)
-    assert anchors == [], (
-        f"README.md should contain no internal anchor links (found: {anchors})"
+    anchors = re.findall(r"\]\(#([^)]+)\)", text)
+    slugs = {_github_heading_slug(h) for h in h2_headings(text)}
+    unresolved = [a for a in anchors if a not in slugs]
+    assert unresolved == [], (
+        f"README.md has internal anchor links with no matching heading: {unresolved}"
     )
 
 

@@ -504,6 +504,10 @@ def config_providers() -> dict[str, Any]:
         registry = {}
     return {"providers": registry.get("providers", {})}
 
+@app.get("/api/workspaces")
+def list_workspaces_route():
+    return {"workspaces": _service.list_workspaces()}
+
 
 @app.post("/api/workspace")
 def set_workspace_route(request: WorkspaceRequest):

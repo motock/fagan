@@ -298,13 +298,15 @@ def _reject_caller_symlinks(abs_path: Path) -> None:
                 break  # nothing beyond this component exists yet
             if os.path.islink(str(current)):
                 spelled = str(current)
+                # The read must still happen: an unreadable link is a denial
+                # (fail closed) even when the spelling itself is an anchor.
                 try:
-                    target = os.path.realpath(spelled)
+                    os.path.realpath(spelled)
                 except Exception:  # noqa: BLE001 - unreadable link -> deny
-                    target = None
-                if spelled not in anchors and (
-                    target is None or target not in anchors
-                ):
+                    raise WorkspaceSecurityError(
+                        "workspace path must not traverse symbolic links"
+                    )
+                if spelled not in anchors:
                     raise WorkspaceSecurityError(
                         "workspace path must not traverse symbolic links"
                     )

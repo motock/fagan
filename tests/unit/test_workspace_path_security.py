@@ -723,3 +723,30 @@ class TestServiceLayerEnforcement:
 
         result = p._service.resolve_workspace(str(tmp_path / "ws"), create=True)
         assert result["ok"] is True, result
+
+
+class TestSymlinkTargetToleranceRemoved:
+    """WS-SEC-02: only the link's own EXACT spelling may be an anchor.
+
+    A caller-controlled symlink whose *target* happens to resolve into a
+    system anchor (e.g. the system temp dir itself) must still be denied:
+    the target-based half of the old tolerate condition contradicted the
+    documented "only EXACT anchor spellings are tolerated" policy.
+    """
+
+    def test_symlink_to_system_tempdir_is_denied(self, tmp_path):
+        # Target = the system temp dir itself, which IS in the anchor set
+        # (on macOS via /private/tmp; on Linux /tmp's realpath is /tmp).
+        # The spelled link path is not an anchor, so this must be denied.
+        link = tmp_path / "foo"
+        link.symlink_to(tempfile.gettempdir())
+        with pytest.raises(ValueError):
+            normalize_workspace_path(str(link))
+
+    def test_intermediate_symlink_to_tempdir_is_denied(self, tmp_path):
+        # Same attack, one level deeper: the symlink is an intermediate
+        # component of the requested path.
+        link = tmp_path / "link"
+        link.symlink_to(tempfile.gettempdir())
+        with pytest.raises(ValueError):
+            normalize_workspace_path(str(link / "ws"))

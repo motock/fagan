@@ -380,49 +380,6 @@ class PipelineService:
         appended after, preserving the order returned by the manifest
         discovery helper.  Paths are de‑duplicated by resolved path.
         """
-        seen = set()
-        workspaces: list[dict] = []
-        # Recents first
-        for p in _store.get_recent_workspaces():
-            if p in seen:
-                continue
-            seen.add(p)
-            exists = os.path.exists(p)
-            valid = False
-            if exists:
-                try:
-                    valid = _workspace.validate_workspace(p).get("ok")
-                except Exception:
-                    valid = False
-            workspaces.append({"path": p, "exists": exists, "valid": valid})
-        # Manifest-only
-        for plan_name in self.list_plans():
-            manifest = self.get_manifest_or_none(plan_name)
-            if not manifest:
-                continue
-            repo_root = manifest.get("repo_root")
-            if not repo_root:
-                continue
-            if repo_root in seen:
-                continue
-            seen.add(repo_root)
-            exists = os.path.exists(repo_root)
-            valid = False
-            if exists:
-                try:
-                    valid = _workspace.validate_workspace(repo_root).get("ok")
-                except Exception:
-                    valid = False
-            workspaces.append({"path": repo_root, "exists": exists, "valid": valid})
-    def list_workspaces(self) -> list[dict]:
-        """Return a combined list of recent and manifest workspaces.
-
-        Each entry is ``{"path": str, "exists": bool, "valid": bool}``.
-        Recents are returned first in the order provided by
-        ``_store.get_recent_workspaces``.  Manifest-only entries are
-        appended after, preserving the order returned by the manifest
-        discovery helper.  Paths are de‑duplicated by resolved path.
-        """
         import pipeline.workspace as _workspace
         seen = set()
         workspaces: list[dict] = []
@@ -438,6 +395,8 @@ class PipelineService:
             workspaces.append({"path": p, "exists": exists, "valid": valid})
         # Manifest-only
         for plan_name in self.list_plans():
+            # strip any .manifest suffix to match manifest filenames
+            plan_name = plan_name.removesuffix(".manifest")
             manifest = self.get_manifest_or_none(plan_name)
             if not manifest:
                 continue

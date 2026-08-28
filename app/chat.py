@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from urllib.parse import quote
 
 import httpx
@@ -327,8 +328,8 @@ class ChatService:
         turns = 0
         while turns < self._max_turns:
             turns += 1
-            # --bare prevents this repo's own CLAUDE.md - which governs a *different* agent's (the coding agent's) workflow - from silently overriding chat.py's own SYSTEM_PROMPT and tool-confirmation policy
-            response = driver.complete(prompt=current_prompt, system=SYSTEM_PROMPT, model=model_tag, bare=True)
+            # cwd=tempfile.gettempdir() keeps this repo's own CLAUDE.md from auto-discovering and silently overriding chat.py's own SYSTEM_PROMPT and tool-confirmation policy, without the --bare flag's side effect of disabling OAuth/keychain auth (see ClaudeCliDriver.complete's --bare handling)
+            response = driver.complete(prompt=current_prompt, system=SYSTEM_PROMPT, model=model_tag, cwd=tempfile.gettempdir())
             parsed = _parse_tool_calls(response)
             if not parsed:
                 return {"reply": response, "tool_calls": tool_calls_made, "turns": turns}

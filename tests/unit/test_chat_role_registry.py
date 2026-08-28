@@ -85,21 +85,25 @@ def test_model_registry_has_chat_role_entry():
     assert "chat" in roles, "model_registry.json roles block must include 'chat'"
 
 
-def test_model_registry_chat_uses_claude_provider():
-    """The chat role must default to provider claude."""
+def test_model_registry_chat_uses_ollama_provider():
+    """The chat role's committed default provider (2026-08-28: switched from
+    claude/sonnet to ollama/glm so non-implementer roles run on the local
+    glm model instead of Claude)."""
     data = json.loads(_REGISTRY_PATH.read_text())
     chat = data["roles"]["chat"]
-    assert chat.get("provider") == "claude", (
-        f"expected roles.chat.provider == 'claude', got {chat.get('provider')!r}"
+    assert chat.get("provider") == "ollama", (
+        f"expected roles.chat.provider == 'ollama', got {chat.get('provider')!r}"
     )
 
 
-def test_model_registry_chat_uses_sonnet_model():
-    """The chat role must default to model sonnet (a friendly name)."""
+def test_model_registry_chat_uses_glm_model():
+    """The chat role must default to model glm (a friendly name) - see
+    test_model_registry_chat_uses_ollama_provider for why the default
+    changed from claude/sonnet."""
     data = json.loads(_REGISTRY_PATH.read_text())
     chat = data["roles"]["chat"]
-    assert chat.get("model") == "sonnet", (
-        f"expected roles.chat.model == 'sonnet', got {chat.get('model')!r}"
+    assert chat.get("model") == "glm", (
+        f"expected roles.chat.model == 'glm', got {chat.get('model')!r}"
     )
 
 
@@ -129,12 +133,25 @@ def test_load_registry_does_not_raise_with_chat_role():
 
 
 # ---------------------------------------------------------------------------
-# 3. resolve_role with role "chat" and the real registry.
+# 3. resolve_role with role "chat" against a synthetic registry fixture.
+#
+# A synthetic fixture (not the real model_registry.json) so these tests
+# exercise resolve_role's own claude/sonnet-pairing logic and stay stable
+# across legitimate reconfiguration of the live registry's chat role (see
+# test_model_registry_chat_uses_ollama_provider) - CLAUDE.md's "Testing
+# Configuration-Driven Logic" section: assert against a stubbed fixture,
+# never against whatever the real config currently contains.
 # ---------------------------------------------------------------------------
+_SYNTHETIC_CHAT_REGISTRY = {
+    "providers": {"claude": {"models": {"sonnet": {"tag": "sonnet"}}}},
+    "roles": {"chat": {"provider": "claude", "model": "sonnet"}},
+}
+
+
 def test_resolve_role_chat_returns_claude_provider():
-    """resolve_role(role='chat', registry=load_registry()) must return a
-    RoleResolution whose provider is claude, without raising."""
-    resolution = rr.resolve_role("chat", registry=rr.load_registry())
+    """resolve_role(role='chat', registry=<claude/sonnet fixture>) must
+    return a RoleResolution whose provider is claude, without raising."""
+    resolution = rr.resolve_role("chat", registry=_SYNTHETIC_CHAT_REGISTRY)
     assert isinstance(resolution, rr.RoleResolution)
     assert resolution.provider == "claude"
 
@@ -142,9 +159,8 @@ def test_resolve_role_chat_returns_claude_provider():
 def test_resolve_role_chat_returns_sonnet_tag_model():
     """The resolved model must be the sonnet *tag* (resolved against
     providers.claude.models), not the friendly name."""
-    resolution = rr.resolve_role("chat", registry=rr.load_registry())
-    data = rr.load_registry()
-    expected_tag = data["providers"]["claude"]["models"]["sonnet"]["tag"]
+    resolution = rr.resolve_role("chat", registry=_SYNTHETIC_CHAT_REGISTRY)
+    expected_tag = _SYNTHETIC_CHAT_REGISTRY["providers"]["claude"]["models"]["sonnet"]["tag"]
     assert resolution.model == expected_tag, (
         f"expected model tag {expected_tag!r}, got {resolution.model!r}"
     )
@@ -177,8 +193,10 @@ def test_effective_role_config_chat_entry_error_is_none():
 
 
 def test_effective_role_config_chat_entry_provider_is_claude():
-    """The chat entry's provider must be claude (from the registry)."""
-    result = cp.effective_role_config(registry=rr.load_registry(), environ={})
+    """The chat entry's provider must be claude when the registry pairs it
+    that way (a synthetic fixture, per _SYNTHETIC_CHAT_REGISTRY above -
+    decoupled from the live registry's current default)."""
+    result = cp.effective_role_config(registry=_SYNTHETIC_CHAT_REGISTRY, environ={})
     chat_entry = next(e for e in result if e["role"] == "chat")
     assert chat_entry["provider"] == "claude", (
         f"expected chat provider 'claude', got {chat_entry['provider']!r}"
@@ -186,11 +204,11 @@ def test_effective_role_config_chat_entry_provider_is_claude():
 
 
 def test_effective_role_config_chat_entry_model_is_sonnet_tag():
-    """The chat entry's model must be the sonnet tag."""
-    result = cp.effective_role_config(registry=rr.load_registry(), environ={})
+    """The chat entry's model must be the sonnet tag when the registry pairs
+    it that way (synthetic fixture, see above)."""
+    result = cp.effective_role_config(registry=_SYNTHETIC_CHAT_REGISTRY, environ={})
     chat_entry = next(e for e in result if e["role"] == "chat")
-    data = rr.load_registry()
-    expected_tag = data["providers"]["claude"]["models"]["sonnet"]["tag"]
+    expected_tag = _SYNTHETIC_CHAT_REGISTRY["providers"]["claude"]["models"]["sonnet"]["tag"]
     assert chat_entry["model"] == expected_tag, (
         f"expected chat model {expected_tag!r}, got {chat_entry['model']!r}"
     )

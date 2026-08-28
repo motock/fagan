@@ -506,7 +506,6 @@ def config_providers() -> dict[str, Any]:
 
 
 @app.post("/api/workspace")
-
 def set_workspace_route(request: WorkspaceRequest):
     result = _service.resolve_workspace(request.path, create=request.create)
     if not result.get("ok"):

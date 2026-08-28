@@ -523,13 +523,28 @@ class TestGitInitHardening:
         assert r.returncode != 0 or r.stdout.strip() == ""
 
     def test_created_repo_local_config_has_no_credential_helper(self, tmp_path):
-        # Read the repo's LOCAL config file directly: `git config --get`
-        # would also match a value inherited from the operator's global
-        # config, which is not something create_workspace can control.
-        create_workspace(str(tmp_path / "ws"))
-        local_cfg = (tmp_path / "ws" / ".git" / "config").read_text()
-        assert "helper" not in local_cfg.lower()
-        assert "credential" not in local_cfg.lower()
+        # The local config must carry an EXPLICIT credential.helper entry
+        # with an empty value (git treats an empty helper value as "reset
+        # the helper list"), written directly into .git/config.
+        repo_path = tmp_path / "ws"
+        create_workspace(str(repo_path))
+        config_text = (repo_path / ".git" / "config").read_text()
+        assert "[credential]" in config_text
+        assert re.search(r"^\s*helper\s*=\s*$", config_text, re.MULTILINE)  # (a) helper present, EMPTY value
+        proc = subprocess.run(
+            ["git", "config", "--get", "credential.helper"],
+            cwd=repo_path, capture_output=True, text=True, check=False,
+        )
+        assert proc.stdout.strip() == ""                                # (b) behavioral reset proof
+        assert not (repo_path / ".git" / "security-reset").exists()     # (c) indirection file gone
+        assert "include.path" not in config_text                        # (d) no include directive
+        assert "security-reset" not in config_text
+
+    def test_created_repo_config_has_no_include_path(self, tmp_path):
+        repo_path = tmp_path / "ws"
+        create_workspace(str(repo_path))
+        config_text = (repo_path / ".git" / "config").read_text()
+        assert "include.path" not in config_text
 
     def test_poisoned_template_dir_cannot_inject_hook(self, tmp_path, monkeypatch):
         # Behavioral proof: even with init.templateDir set in the environment
@@ -552,9 +567,16 @@ class TestGitInitHardening:
             h for h in hooks if h.is_file() and h.stat().st_mode & stat.S_IXUSR
         ]
         assert executable == [], "poisoned template injected an executable hook"
-        local_cfg = (tmp_path / "ws" / ".git" / "config").read_text()
-        assert "evil" not in local_cfg.lower()
-        assert "helper" not in local_cfg.lower()
+        proc = subprocess.run(
+            ["git", "config", "--get", "credential.helper"],
+            cwd=tmp_path / "ws", capture_output=True, text=True, check=False,
+        )
+        assert proc.stdout.strip() == ""   # poisoned GIT_CONFIG_GLOBAL must not leak through
+        local = subprocess.run(
+            ["git", "config", "--list", "--local"],
+            cwd=tmp_path / "ws", capture_output=True, text=True, check=True,
+        ).stdout
+        assert "evil" not in local
 
     def test_created_repo_has_no_inherited_config_from_global_includeif(
         self, tmp_path, monkeypatch

@@ -29,11 +29,15 @@ MAIN_JS = STATIC / "app" / "main.js"
 # it is markup/CSS only, so any drift here means a JS file was touched.
 _UNCHANGED_JS_SHA256 = {
     APP_JS: "52e12daba11b07f777764a6b6e3623c7bfd91ec9a0bf10251d903d2319772baa",
-    # Re-pinned for the chat-page touch-up pass (2026-08-27): appendCommsMessage
-    # now renders a role/timestamp "who" line into the (already-styled) .bubble
-    # element, plus new resetCommsThread()/exportCommsThread() + wiring. See
-    # test_dashboard_comms_css.py's COMMS_JS_SHA256 comment for the same pin.
-    COMMS_JS: "f300e0ad087c4d16606488b99cd34a6fed75e1bea02dfc5a5a63c49c7cef496f",
+    # Re-pinned for the "repair Comms chat panel layout, auto-scroll, reset,
+    # export" fix (#478, commit 7f18a2a): appendCommsMessage now renders a
+    # role/timestamp "who" line into the (already-styled) .bubble element,
+    # plus new resetCommsThread()/exportCommsThread() + wiring. (The hash
+    # #478 itself re-pinned here was stale - computed before that commit's
+    # own final edits to comms.js - so this corrects it to the actual
+    # committed file contents.) See test_dashboard_comms_css.py's
+    # COMMS_JS_SHA256 comment for the same pin.
+    COMMS_JS: "6724b79e0e76c4780d38e69f2ecaf89c49c4ee497d6f9569a2f9c4310ca3070f",
     # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
     # subtitle...") legitimately added the updateCommsSubtitle() call to
     # main.js after this story's own pre-implementation baseline was

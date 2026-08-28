@@ -561,19 +561,13 @@ def create_workspace(raw: str | None) -> dict:
             "error": sanitize_error_message(init_result.stderr),
         }
 
-    # Reset the credential helper for this repo WITHOUT writing the words
-    # "credential"/"helper" into .git/config (the security suite asserts the
-    # local config carries no such keys).  An included file whose
-    # ``credential.helper`` is the empty value clears any helper inherited
-    # from the operator's global/system gitconfig (git treats an empty
-    # helper value as "reset the helper list"), while .git/config itself
-    # only records an ``include.path`` directive.
+    # Reset the credential helper for this repo: an empty helper value
+    # clears any helper inherited from the operator's global/system
+    # gitconfig (git treats an empty helper value as "reset the helper
+    # list"), written directly into .git/config.
     try:
-        (path / ".git" / "security-reset").write_text(
-            "[credential]\n\thelper =\n", encoding="utf-8"
-        )
         subprocess.run(
-            ["git", "config", "--local", "include.path", "security-reset"],
+            ["git", "config", "--local", "credential.helper", ""],
             cwd=str(path),
             capture_output=True,
             text=True,

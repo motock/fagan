@@ -17,18 +17,93 @@ function renderToolTraceHtml(toolCalls) {
   return html;
 }
 
+function _commsRoleLabel(role) {
+  return role.split(' ')[0] === 'user' ? 'GROUND' : 'TOWER';
+}
+
+function _commsTimeLabel(date) {
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function _prefersReducedMotion() {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
+
+function _scrollCommsToBottom() {
+  const body = document.getElementById('comms-body');
+  if (!body) return;
+  if (typeof body.scrollTo === 'function') {
+    body.scrollTo({ top: body.scrollHeight, behavior: _prefersReducedMotion() ? 'auto' : 'smooth' });
+  } else {
+    body.scrollTop = body.scrollHeight;
+  }
+}
+
 function appendCommsMessage(role, html) {
   const thread = document.getElementById('comms-thread');
   const landing = document.getElementById('comms-landing');
   const el = document.createElement('div');
   el.className = `msg ${role}`;
-  el.innerHTML = html;
+  const isTower = role.split(' ')[0] === 'tower';
+  const dot = isTower ? '<span class="who-dot" aria-hidden="true"></span>' : '';
+  const flag = role.indexOf('denied') !== -1 ? ' <span class="who-flag">DENIED</span>' : '';
+  const who = `<span class="who">${dot}${_commsRoleLabel(role)}${flag}<span class="who-time">${_commsTimeLabel(new Date())}</span></span>`;
+  el.innerHTML = `${who}<div class="bubble">${html}</div>`;
   const first = thread.children.length === 0;
   thread.appendChild(el);
   if (first) {
     landing.style.display = 'none';
     thread.style.display = 'flex';
   }
+  _scrollCommsToBottom();
+}
+
+function _commsTranscriptMarkdown() {
+  const thread = document.getElementById('comms-thread');
+  const lines = ['# Tower transcript', ''];
+  if (thread && typeof thread.querySelectorAll === 'function') {
+    thread.querySelectorAll('.msg').forEach((node) => {
+      const label = node.className.indexOf('user') !== -1 ? 'Ground' : 'Tower';
+      const bubble = typeof node.querySelector === 'function' ? node.querySelector('.bubble') : null;
+      const text = (bubble ? bubble.textContent : node.textContent || '').trim();
+      lines.push(`**${label}:** ${text}`, '');
+    });
+  }
+  return lines.join('\n');
+}
+
+function resetCommsThread() {
+  const thread = document.getElementById('comms-thread');
+  const landing = document.getElementById('comms-landing');
+  if (!thread) return;
+  const hasMessages = thread.children && thread.children.length > 0;
+  if (hasMessages && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+    if (!window.confirm('Clear this conversation? This cannot be undone.')) return;
+  }
+  thread.innerHTML = '';
+  thread.style.display = 'none';
+  if (landing) landing.style.display = '';
+}
+
+function exportCommsThread() {
+  const thread = document.getElementById('comms-thread');
+  if (!thread || !thread.children || thread.children.length === 0) return;
+  const markdown = _commsTranscriptMarkdown();
+  const blob = new Blob([markdown], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `tower-transcript-${stamp}.md`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 async function sendCommsMessage(text) {
@@ -89,6 +164,10 @@ commsChips.forEach((chip) => {
     sendCommsMessage(message);
   });
 });
+const commsResetBtn = document.getElementById('comms-reset');
+if (commsResetBtn) commsResetBtn.addEventListener('click', resetCommsThread);
+const commsExportBtn = document.getElementById('comms-export');
+if (commsExportBtn) commsExportBtn.addEventListener('click', exportCommsThread);
 
 async function updateCommsSubtitle() {
   const sub = document.getElementById('comms-sub');

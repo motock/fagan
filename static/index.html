@@ -67,22 +67,26 @@
     <section id="comms-view" class="hidden">
       <div class="comms-head">
         <div class="comms-title"><span class="on-air" id="on-air"></span><div><div class="label">Comms</div><div class="comms-sub" id="comms-sub">chat</div></div></div>
-        <div class="comms-body">
-          <div class="comms-thread" id="comms-thread" style="display:none" aria-live="polite"></div>
-          <div class="comms-landing" id="comms-landing">
-            <h3>Ask the tower.</h3>
-            <p>Describe a goal to draft a plan, ask what's blocked or why a story failed, or answer a decision the overlord is waiting on. Every action still runs through the same gated API the board buttons call - nothing here gets a back door.</p>
-            <div class="comms-chips" id="comms-chips">
-              <button type="button" class="comms-chip" data-comms-chip-message="what's blocked right now?">what's blocked right now?</button>
-              <button type="button" class="comms-chip" data-comms-chip-message="draft a plan for CSV export">draft a plan for CSV export</button>
-              <button type="button" class="comms-chip" data-comms-chip-message="approve the merge for W1-04">approve the merge for W1-04</button>
-              <button type="button" class="comms-chip" data-comms-chip-message="the W1-07 worktree is stuck, can you fix it?">the W1-07 worktree is stuck, can you fix it?</button>
-            </div>
+        <div class="comms-actions">
+          <button id="comms-export" class="comms-icon-btn" type="button" aria-label="Export conversation" title="Export conversation">EXPORT</button>
+          <button id="comms-reset" class="comms-icon-btn" type="button" aria-label="Reset conversation" title="Reset conversation">RESET</button>
+        </div>
+      </div>
+      <div class="comms-body" id="comms-body">
+        <div class="comms-thread" id="comms-thread" style="display:none" aria-live="polite"></div>
+        <div class="comms-landing" id="comms-landing">
+          <h3>Ask the tower.</h3>
+          <p>Describe a goal to draft a plan, ask what's blocked or why a story failed, or answer a decision the overlord is waiting on. Every action still runs through the same gated API the board buttons call - nothing here gets a back door.</p>
+          <div class="comms-chips" id="comms-chips">
+            <button type="button" class="comms-chip" data-comms-chip-message="what's blocked right now?">what's blocked right now?</button>
+            <button type="button" class="comms-chip" data-comms-chip-message="draft a plan for CSV export">draft a plan for CSV export</button>
+            <button type="button" class="comms-chip" data-comms-chip-message="approve the merge for W1-04">approve the merge for W1-04</button>
+            <button type="button" class="comms-chip" data-comms-chip-message="the W1-07 worktree is stuck, can you fix it?">the W1-07 worktree is stuck, can you fix it?</button>
           </div>
-          <div class="comms-input-row">
-            <textarea id="comms-input" class="comms-input" placeholder="Ask about a plan, describe a goal, or answer a decision..." rows="3" aria-label="Message input"></textarea>
-            <button id="comms-send" class="comms-send" type="button" aria-label="Transmit message" title="Transmit">TRANSMIT</button>
-          </div>
+        </div>
+        <div class="comms-input-row">
+          <textarea id="comms-input" class="comms-input" placeholder="Ask about a plan, describe a goal, or answer a decision..." rows="3" aria-label="Message input"></textarea>
+          <button id="comms-send" class="comms-send" type="button" aria-label="Transmit message" title="Transmit">TRANSMIT</button>
         </div>
       </div>
     </section>

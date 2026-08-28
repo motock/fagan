@@ -43,6 +43,7 @@ from app.dashboard_models import (
     StoryDecisionRequest,
     StoryPatchBody,
     StoryStatusBody,
+    WorkspaceRequest,
 )
 from pipeline import config_provenance
 from pipeline.server import PipelineService, _store
@@ -502,6 +503,14 @@ def config_providers() -> dict[str, Any]:
     except role_registry.RoleRegistryError:
         registry = {}
     return {"providers": registry.get("providers", {})}
+
+
+@app.post("/api/workspace")
+def set_workspace_route(request: WorkspaceRequest):
+    result = _service.resolve_workspace(request.path, create=request.create)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    return result
 
 
 @app.post("/api/config/roles/{role}")

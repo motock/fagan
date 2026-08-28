@@ -34,9 +34,9 @@ class _FakeChatService:
         self.init_kwargs = kwargs
         self.calls: list[dict] = []
 
-    def execute_turn(self, message, *, plan_name=None, history=None) -> dict:
+    def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:
         self.calls.append(
-            {"message": message, "plan_name": plan_name, "history": history}
+            {"message": message, "plan_name": plan_name, "history": history, "workspace": workspace}
         )
         return {"reply": "hi", "tool_calls": [], "turns": 1}
 
@@ -78,9 +78,9 @@ def test_chat_forwards_plan_name_and_history(client, monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def execute_turn(self, message, *, plan_name=None, history=None) -> dict:
+        def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:
             captured.append(
-                {"message": message, "plan_name": plan_name, "history": history}
+                {"message": message, "plan_name": plan_name, "history": history, "workspace": workspace}
             )
             return {"reply": "hi", "tool_calls": [], "turns": 1}
 
@@ -102,6 +102,7 @@ def test_chat_forwards_plan_name_and_history(client, monkeypatch):
             "message": "hello",
             "plan_name": "demo",
             "history": [{"role": "user", "content": "prev"}],
+            "workspace": None,
         }
     ]
 
@@ -115,9 +116,9 @@ def test_chat_optional_fields_default(client, monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def execute_turn(self, message, *, plan_name=None, history=None) -> dict:
+        def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:
             captured.append(
-                {"message": message, "plan_name": plan_name, "history": history}
+                {"message": message, "plan_name": plan_name, "history": history, "workspace": workspace}
             )
             return {"reply": "hi", "tool_calls": [], "turns": 1}
 
@@ -127,7 +128,7 @@ def test_chat_optional_fields_default(client, monkeypatch):
 
     resp = client.post("/api/chat", json={"message": "hello"})
     assert resp.status_code == 200
-    assert captured == [{"message": "hello", "plan_name": None, "history": None}]
+    assert captured == [{"message": "hello", "plan_name": None, "history": None, "workspace": None}]
 
 
 # --------------------------------------------------------------------------- #

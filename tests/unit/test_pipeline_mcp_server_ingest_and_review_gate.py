@@ -199,9 +199,19 @@ def test_run_security_reviewer_routes_via_plan_role_config_security(agents_dir, 
     story can clear security review on a configured non-Claude backend
     (e.g. ollama/glm) instead of dead-ending when Claude is unavailable.
     Unconfigured, it still resolves to Claude (covered by
-    test_run_security_reviewer_always_uses_claude_backend_even_under_local_review)."""
+    test_run_security_reviewer_always_uses_claude_backend_even_under_local_review).
+
+    Stubs role_registry.load_registry with a synthetic fixture rather than
+    hitting the real model_registry.json: the friendly name "glm" resolves
+    to whatever tag that file's providers.ollama.models.glm.tag currently
+    holds, and asserting that live value here ties this test to today's
+    registry contents (CLAUDE.md's "Testing Configuration-Driven Logic")."""
     (agents_dir / "security-engineer.md").write_text(
         '---\nname: "security-engineer"\nmodel: opus\n---\n\nSecurity body.\n'
+    )
+    monkeypatch.setattr(
+        role_registry, "load_registry",
+        lambda *a, **k: {"providers": {"ollama": {"models": {"glm": {"tag": "glm-test-tag:cloud"}}}}},
     )
     captured = {}
 
@@ -224,7 +234,7 @@ def test_run_security_reviewer_routes_via_plan_role_config_security(agents_dir, 
 
     assert captured["role"] == "review"
     assert captured["name"] == "ollama"
-    assert captured["model"] == "glm-5.2:cloud"
+    assert captured["model"] == "glm-test-tag:cloud"
 
 
 # ---------- Reviewer self-fix (APPROVE_WITH_FIX) ----------

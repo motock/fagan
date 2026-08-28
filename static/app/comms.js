@@ -1,6 +1,7 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
 import { fetchJson } from "./api.js";
+let commsHistory = []
 
 // Comms helper functions
 
@@ -42,10 +43,12 @@ async function sendCommsMessage(text) {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: null })
+      body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: commsHistory })
     });
     if (!res.ok) throw new Error('non-2xx');
     const data = await res.json();
+    commsHistory.push({ role: 'user', content: trimmed });
+    commsHistory.push({ role: 'assistant', content: data.reply });
     const hasError = Array.isArray(data.tool_calls) && data.tool_calls.some(c => c.result && c.result.error);
     const role = hasError ? 'tower denied' : 'tower';
     const bubbleHtml = escapeHtml(data.reply) + renderToolTraceHtml(data.tool_calls);

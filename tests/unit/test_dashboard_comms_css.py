@@ -29,10 +29,19 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 # region directly. Re-pinned below to the current, correct post-merge state
 # rather than left red for every unrelated future story - see the
 # chat-claude-md-leak session's diagnosis of the wired-chip-clicks story.
-INDEX_HTML_SHA256 = "16ebe5c93b697874cab45bbf66e3475a3170a498f1dfbe0338feab69d9b627b7"
-# Updated by the chip-wiring follow-up story, which legitimately added
-# suggestion-chip click handlers to comms.js after this CSS-only story landed.
-COMMS_JS_SHA256 = "803f554f5553d13eb4236a285e1764f1b5c286a1883d89bc4862ee4715bb0680"
+# Re-pinned for the chat-page touch-up pass (2026-08-27): comms-body was
+# moved out of comms-head to become a proper sibling flex region (fixing a
+# layout bug where the whole panel shrank to content height instead of
+# filling the viewport, which is also why auto-scroll never had a bounded
+# container to scroll within), and comms-head gained a .comms-actions button
+# group (Export/Reset). Only that touch-up changed; unrelated markup is
+# byte-identical to the prior pin.
+INDEX_HTML_SHA256 = "309e95d6cb7086a3c3abd22ee26f3054619e050a4e0a2e0698f8ed2ca86c2251"
+# Re-pinned for the same touch-up pass: appendCommsMessage now renders a
+# role/timestamp "who" line and wraps content in the (already-styled)
+# .bubble element instead of setting raw innerHTML directly, plus new
+# resetCommsThread()/exportCommsThread() functions and their button wiring.
+COMMS_JS_SHA256 = "f300e0ad087c4d16606488b99cd34a6fed75e1bea02dfc5a5a63c49c7cef496f"
 
 # sha256 of the style.css regions this story must not touch: everything
 # before the "Comms view styles" comment, the "Toast stack styles" section

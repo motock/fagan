@@ -29,9 +29,11 @@ MAIN_JS = STATIC / "app" / "main.js"
 # it is markup/CSS only, so any drift here means a JS file was touched.
 _UNCHANGED_JS_SHA256 = {
     APP_JS: "52e12daba11b07f777764a6b6e3623c7bfd91ec9a0bf10251d903d2319772baa",
-    # COMMS_JS updated by the chip-wiring follow-up story this test's own
-    # docstring anticipated (suggestion-chip click handlers wired in).
-    COMMS_JS: "803f554f5553d13eb4236a285e1764f1b5c286a1883d89bc4862ee4715bb0680",
+    # Re-pinned for the chat-page touch-up pass (2026-08-27): appendCommsMessage
+    # now renders a role/timestamp "who" line into the (already-styled) .bubble
+    # element, plus new resetCommsThread()/exportCommsThread() + wiring. See
+    # test_dashboard_comms_css.py's COMMS_JS_SHA256 comment for the same pin.
+    COMMS_JS: "f300e0ad087c4d16606488b99cd34a6fed75e1bea02dfc5a5a63c49c7cef496f",
     # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
     # subtitle...") legitimately added the updateCommsSubtitle() call to
     # main.js after this story's own pre-implementation baseline was

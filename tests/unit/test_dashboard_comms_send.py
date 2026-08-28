@@ -590,6 +590,26 @@ def test_send_comms_message_failed_request_does_not_add_to_history():
     assert result == [], f"failed turn must not be recorded in history, got {result!r}"
 
 
+def test_reset_comms_thread_clears_accumulated_history():
+    """Clearing the conversation (resetCommsThread) must also drop the
+    client-side history array - otherwise a 'reset' conversation silently
+    keeps sending the old turns to the backend even though the UI looks
+    empty."""
+    fetch_recorder = (
+        "(url, opts) => { globalThis.__fetchCalls = globalThis.__fetchCalls || []; "
+        "globalThis.__fetchCalls.push({ url: url, opts: opts }); "
+        "return Promise.resolve({ ok: true, status: 200, "
+        "json: () => Promise.resolve({ reply: 'first reply', tool_calls: [], turns: 1 }) }); }"
+    )
+    result = _run_app_js_async(
+        "sendCommsMessage('first message')"
+        ".then(() => { resetCommsThread(); return sendCommsMessage('second message'); })"
+        ".then(() => JSON.parse(globalThis.__fetchCalls[1].opts.body).history)",
+        fetch_impl=fetch_recorder,
+    )
+    assert result == [], f"history must be cleared after reset, got {result!r}"
+
+
 def test_send_comms_message_disables_send_and_lives_on_air():
     """sendCommsMessage must disable #comms-send and add 'live' to #on-air
     while in flight, then restore both in the finally path."""

@@ -88,6 +88,7 @@ function resetCommsThread() {
   thread.innerHTML = '';
   thread.style.display = 'none';
   if (landing) landing.style.display = '';
+  commsHistory = [];
 }
 
 function exportCommsThread() {
@@ -186,4 +187,4 @@ async function updateCommsSubtitle() {
   }
 }
 
-export { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle };
+export { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle, resetCommsThread };

@@ -321,7 +321,7 @@ class ChatService:
         self._resolved_model = resolution.model
         return driver, resolution.model
 
-    def execute_turn(self, message, *, plan_name=None, history=None) -> dict:
+    def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:
         driver, model_tag = self._resolve_driver()
         current_prompt = _build_chat_prompt(message, history)
         tool_calls_made: list[dict] = []
@@ -329,7 +329,10 @@ class ChatService:
         while turns < self._max_turns:
             turns += 1
             # cwd=tempfile.gettempdir() keeps this repo's own CLAUDE.md from auto-discovering and silently overriding chat.py's own SYSTEM_PROMPT and tool-confirmation policy, without the --bare flag's side effect of disabling OAuth/keychain auth (see ClaudeCliDriver.complete's --bare handling)
-            response = driver.complete(prompt=current_prompt, system=SYSTEM_PROMPT, model=model_tag, cwd=tempfile.gettempdir())
+            system_prompt = SYSTEM_PROMPT
+            if workspace:
+                system_prompt += f"\nThe active workspace is {workspace}. Use this absolute path as repo_root when authoring a plan."
+            response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
             parsed = _parse_tool_calls(response)
             if not parsed:
                 return {"reply": response, "tool_calls": tool_calls_made, "turns": turns}
@@ -348,6 +351,7 @@ class ChatService:
 # ---------------------------------------------------------------------------
 class ChatRequest(BaseModel):
     plan_name: str | None = None
+    workspace: str | None = None
     message: str
     history: list[dict] | None = None
 
@@ -363,7 +367,7 @@ def chat_endpoint(req: ChatRequest) -> ChatResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
     svc = ChatService()
-    result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history)
+    result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace)
     return ChatResponse(**result)
 
 """

@@ -55,8 +55,9 @@ INDEX_HTML_SHA256 = "16da8a06de3539d0c6e53c93c0c00d57550752a39edfb3301a51c0e4134
 # the toggle adds a module-level showTrace block and header-button wiring to
 # comms.js, and a #comms-trace-toggle button to index.html. Both blockers the
 # rework round introduced (deleted commsHistory declaration, deleted
-# reset/export wiring) were restored before this pin was taken.
-COMMS_JS_SHA256 = "20a8073d00b28063647ae7c8f15f4f6066a6da7370a4f07df3048fe9fc2c7808"
+# reset/export wiring) were restored before this pin was taken; the final
+# pin adds the bare-shim classList guard in applyTraceVisibility.
+COMMS_JS_SHA256 = "2c617ea781ee0235f34c674b610e32a0d7deb31d5f84c4e86fb918aef4ebbcad"
 
 # sha256 of the style.css regions this story must not touch: everything
 # before the "Comms view styles" comment, the "Toast stack styles" section

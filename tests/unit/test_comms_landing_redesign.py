@@ -47,9 +47,10 @@ _UNCHANGED_JS_SHA256 = {
     # (comms-trace-toggle-01, 2026-08-29): the toggle adds a module-level
     # showTrace block and header-button wiring to comms.js. Both blockers the
     # rework round introduced (deleted commsHistory declaration, deleted
-    # reset/export wiring) were restored before this pin was taken. See
+    # reset/export wiring) were restored before this pin was taken; the final
+    # pin adds the bare-shim classList guard in applyTraceVisibility. See
     # test_dashboard_comms_css.py's COMMS_JS_SHA256 comment for the same pin.
-    COMMS_JS: "20a8073d00b28063647ae7c8f15f4f6066a6da7370a4f07df3048fe9fc2c7808",
+    COMMS_JS: "2c617ea781ee0235f34c674b610e32a0d7deb31d5f84c4e86fb918aef4ebbcad",
     # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
     # subtitle...") legitimately added the updateCommsSubtitle() call to
     # main.js after this story's own pre-implementation baseline was

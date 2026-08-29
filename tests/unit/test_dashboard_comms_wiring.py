@@ -260,6 +260,20 @@ def _run_comms_js_async(expr, fetch_impl=None, extra_setup=""):
 
 # === Blocking 2: header button click wiring ==============================
 
+
+def test_module_load_survives_body_without_classlist():
+    """Harness shims vary in how complete their document.body is: some
+    (e.g. test_dashboard_search_preserve.py) define body as a bare marker
+    object with no classList. applyTraceVisibility() runs at module load,
+    so it must not throw - the whole app module graph fails to load for
+    every such test otherwise (comms-trace-toggle-01, 2026-08-29)."""
+    result = _run_comms_js(
+        "({loaded: true})",
+        extra_setup="globalThis.document.body = { _isBody: true };",
+    )
+    assert result["loaded"] is True
+
+
 def test_comms_reset_and_export_buttons_have_click_listeners():
     """#comms-reset and #comms-export must each get a click listener at
     module load (base wiring restored alongside the trace-toggle wiring)."""

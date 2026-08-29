@@ -14,7 +14,9 @@ function readStoredShowTrace() {
 }
 
 function applyTraceVisibility() {
-  if (document.body) {
+  // Test harnesses may define document.body as a bare marker object with no
+  // classList - guard the shape, or module load dies for them.
+  if (document.body && document.body.classList) {
     document.body.classList.toggle('trace-off', !showTrace);
   }
   const traceToggle = document.getElementById('comms-trace-toggle');

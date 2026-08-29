@@ -21,6 +21,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from pipeline.workspace import validate_workspace
+
 __all__ = ["PipelineService"]
 
 
@@ -536,12 +538,25 @@ class PipelineService:
             if deps_met:
                 ready.append({"key": key, "summary": story["summary"]})
         return ready
-    def save_plan(self, plan_name: str, plan_json: str) -> dict[str, Any]:
+    def save_plan(self, plan_name: str, plan_json: str, workspace: str | None = None) -> dict[str, Any]:
         _validate_key(plan_name)
         try:
             plan = json.loads(plan_json)
         except json.JSONDecodeError as e:
             return {"ok": False, "error": f"Invalid JSON: {e}"}
+        if not isinstance(plan, dict):
+            return {"ok": False, "error": "Plan JSON must be a JSON object"}
+
+        if workspace is not None:
+            ws_result = validate_workspace(workspace)
+            if not ws_result.get("ok"):
+                return {
+                    "ok": False,
+                    "error": ws_result.get("error") or "invalid workspace",
+                }
+            # WS-11: the model-authored repo_root is untrusted -- overwrite it
+            # with the server-validated resolved path.
+            plan["repo_root"] = ws_result["path"]
 
         if "epics" not in plan:
             return {"ok": False, "error": "Plan must contain 'epics' key"}

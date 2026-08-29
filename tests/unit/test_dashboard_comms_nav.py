@@ -366,3 +366,64 @@ def test_select_comms_does_not_crash_rendering_overview_plan_rows():
         "({ commsActive: state.commsActive })"
     )
     assert result["commsActive"] is True
+
+
+# === selectComms()/selectOverview() must apply the active view synchronously
+#
+# BUG: selectComms() and selectOverview() flip state.commsActive and the
+# sidebar's .active classes but never call _applyActiveView() — the only
+# helper that unhides/hides the three <section> panes. The only other caller
+# is refresh(), which runs on the 4-second polling interval, so after
+# clicking Comms (or Overview while in Chat) the correct pane stays hidden
+# until the next poll tick (up to 4s of perceived nav lag). Each function
+# must call _applyActiveView() inside its own body.
+#
+# NOTE: the DOM shim above has no-op classList, so behavioral class
+# assertions cannot work here; static-source assertions are the established
+# pattern in this file (mirroring test_refresh_uses_apply_active_view_helper)
+# and are RED before the fix / GREEN after.
+
+def test_select_comms_calls_apply_active_view():
+    """selectComms() must call _applyActiveView() inside its own body so the
+    #comms-view pane unhides synchronously on click instead of waiting for
+    the next 4s polling tick. Exactly one call is required, and the existing
+    renderOverview(...) call must be retained (removing it is out of
+    scope)."""
+    src = _main_js_source()
+    start = src.index("function selectComms(")
+    end = src.index("async function selectPlan", start)
+    body = src[start:end]
+    assert "_applyActiveView()" in body, (
+        "selectComms() must call _applyActiveView() so the Comms pane "
+        "unhides synchronously instead of waiting for the next poll tick"
+    )
+    assert body.count("_applyActiveView()") == 1, (
+        "selectComms() must contain exactly one _applyActiveView() call"
+    )
+    assert "renderOverview(" in body, (
+        "selectComms() must keep its existing renderOverview(...) call "
+        "(removing it is out of scope for this fix)"
+    )
+
+
+def test_select_overview_calls_apply_active_view():
+    """selectOverview() must call _applyActiveView() inside its own body so
+    the #plan-detail pane unhides synchronously when navigating back from
+    Chat to Overview (same 4s poll-tick lag as selectComms). Exactly one
+    call is required, and the existing renderOverview(...) call must be
+    retained (removing it is out of scope)."""
+    src = _main_js_source()
+    start = src.index("function selectOverview(")
+    end = src.index("function selectComms(", start)
+    body = src[start:end]
+    assert "_applyActiveView()" in body, (
+        "selectOverview() must call _applyActiveView() so the Overview pane "
+        "unhides synchronously instead of waiting for the next poll tick"
+    )
+    assert body.count("_applyActiveView()") == 1, (
+        "selectOverview() must contain exactly one _applyActiveView() call"
+    )
+    assert "renderOverview(" in body, (
+        "selectOverview() must keep its existing renderOverview(...) call "
+        "(removing it is out of scope for this fix)"
+    )

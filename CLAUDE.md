@@ -18,6 +18,8 @@ Shared engineering-standards template — fork and adapt for your repo.
 
 Prefer adding new sections over editing the invariant ones, so the document stays composable across template updates.
 
+**Where content lives:** CLAUDE.md holds only what every contributor needs always-on, and must stay under the ~40k context limit. Longer reference material (review-gate checklists, incident-derived testing rules, story-schema and dispatch-sizing rules) lives in `.claude/rules/*.md` and is pulled in via `@.claude/rules/...` references. Put new additive sections there — as a standalone rules file with a provenance note — and leave a short heading + summary + pointer in CLAUDE.md rather than growing this file.
+
 ---
 
 ## Local Development Setup
@@ -122,47 +124,12 @@ Contract tests belong in the same repository as the service they test and must r
 
 ## Testing Configuration-Driven Logic and Resource Gates
 
-Additive section (see "How to use this template" above) — two specific
-testing failure modes, generalized from production incidents, that the
-generic Testing section above doesn't call out by name.
-
-### Test the resolution logic, not today's configured values
-- When a test exercises code that resolves a setting from a config file,
-  registry, or environment (e.g. "which provider/model does role X route
-  to"), stub the config source with a synthetic fixture and assert against
-  that fixture — never assert against whatever the real config currently
-  contains.
-- **Why:** an assertion against a live value ties the test to today's
-  configuration. The next legitimate config change breaks every test that
-  asserted the old value, for no defect in the code — and reverting the
-  config later requires reverting the tests too. A registry, flag store, or
-  settings file is meant to be freely reconfigurable; a test suite that
-  breaks every time it's reconfigured has the coupling backwards.
-- The one legitimate exception is a test asserting a *hardcoded fallback
-  invariant* — e.g. "when the registry has no entry for role X, default to
-  the safe built-in provider." Stub the registry as empty for that case and
-  assert the fallback fires; that's a code-level guarantee independent of
-  what's currently configured, not a live-value assertion.
-
-### Validate any gate that can withhold work against the real environment
-- For any check that can refuse or block work — a resource threshold, a
-  rate limit, a quota check, a capacity gate — a green test suite proves
-  the branch logic is correct, not that the threshold is survivable in
-  production. If every test mocks the gate's input to a convenient value,
-  nothing has ever evaluated the gate against a real reading.
-- **Why:** this failure mode is silent by construction — nothing throws,
-  nothing errors, the gate just returns "not ok" forever and the blocked
-  work quietly stops happening. It can pass hundreds or thousands of green,
-  fully-mocked tests while paralyzing the exact thing it was meant to
-  protect, because no test ever fed it a realistic number.
-- Before calling a new withholding gate done, run it against the real host
-  or environment at least once and print the actual measured value next to
-  the threshold. Prefer a stable signal over an instantaneous one (e.g. a
-  resource ceiling that doesn't flap with unrelated concurrent load), and
-  bias the gate toward never blocking something already known to work — if
-  a genuinely-unservable case slips through, a downstream bounded retry or
-  escalation path can catch it at the cost of one cycle; a gate that's
-  wrong in the blocking direction costs everything behind it.
+Additive section — now maintained at @.claude/rules/testing-config-gates.md:
+two specific testing failure modes, generalized from production incidents,
+that the generic Testing section above doesn't call out by name: (1) test
+the resolution logic against a stubbed config source, never today's
+configured values; (2) validate any gate that can withhold work against the
+real environment before trusting it.
 
 ---
 
@@ -437,7 +404,7 @@ This sequence matters: a bug that is fixed without a reproducing test will likel
 Responsibility for telling these apart splits across two roles — neither is sufficient alone:
 
 - **The implementer must justify, not silently edit.** Before modifying an existing test, state explicitly: which test/assertion is changing, why the previously-asserted behavior is no longer correct, and what the new expected behavior is. This justification must be visible in the commit message or PR description — never folded into an unrelated diff. If the task's own scope does not require the behavior change the test would need to reflect, do not touch it; find another way to satisfy the test as written.
-- **The reviewer is the actual gate.** Every existing-test modification is a mandatory review checklist item (see **Code Review**): verify the new assertion still tests real, intended behavior — not weakened, loosened, or deleted just to pass — and that it matches a behavior change the task genuinely called for. A modification with no stated justification, or one that merely relaxes a check without a corresponding behavior change, is a **Blocking** finding by default.
+- **The reviewer is the actual gate.** Every existing-test modification is a mandatory review checklist item (see @.claude/rules/code-review.md): verify the new assertion still tests real, intended behavior — not weakened, loosened, or deleted just to pass — and that it matches a behavior change the task genuinely called for. A modification with no stated justification, or one that merely relaxes a check without a corresponding behavior change, is a **Blocking** finding by default.
 
 This applies to all test files — test logic, assertions, setup/teardown, test data, and test naming. Adding new test cases to an existing test file never needs justification; modifying or removing existing ones always does.
 
@@ -493,7 +460,7 @@ A task is not complete when the code is written. It is complete when all of the 
 
 - [ ] All new and existing tests pass
 - [ ] A reproducing test exists and was observed failing before the fix (bug fixes only)
-- [ ] The change has passed `mcp__pipeline__review_story` with a clean verdict (see **Code Review**)
+- [ ] The change has passed `mcp__pipeline__review_story` with a clean verdict (see @.claude/rules/code-review.md)
 - [ ] The merge went through `mcp__pipeline__approve_merge` (or the scheduler's own merge path) or, for a manual merge, `gh pr checks <branch>` was confirmed all-green first — not just "reviewer approved + tests passed locally"
 - [ ] No regressions in areas touched by the change — smoke-test the critical path if automated tests do not cover it
 - [ ] Documentation is updated if the change alters externally visible behavior (API contracts, configuration, user-facing functionality)
@@ -516,89 +483,14 @@ This matters most for weaker or resource-constrained executors (limited context 
 
 ## Code Review
 
-Code review is the last quality gate before code enters the shared codebase. Its purpose is to catch what tests cannot: design problems, unclear intent, missing edge cases, security concerns, and drift from team standards.
+Now maintained at @.claude/rules/code-review.md — the review gate's
+checklist ("what a reviewer is signing off on"), the Blocking/Suggestion/Nit
+feedback labels, PR size guidance, AI-generated-code review rules, and the
+merge-gate/AI-review lessons from production incidents. Two anchors from it
+that apply to every contributor, not just reviewers:
 
-### What a reviewer is signing off on
-
-Approving a pull request is a statement that the reviewer has verified all of the following:
-
-- The change does what it claims to do
-- Tests cover the new behavior, including negative and boundary cases
-- No obvious security issues — injection, unvalidated input, exposed secrets, excessive permissions
-- The implementation is consistent with the architecture and style of the surrounding code
-- The commit message accurately describes the change
-- If the change alters externally visible behavior (API contracts, configuration, CLI flags, user-facing functionality), documentation is updated — request changes and name the specific doc if it's missing, rather than approving with the gap unaddressed
-- If the diff modifies or removes an existing test (see Agent Workflow Step 4), the author's stated justification holds up: the new assertion reflects a real, requested behavior change — not a loosened or deleted check made just to pass. No justification present is itself a **Blocking** finding
-
-An approver who has not checked these items should not approve.
-
-### Blocking vs. non-blocking feedback
-
-Be explicit about the weight of your feedback so the author can prioritize:
-
-| Label | Meaning |
-|---|---|
-| **Blocking** | Must be addressed before merge. The change is incorrect, unsafe, or violates a standard. |
-| **Suggestion** | Worth considering but will not block merge. Author decides. |
-| **Nit** | Minor style or wording preference. Author may ignore. |
-
-Default to `Suggestion` when in doubt. Reserve `Blocking` for genuine problems — overusing it trains authors to discount all feedback.
-
-### Pull request size
-
-Small, focused pull requests are easier to review, less risky to merge, and produce more useful feedback.
-
-- **Aim for PRs under 400 lines of changed code.** This is a guideline, not a hard limit — a well-scoped 600-line change is better than five artificial splits — but consistently large PRs indicate a scoping problem.
-- **One concern per PR.** A PR that fixes a bug *and* refactors a module *and* updates dependencies is three PRs. Mixing concerns makes review harder and rollback nearly impossible.
-- **Separate mechanical changes from behavioral ones.** Refactors, formatting fixes, and dependency updates should not be bundled with feature work. When something breaks, you need to identify which change caused it.
-- If a task genuinely requires a large change, break it into a sequence of reviewable steps merged incrementally to `main`.
-
-### Reviewing AI-generated code
-
-AI-generated code requires the same scrutiny as human-written code. Additionally:
-
-- Verify the AI did not add unrequested features, quietly remove behavior, or silently refactor adjacent code
-- Check that tests were written before the implementation (per the Agent Workflow), not retrofitted after
-- Be skeptical of plausible-looking code that has not been exercised against the actual system — AI can generate syntactically correct code that is logically wrong
-- Security-sensitive changes (auth, payments, data access) require human review regardless of source or apparent quality
-
-### Merge-gate and AI-review lessons from production incidents
-
-Four specific, non-obvious lessons distilled from real incidents in this
-project's autonomous-dispatch history — general enough to apply to any
-review/CI pipeline gating a merge, AI-driven or not:
-
-- **A green test suite proves the diff's branch logic, not spec-completeness.**
-  An AI executor (and a rushed human) reliably converges to the *minimum*
-  edit that turns its own tests green, then stops — anything not covered by
-  an assertion is liable to be left half-done (a rename applied in one
-  place but not another, a doc comment never updated, a second call site
-  never migrated). Only a reviewer who diffs against the actual requirement
-  — not just "did the tests pass" — catches the gap. When re-reviewing a
-  rework round, require each prior Blocking finding to be discharged
-  individually against the new diff; do not treat "the suite is green now"
-  as evidence a specific named finding was actually fixed.
-- **An AI-authored test can be self-consistently wrong.** A test existing
-  and passing is necessary but not sufficient: an executor that misreads a
-  boundary condition (an off-by-one, an inclusive/exclusive edge) can write
-  a fully green test suite that encodes the *same* mistake as the
-  implementation, so the test confirms the bug instead of catching it.
-  Review sensitive numeric/boundary logic by re-deriving the correct
-  behavior yourself, not by confirming a test exists and is green.
-- **Pin the exact version of any tool whose exit code gates a merge**
-  (linters, formatters, type checkers) — a floor constraint (`>=`) lets an
-  upstream release silently change what "clean" means mid-flight, and a
-  version mismatch between a local environment and CI then gets
-  misdiagnosed as a code or capability problem when it's actually an
-  environment drift problem. Keep the pinned version identical everywhere
-  the check runs.
-- **A stuck agent's own resumed context can be the actual blocker**, not a
-  capability ceiling. If a dispatched agent churns or regresses across
-  repeated rework attempts, try once with a fresh context (a clean restart
-  from the last-known-good state, briefed only on what's left to do) before
-  concluding the model or approach can't do the task — a long, cluttered
-  transcript full of its own prior confusion can itself be what's
-  producing more confusion.
+- **Default to `Suggestion` when in doubt.** Reserve `Blocking` for genuine problems.
+- **Aim for PRs under 400 lines, one concern per PR**, mechanical changes separated from behavioral ones.
 
 ---
 

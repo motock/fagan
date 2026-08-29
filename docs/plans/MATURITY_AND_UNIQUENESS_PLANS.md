@@ -9,7 +9,7 @@ A self-assessment TODO list, not a specification. Two halves:
 Each item is a TODO with a *why* and a rough priority — no design detail yet.
 
 > **See also:** `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (2026-08-05; updated
-> 2026-08-24) carries the design detail for A2, B1's remote-exec, B3, and B4,
+> 2026-08-29) carries the design detail for A2, B1's remote-exec, B3, and B4,
 > and adds a service-extraction workstream (W1) this doc has no item for.
 > Overlaps, disagreements, and a since-resolved ordering conflict are mapped in
 > that doc's "Relationship to MATURITY_AND_UNIQUENESS_PLANS.md" section.
@@ -572,7 +572,8 @@ stories (TDD-split stays strictly read-only). Tests in
 
 > **Prerequisite (added 2026-08-05; SATISFIED 2026-08-17):** every item below
 > needed a service seam — the `@mcp.tool()` entrypoints and the state machine
-> were the same `pipeline/server.py` (then 4,132 lines; now 5,466), with no
+> were the same `pipeline/server.py` (then 4,132 lines; now split into nine
+> modules under 1,000 lines by `server-app-file-split`, PRs #435-#457), with no
 > `PipelineService` a non-MCP caller could drive and no `Store` abstraction
 > over the `PLAN_DIR` JSON files. **That seam now exists:** W1a extracted
 > `PipelineService` (2026-08-12) and W1b added the `Store` protocol + `FileStore`
@@ -703,6 +704,11 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > #421-#432** → ~~`server-app-file-split` (split the then-5,466-line
 > `pipeline/server.py` + 2,730-line `static/app.js` into modules under
 > 1,000 lines)~~ **DONE 2026-08-25 — 22 stories, PRs #435-#457** →
+> ~~`workspace-selection` (the chat entry point's new-user path: workspace
+> create/pick + recents + server-side repo_root validation + chat tools +
+> picker UI; with it, a new user runs entirely in the browser)~~ **DONE
+> 2026-08-29 — 13 stories, PRs #475-#497 (+ `workspace-security-followups`
+> #489/#492)** →
 > **re-split `scripts/local_agent.py`/`local_agent_oracle.py` (same
 > file-size concern recurring at 1,723/1,599 lines) — PARTIAL 2026-08-27,
 > direct, no plan: config constants + tool schemas extracted to

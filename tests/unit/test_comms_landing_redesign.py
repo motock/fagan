@@ -51,7 +51,7 @@ _UNCHANGED_JS_SHA256 = {
     # Re-pinned again alongside the COMMS_JS pin above: resetCommsThread
     # added to main.js's import-from-comms.js line and re-export block so
     # the reset-clears-history regression test can call it.
-    MAIN_JS: "772647ab2c9df7eace383d4210a614887e457e09d7eda43f6e8333ac96211269",
+    MAIN_JS: "5dc4cf6759bab685fb242a90509a8c6ee401bef77c9ae5fa882c42070af6ff8d",
 }
 
 EXPECTED_CHIP_MESSAGES = {

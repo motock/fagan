@@ -1,6 +1,7 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
 import { fetchJson } from "./api.js";
+let commsHistory = [];
 let showTrace = readStoredShowTrace();
 
 function readStoredShowTrace() {

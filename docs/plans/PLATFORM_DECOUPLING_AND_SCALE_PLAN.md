@@ -1,15 +1,27 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **In execution (last updated 2026-08-27).** W3a, W1a, W1b, W1c, W2,
-> W3b, and `server-app-file-split` are all done and merged.
-> `server-app-file-split` (22 stories, PRs #435-#457) landed since the prior
-> update: `pipeline/server.py` is down from 5,466 to 992 lines, split into
+> Status: **In execution (last updated 2026-08-29).** W3a, W1a, W1b, W1c, W2,
+> W3b, `server-app-file-split`, and `workspace-selection` are all done and
+> merged. `comms-ui-design-alignment` (Comms nav/hero/toast polish) also landed
+> on top of the split modules.
+> **`workspace-selection` (13 stories, PRs #475, #476, #482, #485-#491, #494,
+> #496, #497 — plus the `workspace-security-followups` plan, WS-SEC-01/02,
+> PRs #489/#492) DONE 2026-08-29:** the last piece of the chat entry point's
+> new-user path. `pipeline/workspace.py` (`create_workspace` = mkdir + git
+> init + empty initial commit, path validation, deny list, fail-closed symlink
+> hardening), workspace thread/list through `ChatService`, `POST /api/workspace`
+> + `GET /api/workspaces`, server-side `repo_root` validation in
+> `save_plan`, the `set_workspace`/`list_workspaces` chat tools, and the
+> `static/app/workspace.js` picker wired into the chat UI. A new user can now
+> pick (or create) a workspace from the browser chat before `decompose` —
+> Goals 1-2 no longer require a Claude Code session at all.
+> `server-app-file-split` (22 stories, PRs #435-#457): `pipeline/server.py` is
+> down from 5,466 to 992 lines, split into
 > `store.py`/`service.py`/`merge.py`/`ingest.py`/`dispatch.py`/
 > `review_orchestrator.py`/`story_status.py`/`advance.py`/`usage.py`; and
 > `static/app.js` (2,730 lines) is now ES modules
 > (`state.js`/`routing.js`/`api.js`/`render/*.js`/`comms.js`/`usage.js`/
-> `main.js`), every file under 1,000 lines. `comms-ui-design-alignment` (Comms
-> nav/hero/toast polish) also landed on top of the split modules.
+> `main.js`), every file under 1,000 lines.
 > **New instance of the same scaling concern (#5 below), found 2026-08-27:**
 > `scripts/local_agent.py` (1,723 lines) and `scripts/local_agent_oracle.py`
 > (1,599 lines) were the two largest files in the repo, both over the
@@ -525,22 +537,28 @@ The dependency order is fairly rigid:
    2026-08-25** — 22 stories, PRs #435-#457. `pipeline/server.py` (was 5,466
    lines) and `static/app.js` (was 2,730) are both now under 1,000 lines per
    module — see the top-of-doc status note and scaling concern #5.
-8. **Re-split `scripts/local_agent.py`/`local_agent_oracle.py`.** **PARTIAL,
+8. ~~**`workspace-selection` — the chat entry point's new-user path.**~~
+   **DONE 2026-08-29** — 13 stories, PRs #475, #476, #482, #485-#491, #494,
+   #496, #497 (plus `workspace-security-followups`, PRs #489/#492). See the
+   top-of-doc status note. With this, a new user goes from "open the
+   dashboard" to "plans dispatching" entirely in the browser — Claude Code
+   is one client, not the entry point (Goal 1).
+9. **Re-split `scripts/local_agent.py`/`local_agent_oracle.py`.** **PARTIAL,
    2026-08-27, direct (no pipeline)** — config constants + tool schemas
    extracted (1,723→1,530 / 1,599→1,436 lines); `run_tool`/transport/
    `_main_impl` remain, blocked on the same `_ServerRef`-proxy rigor
    `server-app-file-split` used, applied per-function. See scaling concern
    #5 above for detail. Scoped follow-up, not force-completed same-session.
-9. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
+10. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
    only where there's a real second deployment to validate against. Building it
    speculatively against an imagined tenant is exactly the over-engineering the
    project's own standards warn about.
 
-Steps 1–6 are worth doing even if enterprise never happens: they're what make the
+Steps 1–8 are worth doing even if enterprise never happens: they're what make the
 system usable without a Claude Code session open, which is the stated goal. Steps
-7–8 are the change-scaling debt those workstreams accrued, and are worth doing on
-the same grounds — it's what keeps the files every future workstream touches
-editable.
+7 and 9 are the change-scaling debt those workstreams accrued, and are worth
+doing on the same grounds — it's what keeps the files every future workstream
+touches editable.
 
 ---
 
@@ -563,7 +581,8 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   B4 and most of B3 were listed as if independently startable. They were not:
   both needed a `PipelineService` seam that did not exist until W1a/W1b landed
   (2026-08-12/15) — the `@mcp.tool()` entrypoints and the state machine were
-  the same module (then 4,132 lines; now 5,466). That seam now exists, B4
+  the same module (then 4,132 lines; split into nine modules under 1,000 by
+  `server-app-file-split`, PRs #435-#457). That seam now exists, B4
   (writable dashboard) is DONE via W3b, and B3's prerequisite is satisfied —
   what remains under B3 is the genuine multi-tenant work (W4), not the
   refactor. The maturity doc records this as a prerequisite line under both
@@ -587,7 +606,9 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   2026-08-20, 9/9 stories, PRs #391-#398 + #406** → ~~**W3b (writable
   dashboard — closes B4)**~~ **DONE 2026-08-24, 11/11 stories, PRs #421-#432**
   → ~~**`server-app-file-split` (split the two monolith files)**~~ **DONE
-  2026-08-25, 22 stories, PRs #435-#457** → **re-split
+  2026-08-25, 22 stories, PRs #435-#457** → ~~**`workspace-selection` (chat
+  entry point's new-user path — completes Goal 1)**~~ **DONE 2026-08-29, 13
+  stories, PRs #475-#497 (+ security followups #489/#492)** → **re-split
   `local_agent.py`/`local_agent_oracle.py` (same concern recurring; config
   extracted 2026-08-27, run_tool/`_main_impl` split remains as a scoped
   follow-up)** → W4 (multi-tenant, closes B3), with B1

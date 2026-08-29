@@ -30,6 +30,7 @@ function defaultFilters() {
 
 window.state = {
   selectedPlan: null,
+  selectedWorkspace: null,
   pollHandle: null,
   refreshIndicatorTimer: null,
   filters: defaultFilters(),
@@ -48,6 +49,7 @@ const state = window.state;
 // sequence so each load starts from known-default field values.
 function resetState() {
   state.selectedPlan = null;
+  state.selectedWorkspace = null;
   state.pollHandle = null;
   state.refreshIndicatorTimer = null;
   state.filters = defaultFilters();

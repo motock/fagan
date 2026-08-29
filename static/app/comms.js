@@ -1,7 +1,30 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
 import { fetchJson } from "./api.js";
-let commsHistory = []
+let commsHistory = [];
+let showTrace = readStoredShowTrace();
+
+function readStoredShowTrace() {
+  try {
+    const stored = localStorage.getItem('commsShowTrace');
+    return stored !== 'false';
+  } catch (err) {
+    return true;
+  }
+}
+
+function applyTraceVisibility() {
+  // Test harnesses may define document.body as a bare marker object with no
+  // classList - guard the shape, or module load dies for them.
+  if (document.body && document.body.classList) {
+    document.body.classList.toggle('trace-off', !showTrace);
+  }
+  const traceToggle = document.getElementById('comms-trace-toggle');
+  if (traceToggle) {
+    traceToggle.setAttribute('aria-pressed', String(showTrace));
+  }
+}
+
 
 // Comms helper functions
 
@@ -165,10 +188,25 @@ commsChips.forEach((chip) => {
     sendCommsMessage(message);
   });
 });
+const traceToggleButton = document.getElementById('comms-trace-toggle');
+if (traceToggleButton) {
+  traceToggleButton.addEventListener('click', () => {
+    showTrace = !showTrace;
+    try {
+      localStorage.setItem('commsShowTrace', showTrace ? 'true' : 'false');
+    } catch (err) {
+      // storage unavailable; visibility still applies
+    }
+    applyTraceVisibility();
+  });
+}
+
 const commsResetBtn = document.getElementById('comms-reset');
 if (commsResetBtn) commsResetBtn.addEventListener('click', resetCommsThread);
 const commsExportBtn = document.getElementById('comms-export');
 if (commsExportBtn) commsExportBtn.addEventListener('click', exportCommsThread);
+
+applyTraceVisibility();
 
 async function updateCommsSubtitle() {
   const sub = document.getElementById('comms-sub');

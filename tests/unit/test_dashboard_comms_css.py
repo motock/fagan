@@ -36,7 +36,9 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 # container to scroll within), and comms-head gained a .comms-actions button
 # group (Export/Reset). Only that touch-up changed; unrelated markup is
 # byte-identical to the prior pin.
-INDEX_HTML_SHA256 = "309e95d6cb7086a3c3abd22ee26f3054619e050a4e0a2e0698f8ed2ca86c2251"
+# Re-pinned for the comms TRACE-toggle story (comms-trace-toggle-01,
+# 2026-08-29): adds a #comms-trace-toggle button to the .comms-actions row.
+INDEX_HTML_SHA256 = "16da8a06de3539d0c6e53c93c0c00d57550752a39edfb3301a51c0e4134ba305"
 # Re-pinned for the same touch-up pass: appendCommsMessage now renders a
 # role/timestamp "who" line and wraps content in the (already-styled)
 # .bubble element instead of setting raw innerHTML directly, plus new
@@ -49,7 +51,13 @@ INDEX_HTML_SHA256 = "309e95d6cb7086a3c3abd22ee26f3054619e050a4e0a2e0698f8ed2ca86
 # so a 'reset' conversation silently kept sending old turns to the backend.
 # Added `commsHistory = []` to resetCommsThread and exported it so the new
 # regression test can call it directly.
-COMMS_JS_SHA256 = "3b75f9aff73a5a4b54ca05f6ce88ed78a861a00cab2c00f6cd178802eb882ad3"
+# Re-pinned for the comms TRACE-toggle story (comms-trace-toggle-01, 2026-08-29):
+# the toggle adds a module-level showTrace block and header-button wiring to
+# comms.js, and a #comms-trace-toggle button to index.html. Both blockers the
+# rework round introduced (deleted commsHistory declaration, deleted
+# reset/export wiring) were restored before this pin was taken; the final
+# pin adds the bare-shim classList guard in applyTraceVisibility.
+COMMS_JS_SHA256 = "2c617ea781ee0235f34c674b610e32a0d7deb31d5f84c4e86fb918aef4ebbcad"
 
 # sha256 of the style.css regions this story must not touch: everything
 # before the "Comms view styles" comment, the "Toast stack styles" section

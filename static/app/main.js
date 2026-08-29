@@ -97,6 +97,7 @@ function selectOverview() {
     state.lastPlans || { plans: [] },
     state.lastHealth || null,
   );
+  _applyActiveView();
 }
 
 function selectComms() {
@@ -116,6 +117,7 @@ function selectComms() {
     state.lastPlans || { plans: [] },
     state.lastHealth || null,
   );
+  _applyActiveView();
 }
 
 async function selectPlan(name) {

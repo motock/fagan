@@ -59,8 +59,9 @@ def test_save_plan_method_takes_self_plus_original_params():
         "first parameter of the method must be `self`, got "
         f"{params[0]!r}"
     )
-    assert params[1:] == ["plan_name", "plan_json"], (
-        "method must keep the original parameter names plan_name, plan_json; "
+    assert params[1:] == ["plan_name", "plan_json", "workspace"], (
+        "method must keep the original parameter names plan_name, plan_json "
+        "plus WS-11's optional workspace kwarg; "
         f"got {params[1:]!r}"
     )
     # Annotations preserved.

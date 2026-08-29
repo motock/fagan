@@ -166,7 +166,11 @@ let bootstrapped = false;
 async function bootstrapGlobals() {
   if (bootstrapped) return;
   bootstrapped = true;
-  currentFetch = async () => jsonResponse(200, {});
+  currentFetch = async (url, opts) => {
+    if (url.includes('/api/plans')) return jsonResponse(200, { plans: [] });
+    if (url.includes('/api/usage')) return jsonResponse(200, { available: false });
+    return jsonResponse(200, {});
+  };
   try {
     await loadAppInto(makeWindowStub());
   } catch {

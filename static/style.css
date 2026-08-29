@@ -972,9 +972,8 @@ main {
 .trace-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .trace-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-done); flex-shrink: 0; }
 .trace-detail { display: none; font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-2); color: var(--text-dim); white-space: pre-wrap; }
- .trace-chip.expanded + .trace-detail { display: block; }
+.trace-chip.expanded + .trace-detail { display: block; }
 body.trace-off .trace-chip { display: none !important; }
-body.trace-off .trace-detail { display: none !important; }
 body.trace-off .trace-detail { display: none !important; }
 /* Config view styles */
 .config-table { width: 100%; border-collapse: collapse; }

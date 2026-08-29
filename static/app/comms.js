@@ -14,7 +14,9 @@ function readStoredShowTrace() {
 }
 
 function applyTraceVisibility() {
-  document.body.classList.toggle('trace-off', !showTrace);
+  if (document.body) {
+    document.body.classList.toggle('trace-off', !showTrace);
+  }
   const traceToggle = document.getElementById('comms-trace-toggle');
   if (traceToggle) {
     traceToggle.setAttribute('aria-pressed', String(showTrace));
@@ -196,6 +198,11 @@ if (traceToggleButton) {
     applyTraceVisibility();
   });
 }
+
+const commsResetBtn = document.getElementById('comms-reset');
+if (commsResetBtn) commsResetBtn.addEventListener('click', resetCommsThread);
+const commsExportBtn = document.getElementById('comms-export');
+if (commsExportBtn) commsExportBtn.addEventListener('click', exportCommsThread);
 
 applyTraceVisibility();
 

@@ -43,7 +43,13 @@ _UNCHANGED_JS_SHA256 = {
     # to the backend): commsHistory = [] added to resetCommsThread, and
     # resetCommsThread added to the module's export list so it's reachable
     # by the regression test that covers this.
-    COMMS_JS: "3b75f9aff73a5a4b54ca05f6ce88ed78a861a00cab2c00f6cd178802eb882ad3",
+    # Re-pinned again for the comms TRACE-toggle story
+    # (comms-trace-toggle-01, 2026-08-29): the toggle adds a module-level
+    # showTrace block and header-button wiring to comms.js. Both blockers the
+    # rework round introduced (deleted commsHistory declaration, deleted
+    # reset/export wiring) were restored before this pin was taken. See
+    # test_dashboard_comms_css.py's COMMS_JS_SHA256 comment for the same pin.
+    COMMS_JS: "20a8073d00b28063647ae7c8f15f4f6066a6da7370a4f07df3048fe9fc2c7808",
     # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
     # subtitle...") legitimately added the updateCommsSubtitle() call to
     # main.js after this story's own pre-implementation baseline was

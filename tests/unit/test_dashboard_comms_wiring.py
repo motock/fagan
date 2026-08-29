@@ -21,7 +21,9 @@ a listener recorder for #comms-reset/#comms-export, a fetch log capturing
 url+body, and innerHTML/style recorders on #comms-thread so the reset and
 export handlers' observable effects can be asserted.
 
-These tests are RED until the deleted lines are restored.
+Both deletions ( Blocking 1 and Blocking 2 ) have been restored in
+static/app/comms.js; these tests are permanent regression guards for
+that restoration.
 """
 import json
 import os

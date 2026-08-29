@@ -3,16 +3,7 @@
 // Conforms to conventions used in static/app/api.js and static/app/comms.js.
 // Exported functions: fetchWorkspaces, selectWorkspace, renderWorkspaceList.
 
-// Escape HTML according to the tests: &, <, >, ", ' -> &amp;, &lt;, &gt;, &quot;, &#39;
-function escapeHtml(str) {
-  if (typeof str !== "string") return "";
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+import { escapeHtml } from "./render/board.js";
 
 // Fetch the list of workspaces from the backend.
 // Returns the array of workspaces on success, or [] on any error.
@@ -62,8 +53,8 @@ function renderWorkspaceList(workspaces) {
     return "<p class=\"empty-state\">No workspaces found.</p>";
   }
   const items = workspaces.map((w) => {
-    const escaped = escapeHtml(w.path ?? "");
-    const unavailable = w.valid === false;
+    const escaped = escapeHtml((w && w.path) ?? "");
+    const unavailable = w && w.valid === false;
     const cls = unavailable ? "unavailable" : "";
     const label = unavailable ? " (unavailable)" : "";
     return `<li class="${cls}">${escaped}${label}</li>`;

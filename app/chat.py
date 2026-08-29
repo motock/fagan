@@ -61,6 +61,20 @@ TOOLS: dict[str, dict] = {
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/plans")).json()
         ),
     },
+    "set_workspace": {
+        "description": "Set the current workspace.",
+        "params": {"path": "str", "create": "bool"},
+        "execute": lambda http_client, api_base_url, path, create=False, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, "/api/workspace"), json={"path": path, "create": create}).json()
+        ),
+    },
+    "list_workspaces": {
+        "description": "List all workspaces.",
+        "params": {},
+        "execute": lambda http_client, api_base_url, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspaces")).json()
+        ),
+    },
     "get_plan": {
         "description": "Get full detail for one plan by name.",
         "params": {"plan_name": "str"},

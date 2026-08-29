@@ -1,7 +1,25 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
 import { fetchJson } from "./api.js";
-let commsHistory = []
+let showTrace = readStoredShowTrace();
+
+function readStoredShowTrace() {
+  try {
+    const stored = localStorage.getItem('commsShowTrace');
+    return stored !== 'false';
+  } catch (err) {
+    return true;
+  }
+}
+
+function applyTraceVisibility() {
+  document.body.classList.toggle('trace-off', !showTrace);
+  const traceToggle = document.getElementById('comms-trace-toggle');
+  if (traceToggle) {
+    traceToggle.setAttribute('aria-pressed', String(showTrace));
+  }
+}
+
 
 // Comms helper functions
 
@@ -165,10 +183,20 @@ commsChips.forEach((chip) => {
     sendCommsMessage(message);
   });
 });
-const commsResetBtn = document.getElementById('comms-reset');
-if (commsResetBtn) commsResetBtn.addEventListener('click', resetCommsThread);
-const commsExportBtn = document.getElementById('comms-export');
-if (commsExportBtn) commsExportBtn.addEventListener('click', exportCommsThread);
+const traceToggleButton = document.getElementById('comms-trace-toggle');
+if (traceToggleButton) {
+  traceToggleButton.addEventListener('click', () => {
+    showTrace = !showTrace;
+    try {
+      localStorage.setItem('commsShowTrace', showTrace ? 'true' : 'false');
+    } catch (err) {
+      // storage unavailable; visibility still applies
+    }
+    applyTraceVisibility();
+  });
+}
+
+applyTraceVisibility();
 
 async function updateCommsSubtitle() {
   const sub = document.getElementById('comms-sub');

@@ -21,6 +21,7 @@ _RECOVERY_ROUNDS = ((0.75, 1), (0.50, 3), (0.30, 6))
 # `lao.time.sleep`, which mutates the shared stdlib time module object; this
 # module's plain `import time` binds that same object, so the patch is
 # observed here.
+# Backoff patches must target scripts.local_agent_oracle_recovery.RECOVERY_BACKOFF_SECONDS, not the oracle module.
 
 
 def recover_from_oversized_5xx_impl(origin, messages, chat_fn, *, step=None):

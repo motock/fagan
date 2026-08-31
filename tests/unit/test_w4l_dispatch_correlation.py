@@ -195,7 +195,7 @@ def recorder(monkeypatch):
     rec.bus = _RecordingBus()
     monkeypatch.setattr(p, "_notify_user", rec.notify)
 
-    import pipeline.event_wiring as event_wiring
+    from pipeline import event_wiring
 
     monkeypatch.setattr(event_wiring, "get_bus", lambda: rec.bus)
 

@@ -229,8 +229,12 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 # merges. The hardcoded convention name previously pushed a
                 # branch a prior _merge_pr had already deleted ("src refspec
                 # does not match any") or a stale twin, and CI-polled a SHA
-                # that was never pushed to it.
-                branch = _resolve_story_branch(worktree, story_key)
+                # that was never pushed to it. Resolve only when there is a
+                # worktree to probe; a missing/anomalous worktree degrades to
+                # the convention branch without paying a subprocess.
+                branch = f"agent/{story_key.lower()}"
+                if worktree and Path(worktree).is_dir():
+                    branch = _resolve_story_branch(worktree, story_key)
                 rb = _rebase_onto_master(worktree, branch)
                 if rb.get("auto_resolved"):
                     _notify_user(

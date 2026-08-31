@@ -7,9 +7,11 @@ in_progress agent via ``_count_in_progress_agents`` — including cloud-backed
 dispatch that has no on-device footprint to protect. The slot accounting must
 count only ON-DEVICE in_progress stories:
 
-  - a story is on-device when its resolved dispatch backend
-    (``_resolve_dispatch_backend(story, env_backend)``) is NOT ``claude`` AND
-    its model tag (``story.get("model")``) does NOT end with ``:cloud``;
+  - a story is on-device when its RAW ``story.get("backend")`` field is
+    absent or NOT ``claude`` (independent of the ``PIPELINE_BACKEND_DISPATCH``
+    env default — a story with no explicit backend counts even when the env
+    default is ``claude``) AND its model tag (``story.get("model")``) does
+    NOT end with ``:cloud``;
   - a story with NO explicit model tag on a local-family backend resolves to
     the env-default on-device model, so it COUNTS (conservative — same rule
     as the per-story interruption gate's no-tag branch);

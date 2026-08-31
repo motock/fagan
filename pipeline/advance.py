@@ -563,14 +563,14 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # _merge_pr merges. The hardcoded convention name previously
             # named a branch a prior _merge_pr had already deleted ("src
             # refspec ... does not match any") or a stale twin, and the CI
-            # poll queried a SHA that was never pushed to it. Resolve only
-            # when there is a worktree to probe; a missing/anomalous worktree
-            # degrades to the convention branch without paying a subprocess.
+            # poll queried a SHA that was never pushed to it. The resolver
+            # itself fails open to the convention name when the worktree
+            # cannot be probed, so no local fallback is needed here - and
+            # none may be added: a locally computed convention branch is the
+            # exact mistake the round-2 review finding names.
             from .pr import _resolve_story_branch
 
-            branch = f"agent/{key.lower()}"
-            if worktree and Path(worktree).is_dir():
-                branch = _resolve_story_branch(worktree, key)
+            branch = _resolve_story_branch(worktree, key)
             gate_error = ""
             ci_definitive_fail = False
             ci_wait = False

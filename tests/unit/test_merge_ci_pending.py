@@ -14,16 +14,12 @@ never call ``gh``.  They are written against the *target* behaviour and fail
 (import/attribute errors) until ``pipeline/server.py`` implements the change.
 """
 
-import contextlib
-import inspect
 import json
-import subprocess
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import pipeline.server as p
-from pipeline import merge
 from pipeline.server import (
     MERGE_MAX_ATTEMPTS,
     PIPELINE_MERGE_CI_TIMEOUT,

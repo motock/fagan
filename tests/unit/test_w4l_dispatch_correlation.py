@@ -78,6 +78,9 @@ class _FakeProc:
         self.args = []
         self.returncode = 0
 
+    def communicate(self, input=None, timeout=None):
+        return ("", "")
+
     def poll(self):
         return 0
 

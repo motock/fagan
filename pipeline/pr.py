@@ -18,7 +18,7 @@ import subprocess
 from typing import Any
 
 
-def _resolve_story_branch(worktree, story_key) -> str:
+def _resolve_story_branch(worktree: str, story_key: str) -> str:
     """Return the branch _open_pr/_merge_pr must operate on for this story.
 
     Normally that is the convention branch agent/<key>, but a rework round
@@ -27,12 +27,21 @@ def _resolve_story_branch(worktree, story_key) -> str:
     convention name then targets a stale, already-merged branch and `gh pr
     create` fails with "No commits between master and agent/<key>", so the
     worktree's actual HEAD branch wins whenever it is such an alias.
+
+    Fails open to the convention branch when the worktree cannot be probed
+    (missing directory, non-repo, git absent): the merge gate calls this with
+    story worktrees that may legitimately not exist yet, and a probe failure
+    must degrade to the old convention-branch behaviour, never raise.
     """
     convention = f"agent/{story_key.lower()}"
-    proc = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=worktree, check=False, capture_output=True, text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree, check=False, capture_output=True, text=True,
+        )
+    except OSError:
+        # cwd missing/unusable (or git not executable): fail open.
+        return convention
     if proc.returncode != 0:
         return convention
     head = proc.stdout.strip()

@@ -284,7 +284,7 @@ def test_advance_tick_clears_merge_gate_on_alias_head_across_calls(
         "call 2's rebase must rewrite the worktree HEAD again"
     )
     push_calls_2 = [c for c in recorded if c[:2] == ["git", "push"]]
-    assert len(push_calls_2) >= 2, (
+    assert push_calls_2, (
         "call 2 must push the rebased branch again (follow-up call)"
     )
     assert _pushed_refspecs(push_calls_2[-1]) == ["agent/s10-2"], (

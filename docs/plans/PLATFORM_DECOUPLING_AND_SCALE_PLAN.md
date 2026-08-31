@@ -35,7 +35,10 @@
 > tests monkeypatch directly on the module object, so moving them requires
 > the same `_ServerRef`-proxy rigor `pipeline/service.py` applies, verified
 > function-by-function — a scoped follow-up, not a same-session mechanical
-> move.
+> move. **That follow-up is now DONE (LA-VERIFY, 2026-08-31):** both
+> `scripts/local_agent.py` (999 lines) and `scripts/local_agent_oracle.py`
+> (947 lines) are under the 1,000-line target — see scaling concern #5
+> below for the module list and the routing convention used.
 > W4 (multi-tenant) remains deferred until there's a real second deployment to
 > validate against. See "Suggested sequencing" below for the live state of
 > each workstream. This doc exists to capture the target shape and the real
@@ -481,6 +484,31 @@ regression in the production dispatch loop that only a specific monkeypatch
 combination would catch. This class of file — the one every future feature
 keeps adding a branch to — needs a standing size check, not a one-time fix,
 or it silently regrows either way.
+
+**DONE 2026-08-31 (LA-VERIFY):** both dispatch-agent scripts are now under
+the 1,000-line target — `scripts/local_agent.py` at 999 lines and
+`scripts/local_agent_oracle.py` at 947 lines. The split extracted eight
+modules — `scripts/local_agent_git.py`, `scripts/local_agent_chat.py`,
+`scripts/local_agent_tools.py`, `scripts/local_agent_recovery.py` and their
+oracle twins `scripts/local_agent_oracle_git.py`,
+`scripts/local_agent_oracle_chat.py`, `scripts/local_agent_oracle_tools.py`,
+`scripts/local_agent_oracle_recovery.py` — plus the shared
+`scripts/local_agent_config.py`/`scripts/local_agent_oracle_config.py` data
+modules and the guards module `scripts/local_agent_guards.py`. Every moved
+function follows the **per-instance origin-dict routing convention**
+(`scripts/local_agent_git.py`'s module docstring is the worked example): the
+impl is renamed `<name>_impl` with `origin` as its first parameter, the
+delegating wrapper in the agent module keeps the ORIGINAL function name and
+docstring and passes its own module's `globals()` dict, and every
+agent-module-owned free variable is read as `origin["NAME"]` at call time —
+so `monkeypatch.setattr(mod, "NAME", fake)` lands on the instance the test
+actually patched, because the agent module is file-execed under multiple
+module names in one pytest process. `_main_impl` — the step loop — was
+deliberately left byte-identical in both scripts (verified by hunk-level
+diff against the merge base: no changed line inside its body); it stays in
+the agent modules because it is the orchestrator that owns the loop state,
+with the extracted clusters it calls re-exported as bare names. Full suite
+green after the split (5,995 passed, 3 skipped) and `ruff check .` clean.
 
 ### Not a concern
 

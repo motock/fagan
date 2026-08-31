@@ -2,10 +2,15 @@
 step loop. Pure functions (no module-level mutable state, no dependency on
 the loop's git-commit helpers) split out purely to keep local_agent.py under
 the project's line-count target. local_agent.py re-exports these names,
-since its step loop references them as bare names; _apply_off_task_action
-(the one function in this family with side effects — it calls
-local_agent.worktree_dirty()/auto_wip_commit()) stays in local_agent.py
-rather than moving here, to avoid a cross-module bare-name call.
+since its step loop references them as bare names. The two functions in this
+family with side effects or done-gate coupling — _apply_off_task_action
+(it calls local_agent.worktree_dirty()/auto_wip_commit()) and
+_reject_done_for_suite — also live here as ``<name>_impl`` functions using
+the same per-instance origin-dict routing as scripts/local_agent_git.py
+(see that module's docstring for the worked example): each delegating
+wrapper in local_agent.py passes its own module's ``globals()`` dict, and
+agent-module-owned free variables are read as ``origin["NAME"]`` at call
+time so monkeypatched re-binds land on the instance the test patched.
 """
 import os
 import re
@@ -209,3 +214,42 @@ __all__ = [
     "_no_tool_nudge",
     "_off_task_step",
 ]
+
+
+def _apply_off_task_action_impl(origin, action, path_arg, messages):
+    """Verbatim body of local_agent._apply_off_task_action, moved here by
+    LA-VERIFY-FOLLOWUP. ``origin`` is the delegating wrapper's ``globals()``
+    (routing convention: see this module's docstring, and
+    scripts/local_agent_git.py for the worked example) — worktree_dirty and
+    auto_wip_commit are agent-module-owned and read from it at call time."""
+    if action == "nudge":
+        print(f"   [off-task nudge: {path_arg} not in assigned scope]", flush=True)
+        messages.append({"role": "user", "content": (
+            f"You just touched {path_arg}, which was not named anywhere "
+            f"in your assigned task. If this file is genuinely required "
+            f"to complete the task, explain why in your next message and "
+            f"continue. Otherwise STOP editing unrelated files and refocus "
+            f"on the files named in your instructions.")})
+        return False
+    if action == "escalate":
+        print(f"   [parking: off-task drift onto {path_arg} after nudge]", flush=True)
+        if origin["worktree_dirty"]():
+            origin["auto_wip_commit"]("parked on off-task drift")
+        return True
+    return False
+
+
+def _reject_done_for_suite_impl(origin, messages, step, suite_tail, gate):
+    """Verbatim body of local_agent._reject_done_for_suite, moved here by
+    LA-VERIFY-FOLLOWUP. No agent-module free variables today; ``origin`` is
+    kept first for signature symmetry with the other origin-routing impls."""
+    if gate == 'lint':
+        print(f"[step {step}] done rejected — lint gate still fails (rework done-bar); asking agent to fix the lint failure", flush=True)
+        messages.append({"role": "user", "content": (
+            f"Your tests PASS, but the lint check (`ruff check .`) fails. The merge-gate CI lint gate will reject this on the same failure:\n{suite_tail}\n\nMost lint errors are auto-fixable: run `ruff check . --fix`, then `ruff check .` to confirm it is clean.\n\nDo NOT edit implementation logic — this is a formatting/import/style error, not a correctness bug, and editing logic will not fix it. Do not call done until `ruff check .` passes in full."
+        )})
+    else:
+        print(f"[step {step}] done rejected — full test suite still fails (rework done-bar); asking agent to fix the failure", flush=True)
+        messages.append({"role": "user", "content": (
+            f"The full test suite still fails. The merge-gate CI will reject this on the same failure:\n{suite_tail}\n\nThe bug could be in the implementation you just changed, or in a test file - do not assume either side is correct. Re-read the failing test and the code it exercises, identify which one is actually wrong, and make ONE targeted fix there. do not call done until pytest passes in full."
+        )})

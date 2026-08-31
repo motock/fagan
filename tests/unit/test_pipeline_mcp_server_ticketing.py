@@ -3,11 +3,13 @@
 Split out of test_pipeline_mcp_server.py to keep it under the project's line-count target; shared fixtures/helpers moved to tests.unit._pipeline_mcp_server_test_helpers.
 """
 import fcntl
+import inspect
 import json
 import os
 
 import pytest
 
+from pipeline import pr as pr_mod
 from pipeline import server as p
 from pipeline import ticketing as pt
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
@@ -258,6 +260,300 @@ def test_open_pr_reraises_other_gh_pr_create_failures(monkeypatch, tmp_path):
     monkeypatch.setattr(p.subprocess, "run", _fake_run)
     with pytest.raises(p.subprocess.CalledProcessError):
         p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+
+# ---------- Story branch alias resolution (rework suffix branches) ----------
+# When a story's worktree is checked out on an alias branch created during
+# rework (agent/<key>-<suffix>, e.g. agent/la-verify-followup), _open_pr must
+# push and open the PR from THAT branch instead of the convention name
+# agent/<key> - otherwise it pushes a stale/already-merged branch, `gh pr
+# create` fails with "No commits between master and agent/<key>", and the
+# story silently loops in tests_passed forever (live failure 2026-08-31,
+# LA-VERIFY, ~5h of APPROVE-with-no-PR ticks). _merge_pr must resolve the
+# same branch so the squash-merge, the local `git branch -D`, and the
+# `git push origin --delete` all operate on the branch _open_pr pushed;
+# pushing one branch and merging another would strand the PR.
+
+
+def _stub_run_recording_head(head, *, revparse_returncode=0):
+    """subprocess.run stub in the style of the _open_pr tests above: records
+    every non-rev-parse command (and succeeds); answers
+    `git rev-parse --abbrev-ref HEAD` with `head`, or with a failing
+    returncode when revparse_returncode != 0."""
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            if revparse_returncode != 0:
+                class Failed:
+                    stdout = ""
+                    stderr = "fatal: not a git repository"
+                    returncode = revparse_returncode
+                return Failed()
+            class Result:
+                stdout = head
+                returncode = 0
+            return Result()
+        calls.append(cmd)
+
+        class Ok:
+            stdout = "https://gh/pr/1\n"
+            returncode = 0
+        return Ok()
+
+    return calls, _fake_run
+
+
+def test_open_pr_pushes_and_creates_pr_from_rework_alias_branch(
+    monkeypatch, tmp_path,
+):
+    calls, _fake_run = _stub_run_recording_head("agent/s1-followup\n")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+    push_calls = [c for c in calls if c[:2] == ["git", "push"]]
+    create_calls = [c for c in calls if c[:3] == ["gh", "pr", "create"]]
+    assert push_calls, "expected the branch to be pushed before opening a PR"
+    assert create_calls, "expected `gh pr create` to run"
+    assert push_calls[0][-1] == "agent/s1-followup", (
+        "push must target the worktree's actual HEAD branch (the rework "
+        "alias), not the stale convention branch agent/s1"
+    )
+    head_idx = create_calls[0].index("--head")
+    assert create_calls[0][head_idx + 1] == "agent/s1-followup", (
+        "`gh pr create --head` must name the rework alias branch"
+    )
+
+
+def test_open_pr_keeps_convention_branch_when_head_is_already_on_it(
+    monkeypatch, tmp_path,
+):
+    calls, _fake_run = _stub_run_recording_head("agent/s1\n")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+    push_calls = [c for c in calls if c[:2] == ["git", "push"]]
+    create_calls = [c for c in calls if c[:3] == ["gh", "pr", "create"]]
+    assert push_calls, "expected the branch to be pushed before opening a PR"
+    assert push_calls[0][-1] == "agent/s1"
+    head_idx = create_calls[0].index("--head")
+    assert create_calls[0][head_idx + 1] == "agent/s1"
+
+
+def test_open_pr_falls_back_to_convention_branch_when_rev_parse_fails(
+    monkeypatch, tmp_path,
+):
+    calls, _fake_run = _stub_run_recording_head("", revparse_returncode=128)
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+    push_calls = [c for c in calls if c[:2] == ["git", "push"]]
+    create_calls = [c for c in calls if c[:3] == ["gh", "pr", "create"]]
+    assert push_calls, "expected the fallback branch to still be pushed"
+    assert push_calls[0][-1] == "agent/s1"
+    head_idx = create_calls[0].index("--head")
+    assert create_calls[0][head_idx + 1] == "agent/s1"
+
+
+def test_open_pr_falls_back_to_convention_branch_when_head_is_detached(
+    monkeypatch, tmp_path,
+):
+    calls, _fake_run = _stub_run_recording_head("HEAD\n")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+    push_calls = [c for c in calls if c[:2] == ["git", "push"]]
+    create_calls = [c for c in calls if c[:3] == ["gh", "pr", "create"]]
+    assert push_calls, "expected the fallback branch to still be pushed"
+    assert push_calls[0][-1] == "agent/s1"
+    head_idx = create_calls[0].index("--head")
+    assert create_calls[0][head_idx + 1] == "agent/s1"
+
+
+def test_merge_pr_merges_and_cleans_up_the_same_rework_alias_branch(
+    monkeypatch, tmp_path,
+):
+    calls, _fake_run = _stub_run_recording_head("agent/s1-followup\n")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "REPO_ROOT", str(tmp_path / "repo"))
+    result = p._merge_pr(str(tmp_path / "wt"), "S1")
+
+    assert result == "https://gh/pr/1"
+    merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+    assert merge_calls, "expected a `gh pr merge` call"
+    assert merge_calls[0][:4] == ["gh", "pr", "merge", "agent/s1-followup"]
+    assert "--squash" in merge_calls[0]
+
+    branch_d = [c for c in calls if c[:2] == ["git", "branch"]]
+    assert branch_d, "expected the local branch cleanup `git branch -D`"
+    assert branch_d[0] == ["git", "branch", "-D", "agent/s1-followup"]
+
+    remote_del = [c for c in calls if c[:2] == ["git", "push"] and "--delete" in c]
+    assert remote_del, "expected `git push origin --delete` cleanup"
+    assert remote_del[0][-1] == "agent/s1-followup"
+
+    worktree_rm = [c for c in calls if c[:2] == ["git", "worktree"]]
+    assert worktree_rm, "worktree cleanup must still happen"
+
+    # One branch end-to-end: pushing agent/s1 but merging agent/s1-followup
+    # (or vice versa) would strand the PR and skip its cleanup.
+    assert (
+        merge_calls[0][3] == branch_d[0][3] == remote_del[0][-1]
+        == "agent/s1-followup"
+    )
+
+
+def test_resolve_story_branch_helper_contract_in_pipeline_pr_module():
+    """The resolver must be a module-level helper in pipeline/pr.py, both
+    _open_pr and _merge_pr must route through it (the old inline
+    f"agent/{story_key.lower()}" computation must be gone from both), the
+    'Tests mock this function' docstring contract stays intact, and server
+    keeps re-exporting the seams so patch-via-p.<name> still lands."""
+    assert callable(pr_mod._resolve_story_branch)
+    module_src = inspect.getsource(pr_mod)
+    assert "def _resolve_story_branch(" in module_src
+    assert "import logging" not in module_src
+
+    open_src = inspect.getsource(pr_mod._open_pr)
+    merge_src = inspect.getsource(pr_mod._merge_pr)
+    assert "_resolve_story_branch(" in open_src
+    assert "_resolve_story_branch(" in merge_src
+    assert 'f"agent/{story_key.lower()}"' not in open_src
+    assert 'f"agent/{story_key.lower()}"' not in merge_src
+
+    assert "Tests mock this function" in (pr_mod._open_pr.__doc__ or "")
+    assert "Tests mock this function" in (pr_mod._merge_pr.__doc__ or "")
+
+    assert p._open_pr is pr_mod._open_pr
+    assert p._merge_pr is pr_mod._merge_pr
+
+
+def test_resolve_story_branch_returns_alias_and_runs_rev_parse_in_worktree(
+    monkeypatch, tmp_path,
+):
+    seen = {}
+
+    def _fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["kwargs"] = kwargs
+
+        class Result:
+            stdout = "agent/s1-followup\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert pr_mod._resolve_story_branch(str(tmp_path), "S1") == "agent/s1-followup"
+    assert seen["cmd"] == ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+    assert str(seen["kwargs"].get("cwd")) == str(tmp_path)
+    assert seen["kwargs"].get("capture_output") is True
+    assert seen["kwargs"].get("text") is True
+
+
+def test_resolve_story_branch_returns_convention_branch_when_head_is_on_it(
+    monkeypatch, tmp_path,
+):
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            stdout = "agent/s1\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert pr_mod._resolve_story_branch(str(tmp_path), "S1") == "agent/s1"
+
+
+def test_resolve_story_branch_falls_back_when_rev_parse_fails(
+    monkeypatch, tmp_path,
+):
+    def _fake_run(cmd, **kwargs):
+        class Failed:
+            stdout = ""
+            stderr = "fatal: not a git repository"
+            returncode = 128
+        return Failed()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert pr_mod._resolve_story_branch(str(tmp_path), "S1") == "agent/s1"
+
+
+def test_resolve_story_branch_falls_back_when_head_is_detached(
+    monkeypatch, tmp_path,
+):
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            stdout = "HEAD\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert pr_mod._resolve_story_branch(str(tmp_path), "S1") == "agent/s1"
+
+
+def test_resolve_story_branch_falls_back_when_rev_parse_stdout_is_empty(
+    monkeypatch, tmp_path,
+):
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            stdout = ""
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert pr_mod._resolve_story_branch(str(tmp_path), "S1") == "agent/s1"
+
+
+def test_resolve_story_branch_requires_dash_suffix_not_bare_prefix(
+    monkeypatch, tmp_path,
+):
+    """'agent/s10' shares the 'agent/s1' prefix but is a different branch;
+    only the convention name followed by '-' marks a rework alias."""
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            stdout = "agent/s10\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert pr_mod._resolve_story_branch(str(tmp_path), "S1") == "agent/s1"
+
+
+def test_resolve_story_branch_resolves_multiword_key_alias_from_live_incident(
+    monkeypatch, tmp_path,
+):
+    """2026-08-31 LA-VERIFY: the worktree sat on agent/la-verify-followup
+    while _open_pr kept pushing agent/la-verify."""
+    def _fake_run(cmd, **kwargs):
+        class Result:
+            stdout = "agent/la-verify-followup\n"
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    assert (
+        pr_mod._resolve_story_branch(str(tmp_path), "LA-VERIFY")
+        == "agent/la-verify-followup"
+    )
+
+
+def test_open_pr_routes_branch_through_resolve_story_branch_helper(
+    monkeypatch, tmp_path,
+):
+    seen = []
+    calls, _fake_run = _stub_run_recording_head("agent/s1\n")
+
+    def _fake_resolve(wt, key):
+        seen.append((wt, key))
+        return "agent/s1-alias"
+
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(pr_mod, "_resolve_story_branch", _fake_resolve)
+    p._open_pr(str(tmp_path), "S1", {"summary": "Add thing"})
+
+    assert seen == [(str(tmp_path), "S1")]
+    push_calls = [c for c in calls if c[:2] == ["git", "push"]]
+    assert push_calls, "expected the resolved branch to be pushed"
+    assert push_calls[0][-1] == "agent/s1-alias"
 
 
 def test_parse_verdict_variants():

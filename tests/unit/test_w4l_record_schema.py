@@ -204,7 +204,7 @@ def test_notify_user_forwards_new_context_fields_into_record(monkeypatch, tmp_pa
 
 def test_notify_user_without_new_kwargs_record_has_no_new_keys(monkeypatch, tmp_path):
     monkeypatch.setattr(persistence, "PLAN_DIR", tmp_path)
-    import pipeline.event_wiring as event_wiring
+    from pipeline import event_wiring
 
     monkeypatch.setattr(event_wiring, "get_bus", lambda: _NoSinkBus())
     captured = _capture_written_records(monkeypatch)

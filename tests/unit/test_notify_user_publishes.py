@@ -321,12 +321,14 @@ def test_signature_unchanged_keyword_only_defaults():
     """The signature of ``_notify_user`` must stay exactly as the previous
     story left it: two positional params, then keyword-only
     ``story_key``/``severity``/``event``/``dedup_key`` with defaults
-    ``None``/``"info"``/``None``/``None``."""
+    ``None``/``"info"``/``None``/``None``, extended by this story with the
+    correlation/context params (all keyword-only, default ``None``)."""
     import inspect
 
     sig = inspect.signature(persistence._notify_user)
     params = list(sig.parameters.values())
-    # Exactly: plan_name, message, *, story_key, severity, event, dedup_key.
+    # Exactly: plan_name, message, *, story_key, severity, event, dedup_key,
+    # correlation_id, attempt, role, provider, model.
     assert [p.name for p in params] == [
         "plan_name",
         "message",
@@ -334,12 +336,20 @@ def test_signature_unchanged_keyword_only_defaults():
         "severity",
         "event",
         "dedup_key",
+        "correlation_id",
+        "attempt",
+        "role",
+        "provider",
+        "model",
     ]
     # story_key/event/dedup_key default to None; severity defaults to "info".
     assert params[2].default is None  # story_key
     assert params[3].default == "info"  # severity
     assert params[4].default is None  # event
     assert params[5].default is None  # dedup_key
+    # The correlation/context params added by W4L-01 default to None.
+    for p in params[6:]:
+        assert p.default is None, f"{p.name} must default to None"
     # story_key..dedup_key are keyword-only (KIND is KEYWORD_ONLY).
     for p in params[2:]:
         assert p.kind == inspect.Parameter.KEYWORD_ONLY, (

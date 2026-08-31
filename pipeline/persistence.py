@@ -84,11 +84,20 @@ def _notification_record(
     event,
     dedup_key,
     ts,
+    correlation_id=None,
+    attempt=None,
+    role=None,
+    provider=None,
+    model=None,
 ) -> dict:
     """Build a structured notification record.
 
     Parameters are passed in the same order as used by _notify_user. The
     function is pure and does not modify any global state.
+
+    The optional correlation/context fields (correlation_id, attempt, role,
+    provider, model) are included in the returned record ONLY when not None,
+    so the legacy record shape is unchanged when none are set.
     """
     # Validate severity; fall back to "info" if invalid.
     if not isinstance(severity, str) or severity not in NOTIFY_SEVERITIES:
@@ -98,7 +107,7 @@ def _notification_record(
             plan_name,
         )
         severity = "info"
-    return {
+    record = {
         "ts": ts,
         "plan": plan_name,
         "message": message,
@@ -107,6 +116,16 @@ def _notification_record(
         "event": event,
         "dedup_key": dedup_key,
     }
+    for name, value in (
+        ("correlation_id", correlation_id),
+        ("attempt", attempt),
+        ("role", role),
+        ("provider", provider),
+        ("model", model),
+    ):
+        if value is not None:
+            record[name] = value
+    return record
 
 
 def _write_notification_record(plan_name: str, record: dict) -> None:
@@ -132,12 +151,21 @@ def _notify_user(
     severity="info",
     event=None,
     dedup_key=None,
+    correlation_id=None,
+    attempt=None,
+    role=None,
+    provider=None,
+    model=None,
 ) -> None:
     """Durably record a notice for the user with structured JSONL sidecar.
 
     The function keeps its original two-positional-argument contract while
     adding keyword-only parameters for structured data. It writes the free-text
     log line first, then appends a JSONL record.
+
+    The optional correlation/context kwargs are forwarded to the record
+    builder and the bus-event payload; when omitted (the default) the record
+    and payload shapes are unchanged.
     """
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
     record = _notification_record(
@@ -148,6 +176,11 @@ def _notify_user(
         event,
         dedup_key,
         ts,
+        correlation_id=correlation_id,
+        attempt=attempt,
+        role=role,
+        provider=provider,
+        model=model,
     )
 
     def _write_directly() -> None:
@@ -161,18 +194,30 @@ def _notify_user(
         from .event_wiring import get_bus
         from .events import make_event
         bus = get_bus()
+        payload = {
+            "message": message,
+            "story_key": story_key,
+            "severity": record["severity"],
+            "event": event,
+            "dedup_key": dedup_key,
+            "ts": ts,
+        }
+        # Forward the optional dispatch context so sinks persisting from the
+        # bus payload produce the same record as the direct-write path.
+        for name, value in (
+            ("correlation_id", correlation_id),
+            ("attempt", attempt),
+            ("role", role),
+            ("provider", provider),
+            ("model", model),
+        ):
+            if value is not None:
+                payload[name] = value
         evt = make_event(
             "notification",
             plan_name,
             story_key=story_key,
-            payload={
-                "message": message,
-                "story_key": story_key,
-                "severity": record["severity"],
-                "event": event,
-                "dedup_key": dedup_key,
-                "ts": ts,
-            },
+            payload=payload,
         )
         evt["ts"] = ts
         bus.publish(evt)

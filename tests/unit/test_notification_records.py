@@ -288,9 +288,19 @@ def test_notify_user_signature_is_keyword_only_for_new_params():
     # plan_name, message positional-or-keyword; then keyword-only rest.
     assert [p.name for p in params[:2]] == ["plan_name", "message"]
     kw_only = {p.name for p in params if p.kind == inspect.Parameter.KEYWORD_ONLY}
-    assert kw_only == {"story_key", "severity", "event", "dedup_key"}
+    assert kw_only == {
+        "story_key", "severity", "event", "dedup_key",
+        "correlation_id", "attempt", "role", "provider", "model",
+    }
     # Defaults: severity="info", the rest None.
     assert params[2].default is None  # story_key
     assert params[3].default == "info"  # severity
     assert params[4].default is None  # event
     assert params[5].default is None  # dedup_key
+    # The correlation/context params added by W4L-01: keyword-only, None.
+    for name in ("correlation_id", "attempt", "role", "provider", "model"):
+        p = sig.parameters[name]
+        assert p.kind == inspect.Parameter.KEYWORD_ONLY, (
+            f"{name} must be keyword-only"
+        )
+        assert p.default is None, f"{name} must default to None"

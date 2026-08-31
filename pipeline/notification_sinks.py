@@ -74,7 +74,15 @@ def file_log_sink(event: dict[str, Any]) -> None:
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(f"{ts} {message}\n")
 
-        # Structured JSONL record via helper
+        # Structured JSONL record via helper. The optional correlation
+        # context keys are read with .get and forwarded ONLY when present so
+        # legacy payloads keep the exact legacy call shape (the helper is
+        # monkeypatched with the legacy signature in existing tests).
+        record_kwargs = {}
+        for name in ("correlation_id", "attempt", "role", "provider", "model"):
+            value = payload.get(name)
+            if value is not None:
+                record_kwargs[name] = value
         record = persistence._notification_record(
             plan_name=plan,
             message=payload.get("message"),
@@ -83,6 +91,7 @@ def file_log_sink(event: dict[str, Any]) -> None:
             event=payload.get("event"),
             dedup_key=payload.get("dedup_key"),
             ts=ts,
+            **record_kwargs,
         )
         persistence._write_notification_record(plan, record)
     except Exception:  # pragma: no cover - defensive

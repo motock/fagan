@@ -105,6 +105,11 @@ def _escalate_to_claude(
                         check=False, cwd=REPO_ROOT, capture_output=True, text=True)
     subprocess.run(["git", "branch", "-D", branch],
                     check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+    if resolved != branch:
+        # Best-effort, same error-swallowing style as the deletes above: the
+        # alias may already be gone (e.g. squash-merged by _merge_pr).
+        subprocess.run(["git", "branch", "-D", resolved],
+                        check=False, cwd=REPO_ROOT, capture_output=True, text=True)
     # Clear journal so Claude starts fresh (not from a broken local checkpoint).
     journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
     if journal_path.exists():

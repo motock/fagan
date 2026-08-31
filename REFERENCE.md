@@ -520,6 +520,39 @@ running that plan.
 
 ---
 
+## Dispatch implementation resolution
+
+The `dispatch` role in "Per-role provider/model configuration" above is the
+**implementer** — and its backend and model do *not* come from
+`role_config.dispatch`. They resolve as follows (verified in
+`pipeline/dispatch.py::_resolve_dispatch_backend` and
+`pipeline/persona.py::_build_dispatch_command`):
+
+- **Implementer backend** — story-level `backend` field (if set; also
+  persisted onto the story after *every* dispatch, so a later env change
+  never re-routes an already-dispatched story) → `PIPELINE_BACKEND_DISPATCH`
+  env (read from the dispatch daemon's process env; `auto` routes a-priori) →
+  the `claude` driver default when unset. The persona (security-engineer) and
+  unwinnable-scope overrides force `claude` **only when the story has NO
+  explicit backend** — a story with `backend: "codex"` stays on `codex`.
+- **Implementer model** — `story['model']` → persona default model →
+  `DEFAULT_MODEL` (`pipeline/config.py`; env `PIPELINE_DEFAULT_MODEL`, default
+  `'sonnet'`). For local-family backends the driver then maps the resolved
+  tier to a concrete tag (`PIPELINE_LOCAL_MODEL_DEFAULT` plus the
+  `PIPELINE_LOCAL_MODEL_<TIER>` overrides) — that mapping happens *after*
+  resolution and is not a fourth chain entry.
+- **`role_config.dispatch` / `model_registry.json` `roles.dispatch`** —
+  consulted only for the planner / tech-lead tier classification and the
+  decompose strength-tier guidance (`pipeline/planner.py::_dispatch_strength_tier`)
+  and by `get_role_config`'s display. It never selects the executor backend
+  or model. (It DOES directly drive the review/overlord/test_author roles.)
+
+Practical consequence: to pin an implementer model for one plan, set
+`PIPELINE_LOCAL_MODEL_DEFAULT` (or pipe it through the dispatch backend), or
+set story-level `backend` — a plan's `role_config.dispatch` does not do it.
+
+---
+
 ## Guided decomposition (the tech-lead planner)
 
 A constrained local implementer ("junior" level — gpt-oss, qwen3-coder)

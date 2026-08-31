@@ -18,13 +18,60 @@ import subprocess
 from typing import Any
 
 
+def _convention_branch(story_key: str) -> str:
+    """The pre-alias convention branch name for a story key.
+
+    Single definition of ``agent/<key>`` so callers that cannot probe a
+    worktree (missing/anomalous dir - nothing was dispatched, so no alias can
+    exist) degrade to the same name the resolver itself would fail open to,
+    without re-hardcoding the literal at each call site.
+    """
+    return f"agent/{story_key.lower()}"
+
+
+def _resolve_story_branch(worktree: str, story_key: str) -> str:
+    """Return the branch _open_pr/_merge_pr must operate on for this story.
+
+    Normally that is the convention branch agent/<key>, but a rework round
+    can leave the worktree checked out on an alias branch named
+    agent/<key>-<suffix> (e.g. agent/la-verify-followup). Pushing/merging the
+    convention name then targets a stale, already-merged branch and `gh pr
+    create` fails with "No commits between master and agent/<key>", so the
+    worktree's actual HEAD branch wins whenever it is such an alias.
+
+    Fails open to the convention branch when the worktree cannot be probed
+    (missing directory, non-repo, git absent): the merge gate calls this with
+    story worktrees that may legitimately not exist yet, and a probe failure
+    must degrade to the old convention-branch behaviour, never raise.
+    """
+    convention = f"agent/{story_key.lower()}"
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree, check=False, capture_output=True, text=True,
+        )
+    except OSError:
+        # cwd missing/unusable (or git not executable): fail open.
+        return convention
+    if proc is None or proc.returncode != 0:
+        # None: a test fake (or exotic shim) answered the probe with None -
+        # treat it exactly like a failed probe and fail open.
+        return convention
+    head = proc.stdout.strip()
+    if not head or head == "HEAD":          # detached HEAD
+        return convention
+    if head.startswith(convention + "-"):   # alias suffix, e.g. agent/s1-followup
+        return head
+    return convention
+
+
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
     """Push the story's branch and open a PR for it via the gh CLI.
 
     External boundary: spawns `git`/`gh`. Tests mock this function (or
     subprocess.run) rather than hitting a real remote.
     """
-    branch = f"agent/{story_key.lower()}"
+    branch = _resolve_story_branch(worktree, story_key)
     title = f"{story_key}: {story['summary']}"
     body = story.get("pr_body") or (
         f"Automated PR for {story_key} produced by the agent pipeline."
@@ -76,7 +123,7 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     # Lazy import: REPO_ROOT is a server module-level global patched by tests
     # via p.REPO_ROOT; the lazy import at call time sees the patched value.
     from .server import REPO_ROOT
-    branch = f"agent/{story_key.lower()}"
+    branch = _resolve_story_branch(worktree, story_key)
     proc = subprocess.run(
         ["gh", "pr", "merge", branch, "--squash"],
         cwd=worktree, check=True, capture_output=True, text=True,

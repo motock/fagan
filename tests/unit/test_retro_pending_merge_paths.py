@@ -102,3 +102,14 @@ def test_approve_merge_impl_calls_maybe_record_retro():
     # behavior, so here we pin the call-site wiring via source inspection.
     src = inspect.getsource(pipeline.merge._approve_merge_impl)
     assert "_maybe_record_retro(plan_name, manifest)" in src
+
+
+def test_advance_pipeline_locked_impl_calls_maybe_record_retro():
+    import pipeline.advance
+
+    # Mirror of the merge.py structural pin above: the advance-scheduler merge
+    # branch must also feed the backlog after marking a story done. A full
+    # tick run needs the plan lock + a merged PR, so the call site inside
+    # _advance_pipeline_locked_impl is pinned via source inspection.
+    src = inspect.getsource(pipeline.advance._advance_pipeline_locked_impl)
+    assert "_maybe_record_retro(plan_name, manifest)" in src

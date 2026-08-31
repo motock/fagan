@@ -333,8 +333,8 @@ def test_failed_launch_still_persists_minted_id(
 
     try:
         p.dispatch_story(plan_name, "S1")
-    except OSError:
-        pass  # dispatch may propagate or swallow the launch failure
+    except Exception:  # noqa: BLE001 — dispatch may propagate or swallow
+        pass  # the launch failure; either way the id must be persisted
 
     story = _read_manifest(plan_dir, plan_name)["stories"]["S1"]
     cid = story.get("correlation_id")

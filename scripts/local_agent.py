@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
+import re  # noqa: F401 (kept: tests patch module attrs on la; moved chat cluster owned the only re.* use)
 import shlex
 import subprocess
 import sys
@@ -67,7 +67,10 @@ import httpx
 # feedback, a tech-lead fix checklist) with no bound, so repeated rework
 # cycles on the same story compound: story 93fdc371 died this way on its
 # 2nd AND 3rd rework attempts, both times on the model's very first turn.
-_CHARS_PER_TOKEN_ESTIMATE = 4
+# LA-CHAT: the constant itself moved to scripts/local_agent_chat.py; the name
+# is re-exported below (after the sys.path setup, so bare-script execution
+# resolves the scripts package) and the moved _effective_chars_per_token reads
+# it via its own module constant.
 
 # Calibrated at runtime from ollama's own measured prompt_eval_count (the
 # streamed done chunk's real token count for everything sent in that
@@ -89,11 +92,14 @@ _last_prompt_eval_count: int | None = None
 def _effective_chars_per_token() -> float:
     """The live-calibrated chars/token ratio when available, else the fixed
     _CHARS_PER_TOKEN_ESTIMATE guess."""
-    return _measured_chars_per_token or _CHARS_PER_TOKEN_ESTIMATE
+    from scripts.local_agent_chat import _effective_chars_per_token_impl
+    return _effective_chars_per_token_impl(globals())
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app import inference_providers
+# LA-CHAT: kept bound for the moved chat cluster, which reads it via origin
+# (origin["inference_providers"]) and for tests that patch la.inference_providers.
+from app import inference_providers  # noqa: F401
 from app import pipeline_mcp_server as p
 from pipeline import edit_guards
 from pipeline.local_agent_common import (
@@ -105,7 +111,7 @@ from pipeline.local_agent_common import (
     _dropped_top_level_vars,
     _is_context_overflow_error,
     _load_resume_transcript,
-    _message_char_len,
+    _message_char_len,  # noqa: F401 (kept: moved chat cluster reads it via origin["_message_char_len"])
     _persist_messages,
     _repetition_nudge,
     _str_replace_not_found_diag,
@@ -113,7 +119,17 @@ from pipeline.local_agent_common import (
     _trim_resumed_transcript,
     destructive_git_op,
 )
-from pipeline.local_agent_common import recover_tool_calls as _recover_tool_calls_shared
+from pipeline.local_agent_common import (  # noqa: F401 (kept: moved recover_tool_calls_impl reads it via origin["_recover_tool_calls_shared"])
+    recover_tool_calls as _recover_tool_calls_shared,
+)
+
+# LA-CHAT: the chars/token estimate constant itself moved to
+# scripts/local_agent_chat.py; the name is re-exported here (tests read
+# la._CHARS_PER_TOKEN_ESTIMATE) and the moved _effective_chars_per_token reads
+# it via its own module constant.
+from scripts.local_agent_chat import (  # noqa: F401 (re-exported: tests read la._CHARS_PER_TOKEN_ESTIMATE)
+    _CHARS_PER_TOKEN_ESTIMATE,
+)
 
 # Several tests exec this file fresh via importlib (spec_from_file_location +
 # exec_module) after mutating os.environ, to verify env-var-derived constants
@@ -127,11 +143,11 @@ from pipeline.local_agent_common import recover_tool_calls as _recover_tool_call
 # os.environ, matching pre-split behavior with no test changes required.
 sys.modules.pop("scripts.local_agent_config", None)
 from scripts.local_agent_config import (
-    _THINK_LEVELS,
+    _THINK_LEVELS,  # noqa: F401 (kept: moved _ollama_payload_impl reads it via origin["_THINK_LEVELS"])
     BASH_TIMEOUT,
     CHAT_MAX_ATTEMPTS,
-    CHAT_RETRY_BACKOFF,
-    CONNECT_TIMEOUT_SECONDS,
+    CHAT_RETRY_BACKOFF,  # noqa: F401 (kept: moved chat_impl reads it via origin["CHAT_RETRY_BACKOFF"])
+    CONNECT_TIMEOUT_SECONDS,  # noqa: F401 (kept: moved _stream_one_turn_impl reads it via origin)
     ENDPOINT,
     FULL_SUITE_DONE_BAR,
     HARNESS_RULES,
@@ -146,14 +162,14 @@ from scripts.local_agent_config import (
     PROVIDER,
     READ_HEAVY_DISTINCT_WINDOWS,
     READ_HEAVY_WINDOW,
-    READ_SILENCE_SECONDS,
+    READ_SILENCE_SECONDS,  # noqa: F401 (kept: moved _stream_one_turn_impl reads it via origin["READ_SILENCE_SECONDS"])
     REWORK_FULL_SUITE,
     REWORK_SUITE_REJECT_CAP,
     SCRATCHPAD_NUDGE_STEPS,
     SCRATCHPAD_ON,
     STR_REPLACE_FAIL_ESCALATE_AFTER,
-    TEMPERATURE,
-    THINK,
+    TEMPERATURE,  # noqa: F401 (kept: moved _ollama_payload_impl/_provider_chat_turn_impl read it via origin)
+    THINK,  # noqa: F401 (kept: moved _ollama_payload_impl reads it via origin["THINK"])
     TIMEOUT,
     TOOLS,
 )
@@ -207,208 +223,39 @@ def _apply_off_task_action(action: str, path_arg: str, messages: list) -> bool:
 
 
 def _stream_one_turn(payload):
-    """One streamed chat turn against Ollama's /api/chat. Accumulates the
-    assistant message across newline-delimited JSON chunks and returns the
-    assembled message dict ({role, content, tool_calls?}) — the same shape
-    the non-streaming path returned via r.json()["message"], so main() and
-    recover_tool_calls() work unchanged.
-
-    Streaming lets the per-chunk read timeout (READ_SILENCE_SECONDS) fire
-    only on a genuine stall (no bytes for N seconds), not on a legitimately
-    long generation. A slow-but-progressing gen streams a chunk every ~1-2s
-    and never trips it.
-
-    Raises httpx.HTTPStatusError on a bad response (4xx/5xx) or
-    httpx.TransportError (TimeoutException/ConnectError/ReadError) on a
-    connect/read stall — chat() decides which of those are retryable.
-    """
-    global _measured_chars_per_token, _last_prompt_eval_count
-    content_parts: list[str] = []
-    thinking_parts: list[str] = []
-    tool_calls = None
-    role = "assistant"
-    prompt_eval_count = None
-    with httpx.stream(
-        "POST", f"{ENDPOINT}/api/chat", json=payload,
-        timeout=httpx.Timeout(connect=CONNECT_TIMEOUT_SECONDS, read=READ_SILENCE_SECONDS,
-                              write=10.0, pool=10.0),
-    ) as r:
-        r.raise_for_status()
-        for line in r.iter_lines():
-            if not line:
-                continue
-            try:
-                chunk = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            msg = chunk.get("message") or {}
-            if msg.get("role"):
-                role = msg["role"]
-            if msg.get("content"):
-                content_parts.append(msg["content"])
-            if msg.get("thinking"):
-                thinking_parts.append(msg["thinking"])
-            # Tool calls may land at the top level of a chunk or inside its
-            # message; capture from either. (devstral emits tool calls as
-            # text content, so tool_calls stays None and recover_tool_calls
-            # parses the assembled content downstream.)
-            tc = chunk.get("tool_calls") or msg.get("tool_calls")
-            if tc:
-                tool_calls = tc
-            if chunk.get("done"):
-                prompt_eval_count = chunk.get("prompt_eval_count")
-                break
-    content = "".join(content_parts)
-    # Reasoning models (e.g. gpt-oss:20b) stream their chain-of-thought in a
-    # separate `thinking` field and may leave `content` entirely empty for a
-    # turn. Fall back to the assembled thinking text ONLY when there is no
-    # real content at all — never append it alongside genuine content, since
-    # that would leak raw reasoning traces into recover_tool_calls() parsing
-    # and downstream commit messages/logs.
-    if not content.strip() and thinking_parts:
-        content = "".join(thinking_parts)
-    assembled = {"role": role, "content": content}
-    if tool_calls:
-        assembled["tool_calls"] = tool_calls
-    # Calibrate the chars/token ratio from ollama's own real count for this
-    # request — see _measured_chars_per_token's docstring for why the fixed
-    # estimate alone is not trustworthy.
-    if prompt_eval_count:
-        _last_prompt_eval_count = prompt_eval_count
-        # The tools schema is part of every prompt and is counted in
-        # prompt_eval_count, so it must be counted in the numerator too -
-        # omitting it biases the ratio badly low early in a run, when the
-        # ~3.4KB schema dominates a still-small transcript (measured: 0.67
-        # vs a true ~2.35, shrinking the reactive-5xx trim budget ~3.5x more
-        # than needed). Chat-template scaffolding is still unaccounted for,
-        # which leaves a small residual bias in the same safe (over-trim)
-        # direction, and shrinks as the transcript grows.
-        sent_chars = (
-            sum(_message_char_len(m) for m in payload.get("messages", []))
-            + len(json.dumps(payload.get("tools") or []))
-        )
-        if sent_chars > 0:
-            _measured_chars_per_token = sent_chars / prompt_eval_count
-    return assembled
+    """One streamed chat turn against Ollama's /api/chat."""
+    from scripts.local_agent_chat import _stream_one_turn_impl
+    return _stream_one_turn_impl(globals(), payload)
 
 
 def _provider_chat_turn(messages):
-    """One provider-backed chat turn for a non-Ollama PROVIDER (lmstudio,
-    mlx). Blocking, not streamed — these servers are OpenAI-compatible and
-    stream tool calls as index-based deltas that need reassembly across
-    chunks, a materially different (and riskier) parser than Ollama's
-    whole-message-per-chunk NDJSON; deferred, see
-    MODEL_PROVIDER_ABSTRACTION_PLAN.md S3. Bounded by TIMEOUT (the overall
-    dispatch wall-clock budget) rather than a per-chunk silence timeout.
-    Returns just the assembled message dict — the same shape
-    _stream_one_turn returns — so chat()/main() work unchanged regardless of
-    which provider is active.
-
-    Records prompt_eval_count/calibration the same way _stream_one_turn does.
-    This return shape stays the bare message, but the usage fields must NOT be
-    discarded: both LMStudioProvider.chat and MLXProvider.chat already map the
-    OpenAI `usage` block into prompt_eval_count, and dropping it left
-    _last_prompt_eval_count permanently None on those providers — which is the
-    condition main()'s proactive trim is gated on, so the primary overflow
-    defense never fired at all outside Ollama (2026-08-07 audit).
-    """
-    global _measured_chars_per_token, _last_prompt_eval_count
-    envelope = inference_providers.get_local_provider().chat(
-        messages, model=MODEL, num_ctx=NUM_CTX, temperature=TEMPERATURE,
-        tools=TOOLS, endpoint=ENDPOINT, timeout=TIMEOUT,
-    )
-    prompt_eval_count = envelope.get("prompt_eval_count")
-    if prompt_eval_count:
-        _last_prompt_eval_count = prompt_eval_count
-        # Same numerator as _stream_one_turn: the tools schema is part of
-        # every prompt and is counted in prompt_eval_count, so it belongs in
-        # the chars total too.
-        sent_chars = (
-            sum(_message_char_len(m) for m in messages)
-            + len(json.dumps(TOOLS))
-        )
-        if sent_chars > 0:
-            _measured_chars_per_token = sent_chars / prompt_eval_count
-    return envelope["message"]
+    """One provider-backed chat turn for a non-Ollama PROVIDER (lmstudio, mlx)."""
+    from scripts.local_agent_chat import _provider_chat_turn_impl
+    return _provider_chat_turn_impl(globals(), messages)
 
 
 def _ollama_payload(messages):
-    """Build the Ollama /api/chat request body for one turn.
-
-    Extracted from chat() so the Qwen3/gemma4 thinking-mode flag (THINK) is
-    unit-testable without an HTTP boundary. `think` is included only when
-    LOCAL_AGENT_THINK is explicitly "true"/"false" (bool) or one of the
-    graded-reasoning levels (passed through verbatim as a string) — omitted
-    otherwise so models with no tuned opinion get an unchanged request body
-    (see THINK's comment).
-    """
-    payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": True,
-               "options": {"num_ctx": NUM_CTX, "temperature": TEMPERATURE}}
-    if THINK in ("true", "false"):
-        payload["think"] = (THINK == "true")
-    elif THINK in _THINK_LEVELS:
-        payload["think"] = THINK
-    return payload
+    """Build the Ollama /api/chat request body for one turn."""
+    from scripts.local_agent_chat import _ollama_payload_impl
+    return _ollama_payload_impl(globals(), messages)
 
 
 def chat(messages):
-    """One LLM turn, with retry.
-
-    A single transient stall (queue contention, network blip, 5xx, 429)
-    must not kill a 30-minute run. For PROVIDER == "ollama" (the default) we
-    stream so a slow generation doesn't trip the timeout; other providers go
-    through _provider_chat_turn's blocking call instead (see its docstring).
-    Either way, retry covers the transient failures: 4xx is a bad request
-    (retrying won't help) so it raises immediately; 5xx, transport errors
-    (timeout/connect/read), and RateLimitedError (429) are retried up to
-    CHAT_MAX_ATTEMPTS. If every attempt fails, the last exception propagates
-    to main()'s except, which commits WIP and returns 1 — same terminal
-    behavior as before, but only after we've genuinely tried.
-    """
-    payload = _ollama_payload(messages)
-    last_exc: Exception | None = None
-    for attempt in range(1, CHAT_MAX_ATTEMPTS + 1):
-        try:
-            if PROVIDER == "ollama":
-                return _stream_one_turn(payload)
-            return _provider_chat_turn(messages)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code < 500:
-                raise  # 4xx — bad request, retrying is pointless
-            last_exc = e
-        except httpx.TransportError as e:
-            last_exc = e  # timeout / connect / read — transient, retry
-        except inference_providers.RateLimitedError as e:
-            last_exc = e  # 429 — transient, retry like a 5xx
-        if attempt < CHAT_MAX_ATTEMPTS:
-            time.sleep(CHAT_RETRY_BACKOFF * attempt)
-    assert last_exc is not None  # loop ran ≥1 attempt; only reachable w/ an exc
-    raise last_exc
+    """One LLM turn, with retry."""
+    from scripts.local_agent_chat import chat_impl
+    return chat_impl(globals(), messages)
 
 
 def _repair_triple_quoted_strings(candidate):
-    """Rewrite Python-style triple-quoted string literals (\"\"\"...\"\"\" or
-    '''...''') as JSON-encoded strings. Weaker local models emit multi-line
-    code arguments (a str_replace's new_str/old_str) using Python triple-quote
-    syntax with literal newlines, which is not valid JSON - json.loads rejects
-    it at the opening \"\"\", so the tool call is silently dropped and the
-    edit never lands (observed systematically with Qwen2.5-Coder-14B-4bit on
-    mlx: 12/12 dropped calls, see MLX_DEFAULT_PROVIDER_PLAN.md). json.dumps of
-    the inner text produces a correctly-escaped JSON string in its place."""
-    def _sub(m):
-        inner = m.group(1) if m.group(1) is not None else m.group(2)
-        return json.dumps(inner)
-    return re.sub(r'"""(.*?)"""|\'\'\'(.*?)\'\'\'', _sub, candidate, flags=re.DOTALL)
+    """Rewrite Python-style triple-quoted string literals (\"\"\"...\"\"\" or '''...''') as JSON-encoded strings."""
+    from scripts.local_agent_chat import _repair_triple_quoted_strings_impl
+    return _repair_triple_quoted_strings_impl(globals(), candidate)
 
 
 def recover_tool_calls(content):
-    """Pull a tool call out of message text when the native field is empty.
-
-    Delegates to the shared parser in local_agent_common, binding this
-    file's own diverged _repair_triple_quoted_strings as the injectable
-    repair fallback (see that module's _loads_tolerant docstring for why
-    the repair function isn't imported alongside it)."""
-    return _recover_tool_calls_shared(content, _repair_triple_quoted_strings)
+    """Pull a tool call out of message text when the native field is empty."""
+    from scripts.local_agent_chat import recover_tool_calls_impl
+    return recover_tool_calls_impl(globals(), content)
 
 
 def git(*args):

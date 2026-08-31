@@ -297,10 +297,23 @@ def test_agent_dispatched_event_carries_correlation_id(
         "correlation_id"
     ]
 
-    assert recorder.notifies, "expected dispatch to emit _notify_user events"
-    assert minted in recorder.notified_cids(), (
+    # The event may travel via the process bus (make_event with a
+    # top-level correlation_id) or via the _notify_user seam (correlation_id
+    # kwarg / payload key). Accept either, require at least one.
+    bus_cids = [
+        evt.get("correlation_id")
+        for evt in recorder.bus.events
+        if evt.get("correlation_id")
+    ]
+    assert recorder.notifies or recorder.bus.events, (
+        "expected dispatch to emit an event on success"
+    )
+    assert (
+        minted in bus_cids or minted in recorder.notified_cids()
+    ), (
         f"expected an event stamped with correlation_id={minted!r}; "
-        f"got notify kwargs: {[kw for _a, kw in recorder.notifies]!r}"
+        f"got bus events: {recorder.bus.events!r}, "
+        f"notify kwargs: {[kw for _a, kw in recorder.notifies]!r}"
     )
 
 

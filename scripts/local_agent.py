@@ -412,82 +412,30 @@ def recover_tool_calls(content):
 
 
 def git(*args):
-    return subprocess.run(["git", *args], check=False, cwd=CWD, capture_output=True, text=True)
+    from scripts.local_agent_git import git_impl
+    return git_impl(globals(), *args)
 
 
 def exclude_runtime_artifacts() -> None:
-    """Keep dispatch runtime junk out of git. agent.log lives *inside* the
-    worktree and is written live, so without this it would (a) make the tree
-    perpetually "dirty" — tripping commit-enforcement on every `done` — and
-    (b) get swept into commits by `git add -A` and carried into the eventual
-    merge. Same for pytest's __pycache__/*.pyc. Written to git's real
-    info/exclude path, which `git rev-parse --git-path` resolves correctly
-    whether .git is a directory (plain repo) or a file (a `git worktree`)."""
-    rel = git("rev-parse", "--git-path", "info/exclude").stdout.strip()
-    if not rel:
-        return
-    if os.path.isabs(rel):
-        path = Path(rel)
-    elif (CWD / ".git").is_dir() and not rel.startswith(".git"):
-        # git returned a path relative to the git dir (e.g. "info/exclude");
-        # resolve it against the .git directory under the worktree root.
-        path = CWD / ".git" / rel
-    else:
-        path = CWD / rel
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        existing = path.read_text() if path.exists() else ""
-        additions = [p for p in ("agent.log", "__pycache__/", "*.pyc", ".agent_transcript.json", ".agent_done", ".agent_done.tmp", ".agent_done.consumed") if p not in existing]
-        if additions:
-            path.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "")
-                            + "\n".join(additions) + "\n")
-    except OSError:
-        pass
+    """Keep dispatch runtime junk out of git."""
+    from scripts.local_agent_git import exclude_runtime_artifacts_impl
+    return exclude_runtime_artifacts_impl(globals())
 
 
 def worktree_dirty() -> bool:
-    return bool(git("status", "--porcelain").stdout.strip())
+    from scripts.local_agent_git import worktree_dirty_impl
+    return worktree_dirty_impl(globals())
 
 
 def auto_wip_commit(reason: str) -> None:
-    git("add", "-A")
-    git("commit", "-m", f"WIP ({reason})")
+    from scripts.local_agent_git import auto_wip_commit_impl
+    return auto_wip_commit_impl(globals(), reason)
 
 
 def _full_suite_result() -> tuple[bool, str, str | None]:
-    """Run the FULL worktree suite (unscoped), for the L1 CI-fail-rework
-    done-gate. Mirrors the merge gate's _ci_status_stub runner
-    (tests/benchmark/harness.py:623) and the oracle variant's helper:
-    detect_test_command + the heavy lock, run the detected command verbatim
-    (no acceptance scoping - this agent has no acceptance oracle), return
-    (passed, tail[-500:], gate). No detectable test command -> (True, '', None) (nothing
-    to fail). Kept in sync with scripts/local_agent_oracle.py:_full_suite_result.
-
-    Mode 40: once tests pass, also run detect_lint_command (if the repo has
-    one) and fold a lint failure into the same (False, tail, 'lint') result - the
-    live incident that motivated this was an agent exiting DONE with a
-    green suite but a lint-failing CI, because nothing local ever checked
-    lint before this. No detected lint command -> unchanged (True, '', None).
-    """
-    test_dir, test_cmd = p.detect_test_command(CWD)
-    if not test_cmd:
-        return True, "", None
-    argv = test_cmd
-    needs_heavy = bool(argv) and p._is_heavy(argv)
-    if needs_heavy:
-        with p._heavy_lock():
-            r = subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
-    else:
-        r = subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
-    if r.returncode != 0:
-        return False, (r.stdout + r.stderr)[-500:], "test"
-    lint = p.detect_lint_command(CWD)
-    if lint is not None:
-        lint_dir, lint_cmd = lint
-        lr = subprocess.run(lint_cmd, check=False, cwd=lint_dir, capture_output=True, text=True)
-        if lr.returncode != 0:
-            return False, (lr.stdout + lr.stderr)[-500:], "lint"
-    return True, "", None
+    """Run the FULL worktree suite (unscoped), for the L1 CI-fail-rework done-gate."""
+    from scripts.local_agent_git import _full_suite_result_impl
+    return _full_suite_result_impl(globals())
 
 
 def _reject_done_for_suite(messages: list, step: int, suite_tail: str, gate: str | None) -> None:

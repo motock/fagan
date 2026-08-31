@@ -555,8 +555,17 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # so a stale-base branch can't land cross-story breakage or a
             # ruff-red PR onto main. Failures count against merge_attempts just
             # like a transient `gh pr merge` failure (see MERGE_MAX_ATTEMPTS).
-            branch = f"agent/{key.lower()}"
             worktree = story.get("worktree", "")
+            # Resolve the worktree's ACTUAL HEAD branch (a rework round can
+            # leave it on an alias agent/<key>-<suffix>) so the gate's rebase,
+            # push, CI poll and _merge_pr all operate on the one branch
+            # _merge_pr merges. The hardcoded convention name previously
+            # named a branch a prior _merge_pr had already deleted ("src
+            # refspec ... does not match any") or a stale twin, and the CI
+            # poll queried a SHA that was never pushed to it.
+            from .pr import _resolve_story_branch
+
+            branch = _resolve_story_branch(worktree, key)
             gate_error = ""
             ci_definitive_fail = False
             ci_wait = False

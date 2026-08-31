@@ -331,6 +331,12 @@ _VIEWED_THIS_RUN: set[str] = set()
 
 
 def run_tool(fn, args) -> str:
+    # Wiring contract (LA-TOOLS): the replace_lines branch below-in-impl still
+    # calls edit_guards.verify_range_anchors (with the "MUST stay optional"
+    # comment) and edit_guards.duplicated_block_warning (advisory, not a
+    # block, and never gated on a .py extension) — the call sites now live in
+    # scripts/local_agent_tools.py::run_tool_impl, which this wrapper
+    # delegates to with this module's live namespace.
     from scripts.local_agent_tools import run_tool_impl
     return run_tool_impl(globals(), fn, args)
 

@@ -44,7 +44,6 @@ This test pins both halves of that contract:
 
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 

@@ -35,6 +35,7 @@ may be invented).
 import importlib.util
 import inspect
 import itertools
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -232,3 +233,97 @@ def test_no_new_log_file_is_invented(tmp_path, monkeypatch, capsys):
     w.emit(1, "DONE: x", correlation_id="c")
     capsys.readouterr()
     assert {p.name for p in tmp_path.iterdir()} == before
+
+
+# ---------------------------------------------------------------------------
+# Requirement 5 (review-directed): the REAL DONE call site in main()'s loop
+# ---------------------------------------------------------------------------
+#
+# The 12 tests above all call emit_step_line()/read_correlation_id() directly
+# with the correlation_id kwarg supplied by the test itself, so none of them
+# would notice if the DONE emitter at scripts/local_agent.py:685-689 stopped
+# passing correlation_id=read_correlation_id().  These two tests drive the real
+# agent loop (la.main()) through the established harness from
+# tests/unit/test_local_agent_persistence.py:311 -- module loaded with pinned
+# env, chat monkeypatched to return a `done` tool call, worktree_dirty and
+# exclude_runtime_artifacts mocked -- and assert on the stdout line the loop
+# actually emits.  emit_step_line's default is the literal "" with NO env
+# fallback, so a kwarg-dropping regression prints a bare DONE line even with
+# PIPELINE_CORRELATION_ID staged; only a main()-level test can see that.
+
+
+def _drive_main_to_done(monkeypatch, tmp_path, capsys):
+    """Load scripts/local_agent.py fresh (pinned env) and drive main() to the
+    DONE emit, mirroring test_local_agent_persistence.py:311.  Returns
+    (module, stdout_text).  The caller must have set/cleared
+    PIPELINE_CORRELATION_ID BEFORE calling this: read_correlation_id() reads
+    the env at call time, but the module also snapshots env at import."""
+    monkeypatch.setenv("LOCAL_AGENT_MODEL", "test-model")
+    monkeypatch.setenv("LOCAL_AGENT_TASK", "ship the thing")
+    monkeypatch.setenv("PIPELINE_TRANSPORT_MAX_STEPS", "1")
+    monkeypatch.delenv("LOCAL_AGENT_RESUME_TRANSCRIPT_PATH", raising=False)
+    la = _exec_module(_LOCAL_AGENT_PY, f"_local_agent_main_cid_{next(_counter)}")
+    monkeypatch.setattr(la, "CWD", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(la, "MAX_STEPS", 1)
+
+    def _fake_chat(messages):
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "done",
+                                             "arguments": {"summary": "all checks green"}}}]}
+
+    monkeypatch.setattr(la, "chat", _fake_chat)
+    monkeypatch.setattr(la, "worktree_dirty", lambda: False)
+    monkeypatch.setattr(la, "exclude_runtime_artifacts", lambda: None)
+
+    rc = la.main()
+    assert rc == 0, "fake agent called done on a clean tree; main() must return 0"
+    return la, capsys.readouterr().out
+
+
+def test_main_done_emitter_passes_read_correlation_id(monkeypatch, tmp_path, capsys):
+    """The story's actual deliverable: the DONE call site at
+    scripts/local_agent.py:685-689 passes correlation_id=read_correlation_id().
+    With PIPELINE_CORRELATION_ID staged (12-hex, the shape pipeline/dispatch.py
+    mints), the DONE stdout line -- the one Popen redirects into agent.log --
+    must end with [cid=<id>].  A kwarg-dropping regression prints a bare line
+    here because emit_step_line's default is literal "" with no env fallback;
+    the 12 helper-level tests above cannot catch that."""
+    cid = "9c41f7a2b8de"
+    monkeypatch.setenv("PIPELINE_CORRELATION_ID", cid)
+    _la, out = _drive_main_to_done(monkeypatch, tmp_path, capsys)
+
+    done_lines = [ln for ln in out.splitlines() if "DONE:" in ln]
+    assert done_lines, f"main() must emit a DONE line; stdout was: {out!r}"
+    done_line = done_lines[-1]
+    assert done_line.endswith("[cid=9c41f7a2b8de]"), (
+        "the DONE emitter must pass correlation_id=read_correlation_id() so the "
+        f"agent.log DONE record joins to the orchestrator; got: {done_line!r}"
+    )
+    # The orchestrator stages the var around the synchronous launch and only
+    # RESTORES it afterwards: the agent reads it, it never pops it.
+    assert os.environ.get("PIPELINE_CORRELATION_ID") == cid
+
+
+def test_main_done_emitter_reads_env_at_call_time_not_cached(monkeypatch, tmp_path, capsys):
+    """Call-time read, two calls, real state carried across: call 1 with the
+    var staged (production shape), call 2 with it unset -- the exact state
+    pipeline/dispatch.py's restore leaves behind.  If the implementation cached
+    the id at import time, or popped the env var during call 1, call 2 (or the
+    post-call-1 state check) exposes it."""
+    monkeypatch.setenv("PIPELINE_CORRELATION_ID", "9c41f7a2b8de")
+    _la1, out1 = _drive_main_to_done(monkeypatch, tmp_path, capsys)
+    assert out1.splitlines()[-1].endswith("[cid=9c41f7a2b8de]")
+    assert os.environ.get("PIPELINE_CORRELATION_ID") == "9c41f7a2b8de", (
+        "call 1 must leave the orchestrator's staged value in place: the agent "
+        "reads PIPELINE_CORRELATION_ID, it never pops it"
+    )
+
+    monkeypatch.delenv("PIPELINE_CORRELATION_ID", raising=False)
+    _la2, out2 = _drive_main_to_done(monkeypatch, tmp_path, capsys)
+    done_lines = [ln for ln in out2.splitlines() if "DONE:" in ln]
+    assert done_lines, f"main() must emit a DONE line; stdout was: {out2!r}"
+    assert "[cid=" not in done_lines[-1], (
+        "with the env unset (the orchestrator's post-restore state) the DONE "
+        f"line must be suffix-free; got: {done_lines[-1]!r}"
+    )

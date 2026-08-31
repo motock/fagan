@@ -226,7 +226,6 @@ def _stub_tick_env(plan_dir, repo, monkeypatch):
 #    fallback slipped through; this one has no escape hatch.
 # ---------------------------------------------------------------------------
 def _gate_function_sources():
-    adv = inspect.getmodule(_advance_pipeline_locked)
     import pipeline.advance as adv_mod
 
     out = []

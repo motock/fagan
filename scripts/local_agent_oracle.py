@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
+import re  # noqa: F401 (re-exported: the moved chat/repair impls use their own; kept for parity with the moved cluster's module context)
 import shlex
 import subprocess
 import sys
@@ -47,11 +47,6 @@ from pathlib import Path
 
 import httpx
 
-# Rough chars-per-token estimate (no tokenizer available here). Ported from
-# local_agent.py - see that file's comment for the live incident (story
-# 93fdc371, 2026-07-20) that motivated this. Keep both copies in sync.
-_CHARS_PER_TOKEN_ESTIMATE = 4
-
 # Calibrated at runtime from ollama's own measured prompt_eval_count. Ported
 # from local_agent.py - see that file's comment for the live incident
 # (2026-07-29 ollama server log, ~2.35 chars/token measured vs the 4.0 guess)
@@ -59,11 +54,17 @@ _CHARS_PER_TOKEN_ESTIMATE = 4
 _measured_chars_per_token: float | None = None
 _last_prompt_eval_count: int | None = None
 
+# The constant itself moved to scripts/local_agent_oracle_chat.py (LAO-CHAT);
+# re-exported here as a one-line copy (same "keep both copies in sync"
+# convention as the comments above) because tests still read it off this
+# module. Deliberately NOT a module-level import of the twin: that would pin
+# the twin in sys.modules and defeat the env-freshness eviction below.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
 
 def _effective_chars_per_token() -> float:
-    """The live-calibrated chars/token ratio when available, else the fixed
-    _CHARS_PER_TOKEN_ESTIMATE guess."""
-    return _measured_chars_per_token or _CHARS_PER_TOKEN_ESTIMATE
+    from scripts.local_agent_oracle_chat import _effective_chars_per_token_impl
+    return _effective_chars_per_token_impl(globals())
 
 
 # The pipeline_mcp_server module lives in this script's parent directory.
@@ -74,7 +75,9 @@ def _effective_chars_per_token() -> float:
 # local_agent.py has the same line; the oracle variant didn't until PR #32
 # because it didn't depend on pipeline_mcp_server.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app import inference_providers
+from app import (
+    inference_providers,  # noqa: F401 (re-exported: the moved chat impls read it via origin; tests patch provider dispatch through it)
+)
 from app import pipeline_mcp_server as p
 from pipeline import edit_guards
 from pipeline.local_agent_common import (
@@ -84,7 +87,7 @@ from pipeline.local_agent_common import (
     _dropped_top_level_vars,
     _is_context_overflow_error,
     _load_resume_transcript,
-    _message_char_len,
+    _message_char_len,  # noqa: F401 (re-exported: the moved calibration impls read it via origin)
     _persist_messages,
     _str_replace_not_found_diag,
     _total_chars,
@@ -138,7 +141,12 @@ from scripts.local_agent_oracle_repair import (  # noqa: F401 (re-exported: run_
 # os.environ, expecting env-derived constants to recompute; without evicting
 # the split-out config module first, a cached copy would serve stale values.
 sys.modules.pop("scripts.local_agent_oracle_config", None)
-from scripts.local_agent_oracle_config import (
+# The chat/transport twin (LAO-CHAT) is imported at CALL time by the
+# delegating wrappers below, so it lands in sys.modules on first use. Evict
+# it here too, for the same env-freshness reason as the config module: a
+# fresh exec of this file must not inherit a cached twin.
+sys.modules.pop("scripts.local_agent_oracle_chat", None)
+from scripts.local_agent_oracle_config import (  # noqa: F401 (re-exported: the moved chat/transport impls read these via origin, and tests monkeypatch them on this module)
     _THINK_LEVELS,
     ACCEPTANCE_PATHS,
     BASH_TIMEOUT,
@@ -169,226 +177,33 @@ from scripts.local_agent_oracle_config import (
 
 
 def _stream_one_turn(payload):
-    """One streamed chat turn against Ollama's /api/chat. Accumulates the
-    assistant message across newline-delimited JSON chunks and returns the
-    assembled message dict ({role, content, tool_calls?}) — the same shape
-    the non-streaming path returned via r.json()["message"], so main() and
-    recover_tool_calls() work unchanged.
-
-    Streaming lets the per-chunk read timeout (READ_SILENCE_SECONDS) fire
-    only on a genuine stall (no bytes for N seconds), not on a legitimately
-    long generation. A slow-but-progressing gen streams a chunk every ~1-2s
-    and never trips it.
-
-    Raises httpx.HTTPStatusError on a bad response (4xx/5xx) or
-    httpx.TransportError (TimeoutException/ConnectError/ReadError) on a
-    connect/read stall — chat() decides which of those are retryable.
-    """
-    global _measured_chars_per_token, _last_prompt_eval_count
-    content_parts: list[str] = []
-    tool_calls = None
-    role = "assistant"
-    prompt_eval_count = None
-    with httpx.stream(
-        "POST", f"{ENDPOINT}/api/chat", json=payload,
-        timeout=httpx.Timeout(connect=CONNECT_TIMEOUT_SECONDS, read=READ_SILENCE_SECONDS,
-                              write=10.0, pool=10.0),
-    ) as r:
-        r.raise_for_status()
-        for line in r.iter_lines():
-            if not line:
-                continue
-            try:
-                chunk = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            msg = chunk.get("message") or {}
-            if msg.get("role"):
-                role = msg["role"]
-            if msg.get("content"):
-                content_parts.append(msg["content"])
-            # Tool calls may land at the top level of a chunk or inside its
-            # message; capture from either. (devstral emits tool calls as
-            # text content, so tool_calls stays None and recover_tool_calls
-            # parses the assembled content downstream.)
-            tc = chunk.get("tool_calls") or msg.get("tool_calls")
-            if tc:
-                tool_calls = tc
-            if chunk.get("done"):
-                prompt_eval_count = chunk.get("prompt_eval_count")
-                break
-    assembled = {"role": role, "content": "".join(content_parts)}
-    if tool_calls:
-        assembled["tool_calls"] = tool_calls
-    # Calibrate the chars/token ratio from ollama's own real count for this
-    # request. Ported from local_agent.py - keep both copies in sync.
-    if prompt_eval_count:
-        _last_prompt_eval_count = prompt_eval_count
-        # The tools schema is counted in prompt_eval_count, so it must be
-        # counted here too - see local_agent.py's copy for the measured bias
-        # this avoids. Keep both copies in sync.
-        sent_chars = (
-            sum(_message_char_len(m) for m in payload.get("messages", []))
-            + len(json.dumps(payload.get("tools") or []))
-        )
-        if sent_chars > 0:
-            _measured_chars_per_token = sent_chars / prompt_eval_count
-    return assembled
+    from scripts.local_agent_oracle_chat import _stream_one_turn_impl
+    return _stream_one_turn_impl(globals(), payload)
 
 
 def _provider_chat_turn(messages):
-    """One provider-backed chat turn for a non-Ollama PROVIDER (lmstudio,
-    mlx). Blocking, not streamed — these servers are OpenAI-compatible and
-    stream tool calls as index-based deltas that need reassembly across
-    chunks, a materially different (and riskier) parser than Ollama's
-    whole-message-per-chunk NDJSON; deferred, see
-    MODEL_PROVIDER_ABSTRACTION_PLAN.md S3. Bounded by TIMEOUT (the overall
-    dispatch wall-clock budget) rather than a per-chunk silence timeout.
-    Returns just the assembled message dict — the same shape
-    _stream_one_turn returns — so chat()/main() work unchanged regardless of
-    which provider is active.
-
-    Records prompt_eval_count/calibration the same way _stream_one_turn does.
-    This return shape stays the bare message, but the usage fields must NOT be
-    discarded: both LMStudioProvider.chat and MLXProvider.chat already map the
-    OpenAI `usage` block into prompt_eval_count, and dropping it left
-    _last_prompt_eval_count permanently None on those providers — which is the
-    condition main()'s proactive trim is gated on, so the primary overflow
-    defense never fired at all outside Ollama (2026-08-07 audit).
-    """
-    global _measured_chars_per_token, _last_prompt_eval_count
-    envelope = inference_providers.get_local_provider().chat(
-        messages, model=MODEL, num_ctx=NUM_CTX, temperature=TEMPERATURE,
-        tools=TOOLS, endpoint=ENDPOINT, timeout=TIMEOUT,
-    )
-    prompt_eval_count = envelope.get("prompt_eval_count")
-    if prompt_eval_count:
-        _last_prompt_eval_count = prompt_eval_count
-        # Same numerator as _stream_one_turn: the tools schema is part of
-        # every prompt and is counted in prompt_eval_count, so it belongs in
-        # the chars total too.
-        sent_chars = (
-            sum(_message_char_len(m) for m in messages)
-            + len(json.dumps(TOOLS))
-        )
-        if sent_chars > 0:
-            _measured_chars_per_token = sent_chars / prompt_eval_count
-    return envelope["message"]
+    from scripts.local_agent_oracle_chat import _provider_chat_turn_impl
+    return _provider_chat_turn_impl(globals(), messages)
 
 
 def chat(messages):
-    """One LLM turn, with retry.
-
-    A single transient stall (queue contention, network blip, 5xx, 429)
-    must not kill a 30-minute run. For PROVIDER == "ollama" (the default) we
-    stream so a slow generation doesn't trip the timeout; other providers go
-    through _provider_chat_turn's blocking call instead (see its docstring).
-    Either way, retry covers the transient failures: 4xx is a bad request
-    (retrying won't help) so it raises immediately; 5xx, transport errors
-    (timeout/connect/read), and RateLimitedError (429) are retried up to
-    CHAT_MAX_ATTEMPTS. If every attempt fails, the last exception propagates
-    to main()'s except, which commits WIP and returns 1 — same terminal
-    behavior as before, but only after we've genuinely tried.
-    """
-    payload = {"model": MODEL, "messages": messages, "tools": TOOLS, "stream": True,
-               "options": {"num_ctx": NUM_CTX, "temperature": TEMPERATURE}}
-    if THINK in ("true", "false"):
-        payload["think"] = (THINK == "true")
-    elif THINK in _THINK_LEVELS:
-        payload["think"] = THINK
-    last_exc: Exception | None = None
-    for attempt in range(1, CHAT_MAX_ATTEMPTS + 1):
-        try:
-            if PROVIDER == "ollama":
-                return _stream_one_turn(payload)
-            return _provider_chat_turn(messages)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code < 500:
-                raise  # 4xx — bad request, retrying is pointless
-            last_exc = e
-        except httpx.TransportError as e:
-            last_exc = e  # timeout / connect / read — transient, retry
-        except inference_providers.RateLimitedError as e:
-            last_exc = e  # 429 — transient, retry like a 5xx
-        if attempt < CHAT_MAX_ATTEMPTS:
-            time.sleep(CHAT_RETRY_BACKOFF * attempt)
-    assert last_exc is not None  # loop ran ≥1 attempt; only reachable w/ an exc
-    raise last_exc
+    from scripts.local_agent_oracle_chat import chat_impl
+    return chat_impl(globals(), messages)
 
 
 def _repair_triple_quoted_strings(candidate):
-    """Rewrite Python-style triple-quoted string literals (\"\"\"...\"\"\" or
-    '''...''') as JSON-encoded strings. Weaker local models emit multi-line
-    code arguments (a str_replace's new_str/old_str) using Python triple-quote
-    syntax with literal newlines, which is not valid JSON - json.loads rejects
-    it at the opening \"\"\", so the tool call is silently dropped and the
-    edit never lands (observed systematically with Qwen2.5-Coder-14B-4bit on
-    mlx: 12/12 dropped calls, see MLX_DEFAULT_PROVIDER_PLAN.md). json.dumps of
-    the inner text produces a correctly-escaped JSON string in its place.
-
-    Kept in sync with scripts/local_agent.py's copy (this module is a verbatim
-    port of that agent for oracle grading)."""
-    def _sub(m):
-        inner = m.group(1) if m.group(1) is not None else m.group(2)
-        return json.dumps(inner)
-    return re.sub(r'"""(.*?)"""|\'\'\'(.*?)\'\'\'', _sub, candidate, flags=re.DOTALL)
+    from scripts.local_agent_oracle_chat import _repair_triple_quoted_strings_impl
+    return _repair_triple_quoted_strings_impl(globals(), candidate)
 
 
 def _loads_tolerant(candidate):
-    """json.loads, tolerating raw control characters inside strings, with a
-    triple-quote repair pass as a further fallback. Valid JSON is never
-    transformed - both fallbacks only ever ACCEPT more inputs than a strict
-    parse would, never reinterpret one that already parses.
-
-    strict=False (observed live, 2026-07-17, Qwen2.5-Coder-14B-4bit on mlx,
-    interval_merge task, the benchmark harness this oracle agent is
-    dispatched through): a distinct malformation from the triple-quote case
-    below - the model uses ordinary double-quoted JSON string syntax for a
-    multi-line create_file `content` argument, but embeds a RAW literal
-    newline instead of escaping it as `\\n`. A strict parse rejects this
-    ("Invalid control character"); the triple-quote repair does not apply
-    (no triple quotes present), so the tool call was silently dropped every
-    retry and the agent looped regenerating the same correct-but-unparseable
-    content until the wall-clock park, with the real fix never landing.
-    json.loads(strict=False) permits control characters (newlines, tabs,
-    etc.) inside strings without weakening validation of anything else -
-    it never accepts input a strict parse would reject, it only stops
-    rejecting on this one class of already-well-structured input.
-
-    Kept in sync with scripts/local_agent.py's copy (this module is a
-    verbatim port of that agent for oracle grading)."""
-    try:
-        return json.loads(candidate, strict=False)
-    except json.JSONDecodeError:
-        pass
-    repaired = _repair_triple_quoted_strings(candidate)
-    if repaired != candidate:
-        try:
-            return json.loads(repaired, strict=False)
-        except json.JSONDecodeError:
-            pass
-    return None
+    from scripts.local_agent_oracle_chat import _loads_tolerant_impl
+    return _loads_tolerant_impl(globals(), candidate)
 
 
 def recover_tool_calls(content):
-    """Pull a tool call out of message text when the native field is empty."""
-    if not content:
-        return None
-    text = content.strip().replace("[TOOL_CALLS]", "")
-    candidates = re.findall(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
-    m = re.search(r"(\[\s*\{.*\}\s*\]|\{.*\})", text, re.DOTALL)
-    if m:
-        candidates.append(m.group(1))
-    for c in candidates:
-        obj = _loads_tolerant(c)
-        if obj is None:
-            continue
-        items = obj if isinstance(obj, list) else [obj]
-        out = [{"function": {"name": it["name"], "arguments": it.get("arguments", it.get("parameters", {}))}}
-               for it in items if isinstance(it, dict) and "name" in it]
-        if out:
-            return out
-    return None
+    from scripts.local_agent_oracle_chat import recover_tool_calls_impl
+    return recover_tool_calls_impl(globals(), content)
 
 
 def git(*args):

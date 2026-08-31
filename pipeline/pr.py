@@ -18,6 +18,17 @@ import subprocess
 from typing import Any
 
 
+def _convention_branch(story_key: str) -> str:
+    """The pre-alias convention branch name for a story key.
+
+    Single definition of ``agent/<key>`` so callers that cannot probe a
+    worktree (missing/anomalous dir - nothing was dispatched, so no alias can
+    exist) degrade to the same name the resolver itself would fail open to,
+    without re-hardcoding the literal at each call site.
+    """
+    return f"agent/{story_key.lower()}"
+
+
 def _resolve_story_branch(worktree: str, story_key: str) -> str:
     """Return the branch _open_pr/_merge_pr must operate on for this story.
 

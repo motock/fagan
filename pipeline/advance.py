@@ -567,9 +567,17 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # cannot be probed, so no local fallback is needed here - and
             # none may be added: a locally computed convention branch is the
             # exact mistake the round-2 review finding names.
-            from .pr import _resolve_story_branch
+            from .pr import _convention_branch, _resolve_story_branch
 
-            branch = _resolve_story_branch(worktree, key)
+            if worktree and Path(worktree).is_dir():
+                branch = _resolve_story_branch(worktree, key)
+            else:
+                # No worktree to probe (missing/anomalous): nothing was
+                # dispatched, so no alias can exist. Degrade to the shared
+                # convention-name helper WITHOUT spawning a subprocess - the
+                # CI-gate-disabled path must run zero subprocesses (see
+                # test_advance_pipeline_ci_gate_disabled_skips_ci).
+                branch = _convention_branch(key)
             gate_error = ""
             ci_definitive_fail = False
             ci_wait = False

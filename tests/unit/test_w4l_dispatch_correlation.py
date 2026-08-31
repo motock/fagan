@@ -19,6 +19,7 @@ test_dispatch_worktree_from_origin.py per this repo's convention — there is
 no shared conftest.py for these. The real remote is never touched: git runs
 against a throwaway local origin, and the agent subprocess launch is faked.
 """
+
 import json
 import re
 import subprocess
@@ -151,7 +152,7 @@ class _Recorder:
 
     def __init__(self):
         self.notifies = []  # list of (args, kwargs)
-        self.popens = []    # list of (cmd, kwargs)
+        self.popens = []  # list of (cmd, kwargs)
 
     def notify(self, *args, **kwargs):
         self.notifies.append((args, kwargs))
@@ -222,8 +223,9 @@ def _no_plane(*_a, **_k):
 
 
 @pytest.fixture
-def dispatched_plan(plan_dir, worktree_root, agents_dir, recorder, tmp_path,
-                    monkeypatch):
+def dispatched_plan(
+    plan_dir, worktree_root, agents_dir, recorder, tmp_path, monkeypatch
+):
     """A plan with one pending story, dispatched once, against a real
     throwaway repo. Returns (plan_name, repo)."""
     _origin, repo = _make_repo(tmp_path)
@@ -236,9 +238,7 @@ def dispatched_plan(plan_dir, worktree_root, agents_dir, recorder, tmp_path,
 
 
 # 1. First dispatch mints and persists a correlation id. ---------------------
-def test_first_dispatch_mints_and_persists_correlation_id(
-    dispatched_plan, plan_dir
-):
+def test_first_dispatch_mints_and_persists_correlation_id(dispatched_plan, plan_dir):
     plan_name, _repo = dispatched_plan
 
     story = _read_manifest(plan_dir, plan_name)["stories"]["S1"]
@@ -247,19 +247,14 @@ def test_first_dispatch_mints_and_persists_correlation_id(
         "first dispatch must set a non-empty story['correlation_id']"
     )
     assert re.fullmatch(r"[0-9a-f]{12}", cid), (
-        f"correlation id should be a 12-char lowercase hex uuid4 slice, "
-        f"got {cid!r}"
+        f"correlation id should be a 12-char lowercase hex uuid4 slice, got {cid!r}"
     )
 
 
 # 2. Redispatch keeps the same id. -------------------------------------------
-def test_redispatch_keeps_existing_correlation_id(
-    dispatched_plan, plan_dir
-):
+def test_redispatch_keeps_existing_correlation_id(dispatched_plan, plan_dir):
     plan_name, _repo = dispatched_plan
-    existing = _read_manifest(plan_dir, plan_name)["stories"]["S1"][
-        "correlation_id"
-    ]
+    existing = _read_manifest(plan_dir, plan_name)["stories"]["S1"]["correlation_id"]
 
     result = p.dispatch_story(plan_name, "S1")
     assert result.get("ok") is True, f"redispatch failed: {result}"
@@ -275,9 +270,7 @@ def test_dispatch_env_contains_pipeline_correlation_id(
     dispatched_plan, plan_dir, recorder
 ):
     plan_name, _repo = dispatched_plan
-    minted = _read_manifest(plan_dir, plan_name)["stories"]["S1"][
-        "correlation_id"
-    ]
+    minted = _read_manifest(plan_dir, plan_name)["stories"]["S1"]["correlation_id"]
 
     envs = recorder.popen_envs()
     assert envs, "expected the agent launch to receive an env mapping"
@@ -293,9 +286,7 @@ def test_agent_dispatched_event_carries_correlation_id(
     dispatched_plan, plan_dir, recorder
 ):
     plan_name, _repo = dispatched_plan
-    minted = _read_manifest(plan_dir, plan_name)["stories"]["S1"][
-        "correlation_id"
-    ]
+    minted = _read_manifest(plan_dir, plan_name)["stories"]["S1"]["correlation_id"]
 
     # The event may travel via the process bus (make_event with a
     # top-level correlation_id) or via the _notify_user seam (correlation_id
@@ -308,9 +299,7 @@ def test_agent_dispatched_event_carries_correlation_id(
     assert recorder.notifies or recorder.bus.events, (
         "expected dispatch to emit an event on success"
     )
-    assert (
-        minted in bus_cids or minted in recorder.notified_cids()
-    ), (
+    assert minted in bus_cids or minted in recorder.notified_cids(), (
         f"expected an event stamped with correlation_id={minted!r}; "
         f"got bus events: {recorder.bus.events!r}, "
         f"notify kwargs: {[kw for _a, kw in recorder.notifies]!r}"

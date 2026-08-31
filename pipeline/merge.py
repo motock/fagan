@@ -291,10 +291,22 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         story.pop("parked_reason", None)
         story.pop("ci_rerun_attempted", None)
         _atomic_write_json(manifest_path, manifest)
+        _maybe_record_retro(plan_name, manifest)
     _mark_plane_done(story_key, plan_name)
     if mcp_touched:
         _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
     return {"ok": True, "story_key": story_key, "status": "done"}
+
+
+def _maybe_record_retro(plan_name: str, manifest: dict) -> None:
+    from .server import PIPELINE_SELF_REPO_ROOT, _record_retro_pending
+
+    stories = manifest.get("stories", {})
+    if not stories or not all(s.get("status") == "done" for s in stories.values()):
+        return
+    if manifest.get("repo_root") != str(PIPELINE_SELF_REPO_ROOT):
+        return
+    _record_retro_pending(plan_name, len(stories))
 
 
 def _set_plan_paused(plan_name: str, paused: bool) -> dict[str, Any]:

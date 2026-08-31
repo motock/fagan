@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import pipeline.server as p
-from pipeline import merge
+from pipeline import advance, merge
 from pipeline.server import (
     MERGE_MAX_ATTEMPTS,
     PIPELINE_MERGE_CI_TIMEOUT,

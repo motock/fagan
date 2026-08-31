@@ -78,6 +78,14 @@ def _escalate_to_claude(
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
+    # A rework round can leave the worktree HEAD on an alias branch
+    # agent/<key>-<suffix>. Resolve it BEFORE the worktree is removed below
+    # (rev-parse needs the worktree) so the teardown deletes the branch the
+    # agent actually built on, not just the convention name - otherwise the
+    # alias lingers after the force worktree removal.
+    from .pr import _resolve_story_branch
+
+    resolved = _resolve_story_branch(worktree, story_key)
     # CLAUDE.md Step 9: encode the diagnosis into the next attempt's
     # instructions rather than an open-ended retry. Must run BEFORE the
     # worktree is removed below - the evidence (agent.log) lives there.

@@ -2,10 +2,12 @@
 
 Split out of test_pipeline_mcp_server.py to keep it under the project's line-count target; shared fixtures/helpers moved to tests.unit._pipeline_mcp_server_test_helpers.
 """
+import inspect
 import json
 from pathlib import Path
 
 from app import backend
+from pipeline import persona as pp
 from pipeline import server as p
 from pipeline import ticketing as pt
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
@@ -347,6 +349,254 @@ def test_story_has_unwinnable_local_scope_still_detects_imperative_repo_wide_swe
     story = {"agent_instructions":
              "Clean up every remaining lint error repo-wide before merging."}
     assert p._story_has_unwinnable_local_scope(story) is True
+
+
+# --- Pattern-0 narrowing (2026-08-31 glm misrouting fix) ---------------------
+# Pattern 0 used to match ANY occurrence of the bare repo-root lint command
+# (ruff check .) followed by whitespace, so a plain, bounded mention of the
+# repo lint gate in a story brief silently misrouted glm-targeted stories to
+# claude/sonnet. It must now fire only when the command is accompanied, in
+# the same sentence, by unbounded remediation language ('--fix', 'fix every',
+# 'fix each', 'every remaining finding', 'all findings', 'clean up', or
+# 'repo-wide'). The eslint, imperative repo-wide verb-pair, and 'across the
+# repo' patterns stay exactly as they are.
+
+def test_story_has_unwinnable_local_scope_false_for_plain_bounded_lint_gate_prose():
+    """A plain, imperative-but-bounded lint instruction that merely mentions
+    the project lint gate in prose - no bare repo-root command, no --fix, no
+    fix-everything language - is not an unbounded sweep."""
+    story = {"agent_instructions":
+             "Run the repo lint gate (ruff) before finishing. "
+             "Implement pipeline/foo.py."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_bare_unquoted_command():
+    """The exact 2026-08-31 live-failure shape: the bare repo-root lint
+    command written unquoted, outside backticks, followed by whitespace, with
+    no --fix and no fix-everything language anywhere in the brief."""
+    story = {"agent_instructions":
+             "Run ruff check . and it must be green before finishing. "
+             "Implement pipeline/foo.py."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_bare_command_at_text_end():
+    """Boundary for the old pattern's $ branch: the bare repo-root command as
+    the final instruction, with no remediation language, is bounded."""
+    story = {"agent_instructions":
+             "Implement pipeline/foo.py. Before finishing, run ruff check ."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_minimal_bare_command():
+    """Minimal boundary: instructions consisting solely of the bare repo-root
+    lint command must not trip the override."""
+    story = {"agent_instructions": "ruff check ."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_command_then_other_steps():
+    """A bare command mention followed by other bounded steps in the same
+    brief is not a sweep."""
+    story = {"agent_instructions":
+             "Run ruff check . then the full test suite. "
+             "Implement pipeline/foo.py."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_sweep_language_other_sentence():
+    """The sweep signal must share a sentence with the bare repo-root
+    command: remediation language in a separate sentence does not accompany
+    the command (this grades the same-sentence requirement)."""
+    story = {"agent_instructions":
+             "Run ruff check . from the repo root. "
+             "Fix every remaining finding afterwards."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_fix_everything_without_command():
+    """Unbounded remediation language with no bare repo-root lint command and
+    no repo-wide/across-the-repo wording is not caught: the narrowed pattern
+    requires the command and the sweep signal together."""
+    story = {"agent_instructions":
+             "Fix every remaining mypy finding in pipeline/foo.py."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_scoped_command_with_fix_flag():
+    """--fix on a path-scoped lint command stays bounded: the narrowed
+    pattern requires the bare repo-root command, not any ruff invocation."""
+    story = {"agent_instructions":
+             "Run ruff check pipeline/foo.py --fix and fix every finding "
+             "in that file."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_codebase_without_repo_word():
+    """Boundary pinning the unchanged 'across the repo(sitory)' pattern:
+    'codebase' phrasing with no repo/repository word and no lint command is
+    not caught (the other three patterns must stay exactly as they are)."""
+    story = {"agent_instructions":
+             "Fix every lint finding across the codebase before finishing."}
+    assert p._story_has_unwinnable_local_scope(story) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_empty_instructions():
+    assert p._story_has_unwinnable_local_scope({"agent_instructions": ""}) is False
+
+
+def test_story_has_unwinnable_local_scope_false_for_none_instructions():
+    assert p._story_has_unwinnable_local_scope({"agent_instructions": None}) is False
+
+
+def test_story_has_unwinnable_local_scope_true_for_command_with_fix_and_fix_every():
+    """The bounded story text from the live failure, with '--fix' and 'fix
+    every finding' added, is an imperative unbounded sweep."""
+    story = {"agent_instructions":
+             "Run ruff check . --fix and fix every finding before finishing. "
+             "Implement pipeline/foo.py."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_bare_command_fix_flag_only():
+    """'--fix' alone next to the bare repo-root command suffices - no
+    fix-everything prose required."""
+    story = {"agent_instructions": "ruff check . --fix"}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_command_with_fix_every():
+    story = {"agent_instructions":
+             "Run ruff check . and fix every finding before finishing."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_command_with_fix_each():
+    story = {"agent_instructions":
+             "Run ruff check . and fix each finding it reports."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_command_with_every_remaining():
+    story = {"agent_instructions":
+             "Run ruff check . and address every remaining finding."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_command_with_all_findings():
+    story = {"agent_instructions":
+             "Run ruff check . and resolve all findings."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_command_with_clean_up():
+    story = {"agent_instructions":
+             "Run ruff check . and clean up every warning it reports."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_command_with_repo_wide():
+    story = {"agent_instructions":
+             "Run ruff check . repo-wide before finishing."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_signal_before_command():
+    """'Accompanied by' is order-agnostic: the sweep signal may precede the
+    bare repo-root command within the same sentence."""
+    story = {"agent_instructions":
+             "Fix every remaining finding, then run ruff check . to confirm."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_uppercase_command_with_fix():
+    """Matching stays case-insensitive after the narrowing."""
+    story = {"agent_instructions":
+             "Run RUFF CHECK . --fix and fix every finding."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_sweep_language_no_command():
+    """Unbounded sweep language with no lint command must still trip the
+    override via the unchanged 'across the repo(sitory)' pattern."""
+    story = {"agent_instructions":
+             "Fix every lint finding across the repository before finishing."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_across_entire_repo():
+    story = {"agent_instructions":
+             "Fix every lint finding across the entire repo before finishing."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_repo_wide_verb_pair_variant():
+    """The imperative repo-wide verb-pair pattern is unchanged: verb first,
+    'repo-wide' later in the same sentence."""
+    story = {"agent_instructions":
+             "Address every remaining lint warning repo-wide before merging."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_true_for_bare_eslint_mention():
+    """The eslint pattern is unchanged: a bare 'eslint .' mention still trips
+    the override (only the ruff repo-root pattern is narrowed)."""
+    story = {"agent_instructions": "Run eslint . before finishing."}
+    assert p._story_has_unwinnable_local_scope(story) is True
+
+
+def test_story_has_unwinnable_local_scope_public_contract_unchanged():
+    """The narrowing must not change the helper's public contract: same
+    single-dict signature, documented behavior, and the pattern table keeps
+    its name (the docstring references it)."""
+    assert p._story_has_unwinnable_local_scope is pp._story_has_unwinnable_local_scope
+    params = list(
+        inspect.signature(p._story_has_unwinnable_local_scope).parameters.values()
+    )
+    assert len(params) == 1
+    assert params[0].name == "story"
+    assert p._story_has_unwinnable_local_scope.__doc__
+    assert "sweep" in p._story_has_unwinnable_local_scope.__doc__
+    assert hasattr(pp, "_UNWINNABLE_SCOPE_PATTERNS")
+
+
+def test_route_dispatch_backend_bounded_lint_gate_mention_stays_local(monkeypatch):
+    """End-to-end regression for the 2026-08-31 misrouting: a glm-targeted,
+    low-risk story whose brief merely requires the repo lint gate to be green
+    (bare, unquoted repo-root command, no --fix, no fix-everything language)
+    must route local, not be silently overridden to claude."""
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "high")
+    story = {"risk": "low", "persona": "software-engineer",
+              "agent_instructions": "Run ruff check . and it must be green "
+              "before finishing. Implement pipeline/foo.py."}
+    assert p._route_dispatch_backend(story) == "local"
+
+
+def test_dispatch_story_explicit_local_bounded_lint_mention_stays_local(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """PIPELINE_BACKEND_DISPATCH=local must not rewrite a bounded story's
+    backend to claude either - the explicit-mode call site of the same
+    override (the second half of the 2026-08-31 live misrouting)."""
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    _write_manifest(plan_dir, "scope3", {
+        "S1": {"summary": "Add pipeline/foo.py",
+               "agent_instructions": "Run ruff check . and it must be green "
+               "before finishing. Implement pipeline/foo.py.",
+               "status": "todo", "dependencies": []},
+    })
+    popen_calls = []
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda cmd, **kw: (popen_calls.append(cmd), _FakeProc(62))[1])
+    monkeypatch.setattr(pt, "plane_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+    p.dispatch_story("scope3", "S1")
+
+    assert _read_manifest(plan_dir, "scope3")["stories"]["S1"]["backend"] == "local"
+    # test_author (claude/sonnet) issues a leading Popen call first.
+    assert popen_calls[-1][0] != "claude"
 
 
 def test_route_dispatch_backend_unwinnable_scope_overrides_low_risk(monkeypatch):

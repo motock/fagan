@@ -183,6 +183,7 @@ from scripts.local_agent_config import (
 )
 from scripts.local_agent_guards import (  # noqa: F401 (re-exported: the step loop references these as bare names)
     CHURN_SAME_PATH_MAX_EDITS,
+    _apply_off_task_action_impl,
     _bash_off_task_path,
     _churn_note_test_run,
     _churn_step,
@@ -190,6 +191,7 @@ from scripts.local_agent_guards import (  # noqa: F401 (re-exported: the step lo
     _is_off_task_path,
     _no_tool_nudge,
     _off_task_step,
+    _reject_done_for_suite_impl,
 )
 from scripts.local_agent_repair import (  # noqa: F401 (re-exported: run_tool references these as bare names)
     _SYNTAX_REJECT_COUNTS,
@@ -211,21 +213,7 @@ def _apply_off_task_action(action: str, path_arg: str, messages: list) -> bool:
     this as a parkable escalation (WIP-committing a dirty tree is done here;
     whether to actually terminate the run is a PARK_ENABLED decision left to
     the caller, exactly like every other guard's kill-switch handling)."""
-    if action == "nudge":
-        print(f"   [off-task nudge: {path_arg} not in assigned scope]", flush=True)
-        messages.append({"role": "user", "content": (
-            f"You just touched {path_arg}, which was not named anywhere "
-            f"in your assigned task. If this file is genuinely required "
-            f"to complete the task, explain why in your next message and "
-            f"continue. Otherwise STOP editing unrelated files and refocus "
-            f"on the files named in your instructions.")})
-        return False
-    if action == "escalate":
-        print(f"   [parking: off-task drift onto {path_arg} after nudge]", flush=True)
-        if worktree_dirty():
-            auto_wip_commit("parked on off-task drift")
-        return True
-    return False
+    return _apply_off_task_action_impl(globals(), action, path_arg, messages)
 
 
 
@@ -295,16 +283,7 @@ def _full_suite_result() -> tuple[bool, str, str | None]:
 
 def _reject_done_for_suite(messages: list, step: int, suite_tail: str, gate: str | None) -> None:
     """L1: feed a full-suite failure back as a user turn and announce the rejection. Used at both `done`-rejection sites (clean tree, and the dirty-tree auto-accept escape) so the raised rework done-bar holds and the agent can't dodge it by interleaving dirty/clean done calls. The caller increments `suite_rejections` and `break`s out of the tool-call loop so the next step re-enters with this fed-back excerpt."""
-    if gate == 'lint':
-        print(f"[step {step}] done rejected — lint gate still fails (rework done-bar); asking agent to fix the lint failure", flush=True)
-        messages.append({"role": "user", "content": (
-            f"Your tests PASS, but the lint check (`ruff check .`) fails. The merge-gate CI lint gate will reject this on the same failure:\n{suite_tail}\n\nMost lint errors are auto-fixable: run `ruff check . --fix`, then `ruff check .` to confirm it is clean.\n\nDo NOT edit implementation logic — this is a formatting/import/style error, not a correctness bug, and editing logic will not fix it. Do not call done until `ruff check .` passes in full."
-        )})
-    else:
-        print(f"[step {step}] done rejected — full test suite still fails (rework done-bar); asking agent to fix the failure", flush=True)
-        messages.append({"role": "user", "content": (
-            f"The full test suite still fails. The merge-gate CI will reject this on the same failure:\n{suite_tail}\n\nThe bug could be in the implementation you just changed, or in a test file - do not assume either side is correct. Re-read the failing test and the code it exercises, identify which one is actually wrong, and make ONE targeted fix there. do not call done until pytest passes in full."
-        )})
+    return _reject_done_for_suite_impl(globals(), messages, step, suite_tail, gate)
 # Paths successfully written via create_file THIS process run. The
 # non-destructive-editor guard (see run_tool's create_file branch) exists to
 # protect PRE-EXISTING repo/seed files from being clobbered by a confused

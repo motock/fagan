@@ -39,13 +39,13 @@ from pipeline.notification_sinks import file_log_sink
 # --------------------------------------------------------------------------- #
 NEW_RECORD_KWARGS = ("correlation_id", "attempt", "role", "provider", "model")
 
-BASE_RECORD_KWARGS = dict(
-    story_key="S1",
-    severity="warning",
-    event="ci_pending_stalled",
-    dedup_key="ci_pending_stalled:S1",
-    ts="2026-01-01T00:00:00+00:00",
-)
+BASE_RECORD_KWARGS = {
+    "story_key": "S1",
+    "severity": "warning",
+    "event": "ci_pending_stalled",
+    "dedup_key": "ci_pending_stalled:S1",
+    "ts": "2026-01-01T00:00:00+00:00",
+}
 
 # The exact legacy record shape, pinned by tests/unit/test_notification_records.py.
 LEGACY_RECORD = {

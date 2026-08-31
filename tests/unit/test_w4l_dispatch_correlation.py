@@ -181,7 +181,16 @@ class _Recorder:
 def recorder(monkeypatch):
     rec = _Recorder()
     monkeypatch.setattr(p, "_notify_user", rec.notify)
-    monkeypatch.setattr(backend.subprocess, "Popen", rec.popen)
+    real_popen = subprocess.Popen
+
+    def _discriminating_popen(cmd, **kwargs):
+        # Let real git (worktree add, fetch, ...) run; fake only agent
+        # launches, mirroring test_dispatch_staleness.py's approach.
+        if cmd and cmd[0] == "git":
+            return real_popen(cmd, **kwargs)
+        return rec.popen(cmd, **kwargs)
+
+    monkeypatch.setattr(backend.subprocess, "Popen", _discriminating_popen)
     return rec
 
 

@@ -105,6 +105,27 @@ _maybe_record_retro = _ServerRef("_maybe_record_retro")
 _mcp_restart_notice = _ServerRef("_mcp_restart_notice")
 _mcp_self_source_touched = _ServerRef("_mcp_self_source_touched")
 _merge_decision = _ServerRef("_merge_decision")
+def _degraded_ci_branch(key: str) -> str:
+    """CI-poll branch for a story whose worktree cannot be probed.
+
+    Nothing was dispatched, so no alias agent/<key>-<suffix> can exist and
+    the merge gate is handed NO branch at all - a locally computed
+    convention branch reaching ``_rebase_and_push_for_merge`` is the exact
+    mistake the round-2 review finding names. The CI poll, however, must
+    still run (the ci-pending/cancelled contracts pin it, see
+    test_advance_pipeline_cancelled_ci_triggers_one_rerun_then_merges),
+    and with no worktree to probe the convention name is the only branch
+    the story could ever have had. This name feeds the poll ONLY - it never
+    reaches the gate, so it cannot be pushed or merged. Polling an empty
+    branch instead would make ``gh pr checks ""`` resolve the CURRENT
+    checkout's PR and import an unrelated CI verdict into this story's
+    merge decision.
+    """
+    from .pr import _convention_branch
+
+    return _convention_branch(key)
+
+
 _merge_gate_ci_status = _ServerRef("_merge_gate_ci_status")
 _merge_pr = _ServerRef("_merge_pr")
 _notify_user = _ServerRef("_notify_user")
@@ -568,17 +589,20 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # cannot be probed, so no local fallback is needed here - and
             # none may be added: a locally computed convention branch is the
             # exact mistake the round-2 review finding names.
-            from .pr import _convention_branch, _resolve_story_branch
+            from .pr import _resolve_story_branch
 
             if worktree and Path(worktree).is_dir():
                 branch = _resolve_story_branch(worktree, key)
             else:
                 # No worktree to probe (missing/anomalous): nothing was
-                # dispatched, so no alias can exist. Degrade to the shared
-                # convention-name helper WITHOUT spawning a subprocess - the
-                # CI-gate-disabled path must run zero subprocesses (see
+                # dispatched, so no alias can exist. Hand the gate NO
+                # branch at all - a locally computed convention branch is
+                # the exact mistake the round-2 review finding names, and
+                # the gate's own is_dir guard skips rebase/push for a
+                # missing worktree without spawning a subprocess (the
+                # CI-gate-disabled path must run zero subprocesses, see
                 # test_advance_pipeline_ci_gate_disabled_skips_ci).
-                branch = _convention_branch(key)
+                branch = ""
             gate_error = ""
             ci_definitive_fail = False
             ci_wait = False
@@ -592,7 +616,8 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             else:
                 gate_error, pushed_sha = _rebase_and_push_for_merge(plan_name, key, branch, worktree)
             if not gate_error:
-                ci = _merge_gate_ci_status(branch, sha=pushed_sha)
+                poll_branch = branch or _degraded_ci_branch(key)
+                ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
                 if ci["state"] == "cancelled" and not story.get(
                     "ci_rerun_attempted"
                 ):
@@ -601,7 +626,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     # jobs with no code-quality signal at all.
                     story["ci_rerun_attempted"] = True
                     _ci_rerun(pushed_sha)
-                    ci = _merge_gate_ci_status(branch, sha=pushed_sha)
+                    ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
                 if ci["state"] == "fail":
                     gate_error = f"ci fail: {ci['error']}"
                     # Only a genuine test-failure verdict is "definitive" -

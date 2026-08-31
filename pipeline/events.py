@@ -38,7 +38,8 @@ EVENT_TYPES = frozenset(
 # Event construction helper
 # ---------------------------------------------------------------------------
 
-def make_event(type: str, plan: str, story_key=None, payload=None) -> dict:
+def make_event(type: str, plan: str, story_key=None, payload=None,
+               correlation_id=None) -> dict:
     """Create a new event dictionary.
 
     Parameters
@@ -53,12 +54,18 @@ def make_event(type: str, plan: str, story_key=None, payload=None) -> dict:
     payload:
         Optional dictionary containing arbitrary data. Defaults to an empty
         dictionary if ``None`` is supplied.
+    correlation_id:
+        Optional correlation identifier stamped as a TOP-LEVEL
+        ``"correlation_id"`` key on the returned event dict. When ``None``
+        (the default) the key is absent entirely, so the legacy event shape
+        is unchanged.
 
     Returns
     -------
     dict
         A mapping with keys ``type``, ``plan``, ``story_key``, ``payload`` and
-        ``ts`` (timestamp in ISO‑8601 UTC format).
+        ``ts`` (timestamp in ISO‑8601 UTC format), plus ``correlation_id``
+        only when one is supplied.
 
     Raises
     ------
@@ -74,13 +81,16 @@ def make_event(type: str, plan: str, story_key=None, payload=None) -> dict:
         payload = {}
 
     ts = datetime.now(timezone.utc).isoformat()
-    return {
+    event = {
         "type": type,
         "plan": plan,
         "story_key": story_key,
         "payload": payload,
         "ts": ts,
     }
+    if correlation_id is not None:
+        event["correlation_id"] = correlation_id
+    return event
 
 # ---------------------------------------------------------------------------
 # Event bus abstractions

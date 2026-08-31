@@ -34,9 +34,29 @@ def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
 
 
 def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
+    from .pr import _resolve_story_branch
     from .server import REPO_ROOT, _default_branch, _notify_user, _rebase_onto_master
 
-    rb = _rebase_onto_master(worktree, branch)
+    # Resolve the worktree's ACTUAL HEAD branch before touching git. A rework
+    # round can leave the worktree checked out on an alias branch
+    # agent/<key>-<suffix> (e.g. agent/s10-2); _open_pr/_merge_pr already
+    # resolve it, and this gate must operate on the SAME branch or the story
+    # can never merge: pushing the convention name here fails with
+    # "src refspec agent/<key> does not match any" once a prior _merge_pr has
+    # squash-merged and `git branch -D`-ed it, or - if a stale local
+    # convention branch survived - pushes that stale code while the CI poll
+    # queries the worktree-HEAD SHA, a SHA never pushed to the polled branch.
+    # The caller-passed ``branch`` (the pre-alias convention name from
+    # advance.py) is kept in the signature for compatibility with the existing
+    # test fakes but must not be trusted for push/CI identity.
+    # Resolve only when there is a worktree to probe: a missing/anomalous
+    # worktree must degrade to the caller's convention branch without paying
+    # a subprocess (the rebase helper below applies the same guard).
+    resolved = branch
+    if worktree and Path(worktree).is_dir():
+        resolved = _resolve_story_branch(worktree, key)
+
+    rb = _rebase_onto_master(worktree, resolved)
     if rb.get("auto_resolved"):
         _notify_user(
             plan_name,
@@ -52,7 +72,7 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
     pushed_sha = ""
     if Path(worktree).is_dir():
         push = subprocess.run(
-            ["git", "push", "--force-with-lease", "origin", branch],
+            ["git", "push", "--force-with-lease", "origin", resolved],
             check=False,
             cwd=REPO_ROOT,
             capture_output=True,
@@ -150,6 +170,7 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
 
 
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
+    from .pr import _resolve_story_branch
     from .server import (
         REPO_ROOT,
         _atomic_write_json,
@@ -201,8 +222,19 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 # Mode 9 gate applies here too: even an explicit human merge must
                 # not land a conflicting or CI-red PR. Disable via
                 # PIPELINE_MERGE_CI_GATE=0 only if you intentionally accept that.
-                branch = f"agent/{story_key.lower()}"
                 worktree = story.get("worktree", "")
+                # Resolve the worktree's ACTUAL HEAD branch (a rework round can
+                # leave it on an alias agent/<key>-<suffix>) so rebase -> push
+                # -> CI -> _merge_pr all operate on the one branch _merge_pr
+                # merges. The hardcoded convention name previously pushed a
+                # branch a prior _merge_pr had already deleted ("src refspec
+                # does not match any") or a stale twin, and CI-polled a SHA
+                # that was never pushed to it. Resolve only when there is a
+                # worktree to probe; a missing/anomalous worktree degrades to
+                # the convention branch without paying a subprocess.
+                branch = f"agent/{story_key.lower()}"
+                if worktree and Path(worktree).is_dir():
+                    branch = _resolve_story_branch(worktree, story_key)
                 rb = _rebase_onto_master(worktree, branch)
                 if rb.get("auto_resolved"):
                     _notify_user(

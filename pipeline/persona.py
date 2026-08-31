@@ -175,6 +175,23 @@ _UNWINNABLE_SCOPE_PATTERNS = (
     re.compile(r"\bacross the (?:entire |whole )?repo(?:sitory)?\b", re.IGNORECASE),
 )
 
+# Unbounded-remediation signals that must accompany the bare repo-root lint
+# command (pattern 0) for it to indicate an imperative sweep. A plain mention
+# of the repo lint gate ("run ruff check . and it must be green") is bounded
+# and must not trip the override; only command + sweep signal in the same
+# sentence does (2026-08-31 glm misrouting fix).
+_SWEEP_REMEDIATION_PATTERN = re.compile(
+    r"--fix|fix every|fix each|every remaining finding|all findings"
+    r"|clean\s*up|repo-wide",
+    re.IGNORECASE,
+)
+
+# Sentence splitter for the pattern-0 co-occurrence check in
+# _story_has_unwinnable_local_scope. A dot preceded by whitespace belongs to
+# the bare repo-root command itself ("ruff check ."), not to a sentence
+# boundary, so the lookbehind keeps the command intact within its sentence.
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<!\s)[.!?]+\s*")
+
 
 def _story_has_unwinnable_local_scope(story: dict[str, Any]) -> bool:
     """Whether story["agent_instructions"] describes a repo-wide, unscoped
@@ -186,7 +203,14 @@ def _story_has_unwinnable_local_scope(story: dict[str, Any]) -> bool:
     override, mirroring _persona_requires_claude's dual call sites exactly.
     """
     text = story.get("agent_instructions") or ""
-    return any(pattern.search(text) for pattern in _UNWINNABLE_SCOPE_PATTERNS)
+    command_pattern = _UNWINNABLE_SCOPE_PATTERNS[0]
+    for sentence in _SENTENCE_SPLIT_PATTERN.split(text):
+        if (command_pattern.search(sentence)
+                and _SWEEP_REMEDIATION_PATTERN.search(sentence)):
+            return True
+    return any(
+        pattern.search(text) for pattern in _UNWINNABLE_SCOPE_PATTERNS[1:]
+    )
 
 
 __all__ = [

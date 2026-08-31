@@ -145,6 +145,11 @@ sys.modules.pop("scripts.local_agent_oracle_config", None)
 # it here too, for the same env-freshness reason as the config module: a
 # fresh exec of this file must not inherit a cached twin.
 sys.modules.pop("scripts.local_agent_oracle_chat", None)
+# LAO-RECOVERY: RECOVERY_BACKOFF_SECONDS/_RECOVERY_ROUNDS moved to
+# scripts/local_agent_oracle_recovery.py (env read at that module's import),
+# so a second fresh exec of this file must evict the cached recovery module
+# too or the wrapper's lazy import would serve stale env-derived constants.
+sys.modules.pop("scripts.local_agent_oracle_recovery", None)
 from scripts.local_agent_oracle_config import (  # noqa: F401 (re-exported: the moved chat/transport impls read these via origin, and tests monkeypatch them on this module)
     _THINK_LEVELS,
     ACCEPTANCE_PATHS,
@@ -464,16 +469,6 @@ def safe_run_tool(fn, args) -> str:
     }, fn, args)
 
 
-# Backoff between escalation rounds. The pre-2026-08-07 helper fired all its
-# rounds back-to-back with no pause at all, which is the worst possible
-# response when the 500 is load-induced (memory pressure, a model reload,
-# concurrent agents) rather than an overflow.
-RECOVERY_BACKOFF_SECONDS = float(
-    os.environ.get("LOCAL_AGENT_RECOVERY_BACKOFF_SECONDS", "2"))
-# (context fraction, backoff multiplier) per round, in order.
-_RECOVERY_ROUNDS = ((0.75, 1), (0.50, 3), (0.30, 6))
-
-
 def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
     """Recover from a backend error on an oversized transcript by retrying
     with an escalating (shrinking) context budget before giving up. A single
@@ -494,31 +489,9 @@ def recover_from_oversized_5xx(messages, chat_fn, *, step=None):
     in backend.py), so a transient 5xx killing a ~95%-complete converging run here
     (2026-07-30 LAUNCHD-PLIST-PORTABILITY) is the live failure this recovers from.
     """
-    print(f"[step {step}] backend error after {CHAT_MAX_ATTEMPTS} attempts on a "
-          f"large transcript; escalating trim and retrying (with backoff)",
-          flush=True)
-    for fraction, backoff_mult in _RECOVERY_ROUNDS:
-        budget_chars = int(NUM_CTX * _effective_chars_per_token() * fraction)
-        trimmed = _trim_resumed_transcript(messages, budget_chars)
-        # Compare CHARS, not message count: the eviction tier shrinks payload
-        # without removing any message, so a length test reports "no change"
-        # for a trim that in fact reclaimed most of the transcript.
-        if _total_chars(trimmed) < _total_chars(messages):
-            messages[:] = trimmed
-        else:
-            # Could not shrink - so this very likely isn't an overflow. Wait
-            # it out instead of giving up; the payload goes back unchanged.
-            print(f"[step {step}] transcript could not be shrunk further; "
-                  f"treating as a transient fault and retrying after backoff",
-                  flush=True)
-        time.sleep(RECOVERY_BACKOFF_SECONDS * backoff_mult)
-        try:
-            return chat_fn(messages)
-        except httpx.HTTPStatusError as e:
-            if not _is_context_overflow_error(e):
-                raise  # a real bad request - propagate rather than retry
-            continue  # overflow-shaped: shrink harder on the next round
-    return None  # all rounds exhausted on a persistent failure
+    from scripts.local_agent_oracle_recovery import recover_from_oversized_5xx_impl
+
+    return recover_from_oversized_5xx_impl(globals(), messages, chat_fn, step=step)
 
 
 def _main_impl() -> int:

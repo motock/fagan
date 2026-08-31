@@ -373,8 +373,22 @@ def test_oracle_copy_stays_in_sync():
               / "local_agent_oracle.py").read_text()
     for symbol in ("_evict_tool_outputs", "_dropped_span_digest",
                    "_is_context_overflow_error", "_tool_call_pairs",
-                   "RECOVERY_BACKOFF_SECONDS", "_EVICT_KEEP_RECENT"):
+                   "_EVICT_KEEP_RECENT"):
         assert f"{symbol}" in oracle, f"oracle copy is missing {symbol}"
+    # LAO-RECOVERY moved the 5xx-recovery constants into the recovery twin
+    # module; the oracle script's only remaining mention is its migration
+    # comment, so this check is definition-level (ast) against that module -
+    # a substring scan would pass off the comment alone.
+    import ast
+    recovery_src = (Path(__file__).parent.parent.parent / "scripts"
+                    / "local_agent_oracle_recovery.py").read_text()
+    tree = ast.parse(recovery_src)
+    defs = {t.id for n in tree.body if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name)}
+    assert "RECOVERY_BACKOFF_SECONDS" in defs, (
+        "recovery module must define RECOVERY_BACKOFF_SECONDS at module level")
+    assert "_RECOVERY_ROUNDS" in defs, (
+        "recovery module must define _RECOVERY_ROUNDS at module level")
 
 
 def test_recovery_gives_up_after_bounded_rounds(no_sleep, monkeypatch):

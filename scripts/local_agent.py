@@ -117,8 +117,10 @@ from pipeline.local_agent_common import (
     _message_char_len,  # noqa: F401 (kept: moved chat cluster reads it via origin["_message_char_len"])
     _persist_messages,
     _repetition_nudge,
+    _str_replace_not_found_diag,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["_str_replace_not_found_diag"])
     _total_chars,
     _trim_resumed_transcript,
+    destructive_git_op,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["destructive_git_op"])
 )
 from pipeline.local_agent_common import (  # noqa: F401 (kept: moved recover_tool_calls_impl reads it via origin["_recover_tool_calls_shared"])
     recover_tool_calls as _recover_tool_calls_shared,
@@ -145,6 +147,7 @@ from scripts.local_agent_chat import (  # noqa: F401 (re-exported: tests read la
 sys.modules.pop("scripts.local_agent_config", None)
 from scripts.local_agent_config import (
     _THINK_LEVELS,  # noqa: F401 (kept: moved _ollama_payload_impl reads it via origin["_THINK_LEVELS"])
+    BASH_TIMEOUT,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["BASH_TIMEOUT"])
     CHAT_MAX_ATTEMPTS,
     CHAT_RETRY_BACKOFF,  # noqa: F401 (kept: moved chat_impl reads it via origin["CHAT_RETRY_BACKOFF"])
     CONNECT_TIMEOUT_SECONDS,  # noqa: F401 (kept: moved _stream_one_turn_impl reads it via origin)

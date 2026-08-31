@@ -18,13 +18,38 @@ import subprocess
 from typing import Any
 
 
+def _resolve_story_branch(worktree, story_key) -> str:
+    """Return the branch _open_pr/_merge_pr must operate on for this story.
+
+    Normally that is the convention branch agent/<key>, but a rework round
+    can leave the worktree checked out on an alias branch named
+    agent/<key>-<suffix> (e.g. agent/la-verify-followup). Pushing/merging the
+    convention name then targets a stale, already-merged branch and `gh pr
+    create` fails with "No commits between master and agent/<key>", so the
+    worktree's actual HEAD branch wins whenever it is such an alias.
+    """
+    convention = f"agent/{story_key.lower()}"
+    proc = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=worktree, check=False, capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        return convention
+    head = proc.stdout.strip()
+    if not head or head == "HEAD":          # detached HEAD
+        return convention
+    if head.startswith(convention + "-"):   # alias suffix, e.g. agent/s1-followup
+        return head
+    return convention
+
+
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
     """Push the story's branch and open a PR for it via the gh CLI.
 
     External boundary: spawns `git`/`gh`. Tests mock this function (or
     subprocess.run) rather than hitting a real remote.
     """
-    branch = f"agent/{story_key.lower()}"
+    branch = _resolve_story_branch(worktree, story_key)
     title = f"{story_key}: {story['summary']}"
     body = story.get("pr_body") or (
         f"Automated PR for {story_key} produced by the agent pipeline."
@@ -76,7 +101,7 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     # Lazy import: REPO_ROOT is a server module-level global patched by tests
     # via p.REPO_ROOT; the lazy import at call time sees the patched value.
     from .server import REPO_ROOT
-    branch = f"agent/{story_key.lower()}"
+    branch = _resolve_story_branch(worktree, story_key)
     proc = subprocess.run(
         ["gh", "pr", "merge", branch, "--squash"],
         cwd=worktree, check=True, capture_output=True, text=True,

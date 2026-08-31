@@ -177,10 +177,28 @@ class _Recorder:
         return found
 
 
+class _RecordingBus:
+    """Stands in for pipeline.event_wiring.get_bus() so tests capture every
+    event published during dispatch without wiring real sinks."""
+
+    def __init__(self):
+        self.events = []
+        self._handlers = {}
+
+    def publish(self, evt):
+        self.events.append(evt)
+
+
 @pytest.fixture
 def recorder(monkeypatch):
     rec = _Recorder()
+    rec.bus = _RecordingBus()
     monkeypatch.setattr(p, "_notify_user", rec.notify)
+
+    import pipeline.event_wiring as event_wiring
+
+    monkeypatch.setattr(event_wiring, "get_bus", lambda: rec.bus)
+
     real_popen = subprocess.Popen
 
     def _discriminating_popen(cmd, **kwargs):

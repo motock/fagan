@@ -412,6 +412,11 @@ def test_resolve_story_branch_helper_contract_in_pipeline_pr_module():
     assert callable(pr_mod._resolve_story_branch)
     module_src = inspect.getsource(pr_mod)
     assert "def _resolve_story_branch(" in module_src
+    # Regression guard (LA-VERIFY, 2026-08-31): an earlier draft of the
+    # resolver left a stray top-level `import logging` in pipeline/pr.py -
+    # dead weight that also broke the module's "no logging" contract the
+    # pipeline relies on for its quiet CLI surface. This assertion pins that
+    # pr.py stays free of module-level logging imports.
     assert "import logging" not in module_src
 
     open_src = inspect.getsource(pr_mod._open_pr)

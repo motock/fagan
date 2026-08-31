@@ -2,6 +2,7 @@ import hashlib
 import logging
 import os
 import subprocess
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,15 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         story = manifest["stories"].get(story_key)
         if not story:
             return {"ok": False, "error": f"No such story {story_key}"}
+
+        # W4-logging slice: mint this story's correlation ID once, on its
+        # first dispatch, and persist it immediately — before ANY subprocess
+        # work (git fetch/worktree add, the agent launch itself) so a failed
+        # launch still leaves the id on the manifest for the retry to reuse.
+        # Rework/redispatch keeps the SAME id (the falsy guard).
+        if not story.get("correlation_id"):
+            story["correlation_id"] = uuid.uuid4().hex[:12]
+            _atomic_write_json(manifest_path, manifest)
 
         branch = f"agent/{story_key.lower()}"
         worktree_path = WORKTREE_ROOT / story_key
@@ -778,9 +788,27 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{rework_tests_note}"
                 )
 
-        handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(
-            **dispatch_kwargs
-        )
+        # W4-logging slice: hand the agent subprocess the story's correlation
+        # ID (PIPELINE_CORRELATION_ID) so its own agent.log lines join up with
+        # the orchestrator's events. Backend.dispatch has no env parameter and
+        # the drivers build the subprocess env from os.environ at launch time
+        # (app/backend_ollama.py's `{**os.environ, ...}` and
+        # app/backend_claude.py's _first_party_claude_env), so the var is
+        # staged in os.environ for exactly this synchronous launch call and
+        # restored afterwards; dispatches are serialized per plan by the
+        # _store transaction, so no concurrent launch observes a torn value.
+        prev_correlation_env = os.environ.get("PIPELINE_CORRELATION_ID")
+        if story.get("correlation_id"):
+            os.environ["PIPELINE_CORRELATION_ID"] = story["correlation_id"]
+        try:
+            handle = backend.get_backend("dispatch", name=dispatch_backend).dispatch(
+                **dispatch_kwargs
+            )
+        finally:
+            if prev_correlation_env is None:
+                os.environ.pop("PIPELINE_CORRELATION_ID", None)
+            else:
+                os.environ["PIPELINE_CORRELATION_ID"] = prev_correlation_env
 
         story["status"] = "in_progress"
         story["pid"] = handle.pid
@@ -802,6 +830,34 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # is routed.
         story["_dispatched_agent_instructions"] = story.get("agent_instructions", "")
         _atomic_write_json(manifest_path, manifest)
+
+        # W4-logging slice: stamp the success event with the story's
+        # correlation ID (plus the role/model context already in scope here)
+        # so dispatch's own events join the same trace as the agent
+        # subprocess's PIPELINE_CORRELATION_ID. Published straight onto the
+        # process bus — make_event stamps correlation_id at TOP level (the
+        # W4L-01 kwarg). Lazy imports mirror persistence._notify_user so a
+        # monkeypatched event_wiring.get_bus is honored; the wired bus has no
+        # "agent_dispatched" handler, so this is a no-op there.
+        from .event_wiring import get_bus
+        from .events import make_event
+
+        get_bus().publish(
+            make_event(
+                "agent_dispatched",
+                plan_name,
+                story_key=story_key,
+                payload={
+                    "role": story.get("role"),
+                    "model": spec["model"],
+                    "backend": dispatch_backend,
+                    "attempt": story.get("dispatch_attempts", 0),
+                    "pid": handle.pid,
+                    "branch": branch,
+                },
+                correlation_id=story.get("correlation_id"),
+            )
+        )
 
         return {
             "ok": True,

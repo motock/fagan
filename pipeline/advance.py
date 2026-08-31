@@ -90,6 +90,11 @@ _ci_rerun = _ServerRef("_ci_rerun")
 _ci_rework_feedback = _ServerRef("_ci_rework_feedback")
 _completed_dep_ids = _ServerRef("_completed_dep_ids")
 _count_in_progress_agents = _ServerRef("_count_in_progress_agents")
+# The on-device slot count scans every plan's manifest (the spend window the
+# cap protects is session-wide), so it reads PLAN_DIR as a free var exactly
+# like _count_in_progress_agents does in pipeline/concurrency.py. Resolving
+# it via a _ServerRef keeps the plan_dir fixture's p.PLAN_DIR patch landing.
+PLAN_DIR = _ServerRef("PLAN_DIR")
 _default_branch = _ServerRef("_default_branch")
 _escalate_to_claude = _ServerRef("_escalate_to_claude")
 _escalate_to_local_fallback_model = _ServerRef("_escalate_to_local_fallback_model")
@@ -139,6 +144,55 @@ def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
             "triage sweep raised; continuing with the tick unchanged"
         )
     return _impl_ref(plan_name)
+
+
+def _story_dispatch_is_on_device(story: dict[str, Any]) -> bool:
+    """True when a story's dispatch has an on-device footprint.
+
+    A story is slot-exempt (returns False) when its dispatch is cloud-backed:
+    either its model tag is explicitly ``:cloud`` (served via Ollama with zero
+    local VRAM footprint) or it is claude-routed (gated by the usage pause
+    thresholds in the per-story gate loop, not by this cap).
+
+    Conservative on the ambiguous cases, mirroring the per-story gate's
+    no-tag branch: a story with NO explicit model tag resolves to the
+    env-default on-device model, so it COUNTS. Likewise a story with no
+    explicit ``backend`` field resolves to the env-default backend, so it
+    counts even when that default is ``claude`` — only an explicitly
+    claude-routed story (``story["backend"] == "claude"``) is exempt.
+    """
+    tag = story.get("model")
+    if tag and tag.endswith(":cloud"):
+        return False
+    return story.get("backend") != "claude"
+
+
+def _count_on_device_in_progress_agents() -> int:
+    """Count *actually running* ON-DEVICE dispatched agents across every
+    plan's manifest — the count MAX_CONCURRENT_AGENTS slots are sized
+    against.
+
+    Same cross-plan scope, pid-liveness check and pure-read contract as
+    ``_count_in_progress_agents`` (which stays backend-blind for its other
+    callers in pipeline/dispatch.py); only the per-story filter differs: a
+    story counts unless its dispatch is cloud-backed (see
+    _story_dispatch_is_on_device).
+    """
+    count = 0
+    for manifest_path in PLAN_DIR.glob("*.manifest.json"):
+        manifest = json.loads(manifest_path.read_text())
+        for story in manifest.get("stories", {}).values():
+            if story.get("status") != "in_progress" or "pid" not in story:
+                continue
+            try:
+                os.kill(story["pid"], 0)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                pass
+            if _story_dispatch_is_on_device(story):
+                count += 1
+    return count
 
 
 def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
@@ -275,18 +329,36 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     summary["interrupted"].append(key)
 
         # 1. Dispatch ready (and resumable-interrupted) stories, capped to
-        # the slots still free under MAX_CONCURRENT_AGENTS. <=0 means no cap.
+        # the ON-DEVICE slots still free under MAX_CONCURRENT_AGENTS. <=0
+        # means no cap. Only on-device dispatch consumes a slot: cloud-backed
+        # dispatch (a :cloud-tagged model or a claude-routed story) has no
+        # on-device footprint to protect, so it bypasses the cap entirely —
+        # its spend is bounded by the usage pause thresholds in the per-story
+        # gate below instead. _count_in_progress_agents keeps its backend-
+        # blind cross-plan semantics for its other callers
+        # (pipeline/dispatch.py's concurrent-dispatch warning gates); only
+        # this cap's slot math gets the on-device-aware count.
         if MAX_CONCURRENT_AGENTS > 0:
-            slots = max(0, MAX_CONCURRENT_AGENTS - _count_in_progress_agents())
-            to_dispatch = ready[:slots]
+            free_device_slots = max(
+                0, MAX_CONCURRENT_AGENTS - _count_on_device_in_progress_agents()
+            )
+            capped = True
         else:
-            to_dispatch = ready
+            free_device_slots = 0
+            capped = False
         # Per-story dispatch gate: only dispatch stories whose own backend+model
         # passes its gate. A :cloud story dispatches even under local memory
         # pressure; an on-device story is deferred when the floor is not met.
+        # Independent of the cap: a slot-exempt story still runs this gate,
+        # and gated stories are recorded exactly as before.
         gated = []
-        for key in to_dispatch:
+        for key in ready:
             story = stories[key]
+            on_device = _story_dispatch_is_on_device(story)
+            if capped and on_device and free_device_slots <= 0:
+                # On-device slots are exhausted: defer this story until a
+                # slot frees up. Cloud dispatches never reach this branch.
+                continue
             story_backend = _resolve_dispatch_backend(story, env_backend)
             if story_backend == "claude":
                 # Gate on Claude's usage resource_status, NOT local memory.
@@ -305,6 +377,10 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 if not status.get("ok", True):
                     gated.append(key)
                     continue
+            if capped and on_device:
+                # Only a dispatch that actually launches on-device consumes
+                # the slot; a cloud dispatch must not touch the counter.
+                free_device_slots -= 1
             try:
                 result = dispatch_story(plan_name, key)
                 if not (isinstance(result, dict) and result.get("skipped")):

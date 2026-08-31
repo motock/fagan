@@ -110,6 +110,8 @@ from pipeline.local_agent_common import (
     PersistingList,
     _answer_orphaned_calls,
     _dropped_span_digest,  # noqa: F401 (unused here; re-exported for test_local_agent_context_compaction.py)
+    _dropped_top_level_defs,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["_dropped_top_level_defs"])
+    _dropped_top_level_vars,  # noqa: F401 (kept: moved run_tool_impl reads it via origin["_dropped_top_level_vars"])
     _is_context_overflow_error,
     _load_resume_transcript,
     _message_char_len,  # noqa: F401 (kept: moved chat cluster reads it via origin["_message_char_len"])

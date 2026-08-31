@@ -208,8 +208,31 @@ closed that gap instead of re-running the original Step 0/1/2/4 story split:
 3. Retire (not truncate-and-wire) the dead `PIPELINE_REVIEW_MAX_TOKENS` /
    `PIPELINE_SECURITY_REVIEW_MAX_TOKENS` knobs — PR #244, merged.
 
-**Still deferred, not ingested:** Step 1 (prompt-cache the static system
-blocks) now has a path to re-evaluate — the planner role has cache-hit data
-going forward — but hasn't been re-run; and the Claude-reviewer input-context
-cap (original Step 4), which never had a clear enforcement mechanism
-identified. Both remain candidates for a future plan, not scheduled.
+**Measured close-out (2026-08-31) — plan CLOSED, nothing left to implement.**
+The planner role now has the cache-hit data story 2 (PR #245) set out to
+collect, measured from production sidecar data
+(`~/.claude/worktrees/review_token_costs.jsonl`, the log the pipeline has
+written on every live driver call since PR #245):
+
+- Planner role (Claude backend, model sonnet, n=83): 58 records show nonzero
+  `cache_read_input_tokens` (~70%), median cache_read ~16,669 tokens; fresh
+  `input_tokens` median ~2-1559. The 51 zero-hit records are all ollama-family
+  models (glm-5.2/glm-5.3-flash), which simply do not report Anthropic-style
+  cache fields — not evidence of missing caching.
+- `rework_planner` (sonnet, n=157): 113 records with cache hits (~72%), median
+  cache_read ~58,613.
+- Role `complete` (the reviewer path recorded under the pre-story-1 hardcoded
+  label, sonnet, n=101): 70 hits (~69%), median cache_read ~911,297.
+- Role `review` (n=5,720): zero cache hits, but every record is ollama-family
+  (glm-5.2:cloud n=3813, glm-5.3-flash:cloud n=1855, gpt-oss-20b-high n=54) —
+  again no Anthropic cache reporting, expected.
+
+Conclusion: when the pipeline's planner/reviewer roles run on the Claude
+backend via `claude -p`, the CLI already auto-caches the system prefix —
+prompt caching is NOT full-price. **Step 1 is deprioritized permanently**
+(not just deferred), the same decision Step 0 already made for the reviewer
+role. **Step 4 (Claude-reviewer input-context cap) remains infeasible as
+scoped**: there is still no mechanism to bound the real `claude` CLI's own
+internal Read/Bash tool use from our code, so it is closed rather than
+re-scheduled. With Steps 2-3 merged (#243/#244/#245) and Steps 1 and 4
+resolved as above, the plan is fully resolved.

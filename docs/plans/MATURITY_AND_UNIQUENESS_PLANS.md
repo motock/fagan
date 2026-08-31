@@ -120,10 +120,15 @@ Reference comparables:
       planner/rework-planner calls so they now get the same cache-hit
       sidecar data the reviewer role already had (#245); dead
       `PIPELINE_REVIEW_MAX_TOKENS`/`PIPELINE_SECURITY_REVIEW_MAX_TOKENS`
-      knobs retired (#244). Deferred, not ingested: prompt-caching the
-      static system blocks (pending confirmation the planner role shows the
-      same cache-hit pattern now that its sidecar data exists) and a Claude
-      reviewer input-context cap (no clear enforcement mechanism found).
+      knobs retired (#244). Measured close-out (2026-08-31, plan CLOSED):
+      planner cache hits confirmed from sidecar data (planner sonnet n=83,
+      ~70% with cache hits, median ~16,669; rework_planner sonnet n=157,
+      ~72%, median ~58,613 — the zero-hit records are all ollama-family
+      models that don't report Anthropic-style cache fields), so prompt
+      caching is NOT full-price on the Claude backend and Step 1 is
+      deprioritized permanently; the Claude reviewer input-context cap
+      (Step 4) is closed as infeasible-as-scoped (no mechanism to bound the
+      real `claude` CLI's internal tool use).
       See `TOKEN_CONTEXT_OPTIMIZATION_PLAN.md`'s status footer.
 - [x] **Decide the remaining plan docs' fate** (2026-07-30). All four —
       `MODEL_PROVIDER_ABSTRACTION_PLAN.md`, `TICKETING_ABSTRACTION_PLAN.md`,

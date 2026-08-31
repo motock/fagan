@@ -184,6 +184,7 @@ from .git_ops import (
 # tests that monkeypatch pipeline.server.<name> still resolve.
 from .merge import (  # noqa: F401
     _approve_merge_impl,
+    _maybe_record_retro,
     _merge_decision,
     _merge_gate_ci_status,
     _rebase_and_push_for_merge,

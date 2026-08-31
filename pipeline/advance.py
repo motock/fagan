@@ -95,6 +95,7 @@ _escalate_to_claude = _ServerRef("_escalate_to_claude")
 _escalate_to_local_fallback_model = _ServerRef("_escalate_to_local_fallback_model")
 _escalation_label = _ServerRef("_escalation_label")
 _mark_plane_done = _ServerRef("_mark_plane_done")
+_maybe_record_retro = _ServerRef("_maybe_record_retro")
 _mcp_restart_notice = _ServerRef("_mcp_restart_notice")
 _mcp_self_source_touched = _ServerRef("_mcp_self_source_touched")
 _merge_decision = _ServerRef("_merge_decision")
@@ -664,6 +665,10 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             story.pop("ci_rerun_attempted", None)
             story.pop("ci_rework", None)  # L1: clear the rework flag on done
             _mark_plane_done(key, plan_name)
+            # A fully-done self-repo plan must enter the retro backlog no
+            # matter which path marked the last story done (dedup inside
+            # _record_retro_pending makes repeat calls across ticks safe).
+            _maybe_record_retro(plan_name, manifest)
             if mcp_touched:
                 _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
                 summary["notify"].append(key)

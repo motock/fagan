@@ -42,7 +42,9 @@ def _resolve_story_branch(worktree: str, story_key: str) -> str:
     except OSError:
         # cwd missing/unusable (or git not executable): fail open.
         return convention
-    if proc.returncode != 0:
+    if proc is None or proc.returncode != 0:
+        # None: a test fake (or exotic shim) answered the probe with None -
+        # treat it exactly like a failed probe and fail open.
         return convention
     head = proc.stdout.strip()
     if not head or head == "HEAD":          # detached HEAD

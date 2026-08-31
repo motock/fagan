@@ -49,7 +49,12 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
     # The caller-passed ``branch`` (the pre-alias convention name from
     # advance.py) is kept in the signature for compatibility with the existing
     # test fakes but must not be trusted for push/CI identity.
-    resolved = _resolve_story_branch(worktree, key)
+    # Resolve only when there is a worktree to probe: a missing/anomalous
+    # worktree must degrade to the caller's convention branch without paying
+    # a subprocess (the rebase helper below applies the same guard).
+    resolved = branch
+    if worktree and Path(worktree).is_dir():
+        resolved = _resolve_story_branch(worktree, key)
 
     rb = _rebase_onto_master(worktree, resolved)
     if rb.get("auto_resolved"):

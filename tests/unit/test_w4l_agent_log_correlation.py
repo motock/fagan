@@ -77,15 +77,14 @@ def _writer(monkeypatch, env=None):
 
     read = getattr(module, "read_correlation_id", None)
     emit = getattr(module, "emit_step_line", None)
-    if read is None or emit is None:
-        # The brief prefers a common writer module; accept the helper living
-        # in scripts/local_agent_common.py as long as it exists there.
-        if _COMMON_PY.exists():
-            common = _exec_module(
-                _COMMON_PY, f"_local_agent_common_cid_test_{next(_counter)}"
-            )
-            read = read or getattr(common, "read_correlation_id", None)
-            emit = emit or getattr(common, "emit_step_line", None)
+    # The brief prefers a common writer module; accept the helper living in
+    # scripts/local_agent_common.py as long as it exists there.
+    if (read is None or emit is None) and _COMMON_PY.exists():
+        common = _exec_module(
+            _COMMON_PY, f"_local_agent_common_cid_test_{next(_counter)}"
+        )
+        read = read or getattr(common, "read_correlation_id", None)
+        emit = emit or getattr(common, "emit_step_line", None)
     if read is None or emit is None:
         pytest.fail(
             "scripts/local_agent.py (or scripts/local_agent_common.py) must "

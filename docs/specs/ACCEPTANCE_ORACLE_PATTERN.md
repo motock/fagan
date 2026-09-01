@@ -32,11 +32,11 @@ An executor that grades itself on its own tests fails in three recurring
 ways. Any grading scheme MUST be designed against all three:
 
 1. **Minimum-edit convergence.** An executor graded on its own tests stops at
-   the smallest edit that turns them green. Anything no assertion covers is
-   liable to be left half-done (a rename applied in one place but not
-   another, a doc comment never updated, a second call site never migrated).
-   The suite is green; the requirement is not met. No amount of "be thorough"
-   in the prompt beats a grade that cannot see the gap.
+   the smallest edit that turns them green — and stops. Anything no assertion
+   covers is liable to be left half-done (a rename applied in one place but
+   not another, a doc comment never updated, a second call site never
+   migrated). The suite is green; the requirement is not met. No amount of
+   "be thorough" in the prompt beats a grade that cannot see the gap.
 2. **Self-consistent bugs.** A test that exists and passes is necessary but
    not sufficient. An executor that misreads a boundary condition — an
    off-by-one, an inclusive/exclusive edge — can write a fully green test
@@ -50,12 +50,12 @@ ways. Any grading scheme MUST be designed against all three:
    An acceptance fixture that calls the changed unit in isolation — never
    touching the call site, registration path, or wiring the story actually
    asks for — goes green the moment the unit works alone, so the ungraded
-   wiring step is skipped and the story ships dead code. This is not
-   hypothetical: in one documented incident, a fixture asserted a helper
-   returned the right string, the brief said "wire this at the call site,"
-   and the executor never touched the call site — because nothing graded it.
-   The full-suite bar did not catch it either, since the suite did not
-   exercise the call site any more than the fixture did.
+   wiring step is skipped and the story ships dead code. In one documented
+   incident, a fixture asserted a helper returned the right string, the brief
+   said "wire this at the call site," and the executor never touched the call
+   site — because nothing graded it. The full-suite bar did not catch it
+   either, since the suite did not exercise the call site any more than the
+   fixture did.
 
 ## 2. The pattern's five rules
 

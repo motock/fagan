@@ -74,6 +74,36 @@ See [Minimal configuration](REFERENCE.md#minimal-configuration) for the
 handful of variables actually worth setting on day one, versus the ~100 that
 exist purely for tuning.
 
+### Companion MCP server (overlord + acceptance-oracle only)
+
+Not ready to adopt the whole orchestrator? `pipeline/companion_server.py` is a
+second, smaller MCP server (`pipeline-companion`) exposing only the two
+adoptable ideas from Plan B5: `escalate_decision` (the overlord decision path)
+and the acceptance-oracle helpers `classify_oracle_outcome` /
+`acceptance_digests`. It imports the real `pipeline.overlord` and
+`pipeline.oracle_gate` modules rather than duplicating them, so it stays in
+sync with the main server. Add it alongside the main server as a second
+`mcpServers` entry:
+
+```json
+{
+  "mcpServers": {
+    "pipeline": {
+      "command": ".venv/bin/python3",
+      "args": ["app/pipeline_mcp_server.py"]
+    },
+    "pipeline-companion": {
+      "command": ".venv/bin/python3",
+      "args": ["-m", "pipeline.companion_server"]
+    }
+  }
+}
+```
+
+The adoptable specs this server exports live in `docs/specs/`:
+`OVERLORD_POLICY_SPEC.md` (the overlord decision path) and
+`ACCEPTANCE_ORACLE_PATTERN.md` (the acceptance-oracle grading pattern).
+
 ## Components at a glance
 
 | Piece | Location | Role |

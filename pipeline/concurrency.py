@@ -7,8 +7,16 @@ invocations. _is_heavy classifies a command as heavy.
 
 _count_in_progress_agents / _is_heavy are patched via p.<name> by tests;
 server call sites use bare names -> re-export -> patch lands. PLAN_DIR is
-read as a free var; the plan_dir fixture patches both p.PLAN_DIR and
-pipeline_concurrency.PLAN_DIR.
+resolved at call time through the ``_ServerRef`` binding below (the same
+pattern pipeline/store.py uses) rather than imported from .paths at module
+load: a module-load copy freezes the real ~/.claude/plans path into every
+test run, so _plan_lock flocked the REAL plans directory even in a test
+that patched p.PLAN_DIR to a tmp_path — and any live process holding a
+lock there (e.g. a long-running MCP server) made dispatch silently return
+skipped:"locked" and mint nothing (root cause of the W4L-02
+test_w4l_dispatch_correlation failures). Patching
+pipeline_concurrency.PLAN_DIR directly also still works: setattr replaces
+this module global and the bare-name reads below resolve at call time.
 """
 
 import fcntl
@@ -18,7 +26,36 @@ import threading
 from contextlib import contextmanager
 
 from .parsers import _atomic_write_json
-from .paths import PLAN_DIR
+
+
+class _ServerRef:
+    """Delegates to the *current* ``pipeline.server`` binding for a name.
+
+    Mirrors the ``_ServerRef`` pattern already used by ``pipeline/store.py``
+    and ``pipeline/service.py``: the class body references server-sourced
+    names (``PLAN_DIR``) as bare module globals, and those names must be read
+    from the live ``pipeline.server`` value at call time so
+    ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...)`` lands.
+    """
+
+    def __init__(self, name: str):
+        self._name = name
+
+    def _value(self):
+        from . import server as _server
+        return getattr(_server, self._name)
+
+    def __getattr__(self, attr: str):
+        return getattr(self._value(), attr)
+
+    def __call__(self, *args, **kwargs):
+        return self._value()(*args, **kwargs)
+
+    def __truediv__(self, other):
+        return self._value() / other
+
+
+PLAN_DIR = _ServerRef("PLAN_DIR")
 
 
 def _count_in_progress_agents() -> int:

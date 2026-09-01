@@ -234,8 +234,21 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     story.pop("last_reviewed_sha", None)
     story.pop("acceptance_failed_review", None)
     story.pop("review_feedback", None)
-    _notify_user(plan_name, f"{story_key} escalating to {_escalation_label()} ({reason}); "
-                            f"retrying the same worktree with a fresh budget.")
+    # W4L-04: stamp the escalation notice with the story's persisted
+    # correlation_id. Older manifests predate the field - the kwarg is then
+    # omitted entirely so the legacy record shape is unchanged (absent, not
+    # null).
+    _cid_kwargs = (
+        {"correlation_id": story["correlation_id"]}
+        if story.get("correlation_id")
+        else {}
+    )
+    _notify_user(
+        plan_name,
+        f"{story_key} escalating to {_escalation_label()} ({reason}); "
+        f"retrying the same worktree with a fresh budget.",
+        **_cid_kwargs,
+    )
 
 
 def _auto_escalation_enabled() -> bool:

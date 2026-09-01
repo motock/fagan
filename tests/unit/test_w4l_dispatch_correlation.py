@@ -23,10 +23,12 @@ against a throwaway local origin, and the agent subprocess launch is faked.
 import json
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from app import backend
+from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import server as p
@@ -62,6 +64,7 @@ def plan_dir(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.setattr(p, "PLAN_DIR", d)
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
+    monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
 
 
@@ -358,3 +361,10 @@ def test_different_stories_get_different_correlation_ids(
     cid2 = stories["S2"].get("correlation_id")
     assert cid1 and cid2, "both stories must end up with a correlation id"
     assert cid1 != cid2, "distinct stories must not share a correlation id"
+
+
+def test_plan_lock_resolves_under_patched_plan_dir(plan_dir):
+    with pcon._plan_lock("w4lcorr-iso-probe"):
+        pass
+    assert (plan_dir / "w4lcorr-iso-probe.lock").exists()
+    assert not (Path.home() / ".claude" / "plans" / "w4lcorr-iso-probe.lock").exists()

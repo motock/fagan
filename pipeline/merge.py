@@ -35,7 +35,13 @@ def _merge_gate_ci_status(branch: str, *, sha: str) -> dict[str, str]:
 
 def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, str]:
     from .pr import _resolve_story_branch
-    from .server import REPO_ROOT, _default_branch, _notify_user, _rebase_onto_master
+    from .server import (
+        REPO_ROOT,
+        _default_branch,
+        _notify_user,
+        _rebase_onto_master,
+        _store,
+    )
 
     # Resolve the worktree's ACTUAL HEAD branch before touching git. A rework
     # round can leave the worktree checked out on an alias branch
@@ -58,11 +64,19 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
 
     rb = _rebase_onto_master(worktree, resolved)
     if rb.get("auto_resolved"):
+        # W4L-04: stamp the story's correlation_id onto this merge-gate
+        # notice. This helper receives only plan+story key (no story dict),
+        # so the id is looked up from the manifest the same way neighboring
+        # code reads story fields; older manifests without the field keep
+        # the legacy record shape (absent key, not null).
+        _story = _store.get_manifest(plan_name)["stories"].get(key) or {}
+        _cid = _story.get("correlation_id")
         _notify_user(
             plan_name,
             f"{key} rebase auto-resolved an "
             f"additive-import conflict against "
             f"origin/{_default_branch()}.",
+            **({"correlation_id": _cid} if _cid else {}),
         )
     if not rb["ok"]:
         return (
@@ -237,11 +251,16 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     branch = _resolve_story_branch(worktree, story_key)
                 rb = _rebase_onto_master(worktree, branch)
                 if rb.get("auto_resolved"):
+                    # W4L-04: stamp the story's persisted correlation_id
+                    # (omitted entirely for older manifests - absent, not
+                    # null).
+                    _cid = story.get("correlation_id")
                     _notify_user(
                         plan_name,
                         f"{story_key} rebase auto-resolved an "
                         f"additive-import conflict against "
                         f"origin/{_default_branch()}.",
+                        **({"correlation_id": _cid} if _cid else {}),
                     )
                 if not rb["ok"]:
                     return {

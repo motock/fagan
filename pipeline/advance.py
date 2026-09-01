@@ -417,6 +417,17 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 st = m["stories"][key]
                 attempts = st.get("dispatch_attempts", 0) + 1
                 st["dispatch_attempts"] = attempts
+                # W4L-04: stamp the story's dispatch-failure notifications with
+                # its persisted correlation_id (omitted entirely for older
+                # manifests). The attempt counter is already in scope here.
+                _cid_kwargs = (
+                    {
+                        "correlation_id": st["correlation_id"],
+                        "attempt": st.get("dispatch_attempts", 0),
+                    }
+                    if st.get("correlation_id")
+                    else {}
+                )
                 if attempts >= DISPATCH_MAX_ATTEMPTS:
                     st["status"] = "failed"
                     st["dispatch_error"] = str(e)
@@ -424,6 +435,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} dispatch failed {attempts}x "
                         f"({e}); giving up - needs human intervention.",
+                        **_cid_kwargs,
                     )
                     summary["failed"].append(key)
                 else:
@@ -432,6 +444,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} dispatch attempt {attempts}/"
                         f"{DISPATCH_MAX_ATTEMPTS} failed ({e}); will retry.",
+                        **_cid_kwargs,
                     )
                 summary["notify"].append(key)
                 _atomic_write_json(manifest_path, m)
@@ -487,6 +500,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     _notify_user(
                         plan_name,
                         f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
                     )
                     summary["notify"].append(key)
                 elif (
@@ -512,6 +530,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} local agent failed on {failed_model}; retrying on "
                         f"fallback model {fallback_model} before parking.",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
                     )
                     summary["notify"].append(key)
                 elif check_result.get("failure_kind") == "give_up":
@@ -526,11 +549,24 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         f"progress) - likely under-specified (missing API, wrong "
                         f"scope) rather than a model-capability gap; needs human "
                         f"clarification before another dispatch.",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
                     )
                     summary["failed"].append(key)
                     summary["notify"].append(key)
                 else:
-                    _notify_user(plan_name, f"{key} tests failed")
+                    _notify_user(
+                        plan_name,
+                        f"{key} tests failed",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
+                    )
                     summary["failed"].append(key)
                     summary["notify"].append(key)
 
@@ -568,7 +604,15 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             if decision["action"] != "merge":
                 story["status"] = "parked"
                 story["parked_reason"] = decision["reason"]
-                _notify_user(plan_name, f"{key} parked: {decision['reason']}")
+                _notify_user(
+                    plan_name,
+                    f"{key} parked: {decision['reason']}",
+                    **(
+                        {"correlation_id": story["correlation_id"]}
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
                 summary["parked"].append(key)
                 summary["notify"].append(key)
                 continue
@@ -650,6 +694,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                             severity="warning",
                             event="ci_pending_stalled",
                             dedup_key=f"ci_pending_stalled:{key}",
+                            **(
+                                {"correlation_id": story["correlation_id"]}
+                                if story.get("correlation_id")
+                                else {}
+                            ),
                         )
                         story.pop("ci_pending_since", None)
                         story.pop("ci_pending_sha", None)
@@ -729,6 +778,14 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge-gate CI failed ({gate_error}); "
                         f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).",
+                        **(
+                            {
+                                "correlation_id": story["correlation_id"],
+                                "attempt": story.get("dispatch_attempts", 0),
+                            }
+                            if story.get("correlation_id")
+                            else {}
+                        ),
                     )
                     summary["notify"].append(key)
                     continue
@@ -742,6 +799,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge gate failed {attempts}x "
                         f"({gate_error}); giving up - needs human intervention.",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
                     )
                     summary["failed"].append(key)
                 else:
@@ -750,6 +812,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge gate attempt {attempts}/"
                         f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
                     )
                 summary["notify"].append(key)
                 continue
@@ -771,6 +838,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge failed {attempts}x "
                         f"({e}); giving up - needs human intervention.",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
                     )
                     summary["failed"].append(key)
                 else:
@@ -779,6 +851,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge attempt {attempts}/"
                         f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
                     )
                 summary["notify"].append(key)
                 continue

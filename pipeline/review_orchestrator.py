@@ -267,11 +267,24 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
     branch = f"agent/{story_key.lower()}"
     worktree = story.get("worktree", "")
+    # W4L-04: stamp every story-scoped notification with the correlation_id
+    # dispatch minted for this story. Older manifests predate the field - the
+    # kwargs are then omitted entirely so legacy records keep their exact
+    # shape (absent key, never null). _rework_kwargs additionally carries the
+    # dispatch attempt counter on the rework path's emit points.
+    _cid = story.get("correlation_id")
+    _cid_kwargs = {"correlation_id": _cid} if _cid else {}
+    _rework_kwargs = (
+        {**_cid_kwargs, "attempt": story.get("dispatch_attempts", 0)}
+        if _cid
+        else {}
+    )
     # Guard: skip if story is not in tests_passed state
     if story.get("status") != "tests_passed":
         _notify_user(
             plan_name,
             f"{story_key} review skipped: status {story.get('status')!r} - only stories with status 'tests_passed' are reviewable.",
+            **_cid_kwargs,
         )
         return {
             "ok": True,
@@ -294,6 +307,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     _notify_user(
                         plan_name,
                         f"{story_key} review skipped: HEAD unchanged since the last REQUEST_CHANGES ({current_sha[:9]}) - a redispatch/rework must land a new commit before re-review.",
+                        **_cid_kwargs,
                     )
                     _atomic_write_json(manifest_path, manifest)
                     return {
@@ -394,6 +408,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _notify_user(
                 plan_name,
                 f"{story_key} review deferred: local reviewer rate-limited; will retry next tick.",
+                **_cid_kwargs,
             )
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
@@ -418,6 +433,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_name,
                 f"{story_key} review failed with an unexpected "
                 f"{type(e).__name__}; treating as inconclusive.",
+                **_cid_kwargs,
             )
             reviewer_output = ""
     verdict = _parse_verdict(reviewer_output)
@@ -441,6 +457,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_name,
                 f"{story_key} review falling back to {fallback_mode} backend "
                 f"after {story['review_deferred_count']} rate-limited attempts.",
+                **_cid_kwargs,
             )
             reviewer_output = _run_reviewer(
                 worktree,
@@ -458,6 +475,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _notify_user(
                 plan_name,
                 f"{story_key} review deferred: reviewer rate-limited; will retry next tick.",
+                **_cid_kwargs,
             )
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
@@ -470,7 +488,8 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     _transient_retried = False
     if verdict == "UNKNOWN" and _is_transient_backend_error(reviewer_output):
         _notify_user(
-            plan_name, f"{story_key} review hit transient backend error; retrying once."
+            plan_name, f"{story_key} review hit transient backend error; retrying once.",
+            **_cid_kwargs,
         )
         reviewer_output = (
             _run_reviewer(
@@ -527,6 +546,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _notify_user(
                 plan_name,
                 f"{story_key} security review deferred: reviewer rate-limited; will retry next tick.",
+                **_cid_kwargs,
             )
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
@@ -574,9 +594,10 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} parked: review inconclusive after "
                     f"{inconclusive} attempts - needs human review.",
+                    **_cid_kwargs,
                 )
         else:
-            _notify_user(plan_name, f"{story_key} review inconclusive; will retry.")
+            _notify_user(plan_name, f"{story_key} review inconclusive; will retry.", **_cid_kwargs)
         _atomic_write_json(manifest_path, manifest)
         return {"ok": True, "verdict": verdict, "status": story["status"]}
 
@@ -614,12 +635,14 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} parked: review inconclusive after "
                     f"{inconclusive} attempts - needs human review.",
+                    **_cid_kwargs,
                 )
         else:
             _notify_user(
                 plan_name,
                 f"{story_key} review approved-changes-requested-empty: "
                 f"REQUEST_CHANGES with no findings text; will retry.",
+                **_cid_kwargs,
             )
         _atomic_write_json(manifest_path, manifest)
         return {"ok": True, "verdict": verdict, "status": story["status"]}
@@ -708,6 +731,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                 plan_name,
                 f"{story_key}: review APPROVEd but could not open PR "
                 f"({exc.__class__.__name__}); will retry next tick.",
+                **_cid_kwargs,
             )
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "verdict": verdict, "status": story["status"]}
@@ -783,6 +807,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                             f"failing); deleted the dispatch transcript so the "
                             f"next attempt starts fresh instead of resuming "
                             f"the churn that caused it.",
+                            **_rework_kwargs,
                         )
                     except OSError:
                         pass
@@ -837,6 +862,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                                 f"{story_key}: reviewer's only blocking finding was "
                                 f"commit-message format; auto-amended HEAD commit "
                                 f"without spending a rework attempt.",
+                                **_rework_kwargs,
                             )
                             _atomic_write_json(manifest_path, manifest)
                             return {
@@ -877,6 +903,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} parked: reviewer still requesting changes "
                     f"after {attempts} cycles - needs human review.",
+                    **_rework_kwargs,
                 )
         else:
             fre = manifest.get("final_rework_escalation") or {}
@@ -889,6 +916,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     _notify_user(
                         plan_name,
                         f"{story_key} final rework attempt ({attempts}/{rework_cap}) escalating to {provider}/{model}.",
+                        **_rework_kwargs,
                     )
             story["status"] = "changes_requested"
             if worktree and os.path.isdir(worktree):
@@ -896,7 +924,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     story["pr_url"] = _open_pr(worktree, story_key, story)
                     _post_pr_comment(worktree, _format_review_comment(reviewer_output, attempts))
                 except (subprocess.CalledProcessError, OSError) as exc:
-                    _notify_user(plan_name, f"{story_key}: could not open PR / post review comment ({exc.__class__.__name__}); findings remain in review_feedback for the rework agent.")
+                    _notify_user(plan_name, f"{story_key}: could not open PR / post review comment ({exc.__class__.__name__}); findings remain in review_feedback for the rework agent.", **_rework_kwargs)
     _atomic_write_json(manifest_path, manifest)
     return {
         "ok": True,

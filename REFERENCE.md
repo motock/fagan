@@ -324,10 +324,21 @@ the cost gate.
 
 The pipeline writes two notification artifacts per plan: a legacy free‑text log
 `<plan>.notifications.log` and a structured JSON Lines file
-`<plan>.notifications.jsonl`.  The log is unchanged – it continues to be the
-human‑readable stream that older tooling expects.  The JSONL file is additive,
-appended each time `_notify_user` is called, and contains one JSON object per
-line terminated by a newline.
+`<plan>.notifications.jsonl`.  Both are bounded by a shared size‑cap rotation
+policy: when a write would push the active file past
+`PIPELINE_NOTIFICATIONS_MAX_BYTES` (default `2097152` bytes = 2 MiB), the
+current file is renamed to `<name>.1`, older generations shift up
+(`.1` → `.2`, `.2` → `.3`, …), and generations beyond
+`PIPELINE_NOTIFICATIONS_KEEP` (default `3`) are deleted.  On‑disk history is
+therefore bounded at roughly `(KEEP + 1) × MAX_BYTES` per artifact.  Setting
+`PIPELINE_NOTIFICATIONS_MAX_BYTES` to `0` (or any value `<= 0`) disables
+rotation entirely, restoring the historical append‑only, unbounded growth.
+
+The free‑text log remains the human‑readable stream that older tooling
+expects — it is additive only up to the cap, then rotated into numbered
+generation files.  The JSONL file is likewise additive, appended each time
+`_notify_user` is called, and contains one JSON object per line terminated by
+a newline; past the cap it rotates under the same policy.
 
 Each record has the following keys:
 
@@ -342,9 +353,12 @@ Each record has the following keys:
   `ci_pending_stalled`.  It lives in `payload["event"]` on the bus event and is
   distinct from the outer event envelope whose `type` is always `"notification"`.
 - `dedup_key`: value captured at write time; it is **not** used to suppress a
-  write.  The full history remains on disk; the dashboard later collapses
-  consecutive records with the same `dedup_key` into a single entry that adds
-  `count` and `last_ts`.
+  write.  Only the current file plus the `PIPELINE_NOTIFICATIONS_KEEP` most
+  recent generations remain on disk — older generations are deleted at
+  rotation time, so on‑disk history is bounded at roughly
+  `(KEEP + 1) × PIPELINE_NOTIFICATIONS_MAX_BYTES`; the dashboard later
+  collapses consecutive records with the same `dedup_key` into a single entry
+  that adds `count` and `last_ts`.
 
 The notification system uses a single event bus returned by
 `pipeline.event_wiring.get_bus()`.  `_notify_user` publishes a `notification`

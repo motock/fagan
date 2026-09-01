@@ -52,7 +52,7 @@ ways. Any grading scheme MUST be designed against all three:
    incident, a fixture asserted a helper returned the right string, the brief
    said "wire this at the call site," and the executor never touched the call
    site: nothing graded it, and the full suite did not exercise the call site
-   any more than the fixture did.
+   either.
 
 ## 2. The pattern's five rules
 
@@ -119,7 +119,7 @@ A fixture MUST exercise the path the requirement actually asks for. State the
 rule at the right strength: the requirement is "traverse the real integration
 seam" — not "never import the unit" (over-broad: a unit-level assertion is
 fine as long as the graded path also crosses the seam the story exists to
-wire) and not "mock the neighbors for speed" (which defeats the purpose —
+wire) and not "mock the neighbors for speed" (which defeats the purpose:
 mocking the integration point is exactly how fixtures pass with the wiring
 half-done, class 3).
 
@@ -162,8 +162,8 @@ states demand opposite actions — the harness MUST classify before reacting:
   oracle cannot distinguish work from no work: a broken pre-condition, not a
   success. The harness MUST refuse to dispatch on it (a false green with zero
   implementation is worse than no signal, because it looks like success).
-- **`empty`** — the runner collected no tests. The oracle graded nothing;
-  refuse to dispatch.
+- **`empty`** — the runner collected no tests; the oracle graded nothing.
+  Refuse to dispatch.
 - **`errors`** — the oracle itself is broken: a syntax error in a helper, a
   parser rejecting fixture content, a malformed CLI invocation, an
   infrastructure failure. The grader never reached a real assertion, so the
@@ -181,9 +181,9 @@ states demand opposite actions — the harness MUST classify before reacting:
 
 A fixture that fails at a clean baseline — before the executor has touched
 anything — was broken by a prior gate's merge, not by the executor. The
-harness MUST detect this case and MUST NOT charge it to the executor,
-because no implementation can satisfy it: the correct action is to refuse to
-dispatch and route the failure to whoever owns the broken baseline.
+harness MUST detect this case and MUST NOT charge it to the executor: no
+implementation can satisfy it, so the correct action is to refuse to dispatch
+and route the failure to whoever owns the broken baseline.
 
 The discriminator MUST be evidence-based: the failure is attributable to a
 prior gate when the failure output carries the signature of an enforcement
@@ -198,18 +198,16 @@ one.
 
 ### 3.3 Worked example: the recorded baseline must stay truthful
 
-Let F be an acceptance fixture and c1…c4 successive commits.
-
 - **c1 (baseline, before the executor exists):** F fails — a prior gate's
-  merge broke the behavior F checks. The recorded baseline result for F is
-  *fail, prior-gate trip*.
+  merge broke the behavior F checks. Recorded baseline result: *fail,
+  prior-gate trip*.
 - **c2 (executor branch):** F fails the same way. Correct classification:
   prior-gate trip, NOT an executor failure. The mistake to avoid: failing the
   executor because F is red on their branch. The corrupt-state variant to
   avoid: overwriting the recorded baseline to green without the prior gate's
-  fix — c2's verdict then *looks* handled, but the record is now a lie.
-- **c3:** the prior gate's fix lands; F passes at baseline. The recorded
-  baseline result is *pass*.
+  fix — the verdict *looks* handled, but the record is now a lie.
+- **c3:** the prior gate's fix lands; F passes at baseline. Recorded
+  baseline result: *pass*.
 - **c4 (a later executor change):** a genuine regression breaks F. Because
   the recorded baseline is truthful (fail-then-pass across c1→c3), c4's
   failure correctly classifies as an executor failure. The follow-up is the
@@ -249,8 +247,8 @@ each stated with the minimum viable form; refinements are optional.
    truthful across runs. A harness SHOULD additionally run a pre-dispatch
    validation pass against a clean checkout, scope the merge-time
    re-verification to the fixture paths when the runner supports scoping
-   (falling back to the full suite when it does not), and provide a reviewer
-   role whose verdict is independent of the fixture verdict.
+   (falling back to the full suite otherwise), and provide a reviewer role
+   whose verdict is independent of the fixture verdict.
 
 ## Appendix: How this repository implements it
 
@@ -268,14 +266,14 @@ above.
   manifest `source` — never the on-disk file. `_oracle_trips_prior_gate`
   implements the prior-gate discriminator: the merged deletion gate's block
   signature appears in the failure output AND no fixture source references
-  the gate's `confirm_removals` mechanism (a fixture with no `source` cannot
-  prove intent and is treated as born-broken).
+  the gate's `confirm_removals` mechanism (no `source`, no provable intent —
+  treated as born-broken).
 - `pipeline/ci.py` — `_reverify_acceptance` re-runs the acceptance oracle at
   merge time against the rebased branch and refuses tampered fixtures
   WITHOUT running them (`_acceptance_tampered` compares worktree bytes to
   the dispatch-time pins); `_scope_test_cmd_to_acceptance` (defined in
-  `pipeline/build_detect.py`, used here and by the oracle gate) scopes the
-  detected test command to the fixture paths only.
+  `pipeline/build_detect.py`) scopes the detected test command to the
+  fixture paths only.
 - `pipeline/build_detect.py` — `_isolation_only_acceptance_warning` is the
   non-blocking isolation-only heuristic run at plan ingestion (rule (d)).
 - `pipeline/test_author.py` — the executor-side test-authoring phase; it

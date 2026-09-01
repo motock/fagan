@@ -93,15 +93,16 @@ sync with the main server. Add it alongside the main server as a second
       "args": ["app/pipeline_mcp_server.py"]
     },
     "pipeline-companion": {
-      "command": "python",
+      "command": ".venv/bin/python3",
       "args": ["-m", "pipeline.companion_server"]
     }
   }
 }
 ```
 
-The B5-01/B5-02 specs in `docs/specs/` (the overlord decision path and the
-acceptance-oracle pattern) are the adoptable specs this server exports.
+The adoptable specs this server exports live in `docs/specs/`:
+`OVERLORD_POLICY_SPEC.md` (the overlord decision path) and
+`ACCEPTANCE_ORACLE_PATTERN.md` (the acceptance-oracle grading pattern).
 
 ## Components at a glance
 

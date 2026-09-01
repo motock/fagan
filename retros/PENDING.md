@@ -117,3 +117,10 @@ if a precise date is needed when writing one of these up.
 - w3b-dashboard-config-ui — completed 2026-08-24, 11 stories
 - workspace-security-followups — completed 2026-08-28, 2 stories
 - workspace-selection — completed 2026-08-29, 13 stories
+- comms-trace-toggle — completed 2026-08-29, 1 stories
+- overlord-failure-triage — completed 2026-08-31, 17 stories
+- concurrent-cap-cloud-exempt — completed 2026-08-31, 1 stories
+- openpr-worktree-branch-fix — completed 2026-08-31, 1 stories
+- w4lcorr-lock-isolation — completed 2026-09-01, 1 stories
+- b5-export-the-moat — completed 2026-09-01, 3 stories
+- w4-logging-correlation — completed 2026-09-01, 5 stories

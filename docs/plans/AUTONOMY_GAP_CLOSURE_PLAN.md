@@ -1,6 +1,12 @@
 # Autonomy Gap Closure Plan
 
-**Status: scoped 2026-07-30, not started.**
+**Status: partially closed (as of 2026-09-01).** G2, G3, and G4 are closed —
+recorded by the successor plan `OVERLORD_FAILURE_TRIAGE_PLAN.md` (§1: G2 via
+`PIPELINE_AUTO_ESCALATE`, G3 via `pipeline/rebrief.py`, G4 via
+`pipeline/oracle_gate.py` dispatch-time digests). **G1, G5, and G6 remain open**
+— notably G1: hand-authored acceptance fixtures still get no lint/validation
+pass at ingest time (`test_author` never touches `acceptance` source), which
+has caused at least one born-broken oracle (2026-08-05, PR #235).
 
 Why a maturity-plan story still cannot reach `merged` without a stronger model
 hand-editing the branch — and the specific harness changes that close it.

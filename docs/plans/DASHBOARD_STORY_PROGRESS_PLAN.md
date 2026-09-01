@@ -1,7 +1,13 @@
 # Plan — Story-Level Progress in the Dashboard
 
-**Status:** Scoped, not started. Written 2026-07-15. Blocked on
-`GUIDED_DECOMPOSITION_PLAN.md`'s ship/kill decision for Tier 1 (see §4).
+**Status:** Tier 0 and Tier 1 shipped; Tier 2 not started (as of 2026-09-01).
+Written 2026-07-15. The Tier 1 blocker resolved 2026-07-19
+(`GUIDED_DECOMPOSITION_PLAN.md` §4.5 ship/kill → "ship narrow"). Landed since:
+Tier 0's worktree checklist/scratchpad view in the story modal
+(`loadStoryChecklist` in `static/app/render/story-modal.js`) and Tier 1's
+`PROGRESS: <done>/<total>` scratchpad contract (`pipeline/dispatch.py`) feeding
+the card-face percentage bar (`static/app/render/board.js`). Tier 2's
+step-budget badge (§2) has no implementation in `pipeline/dashboard.py` yet.
 
 **One-line goal:** when a story is `in_progress`, let the dashboard show *how far
 into that attempt* the agent is — not just "in progress" with no further signal.

@@ -1,6 +1,10 @@
 # Overlord Failure Triage Plan
 
-**Status: scoped 2026-08-13, not started.**
+**Status: DONE 2026-08-31 — 17/17 stories merged (PRs #368-#390).** Outcome was
+mixed: roughly half the parked stories recovered autonomously, but the split
+(8/17 local vs 9/17 escalated) is confounded by reviewer-inconclusive parks, a
+Claude usage gate mid-run, and harness changes landing while the plan executed —
+so the headline recovery rate should not be read as a clean benchmark.
 
 The escalation ladder now fires (see §1) but it knows exactly one move: throw a
 bigger model at the same story. When that move is exhausted the story parks

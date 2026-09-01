@@ -28,54 +28,34 @@ MAY are to be interpreted as described in RFC 2119.
 
 ## 1. Problem statement
 
-### 1.1 Self-graded convergence
-
-When the only grade an executor receives comes from tests it authored itself,
-the executor converges to the minimum edit that turns those tests green — and
-stops. Anything no assertion covers is liable to be left half-done. The suite
-is green; the requirement is not met. No amount of "be thorough" in the
-prompt beats a grade that cannot see the gap.
-
-### 1.2 A green suite is not spec-completeness
-
-A green suite proves the branch logic the assertions cover, not that the
-deliverable is complete. Anything outside the assertions is ungraded, and an
-executor under a step budget will not do ungraded work. This is not
-hypothetical: in one documented incident, a fixture asserted a helper returned
-the right string, the brief said "wire this at the call site," and the
-executor never touched the call site — because nothing graded it. The
-full-suite bar did not catch it either, since the suite did not exercise the
-call site any more than the fixture did.
-
-### 1.3 Agent-authored self-consistent bugs
-
-A test that exists and passes is necessary but not sufficient. An executor
-that misreads a boundary condition — an off-by-one, an inclusive/exclusive
-edge — can write a fully green test suite that encodes the *same* mistake as
-the implementation. The test then confirms the bug instead of catching it:
-self-grading is circular precisely when it matters most. Only a grader whose
-expectations were fixed *before* the implementation existed can catch an
-error the implementer does not know it is making.
-
-### 1.4 The three motivating failure classes
-
-Any grading scheme MUST be designed against all three of these live failure
-classes:
+An executor that grades itself on its own tests fails in three recurring
+ways. Any grading scheme MUST be designed against all three:
 
 1. **Minimum-edit convergence.** An executor graded on its own tests stops at
-   the smallest edit that turns them green; anything no assertion covers is
-   left half-done (a rename applied in one place but not another, a doc
-   comment never updated, a second call site never migrated).
-2. **Self-consistent bugs.** The executor's test encodes the same boundary
-   misunderstanding as its implementation (an off-by-one, an
-   inclusive/exclusive edge), so a fully green suite confirms the bug instead
-   of catching it.
-3. **Half-done wiring under a green fixture.** An acceptance fixture that
-   calls the changed unit in isolation — never touching the call site,
-   registration path, or wiring the story actually asks for — goes green the
-   moment the unit works alone, so the ungraded wiring step is skipped and
-   the story ships dead code that the full suite, which exercises the call
-   site no better than the fixture did, also fails to catch.
+   the smallest edit that turns them green — and stops. Anything no assertion
+   covers is liable to be left half-done (a rename applied in one place but
+   not another, a doc comment never updated, a second call site never
+   migrated). The suite is green; the requirement is not met. No amount of
+   "be thorough" in the prompt beats a grade that cannot see the gap.
+2. **Self-consistent bugs.** A test that exists and passes is necessary but
+   not sufficient. An executor that misreads a boundary condition — an
+   off-by-one, an inclusive/exclusive edge — can write a fully green test
+   suite that encodes the *same* mistake as its implementation. The test then
+   confirms the bug instead of catching it: self-grading is circular
+   precisely when it matters most. Only a grader whose expectations were
+   fixed *before* the implementation existed can catch an error the
+   implementer does not know it is making.
+3. **Half-done wiring under a green fixture.** A green suite proves the
+   branch logic the assertions cover, not that the deliverable is complete.
+   An acceptance fixture that calls the changed unit in isolation — never
+   touching the call site, registration path, or wiring the story actually
+   asks for — goes green the moment the unit works alone, so the ungraded
+   wiring step is skipped and the story ships dead code. This is not
+   hypothetical: in one documented incident, a fixture asserted a helper
+   returned the right string, the brief said "wire this at the call site,"
+   and the executor never touched the call site — because nothing graded it.
+   The full-suite bar did not catch it either, since the suite did not
+   exercise the call site any more than the fixture did.
 
 ## 2. The pattern's five rules
 

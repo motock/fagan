@@ -32,11 +32,11 @@ An executor that grades itself on its own tests fails in three recurring
 ways. Any grading scheme MUST be designed against all three:
 
 1. **Minimum-edit convergence.** An executor graded on its own tests stops at
-   the smallest edit that turns them green — and stops. Anything no assertion
-   covers is liable to be left half-done (a rename applied in one place but
-   not another, a doc comment never updated, a second call site never
-   migrated). The suite is green; the requirement is not met. No amount of
-   "be thorough" in the prompt beats a grade that cannot see the gap.
+   the smallest edit that turns them green. Anything no assertion covers is
+   liable to be left half-done (a rename applied in one place but not
+   another, a doc comment never updated, a second call site never migrated).
+   The suite is green; the requirement is not met. No amount of "be thorough"
+   in the prompt beats a grade that cannot see the gap.
 2. **Self-consistent bugs.** A test that exists and passes is necessary but
    not sufficient. An executor that misreads a boundary condition — an
    off-by-one, an inclusive/exclusive edge — can write a fully green test
@@ -264,14 +264,11 @@ Each is stated with the minimum viable form; refinements are optional.
    prior-gate rule of §3.3, including: refuse-to-dispatch on `passes`,
    `empty`, and `errors`; proceed only on `fails_correctly`; re-verify the
    fixtures at merge time, independent of review and CI; and keep recorded
-   baseline results truthful across runs.
-
-A harness SHOULD also provide: a pre-dispatch validation pass that runs the
-fixtures against a clean checkout before any executor is launched (catching
-`errors`/`passes`/`empty` before they cost anything); a merge-time
-re-verification scoped to the fixture paths when the runner supports scoping,
-falling back to the full suite when it does not; and a reviewer role whose
-verdict is independent of the fixture verdict.
+   baseline results truthful across runs. A harness SHOULD additionally run
+   a pre-dispatch validation pass against a clean checkout, scope the
+   merge-time re-verification to the fixture paths when the runner supports
+   scoping (falling back to the full suite when it does not), and provide a
+   reviewer role whose verdict is independent of the fixture verdict.
 
 ## Appendix: How this repository implements it
 

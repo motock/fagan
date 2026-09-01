@@ -207,6 +207,34 @@ from scripts.local_agent_repair import (  # noqa: F401 (re-exported: run_tool re
 )
 
 
+def read_correlation_id() -> str:
+    """The orchestrator-minted correlation ID for this dispatch (W4L-02 mints
+    one per story and exports it as PIPELINE_CORRELATION_ID into the agent
+    subprocess env). Read at call time — never cached at import — so a fresh
+    exec of this module under a mutated environment sees the current value.
+    Empty string when unset; callers treat "" as "no correlation id"."""
+    return os.environ.get("PIPELINE_CORRELATION_ID", "")
+
+
+def emit_step_line(step: int, message: str, correlation_id: str = "") -> str:
+    """Emit one structured ``[step N] ...`` line to stdout — the stream Popen
+    redirects into the worktree's agent.log — and return it.
+
+    When ``correlation_id`` is non-empty the line gains a trailing
+    ``[cid=<id>]`` suffix so the agent's own log records join to the
+    orchestrator's events by that id (W4L-03). The default is a literal ""
+    (NOT an env read): existing call sites that omit the kwarg keep producing
+    today's exact output, and call sites that want the id pass
+    ``read_correlation_id()`` explicitly. The suffix is computed fresh per
+    call and never accumulated.
+    """
+    line = f"[step {step}] {message}"
+    if correlation_id:
+        line += f" [cid={correlation_id}]"
+    print(line, flush=True)
+    return line
+
+
 def _apply_off_task_action(action: str, path_arg: str, messages: list) -> bool:
     """Perform the off-task-drift guard's side effects for `action` (as
     returned by _off_task_step). Returns True if the caller should treat
@@ -654,7 +682,11 @@ def _main_impl() -> int:
                         _reject_done_for_suite(messages, step, suite_tail, gate)
                         _answer_orphaned_calls(tcs, tc_idx + 1, messages)
                         break
-                print(f"[step {step}] DONE: {args.get('summary', '')}", flush=True)
+                emit_step_line(
+                    step,
+                    f"DONE: {args.get('summary', '')}",
+                    correlation_id=read_correlation_id(),
+                )
                 return 0
 
             if fn == "view_file":

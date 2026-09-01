@@ -71,6 +71,11 @@ def file_log_sink(event: dict[str, Any]) -> None:
 
         # Free‑text line
         log_path = persistence.PLAN_DIR / f"{plan}.notifications.log"
+        persistence._rotate_if_needed(
+            log_path,
+            persistence.NOTIFICATIONS_MAX_BYTES,
+            persistence.NOTIFICATIONS_KEEP_N,
+        )
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(f"{ts} {message}\n")
 

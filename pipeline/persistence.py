@@ -11,11 +11,20 @@ PIPELINE_MCP_DECOMPOSITION_PLAN.md §4).
 import datetime
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 from .parsers import _atomic_write_json
 from .paths import PLAN_DIR
+
+# Retention/rotation policy for the per-plan notification sinks (the JSONL
+# sidecar written by _write_notification_record and the free-text .log written
+# by notification_sinks.file_log_sink). Both writers share one rotation helper
+# (_rotate_if_needed) so the two cannot drift. A cap <= 0 disables rotation
+# (append-only, the historical behavior).
+NOTIFICATIONS_MAX_BYTES = int(os.environ.get("PIPELINE_NOTIFICATIONS_MAX_BYTES", str(2 * 1024 * 1024)))
+NOTIFICATIONS_KEEP_N = int(os.environ.get("PIPELINE_NOTIFICATIONS_KEEP", "3"))
 
 # Module-level constant for notification severities
 NOTIFY_SEVERITIES = frozenset({"info", "warning", "error"})
@@ -128,6 +137,48 @@ def _notification_record(
     return record
 
 
+def _rotate_if_needed(path, max_bytes: int, keep: int) -> None:
+    """Rotate ``path`` to numbered generations when it exceeds ``max_bytes``.
+
+    Shared by both notification writers (the JSONL sidecar and the free-text
+    .log) so their retention policies cannot drift. Best-effort: any OSError
+    (missing file, unreadable dir, failed rename) is swallowed so the caller
+    falls back to a plain append.
+
+    Policy:
+    * ``max_bytes <= 0`` disables rotation entirely (append-only).
+    * Rotation happens only when the current size EXCEEDS ``max_bytes``.
+    * The active file becomes ``<path>.1``; existing generations shift up
+      (``.1`` -> ``.2``, ...) and generations beyond ``keep`` are deleted.
+    """
+    if max_bytes <= 0:
+        return
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        # Missing (or unreadable) file: nothing to rotate, and stat'ing must
+        # not create the file.
+        return
+    if size <= max_bytes:
+        return
+    try:
+        # Shift existing generations up FIRST so the active file's rename to
+        # .1 cannot clobber a generation that still needs to move.
+        for i in range(keep - 1, 0, -1):
+            if os.path.exists(f"{path}.{i}"):
+                os.replace(f"{path}.{i}", f"{path}.{i + 1}")
+        os.replace(path, f"{path}.1")
+        # Delete generations beyond keep (e.g. keep was lowered since an
+        # older run left more generations behind).
+        i = keep + 1
+        while os.path.exists(f"{path}.{i}"):
+            os.remove(f"{path}.{i}")
+            i += 1
+    except OSError:
+        # Rotation is best-effort; the caller falls back to a plain append.
+        return
+
+
 def _write_notification_record(plan_name: str, record: dict) -> None:
     """Append a JSONL line to the plan's notifications.jsonl file.
 
@@ -136,6 +187,7 @@ def _write_notification_record(plan_name: str, record: dict) -> None:
     """
     try:
         path = _notifications_jsonl_path(plan_name)
+        _rotate_if_needed(path, NOTIFICATIONS_MAX_BYTES, NOTIFICATIONS_KEEP_N)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
     except OSError as exc:  # pragma: no cover - exercised by tests
@@ -240,6 +292,8 @@ def _notify_user(
             logger.error("Failed to write notification directly: %s", exc2)
 
 __all__ = [
+    "NOTIFICATIONS_KEEP_N",
+    "NOTIFICATIONS_MAX_BYTES",
     "NOTIFY_SEVERITIES",
     "_append_decision",
     "_append_journal",

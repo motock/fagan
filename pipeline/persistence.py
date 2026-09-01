@@ -137,7 +137,7 @@ def _notification_record(
     return record
 
 
-def _rotate_if_needed(path, max_bytes: int, keep: int) -> None:
+def _rotate_if_needed(path: Path, max_bytes: int, keep: int) -> None:
     """Rotate ``path`` to numbered generations when it exceeds ``max_bytes``.
 
     Shared by both notification writers (the JSONL sidecar and the free-text
@@ -147,6 +147,9 @@ def _rotate_if_needed(path, max_bytes: int, keep: int) -> None:
 
     Policy:
     * ``max_bytes <= 0`` disables rotation entirely (append-only).
+    * ``keep <= 0`` retains no generations: the deletion loop starts at
+      ``keep + 1``, so with ``keep=0`` the just-rotated generation is deleted
+      immediately (truncate-on-overflow, not "disabled").
     * Rotation happens only when the current size EXCEEDS ``max_bytes``.
     * The active file becomes ``<path>.1``; existing generations shift up
       (``.1`` -> ``.2``, ...) and generations beyond ``keep`` are deleted.
@@ -237,6 +240,7 @@ def _notify_user(
 
     def _write_directly() -> None:
         path = PLAN_DIR / f"{plan_name}.notifications.log"
+        _rotate_if_needed(path, NOTIFICATIONS_MAX_BYTES, NOTIFICATIONS_KEEP_N)
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"{ts} {message}\n")
         _write_notification_record(plan_name, record)

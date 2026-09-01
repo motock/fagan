@@ -6,8 +6,8 @@
   trustworthy verdict on whether the delivered code satisfies the requirement.
 - **Provenance:** Distilled from production incidents in an autonomous
   dispatch pipeline (Plan B5, insight FM-A); every rule is backed by at least
-  one live failure. Stated generically so another harness can adopt it
-  without importing this repository's code (see Appendix).
+  one live failure. Stated generically so another harness can adopt it without
+  importing this repository's code (see Appendix).
 
 ## 0. Summary
 
@@ -162,8 +162,7 @@ states demand opposite actions — the harness MUST classify before reacting:
   oracle cannot distinguish work from no work: a broken pre-condition, not a
   success. The harness MUST refuse to dispatch on it (a false green with zero
   implementation is worse than no signal, because it looks like success).
-- **`empty`** — the runner collected no tests; the oracle graded nothing.
-  Refuse to dispatch.
+- **`empty`** — the runner collected no tests; the oracle graded nothing. Refuse to dispatch.
 - **`errors`** — the oracle itself is broken: a syntax error in a helper, a
   parser rejecting fixture content, a malformed CLI invocation, an
   infrastructure failure. The grader never reached a real assertion, so the
@@ -246,15 +245,13 @@ each stated with the minimum viable form; refinements are optional.
    merge time, independent of review and CI; keep recorded baseline results
    truthful across runs. A harness SHOULD additionally run a pre-dispatch
    validation pass against a clean checkout, scope the merge-time
-   re-verification to the fixture paths when the runner supports scoping
-   (falling back to the full suite otherwise), and provide a reviewer role
-   whose verdict is independent of the fixture verdict.
+   re-verification to fixture paths when the runner supports scoping, and
+   provide a reviewer role whose verdict is independent of the fixture verdict.
 
 ## Appendix: How this repository implements it
 
-This repository implements the pattern as follows; function names are listed
-for navigation only, and the normative content of this spec is the sections
-above.
+This repository implements the pattern as follows; function names are listed for
+navigation only, and the normative content of this spec is the sections above.
 
 - `pipeline/oracle_gate.py` — the oracle module.
   `classify_oracle_outcome` implements the four states of §3.1 (`passes`,
@@ -279,6 +276,5 @@ above.
 - `pipeline/test_author.py` — the executor-side test-authoring phase; it
   authors the agent's own unit tests and, by design, never touches or
   reviews acceptance fixtures (rule (a)'s separation of authorship).
-- The dispatch path in `pipeline/dispatch.py` materializes the
-  authoritative fixture source into the worktree pre-launch and records
-  `acceptance_digests` on every dispatch (rule (b)).
+- `pipeline/dispatch.py` materializes the authoritative fixture source into
+  the worktree pre-launch and pins `acceptance_digests` per dispatch (rule (b)).

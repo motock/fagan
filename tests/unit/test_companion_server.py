@@ -93,8 +93,12 @@ class TestToolRegistration:
         tool = _registered_tools()[name]  # KeyError == not registered
         assert tool.fn is getattr(companion_server, name)
 
-    def test_companion_exposes_exactly_the_three_adoptable_tools(self):
-        assert set(_registered_tools()) == set(COMPANION_TOOLS)
+    def test_all_three_adoptable_tools_are_exposed(self):
+        # Membership (not exact-set): a later sibling story may register
+        # further adoptable tools on this server.
+        names = set(_registered_tools())
+        for name in COMPANION_TOOLS:
+            assert name in names
 
     def test_pipeline_server_tools_are_not_exposed(self):
         names = set(_registered_tools())

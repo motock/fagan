@@ -21,10 +21,19 @@ the environment, or reads a clock. Callers pass in
 The verdict carries the measured reading next to the threshold so a
 mis-thresholded detector is diagnosable from its own output (see
 .claude/rules/testing-config-gates.md). Wiring this into a caller is a
-separate story; this module must stay free of I/O.
+separate story; ``wedge_verdict`` itself must stay free of I/O.
+
+The I/O gatherer that feeds it (``collect_story_wedge_signals``) lives in
+``pipeline/wedge_io.py`` -- this module must stay import-pure (see
+tests/unit/test_wedge_verdict.py) -- and is re-exported here so callers can
+import it from pipeline.wedge.
 """
 
 from __future__ import annotations
+
+from .wedge_io import collect_story_wedge_signals
+
+__all__ = ["collect_story_wedge_signals", "wedge_verdict"]
 
 
 def wedge_verdict(

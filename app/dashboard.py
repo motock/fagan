@@ -47,7 +47,9 @@ from app.dashboard_models import (
     WorkspaceRequest,
 )
 from pipeline import config_provenance, preflight
+from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
 from pipeline.server import PipelineService, _store
+from pipeline.wedge import collect_story_wedge_signals, wedge_verdict
 
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
 USAGE_STATE_PATH = Path(
@@ -330,7 +332,38 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         decorated_stories[story_key] = {**story, "last_activity": last_activity}
         if progress is not None:
             decorated_stories[story_key]["progress"] = progress
-    summary = _plan_summary(plan_name, manifest)
+        # Wedge state for in_progress stories only (bounded cost: a `ps -p`
+        # subprocess and two stat calls each; todo/done stories are never
+        # probed). Fail-open per story: any error here omits the "wedge" key
+        # for that story only — /api/plans/{plan} must never 500 because of
+        # wedge computation. We decorate the RESPONSE dict only; the manifest
+        # is never rewritten.
+        if story.get("status") == "in_progress":
+            try:
+                signals = collect_story_wedge_signals(plan_name, story_key, story)
+                verdict = wedge_verdict(
+                    signals["pid_alive"],
+                    signals["activity_age_seconds"],
+                    WEDGE_STALE_ACTIVITY_SECONDS,
+                )
+                decorated_stories[story_key]["wedge"] = {
+                    "wedged": verdict["wedged"],
+                    "reasons": verdict["reasons"],
+                    "measured": verdict["measured"],
+                }
+            except Exception as exc:  # noqa: BLE001 (deliberate: read-only monitoring degrades, never dies)
+                logger.debug(
+                    "wedge signals unavailable for %s/%s: %s", plan_name, story_key, exc
+                )
+    # Malformed manifest entries (non-dict story values) must not break the
+    # summary rollup: _status_counts assumes dict stories, so hand the
+    # summary the dict-only view (same skip-non-dict tolerance
+    # _aggregate_stories already applies). The stories RESPONSE below still
+    # passes malformed entries through untouched.
+    summary = _plan_summary(
+        plan_name,
+        {**manifest, "stories": {k: v for k, v in stories.items() if isinstance(v, dict)}},
+    )
     return {
         **summary,
         "epics": manifest.get("epics", {}),

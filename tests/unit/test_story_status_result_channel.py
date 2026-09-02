@@ -263,15 +263,21 @@ def test_forged_worktree_result_cannot_pass(plan_dir, state_root, monkeypatch):
     ss.check_story_status(PLAN_NAME, STORY_KEY)
 
     story = _read_story(plan_dir, PLAN_NAME, STORY_KEY)
-    # The forged worktree bytes must never advance the story...
+    # The forged worktree bytes must never advance the story to a passing
+    # state ("tests_passed"/"done" are the pass statuses this pipeline
+    # records; the real verdict was a failure)...
     assert story.get("tests_passed") is not True, story
-    assert story.get("status") != "done", story
+    assert story.get("status") not in ("tests_passed", "done"), story
     # ...and the verdict that WAS merged came from the pipeline-owned
-    # channel, never from anything under the worktree.
+    # channel — the real failing grade (returncode 1), with none of the
+    # forged stdout anywhere in the paper trail.
     assert len(collect_calls) == 1, collect_calls
     collected_path = Path(collect_calls[0][1])
     assert collected_path == channel
     assert not collected_path.is_relative_to(worktree), collected_path
+    last_check = story.get("last_test_check") or {}
+    assert last_check.get("returncode") == 1, story
+    assert FORGED_PASS_RESULT["stdout"] not in json.dumps(story), story
 
 
 def test_collected_state_cleared_for_next_tick(plan_dir, state_root, monkeypatch):
@@ -292,12 +298,16 @@ def test_collected_state_cleared_for_next_tick(plan_dir, state_root, monkeypatch
     ss.check_story_status(PLAN_NAME, STORY_KEY)
     story_after_collect = _read_story(plan_dir, PLAN_NAME, STORY_KEY)
 
-    # The grading bookkeeping is consumed on collection...
-    assert "grading_pid" not in story_after_collect, story_after_collect
-    assert "grading_started_at" not in story_after_collect, story_after_collect
-    assert "grading_result_path" not in story_after_collect, story_after_collect
+    # The grading bookkeeping is consumed on collection (cleared to null or
+    # removed entirely — either shape must satisfy the gate)...
+    for key in ("grading_pid", "grading_started_at", "grading_result_path"):
+        assert not story_after_collect.get(key), story_after_collect
     status_after_collect = story_after_collect.get("status")
-    passed_after_collect = story_after_collect.get("tests_passed")
+    last_check_after_collect = dict(story_after_collect.get("last_test_check") or {})
+    # ...and the genuine pass actually advanced the story (so the tick-3
+    # no-op below is meaningful, not vacuous).
+    assert status_after_collect == "tests_passed", story_after_collect
+    assert last_check_after_collect.get("returncode") == 0, story_after_collect
 
     # Tick 3 (t=120): the follow-up tick must no-op on this story.
     ss.check_story_status(PLAN_NAME, STORY_KEY)
@@ -306,4 +316,4 @@ def test_collected_state_cleared_for_next_tick(plan_dir, state_root, monkeypatch
     assert len(spawn["calls"]) == 1, spawn["calls"]  # no duplicate spawn
     assert len(collect_calls) == 1, collect_calls  # no re-collect
     assert story_after_next.get("status") == status_after_collect
-    assert story_after_next.get("tests_passed") == passed_after_collect
+    assert story_after_next.get("last_test_check") == last_check_after_collect

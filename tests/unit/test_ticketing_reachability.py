@@ -146,7 +146,9 @@ def test_plane_set_state_runtime_error_still_retries_and_notifies(monkeypatch):
 
     notify = []
     import pipeline.server as pserver
-    monkeypatch.setattr(pserver, "_notify_user", lambda plan, msg: notify.append(msg))
+    monkeypatch.setattr(
+        pserver, "_notify_user", lambda plan, msg, **kwargs: notify.append(msg)
+    )
 
     result = pt._plane_set_state("S1", "completed", plan_name="pl")
     # Existing behavior: exhaust the budget, return False, notify once.

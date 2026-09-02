@@ -31,6 +31,9 @@ WEEK_RESUME_THRESHOLD = int(os.environ.get("PIPELINE_WEEK_RESUME_THRESHOLD", "70
 # fails open. Guards against a CLI output-format change turning a transient
 # blackout into a permanent pause.
 USAGE_STALE_AFTER_SECONDS = int(os.environ.get("PIPELINE_USAGE_STALE_AFTER_SECONDS", "1800"))
+WEDGE_SCAN_ENABLED = int(os.environ.get("PIPELINE_WEDGE_SCAN_ENABLED", "1"))
+WEDGE_STALE_ACTIVITY_SECONDS = int(os.environ.get("PIPELINE_WEDGE_STALE_ACTIVITY_SECONDS", "1800"))
+WEDGE_NOTIFY_COOLDOWN_SECONDS = int(os.environ.get("PIPELINE_WEDGE_NOTIFY_COOLDOWN_SECONDS", "3600"))
 # Request-count thresholds for the new CLI format (post percentage removal).
 # session_pct = min(100, daily_requests * 100 // DAILY_REQUEST_THRESHOLD)
 # week_pct   = min(100, weekly_requests * 100 // WEEKLY_REQUEST_THRESHOLD)
@@ -314,6 +317,9 @@ __all__ = [
     "USAGE_BLIND_LOG_INTERVAL",
     "USAGE_BLIND_PAUSE_AFTER_SECONDS",
     "USAGE_STALE_AFTER_SECONDS",
+    "WEDGE_NOTIFY_COOLDOWN_SECONDS",
+    "WEDGE_SCAN_ENABLED",
+    "WEDGE_STALE_ACTIVITY_SECONDS",
     "WEEKLY_REQUEST_THRESHOLD",
     "WEEK_PAUSE_THRESHOLD",
     "WEEK_RESUME_THRESHOLD",

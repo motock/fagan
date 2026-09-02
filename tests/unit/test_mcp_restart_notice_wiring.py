@@ -89,7 +89,7 @@ def test_detection_is_called_with_worktree_and_default_branch_base_ref(
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
 
     result = p.approve_merge("amargs", "P1")
 

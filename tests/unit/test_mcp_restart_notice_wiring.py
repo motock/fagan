@@ -230,7 +230,9 @@ def test_no_reconnect_notice_when_worktree_missing_uses_real_detection(
     notes = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p.approve_merge("amreal", "P1")
 

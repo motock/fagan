@@ -27,8 +27,12 @@ any *string* input, however mangled.
 
 from __future__ import annotations
 
+import ast
 import inspect
-import re
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 

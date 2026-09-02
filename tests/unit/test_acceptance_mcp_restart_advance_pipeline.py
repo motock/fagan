@@ -45,7 +45,9 @@ def _run(plan_dir, monkeypatch, touched, plan_name):
     _write_manifest(plan_dir, plan_name)
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p, "_mcp_self_source_touched", lambda worktree, base_ref: list(touched)
     )

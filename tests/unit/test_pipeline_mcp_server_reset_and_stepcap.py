@@ -532,7 +532,9 @@ def test_review_story_bare_request_changes_is_treated_as_inconclusive(plan_dir, 
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on empty REQUEST_CHANGES")))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p.review_story("rc_empty", "S1")
 

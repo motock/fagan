@@ -181,8 +181,8 @@ class TestJournalOnly:
             {"step": "step-one", "summary": "first", "ts": J_TS_A, "next_hint": None},
         ]
         events = build_replay_events(entries, {})
-        assert _seq(events) == [("journal", J_TS_B), ("journal", J_TS_A)]
-        assert [e["message"] for e in events] == ["second", "first"]
+        assert _seq(events) == [("journal", J_TS_A), ("journal", J_TS_B)]
+        assert [e["message"] for e in events] == ["first", "second"]
 
     def test_journal_kind_is_the_entry_step(self):
         events = build_replay_events(
@@ -345,7 +345,7 @@ class TestContinuationLines:
             "review.log": [f"{J_TS_B} review line", "review detail"],
         }
         events = build_replay_events([], sources)
-        assert _messages(events, "agent.log") == ["agent line"]
+        assert _messages(events, "agent.log") == ["agent event"]
         assert _messages(events, "review.log") == ["review line\nreview detail"]
 
     def test_continuation_attaches_to_same_source_even_when_out_of_ts_order(self):

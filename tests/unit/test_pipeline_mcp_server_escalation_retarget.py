@@ -51,7 +51,9 @@ def test_review_story_unknown_notifies_user_will_retry(plan_dir, agents_dir, mon
     })
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "no verdict line here")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.review_story("unk_notify", "S1")
 

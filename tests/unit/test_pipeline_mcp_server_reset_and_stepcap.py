@@ -492,7 +492,9 @@ def test_review_story_rate_limited_notifies_user(plan_dir, agents_dir, monkeypat
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.review_story("rl_notify", "S1")
 

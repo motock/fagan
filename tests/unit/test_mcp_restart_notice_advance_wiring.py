@@ -165,7 +165,9 @@ def test_empty_detection_emits_no_reconnect_notice_and_notify_list_untouched(
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda worktree, base_ref: [])
 
     result = p.advance_pipeline("apnone")

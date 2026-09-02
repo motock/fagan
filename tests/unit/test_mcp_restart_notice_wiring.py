@@ -251,7 +251,7 @@ def test_notify_user_called_after_mark_plane_done(plan_dir, monkeypatch):
         p, "_mark_plane_done", lambda key, plan=None: order.append("mark_done")
     )
 
-    def _notify(plan, msg):
+    def _notify(plan, msg, **kwargs):
         if "/mcp reconnect" in msg:
             order.append("notify")
 

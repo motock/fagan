@@ -42,6 +42,7 @@ import time
 from typing import get_type_hints
 
 import pytest
+
 from pipeline.wedge import wedge_verdict
 
 # The only module-level imports pipeline/wedge.py is allowed to make.

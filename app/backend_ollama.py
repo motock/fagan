@@ -42,6 +42,7 @@ from app.ollama_resources import (  # noqa: F401 (re-exported: resource_status()
     _ollama_serving_parallelism,
     _total_memory_mb,
 )
+from pipeline import execution
 
 # Rough chars-per-token estimate for sizing the review-loop trim budget below
 # (no tokenizer available here) - deliberately NOT dynamically calibrated
@@ -704,9 +705,11 @@ class OllamaDriver:
         if resume_append_content is not None:
             env["LOCAL_AGENT_RESUME_APPEND_CONTENT"] = resume_append_content
         argv = [str(self._VENV_PYTHON), str(agent_script)]
-        with open(log_path, "a" if append else "w") as log_file:
-            proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=log_file, stderr=log_file)
-        return AgentHandle(pid=proc.pid, model=resolved_model)
+        handle = execution.spawn_harness(
+            argv, cwd=cwd, log_path=log_path, append=append, env=env,
+        )
+        handle.model = resolved_model
+        return handle
 
     def usage_probe_text(self) -> str:
         raise NotImplementedError(

@@ -5,8 +5,10 @@ worktree, and report pass/fail without auto-merging.
 Extracted verbatim from pipeline/server.py (behavior-preserving file move).
 """
 
+import json
 import os
 import subprocess
+import sys
 import time
 import types
 from datetime import datetime, timezone
@@ -692,3 +694,79 @@ check_story_status = types.FunctionType(
     check_story_status.__defaults__,
     check_story_status.__closure__,
 )
+
+
+GRADE_WRAPPER = """\
+import json
+import subprocess
+import sys
+
+cmd = json.loads(sys.argv[1])
+result_path = sys.argv[2]
+log_path = sys.argv[3]
+proc = subprocess.run(cmd, capture_output=True, text=True)
+payload = {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+with open(result_path, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh)
+with open(log_path, "a", encoding="utf-8") as fh:
+    fh.write(proc.stdout)
+    fh.write(proc.stderr)
+"""
+
+
+def start_detached_grade(
+    cmd: list[str], cwd: str, env: dict, result_path: str, log_path: str
+) -> int:
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            GRADE_WRAPPER,
+            json.dumps(cmd),
+            str(result_path),
+            str(log_path),
+        ],
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc.pid
+
+
+def collect_detached_grade(pid: int, result_path: str) -> dict | None:
+    alive = True
+    try:
+        os.kill(pid, 0)
+        # os.kill succeeds for zombie (defunct) processes too — check ps stat
+        ps = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        stat = ps.stdout.strip()
+        if not stat or stat.startswith("Z"):
+            alive = False
+    except ProcessLookupError:
+        alive = False
+    except PermissionError:
+        alive = True
+    except (OSError, subprocess.SubprocessError):
+        alive = True
+    if alive:
+        return None
+    fail_closed = {
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "detached grade exited without writing a result",
+    }
+    try:
+        with open(result_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return fail_closed
+    if not isinstance(data, dict):
+        return fail_closed
+    return data

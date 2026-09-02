@@ -399,7 +399,7 @@ keys + what was passed, as a strict superset of the existing error text).
 implementer commit (`"wip(S1): final-commit"`, 125 lines, **zero deletions to
 `test_rate_limiter.py`** — direct evidence the implementer never touched the
 tests) → Claude Sonnet reviewer `APPROVE` → real rebase/CI (`Test: SUCCESS`)
-→ real squash-merge ([PR #1](https://github.com/fico-jessecarroll/tdd-split-validation/pull/1)
+→ real squash-merge (PR #1
 on the sandbox repo) → story status `done`. Notably, `gpt-oss` hit the *same*
 argument-hallucination pattern again on this run, but the improved error from
 PR #127 let it self-correct via a "read-heavy nudge" (switched to `sed` to

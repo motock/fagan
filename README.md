@@ -1,6 +1,6 @@
 # Autonomous SDLC Agent Pipeline
 
-[![CI](https://github.com/fico-jessecarroll/claude-pipeline-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/fico-jessecarroll/claude-pipeline-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/motock/claude-pipeline-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/motock/claude-pipeline-mcp/actions/workflows/ci.yml)
 
 This is a quickstart guide for the Autonomous SDLC Agent Pipeline, describing the system components and how they interact. For detailed reference material, see [REFERENCE.md](./REFERENCE.md).
 
@@ -33,7 +33,7 @@ shells out to the Claude Code CLI.
 
 ```bash
 # 1. Clone and install the Python environment
-git clone https://github.com/fico-jessecarroll/claude-pipeline-mcp.git
+git clone https://github.com/motock/claude-pipeline-mcp.git
 cd claude-pipeline-mcp
 scripts/install.sh          # creates .venv, installs requirements.txt
 

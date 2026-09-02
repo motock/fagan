@@ -18,7 +18,7 @@ asking for the gap to be closed rather than a quick merge.
 ## Setup
 
 ```bash
-git clone https://github.com/fico-jessecarroll/claude-pipeline-mcp.git
+git clone https://github.com/motock/claude-pipeline-mcp.git
 cd claude-pipeline-mcp
 scripts/install.sh --dev   # venv + requirements-dev.txt (adds pytest, ruff)
 ```

@@ -125,9 +125,9 @@ PARSE_CASES = [
 class TestParseGuardPathsObservedShapes:
     """Every observed Guard-cell shape from the dataset, as literals."""
 
-    @pytest.mark.parametrize("raw,expected", [(c.values[0], c.values[1]) for c in PARSE_CASES
-                                              if c.id != "unused"], ids=[c.id for c in PARSE_CASES])
-    def test_shape(self, raw, expected):
+    @pytest.mark.parametrize("case", PARSE_CASES, ids=[c.id for c in PARSE_CASES])
+    def test_shape(self, case):
+        raw, expected = case.values
         assert guard_liveness.parse_guard_paths(raw) == expected
 
 

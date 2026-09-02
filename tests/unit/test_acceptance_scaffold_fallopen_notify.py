@@ -23,7 +23,9 @@ def test_dispatch_start_failure_notifies(monkeypatch):
     # _notify_user/_resolve_test_author_backend as bare names against that
     # module's own globals - patch test_author directly, not its planner
     # re-export, so the patch actually lands on the real call site.
-    monkeypatch.setattr(test_author, "_notify_user", lambda plan, msg: seen.append((plan, msg)))
+    monkeypatch.setattr(
+        test_author, "_notify_user", lambda plan, msg, **kwargs: seen.append((plan, msg))
+    )
     monkeypatch.setattr(
         test_author, "_resolve_test_author_backend", lambda *a, **k: ("claude", "sonnet")
     )

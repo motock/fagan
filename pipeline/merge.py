@@ -77,6 +77,7 @@ def _rebase_and_push_for_merge(plan_name, key, branch, worktree) -> tuple[str, s
             f"additive-import conflict against "
             f"origin/{_default_branch()}.",
             **({"correlation_id": _cid} if _cid else {}),
+            event="rebase_auto_resolved",
         )
     if not rb["ok"]:
         return (
@@ -261,6 +262,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                         f"additive-import conflict against "
                         f"origin/{_default_branch()}.",
                         **({"correlation_id": _cid} if _cid else {}),
+                        event="rebase_auto_resolved",
                     )
                 if not rb["ok"]:
                     return {

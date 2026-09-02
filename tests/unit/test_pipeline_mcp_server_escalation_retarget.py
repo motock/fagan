@@ -51,7 +51,9 @@ def test_review_story_unknown_notifies_user_will_retry(plan_dir, agents_dir, mon
     })
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "no verdict line here")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.review_story("unk_notify", "S1")
 
@@ -70,7 +72,9 @@ def test_review_story_unknown_parks_after_max_inconclusive_attempts(plan_dir, ag
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "no verdict line here")
     monkeypatch.setattr(p, "_open_pr", lambda *a, **k: pr_calls.append(1))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result1 = p.review_story("unk_park", "S1")
     assert result1["status"] == "tests_passed"
@@ -101,7 +105,7 @@ def test_review_story_unknown_park_excerpt_notes_empty_response(plan_dir, agents
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "")
     monkeypatch.setattr(p, "_open_pr", lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("no PR on UNKNOWN")))
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
 
     p.review_story("unk_park_empty", "S1")
     p.review_story("unk_park_empty", "S1")

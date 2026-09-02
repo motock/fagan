@@ -472,7 +472,9 @@ def test_plane_set_state_gives_up_after_budget_and_notifies(plan_dir, monkeypatc
     monkeypatch.setattr(pt, "plane_request",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("plane down")))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p._plane_set_state("S1", "completed", plan_name="pl")
 

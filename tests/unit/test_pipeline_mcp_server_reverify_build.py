@@ -980,7 +980,9 @@ def test_advance_pipeline_give_up_failure_gets_distinguishing_notify(
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
     monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p.advance_pipeline("giveupnotify")
 

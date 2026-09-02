@@ -435,6 +435,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} dispatch failed {attempts}x "
                         f"({e}); giving up - needs human intervention.",
+                        event="dispatch_failed",
                         **_cid_kwargs,
                     )
                     summary["failed"].append(key)
@@ -500,6 +501,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     _notify_user(
                         plan_name,
                         f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
+                        event="escalated",
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -530,6 +532,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} local agent failed on {failed_model}; retrying on "
                         f"fallback model {fallback_model} before parking.",
+                        event="model_fallback",
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -549,6 +552,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         f"progress) - likely under-specified (missing API, wrong "
                         f"scope) rather than a model-capability gap; needs human "
                         f"clarification before another dispatch.",
+                        event="agent_gave_up",
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -561,6 +565,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     _notify_user(
                         plan_name,
                         f"{key} tests failed",
+                        event="tests_failed",
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -778,6 +783,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge-gate CI failed ({gate_error}); "
                         f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).",
+                        event="merge_ci_rework",
                         **(
                             {
                                 "correlation_id": story["correlation_id"],
@@ -799,6 +805,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge gate failed {attempts}x "
                         f"({gate_error}); giving up - needs human intervention.",
+                        event="merge_gate_failed",
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -812,6 +819,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge gate attempt {attempts}/"
                         f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.",
+                        event="merge_gate_retry",
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -838,6 +846,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge failed {attempts}x "
                         f"({e}); giving up - needs human intervention.",
+                        event="merge_failed",
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -851,6 +860,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} merge attempt {attempts}/"
                         f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.",
+                        event="merge_retry",
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -865,6 +875,17 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             story.pop("ci_rerun_attempted", None)
             story.pop("ci_rework", None)  # L1: clear the rework flag on done
             _mark_plane_done(key, plan_name)
+            _notify_user(
+                plan_name,
+                f"{key} merged",
+                story_key=key,
+                event="story_merged",
+                **(
+                    {"correlation_id": story["correlation_id"]}
+                    if story.get("correlation_id")
+                    else {}
+                ),
+            )
             # A fully-done self-repo plan must enter the retro backlog no
             # matter which path marked the last story done (dedup inside
             # _record_retro_pending makes repeat calls across ticks safe).

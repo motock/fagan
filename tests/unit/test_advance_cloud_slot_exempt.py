@@ -95,7 +95,9 @@ def _stub_tick_seams(monkeypatch, max_agents, fail_tags=()):
         lambda plan, key: interrupted.append(key) or {"ok": True},
     )
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     return dispatched, interrupted, notes
 
 

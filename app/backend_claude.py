@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from app.backend_types import AgentHandle
+from app.harness import HarnessRequest, get_harness
 
 # Vars that can redirect the `claude` CLI off the first-party Anthropic API
 # (Bedrock/Vertex, a custom ANTHROPIC_BASE_URL, or an injected auth token/key)
@@ -190,27 +191,10 @@ class ClaudeCliDriver:
         self, prompt: str, *, system: str | None = None, model: str,
         allowed_tools: str | None = None, cwd: Path, log_path: Path, append: bool,
     ) -> AgentHandle:
-        # stream-json (+ the verbose it requires) makes claude emit an event
-        # immediately on startup and one per tool call, instead of buffering
-        # everything until the final answer. check_story_status's "0 bytes
-        # after exit -> failed launch" check depends on that: without
-        # streaming, a long-running-but-legitimate agent looks identical to
-        # one that never started.
-        cmd = ["claude", "-p", prompt, "--model", model,
-               "--output-format", "stream-json", "--verbose"]
-        if system:
-            cmd += ["--append-system-prompt", system]
-        if allowed_tools:
-            cmd += ["--allowedTools", allowed_tools]
-        # This is a one-shot headless subprocess with no external harness to
-        # ever revisit a scheduled wakeup - ScheduleWakeup's "the harness
-        # re-invokes you later" contract is meaningless here and, if the
-        # agent defers to it and ends its turn, the process just exits and
-        # any pending background task is orphaned/killed with no commit ever
-        # landing (observed live 2026-08-07, 4 identical rework parks on
-        # story 4bfcc3b4). Block it outright rather than relying on the
-        # prompt alone.
-        cmd += ["--disallowedTools", "ScheduleWakeup"]
+        request = HarnessRequest(prompt=prompt, system=system, model=model,
+                                 cwd=str(cwd),
+                                 options={"allowed_tools": allowed_tools})
+        cmd = get_harness("claude").build_agent_command(request).argv
         with open(log_path, "a" if append else "w") as log_file:
             proc = subprocess.Popen(
                 cmd, cwd=cwd, env=_first_party_claude_env(),

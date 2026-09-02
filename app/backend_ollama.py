@@ -130,7 +130,11 @@ class OllamaDriver:
             or os.environ.get("PIPELINE_LOCAL_ENDPOINT")
             or self.provider.default_endpoint
         ).rstrip("/")
-        self.timeout = float(os.environ.get("PIPELINE_LOCAL_TIMEOUT_SECONDS", "600"))
+        # NOTE: the legacy PIPELINE_LOCAL_TIMEOUT_SECONDS knob (formerly read
+        # into self.timeout here) is dead - _chat's wall-clock budget comes
+        # from PIPELINE_ROLE_CALL_TIMEOUT_SECONDS via
+        # inference_providers.resolve_role_call_timeout(), which no caller-
+        # overridable attribute can bypass. See REFERENCE.md's env table.
         # 16384 fits 100% on GPU on a 24GB M4 and gives the agentic loop real
         # headroom; complete()'s self-contained prompts are smaller so the same
         # value is safe there too.
@@ -212,11 +216,31 @@ class OllamaDriver:
         # path peels off ["message"] itself; the review loop peels off
         # both the message and the usage fields.
         last_exc: Exception | None = None
-        for attempt in range(1, self.chat_max_attempts + 1):
+        # The 2026-09-02 scheduler freeze (pid 1609 wedged ~40 min in
+        # sock_recv) was a retry loop whose budget reset on every attempt: 3
+        # attempts x a 600s per-attempt timeout outlives any single timeout.
+        # The wall-clock deadline is therefore computed ONCE, before the
+        # first attempt, from PIPELINE_ROLE_CALL_TIMEOUT_SECONDS (via
+        # inference_providers.resolve_role_call_timeout()), and is never
+        # reassigned inside the loop - the whole call is bounded by it no
+        # matter how many attempts fit. No caller-overridable attribute is
+        # consulted here: a None override must never reach the wire as "no
+        # timeout".
+        role_call_timeout = inference_providers.resolve_role_call_timeout()
+        started = time.monotonic()
+        deadline = started + role_call_timeout
+        attempts = max(1, int(self.chat_max_attempts))
+        attempts_made = 0
+        for attempt in range(1, attempts + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break  # budget spent - do not sleep/retry past the deadline
+            attempts_made += 1  # a real wire attempt is starting
             try:
                 return self.provider.chat(
                     messages, model=model, num_ctx=num_ctx, temperature=temperature,
-                    tools=tools, endpoint=self.endpoint, timeout=self.timeout,
+                    tools=tools, endpoint=self.endpoint,
+                    timeout=min(role_call_timeout, remaining),
                     think=think,
                 )
             except httpx.HTTPStatusError as e:
@@ -225,9 +249,29 @@ class OllamaDriver:
                 last_exc = e
             except httpx.TransportError as e:
                 last_exc = e  # connect/read/timeout stall - transient, retry
-            if attempt < self.chat_max_attempts:
-                time.sleep(self.chat_retry_backoff * attempt)
-        raise last_exc
+            remaining = deadline - time.monotonic()
+            if attempt < attempts and remaining > 0:
+                # Cap the backoff at the remaining budget so a retry never
+                # sleeps past the global deadline.
+                time.sleep(min(self.chat_retry_backoff * attempt, remaining))
+        if last_exc is None:
+            last_exc = httpx.ReadTimeout(
+                f"role-call budget of {role_call_timeout:.1f}s expired before "
+                f"any attempt could run"
+            )
+        elapsed = time.monotonic() - started
+        if attempts_made == 0:
+            raise RuntimeError(
+                f"Local backend at {self.endpoint} (model={model}) is "
+                f"unreachable or errored: the role-call budget expired "
+                f"before any attempt could run ({elapsed:.1f}s elapsed): "
+                f"{last_exc}"
+            ) from last_exc
+        raise RuntimeError(
+            f"Local backend at {self.endpoint} (model={model}) is unreachable "
+            f"or errored after {attempts_made} attempt(s) in "
+            f"{elapsed:.1f}s: {last_exc}"
+        ) from last_exc
 
     # Read-only tools for the review loop. No create/edit — review must not
     # modify the tree (the "review does not merge / does not edit" guarantee).
@@ -342,7 +386,18 @@ class OllamaDriver:
                     # token-cost sidecar alongside the message body itself.
                     envelope = self._chat(messages, resolved_model,
                                            tools=self._REVIEW_TOOLS)
+                except inference_providers.RateLimitedError:
+                    raise  # 429 must reach the deferral path unwrapped
                 except httpx.HTTPError as e:
+                    raise RuntimeError(
+                        f"Local backend at {self.endpoint} (model={resolved_model}) "
+                        f"is unreachable or errored during review: {e}"
+                    ) from e
+                except RuntimeError as e:
+                    # _chat's own exhaustion raise (budget spent / attempts
+                    # used up) must keep the review-specific wording so
+                    # callers matching on it are unaffected - same contract
+                    # as the httpx.HTTPError wrap above.
                     raise RuntimeError(
                         f"Local backend at {self.endpoint} (model={resolved_model}) "
                         f"is unreachable or errored during review: {e}"
@@ -818,4 +873,3 @@ class OllamaDriver:
             return (available_pages * page_size) // (1024 * 1024)
         except (OSError, ValueError, subprocess.SubprocessError):
             return None
-

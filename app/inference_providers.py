@@ -20,10 +20,43 @@ special test wiring is needed for the two to share mocks.
 """
 from __future__ import annotations
 
+import math
 import os
 from typing import Protocol
 
 import httpx
+
+# The 2026-09-02 scheduler freeze (daemon pid 1609 blocked ~40 min in
+# sock_recv on localhost:11434) was caused by an unbounded read somewhere in
+# the scheduler-side chat/complete path. Every outbound chat/complete httpx
+# call now carries a finite timeout resolved from this env var at call time
+# (never cached at import: a test that sets the env after import must see the
+# new value on the very next call). Unset, malformed, or non-positive values
+# fall back to the hardcoded 600s default - never to None, which httpx treats
+# as "no timeout" and which is exactly the incident shape.
+ROLE_CALL_TIMEOUT_ENV = "PIPELINE_ROLE_CALL_TIMEOUT_SECONDS"
+_ROLE_CALL_TIMEOUT_DEFAULT_S = 600.0
+
+
+def resolve_role_call_timeout() -> float:
+    """Resolve the per-attempt chat/complete HTTP timeout in seconds.
+
+    Read at call time from PIPELINE_ROLE_CALL_TIMEOUT_SECONDS (float seconds;
+    fractional values like "0.2" are valid). Falls back to the hardcoded 600
+    default when the variable is unset, blank, unparseable, non-positive, or
+    non-finite - the resolver never returns None, zero, or inf, so every
+    caller that passes its result to httpx gets a bounded read.
+    """
+    raw = os.environ.get(ROLE_CALL_TIMEOUT_ENV)
+    if raw is None or not raw.strip():
+        return _ROLE_CALL_TIMEOUT_DEFAULT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return _ROLE_CALL_TIMEOUT_DEFAULT_S
+    if not math.isfinite(value) or value <= 0:
+        return _ROLE_CALL_TIMEOUT_DEFAULT_S
+    return value
 
 
 class RateLimitedError(RuntimeError):
@@ -47,7 +80,7 @@ class LocalInferenceProvider(Protocol):
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
         tools: list | None = None, endpoint: str | None = None,
-        timeout: float = 600.0, think: bool | str | None = None,
+        timeout: float | None = None, think: bool | str | None = None,
     ) -> dict:
         """Blocking, non-streaming chat completion. Returns Ollama's native
         envelope shape - {"message": {"role", "content", "tool_calls"?},
@@ -92,7 +125,7 @@ class OllamaProvider:
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
         tools: list | None = None, endpoint: str | None = None,
-        timeout: float = 600.0, think: bool | str | None = None,
+        timeout: float | None = None, think: bool | str | None = None,
     ) -> dict:
         endpoint = (endpoint or self.default_endpoint).rstrip("/")
         body = {
@@ -103,7 +136,12 @@ class OllamaProvider:
             body["tools"] = tools
         if think is not None:
             body["think"] = think
-        resp = httpx.post(f"{endpoint}/api/chat", json=body, timeout=timeout)
+        # None (defaulted or explicit) is coerced to the resolved role-call
+        # timeout - never an unbounded read on the wire (2026-09-02 freeze).
+        wire_timeout = (
+            timeout if timeout is not None else resolve_role_call_timeout()
+        )
+        resp = httpx.post(f"{endpoint}/api/chat", json=body, timeout=wire_timeout)
         # Detect 429 before raise_for_status() converts it to a generic
         # HTTPError - Ollama-cloud (and any upstream proxy) rate-limits per
         # host, so a 429 is a transient "defer and retry" signal, not a
@@ -177,7 +215,7 @@ class LMStudioProvider:
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
         tools: list | None = None, endpoint: str | None = None,
-        timeout: float = 600.0, think: bool | str | None = None,
+        timeout: float | None = None, think: bool | str | None = None,
     ) -> dict:
         # think accepted for signature parity with LocalInferenceProvider -
         # LM Studio's OpenAI-compatible endpoint has no equivalent field, so
@@ -190,7 +228,13 @@ class LMStudioProvider:
         }
         if tools:
             body["tools"] = tools
-        resp = httpx.post(f"{endpoint}/v1/chat/completions", json=body, timeout=timeout)
+        # None (defaulted or explicit) is coerced to the resolved role-call
+        # timeout - never an unbounded read on the wire (2026-09-02 freeze).
+        wire_timeout = (
+            timeout if timeout is not None else resolve_role_call_timeout()
+        )
+        resp = httpx.post(
+            f"{endpoint}/v1/chat/completions", json=body, timeout=wire_timeout)
         if resp.status_code == 429:
             raise RateLimitedError(
                 f"Local backend at {endpoint} (model={model}) "
@@ -280,7 +324,7 @@ class MLXProvider:
     def chat(
         self, messages: list, *, model: str, num_ctx: int, temperature: float,
         tools: list | None = None, endpoint: str | None = None,
-        timeout: float = 600.0, think: bool | str | None = None,
+        timeout: float | None = None, think: bool | str | None = None,
     ) -> dict:
         # think accepted for signature parity with LocalInferenceProvider -
         # mlx_lm.server's OpenAI-compatible endpoint has no equivalent field,
@@ -293,7 +337,13 @@ class MLXProvider:
         }
         if tools:
             body["tools"] = tools
-        resp = httpx.post(f"{endpoint}/v1/chat/completions", json=body, timeout=timeout)
+        # None (defaulted or explicit) is coerced to the resolved role-call
+        # timeout - never an unbounded read on the wire (2026-09-02 freeze).
+        wire_timeout = (
+            timeout if timeout is not None else resolve_role_call_timeout()
+        )
+        resp = httpx.post(
+            f"{endpoint}/v1/chat/completions", json=body, timeout=wire_timeout)
         if resp.status_code == 429:
             raise RateLimitedError(
                 f"Local backend at {endpoint} (model={model}) "

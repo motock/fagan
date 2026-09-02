@@ -753,7 +753,8 @@ time the active local model changes. Currently populated:
 | Model tag | `temperature` | `num_ctx` | Why |
 |---|---|---|---|
 | `gpt-oss:20b` | `0.3` | `32768` | 2026-07-03 A/B benchmark (`tests/benchmark/_runs/full_20260703_postfix` vs `temp_tune_20260703`, 15 cells each): `temperature=1.0` scored 6/15 success with 3 cells where the implementation never landed on disk at all; `temperature=0.3` scored 9/15 with only 1, at an unchanged 11/15 ground-truth-pass rate. |
-| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Per-request timeout for local single-shot `complete()` calls |
+| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Legacy/unused — no longer read by the code; superseded by `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` below. |
+| `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` | `600` | Total wall-clock budget in seconds for local role-call attempts (single-shot `complete()` and review-loop turns) **including retries and backoff** — the per-attempt HTTP timeout and each backoff sleep are capped at the remaining budget, so the whole call is bounded no matter how many attempts fit. Default `600`; blank, unparseable, non-positive, or non-finite values fall back to `600`. |
 | `PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS` | `900` | Legacy. Was the per-request timeout for the dispatch/review chat loop; since streaming landed this only seeds the harness boot log (`steps=… timeout=…s`). The live timeout is `LOCAL_AGENT_READ_SILENCE_SECONDS` below — kept set by `backend.py` for back-compat. |
 | `LOCAL_AGENT_READ_SILENCE_SECONDS` | `180` | Per-chunk read timeout for the streamed `chat()`. Fires only on a genuine stall (no bytes for N s), not on a legitimately long generation that emits a chunk every ~1–2 s. Passed through from the shell/MCP env by `backend.py` (`**os.environ`). |
 | `LOCAL_AGENT_CHAT_MAX_ATTEMPTS` | `3` | Retry attempts for a transient `chat()` failure (`httpx.TransportError` or 5xx). 4xx raises immediately. Passed through from the shell/MCP env. |

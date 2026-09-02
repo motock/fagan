@@ -94,7 +94,9 @@ def test_notifies_when_pipeline_server_py_was_merged(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p, "_mcp_self_source_touched", lambda worktree, base_ref: ["pipeline/server.py"]
     )
@@ -303,7 +305,7 @@ def test_notified_story_key_recorded_in_summary_notify(plan_dir, monkeypatch):
     _write_manifest(plan_dir, "apsummary", {"P1": _approved_story()})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
     monkeypatch.setattr(
         p, "_mcp_self_source_touched", lambda worktree, base_ref: ["pipeline/server.py"]
     )

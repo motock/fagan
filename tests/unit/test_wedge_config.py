@@ -19,6 +19,7 @@ of the wedge entries only - never exact contents, count, or order.
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 
 import pytest

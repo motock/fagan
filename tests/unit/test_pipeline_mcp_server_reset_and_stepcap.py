@@ -558,7 +558,9 @@ def test_review_story_bare_request_changes_parks_after_max_inconclusive_attempts
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: REQUEST_CHANGES")
     monkeypatch.setattr(p, "_open_pr", lambda *a, **k: pr_calls.append(1))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result1 = p.review_story("rc_empty_park", "S1")
     assert result1["status"] == "tests_passed"

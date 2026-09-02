@@ -52,29 +52,22 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture(autouse=True)
 def _restore_wedge_config_module():
-    """Reload pipeline/config.py with the wedge vars absent after each test.
+    """Reload pipeline/config.py from a pristine environ after each test.
 
     pipeline/config.py resolves its constants at import time, so a test that
-    stubs an env var must reload the module to observe the stub. This fixture
-    deliberately does NOT depend on the monkeypatch fixture: depending on it
-    would make monkeypatch a prerequisite, so its undo would run AFTER this
-    teardown and a test-set malformed value (e.g. PIPELINE_USAGE_STALE_AFTER_
-    SECONDS=abc) would still be live when the reload below runs, raising a
-    spurious ValueError. With no dependency, monkeypatch undo runs first and
-    this teardown only has to clear the wedge vars themselves.
+    stubs an env var must reload the module to observe the stub. The snapshot
+    is taken at fixture setup (before the test stubs anything), and teardown
+    restores it wholesale before reloading, so a malformed value a test set
+    (e.g. PIPELINE_USAGE_STALE_AFTER_SECONDS=abc) can never leak into the
+    teardown reload or into a later test. Restoring the snapshot is safe even
+    if the test's own monkeypatch undo runs after this teardown: undo puts
+    back the same pre-test values this snapshot already holds.
     """
+    pristine_env = dict(os.environ)
     yield
-    saved = {name: os.environ.get(name) for name in WEDGE_ENV_VARS}
-    try:
-        for name in WEDGE_ENV_VARS:
-            os.environ.pop(name, None)
-        importlib.reload(pipeline_config)
-    finally:
-        for name, value in saved.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+    os.environ.clear()
+    os.environ.update(pristine_env)
+    importlib.reload(pipeline_config)
 
 
 def _reload_with_env(monkeypatch, *, setenv=None, absent=WEDGE_ENV_VARS):

@@ -31,6 +31,45 @@ logger = logging.getLogger(__name__)
 # SIGTERM/SIGINT constants, which are read from ``_signal_module`` directly.
 signal = _signal_module.signal
 
+# Scan-phase watchdog (story sh-02): ``scan_fn`` runs in a worker daemon-thread
+# per ``run_once`` and the parent waits with a bounded join. On 2026-09-02 one
+# wedged LLM call inside a scan tick froze the ENTIRE loop for ~40 minutes
+# because ``run_once`` called ``scan_fn`` synchronously on the main thread.
+# The watchdog bounds the blast radius: a hung tick degrades to one skipped
+# tick instead of a full freeze. Transport-level timeouts are story sh-01.
+_SCAN_JOIN_TIMEOUT_ENV = "PIPELINE_SCAN_JOIN_TIMEOUT_SECONDS"
+_DEFAULT_SCAN_JOIN_TIMEOUT_S = 900.0
+
+
+def _scan_join_timeout_seconds() -> float:
+    """Read the scan join deadline from the environment, per call.
+
+    Malformed values degrade to the default (900s) instead of crashing the
+    loop: a bad operator override must never take the daemon down.
+    """
+    raw = os.environ.get(_SCAN_JOIN_TIMEOUT_ENV)
+    if raw is None:
+        return _DEFAULT_SCAN_JOIN_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s must be a number, got %r; using default %gs",
+            _SCAN_JOIN_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_SCAN_JOIN_TIMEOUT_S,
+        )
+        return _DEFAULT_SCAN_JOIN_TIMEOUT_S
+    if value <= 0:
+        logger.warning(
+            "%s must be positive, got %r; using default %gs",
+            _SCAN_JOIN_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_SCAN_JOIN_TIMEOUT_S,
+        )
+        return _DEFAULT_SCAN_JOIN_TIMEOUT_S
+    return value
+
 
 class SchedulerDaemon:
     """Drives the event-driven pipeline's scan + reconcile cadence.
@@ -64,6 +103,11 @@ class SchedulerDaemon:
         self._last_error = None
         self._reconcile_count = 0
         self._scan_count = 0
+        # Additive scan-watchdog state (story sh-02). Kept off the ``health()``
+        # dict until a timeout actually happens because existing tests pin the
+        # exact clean-tick key set.
+        self._scan_timed_out = 0
+        self._last_scan_timeout_ts = None
 
     def start(self) -> None:
         """Perform an immediate reconcile sweep on startup.
@@ -83,7 +127,7 @@ class SchedulerDaemon:
 
     def health(self) -> dict:
         """Return a snapshot of the daemon's health state."""
-        return {
+        snapshot = {
             "alive": True,
             "last_reconcile_ts": self._last_reconcile_ts,
             "last_scan_ts": self._last_scan_ts,
@@ -91,6 +135,13 @@ class SchedulerDaemon:
             "reconcile_count": self._reconcile_count,
             "scan_count": self._scan_count,
         }
+        # Additive watchdog fields appear only once a timeout has happened so
+        # the clean-tick health() key set stays byte-for-byte what existing
+        # tests pin (test_health_has_expected_keys).
+        if self._scan_timed_out:
+            snapshot["scan_timed_out"] = self._scan_timed_out
+            snapshot["last_scan_timeout_ts"] = self._last_scan_timeout_ts
+        return snapshot
 
     def write_health(self, path: str) -> None:
         """Atomically write the health JSON to *path*.
@@ -102,6 +153,50 @@ class SchedulerDaemon:
         with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(self.health(), fh)
         os.replace(tmp_path, path)
+
+    def _scan_with_watchdog(self, scan_fn):
+        """Run ``scan_fn`` in one worker daemon-thread with a bounded join.
+
+        Returns ``(completed, result)`` where ``completed`` is False when the
+        worker outlived the join deadline. A captured exception is re-raised
+        here (on the caller's thread) so ``run_once``'s existing swallow path
+        runs unchanged. The abandoned worker is never joined again: it is a
+        daemon thread, so it can never block interpreter exit, and it dies
+        once its blocked call eventually returns.
+
+        KNOWN LIMITATION (do not fix here): abandoning the worker leaves any
+        plan ``_plan_lock`` held by the wedged call locked until the process
+        dies — the watchdog converts a total freeze into a degraded-but-alive
+        scheduler; lock recovery is future work.
+        """
+        timeout_s = _scan_join_timeout_seconds()
+        box = {}
+
+        def _worker():
+            try:
+                box["result"] = scan_fn()
+            except BaseException as exc:  # noqa: BLE001 - re-raised by caller
+                box["error"] = exc
+
+        worker = threading.Thread(
+            target=_worker, name="scheduler-scan-worker", daemon=True
+        )
+        worker.start()
+        started = time.monotonic()
+        # Thread.join(timeout) ALWAYS returns None; the is_alive() check below
+        # is the only correct timed-out-vs-done signal.
+        worker.join(timeout_s)
+        if not worker.is_alive():
+            if "error" in box:
+                raise box["error"]
+            return True, box.get("result")
+        elapsed = time.monotonic() - started
+        # Abandon the worker: daemon-flagged, never joined again, dies when
+        # its blocked call returns. KNOWN LIMITATION: abandoning it leaves any
+        # plan _plan_lock held by the wedged call locked until the process
+        # dies; the watchdog converts a total freeze into a degraded-but-alive
+        # scheduler, and lock recovery is future work.
+        return False, elapsed
 
     def run_once(self) -> dict:
         """Perform one iteration: scan first, then reconcile if due.
@@ -115,10 +210,28 @@ class SchedulerDaemon:
         scanned = False
         reconciled = False
 
-        # Scan phase – always attempted, count regardless of success.
+        # Scan phase – always attempted, count regardless of success. The scan
+        # runs in a worker thread bounded by a join deadline (story sh-02) so
+        # a wedged scan costs one tick instead of the whole loop.
         try:
-            self._scan_fn()
-            scanned = True
+            completed, outcome = self._scan_with_watchdog(self._scan_fn)
+            if completed:
+                scanned = True
+            else:
+                elapsed_s = outcome
+                logger.error(
+                    "scan_fn stalled past the %.1fs join deadline "
+                    "(PIPELINE_SCAN_JOIN_TIMEOUT_SECONDS); abandoning the "
+                    "worker after %.1fs and continuing the loop",
+                    _scan_join_timeout_seconds(),
+                    elapsed_s,
+                )
+                self._scan_timed_out += 1
+                self._last_scan_timeout_ts = time.time()
+                self._last_error = (
+                    f"scan_fn stalled past the join deadline "
+                    f"({elapsed_s:.1f}s elapsed); worker abandoned"
+                )
         except Exception as exc:  # pragma: no cover - exercised via tests
             logger.exception("scan_fn raised during scheduler iteration")
             self._last_error = str(exc)

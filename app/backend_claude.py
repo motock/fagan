@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.backend_types import AgentHandle
 from app.harness import HarnessRequest, get_harness
+from pipeline import execution
 
 # Vars that can redirect the `claude` CLI off the first-party Anthropic API
 # (Bedrock/Vertex, a custom ANTHROPIC_BASE_URL, or an injected auth token/key)
@@ -195,12 +196,12 @@ class ClaudeCliDriver:
                                  cwd=str(cwd),
                                  options={"allowed_tools": allowed_tools})
         cmd = get_harness("claude").build_agent_command(request).argv
-        with open(log_path, "a" if append else "w") as log_file:
-            proc = subprocess.Popen(
-                cmd, cwd=cwd, env=_first_party_claude_env(),
-                stdout=log_file, stderr=log_file,
-            )
-        return AgentHandle(pid=proc.pid, model=model)
+        handle = execution.spawn_harness(
+            cmd, cwd=cwd, log_path=log_path, append=append,
+            env=_first_party_claude_env(),
+        )
+        handle.model = model
+        return handle
 
     def usage_probe_text(self) -> str:
         proc = subprocess.run(

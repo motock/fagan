@@ -685,7 +685,9 @@ def test_review_story_parks_after_rework_budget_exhausted(plan_dir, agents_dir, 
     })
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "still bad\nVERDICT: REQUEST_CHANGES")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p.review_story("rvpark", "S1")
 

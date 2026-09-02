@@ -50,7 +50,11 @@ _UNCHANGED_JS_SHA256 = {
     # reset/export wiring) were restored before this pin was taken; the final
     # pin adds the bare-shim classList guard in applyTraceVisibility. See
     # test_dashboard_comms_css.py's COMMS_JS_SHA256 comment for the same pin.
-    COMMS_JS: "2c617ea781ee0235f34c674b610e32a0d7deb31d5f84c4e86fb918aef4ebbcad",
+    # Re-pinned for PR #541 ("send selected workspace in chat POST body",
+    # merged 2026-09-02): that story legitimately extended the chat POST
+    # body with the selected workspace id, so the pre-#541 pin no longer
+    # matched the committed file. This story never touched comms.js.
+    COMMS_JS: "313d51a55e5b2d188cbcfbc9ee2687559779c898b1d1185f9bf0eab4136ba830",
     # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
     # subtitle...") legitimately added the updateCommsSubtitle() call to
     # main.js after this story's own pre-implementation baseline was

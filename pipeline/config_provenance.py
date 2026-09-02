@@ -237,6 +237,10 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     # Claude, no model override). See _escalation_target in escalation.py.
     EnvVarSpec("PIPELINE_ESCALATION_BACKEND", "claude"),
     EnvVarSpec("PIPELINE_ESCALATION_MODEL", None),
+    # Wedge detector thresholds
+    EnvVarSpec("PIPELINE_WEDGE_NOTIFY_COOLDOWN_SECONDS", "3600"),
+    EnvVarSpec("PIPELINE_WEDGE_SCAN_ENABLED", "1"),
+    EnvVarSpec("PIPELINE_WEDGE_STALE_ACTIVITY_SECONDS", "1800"),
 )
 
 def _is_secret(name: str) -> bool:

@@ -38,7 +38,6 @@ import pytest
 
 from pipeline import guard_liveness
 
-
 # ---------------------------------------------------------------------------
 # parse_guard_paths: the observed cell shapes, one table entry per shape.
 # Each input is a literal copied from (the prefix of) a real Guard cell.

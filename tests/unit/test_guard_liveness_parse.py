@@ -130,7 +130,7 @@ class TestParseGuardPathsObservedShapes:
 
     @pytest.mark.parametrize("case", PARSE_CASES, ids=[c.id for c in PARSE_CASES])
     def test_shape(self, case):
-        raw, expected = case.values
+        _name, raw, expected = case.values
         assert guard_liveness.parse_guard_paths(raw) == expected
 
 

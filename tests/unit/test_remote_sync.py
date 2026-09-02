@@ -1,0 +1,261 @@
+"""Unit tests for pipeline/remote_sync.py.
+
+The remote-sync contract has two directions:
+
+* ``ensure_remote_worktree`` makes the REMOTE side ready to run the harness:
+  create the bare transport mirror if missing, force-push the story branch
+  into it, and materialize (or reset) a remote worktree at the pushed tip.
+* ``sync_back_commits`` brings the LOCAL story worktree back to the remote's
+  tip: fast-forward when the remote advanced, refuse loudly on divergence.
+
+Git is exercised for real via subprocess against tmp_path repos - git is
+never mocked. The only injected double is ``run_remote``, and the fake used
+here executes the shell commands for real (locally) while recording them, so
+command-routing assertions still run actual git.
+
+Helpers live at module level so each test body is straight-line: no loops,
+no conditionals, one behavioral outcome per test.
+"""
+
+import inspect
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from pipeline import remote_sync
+
+BRANCH = "agent/remote-sync"
+GIT_EMAIL = "remote-sync-tests@example.invalid"
+GIT_NAME = "remote-sync-tests"
+_GIT_IDENTITY = ("-c", f"user.email={GIT_EMAIL}", "-c", f"user.name={GIT_NAME}")
+
+
+def _git(cwd: Path, *args: str) -> str:
+    """Run a real git command in ``cwd``; return stripped stdout."""
+    proc = subprocess.run(
+        ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, (
+        f"git -C {cwd} {' '.join(args)} failed: {proc.stderr.strip()}"
+    )
+    return proc.stdout.strip()
+
+
+def _make_story_worktree(root: Path) -> Path:
+    """Local story worktree with exactly one commit on BRANCH."""
+    worktree = root / "story-worktree"
+    worktree.mkdir()
+    _git(worktree, "init", "-q", "-b", BRANCH)
+    (worktree / "story.md").write_text("story body\n")
+    _git(worktree, "add", ".")
+    _git(worktree, *_GIT_IDENTITY, "commit", "-q", "-m", "initial story commit")
+    return worktree
+
+
+def _remote_paths(root: Path) -> tuple[Path, Path, str]:
+    """(bare repo path, remote worktree path, file:// remote_url)."""
+    bare = root / "remote-mirror.git"
+    remote_cwd = root / "remote-worktree"
+    return bare, remote_cwd, f"file://{bare}"
+
+
+def _commit_file(repo: Path, name: str, content: str, message: str) -> str:
+    """Commit one file in ``repo`` (works in linked worktrees too)."""
+    (repo / name).write_text(content)
+    _git(repo, "add", ".")
+    _git(repo, *_GIT_IDENTITY, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _executing_recorder(calls: list[str]):
+    """run_remote double: records each shell command, then really runs it."""
+
+    def _run_remote(shell_cmd: str) -> None:
+        calls.append(shell_cmd)
+        subprocess.run(shell_cmd, shell=True, check=True, capture_output=True)
+
+    return _run_remote
+
+
+def _commands_containing(calls: list[str], fragment: str) -> list[str]:
+    return [cmd for cmd in calls if fragment in cmd]
+
+
+# ---------- ensure_remote_worktree ----------
+
+
+def test_file_remote_needs_no_runner_and_lands_branch_on_remote(tmp_path):
+    worktree = _make_story_worktree(tmp_path)
+    bare, remote_cwd, remote_url = _remote_paths(tmp_path)
+
+    result = remote_sync.ensure_remote_worktree(
+        worktree, BRANCH, remote_url, remote_cwd=remote_cwd
+    )
+
+    assert result == remote_cwd
+    assert _git(bare, "rev-parse", "--is-bare-repository") == "true"
+    assert _git(remote_cwd, "rev-parse", "HEAD") == _git(worktree, "rev-parse", "HEAD")
+
+
+def test_explicit_run_remote_drives_bare_init_and_worktree_add(tmp_path):
+    worktree = _make_story_worktree(tmp_path)
+    bare, remote_cwd, remote_url = _remote_paths(tmp_path)
+    calls: list[str] = []
+
+    remote_sync.ensure_remote_worktree(
+        worktree,
+        BRANCH,
+        remote_url,
+        remote_cwd=remote_cwd,
+        run_remote=_executing_recorder(calls),
+    )
+
+    init_commands = _commands_containing(calls, "git init --bare")
+    assert len(init_commands) == 1
+    assert "mkdir -p" in init_commands[0]
+    assert str(bare) in init_commands[0]
+    add_commands = _commands_containing(calls, "worktree add")
+    assert len(add_commands) >= 1
+    assert str(remote_cwd) in add_commands[0]
+    assert str(bare) in add_commands[0]
+    assert _git(remote_cwd, "rev-parse", "HEAD") == _git(worktree, "rev-parse", "HEAD")
+
+
+def test_host_supplied_routes_commands_through_ssh_runner(tmp_path, monkeypatch):
+    worktree = _make_story_worktree(tmp_path)
+    _, remote_cwd, remote_url = _remote_paths(tmp_path)
+    hosts: list[str] = []
+    commands: list[str] = []
+
+    def _fake_ssh_run(host: str, shell_cmd: str) -> None:
+        hosts.append(host)
+        commands.append(shell_cmd)
+        subprocess.run(shell_cmd, shell=True, check=True, capture_output=True)
+
+    monkeypatch.setattr(remote_sync, "_ssh_run", _fake_ssh_run)
+    remote_sync.ensure_remote_worktree(
+        worktree, BRANCH, remote_url, remote_cwd=remote_cwd, host="build-host"
+    )
+
+    assert set(hosts) == {"build-host"}
+    assert len(_commands_containing(commands, "git init --bare")) == 1
+    assert _git(remote_cwd, "rev-parse", "HEAD") == _git(worktree, "rev-parse", "HEAD")
+
+
+def test_ssh_remote_without_runner_or_host_fails_closed(tmp_path):
+    worktree = _make_story_worktree(tmp_path)
+    _, remote_cwd, _ = _remote_paths(tmp_path)
+
+    with pytest.raises(ValueError) as excinfo:
+        remote_sync.ensure_remote_worktree(
+            worktree,
+            BRANCH,
+            "ssh://git@example.invalid/srv/remote-mirror.git",
+            remote_cwd=remote_cwd,
+        )
+
+    message = str(excinfo.value)
+    assert "run_remote is required for ssh remotes" in message
+    assert "host" in message
+
+
+def test_redispatch_resets_remote_worktree_to_new_local_tip(tmp_path):
+    worktree = _make_story_worktree(tmp_path)
+    _, remote_cwd, remote_url = _remote_paths(tmp_path)
+    remote_sync.ensure_remote_worktree(
+        worktree, BRANCH, remote_url, remote_cwd=remote_cwd
+    )
+
+    new_tip = _commit_file(worktree, "second.txt", "second change\n", "second commit")
+    remote_sync.ensure_remote_worktree(
+        worktree, BRANCH, remote_url, remote_cwd=remote_cwd
+    )
+
+    assert _git(remote_cwd, "rev-parse", "HEAD") == new_tip
+
+
+def test_ensure_docstring_documents_force_push_as_intentional():
+    doc = inspect.getdoc(remote_sync.ensure_remote_worktree) or ""
+
+    assert "force" in doc.lower()
+
+
+# ---------- sync_back_commits ----------
+
+
+def test_sync_back_returns_unchanged_when_tips_match(tmp_path):
+    worktree = _make_story_worktree(tmp_path)
+    _, remote_cwd, remote_url = _remote_paths(tmp_path)
+    remote_sync.ensure_remote_worktree(
+        worktree, BRANCH, remote_url, remote_cwd=remote_cwd
+    )
+
+    outcome = remote_sync.sync_back_commits(worktree, BRANCH, remote_url)
+
+    assert outcome == "unchanged"
+
+
+def test_sync_back_fast_forwards_local_worktree_to_remote_tip(tmp_path):
+    worktree = _make_story_worktree(tmp_path)
+    _, remote_cwd, remote_url = _remote_paths(tmp_path)
+    remote_sync.ensure_remote_worktree(
+        worktree, BRANCH, remote_url, remote_cwd=remote_cwd
+    )
+    _commit_file(
+        remote_cwd, "remote-note.txt", "written on the remote\n", "remote-side note"
+    )
+
+    outcome = remote_sync.sync_back_commits(worktree, BRANCH, remote_url)
+
+    assert outcome == "fast_forwarded"
+    assert (worktree / "remote-note.txt").read_text() == "written on the remote\n"
+
+
+def test_sync_back_refuses_diverged_histories_and_never_forces_local(tmp_path):
+    worktree = _make_story_worktree(tmp_path)
+    _, remote_cwd, remote_url = _remote_paths(tmp_path)
+    remote_sync.ensure_remote_worktree(
+        worktree, BRANCH, remote_url, remote_cwd=remote_cwd
+    )
+    remote_sha = _commit_file(
+        remote_cwd, "remote-note.txt", "from remote\n", "remote-side commit"
+    )
+    local_sha = _commit_file(
+        worktree, "local-note.txt", "from local\n", "local-side commit"
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        remote_sync.sync_back_commits(worktree, BRANCH, remote_url)
+
+    message = str(excinfo.value)
+    assert local_sha in message
+    assert remote_sha in message
+    assert BRANCH in message
+    assert remote_url in message
+    assert _git(worktree, "rev-parse", "HEAD") == local_sha
+
+
+# ---------- module shape and the production ssh runner ----------
+
+
+def test_module_defines_exactly_the_three_contract_functions():
+    source = Path(inspect.getfile(remote_sync)).read_text()
+
+    assert len(re.findall(r"(?m)^def ", source)) == 3
+    assert callable(remote_sync.ensure_remote_worktree)
+    assert callable(remote_sync.sync_back_commits)
+    assert callable(remote_sync._ssh_run)
+
+
+def test_ssh_run_uses_batch_mode_ssh():
+    source = inspect.getsource(remote_sync._ssh_run)
+
+    assert "ssh" in source
+    assert "BatchMode=yes" in source
+
+
+def test_ssh_run_raises_called_process_error_for_unreachable_host():
+    with pytest.raises(subprocess.CalledProcessError):
+        remote_sync._ssh_run("remote-sync-no-such-host.invalid", "true")

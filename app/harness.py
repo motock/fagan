@@ -31,6 +31,7 @@ __all__ = [
     "ClaudeCliHarness",
     "HarnessCommand",
     "HarnessRequest",
+    "LocalAgentHarness",
     "get_harness",
     "register_harness",
 ]
@@ -155,3 +156,39 @@ class ClaudeCliHarness:
 
 
 register_harness("claude", ClaudeCliHarness)
+
+
+class LocalAgentHarness:
+    """Harness adapter for the local-model agent (scripts/local_agent.py).
+
+    Builds EXACTLY the argv and the six base ``LOCAL_AGENT_*`` env keys
+    OllamaDriver.dispatch has always spawned for a local agent run —
+    byte-identical construction, moved here so the driver delegates command
+    building to the harness seam. Stateless and pure: no I/O, no subprocess,
+    no cached per-call state.
+
+    Env is deliberately MINIMAL: only the six base keys every local-agent
+    spawn needs (model/system/task/endpoint/timeout/provider). The driver
+    keeps owning everything dispatch-specific — num_ctx/temperature/max_steps,
+    think, oracle acceptance/mode, rework, transcript/resume — and merges
+    those over ``command.env`` afterward, so a stale ``LOCAL_AGENT_*`` value
+    exported in the inherited environment still loses to the harness value
+    (the merge order ``{**os.environ, **command.env}`` is the caller's job).
+    """
+
+    def build_agent_command(self, request: HarnessRequest) -> HarnessCommand:
+        """Build the local-agent argv + base env for ``request``."""
+        options = request.options or {}
+        argv = [options["python_executable"], options["agent_script"]]
+        env = {
+            "LOCAL_AGENT_MODEL": options["model"],
+            "LOCAL_AGENT_SYSTEM": options["system"],
+            "LOCAL_AGENT_TASK": options["task"],
+            "LOCAL_AGENT_ENDPOINT": options["endpoint"],
+            "LOCAL_AGENT_TIMEOUT": options["timeout"],
+            "LOCAL_AGENT_PROVIDER": options["provider"],
+        }
+        return HarnessCommand(argv=argv, env=env)
+
+
+register_harness("local", LocalAgentHarness)

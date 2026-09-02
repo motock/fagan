@@ -176,7 +176,7 @@ Reference comparables:
       out of scope for any deprecation, unlike the `LOCAL_AGENT_*` transport
       vars above which were always meant to go away once nothing read them.
 - [x] **Split the 74 KB README** into a quickstart + a reference doc
-      (2026-07-27, `5f7d811`). README.md is now a 126-line quickstart;
+      (2026-07-27, `2cca309`). README.md is now a 126-line quickstart;
       REFERENCE.md (919 lines) holds the moved reference material.
 - [x] **W3a — effective-config + provenance view** (2026-08-09, plan
       `w3a-effective-config-provenance`, PRs #247-#258). Makes the effective

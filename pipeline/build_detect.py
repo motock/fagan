@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import types
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -563,6 +563,46 @@ def _added_pytest_test_paths(
                 and (p.name.startswith("test_") or p.name.endswith("_test.py"))):
             paths.append(line)
     return paths
+
+
+
+def _pytest_ignored_paths(cmd: list[str]) -> list[str]:
+    """Return the paths a pytest command excludes via ``--ignore``.
+
+    Handles both spellings pytest accepts: ``--ignore=tests/benchmark`` and
+    ``--ignore tests/benchmark``. A trailing bare ``--ignore`` with no value
+    is skipped rather than raising.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(cmd):
+        tok = cmd[i]
+        if tok.startswith("--ignore="):
+            value = tok.split("=", 1)[1]
+            if value:
+                out.append(value)
+        elif tok == "--ignore" and i + 1 < len(cmd):
+            out.append(cmd[i + 1])
+            i += 1
+        i += 1
+    return out
+
+
+def _is_hidden_by_pytest_ignores(rel_path: str, ignores: list[str]) -> bool:
+    """True when `rel_path` sits under one of `ignores` (so pytest's own
+    collection would never reach it).
+
+    Compared segment-wise, not as a string prefix: ``tests/benchmarking/``
+    is NOT hidden by ``--ignore=tests/benchmark``.
+    """
+    candidate = PurePosixPath(rel_path.strip("/"))
+    for raw in ignores:
+        ignored = PurePosixPath(raw.strip("/"))
+        if not ignored.parts:
+            continue
+        if candidate == ignored or ignored in candidate.parents:
+            return True
+    return False
 
 
 def _run_lint_gate(worktree: Path, test_env: dict) -> dict | None:

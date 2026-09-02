@@ -408,14 +408,41 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     elif _is_pytest_cmd(test_cmd):
         # Mode 42 done-bar blindspot: a story without an acceptance block
         # whose deliverable lives under tests/ can add its own test_*.py
-        # there, which --ignore=tests then hides from this same gate run
+        # there, which an --ignore then hides from this same gate run
         # (see _added_pytest_test_paths). Pass those paths explicitly so the
         # model's own tests for its own tests/-scoped code actually execute.
+        #
+        # But ONLY the paths that are genuinely hidden. A positional path
+        # argument REPLACES pytest's default collection rather than adding
+        # to it, so appending an already-collected path silently converts
+        # this full-suite done-bar into a single-file done-bar:
+        #
+        #   pytest --override-ini=testpaths=. --ignore=tests/benchmark
+        #       -> collects the whole suite
+        #   pytest --override-ini=testpaths=. --ignore=tests/benchmark A.py
+        #       -> collects ONLY A.py
+        #
+        # The unconditional append was safe only while
+        # _apply_pytest_collection_overrides emitted a blanket
+        # `--ignore=tests` (every tests/ path was hidden, so every path
+        # needed passing). That blanket ignore was removed - it now emits
+        # only --ignore=tests/benchmark --ignore=tests/experiments - which
+        # left the append narrowing the gate for the common case.
+        #
+        # Live consequence (2026-09-02, PR #552): story f68b8350's gate ran
+        # only its own new tests/unit/test_guard_liveness_check.py (23
+        # tests), never ran the pre-existing sibling test file that was red,
+        # returned 0, and merged onto a broken master.
         own_test_paths = _added_pytest_test_paths(
             worktree, story_key, _default_branch()  # noqa: F821
         )
-        if own_test_paths:
-            test_cmd = [*test_cmd, *(str(worktree / p) for p in own_test_paths)]
+        ignored = _pytest_ignored_paths(test_cmd)  # noqa: F821
+        hidden_paths = [
+            rel for rel in own_test_paths
+            if _is_hidden_by_pytest_ignores(rel, ignored)  # noqa: F821
+        ]
+        if hidden_paths:
+            test_cmd = [*test_cmd, *(str(worktree / p) for p in hidden_paths)]
 
     # Grade in a clean dev env, not the MCP server's operational one. The
     # server carries PIPELINE_* (pause/resume thresholds, backend dispatch,

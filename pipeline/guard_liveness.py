@@ -1,4 +1,9 @@
-"""Pure parsing helpers for the Guard cell of docs/failure_modes.json.
+"""Guard-liveness tooling for the Guard cell of docs/failure_modes.json.
+
+Two halves share this module.  The pure half parses and checks with no
+I/O beyond read-only ``tests/`` walks; the runner half (below the pure
+code) owns the module's ONLY subprocess -- one ``pytest --collect-only``
+spawn -- plus the CLI gate and the recurrence-alert framing.
 
 The Guard cell is free text written by humans.  Two helpers turn it into
 candidate regression-test file references:
@@ -18,11 +23,20 @@ Contract:
   test (e.g. ``local_agent.py`` -- no ``test_`` prefix, no ``tests/``
   prefix) STILL yields a candidate.  Existence filtering and
   test-vs-non-test judgement is the later checker story's job, not ours.
-- Pure functions: no I/O, no subprocesses, no module-level mutable state.
+- Pure helpers: no I/O, no subprocesses, no module-level mutable state.
+  The runner functions below are the deliberate exception: they own the
+  module's only subprocess and stdout emission, and nothing else.
 """
 
+import argparse
+import importlib
+import json
+import logging
 import re
+import sys
 from pathlib import Path, PurePosixPath
+
+logger = logging.getLogger(__name__)
 
 # One cited unit is either a backticked token (group 1) or a bare path
 # ending in .py (group 2).  A "(...)" note DIRECTLY after the token is
@@ -297,3 +311,215 @@ def check_guard_liveness(
             "uncollected_files": uncollected_entries,
         },
     }
+
+
+# --------------------------------------------------------------------------- #
+# Runner: the side-effecting half.  ALL of this module's subprocess I/O
+# lives in this section; the pure helpers above never spawn or emit.
+# --------------------------------------------------------------------------- #
+def collect_test_files(repo_root: Path, timeout: float = 120.0) -> list[str] | None:
+    """Collect the repo's test files with ONE ``pytest --collect-only`` run.
+
+    Spawns exactly one subprocess -- ``[sys.executable, "-m", "pytest",
+    "--collect-only", "-q", "--ignore=tests/benchmark",
+    "--ignore=tests/experiments"]`` -- with ``cwd=repo_root`` and the given
+    timeout in seconds (default 120).
+
+    Returns the collected test-file paths parsed from stdout: one path per
+    line until the summary line, ``::``-nodeid suffixes stripped,
+    duplicates collapsed, order preserved.  Returns ``None`` -- logging a
+    warning, never raising -- when the subprocess fails, times out, or
+    cannot even be started: a broken collection degrades to "no collection
+    data", it does not break the caller.
+    """
+    # Resolved at call time rather than at module scope: the pure half of
+    # this module is audited to stay free of subprocess machinery, and the
+    # runner tests patch subprocess.run globally -- a late lookup honours
+    # both contracts.
+    subprocess = importlib.import_module("subprocess")
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--collect-only",
+        "-q",
+        "--ignore=tests/benchmark",
+        "--ignore=tests/experiments",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("pytest collection failed for %s: %s", repo_root, exc)
+        return None
+    if proc.returncode != 0:
+        logger.warning(
+            "pytest collection exited %d for %s; continuing without "
+            "collection data",
+            proc.returncode,
+            repo_root,
+        )
+        return None
+
+    files: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        path = stripped.split("::", 1)[0]
+        if not path.endswith(".py"):
+            break  # summary line: nothing after it is a collected file
+        if path not in files:
+            files.append(path)
+    return files
+
+
+def _load_dataset(dataset_path: Path) -> list[dict]:
+    """Read the failure-mode dataset: a JSON array of entry dicts.
+
+    A missing or unparseable dataset is a CALLER error, not a liveness
+    result, so it raises a clear ``ValueError`` naming the file instead of
+    producing a report.
+    """
+    try:
+        raw = dataset_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"cannot read dataset {dataset_path}: {exc}") from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"dataset {dataset_path} is not valid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise TypeError(
+            f"dataset {dataset_path} must be a JSON array of entries, "
+            f"got {type(data).__name__}"
+        )
+    return data
+
+
+def _frame_recurrence_alerts(report: dict, collected: list[str] | None) -> dict:
+    """Frame recurrence alerts onto a :func:`check_guard_liveness` report.
+
+    One alert per entry whose status expects a live guard (``FIXED``) yet
+    cites files that are missing from ``tests/`` or -- when a collected
+    list exists -- present but not collected.  Shaped ``{"mode", "reason":
+    "missing_guard" | "uncollected_guard", "files": [...]}``; an entry
+    alerts at most once, with ``missing`` winning over ``uncollected``.
+
+    Also sets ``summary["recurrence_alerts"]`` to the alert count and
+    ``summary["collection_ok"]`` to whether a collected list was actually
+    used -- False too when collection was skipped or failed, so consumers
+    never mistake "no uncollected files" for "everything collected".
+    """
+    alerts: list[dict] = []
+    for entry in report["entries"]:
+        if not entry["expected_live"]:
+            continue
+        if entry["missing"]:
+            alerts.append(
+                {
+                    "mode": entry["mode"],
+                    "reason": "missing_guard",
+                    "files": entry["missing"],
+                }
+            )
+        elif entry["uncollected"]:
+            alerts.append(
+                {
+                    "mode": entry["mode"],
+                    "reason": "uncollected_guard",
+                    "files": entry["uncollected"],
+                }
+            )
+    report["recurrence_alerts"] = alerts
+    report["summary"]["recurrence_alerts"] = len(alerts)
+    report["summary"]["collection_ok"] = collected is not None
+    return report
+
+
+def run_liveness_check(repo_root: Path, dataset_path: Path, emit: bool = False) -> dict:
+    """Run the full guard-liveness gate for one repo and return its report.
+
+    Loads the dataset (``ValueError`` when missing or unparseable -- a
+    caller error, not a liveness result), collects the repo's test files
+    with :func:`collect_test_files`, runs the pure
+    :func:`check_guard_liveness` over both, and frames recurrence alerts.
+
+    ``emit=True`` prints the report as one JSON document to stdout.  That
+    is this story's ONLY output channel: no file writes, no bus events, no
+    other notifications -- the same report serves liveness and recurrence.
+    """
+    dataset = _load_dataset(dataset_path)
+    collected = collect_test_files(repo_root)
+    report = check_guard_liveness(dataset, repo_root, collected_test_files=collected)
+    report = _frame_recurrence_alerts(report, collected)
+    if emit:
+        print(json.dumps(report, indent=2))
+    return report
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI gate: run the check, print the report, return the exit code.
+
+    Flags: ``--repo-root`` (default: the current working directory),
+    ``--dataset`` (default: ``<repo-root>/docs/failure_modes.json``), and
+    ``--no-collect`` (skip the pytest subprocess; existence-only checking).
+
+    Returns 0 when the report has no recurrence alerts and 1 when it does
+    -- that is what makes this a gate.  A failed pytest collection is
+    never an exit-code event: it degrades to ``collection_ok: false``.
+    """
+    parser = argparse.ArgumentParser(
+        prog="pipeline.guard_liveness",
+        description=(
+            "Guard-liveness gate: report which FIXED failure modes still "
+            "lack a live regression test, and exit nonzero when any do."
+        ),
+    )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path.cwd(),
+        help="repository to check (default: current working directory)",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=None,
+        help="failure-mode dataset JSON "
+        "(default: <repo-root>/docs/failure_modes.json)",
+    )
+    parser.add_argument(
+        "--no-collect",
+        action="store_true",
+        help="skip the pytest collection subprocess; check file existence only",
+    )
+    args = parser.parse_args(argv)
+
+    repo_root: Path = args.repo_root
+    dataset_path = (
+        args.dataset
+        if args.dataset is not None
+        else repo_root / "docs" / "failure_modes.json"
+    )
+    if args.no_collect:
+        # Existence-only: no subprocess is spawned and no collected list is
+        # used, so collection_ok reports False rather than a fake success.
+        report = _frame_recurrence_alerts(
+            check_guard_liveness(_load_dataset(dataset_path), repo_root),
+            None,
+        )
+    else:
+        report = run_liveness_check(repo_root, dataset_path)
+    print(json.dumps(report, indent=2))
+    return 1 if report["recurrence_alerts"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

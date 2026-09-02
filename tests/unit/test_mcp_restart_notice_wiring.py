@@ -89,7 +89,7 @@ def test_detection_is_called_with_worktree_and_default_branch_base_ref(
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
 
     result = p.approve_merge("amargs", "P1")
 
@@ -230,7 +230,9 @@ def test_no_reconnect_notice_when_worktree_missing_uses_real_detection(
     notes = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p.approve_merge("amreal", "P1")
 
@@ -251,7 +253,7 @@ def test_notify_user_called_after_mark_plane_done(plan_dir, monkeypatch):
         p, "_mark_plane_done", lambda key, plan=None: order.append("mark_done")
     )
 
-    def _notify(plan, msg):
+    def _notify(plan, msg, **kwargs):
         if "/mcp reconnect" in msg:
             order.append("notify")
 
@@ -271,7 +273,9 @@ def test_reconnect_notice_text_matches_helper_output(plan_dir, monkeypatch):
     notes = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p, "_mcp_self_source_touched", lambda wt, br: ["pipeline/server.py"]
     )

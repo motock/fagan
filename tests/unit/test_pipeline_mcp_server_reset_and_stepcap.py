@@ -50,7 +50,9 @@ def test_dispatch_warns_on_loaded_model_mismatch(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("swap_warn", "S1")
 
@@ -86,7 +88,9 @@ def test_dispatch_warns_on_loaded_model_mismatch_under_explicit_provider_name(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("swap_warn_lmstudio", "S1")
 
@@ -116,7 +120,9 @@ def test_dispatch_no_warn_when_same_model_loaded(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("same_model", "S1")
 
@@ -150,7 +156,9 @@ def test_dispatch_no_warn_when_no_agents_in_progress(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("fresh", "S1")
 
@@ -182,7 +190,9 @@ def test_dispatch_no_warn_when_max_concurrent_agents_is_one(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("single_slot", "S1")
 
@@ -213,7 +223,9 @@ def test_dispatch_no_warn_for_claude_backend(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("claude", "S1")
 
@@ -250,7 +262,9 @@ def test_dispatch_no_warn_when_resolved_tier_matches_loaded(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("tier_resolves_to_loaded", "S1")
 
@@ -284,7 +298,9 @@ def test_dispatch_warns_with_resolved_tag_when_tier_mismatches_loaded(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("tier_resolves_to_mismatch", "S1")
 
@@ -328,7 +344,9 @@ def test_dispatch_warns_when_serving_parallelism_below_max_concurrent(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("np_dropped", "S1")
 
@@ -367,7 +385,9 @@ def test_dispatch_no_warn_when_serving_parallelism_unknown(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("np_unknown", "S1")
 
@@ -401,7 +421,9 @@ def test_dispatch_no_warn_when_serving_parallelism_meets_max_concurrent(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("np_ok", "S1")
 
@@ -492,7 +514,9 @@ def test_review_story_rate_limited_notifies_user(plan_dir, agents_dir, monkeypat
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR")))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.review_story("rl_notify", "S1")
 
@@ -532,7 +556,9 @@ def test_review_story_bare_request_changes_is_treated_as_inconclusive(plan_dir, 
     monkeypatch.setattr(p, "_open_pr",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no PR on empty REQUEST_CHANGES")))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p.review_story("rc_empty", "S1")
 
@@ -558,7 +584,9 @@ def test_review_story_bare_request_changes_parks_after_max_inconclusive_attempts
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "VERDICT: REQUEST_CHANGES")
     monkeypatch.setattr(p, "_open_pr", lambda *a, **k: pr_calls.append(1))
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result1 = p.review_story("rc_empty_park", "S1")
     assert result1["status"] == "tests_passed"

@@ -190,7 +190,7 @@ def _dispatch_resumed(
 
     if notify_calls is not None:
         monkeypatch.setattr(p, "_notify_user",
-                            lambda plan, msg: notify_calls.append((plan, msg)))
+                            lambda plan, msg, **kwargs: notify_calls.append((plan, msg)))
 
     return p.dispatch_story(plan_name, story_key)
 

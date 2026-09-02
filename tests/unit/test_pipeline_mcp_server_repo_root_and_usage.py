@@ -72,7 +72,9 @@ def test_advance_pipeline_gated_dispatches_merges_and_parks(plan_dir, monkeypatc
     merged = []
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: merged.append(key) or "merged")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p.advance_pipeline("go")
     assert dispatched == ["T1"]

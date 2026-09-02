@@ -352,6 +352,20 @@ Each record has the following keys:
 - `event`: machine‑readable name for the kind of notice, e.g.
   `ci_pending_stalled`.  It lives in `payload["event"]` on the bus event and is
   distinct from the outer event envelope whose `type` is always `"notification"`.
+  Story‑lifecycle notifications emitted by `pipeline/advance.py` carry one of
+  these structured `event` names, drawn from a fixed vocabulary so the
+  notifications JSONL sidecar can drive cost‑per‑merged‑story metrics:
+  `dispatch_failed`, `escalated`, `model_fallback`, `agent_gave_up`,
+  `tests_failed`, `merge_ci_rework`, `merge_gate_failed`, `merge_gate_retry`,
+  `merge_failed`, `merge_retry`, and `story_merged` (emitted on the
+  successful‑merge path only, immediately after the story is marked done).
+  Two notifications are intentionally excluded from this vocabulary: the
+  dispatch‑retry notice (`"<key> dispatch attempt n/max failed …; will
+  retry."`) and the parked notice (`"<key> parked: <reason>"`) — both are
+  transient scheduling/adjudication states rather than terminal story
+  outcomes, so counting them would inflate cost‑per‑merged‑story numerators
+  without a corresponding merge.  Records whose message matches no vocabulary
+  entry simply omit the `event` key (backward compatible).
 - `dedup_key`: value captured at write time; it is **not** used to suppress a
   write.  Only the current file plus the `PIPELINE_NOTIFICATIONS_KEEP` most
   recent generations remain on disk — older generations are deleted at

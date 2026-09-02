@@ -95,12 +95,15 @@ def test_plane_set_state_silenced_short_circuits_future_calls(monkeypatch, capsy
 
     # Second + third calls: no HTTP, no warning, no notify - silent no-ops.
     notify = []
-    monkeypatch.setattr(pt, "_notify_user", lambda plan, msg: notify.append(msg),
+    monkeypatch.setattr(pt, "_notify_user",
+                        lambda plan, msg, **kwargs: notify.append(msg),
                         raising=False)
     # _notify_user lives on the server module; _plane_set_state imports it
     # lazily, so patch the server attribute the lazy import resolves to.
     import pipeline.server as pserver
-    monkeypatch.setattr(pserver, "_notify_user", lambda plan, msg: notify.append(msg))
+    monkeypatch.setattr(
+        pserver, "_notify_user", lambda plan, msg, **kwargs: notify.append(msg)
+    )
 
     assert pt._plane_set_state("B", "completed", plan_name="pl") is True
     assert pt._plane_set_state("C", "completed", plan_name="pl") is True
@@ -146,7 +149,9 @@ def test_plane_set_state_runtime_error_still_retries_and_notifies(monkeypatch):
 
     notify = []
     import pipeline.server as pserver
-    monkeypatch.setattr(pserver, "_notify_user", lambda plan, msg: notify.append(msg))
+    monkeypatch.setattr(
+        pserver, "_notify_user", lambda plan, msg, **kwargs: notify.append(msg)
+    )
 
     result = pt._plane_set_state("S1", "completed", plan_name="pl")
     # Existing behavior: exhaust the budget, return False, notify once.

@@ -94,7 +94,9 @@ def test_notifies_when_pipeline_server_py_was_merged(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p, "_mcp_self_source_touched", lambda worktree, base_ref: ["pipeline/server.py"]
     )
@@ -115,7 +117,9 @@ def test_notifies_when_only_the_app_module_was_merged(plan_dir, monkeypatch):
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p,
         "_mcp_self_source_touched",
@@ -136,7 +140,9 @@ def test_both_files_touched_produce_exactly_one_notification(plan_dir, monkeypat
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p,
         "_mcp_self_source_touched",
@@ -163,7 +169,9 @@ def test_empty_detection_emits_no_reconnect_notice_and_notify_list_untouched(
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(p, "_mcp_self_source_touched", lambda worktree, base_ref: [])
 
     result = p.advance_pipeline("apnone")
@@ -188,7 +196,7 @@ def test_detection_runs_before_merge_pr(plan_dir, monkeypatch):
         p, "_merge_pr", lambda wt, key: order.append("merge") or "merged"
     )
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
 
     def _detect(worktree, base_ref):
         order.append("detect")
@@ -208,7 +216,7 @@ def test_detection_called_with_worktree_and_origin_default_branch(plan_dir, monk
     _write_manifest(plan_dir, "apargs", {"P1": _approved_story(worktree="/some/worktree")})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
     calls = []
 
     def _detect(worktree, base_ref):
@@ -250,7 +258,9 @@ def test_merge_pr_exception_suppresses_reconnect_notice_even_if_touched(
         p, "_mark_plane_done", lambda key, plan=None: mark_plane_calls.append(key)
     )
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p, "_mcp_self_source_touched", lambda worktree, base_ref: ["pipeline/server.py"]
     )
@@ -280,7 +290,9 @@ def test_only_the_merged_story_with_touched_files_gets_notified(plan_dir, monkey
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     def _detect(worktree, base_ref):
         return ["pipeline/server.py"] if worktree == "/x1" else []
@@ -303,7 +315,7 @@ def test_notified_story_key_recorded_in_summary_notify(plan_dir, monkeypatch):
     _write_manifest(plan_dir, "apsummary", {"P1": _approved_story()})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
     monkeypatch.setattr(
         p, "_mcp_self_source_touched", lambda worktree, base_ref: ["pipeline/server.py"]
     )

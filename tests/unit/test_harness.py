@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import ClassVar, Protocol
 
 import pytest
+
+from app import harness
 from app.harness import (
     AgentHarness,
     HarnessCommand,
@@ -38,8 +40,6 @@ from app.harness import (
     get_harness,
     register_harness,
 )
-
-from app import harness
 
 # ---------------------------------------------------------------------------
 # Fakes: the registry probe this story tests with. Real harnesses ('claude',

@@ -401,7 +401,9 @@ def test_dispatch_no_warn_when_serving_parallelism_meets_max_concurrent(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("np_ok", "S1")
 

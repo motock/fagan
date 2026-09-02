@@ -138,7 +138,9 @@ def test_both_files_touched_produce_exactly_one_notification(plan_dir, monkeypat
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p,
         "_mcp_self_source_touched",

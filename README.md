@@ -48,6 +48,14 @@ cp overlord-policy.md ~/.claude/overlord-policy.md
 # 4. Restart Claude Code (or start a new session) so it picks up the MCP server
 ```
 
+`scripts/install.sh` creates the `.venv`, installs `requirements.txt`, and reports
+on the tools the pipeline shells out to — required: `git`, `gh`, and the `claude`
+CLI; optional: `ollama` and `docker` — with graceful-degradation messaging, and is
+safe to re-run. It does **not** register the MCP server, set environment
+variables, or install the persona subagents — steps 2–4 above cover those. With
+nothing but the `claude` backend configured, `ollama`/`docker` being absent is
+expected, not an error.
+
 From a Claude Code session in the project you want the pipeline to work on:
 
 1. Ask the `product-analyst` subagent to turn a goal into epics/stories, or

@@ -142,7 +142,7 @@ async function sendCommsMessage(text) {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, history: commsHistory })
+      body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, workspace: state.selectedWorkspace, history: commsHistory })
     });
     if (!res.ok) throw new Error('non-2xx');
     const data = await res.json();

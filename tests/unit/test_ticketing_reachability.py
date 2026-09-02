@@ -95,7 +95,8 @@ def test_plane_set_state_silenced_short_circuits_future_calls(monkeypatch, capsy
 
     # Second + third calls: no HTTP, no warning, no notify - silent no-ops.
     notify = []
-    monkeypatch.setattr(pt, "_notify_user", lambda plan, msg: notify.append(msg),
+    monkeypatch.setattr(pt, "_notify_user",
+                        lambda plan, msg, **kwargs: notify.append(msg),
                         raising=False)
     # _notify_user lives on the server module; _plane_set_state imports it
     # lazily, so patch the server attribute the lazy import resolves to.

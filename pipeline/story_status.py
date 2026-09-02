@@ -518,12 +518,48 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             # stays read-only.
             grading_alive = True
 
+    # Follow-up ticks must not re-grade an already-graded story: once the
+    # post-grade logic has run, the grading bookkeeping is consumed and the
+    # story's status has moved off in_progress. Key on that cleared state
+    # (not on any leftover result file) so a later tick neither re-collects
+    # nor re-spawns a duplicate grade.
+    if grading_pid is None and story.get("status") != "in_progress":
+        return {"status": story.get("status"), "pid": pid}
+
     test_result = None
     if grading_pid is None:
         starter = globals().get("start_detached_grade")
         if starter is not None:
-            result_path = worktree / ".detached_grade_result.json"
-            log_path = worktree / ".detached_grade.log"
+            # Security review (REQUEST_CHANGES): the detached grade's result
+            # channel must not live in the agent-writable worktree — the code
+            # under test could forge a passing grade there during its own
+            # build and bypass the acceptance gate. When a pipeline-owned
+            # state dir is configured (PIPELINE_STATE_DIR), the result/log
+            # files live under <state_root>/grading/<story_id>/ (mode 0o700)
+            # and the collector reads ONLY the persisted path. The guard
+            # below refuses to aim the hardened channel back into the
+            # worktree, so a regression cannot silently move it back.
+            state_root = os.environ.get("PIPELINE_STATE_DIR")
+            if state_root:
+                grading_dir = Path(state_root) / "grading" / story_key
+                grading_dir.mkdir(parents=True, exist_ok=True)
+                grading_dir.chmod(0o700)
+                result_path = grading_dir / "result.json"
+                log_path = grading_dir / "grading.log"
+                _worktree_resolved = Path(worktree).resolve()
+                for _artifact in (result_path, log_path):
+                    if _artifact.resolve().is_relative_to(_worktree_resolved):
+                        raise RuntimeError(
+                            "detached grade result channel must live outside "
+                            "the agent-writable worktree "
+                            f"({_worktree_resolved}): {_artifact}"
+                        )
+            else:
+                # No state dir provisioned: legacy worktree channel (the
+                # pre-hardening behavior, kept for environments that have
+                # not set PIPELINE_STATE_DIR).
+                result_path = worktree / ".detached_grade_result.json"
+                log_path = worktree / ".detached_grade.log"
             try:
                 grade_pid = starter(
                     test_cmd,
@@ -554,6 +590,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # poll, so the story would never time out.
         return {"status": "grading", "pid": grading_pid}
     else:
+        # Follow-up ticks must not re-collect an already-consumed grade: the
+        # bookkeeping is deleted below and the story's status has moved off
+        # in_progress, so a later tick no-ops here instead of re-reading any
+        # file or re-advancing the story.
+        if story.get("status") != "in_progress":
+            return {"status": story.get("status"), "pid": pid}
         collector = globals().get("collect_detached_grade")
         grade_result_path = story.get("grading_result_path")
         collected = None
@@ -603,10 +645,12 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             stderr=raw_stderr if isinstance(raw_stderr, str) else "",
         )
         # The bookkeeping is consumed: a future dead-pid re-grade starts clean
-        # instead of re-collecting a stale result file.
+        # instead of re-collecting a stale result file. collected_at records
+        # when the verdict was merged so later ticks key on the cleared state.
         story.pop("grading_pid", None)
         story.pop("grading_started_at", None)
         story.pop("grading_result_path", None)
+        story["collected_at"] = datetime.now(timezone.utc).isoformat()
         _atomic_write_json(manifest_path, manifest)
 
     if test_result is None:

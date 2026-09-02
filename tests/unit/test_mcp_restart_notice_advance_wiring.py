@@ -190,7 +190,7 @@ def test_detection_runs_before_merge_pr(plan_dir, monkeypatch):
         p, "_merge_pr", lambda wt, key: order.append("merge") or "merged"
     )
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
 
     def _detect(worktree, base_ref):
         order.append("detect")

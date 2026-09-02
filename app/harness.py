@@ -1,0 +1,111 @@
+"""Agent-harness seam: value types, protocol, and the harness registry.
+
+The AGENT HARNESS axis' counterpart to app/backend.py's Backend seam. This
+module owns:
+
+- ``HarnessRequest`` — the resolved inputs a caller hands a harness.
+- ``HarnessCommand`` — the argv plus ADDITIONAL env a harness wants executed.
+- ``AgentHarness`` — the protocol every harness adapter satisfies.
+- ``register_harness`` / ``get_harness`` and the cumulative ``_HARNESSES``
+  registry, keyed by names normalized with ``.strip().lower()``.
+
+Fail-closed: ``get_harness`` raises ValueError for unknown names and never
+substitutes a default harness — the same loud-failure posture as
+``get_backend()`` for unknown drivers and the PIPELINE_EXEC_DISPATCH
+fail-closed pattern. The registry starts EMPTY; adapters (the 'claude' and
+'local' harnesses of later stories) register themselves into it, and it is
+never cleared or reset.
+
+Import hygiene: ONLY the stdlib is imported here (dataclasses/typing).
+Adapters import this module — never the reverse — so this file must not
+import any app.*, pipeline.*, or scripts.* module (no import cycles, ever).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol
+
+__all__ = [
+    "AgentHarness",
+    "HarnessCommand",
+    "HarnessRequest",
+    "get_harness",
+    "register_harness",
+]
+
+
+@dataclass(frozen=True)
+class HarnessRequest:
+    """Everything a harness needs to build and run one agent command.
+
+    ``acceptance`` optionally carries the acceptance commands the run will be
+    graded against. ``options`` carries harness-specific resolved values
+    (e.g. ``python_executable`` / ``agent_script``) supplied by the calling
+    driver; a harness reads the keys it knows and ignores the rest.
+    """
+
+    prompt: str
+    system: str | None
+    model: str
+    cwd: str
+    acceptance: list[str] | None = None
+    options: dict | None = None
+
+
+@dataclass(frozen=True)
+class HarnessCommand:
+    """The process a harness wants executed.
+
+    ``env`` holds ONLY the ADDITIONAL environment variables this harness
+    requires; the caller merges them over its own inherited environment.
+    """
+
+    argv: list[str]
+    env: dict
+
+
+class AgentHarness(Protocol):
+    """A harness adapter: resolves a request into an executable command."""
+
+    def build_agent_command(self, request: HarnessRequest) -> HarnessCommand:
+        """Build the argv/env for ``request``. Pure: no I/O, no subprocess."""
+        ...
+
+
+# Cumulative registry of harness adapters, keyed by normalized name. Starts
+# empty on purpose: there is no default harness, and unknown names fail
+# closed. Later stories register 'claude' and 'local' here at import time.
+_HARNESSES: dict[str, type] = {}
+
+
+def register_harness(name: str, cls: type) -> None:
+    """Register harness ``cls`` under ``name`` (normalized .strip().lower()).
+
+    Re-registering the identical class is an idempotent no-op. Registering a
+    DIFFERENT class under an existing name raises ValueError and leaves the
+    original binding intact — the registry is never silently rebound.
+    """
+    key = name.strip().lower()
+    if key in _HARNESSES and _HARNESSES[key] is not cls:
+        raise ValueError(
+            f"harness {key!r} is already registered to "
+            f"{_HARNESSES[key].__name__!r}; refusing to rebind to "
+            f"{cls.__name__!r}"
+        )
+    _HARNESSES[key] = cls
+
+
+def get_harness(name: str) -> AgentHarness:
+    """Return a fresh instance of the harness registered under ``name``.
+
+    Fail-closed: an unknown name raises ValueError listing the registered
+    names; there is no default harness and a failed lookup never mutates the
+    registry. The class is constructed with no arguments on every call —
+    harnesses are stateless adapters, not cached singletons.
+    """
+    key = name.strip().lower()
+    if key not in _HARNESSES:
+        registered = ", ".join(sorted(_HARNESSES)) or "(none)"
+        raise ValueError(f"unknown harness {name!r}; registered: {registered}")
+    return _HARNESSES[key]()

@@ -82,6 +82,37 @@ See [Minimal configuration](REFERENCE.md#minimal-configuration) for the
 handful of variables actually worth setting on day one, versus the ~100 that
 exist purely for tuning.
 
+### Getting-started walkthrough
+
+No local model is required anywhere in this walkthrough: with
+`PIPELINE_BACKEND_DISPATCH=claude` (the default) dispatch and review shell out
+to the Claude Code CLI and never touch ollama.
+
+1. **Install** — one command: `scripts/install.sh` (see the quickstart above
+   for what it does and does not do).
+2. **Register the MCP server and personas** — quickstart steps 2–3 above
+   (`claude mcp add ...` plus copying `agents/*.md` and the overlord policy),
+   then restart Claude Code.
+3. **Start the dashboard** — `scripts/dashboard.sh start`, then open
+   `http://localhost:8000` and pick your target project in the workspace
+   picker.
+4. **Decompose a tiny goal** — ask the `product-analyst` subagent (or the
+   dashboard's decompose action) to turn a one-liner goal into
+   epics/stories, then `mcp__pipeline__save_plan` the result with its
+   `repo_root` field pointing at your target project — not this pipeline repo.
+5. **Dispatch the first ready story** — `mcp__pipeline__list_ready_stories`,
+   then `mcp__pipeline__dispatch_story` on the first one, and watch the story
+   advance across the kanban board in the dashboard.
+6. **Watch it merge** — with `PIPELINE_AUTONOMY=gated` (the default), a
+   risk-`low` story that passes review merges unattended. Start with
+   `PIPELINE_AUTONOMY=dry-run` first, per the quickstart advice above.
+7. **Prefer the scripted path?** — `python scripts/smoke_getting_started.py`
+   runs the same flow end-to-end without the dashboard, in a scratch
+   `PLAN_DIR` that never touches your real plans.
+
+For what can still go wrong, see
+[Reliability & limitations](#reliability--limitations).
+
 ### Companion MCP server (overlord + acceptance-oracle only)
 
 Not ready to adopt the whole orchestrator? `pipeline/companion_server.py` is a

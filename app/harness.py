@@ -28,6 +28,7 @@ from typing import Protocol
 
 __all__ = [
     "AgentHarness",
+    "ClaudeCliHarness",
     "HarnessCommand",
     "HarnessRequest",
     "get_harness",
@@ -109,3 +110,48 @@ def get_harness(name: str) -> AgentHarness:
         registered = ", ".join(sorted(_HARNESSES)) or "(none)"
         raise ValueError(f"unknown harness {name!r}; registered: {registered}")
     return _HARNESSES[key]()
+
+
+class ClaudeCliHarness:
+    """Harness adapter for the first-party Anthropic `claude` CLI.
+
+    Builds EXACTLY the argv ClaudeCliDriver.dispatch has always spawned for
+    an agent run — byte-identical construction, moved here so the driver
+    delegates command building to the harness seam. Stateless and pure: no
+    I/O, no subprocess, no cached per-call state.
+
+    Env is deliberately NOT this adapter's business: it returns
+    ``HarnessCommand.env == {}`` and the claude subprocess environment stays
+    owned by the driver's ``_first_party_claude_env()`` (provider-redirect
+    stripping). ``allowed_tools`` rides in ``request.options`` rather than
+    being a HarnessRequest field.
+    """
+
+    def build_agent_command(self, request: HarnessRequest) -> HarnessCommand:
+        """Build the `claude -p` argv for ``request``."""
+        # stream-json (+ the verbose it requires) makes claude emit an event
+        # immediately on startup and one per tool call, instead of buffering
+        # everything until the final answer. check_story_status's "0 bytes
+        # after exit -> failed launch" check depends on that: without
+        # streaming, a long-running-but-legitimate agent looks identical to
+        # one that never started.
+        argv = ["claude", "-p", request.prompt, "--model", request.model,
+                "--output-format", "stream-json", "--verbose"]
+        if request.system:
+            argv += ["--append-system-prompt", request.system]
+        allowed_tools = (request.options or {}).get("allowed_tools")
+        if allowed_tools:
+            argv += ["--allowedTools", allowed_tools]
+        # This is a one-shot headless subprocess with no external harness to
+        # ever revisit a scheduled wakeup - ScheduleWakeup's "the harness
+        # re-invokes you later" contract is meaningless here and, if the
+        # agent defers to it and ends its turn, the process just exits and
+        # any pending background task is orphaned/killed with no commit ever
+        # landing (observed live 2026-08-07, 4 identical rework parks on
+        # story 4bfcc3b4). Block it outright rather than relying on the
+        # prompt alone.
+        argv += ["--disallowedTools", "ScheduleWakeup"]
+        return HarnessCommand(argv=argv, env={})
+
+
+register_harness("claude", ClaudeCliHarness)

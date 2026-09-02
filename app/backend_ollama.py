@@ -212,11 +212,29 @@ class OllamaDriver:
         # path peels off ["message"] itself; the review loop peels off
         # both the message and the usage fields.
         last_exc: Exception | None = None
-        for attempt in range(1, self.chat_max_attempts + 1):
+        # The 2026-09-02 scheduler freeze (pid 1609 wedged ~40 min in
+        # sock_recv) was a retry loop whose budget reset on every attempt: 3
+        # attempts x a 600s per-attempt timeout outlives any single timeout.
+        # The wall-clock deadline is therefore computed ONCE, before the
+        # first attempt, from PIPELINE_ROLE_CALL_TIMEOUT_SECONDS (via
+        # inference_providers.resolve_role_call_timeout()), and is never
+        # reassigned inside the loop - the whole call is bounded by it no
+        # matter how many attempts fit. self.timeout (a caller-overridable
+        # attribute) is deliberately NOT consulted here: a None override must
+        # never reach the wire as "no timeout".
+        role_call_timeout = inference_providers.resolve_role_call_timeout()
+        started = time.monotonic()
+        deadline = started + role_call_timeout
+        attempts = max(1, int(self.chat_max_attempts))
+        for attempt in range(1, attempts + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break  # budget spent - do not sleep/retry past the deadline
             try:
                 return self.provider.chat(
                     messages, model=model, num_ctx=num_ctx, temperature=temperature,
-                    tools=tools, endpoint=self.endpoint, timeout=self.timeout,
+                    tools=tools, endpoint=self.endpoint,
+                    timeout=min(role_call_timeout, remaining),
                     think=think,
                 )
             except httpx.HTTPStatusError as e:
@@ -225,8 +243,21 @@ class OllamaDriver:
                 last_exc = e
             except httpx.TransportError as e:
                 last_exc = e  # connect/read/timeout stall - transient, retry
-            if attempt < self.chat_max_attempts:
-                time.sleep(self.chat_retry_backoff * attempt)
+            remaining = deadline - time.monotonic()
+            if attempt < attempts and remaining > 0:
+                # Cap the backoff at the remaining budget so a retry never
+                # sleeps past the global deadline.
+                time.sleep(min(self.chat_retry_backoff * attempt, remaining))
+        if last_exc is None:
+            last_exc = httpx.ReadTimeout(
+                f"role-call budget of {role_call_timeout:.1f}s expired before "
+                f"any attempt could run"
+            )
+        raise RuntimeError(
+            f"Local backend at {self.endpoint} (model={model}) is unreachable "
+            f"or errored after {attempt} attempt(s) in "
+            f"{time.monotonic() - started:.1f}s: {last_exc}"
+        ) from last_exc
         raise last_exc
 
     # Read-only tools for the review loop. No create/edit — review must not

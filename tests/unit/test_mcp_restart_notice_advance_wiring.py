@@ -282,7 +282,9 @@ def test_only_the_merged_story_with_touched_files_gets_notified(plan_dir, monkey
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     def _detect(worktree, base_ref):
         return ["pipeline/server.py"] if worktree == "/x1" else []

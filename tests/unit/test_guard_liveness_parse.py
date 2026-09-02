@@ -305,8 +305,13 @@ class TestIsNoGuardNote:
 class TestModuleContract:
     """Structural requirements from the story brief."""
 
+    def _module_ast(self):
+        return ast.parse(inspect.getsource(guard_liveness))
+
     def test_public_surface_is_exactly_two_functions(self):
-        # "Public surface to implement (2 functions, no more)."
+        # "Public surface to implement (2 functions, no more)." Private
+        # helpers (leading underscore) and non-function module attributes
+        # (constants, __all__) are allowed; public functions are not.
         public = [
             name
             for name, obj in vars(guard_liveness).items()
@@ -320,60 +325,90 @@ class TestModuleContract:
         assert callable(guard_liveness.parse_guard_paths)
         assert callable(guard_liveness.is_no_guard_note)
 
-    def test_signatures(self):
+    def test_signatures_match_the_brief(self):
+        # parse_guard_paths(raw: str) -> list[str]
         psig = inspect.signature(guard_liveness.parse_guard_paths)
         assert list(psig.parameters) == ["raw"]
-        assert psig.parameters["raw"].annotation is str
+        # Accept both live annotations (str) and PEP 563 string forms
+        # ("str"), depending on the module's __future__ import.
+        assert psig.parameters["raw"].annotation in (str, "str")
+        assert psig.return_annotation in (list[str], "list[str]")
+        # is_no_guard_note(raw: str) -> bool
         isig = inspect.signature(guard_liveness.is_no_guard_note)
         assert list(isig.parameters) == ["raw"]
-        assert isig.parameters["raw"].annotation is str
+        assert isig.parameters["raw"].annotation in (str, "str")
+        assert isig.return_annotation in (bool, "bool")
 
     def test_no_imports_beyond_stdlib(self):
-        # "contains no imports beyond stdlib" - every imported top-level
-        # module must be in the stdlib list (sys.stdlib_module_names).
-        source = inspect.getsource(guard_liveness)
-        imports = set()
-        for line in source.splitlines():
-            line = line.strip()
-            m = re.match(r"^(?:from|import)\s+([A-Za-z_][\w.]*)", line)
-            if m:
-                imports.add(m.group(1).split(".")[0])
-        assert imports, "module must import something (typing/re etc.) or be import-only"
-        stdlib = set(__import__("sys").stdlib_module_names)
-        assert imports <= stdlib, f"non-stdlib imports: {sorted(imports - stdlib)}"
+        # "contains no imports beyond stdlib" - checked on the AST so a
+        # docstring that merely mentions a module name cannot trip it.
+        imported = set()
+        for node in ast.walk(self._module_ast()):
+            if isinstance(node, ast.Import):
+                imported.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level > 0:
+                    imported.add("<relative-import>")
+                elif node.module:
+                    imported.add(node.module.split(".")[0])
+        non_stdlib = imported - set(sys.stdlib_module_names)
+        assert not non_stdlib, f"non-stdlib imports: {sorted(non_stdlib)}"
 
     def test_no_io_or_subprocess_anywhere_in_source(self):
-        # "No subprocesses, no filesystem access, no I/O of any kind."
-        source = inspect.getsource(guard_liveness)
-        banned = [
-            "subprocess", "open(", "Path(", "os.remove", "os.rename",
-            "shutil", "socket", "urllib", "requests", "read_text",
-            "write_text", "mkdir", "input(", "print(",
-        ]
-        for token in banned:
-            assert token not in source, f"forbidden I/O token in source: {token!r}"
+        # "No subprocesses, no filesystem access, no I/O of any kind" -
+        # AST-level: no I/O-capable imports, no I/O-shaped calls. Checked
+        # on the AST so prose in the docstring cannot trip it.
+        banned_imports = {
+            "subprocess", "os", "pathlib", "shutil", "socket", "urllib",
+            "io", "glob", "tempfile", "ftplib", "http", "requests",
+        }
+        banned_name_calls = {"open", "print", "input", "eval", "exec", "__import__"}
+        banned_attr_calls = {
+            "open", "read", "write", "read_text", "write_text",
+            "read_bytes", "write_bytes", "mkdir", "remove", "unlink",
+            "rename", "rmdir", "popen", "system", "Popen", "check_output",
+        }
+        for node in ast.walk(self._module_ast()):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".")[0]
+                    assert root not in banned_imports, f"imports I/O-capable {root}"
+            elif isinstance(node, ast.ImportFrom):
+                root = (node.module or "").split(".")[0]
+                assert root not in banned_imports, f"imports from I/O-capable {root}"
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    bad = node.func.id
+                    assert bad not in banned_name_calls, f"calls {bad}()"
+                elif isinstance(node.func, ast.Attribute):
+                    bad = node.func.attr
+                    assert bad not in banned_attr_calls, f"calls .{bad}()"
 
     def test_no_module_level_side_effects(self):
-        # Importing the module in a fresh interpreter must not touch the
-        # filesystem or spawn processes: run a subprocess that imports it
-        # and asserts nothing was opened. (This test itself uses I/O - the
-        # module under test must not.)
-        import subprocess as _subprocess
-        import sys as _sys
-
+        # Importing the module in a fresh interpreter - with builtins.open
+        # spied BEFORE the import - must open nothing, and both helpers
+        # must work. (This test itself uses I/O; the module must not.)
+        repo_root = Path(__file__).resolve().parents[2]
         code = (
-            "import sys, builtins, pipeline.guard_liveness as g\n"
+            "import builtins\n"
             "opened = []\n"
             "real_open = builtins.open\n"
-            "def spy(*a, **k):\n"
-            "    opened.append(a)\n"
+            "def _spy(*a, **k):\n"
+            "    opened.append(a[0] if a else k)\n"
             "    return real_open(*a, **k)\n"
-            "builtins.open = spy\n"
+            "builtins.open = _spy\n"
+            "import pipeline.guard_liveness as g\n"
+            "assert g.parse_guard_paths('none identified') == []\n"
+            "assert g.parse_guard_paths('`test_a.py` + `test_b.py`') == "
+            "['test_a.py', 'test_b.py']\n"
             "print('OPENED', opened)\n"
         )
-        proc = _subprocess.run(
-            [_sys.executable, "-c", code],
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo_root)
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
             capture_output=True, text=True, timeout=60,
+            cwd=str(repo_root), env=env, check=False,
         )
         assert proc.returncode == 0, proc.stderr
         assert "OPENED []" in proc.stdout, proc.stdout

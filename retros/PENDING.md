@@ -121,6 +121,10 @@ if a precise date is needed when writing one of these up.
 - overlord-failure-triage — completed 2026-08-31, 17 stories
 - concurrent-cap-cloud-exempt — completed 2026-08-31, 1 stories
 - openpr-worktree-branch-fix — completed 2026-08-31, 1 stories
+- local-agent-file-split — completed 2026-08-31, 9 stories
+- token-context-closeout — completed 2026-08-31, 1 stories
+- retro-merge-append-hook — completed 2026-08-31, 1 stories
+- unwinnable-scope-fix — completed 2026-08-31, 2 stories
 - w4lcorr-lock-isolation — completed 2026-09-01, 1 stories
 - b5-export-the-moat — completed 2026-09-01, 3 stories
 - w4-logging-correlation — completed 2026-09-01, 5 stories

@@ -101,7 +101,7 @@ def test_review_story_unknown_park_excerpt_notes_empty_response(plan_dir, agents
     monkeypatch.setattr(p, "_run_reviewer", lambda wt, br, **k: "")
     monkeypatch.setattr(p, "_open_pr", lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("no PR on UNKNOWN")))
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
 
     p.review_story("unk_park_empty", "S1")
     p.review_story("unk_park_empty", "S1")

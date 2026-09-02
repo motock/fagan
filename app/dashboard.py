@@ -11,6 +11,7 @@ Run with:  uvicorn dashboard:app --reload
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,7 +46,7 @@ from app.dashboard_models import (
     StoryStatusBody,
     WorkspaceRequest,
 )
-from pipeline import config_provenance
+from pipeline import config_provenance, preflight
 from pipeline.server import PipelineService, _store
 
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
@@ -62,6 +63,32 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
 _service = PipelineService()
+
+logger = logging.getLogger(__name__)
+
+
+def _log_startup_preflight() -> None:
+    """Log one startup preflight summary line; never block dashboard startup."""
+    try:
+        results = preflight.run_preflight()
+        summary = preflight.summarize(results)
+        fails = sum(
+            1
+            for check in results
+            if isinstance(check, dict) and check.get("status") == "fail"
+        )
+        warns = sum(
+            1
+            for check in results
+            if isinstance(check, dict) and check.get("status") == "warn"
+        )
+        level = logging.ERROR if fails else logging.WARNING if warns else logging.INFO
+        logger.log(level, "startup preflight: %s", summary)
+    except Exception as exc:  # noqa: BLE001 (deliberate: read-only monitoring degrades, never dies)
+        logger.warning("startup preflight unavailable: %s", exc)
+
+
+_log_startup_preflight()
 
 @app.post("/api/plans/{plan_name}/stories/{story_key}/decisions")
 def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRequest) -> dict[str, Any]:

@@ -378,13 +378,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.check_preconditions:
+        # Backend guard first: under a local-family/unknown dispatch backend
+        # the script must exit 2 even on a machine without the claude CLI
+        # (a bare CI runner), not 1 for the missing CLI.
+        _require_claude_backend()  # exits 2 on a local-family/unknown value
         if shutil.which("claude") is None:
             print(
                 "precondition FAIL: the `claude` CLI was not found on PATH; "
                 "install it (https://claude.com/cli) or add it to PATH."
             )
             return 1
-        _require_claude_backend()  # exits 2 on a local-family/unknown value
         print("precondition check PASS: claude CLI on PATH, claude backend resolved")
         return 0
 

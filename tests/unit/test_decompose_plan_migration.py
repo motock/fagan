@@ -187,7 +187,10 @@ def test_tool_function_docstring_preserved_byte_for_byte():
     assert "product-analyst persona" in doc
     assert "Does NOT call save_plan itself" in doc
     assert 'Returns {"ok": True, "plan": {...}} on success' in doc
-    assert "never\nraises" in doc or "never raises" in doc
+    # The mcp SDK reformats docstrings with Python-version-dependent
+    # dedenting (CI's 3.12 differs from 3.13+), so match on
+    # whitespace-collapsed text rather than the raw docstring.
+    assert "never raises" in " ".join(doc.split())
 
 
 def test_tool_function_still_decorated_with_mcp_tool():

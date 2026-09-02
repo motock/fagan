@@ -284,7 +284,9 @@ def test_dispatch_warns_with_resolved_tag_when_tier_mismatches_loaded(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("tier_resolves_to_mismatch", "S1")
 

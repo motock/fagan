@@ -182,10 +182,15 @@ def test_non_numeric_value_raises_value_error(monkeypatch, env_var, bad_value, c
 
 def test_non_numeric_matches_existing_usage_stale_behavior(monkeypatch):
     """The wedge knobs fail exactly like USAGE_STALE_AFTER_SECONDS does."""
+    # Block 1: prove the existing convention raises on a malformed value...
+    monkeypatch.delenv("PIPELINE_USAGE_STALE_AFTER_SECONDS", raising=False)
     with pytest.raises(ValueError):
         _reload_with_env(
             monkeypatch, setenv={"PIPELINE_USAGE_STALE_AFTER_SECONDS": "abc"}
         )
+    # ...then clear it so block 2's ValueError can only come from the wedge
+    # var itself, never from the still-malformed usage var.
+    monkeypatch.delenv("PIPELINE_USAGE_STALE_AFTER_SECONDS", raising=False)
     with pytest.raises(ValueError):
         _reload_with_env(
             monkeypatch, setenv={"PIPELINE_WEDGE_STALE_ACTIVITY_SECONDS": "abc"}

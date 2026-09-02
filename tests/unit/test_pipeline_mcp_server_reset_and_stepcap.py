@@ -86,7 +86,9 @@ def test_dispatch_warns_on_loaded_model_mismatch_under_explicit_provider_name(
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     p.dispatch_story("swap_warn_lmstudio", "S1")
 

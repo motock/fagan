@@ -292,9 +292,12 @@ def test_empty_path_stubs_every_check_missing_without_raising():
 
 
 def _current_username():
+    # getpass.getuser() documents KeyError/OSError/ImportError as its failure
+    # modes on hosts without a login identity; catching only those keeps the
+    # helper lint-clean (no blind except) while still degrading to None.
     try:
         return getpass.getuser()
-    except Exception:  # pragma: no cover - exotic hosts without a login
+    except (KeyError, OSError, ImportError):  # pragma: no cover - exotic hosts
         return None
 
 

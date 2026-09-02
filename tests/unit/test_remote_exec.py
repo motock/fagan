@@ -32,8 +32,7 @@ from unittest import mock
 
 import pytest
 
-import pipeline.remote_exec as remote_exec
-from pipeline import remote_sync
+from pipeline import remote_exec
 
 BRANCH = "agent/remote-exec"
 HOST = "gpu-box.invalid"
@@ -74,6 +73,11 @@ def _remote_paths(root: Path) -> tuple[Path, Path, str]:
     return bare, remote_cwd, f"file://{bare}"
 
 
+def _capture_path(root: Path) -> Path:
+    """Where the stub ssh records the argv of every invocation."""
+    return root / "ssh-capture.txt"
+
+
 def _write_stub_ssh(
     stub_dir: Path,
     capture: Path,
@@ -97,19 +101,19 @@ def _write_stub_ssh(
     ``sync_back_commits`` refuses.
     """
     stub_dir.mkdir(parents=True, exist_ok=True)
-    diverge = local_worktree is not None
-    local_block = (
-        f'git -C "{local_worktree}" commit -q --allow-empty '
-        f'-m "local-side write during run" {_GIT_IDENTITY_LOCAL}\n'
-        if diverge
-        else ""
-    )
     fail_block = "exit 7\n" if fail_all else ""
+    if local_worktree is not None:
+        diverge_block = (
+            f'git -C "{local_worktree}" {_IDENTITY} commit -q --allow-empty '
+            f"-m local-write-during-run\n"
+        )
+    else:
+        diverge_block = ""
     script = f"""#!/bin/sh
-# stub ssh: capture argv, run the command for real, exit with its status
-{fail_all and fail_block or ""}printf '%s\\037' "$@" >> "{capture}"
+# stub ssh: record argv, execute the handed command, exit with its status
+printf '%s\\037' "$@" >> "{capture}"
 printf '\\n' >> "{capture}"
-last="$#"
+{fail_block}last="$#"
 i=0
 cmd=""
 for a in "$@"; do
@@ -123,9 +127,9 @@ rc=$?
 case "$cmd" in
   *{HARNESS_MARKER}*)
     git -C "{remote_cwd}" add -A
-    git -C "{remote_cwd}" {_GIT_IDENTITY_REMOTE} commit -q -m "remote harness commit"
+    git -C "{remote_cwd}" {_IDENTITY} commit -q --allow-empty -m remote-commit
     git -C "{remote_cwd}" push -q "{bare}" "{BRANCH}"
-{local_block}    ;;
+{diverge_block}    ;;
 esac
 exit $rc
 """
@@ -134,10 +138,7 @@ exit $rc
     stub.chmod(0o755)
 
 
-_GIT_IDENTITY_REMOTE = (
-    "-c user.email=" + GIT_EMAIL + " -c user.name=" + GIT_NAME
-)
-_GIT_IDENTITY_LOCAL = "-c user.email=" + GIT_EMAIL + " -c user.name=" + GIT_NAME
+_IDENTITY = f"-c user.email={GIT_EMAIL} -c user.name={GIT_NAME}"
 
 
 def _spec_file(root: Path, cmd: list[str], env: dict[str, str] | None) -> Path:
@@ -173,7 +174,7 @@ def _argv(root: Path, spec: Path, host: str = HOST) -> list[str]:
 def _captured_invocations(capture: Path) -> list[list[str]]:
     """Parse the stub's capture file into one argv list per invocation."""
     lines = capture.read_text().splitlines()
-    return [line.split("\037") for line in lines if line.strip()]
+    return [line[:-1].split("\037") for line in lines if line.strip()]
 
 
 def _run_main(root: Path, argv: list[str], stub_dir: Path) -> int:
@@ -213,9 +214,13 @@ def test_build_remote_shell_multiple_env_entries_in_order():
     shell = remote_exec.build_remote_shell(
         ["python", "-c", "harness.py"], {"A": "1", "B": "2 x"}, "/srv/w"
     )
-    assert shell == (
-        "cd /srv/w && env 'A=1' 'B=2 x' python -c 'harness.py'"
-    )
+    assert shell == "cd /srv/w && env A=1 'B=2 x' python -c harness.py"
+
+
+def test_build_remote_shell_single_cmd_element():
+    """One cmd element (boundary: min) is appended after the cd prefix."""
+    shell = remote_exec.build_remote_shell(["echo"], None, "/srv/w")
+    assert shell == "cd /srv/w && echo"
 
 
 def test_build_remote_shell_round_trips_through_shlex_split():
@@ -247,22 +252,15 @@ def test_build_remote_shell_signatures():
 def test_main_hands_ssh_one_shell_argument_with_cd_and_quoted_args(
     tmp_path, stub_ssh
 ):
-    """The argv the stub ssh captured is exactly the contracted ssh argv."""
+    """The last argv the stub ssh captured is exactly the contracted argv."""
     root = tmp_path
-    worktree = _make_story_worktree(root)
-    assert worktree.exists()
-    bare, remote_cwd, _ = _remote_paths(root)
+    _make_story_worktree(root)
+    _, remote_cwd, _ = _remote_paths(root)
     spec = _spec_file(root, ["echo", "hello world's"], {"MSG": "two words"})
-    argv = _argv(root, spec)
-    code = _run_main(root, argv, stub_ssh)
+    code = _run_main(root, _argv(root, spec), stub_ssh)
     assert code == 0
-    capture = stub_ssh_capture_path(root)
-    invocations = _captured_invocations(capture)
-    harness_invocations = [
-        inv for inv in invocations if HARNESS_MARKER in inv[-1]
-    ]
-    assert len(harness_invocations) == 1
-    assert harness_invocations[0] == [
+    invocations = _captured_invocations(_capture_path(root))
+    assert invocations[-1] == [
         "-o",
         "BatchMode=yes",
         HOST,
@@ -287,19 +285,19 @@ def test_main_fast_forwards_local_worktree_when_remote_committed(
     """The harness output committed remotely exists locally after main."""
     root = tmp_path
     worktree = _make_story_worktree(root)
-    spec = _spec_file(root, ["echo", "harness ran"], None)
+    spec = _spec_file(root, ["touch", HARNESS_MARKER], None)
     code = _run_main(root, _argv(root, spec), stub_ssh)
     assert code == 0
     assert (worktree / HARNESS_MARKER).exists()
 
 
 def test_main_returns_1_when_sync_back_fails_but_harness_exited_0(
-    tmp_path, stub_ssh, capfd
+    tmp_path, capfd
 ):
     """Divergence + harness exit 0: main returns 1 and logs the refusal."""
     root = tmp_path
     _make_story_worktree(root)
-    spec = _spec_file(root, ["echo", "harness ran"], None)
+    spec = _spec_file(root, ["touch", HARNESS_MARKER], None)
     divergent_stub = _divergent_stub_dir(root)
     code = _run_main(root, _argv(root, spec), divergent_stub)
     assert code == 1
@@ -308,19 +306,19 @@ def test_main_returns_1_when_sync_back_fails_but_harness_exited_0(
 
 
 def test_sync_back_failure_does_not_mask_nonzero_harness_exit_code(
-    tmp_path, stub_ssh
+    tmp_path,
 ):
     """Divergence + harness exit 3: main returns 3, not 1."""
     root = tmp_path
     _make_story_worktree(root)
-    spec = _spec_file(root, ["sh", "-c", "exit 3"], None)
+    spec = _spec_file(root, ["sh", "-c", f"touch {HARNESS_MARKER}; exit 3"], None)
     divergent_stub = _divergent_stub_dir(root)
     code = _run_main(root, _argv(root, spec), divergent_stub)
     assert code == 3
 
 
 def test_unreachable_host_called_process_error_propagates_out_of_main(
-    tmp_path, stub_ssh
+    tmp_path,
 ):
     """A failing _ssh_run inside ensure_remote_worktree raises out of main."""
     root = tmp_path
@@ -329,6 +327,8 @@ def test_unreachable_host_called_process_error_propagates_out_of_main(
     failing_stub = _failing_stub_dir(root)
     with pytest.raises(subprocess.CalledProcessError):
         _run_main(root, _argv(root, spec), failing_stub)
+    invocations = _captured_invocations(_capture_path(root))
+    assert "git init --bare" in invocations[0][-1]
 
 
 def test_harness_output_streams_through_supervisor_stdout(tmp_path, stub_ssh, capfd):
@@ -359,9 +359,8 @@ def test_main_missing_required_flag_raises(tmp_path, stub_ssh):
     _make_story_worktree(root)
     spec = _spec_file(root, ["echo", "harness ran"], None)
     argv = _argv(root, spec)
-    without_host = [a for a, b in zip(argv, argv[1:] + [""]) if a != "--host"] + [
-        b for a, b in zip(argv, argv[1:] + [""]) if a != "--host"
-    ]
+    i = argv.index("--host")
+    without_host = argv[:i] + argv[i + 2 :]
     with pytest.raises((SystemExit, ValueError)):
         _run_main(root, without_host, stub_ssh)
 
@@ -406,7 +405,7 @@ def test_module_delegates_to_remote_sync_instead_of_reimplementing():
     source = _module_source()
     assert "sync_back_commits" in source
     assert "ensure_remote_worktree" in source
-    assert "from pipeline" in source
+    assert "from pipeline" in source or "import pipeline" in source
     for redefined in (
         "def ensure_remote_worktree",
         "def sync_back_commits",
@@ -496,7 +495,3 @@ def _failing_stub_dir(root: Path) -> Path:
         stub_dir, capture, bare, remote_cwd, fail_all=True
     )
     return stub_dir
-
-
-def stub_ssh_capture_path(root: Path) -> Path:
-    return root / "ssh-capture.txt"

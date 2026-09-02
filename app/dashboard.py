@@ -62,6 +62,7 @@ WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).exp
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="Agent Pipeline Dashboard")
+_service = PipelineService()
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,6 @@ def _log_startup_preflight() -> None:
 
 
 _log_startup_preflight()
-_service = PipelineService()
 
 @app.post("/api/plans/{plan_name}/stories/{story_key}/decisions")
 def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRequest) -> dict[str, Any]:

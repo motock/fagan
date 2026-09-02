@@ -842,7 +842,9 @@ def test_review_story_survives_unexpected_reviewer_exception(plan_dir, agents_di
 
     monkeypatch.setattr(p, "_run_reviewer", _boom)
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
 
     result = p.review_story("rvcrash", "S1")
 

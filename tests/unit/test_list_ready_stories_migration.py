@@ -125,7 +125,9 @@ def test_module_level_list_ready_stories_docstring_unchanged():
         "Return stories whose dependencies are satisfied and that are still in\n"
         "    To Do. Use this to decide what to dispatch next.\n    "
     )
-    assert doc.strip() == expected.strip(), (
+    # The mcp SDK's docstring dedenting differs between CI's Python 3.12
+    # and 3.13+, so compare whitespace-collapsed text, not raw bytes.
+    assert " ".join(doc.split()) == " ".join(expected.split()), (
         "module-level list_ready_stories docstring changed:\n" + repr(doc)
     )
 

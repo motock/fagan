@@ -47,6 +47,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -351,6 +352,7 @@ class TestSensitiveLocationDenyList:
         assert any("/System" in n for n in names)
         assert any(".ssh" in n for n in names)
 
+    @pytest.mark.skipif(sys.platform != "darwin", reason="/etc -> /private/etc symlink resolution is macOS-only; on Linux /private/etc is an ordinary nonexistent path")
     def test_deny_list_covers_resolved_etc_not_symlink_spelling(self):
         # On macOS /etc is a symlink to /private/etc; the deny list must
         # still catch a caller who spells the target directly.

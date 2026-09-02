@@ -1,7 +1,7 @@
-"""Failing tests for active-workspace persistence on FileStore (pipeline/store.py).
+"""Tests for active-workspace persistence on FileStore (pipeline/store.py).
 
-FileStore is expected to grow two methods, following the pattern of
-``get_recent_workspaces``/``add_recent_workspace``:
+Covers FileStore active-workspace get/set: negative and boundary cases for
+reading and writing ``PLAN_DIR / active_workspace.json``.
 
 - ``get_active_workspace() -> str | None`` reads ``PLAN_DIR /
   active_workspace.json``, which holds a JSON object ``{"path": "<abs
@@ -16,12 +16,11 @@ FileStore is expected to grow two methods, following the pattern of
   try/except BaseException cleanup). ``None`` or ``""`` clears the
   selection; a string replaces any previous selection.
 
-These tests are written to be RED until both methods exist on FileStore
-(they fail with AttributeError). The shared ``plan_dir`` fixture from
-tests/unit/conftest.py patches ``pipeline.server.PLAN_DIR`` to a tmp
-directory, and FileStore resolves PLAN_DIR through that same binding at
-call time. No path validation belongs at this layer — that happens in
-pipeline/workspace.py — so arbitrary strings must round-trip untouched.
+The shared ``plan_dir`` fixture from tests/unit/conftest.py patches
+``pipeline.server.PLAN_DIR`` to a tmp directory, and FileStore resolves
+PLAN_DIR through that same binding at call time. No path validation
+belongs at this layer — that happens in pipeline/workspace.py — so
+arbitrary strings must round-trip untouched.
 """
 
 import contextlib
@@ -30,7 +29,7 @@ import os
 
 import pytest
 
-from pipeline.server import FileStore
+from pipeline.server import FileStore, Store
 
 ACTIVE_FILENAME = "active_workspace.json"
 
@@ -275,7 +274,7 @@ def test_failed_replace_cleans_up_tmp_file_and_preserves_previous_value(
     # The cleanup mirrors add_recent_workspace's try/except BaseException:
     # whether the implementation swallows or propagates the failure, the tmp
     # file must be removed and the previous selection must survive intact.
-    with contextlib.suppress(BaseException):
+    with contextlib.suppress(OSError):
         store.set_active_workspace("/abs/new")
 
     assert list(plan_dir.glob("active_workspace.json.tmp.*")) == []
@@ -296,3 +295,9 @@ def test_active_workspace_storage_does_not_disturb_recent_workspaces(plan_dir):
 
     recents_on_disk = json.loads((plan_dir / "recent_workspaces.json").read_text())
     assert recents_on_disk == ["/abs/ws-a"]
+
+
+def test_store_protocol_declares_active_workspace_methods():
+    """Store Protocol must declare every public FileStore method (precedent: be1f72a / #476)."""
+    assert hasattr(Store, "get_active_workspace")
+    assert hasattr(Store, "set_active_workspace")

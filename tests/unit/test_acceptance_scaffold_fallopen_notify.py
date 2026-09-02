@@ -49,7 +49,9 @@ def test_dispatch_start_failure_notifies(monkeypatch):
 
 def test_unconfigured_role_notifies(monkeypatch):
     seen = []
-    monkeypatch.setattr(test_author, "_notify_user", lambda plan, msg: seen.append((plan, msg)))
+    monkeypatch.setattr(
+        test_author, "_notify_user", lambda plan, msg, **kwargs: seen.append((plan, msg))
+    )
     monkeypatch.setattr(test_author, "_resolve_test_author_backend", lambda *a, **k: (None, None))
 
     result = planner._run_test_author_phase(

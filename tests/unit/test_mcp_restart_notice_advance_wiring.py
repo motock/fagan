@@ -252,7 +252,9 @@ def test_merge_pr_exception_suppresses_reconnect_notice_even_if_touched(
         p, "_mark_plane_done", lambda key, plan=None: mark_plane_calls.append(key)
     )
     notes = []
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: notes.append(msg))
+    monkeypatch.setattr(
+        p, "_notify_user", lambda plan, msg, **kwargs: notes.append(msg)
+    )
     monkeypatch.setattr(
         p, "_mcp_self_source_touched", lambda worktree, base_ref: ["pipeline/server.py"]
     )

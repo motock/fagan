@@ -57,7 +57,11 @@ INDEX_HTML_SHA256 = "16da8a06de3539d0c6e53c93c0c00d57550752a39edfb3301a51c0e4134
 # rework round introduced (deleted commsHistory declaration, deleted
 # reset/export wiring) were restored before this pin was taken; the final
 # pin adds the bare-shim classList guard in applyTraceVisibility.
-COMMS_JS_SHA256 = "2c617ea781ee0235f34c674b610e32a0d7deb31d5f84c4e86fb918aef4ebbcad"
+# Re-pinned for PR #541 ("send selected workspace in chat POST body",
+# merged 2026-09-02): that story legitimately extended the chat POST body
+# with the selected workspace id, so the pre-#541 pin no longer matched the
+# committed file. This story never touched comms.js.
+COMMS_JS_SHA256 = "313d51a55e5b2d188cbcfbc9ee2687559779c898b1d1185f9bf0eab4136ba830"
 
 # sha256 of the style.css regions this story must not touch: everything
 # before the "Comms view styles" comment, the "Toast stack styles" section

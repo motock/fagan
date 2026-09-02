@@ -392,3 +392,27 @@ class FileStore:
             tmp.unlink(missing_ok=True)
             raise
 
+    def get_active_workspace(self) -> str | None:
+        path = PLAN_DIR / "active_workspace.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        value = data.get("path")
+        if isinstance(value, str) and value:
+            return value
+        return None
+
+    def set_active_workspace(self, path: str | None) -> None:
+        tmp = PLAN_DIR / f"active_workspace.json.tmp.{os.getpid()}"
+        try:
+            tmp.write_text(json.dumps({"path": path}))
+            os.replace(tmp, PLAN_DIR / "active_workspace.json")
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+

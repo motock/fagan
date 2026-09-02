@@ -401,6 +401,42 @@ No outbound sinks (Slack, webhook, email) are implemented; notifications are
 only written locally and consumed by the dashboard.
 
 
+### Runtime preflight
+
+`run_preflight()` (`pipeline/preflight.py`) runs four read-only checks before
+dispatch: the plan directory resolves and is writable (`PLAN_DIR` env var, else
+`pipeline.paths.PLAN_DIR`), `git` is on `PATH`, the resolved dispatch backend
+(`PIPELINE_BACKEND_DISPATCH`, default `claude`) is usable — the `claude` backend
+requires the Claude Code CLI on `PATH` — and `model_registry.json` loads as a
+JSON object.
+
+| Check | Status when it fails | Observable behavior |
+| --- | --- | --- |
+| `PLAN_DIR` unwritable (or its parent not writable) | FAIL | `raise_on_failure()` raises `PreflightError` — fix permissions or point `PLAN_DIR` elsewhere |
+| `git` absent from `PATH` | FAIL | `PreflightError` — install git and re-run |
+| `claude` CLI absent while backend is `claude` | FAIL | `PreflightError` — install the CLI or reject the backend at startup |
+| `model_registry.json` unloadable/malformed | FAIL | `PreflightError` — check the file exists, is valid JSON, is readable |
+| local-family backend (`ollama`, `lmstudio`, `mlx`, `local`, `auto`) with its provider CLI absent | WARN only | logged in the summary; dispatch fails later until the provider is installed |
+
+The dashboard logs this summary once at startup (`startup preflight: N ok, N
+warn, N fail`) but never blocks on it — only `raise_on_failure()` turns FAIL
+statuses into a `PreflightError`, and warns never raise.
+
+Graceful degradation for optional components — absence is never an error:
+
+- **Ollama absent** — local dispatch via `PIPELINE_LOCAL_PROVIDER=ollama` fails
+  at dispatch time with a clear message; the Claude backend and the rest of the
+  pipeline are unaffected.
+- **Docker absent** — `PIPELINE_SANDBOX=docker` falls back to unsandboxed
+  execution in the isolated worktree; nothing crashes at startup.
+- **MLX / launchd** — macOS-only; see the
+  [Platform support](README.md#platform-support) section of README.md for the
+  documented Linux alternatives. On other hosts the scheduler and MLX
+  supervision simply do not start unless you run the same entry points
+  yourself.
+
+`scripts/install.sh` runs the install-time version of the same checks.
+
 ## Plan / story schema
 
 `save_plan` accepts JSON of this shape (the `product-analyst` persona emits it):

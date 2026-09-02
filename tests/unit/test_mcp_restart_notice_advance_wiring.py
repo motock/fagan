@@ -210,7 +210,7 @@ def test_detection_called_with_worktree_and_origin_default_branch(plan_dir, monk
     _write_manifest(plan_dir, "apargs", {"P1": _approved_story(worktree="/some/worktree")})
     monkeypatch.setattr(p, "_merge_pr", lambda wt, key: "merged")
     monkeypatch.setattr(p, "_mark_plane_done", lambda key, plan=None: None)
-    monkeypatch.setattr(p, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(p, "_notify_user", lambda plan, msg, **kwargs: None)
     calls = []
 
     def _detect(worktree, base_ref):

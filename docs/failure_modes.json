@@ -1,0 +1,458 @@
+[
+  {
+    "mode": "1",
+    "date": "2026-06-27",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #28",
+    "guard": "none identified"
+  },
+  {
+    "mode": "2",
+    "date": "2026-06-27",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #29",
+    "guard": "`test_pipeline_mcp_server.py` (`DISPATCH_STARTUP_GRACE_SECONDS`)"
+  },
+  {
+    "mode": "3",
+    "date": "2026-06-27",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #31 (3 modes bundled)",
+    "guard": "none identified"
+  },
+  {
+    "mode": "4",
+    "date": "2026-06-28",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #33",
+    "guard": "none identified"
+  },
+  {
+    "mode": "5",
+    "date": "2026-06-28",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "branch `fix/test-gate-venv-aware`",
+    "guard": "none identified"
+  },
+  {
+    "mode": "6",
+    "date": "2026-06-29",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "n/a (verification-in-flight at write time)",
+    "guard": "none (pure config, no code)"
+  },
+  {
+    "mode": "7",
+    "date": "2026-06-29",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "plist change",
+    "guard": "none (pure config, no code)"
+  },
+  {
+    "mode": "8",
+    "date": "2026-06-29",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #42",
+    "guard": "none identified"
+  },
+  {
+    "mode": "9",
+    "date": "2026-06-29",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "branch `fix/orchestrator-rebase-before-merge`",
+    "guard": "`test_pipeline_mcp_server.py` (`_rebase_onto_master`)"
+  },
+  {
+    "mode": "10",
+    "date": "2026-06-29",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "local ref sync",
+    "guard": "none (git hygiene, no code)"
+  },
+  {
+    "mode": "11",
+    "date": "2026-06-29",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #46",
+    "guard": "`test_local_agent.py` + `test_local_agent_oracle.py` (`destructive_git_op`)"
+  },
+  {
+    "mode": "12",
+    "date": "~2026-06-29",
+    "class": "operational",
+    "status": "n/a",
+    "fix_ref": "n/a",
+    "guard": "none (operational)"
+  },
+  {
+    "mode": "13",
+    "date": "~2026-07-01",
+    "class": "model-capability",
+    "status": "direct-repaired",
+    "fix_ref": "`2f306d05`",
+    "guard": "none (direct repair, no new test)"
+  },
+  {
+    "mode": "14",
+    "date": "~2026-07-01",
+    "class": "harness-bug",
+    "status": "mitigated (rescope+reset, no code fix)",
+    "fix_ref": "n/a",
+    "guard": "none (operational)"
+  },
+  {
+    "mode": "15",
+    "date": "2026-06-29",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #56",
+    "guard": "`test_pipeline_mcp_server.py` (`STEP_CAP_MARKERS`)"
+  },
+  {
+    "mode": "16",
+    "date": "2026-07-01/02",
+    "class": "harness-bug",
+    "status": "recurring / mitigated by direct-repair",
+    "fix_ref": "n/a",
+    "guard": "none (direct repair, no code fix)"
+  },
+  {
+    "mode": "16b",
+    "date": "~2026-07-02",
+    "class": "operational",
+    "status": "n/a",
+    "fix_ref": "n/a",
+    "guard": "none (operational)"
+  },
+  {
+    "mode": "17",
+    "date": "~2026-07-xx",
+    "class": "harness-bug",
+    "status": "unclear (no later status found)",
+    "fix_ref": "n/a",
+    "guard": "none (never fixed)"
+  },
+  {
+    "mode": "16-recur",
+    "date": "2026-07-11",
+    "class": "harness-bug",
+    "status": "recurring",
+    "fix_ref": "n/a",
+    "guard": "none (direct repair, no code fix)"
+  },
+  {
+    "mode": "18",
+    "date": "2026-07-13",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "`937fb79`",
+    "guard": "`test_pipeline_mcp_server.py`"
+  },
+  {
+    "mode": "19",
+    "date": "~2026-07-xx",
+    "class": "operational",
+    "status": "n/a",
+    "fix_ref": "n/a",
+    "guard": "none (operational)"
+  },
+  {
+    "mode": "20",
+    "date": "2026-07-17",
+    "class": "harness-bug",
+    "status": "FIXED (verified live end-to-end)",
+    "fix_ref": "n/a",
+    "guard": "none identified"
+  },
+  {
+    "mode": "21",
+    "date": "2026-07-17",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "n/a",
+    "guard": "`test_local_agent.py` + `test_local_agent_oracle.py` (`test_recover_tool_calls_tolerates_raw_newlines_in_json_string`)"
+  },
+  {
+    "mode": "22",
+    "date": "2026-07-19/20",
+    "class": "model-capability",
+    "status": "NOT fixed (workaround only)",
+    "fix_ref": "n/a",
+    "guard": "none (not fixed)"
+  },
+  {
+    "mode": "23",
+    "date": "2026-07-19/20",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #150",
+    "guard": "`test_checkpoint_deletion_guard.py`"
+  },
+  {
+    "mode": "24",
+    "date": "2026-07-19/20",
+    "class": "harness-bug",
+    "status": "FIXED (with 28)",
+    "fix_ref": "PR #158",
+    "guard": "`test_review_finding_target_guard.py`"
+  },
+  {
+    "mode": "25",
+    "date": "2026-07-20",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #144",
+    "guard": "`test_backend.py`"
+  },
+  {
+    "mode": "26",
+    "date": "2026-07-20",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #142",
+    "guard": "`test_ci_sha_scoping.py`"
+  },
+  {
+    "mode": "27",
+    "date": "2026-07-20",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #143",
+    "guard": "`test_pipeline_mcp_server.py`"
+  },
+  {
+    "mode": "28",
+    "date": "2026-07-21",
+    "class": "harness-bug",
+    "status": "FIXED (with 24)",
+    "fix_ref": "PR #158",
+    "guard": "`test_review_finding_target_guard.py`"
+  },
+  {
+    "mode": "29",
+    "date": "2026-07-21",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #157 + #160",
+    "guard": "none identified"
+  },
+  {
+    "mode": "30",
+    "date": "2026-07-21",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #177 + #178",
+    "guard": "`test_dispatch_git_fetch_lock.py`"
+  },
+  {
+    "mode": "31",
+    "date": "2026-07-22",
+    "class": "model-capability",
+    "status": "FIXED (drift-detection guard)",
+    "fix_ref": "PR #234 + #235",
+    "guard": "`test_off_task_guard_helpers_acceptance.py`"
+  },
+  {
+    "mode": "32",
+    "date": "2026-07-22",
+    "class": "model-capability + harness-bug",
+    "status": "PARTIAL",
+    "fix_ref": "PR #232",
+    "guard": "`test_backend.py` (`test_chat_retries_transient_connect_error_then_succeeds`, `test_chat_retries_5xx_then_succeeds`)"
+  },
+  {
+    "mode": "33",
+    "date": "2026-07-22",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "`60bc2c1`",
+    "guard": "`test_local_agent.py`"
+  },
+  {
+    "mode": "34",
+    "date": "2026-07-22",
+    "class": "not-a-bug",
+    "status": "REFRAMED — no defect found (observability gap fixed)",
+    "fix_ref": "`69f4cb8`",
+    "guard": "`test_pipeline_mcp_server.py`"
+  },
+  {
+    "mode": "35",
+    "date": "2026-07-22",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "`9ec3bdc`",
+    "guard": "`test_local_agent.py`"
+  },
+  {
+    "mode": "36",
+    "date": "2026-07-22",
+    "class": "harness-bug (diagnosis process)",
+    "status": "PARTIAL",
+    "fix_ref": "`a074d74` + `64ef86d`",
+    "guard": "none identified (multiple bundled guards, no single confirmed match)"
+  },
+  {
+    "mode": "37",
+    "date": "2026-07-22",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "`b5016ed`",
+    "guard": "`test_conftest_env_isolation.py` (added later, 2026-08-03, as the durable regression guard for this exact env-leak class)"
+  },
+  {
+    "mode": "38",
+    "date": "2026-07-22/23",
+    "class": "harness-bug",
+    "status": "FIXED (3 bundled fixes)",
+    "fix_ref": "`8cdb620`",
+    "guard": "`test_local_agent.py` (`_newly_undefined_module_defs`)"
+  },
+  {
+    "mode": "39",
+    "date": "2026-07-23",
+    "class": "harness-bug",
+    "status": "FIXED (4 bundled fixes)",
+    "fix_ref": "`9da5fdd`",
+    "guard": "`test_code_reviewer_persona_blocking_format.py`"
+  },
+  {
+    "mode": "40",
+    "date": "2026-07-23",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #166 + #168 + #171 + #172",
+    "guard": "`test_ci_fail_error_detail.py`"
+  },
+  {
+    "mode": "41",
+    "date": "2026-07-23/24",
+    "class": "harness-bug",
+    "status": "FIXED (exact pin, now `ruff==0.16.0`)",
+    "fix_ref": "n/a",
+    "guard": "`requirements-dev.txt` exact pin (not a test — machine-verifiable via `grep ^ruff`)"
+  },
+  {
+    "mode": "42",
+    "date": "2026-07-24",
+    "class": "model-capability",
+    "status": "NOT fixed (deliberately, by user direction)",
+    "fix_ref": "n/a",
+    "guard": "none (not fixed)"
+  },
+  {
+    "mode": "43",
+    "date": "2026-07-29",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #196",
+    "guard": "`test_local_agent.py` (`test_replace_lines_rejects_edit_that_deletes_a_read_module_level_var`)"
+  },
+  {
+    "mode": "44",
+    "date": "2026-07-30",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #195",
+    "guard": "`test_dispatch_acceptance_overwrite.py`"
+  },
+  {
+    "mode": "45",
+    "date": "2026-07-30",
+    "class": "harness-bug",
+    "status": "MITIGATED (root cause not pinned)",
+    "fix_ref": "n/a (unique-path mitigation)",
+    "guard": "none (naming-convention mitigation, not a test)"
+  },
+  {
+    "mode": "46",
+    "date": "2026-07-30",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #199",
+    "guard": "none (CI config change, `.github/workflows/ci.yml` — not a test file)"
+  },
+  {
+    "mode": "47",
+    "date": "2026-07-30",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #204",
+    "guard": "`test_spec_completeness_gates.py`"
+  },
+  {
+    "mode": "48",
+    "date": "2026-07-31",
+    "class": "harness-bug",
+    "status": "FIXED",
+    "fix_ref": "PR #213",
+    "guard": "`test_backend_venv_path_reorg.py`"
+  },
+  {
+    "mode": "49",
+    "date": "2026-07-31",
+    "class": "plan-authoring + model-capability",
+    "status": "REFRAMED (born-broken variant fixed 2026-08-03; general git-op-avoidance gap still open)",
+    "fix_ref": "direct-repair + `pipeline/oracle_gate.py`",
+    "guard": "`test_acceptance_oracle_gate_prior_gate.py` + `test_acceptance_oracle_tamper_append.py` (covers the born-broken-oracle variant only; the general git-op-avoidance gap has no guard)"
+  },
+  {
+    "mode": "50",
+    "date": "2026-08-05",
+    "class": "harness-bug + harness-bug (process)",
+    "status": "PARTIAL (ignore-tests bug fixed; diagnosis-bypass on CI-fail-rework still open)",
+    "fix_ref": "PR #232 + #233",
+    "guard": "`test_added_pytest_test_paths.py`"
+  },
+  {
+    "mode": "51",
+    "date": "2026-08-10",
+    "class": "harness-bug (FIXED) + plan-authoring (recurrence)",
+    "status": "FIXED `f8e45a8` (opt-out + park-only rejection); RECURRED same day on W1a-11 (plan author forgot to apply the now-existing `[no-new-tests]` token to a behavior-preserving local move)",
+    "fix_ref": "direct-repair (W1a-10 PR #272) + `f8e45a8`",
+    "guard": "`tests/unit/test_test_author_park_only_and_optout.py` (12 tests, shipped with `f8e45a8`)"
+  },
+  {
+    "mode": "52",
+    "date": "2026-08-07 (found 2026-08-12)",
+    "class": "harness-bug",
+    "status": "NOT fixed (confirmed open by direct code read, not just retro prose)",
+    "fix_ref": "n/a",
+    "guard": "none (gap, not a guard)"
+  },
+  {
+    "mode": "53",
+    "date": "n/a (found 2026-08-12)",
+    "class": "harness-bug",
+    "status": "NOT fixed (confirmed open by direct code read)",
+    "fix_ref": "n/a",
+    "guard": "none (gap, not a guard)"
+  },
+  {
+    "mode": "54",
+    "date": "2026-08-06 (found 2026-08-12)",
+    "class": "harness-bug",
+    "status": "NOT fixed — postdates edit-guard-enforcement, resolves token-context-a1 retro's open question",
+    "fix_ref": "n/a",
+    "guard": "none (same open class as Mode 55)"
+  },
+  {
+    "mode": "55",
+    "date": "2026-08-08 (found 2026-08-12)",
+    "class": "harness-bug",
+    "status": "NOT fixed — root cause PINNED 2026-08-12 (replace_lines-range swept 4 unrelated top-level symbols; cross-file-blind orphan guard + unscoped confirm_removals bypass both missed it)",
+    "fix_ref": "n/a",
+    "guard": "none (root cause pinned, fix not yet shipped)"
+  }
+]

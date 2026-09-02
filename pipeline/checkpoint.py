@@ -32,7 +32,7 @@ def _terminate_and_checkpoint(
     watchdog (automatic, on a hung process past DISPATCH_WATCHDOG_SECONDS)."""
     try:
         os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
 
     sha = _commit_wip(story["worktree"], story_key, step, guard_against_deletion=True)

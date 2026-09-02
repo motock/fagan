@@ -168,7 +168,7 @@ def test_reference_md_preserves_mcp_h3_subsections():
 # ---------------------------------------------------------------------------
 
 # Re-pinned by the "add quickstart, platform/limitations notes, and repo
-# governance files" docs commit (f53bffe): it legitimately added "Platform
+# governance files" docs commit (4ac19c2): it legitimately added "Platform
 # support", "Quickstart", and "Reliability & limitations" as new H2 sections
 # ahead of/around the pre-existing conceptual sections below.
 EXPECTED_README_SECTIONS = [
@@ -342,14 +342,14 @@ def _section_body(path: Path, title: str) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
-# 5f7d811 is the commit that performed the README/REFERENCE split itself, so
-# its parent (5f7d811~1) is the last commit with the original, unsplit
+# 2cca309 is the commit that performed the README/REFERENCE split itself, so
+# its parent (2cca309~1) is the last commit with the original, unsplit
 # README.md. Pinned to this immutable SHA rather than a HEAD-relative ref
 # (e.g. HEAD~2) because a HEAD-relative ref's distance from the split commit
 # grows as new commits land on top of it, silently returning the wrong
 # (already-split) README and breaking every case in
 # test_moved_section_body_is_verbatim.
-_ORIGINAL_README_REF = "5f7d811~1"
+_ORIGINAL_README_REF = "2cca309~1"
 
 
 def _original_readme_text() -> str:
@@ -422,7 +422,7 @@ def test_moved_section_body_is_verbatim(title):
         # The REFERENCE.md row was corrected to name PIPELINE_TRANSPORT_MAX_STEPS
         # and note the legacy duplicate write was removed (parenthetical: "the
         # legacy duplicate write was removed; nothing reads it"). The original
-        # README at commit 5f7d811~1 had the wrong variable name, so we relax
+        # README at commit 2cca309~1 had the wrong variable name, so we relax
         # the verbatim check for this section only.
         assert "PIPELINE_TRANSPORT_MAX_STEPS" in reference_body and "(the legacy duplicate write was removed; nothing reads it)" in reference_body, (
             f"Section body for {title!r} in REFERENCE.md does not contain the expected transport-only variable or parenthetical."
@@ -459,7 +459,7 @@ def _section_body_from_text(text: str, title: str) -> str:
 # ---------------------------------------------------------------------------
 # Internal anchor links, where present, must resolve to a real H2 heading.
 #
-# README.md had none of these when this guard was written; f53bffe
+# README.md had none of these when this guard was written; 4ac19c2
 # legitimately introduced two ("Reliability & limitations", "Scheduler") as
 # top-of-file navigation for the new Quickstart section. Rather than ban
 # anchors outright, verify any that exist point at a heading that's actually

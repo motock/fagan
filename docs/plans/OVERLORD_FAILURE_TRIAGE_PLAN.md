@@ -177,7 +177,7 @@ worse than measuring it. Several detectors already exist:
   Mode 49 prior-gate case (`oracle_gate.py:52-70`). It runs pre-dispatch and is
   **not consulted at triage time**.
 - Repo-wide lint red at the merge-base — the exact condition that silently
-  rejected every rework `done` until commit `7039f70`.
+  rejected every rework `done` until commit `d88037f`.
 - Full suite red at a clean baseline.
 - CI unavailable (GHA billing cap) versus CI genuinely failing.
 

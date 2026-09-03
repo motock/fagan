@@ -1,6 +1,6 @@
 """Companion MCP server exposing only the pipeline's adoptable subset.
 
-Plan B5's companion-server item (B5-03): a second, smaller FastMCP server
+Plan B5's companion-server item (B5-03): a second, smaller MCP server
 named ``pipeline-companion`` that a foreign harness can adopt piecemeal,
 without taking on the whole pipeline orchestrator. It exposes exactly the two
 exported ideas from Plan B5:
@@ -28,11 +28,11 @@ import importlib.util
 import logging
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("pipeline-companion")
+mcp = MCPServer("pipeline-companion")
 
-# FastMCP's constructor calls logging.basicConfig(level=INFO), which the httpx
+# MCPServer's constructor calls logging.basicConfig(level=INFO), which the httpx
 # and httpcore loggers (NOTSET) then inherit - so every HTTP call logs an INFO
 # "HTTP Request: ..." line. Under launchd's stderr redirect that floods the
 # unattended logs. Cap them at WARNING so genuine HTTP problems still surface

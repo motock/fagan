@@ -16,24 +16,9 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-from pipeline import story_metrics, guard_liveness
-
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-
-# config_provenance is a read-only leaf: its only non-stdlib import is
-# app.role_registry (see both modules' docstrings), so pulling it in does
-# NOT drag the orchestrator's write surface (pipeline.server /
-# app.pipeline_mcp_server / app.backend) into the dashboard's import graph.
-
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
-
-# config_provenance is a read-only leaf: its only non-stdlib import is
-# app.role_registry (see both modules' docstrings), so pulling it in does
-# NOT drag the orchestrator's write surface (pipeline.server /
-# app.pipeline_mcp_server / app.backend) into the dashboard's import graph.
+from pipeline.server import PipelineService
 from app import chat, role_registry
 from app.dashboard_helpers import (
     _LOG_TAIL_CAP,
@@ -60,13 +45,6 @@ from app.dashboard_models import (
 from app.story_replay import build_replay_events
 from pipeline import config_provenance, preflight
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
-from pipeline.server import PipelineService, _store
-from pipeline import story_metrics, guard_liveness
-from pathlib import Path
-from typing import Any
-
-from pipeline.wedge import collect_story_wedge_signals, wedge_verdict
-
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
 FAILURE_MODES_DATASET_PATH = Path(os.environ.get("FAILURE_MODES_DATASET_PATH", "docs/failure_modes.json")).expanduser()
 USAGE_STATE_PATH = Path(

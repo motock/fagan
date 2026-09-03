@@ -382,7 +382,9 @@ def test_dead_pid_story_without_grading_pid_starts_detached_grade(
         "story['grading_started_at'] must be recorded in the manifest"
     )
     _assert_utc_iso(story["grading_started_at"], "grading_started_at")
-    assert story["grading_result_path"] == str(worktree / RESULT_NAME)
+    assert story["grading_result_path"] == str(
+        plan_dir / "grading" / STORY_KEY / "result.json"
+    )
     # The story stays pollable: a LATER tick must pick the result up, so the
     # status cannot move off in_progress on the first poll.
     assert story["status"] == "in_progress"
@@ -439,8 +441,9 @@ def test_detached_grade_receives_stripped_env_and_worktree_artifact_paths(
 ):
     """The detached grade runs under the SAME stripped env dict the
     synchronous run builds today (PIPELINE_*/LOCAL_AGENT_*/REPO_ROOT
-    removed), and its result/log files land under the story's worktree with
-    the exact agreed names."""
+    removed), and its result/log files land under the pipeline-owned
+    grading state dir (<state root>/grading/<story>/) — outside the
+    agent-writable worktree, per the security review's blocking finding."""
     monkeypatch.setenv("PIPELINE_DG_SENTINEL", "1")
     monkeypatch.setenv("LOCAL_AGENT_DG_SENTINEL", "1")
     monkeypatch.setenv("REPO_ROOT", "/nonexistent-dg-sentinel")
@@ -457,12 +460,17 @@ def test_detached_grade_receives_stripped_env_and_worktree_artifact_paths(
     assert "LOCAL_AGENT_DG_SENTINEL" not in env
     assert "REPO_ROOT" not in env
 
-    assert rec["result_path"] == str(worktree / RESULT_NAME), (
-        "the detached result file must be worktree/'.detached_grade_result.json"
-    )
-    assert rec["log_path"] == str(worktree / LOG_NAME), (
-        "the detached log file must be worktree/'.detached_grade.log'"
-    )
+    assert rec["result_path"] == str(
+        plan_dir / "grading" / STORY_KEY / "result.json"
+    ), "the detached result file must be <state root>/grading/<story>/result.json"
+    assert rec["log_path"] == str(
+        plan_dir / "grading" / STORY_KEY / "grading.log"
+    ), "the detached log file must be <state root>/grading/<story>/grading.log"
+    # Security review (blocking finding 1): the verdict channel must live
+    # OUTSIDE the agent-writable worktree — the code under test could
+    # otherwise forge a passing grade there during its own build.
+    assert not Path(rec["result_path"]).is_relative_to(worktree)
+    assert not Path(rec["log_path"]).is_relative_to(worktree)
 
 
 # ------------------------------------------- 3. poll while grade in flight

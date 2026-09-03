@@ -1,9 +1,12 @@
-"""I/O gatherers for the wedge detector (pipeline/wedge.py).
+"""I/O gatherers for the wedge detector (pipeline/wedge.py), and the
+detection-only scan that sweeps a plan's in_progress stories with them.
 
 ``pipeline/wedge.py`` is PURE by committed contract
 (tests/unit/test_wedge_verdict.py scans its imports and module bindings and
 forbids os/subprocess/time/pathlib), so the measurement side of wedge
-detection lives here: read-only, never raises, bounded cost.
+detection lives here: read-only, never raises, bounded cost. The tick wiring
+(``run_wedge_scan``) does I/O too (it notifies), so it lives here as well
+rather than in wedge.py.
 
 ``collect_story_wedge_signals`` measures one dispatched story's wedge
 signals:
@@ -40,13 +43,18 @@ import subprocess
 import time
 from pathlib import Path
 
-# PLAN_DIR is resolved at CALL time through the _ServerRef pattern (see
-# pipeline/concurrency.py): a module-load copy would freeze the real
-# ~/.claude/plans path into every test run, so
-# monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...) would never land.
+from . import config
+
+# Server-owned names are resolved at CALL time through the live
+# pipeline.server binding (the _ServerRef pattern from pipeline/concurrency.py
+# and pipeline/store.py): a module-load copy would freeze the real
+# ~/.claude/plans path and the real notifier into every test run, so
+# monkeypatch.setattr(pipeline.server, "_notify_user", ...) would never land.
 from .concurrency import _ServerRef
 
 PLAN_DIR = _ServerRef("PLAN_DIR")
+_notify_user = _ServerRef("_notify_user")
+_store = _ServerRef("_store")
 
 
 def _pid_is_alive(pid: int) -> bool | None:
@@ -144,3 +152,141 @@ def collect_story_wedge_signals(plan_name: str, story_key: str, story: dict) -> 
         "pid_alive": pid_alive,
         "activity_age_seconds": activity_age_seconds,
     }
+
+
+# Cooldown state for wedge notifications: dedup_key -> last emit
+# time.monotonic(). Module-level so the scan stays quiet across ticks, and
+# pruned crudely inside run_wedge_scan so it cannot grow unbounded across
+# plans.
+_WEDGE_LAST_EMIT: dict[str, float] = {}
+
+
+def _wedge_message(
+    reason: str, story: dict, signals: dict, stale_threshold: int
+) -> str:
+    """Build the notification message, embedding the MEASURED value next to
+    the threshold so a mis-thresholded detector is diagnosable from its own
+    output."""
+    if reason == "dead_pid":
+        return (
+            f"Story wedged (dead_pid): dispatch pid {story.get('pid')} "
+            "is gone or defunct"
+        )
+    if reason == "stale_activity":
+        age = signals.get("activity_age_seconds")
+        return (
+            "Story wedged (stale_activity): no worktree/journal activity "
+            f"for {age:.0f}s (threshold {stale_threshold}s)"
+        )
+    return f"Story wedged ({reason}): measured {signals}"
+
+
+def run_wedge_scan(plan_name: str) -> int:
+    """DETECTION ONLY: sweep a plan's in_progress stories for wedge signals
+    and emit one warning notification per wedge reason.
+
+    This scan must NOT reap, interrupt, terminate, re-dispatch, set story
+    status, or write any file -- it only measures and notifies. Recovery
+    already exists elsewhere: the zombie reap in pipeline/concurrency.py
+    reaps dead pids, and check_story_status's watchdog in
+    pipeline/story_status.py terminates hung agents.
+
+    Returns the number of notifications actually EMITTED this call: a reason
+    that passed its own cooldown check but collapsed into a same-scan
+    staleness alert (see the dead_pid branch below) does not add to this
+    count, since no separate notification went out for it. Thresholds are
+    read from pipeline.config at CALL time (a module-level freeze would make
+    them untestable and ignore env changes).
+    """
+    # Imported here, not at module top: wedge.py imports
+    # collect_story_wedge_signals FROM this module, so a top-level
+    # `from .wedge import wedge_verdict` here would be a circular import
+    # (whichever module loads first hits the other's not-yet-defined name).
+    from .wedge import wedge_verdict
+
+    if not config.WEDGE_SCAN_ENABLED:
+        return 0
+    stale_threshold = config.WEDGE_STALE_ACTIVITY_SECONDS
+    cooldown_seconds = config.WEDGE_NOTIFY_COOLDOWN_SECONDS
+
+    manifest = _store.get_manifest_or_none(plan_name)
+    if manifest is None:
+        return 0
+
+    now = time.monotonic()
+    # Crude cap: the table spans every plan this process ever scanned, so
+    # drop expired entries once it grows past 1000 keys. Mutate in place --
+    # callers may hold a reference to the dict.
+    if len(_WEDGE_LAST_EMIT) > 1000:
+        for key in [
+            k for k, ts in _WEDGE_LAST_EMIT.items() if now - ts >= cooldown_seconds
+        ]:
+            del _WEDGE_LAST_EMIT[key]
+
+    due = 0
+    for story_key, story in (manifest.get("stories") or {}).items():
+        if not isinstance(story, dict):
+            continue
+        if story.get("status") != "in_progress":
+            continue
+        signals = collect_story_wedge_signals(plan_name, story_key, story)
+        verdict = wedge_verdict(
+            signals["pid_alive"], signals["activity_age_seconds"], stale_threshold
+        )
+        if not verdict["wedged"]:
+            continue
+        # Stale_activity is reported before dead_pid (reasons come back
+        # sorted, so reversed() puts the activity evidence first): for a
+        # story with no worktree the journal is the only activity surface,
+        # and the dead_pid branch below collapses into a staleness alert
+        # that went out during this same scan.
+        #
+        # "This same scan" is tracked directly with a per-story boolean, not
+        # by comparing time.monotonic() reads against each other -- two
+        # monotonic() calls a few lines apart can return the identical tick
+        # on a coarse or frozen clock (a fixed-value test clock that never
+        # advances, or two calls landing on the same real-clock tick), and a
+        # strict "is this timestamp later than that one" comparison fails to
+        # recognize the collapse in that case, so both notifications would
+        # fire. A plain boolean, set only when stale_activity actually
+        # notifies during this story's own pass, has no clock dependency and
+        # cannot tie.
+        stale_activity_notified = False
+        for reason in reversed(verdict["reasons"]):
+            dedup_key = f"wedge:{plan_name}:{story_key}:{reason}"
+            last_emit = _WEDGE_LAST_EMIT.get(dedup_key)
+            if last_emit is not None and now - last_emit < cooldown_seconds:
+                continue  # anti cry-wolf: already alerted inside the window
+            if (
+                reason == "dead_pid"
+                and not story.get("worktree")
+                and stale_activity_notified
+            ):
+                # The staleness alert for this worktree-less story already
+                # went out earlier in this same pass: one failure, one
+                # notification -- the staleness alert already carries the
+                # measured age, so a dead-pid alert on top of it would be a
+                # duplicate for the dashboard's duplicate-collapse. Not
+                # counted in `due` (this function's contract is that `due`
+                # == notifications actually emitted this call) and
+                # deliberately NOT recorded into the cooldown table: only
+                # successful emits enter it, so the very next scan (this
+                # collapse is scoped to "the same pass", not "the whole
+                # cooldown window") re-derives the dead pid on its own once
+                # stale_activity itself is no longer due.
+                continue
+            due += 1
+            _notify_user(
+                plan_name,
+                _wedge_message(reason, story, signals, stale_threshold),
+                story_key=story_key,
+                severity="warning",
+                event="wedge",
+                dedup_key=dedup_key,
+            )
+            if reason == "stale_activity":
+                stale_activity_notified = True
+            # Record only after a successful emit, so a failed notify is
+            # retried on the next scan instead of being silenced forever.
+            _WEDGE_LAST_EMIT[dedup_key] = time.monotonic()
+    return due

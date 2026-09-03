@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .wedge_io import run_wedge_scan
+
 
 class _ServerRef:
     """Delegates to the *current* ``pipeline.server`` binding for a name."""
@@ -150,20 +152,22 @@ _impl_ref = _ServerRef("_advance_pipeline_locked_impl")
 
 
 def _advance_pipeline_locked(plan_name: str) -> dict[str, Any]:
-    """Run the failure-triage sweep over the terminal-state stories left by
-    previous ticks, then the tick proper.
-
-    Rename-and-delegate: the entire existing tick body moved verbatim to
-    _advance_pipeline_locked_impl with no other change, so the sweep could be
-    added without re-indenting a 455-line function. The sweep is advisory (C2
-    of docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md): anything that goes wrong
-    inside it must leave the tick exactly as it was.
+    """Run the advisory pre-tick sweeps (failure triage, wedge scan), then the
+    tick proper. Rename-and-delegate: the tick body moved verbatim to
+    _advance_pipeline_locked_impl; both sweeps are advisory and fail-open (C2):
+    anything that goes wrong inside them must leave the tick exactly as it was.
     """
     try:
         run_triage_sweep(plan_name)
     except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
         logging.getLogger("pipeline").warning(
             "triage sweep raised; continuing with the tick unchanged"
+        )
+    try:
+        run_wedge_scan(plan_name)
+    except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
+        logging.getLogger("pipeline").warning(
+            "wedge scan raised; continuing with the tick unchanged"
         )
     return _impl_ref(plan_name)
 

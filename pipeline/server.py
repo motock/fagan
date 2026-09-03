@@ -650,13 +650,23 @@ def decompose_plan(request: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def save_plan(plan_name: str, plan_json: str) -> dict[str, Any]:
+def save_plan(plan_name: str, plan_json: str, workspace: str | None = None) -> dict[str, Any]:
     """
     Save a generated project plan to disk. Plan should be JSON matching the
     schema: { "epics": [ { "summary", "stories": [...] } ] }.
     Call this after generating a plan so the user can review before ingestion.
+
+    workspace is optional. When supplied, it is validated and (WS-11) the
+    model-authored repo_root in plan_json is OVERWRITTEN with the
+    server-validated resolved path (the server overwrites the model-authored
+    value; this tool never resolves or rewrites plan_json itself). When
+    omitted, the plan's own repo_root is trusted, exactly as before. The tool
+    deliberately does NOT fall back to the dashboard's persisted active
+    workspace: the MCP server and the dashboard are separate processes, and
+    silently coupling them through shared durable state is out of scope (that
+    fallback lives only in the dashboard HTTP route).
     """
-    return _service.save_plan(plan_name, plan_json)
+    return _service.save_plan(plan_name, plan_json, workspace)
 
 
 @mcp.tool()

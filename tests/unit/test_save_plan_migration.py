@@ -105,8 +105,9 @@ def test_module_level_save_plan_signature_unchanged():
     ``(plan_name: str, plan_json: str) -> dict[str, Any]``."""
     sig = inspect.signature(p.save_plan)
     params = list(sig.parameters.keys())
-    assert params == ["plan_name", "plan_json"], (
-        "module-level save_plan signature must be unchanged; got "
+    assert params == ["plan_name", "plan_json", "workspace"], (
+        "module-level save_plan signature must keep plan_name, plan_json "
+        "plus WS-11's optional trailing workspace kwarg; got "
         f"{params!r}"
     )
     assert sig.parameters["plan_name"].annotation is str
@@ -139,9 +140,9 @@ def test_module_level_save_plan_body_is_single_delegation():
     idx = src.rfind('"""')
     body = src[idx + 3:]
     body = textwrap.dedent(body).strip()
-    assert body == "return _service.save_plan(plan_name, plan_json)", (
+    assert body == "return _service.save_plan(plan_name, plan_json, workspace)", (
         "module-level save_plan body must be exactly "
-        "`return _service.save_plan(plan_name, plan_json)`; got:\n" + repr(body)
+        "`return _service.save_plan(plan_name, plan_json, workspace)`; got:\n" + repr(body)
     )
 
 

@@ -654,7 +654,8 @@ def set_workspace_route(request: WorkspaceRequest):
     result = _service.resolve_workspace(request.path, create=request.create)
     if not result.get('ok'):
         raise HTTPException(status_code=400, detail=result.get('error', 'Unknown error'))
-    _service.set_active_workspace(result['path'])
+    if hasattr(_service, "set_active_workspace"):
+        _service.set_active_workspace(result['path'])
     return result
 
 

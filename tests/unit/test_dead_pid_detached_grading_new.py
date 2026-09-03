@@ -20,7 +20,7 @@ def plan_dir(tmp_path, monkeypatch):
     manifest_path = plan_dir / "manifest.json"
     manifest_path.write_text(json.dumps({"plan_name": "demo", "stories": []}))
     # Ensure the plan root is the parent of the manifest
-    monkeypatch.setattr(_server, "MANIFEST_PATH", str(manifest_path))
+    # (no need to set _server.MANIFEST_PATH for this test)
     return plan_dir
 
 @pytest.fixture

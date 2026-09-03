@@ -14,6 +14,11 @@ import subprocess
 from pathlib import Path
 
 from app.backend_types import AgentHandle
+from pipeline.sandbox import (
+    build_docker_command,
+    docker_binary_available,
+    resolve_sandbox,
+)
 
 _VALID_MODES = ("local", "ssh")
 _SSH_NOT_IMPLEMENTED_MSG = "ssh execution is not implemented yet (B1 later story)"
@@ -76,4 +81,23 @@ def spawn_harness(
     mode = resolve_execution_mode(role)
     if mode == "ssh":
         raise NotImplementedError(_SSH_NOT_IMPLEMENTED_MSG)
+
+    sandbox = resolve_sandbox()
+    if sandbox == "docker":
+        if not docker_binary_available():
+            raise RuntimeError(
+                "PIPELINE_SANDBOX=docker is configured but the docker binary "
+                "is not installed on this host: dispatch is REFUSED rather "
+                "than falling back to unsandboxed execution"
+            )
+        allowlisted_env = (
+            None
+            if env is None
+            else {
+                key: value
+                for key, value in env.items()
+                if key.startswith(("LOCAL_AGENT_", "PIPELINE_"))
+            }
+        )
+        cmd = build_docker_command(str(cwd), cmd, allowlisted_env)
     return spawn_local(cmd, cwd=cwd, log_path=log_path, append=append, env=env)

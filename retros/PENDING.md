@@ -128,3 +128,8 @@ if a precise date is needed when writing one of these up.
 - w4lcorr-lock-isolation — completed 2026-09-01, 1 stories
 - b5-export-the-moat — completed 2026-09-01, 3 stories
 - w4-logging-correlation — completed 2026-09-01, 5 stories
+- ci-green-after-billing-reset — completed 2026-09-02, 3 stories
+- ci-docstring-tests-env-independent — completed 2026-09-02, 1 stories
+- scheduler-hang-hardening — completed 2026-09-02, 2 stories
+- async-dead-pid-grading — completed 2026-09-03, 2 stories
+- a4-non-author-usability — completed 2026-09-03, 9 stories

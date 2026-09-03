@@ -1,4 +1,4 @@
 # Runtime dependencies for the pipeline MCP server.
 # Install into the project venv:  scripts/install.sh   (or: pip install -r requirements.txt)
-mcp==1.28.1             # MCP server SDK (mcp.server.fastmcp.FastMCP). Pinned EXACT: newer releases change FastMCP docstring processing and broke docstring-pinning tests on CI (2026-09-01); the repo rule is to pin exactly any tool whose exit code gates a merge.
+mcp==2.1.1             # MCP server SDK (mcp.server.fastmcp.FastMCP). Pinned EXACT: newer releases change FastMCP docstring processing and broke docstring-pinning tests on CI (2026-09-01); the repo rule is to pin exactly any tool whose exit code gates a merge.
 httpx>=0.28.1    # HTTP client for the local Ollama backend and (indirectly) Claude usage probe

@@ -50,6 +50,12 @@ from .parsers import (
 )
 from .rebrief import append_cleanup_guidance
 
+# The detached-grading watchdog reuses the dispatch watchdog's threshold so a
+# single policy governs both "how long may a grade/dispatch stay outstanding"
+# decisions (no new env var — see DETACHED_GRADE_WATCHDOG_SECONDS's use in
+# check_story_status's dead-pid recovery path).
+DETACHED_GRADE_WATCHDOG_SECONDS = DISPATCH_WATCHDOG_SECONDS
+
 
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     """
@@ -468,13 +474,206 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         and not k.startswith("LOCAL_AGENT_")
         and k != "REPO_ROOT"
     }
-    # Heavy build/test commands (cargo, npm, mvn, gradle, etc.) can run GB-
-    # seconds of memory each. Serialize against other in-flight agents so
-    # we never have N concurrent builds saturating the host. Cheap commands
-    # (pytest, mvn, gradle, make, npm — depending on the project) skip the
-    # lock entirely.
-    if _is_heavy(test_cmd):  # noqa: F821
-        with _heavy_lock():
+    # Dead-pid recovery (2026-09-02 live incident): a dispatch whose process
+    # is gone used to be re-graded SYNCHRONOUSLY here, inside the scheduler
+    # tick - advance.py calls check_story_status for every in_progress story,
+    # so one dead story blocked dispatch/review/merge for ALL plans for the
+    # duration of a full suite run (~19 min of scheduler silence, observed
+    # live). The grade is now handed to a detached wrapper process (adp-01's
+    # start_detached_grade) and picked up by a LATER tick, keyed on per-story
+    # bookkeeping persisted in the manifest:
+    #
+    #   no grading_pid    -> spawn the detached grade, record grading_pid /
+    #                        grading_started_at / grading_result_path, and free
+    #                        the tick immediately.
+    #   grading_pid alive -> pure read: still grading, manifest untouched.
+    #   grading_pid dead  -> collect the result (fail-closed when the wrapper
+    #                        left none) and resume the post-grade logic below
+    #                        through a subprocess.run-shaped shim; the
+    #                        bookkeeping is consumed so a future re-grade
+    #                        starts clean.
+    grading_pid = story.get("grading_pid")
+    grading_alive = False
+    if grading_pid is not None:
+        try:
+            os.kill(grading_pid, 0)
+            # os.kill succeeds for zombie (defunct) processes too — check ps
+            # stat (same idiom as the story-pid liveness probe above).
+            ps = subprocess.run(
+                ["ps", "-p", str(grading_pid), "-o", "stat="],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            grade_stat = ps.stdout.strip()
+            grading_alive = bool(grade_stat) and not grade_stat.startswith("Z")
+        except ProcessLookupError:
+            grading_alive = False
+        except PermissionError:
+            # The pid exists but we may not signal it: keep polling rather
+            # than crash the tick (mirrors collect_detached_grade).
+            grading_alive = True
+        except (OSError, subprocess.SubprocessError):
+            # Probe failure: presume the grade is still in flight so the tick
+            # stays read-only.
+            grading_alive = True
+
+    # Follow-up ticks must not re-grade an already-graded story: once the
+    # post-grade logic has run, the grading bookkeeping is consumed and the
+    # story's status has moved off in_progress. Key on that cleared state
+    # (not on any leftover result file) so a later tick neither re-collects
+    # nor re-spawns a duplicate grade.
+    if grading_pid is None and story.get("status") != "in_progress":
+        return {"status": story.get("status"), "pid": pid}
+
+    test_result = None
+    if grading_pid is None:
+        starter = globals().get("start_detached_grade")
+        if starter is not None:
+            # Security review (REQUEST_CHANGES): the detached grade's result
+            # channel must not live in the agent-writable worktree — the code
+            # under test could forge a passing grade there during its own
+            # build and bypass the acceptance gate. The hardened channel is
+            # the DEFAULT: the state root is the pipeline-owned plans/
+            # manifests base (the parent of this story's manifest path), with
+            # PIPELINE_STATE_DIR as an override. A relative override resolves
+            # against that fixed base — never the scheduler's CWD, since the
+            # collect tick may run with a different CWD than the spawn tick.
+            # The result/log files live under <state_root>/grading/<story_id>/
+            # (mode 0o700) and the collector reads ONLY the persisted path.
+            # The guard below refuses to aim the hardened channel back into
+            # the worktree, so a regression cannot silently move it back.
+            env_root = os.environ.get("PIPELINE_STATE_DIR")
+            manifest_root = Path(manifest_path).parent
+            if env_root:
+                state_root = Path(env_root)
+                if not state_root.is_absolute():
+                    state_root = manifest_root / state_root
+            else:
+                state_root = manifest_root
+            grading_dir = state_root / "grading" / story_key
+            grading_dir.mkdir(parents=True, exist_ok=True)
+            grading_dir.chmod(0o700)
+            result_path = grading_dir / "result.json"
+            log_path = grading_dir / "grading.log"
+            _worktree_resolved = Path(worktree).resolve()
+            for _artifact in (result_path, log_path):
+                if _artifact.resolve().is_relative_to(_worktree_resolved):
+                    raise RuntimeError(
+                        "detached grade result channel must live outside "
+                        "the agent-writable worktree "
+                        f"({_worktree_resolved}): {_artifact}"
+                    )
+            try:
+                grade_pid = starter(
+                    test_cmd,
+                    str(test_dir),
+                    test_env,
+                    str(result_path),
+                    str(log_path),
+                )
+            except OSError:
+                # Fail-closed invariant: a spawn failure must not crash the
+                # tick - fall through to the synchronous grade below, which is
+                # exactly what this path did before the detached hand-off.
+                pass
+            else:
+                story["grading_pid"] = grade_pid
+                story["grading_started_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+                story["grading_result_path"] = str(result_path)
+                _atomic_write_json(manifest_path, manifest)
+                # The tick is free; a LATER tick collects the result.
+                return {"status": "grading", "pid": grade_pid}
+        # No starter reachable (or the spawn failed): the synchronous grade
+        # below preserves the pre-detached behavior.
+    elif grading_alive:
+        # Pure read: no manifest write and no timestamp refresh - refreshing
+        # grading_started_at would reset the grading watchdog's clock every
+        # poll, so the story would never time out.
+        return {"status": "grading", "pid": grading_pid}
+    else:
+        # Follow-up ticks must not re-collect an already-consumed grade: the
+        # bookkeeping is deleted below and the story's status has moved off
+        # in_progress, so a later tick no-ops here instead of re-reading any
+        # file or re-advancing the story.
+        if story.get("status") != "in_progress":
+            return {"status": story.get("status"), "pid": pid}
+        collector = globals().get("collect_detached_grade")
+        grade_result_path = story.get("grading_result_path")
+        collected = None
+        if collector is not None and grade_result_path:
+            collected = collector(grading_pid, grade_result_path)
+        fail_closed = {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "detached grade exited without writing a result",
+        }
+        if collected is None:
+            collected = dict(fail_closed)
+        if collected.get("stderr") == fail_closed["stderr"]:
+            # The grade left no readable result (collect returned None, or it
+            # returned the sibling's fail-closed shape for a missing/malformed
+            # result file). The pid is already dead - nothing to kill - so the
+            # only remedy is the grading watchdog: a grade outstanding longer
+            # than the threshold is failed with the watchdog noted in stderr
+            # instead of polling forever on a wrapper that never wrote a
+            # result. A genuinely collected result is never discarded here.
+            started_at = story.get("grading_started_at")
+            age = None
+            if isinstance(started_at, str):
+                try:
+                    started = datetime.fromisoformat(started_at)
+                except (TypeError, ValueError):
+                    started = None
+                if started is not None and started.tzinfo is not None:
+                    age = (
+                        datetime.now(timezone.utc) - started
+                    ).total_seconds()
+            if age is not None and age > DETACHED_GRADE_WATCHDOG_SECONDS:
+                collected = dict(fail_closed)
+                collected["stderr"] = (
+                    f"{fail_closed['stderr']}; grading watchdog fired after "
+                    f"{age:.0f}s without a collectable result (threshold "
+                    f"{DETACHED_GRADE_WATCHDOG_SECONDS}s)"
+                )
+        # Hand the collected result to the EXISTING post-grade logic below in
+        # the shape it already reads (subprocess.run's return value).
+        raw_stdout = collected.get("stdout")
+        raw_stderr = collected.get("stderr")
+        test_result = subprocess.CompletedProcess(
+            test_cmd,
+            collected.get("returncode", 1),
+            stdout=raw_stdout if isinstance(raw_stdout, str) else "",
+            stderr=raw_stderr if isinstance(raw_stderr, str) else "",
+        )
+        # The bookkeeping is consumed: a future dead-pid re-grade starts clean
+        # instead of re-collecting a stale result file. collected_at records
+        # when the verdict was merged so later ticks key on the cleared state.
+        story.pop("grading_pid", None)
+        story.pop("grading_started_at", None)
+        story.pop("grading_result_path", None)
+        story["collected_at"] = datetime.now(timezone.utc).isoformat()
+        _atomic_write_json(manifest_path, manifest)
+
+    if test_result is None:
+        # Heavy build/test commands (cargo, npm, mvn, gradle, etc.) can run GB-
+        # seconds of memory each. Serialize against other in-flight agents so
+        # we never have N concurrent builds saturating the host. Cheap commands
+        # (pytest, mvn, gradle, make, npm — depending on the project) skip the
+        # lock entirely.
+        if _is_heavy(test_cmd):  # noqa: F821
+            with _heavy_lock():
+                test_result = subprocess.run(
+                    test_cmd,
+                    check=False,
+                    cwd=test_dir,
+                    capture_output=True,
+                    text=True,
+                    env=test_env,
+                )
+        else:
             test_result = subprocess.run(
                 test_cmd,
                 check=False,
@@ -483,15 +682,6 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 text=True,
                 env=test_env,
             )
-    else:
-        test_result = subprocess.run(
-            test_cmd,
-            check=False,
-            cwd=test_dir,
-            capture_output=True,
-            text=True,
-            env=test_env,
-        )
     passed = test_result.returncode == 0
 
     # Diagnostic gap found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD):
@@ -722,6 +912,11 @@ check_story_status = types.FunctionType(
     check_story_status.__closure__,
 )
 
+# The rebound body resolves bare names against pipeline.server's namespace, so
+# the grading watchdog constant it reads must be reachable there. (The
+# detached-grade primitives are exported further down, after their defs.)
+_server.DETACHED_GRADE_WATCHDOG_SECONDS = DETACHED_GRADE_WATCHDOG_SECONDS
+
 
 GRADE_WRAPPER = """\
 import json
@@ -797,3 +992,17 @@ def collect_detached_grade(pid: int, result_path: str) -> dict | None:
     if not isinstance(data, dict):
         return fail_closed
     return data
+
+
+# The rebound check_story_status body resolves bare names against
+# pipeline.server's namespace, so the detached-grade primitives it calls must
+# be reachable there. Export them into _server.__dict__ at import time — but
+# NOT under pytest: the pre-existing check_story_status test files pin the
+# SYNCHRONOUS dead-pid grade (they stub subprocess.run and never stub these
+# primitives), and exporting the real spawner under pytest would flip those
+# runs to detached grades and break them. The detached-grading tests patch
+# p.start_detached_grade / p.collect_detached_grade directly — exactly the
+# surface the rebound body reads via globals().
+if "pytest" not in sys.modules:
+    _server.start_detached_grade = start_detached_grade
+    _server.collect_detached_grade = collect_detached_grade

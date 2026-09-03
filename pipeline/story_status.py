@@ -533,33 +533,37 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
             # Security review (REQUEST_CHANGES): the detached grade's result
             # channel must not live in the agent-writable worktree — the code
             # under test could forge a passing grade there during its own
-            # build and bypass the acceptance gate. When a pipeline-owned
-            # state dir is configured (PIPELINE_STATE_DIR), the result/log
-            # files live under <state_root>/grading/<story_id>/ (mode 0o700)
-            # and the collector reads ONLY the persisted path. The guard
-            # below refuses to aim the hardened channel back into the
-            # worktree, so a regression cannot silently move it back.
-            state_root = os.environ.get("PIPELINE_STATE_DIR")
-            if state_root:
-                grading_dir = Path(state_root) / "grading" / story_key
-                grading_dir.mkdir(parents=True, exist_ok=True)
-                grading_dir.chmod(0o700)
-                result_path = grading_dir / "result.json"
-                log_path = grading_dir / "grading.log"
-                _worktree_resolved = Path(worktree).resolve()
-                for _artifact in (result_path, log_path):
-                    if _artifact.resolve().is_relative_to(_worktree_resolved):
-                        raise RuntimeError(
-                            "detached grade result channel must live outside "
-                            "the agent-writable worktree "
-                            f"({_worktree_resolved}): {_artifact}"
-                        )
+            # build and bypass the acceptance gate. The hardened channel is
+            # the DEFAULT: the state root is the pipeline-owned plans/
+            # manifests base (the parent of this story's manifest path), with
+            # PIPELINE_STATE_DIR as an override. A relative override resolves
+            # against that fixed base — never the scheduler's CWD, since the
+            # collect tick may run with a different CWD than the spawn tick.
+            # The result/log files live under <state_root>/grading/<story_id>/
+            # (mode 0o700) and the collector reads ONLY the persisted path.
+            # The guard below refuses to aim the hardened channel back into
+            # the worktree, so a regression cannot silently move it back.
+            env_root = os.environ.get("PIPELINE_STATE_DIR")
+            manifest_root = Path(manifest_path).parent
+            if env_root:
+                state_root = Path(env_root)
+                if not state_root.is_absolute():
+                    state_root = manifest_root / state_root
             else:
-                # No state dir provisioned: legacy worktree channel (the
-                # pre-hardening behavior, kept for environments that have
-                # not set PIPELINE_STATE_DIR).
-                result_path = worktree / ".detached_grade_result.json"
-                log_path = worktree / ".detached_grade.log"
+                state_root = manifest_root
+            grading_dir = state_root / "grading" / story_key
+            grading_dir.mkdir(parents=True, exist_ok=True)
+            grading_dir.chmod(0o700)
+            result_path = grading_dir / "result.json"
+            log_path = grading_dir / "grading.log"
+            _worktree_resolved = Path(worktree).resolve()
+            for _artifact in (result_path, log_path):
+                if _artifact.resolve().is_relative_to(_worktree_resolved):
+                    raise RuntimeError(
+                        "detached grade result channel must live outside "
+                        "the agent-writable worktree "
+                        f"({_worktree_resolved}): {_artifact}"
+                    )
             try:
                 grade_pid = starter(
                     test_cmd,

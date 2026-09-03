@@ -233,6 +233,58 @@ def test_result_path_outside_worktree(plan_dir, state_root, monkeypatch):
     assert not (worktree / WORKTREE_LOG_NAME).exists()
 
 
+def test_default_channel_is_manifest_root_without_env_override(
+    plan_dir, monkeypatch
+):
+    """Security review cycle 2: the hardened channel must be the DEFAULT,
+    not an opt-in. With PIPELINE_STATE_DIR unset, the spawn tick must aim
+    the wrapper at <manifest_root>/grading/<story_key>/result.json — the
+    pipeline-owned plans/manifests base (_store.manifest_path's parent) —
+    and never at the agent-writable worktree."""
+    monkeypatch.delenv("PIPELINE_STATE_DIR", raising=False)
+    setup = _base_setup(plan_dir, monkeypatch)
+    worktree = setup["worktree"]
+    spawn = _install_spawn_stub(monkeypatch)
+    collect_calls = _install_collect_spy(monkeypatch)
+
+    first = ss.check_story_status(PLAN_NAME, STORY_KEY)
+    assert first.get("status") == "grading", first
+    assert len(spawn["calls"]) == 1, spawn["calls"]
+
+    # Same derivation the implementation must use: the parent of the
+    # manifest path the store itself hands out.
+    manifest_root = Path(p._store.manifest_path(PLAN_NAME)).parent
+    expected_result = manifest_root / "grading" / STORY_KEY / "result.json"
+    expected_log = manifest_root / "grading" / STORY_KEY / "grading.log"
+
+    call = spawn["calls"][0]
+    result_path = Path(call["result_path"])
+    log_path = Path(call["log_path"])
+    assert result_path == expected_result, call
+    assert log_path == expected_log, call
+    assert not result_path.is_relative_to(worktree), result_path
+    assert not log_path.is_relative_to(worktree), log_path
+
+    # The persisted bookkeeping points at the same absolute channel.
+    story = _read_story(plan_dir, PLAN_NAME, STORY_KEY)
+    assert story.get("grading_result_path") == str(result_path), story
+
+    # Follow-up tick: the collector opens exactly the persisted absolute
+    # path; a forged pass in the worktree is never read and never advances
+    # the story.
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(json.dumps(REAL_FAIL_RESULT))
+    forged = worktree / WORKTREE_RESULT_NAME
+    forged.parent.mkdir(parents=True, exist_ok=True)
+    forged.write_text(json.dumps(FORGED_PASS_RESULT))
+    ss.check_story_status(PLAN_NAME, STORY_KEY)
+    assert len(collect_calls) == 1, collect_calls
+    assert Path(collect_calls[0][1]) == result_path
+    story = _read_story(plan_dir, PLAN_NAME, STORY_KEY)
+    assert story.get("status") not in ("tests_passed", "done"), story
+    assert story.get("tests_passed") is not True, story
+
+
 def test_forged_worktree_result_cannot_pass(plan_dir, state_root, monkeypatch):
     """A graded agent forges {'returncode': 0} into its own worktree; the
     collector must merge the REAL verdict from the state-dir channel and

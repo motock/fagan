@@ -17,6 +17,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pipeline import story_metrics, guard_liveness
+
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+
+# config_provenance is a read-only leaf: its only non-stdlib import is
+# app.role_registry (see both modules' docstrings), so pulling it in does
+# NOT drag the orchestrator's write surface (pipeline.server /
+# app.pipeline_mcp_server / app.backend) into the dashboard's import graph.
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
@@ -51,9 +61,14 @@ from app.story_replay import build_replay_events
 from pipeline import config_provenance, preflight
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
 from pipeline.server import PipelineService, _store
+from pipeline import story_metrics, guard_liveness
+from pathlib import Path
+from typing import Any
+
 from pipeline.wedge import collect_story_wedge_signals, wedge_verdict
 
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
+FAILURE_MODES_DATASET_PATH = Path(os.environ.get("FAILURE_MODES_DATASET_PATH", "docs/failure_modes.json")).expanduser()
 USAGE_STATE_PATH = Path(
     os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_state.json")
 ).expanduser()
@@ -858,6 +873,53 @@ def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result
 
+
+@app.get("/api/plans/{plan_name}/metrics")
+
+def get_plan_metrics(plan_name: str) -> dict[str, Any]:
+    if plan_name not in _store.list_manifests():
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    notifications_path = PLAN_DIR / f"{plan_name}.notifications.jsonl"
+    records, malformed = story_metrics.load_notification_records(notifications_path)
+    story_metrics_map = story_metrics.compute_story_metrics(records)
+    stories = list(story_metrics_map.values())
+    rollup = story_metrics.compute_plan_rollup(stories)
+    return {
+        "plan": plan_name,
+        "stories": stories,
+        "rollup": rollup,
+        "malformed_lines": malformed,
+    }
+
+
+@app.get("/api/guard-liveness")
+
+def get_guard_liveness() -> dict[str, Any]:
+    try:
+        with open(FAILURE_MODES_DATASET_PATH, "r", encoding="utf-8") as f:
+            dataset = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, TypeError):
+        return {
+            "dataset_found": False,
+            "entries": [],
+            "summary": {
+                "total": 0,
+                "with_guard": 0,
+                "no_guard_expected": 0,
+                "missing_files": 0,
+                "uncollected_files": 0,
+            },
+        }
+    repo_root = Path(__file__).resolve().parents[2]
+    report = guard_liveness.check_guard_liveness(dataset, repo_root, collected_test_files=None)
+    # Adjust missing list: if a file actually exists, remove from missing
+    for entry in report["entries"]:
+        for candidate in list(entry["missing"]):
+            if (repo_root / "tests" / candidate).exists():
+                entry["missing"].remove(candidate)
+    report["dataset_found"] = True
+    return report
+    return report
 
 # Mount static files for the dashboard UI.
 app.include_router(chat.chat_router, prefix="/api")

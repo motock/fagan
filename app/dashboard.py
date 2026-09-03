@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 # app.pipeline_mcp_server / app.backend) into the dashboard's import graph.
 from app import chat, role_registry
 from app.dashboard_helpers import (
+    _LOG_TAIL_CAP,
     _LOG_TAIL_DEFAULT,
     _acceptance_slice,
     _aggregate_stories,
@@ -46,6 +47,7 @@ from app.dashboard_models import (
     StoryStatusBody,
     WorkspaceRequest,
 )
+from app.story_replay import build_replay_events
 from pipeline import config_provenance, preflight
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
 from pipeline.server import PipelineService, _store
@@ -486,6 +488,80 @@ def get_story_checklist(plan_name: str, story_key: str) -> dict[str, Any]:
         "plan": plan_file,
         "scratchpad": scratch_file,
         "progress": progress,
+    }
+
+
+@app.get("/api/plans/{plan_name}/stories/{story_key}/replay")
+def get_story_replay(
+    plan_name: str,
+    story_key: str,
+    lines: int = 200,
+) -> dict[str, Any]:
+    """Return the story's merged chronological replay timeline, combining
+    the checkpoint journal with the tails of the worktree logs, so the
+    dashboard can render one vertical timeline of everything the agent
+    did (journal steps interleaved with agent/review log activity).
+
+    Response shape:
+      { "available": bool,
+        "events": [ {ts, source, kind, message} ],
+        "sources": {"journal": bool, "agent.log": bool, "review.log": bool} }
+
+    Semantics:
+      - 404 only when the plan or story itself doesn't exist. The client
+        treats 404 as 'this story is gone' (render an empty placeholder or
+        toast), distinct from a healthy story that simply has nothing to
+        replay yet.
+      - 200 + available:false + events:[] when the journal is missing,
+        malformed, or empty AND no worktree log is readable — a story never
+        dispatched (no worktree), a wiped agent.log, and a corrupt journal
+        are all normal available-degraded states, NEVER 500.
+      - available is True iff the journal was readable OR at least one log
+        source contributed; `sources` echoes which inputs actually did, so
+        the UI can label provenance.
+      - Each log source contributes only its last `lines` lines (default
+        `_LOG_TAIL_DEFAULT` 200, clamped to [1, `_LOG_TAIL_CAP` 500]).
+      - Events are merged and sorted chronologically by build_replay_events
+        (app.story_replay); the sort is stable, journal events first at
+        equal timestamps.
+    """
+    manifest = _service.get_manifest_or_none(plan_name)
+    if manifest is None:
+        raise HTTPException(
+            status_code=404, detail=f"No manifest for plan '{plan_name}'"
+        )
+    stories = manifest.get("stories") if isinstance(manifest, dict) else {}
+    if not isinstance(stories, dict) or story_key not in stories:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No story '{story_key}' in plan '{plan_name}'",
+        )
+    story = stories[story_key]
+    n = max(1, min(lines, _LOG_TAIL_CAP))
+    journal_available, entries = _store.get_journal(plan_name, story_key)
+    log_sources: dict[str, list[str]] = {}
+    source_flags = {"agent.log": False, "review.log": False}
+    for name in ("agent.log", "review.log"):
+        res = _store.get_worktree_file(story, name)
+        if not res["available"]:
+            continue
+        tail = res["text"].splitlines()[-n:]
+        if not tail:
+            # A wiped/empty log contributes nothing: it is not a source
+            # (no empty list is passed on) and does not flip available.
+            continue
+        source_flags[name] = True
+        log_sources[name] = tail
+    events = build_replay_events(entries, log_sources)
+    available = journal_available or len(log_sources) > 0
+    return {
+        "available": available,
+        "events": events,
+        "sources": {
+            "journal": journal_available,
+            "agent.log": source_flags["agent.log"],
+            "review.log": source_flags["review.log"],
+        },
     }
 
 

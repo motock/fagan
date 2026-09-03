@@ -281,15 +281,26 @@ def test_backend_source_still_writes_new_transport_env_keys():
 
 def test_backend_source_still_writes_other_local_agent_env_keys():
     """Source-level guard: the out-of-scope LOCAL_AGENT_* keys (MODEL, SYSTEM,
-    THINK) must still be assigned into the dispatch env in app/backend.py.
-    MODEL and SYSTEM are written via a dict literal; THINK via env[...]."""
+    THINK) must still be assigned into the dispatch env. MODEL and SYSTEM are
+    written via a dict literal; THINK via env[...].
+
+    Originally grepped app/backend.py's own text; updated 2026-09-03
+    (harness-seam story 6a9963a1) when the base MODEL/SYSTEM dict literal moved
+    into LocalAgentHarness.build_agent_command (app/harness.py) — that is the
+    story's whole deliverable, a byte-identical relocation of the writes onto
+    the harness seam. OllamaDriver.dispatch merges command.env into the
+    dispatch env ({**os.environ, **command.env}), so the keys still reach the
+    spawned process; the guard's real intent (don't lose these writes) is
+    preserved by checking each key wherever it now lives, not by grepping a
+    file that no longer contains them by design."""
+    harness_src = _harness_source()
+    assert '"LOCAL_AGENT_MODEL":' in harness_src, (
+        "app/harness.py must still write LOCAL_AGENT_MODEL into the base env"
+    )
+    assert '"LOCAL_AGENT_SYSTEM":' in harness_src, (
+        "app/harness.py must still write LOCAL_AGENT_SYSTEM into the base env"
+    )
     src = _backend_source()
-    assert '"LOCAL_AGENT_MODEL":' in src, (
-        "app/backend.py must still write LOCAL_AGENT_MODEL into the dispatch env"
-    )
-    assert '"LOCAL_AGENT_SYSTEM":' in src, (
-        "app/backend.py must still write LOCAL_AGENT_SYSTEM into the dispatch env"
-    )
     assert 'env["LOCAL_AGENT_THINK"]' in src, (
         "app/backend.py must still write LOCAL_AGENT_THINK into the dispatch env"
     )
@@ -325,3 +336,13 @@ def _backend_source():
     # extraction)
     backend = here.parents[2] / "app" / "backend_ollama.py"
     return backend.read_text()
+
+
+def _harness_source():
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    # tests/unit/<file> -> repo root / app / harness.py (the base
+    # LOCAL_AGENT_MODEL/SYSTEM env writes live here since the harness seam)
+    harness = here.parents[2] / "app" / "harness.py"
+    return harness.read_text()

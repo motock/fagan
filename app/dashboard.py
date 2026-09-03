@@ -30,6 +30,8 @@ from app.dashboard_helpers import (
     _plan_summary,
     _story_last_activity,
 )
+from pipeline import guard_liveness
+from pipeline import story_metrics
 from app.dashboard_models import (
     DecisionRequest,
     DecomposeRequest,

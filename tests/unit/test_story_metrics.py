@@ -216,6 +216,25 @@ def test_load_file_of_only_malformed_lines_returns_empty_with_count(tmp_path):
     assert malformed == 3
 
 
+def test_load_notification_records_counts_valid_json_non_dict_lines_as_malformed(tmp_path):
+    """Lines that parse to a non-dict are malformed, never records.
+
+    Every other malformed fixture in this module is invalid JSON and only
+    exercises the ``except ValueError`` path.  These four lines are all VALID
+    JSON (the docstring's own examples), so ``json.loads`` succeeds on each and
+    only the "parsed value is not a dict" type guard may count them: a
+    regression that appends them as records would then be silently dropped by
+    ``compute_story_metrics``, reporting zero malformed and no groups.
+    """
+    path = write_jsonl(
+        tmp_path / "p.notifications.jsonl",
+        ["[1, 2]", '"str"', "42", "null"],
+    )
+    records, malformed = story_metrics.load_notification_records(path)
+    assert records == []
+    assert malformed == 4
+
+
 # --------------------------------------------------------------------------- #
 # compute_story_metrics - grouping
 # --------------------------------------------------------------------------- #

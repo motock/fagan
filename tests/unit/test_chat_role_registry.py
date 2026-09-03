@@ -85,25 +85,29 @@ def test_model_registry_has_chat_role_entry():
     assert "chat" in roles, "model_registry.json roles block must include 'chat'"
 
 
-def test_model_registry_chat_uses_ollama_provider():
-    """The chat role's committed default provider (2026-08-28: switched from
-    claude/sonnet to ollama/glm so non-implementer roles run on the local
-    glm model instead of Claude)."""
+def test_model_registry_chat_has_a_provider():
+    """The chat role must declare SOME provider — which one is a
+    reconfigurable operational choice (see model_registry.json's roles
+    block for the current default), not a fact this test should pin. See
+    test_model_registry_chat_pairs_with_declared_provider_model for the
+    check that the declared value is actually valid."""
     data = json.loads(_REGISTRY_PATH.read_text())
     chat = data["roles"]["chat"]
-    assert chat.get("provider") == "ollama", (
-        f"expected roles.chat.provider == 'ollama', got {chat.get('provider')!r}"
+    provider = chat.get("provider")
+    assert isinstance(provider, str) and provider, (
+        f"expected roles.chat.provider to be a non-empty string, got {provider!r}"
     )
 
 
-def test_model_registry_chat_uses_glm_model():
-    """The chat role must default to model glm (a friendly name) - see
-    test_model_registry_chat_uses_ollama_provider for why the default
-    changed from claude/sonnet."""
+def test_model_registry_chat_has_a_model():
+    """The chat role must declare SOME model — see
+    test_model_registry_chat_has_a_provider for why this doesn't pin a
+    specific value."""
     data = json.loads(_REGISTRY_PATH.read_text())
     chat = data["roles"]["chat"]
-    assert chat.get("model") == "glm", (
-        f"expected roles.chat.model == 'glm', got {chat.get('model')!r}"
+    model = chat.get("model")
+    assert isinstance(model, str) and model, (
+        f"expected roles.chat.model to be a non-empty string, got {model!r}"
     )
 
 

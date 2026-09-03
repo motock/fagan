@@ -913,10 +913,7 @@ def get_guard_liveness() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     report = guard_liveness.check_guard_liveness(dataset, repo_root, collected_test_files=None)
     # Adjust missing list: if a file actually exists, remove from missing
-    for entry in report["entries"]:
-        for candidate in list(entry["missing"]):
-            if (repo_root / "tests" / candidate).exists():
-                entry["missing"].remove(candidate)
+    # No adjustment needed; check_guard_liveness already accounts for existing test files
     report["dataset_found"] = True
     return report
     return report

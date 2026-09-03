@@ -415,6 +415,13 @@ class PipelineService:
             workspaces.append({"path": repo_root, "exists": exists, "valid": valid})
         return workspaces
 
+    def get_active_workspace(self) -> str | None:
+        """Return the active workspace path, or None if unset."""
+        return _store.get_active_workspace()
+
+    def set_active_workspace(self, path: str | None) -> None:
+        """Set the active workspace; None clears it."""
+        _store.set_active_workspace(path)
 
     def approve_merge(self, plan_name: str, story_key: str) -> dict[str, Any]:
         return _approve_merge_impl(plan_name, story_key)

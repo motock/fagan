@@ -100,6 +100,8 @@ class Store(Protocol):
     def get_decisions(self, plan_name: str) -> list[dict]: ...
     def get_recent_workspaces(self) -> list[str]: ...
     def add_recent_workspace(self, path: str) -> None: ...
+    def get_active_workspace(self) -> str | None: ...
+    def set_active_workspace(self, path: str | None) -> None: ...
     def get_manifest_or_none(self, plan_name: str) -> dict | None: ...
     def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]: ...
     def get_journal_final_ts(self, plan_name: str, story_key: str) -> str | None: ...
@@ -388,6 +390,30 @@ class FileStore:
         try:
             tmp.write_text(json.dumps(recent))
             os.replace(tmp, PLAN_DIR / "recent_workspaces.json")
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def get_active_workspace(self) -> str | None:
+        path = PLAN_DIR / "active_workspace.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        value = data.get("path")
+        if isinstance(value, str) and value:
+            return value
+        return None
+
+    def set_active_workspace(self, path: str | None) -> None:
+        tmp = PLAN_DIR / f"active_workspace.json.tmp.{os.getpid()}"
+        try:
+            tmp.write_text(json.dumps({"path": path}))
+            os.replace(tmp, PLAN_DIR / "active_workspace.json")
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise

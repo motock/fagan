@@ -6,7 +6,7 @@ helpers (``classify_oracle_outcome`` / ``acceptance_digests``). It must reuse
 the real pipeline modules (no duplicated logic) and must NOT register any of
 the main pipeline server's other tools.
 
-Registration-path note: these tests assert the FastMCP registration itself
+Registration-path note: these tests assert the MCPServer registration itself
 (``mcp._tool_manager._tools[name].fn is <declared function>``), not just that
 a module-level callable exists — a tool silently dropped from the decorator
 registration must fail here, not only at call time.
@@ -54,14 +54,14 @@ def _call_arg(call, index, name):
 
 
 class TestCompanionServerConstruction:
-    """FastMCP construction must mirror pipeline/server.py's pattern."""
+    """MCPServer construction must mirror pipeline/server.py's pattern."""
 
     def test_server_instance_is_named_pipeline_companion(self):
         assert companion_server.mcp.name == "pipeline-companion"
 
-    def test_fastmcp_constructed_with_the_companion_name(self):
+    def test_mcpserver_constructed_with_the_companion_name(self):
         source = inspect.getsource(companion_server)
-        assert re.search(r"""FastMCP\(\s*['"]pipeline-companion['"]\s*\)""", source)
+        assert re.search(r"""MCPServer\(\s*['"]pipeline-companion['"]\s*\)""", source)
 
     def test_module_docstring_explains_b5_companion_purpose(self):
         doc = (inspect.getdoc(companion_server) or "").lower()
@@ -85,7 +85,7 @@ class TestCompanionServerConstruction:
 
 
 class TestToolRegistration:
-    """Each tool must be registered on the FastMCP instance AND bound to the
+    """Each tool must be registered on the MCPServer instance AND bound to the
     declared module-level function (catches silent deregistration)."""
 
     @pytest.mark.parametrize("name", COMPANION_TOOLS)

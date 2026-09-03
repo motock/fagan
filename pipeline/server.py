@@ -48,7 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from app import backend, role_registry
 
@@ -413,9 +413,9 @@ RETRO_PENDING_PATH = PIPELINE_SELF_REPO_ROOT / "retros" / "PENDING.md"
 PLAN_DIR.mkdir(parents=True, exist_ok=True)
 WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
 
-mcp = FastMCP("pipeline")
+mcp = MCPServer("pipeline")
 
-# FastMCP's constructor calls logging.basicConfig(level=INFO), which the httpx
+# MCPServer's constructor calls logging.basicConfig(level=INFO), which the httpx
 # and httpcore loggers (NOTSET) then inherit — so every HTTP call (e.g. the
 # per-tick Ollama /api/tags reachability probe) logs an INFO "HTTP Request: ..."
 # line. Under launchd's stderr redirect that floods the unattended logs (the

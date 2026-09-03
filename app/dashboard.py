@@ -643,11 +643,18 @@ def list_workspaces_route():
     return {"workspaces": _service.list_workspaces()}
 
 
+@app.get("/api/workspace")
+
+def get_workspace_route():
+    return {"active": _service.get_active_workspace()}
+
 @app.post("/api/workspace")
+
 def set_workspace_route(request: WorkspaceRequest):
     result = _service.resolve_workspace(request.path, create=request.create)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
+    if not result.get('ok'):
+        raise HTTPException(status_code=400, detail=result.get('error', 'Unknown error'))
+    _service.set_active_workspace(result['path'])
     return result
 
 

@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 import types
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -421,6 +422,108 @@ def _platform_locked_fixture_warning(story: dict[str, Any]) -> str | None:
         f"({', '.join(matched)}): dispatch grades on macOS but CI runs "
         f"ubuntu-latest, so this fixture cannot pass in CI"
     )
+
+
+def _materialize_acceptance_fixtures(story: dict[str, Any], dest_dir: Path) -> list[Path]:
+    """Write each of ``story``'s acceptance fixture sources under ``dest_dir``
+    at its declared relative path, creating parent directories as needed.
+
+    Returns the list of written paths. Entries missing a truthy ``path`` or
+    ``source`` are silently skipped - malformed acceptance data should never
+    raise here, since this helper is called from lint/materialization paths
+    that must fail open rather than crash ingest. ``story`` is plan-authored
+    data, i.e. a system boundary: an absolute ``path`` or one containing a
+    ``..`` segment is also skipped rather than honored, so a malformed entry
+    can never write (or create directories) outside ``dest_dir``.
+    """
+    written: list[Path] = []
+    for entry in story.get("acceptance") or []:
+        path = entry.get("path")
+        source = entry.get("source")
+        if not path or not source:
+            continue
+        candidate = Path(path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            continue
+        dest = dest_dir / candidate
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(source)
+        written.append(dest)
+    return written
+
+
+def _lint_acceptance_fixtures(
+    story: dict[str, Any], repo_root: str | None = None
+) -> tuple[str, str | None]:
+    """Run ruff against a story's Python acceptance fixtures before they
+    become a read-only oracle.
+
+    Why this exists: an acceptance fixture with a lint violation is a
+    read-only oracle the dispatched agent is forbidden from touching (see
+    CLAUDE.md's "never modify existing tests" default), so CI's repo-wide
+    lint gate fails every rework attempt with no way for the agent to ever
+    fix it. This happened live 2026-08-05 on the mode31-off-task-drift-guard
+    story (PR #235): the plan author's own fixture carried an unused import
+    (ruff F401), and 4 of 7 CI lint failures traced back to it, burning a
+    full local rework cycle that could never converge.
+
+    Note: this function is groundwork only - as of this change it has no
+    production caller. Wiring it into the ingest-time per-story loop (and
+    re-exporting it alongside its siblings) is left to a follow-up story so
+    that this one stays scoped to a single production file.
+
+    Returns exactly one of three kinds - callers (including a later opt-in
+    blocking mode) must only ever gate on ``"finding"``, never on
+    ``"skipped"``, so a broken or absent lint tool can never block a
+    known-good plan:
+
+      - ``("clean", None)``: no acceptance entries, no ``.py`` fixture path,
+        or ruff ran and found nothing.
+      - ``("finding", message)``: ruff ran and found a violation; ``message``
+        names the story summary, the declared fixture path(s), and the tail
+        of ruff's output.
+      - ``("skipped", message)``: ruff isn't on PATH, or anything else went
+        wrong (timeout, exception) - validation could not run at all.
+
+    ``repo_root`` is accepted for call-site symmetry with the sibling
+    pytest-fixture validator, so a future caller can invoke both the same
+    way; it is passed through as ``cwd`` to the ruff subprocess when given.
+    """
+    acceptance = story.get("acceptance") or []
+    py_paths = [e.get("path") for e in acceptance if (e.get("path") or "").endswith(".py")]
+    if not py_paths:
+        return ("clean", None)
+
+    ruff_path = shutil.which("ruff")
+    if ruff_path is None:
+        return ("skipped", "acceptance-fixture lint validation skipped: ruff not found on PATH")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _materialize_acceptance_fixtures(story, Path(tmp_dir))
+            result = subprocess.run(
+                [ruff_path, "check", "--no-cache", str(tmp_dir)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=repo_root,
+            )
+    except subprocess.TimeoutExpired:
+        return ("skipped", "acceptance-fixture lint validation skipped: ruff timed out")
+    except Exception as exc:  # noqa: BLE001 - must never crash ingest
+        return ("skipped", f"acceptance-fixture lint validation skipped: {exc}")
+
+    if result.returncode == 0:
+        return ("clean", None)
+
+    summary = story.get("summary", "?")
+    output = f"{result.stdout or ''}{result.stderr or ''}"[-1500:]
+    message = (
+        f"acceptance fixture lint failed for {summary!r} "
+        f"(fixture path(s): {', '.join(py_paths)}) - ruff reported:\n{output}"
+    )
+    return ("finding", message)
 
 
 def _is_pytest_cmd(cmd: list[str]) -> bool:

@@ -309,11 +309,7 @@ function _diffBoardCards(columnBodyEl, storiesForColumn) {
   // over by _tryUpdateBoardInPlace — or a single bare [key, story] pair,
   // which is just a one-entry column. A bare pair is recognizable because
   // its first element is the string key rather than another pair.
-  const pairs = (Array.isArray(storiesForColumn)
-    && storiesForColumn.length === 2
-    && !Array.isArray(storiesForColumn[0]))
-    ? [storiesForColumn]
-    : (Array.isArray(storiesForColumn) ? storiesForColumn : []);
+  const pairs = storiesForColumn;
   // Map existing cards by data-key.
 const existing = Array.from(columnBodyEl.querySelectorAll('.card')).reduce((m, el) => {
     m[el.dataset.key] = el;

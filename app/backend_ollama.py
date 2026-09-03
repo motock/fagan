@@ -20,6 +20,7 @@ import httpx
 
 from app import inference_providers
 from app.backend_types import AgentHandle
+from app.harness import HarnessRequest, get_harness
 from app.ollama_prompt_utils import (  # noqa: F401 (re-exported: OllamaDriver's methods reference these as bare names)
     _LOCAL_DEFAULT_MODEL,
     _LOCAL_MODEL_TUNING,
@@ -611,14 +612,10 @@ class OllamaDriver:
         acceptance = acceptance or []
         oracle_mode = bool(acceptance)
         agent_script = self._AGENT_SCRIPT_ORACLE if oracle_mode else self._AGENT_SCRIPT
+        command = get_harness('local').build_agent_command(HarnessRequest(prompt=prompt, system=system, model=resolved_model, cwd=str(cwd), acceptance=acceptance or None, options={'python_executable': str(self._VENV_PYTHON), 'agent_script': str(agent_script), 'model': resolved_model, 'system': system or '', 'task': prompt, 'endpoint': self.endpoint, 'timeout': str(self.dispatch_timeout), 'provider': self.provider.name}))
         env = {
             **os.environ,
-            "LOCAL_AGENT_MODEL": resolved_model,
-            "LOCAL_AGENT_SYSTEM": system or "",
-            "LOCAL_AGENT_TASK": prompt,
-            "LOCAL_AGENT_ENDPOINT": self.endpoint,
-            "LOCAL_AGENT_TIMEOUT": str(self.dispatch_timeout),
-            "LOCAL_AGENT_PROVIDER": self.provider.name,
+            **command.env,
         }
         # num_ctx/temperature are resolved per dispatch (env override >
         # per-model tuning table > constructor default) so a per-model
@@ -704,7 +701,7 @@ class OllamaDriver:
             env["LOCAL_AGENT_RESUME_TRANSCRIPT_PATH"] = str(resume_transcript_path)
         if resume_append_content is not None:
             env["LOCAL_AGENT_RESUME_APPEND_CONTENT"] = resume_append_content
-        argv = [str(self._VENV_PYTHON), str(agent_script)]
+        argv = command.argv
         handle = execution.spawn_harness(
             argv, cwd=cwd, log_path=log_path, append=append, env=env,
         )

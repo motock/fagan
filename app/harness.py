@@ -116,6 +116,15 @@ def get_harness(name: str) -> AgentHarness:
 
 
 def resolve_harness_name(default: str) -> str:
+    """Resolve the harness name from ``PIPELINE_AGENT_HARNESS``, or ``default``.
+
+    Fail-closed: unset or whitespace-only is treated as "not selected" and
+    returns ``default`` unchanged; any other value is normalized with
+    ``.strip().lower()`` and must already be a registered harness name, or
+    this raises ValueError naming the env var, the offending value, and the
+    registered names. Never silently falls back to ``default`` on a typo'd
+    or unregistered value.
+    """
     raw = os.environ.get("PIPELINE_AGENT_HARNESS", "")
     resolved = raw.strip().lower()
     if not resolved:
@@ -126,7 +135,6 @@ def resolve_harness_name(default: str) -> str:
         f"PIPELINE_AGENT_HARNESS={resolved!r} is not a registered harness; "
         f"registered: {sorted(_HARNESSES)}"
     )
-
 
 
 class ClaudeCliHarness:

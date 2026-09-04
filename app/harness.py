@@ -110,8 +110,8 @@ def get_harness(name: str) -> AgentHarness:
     """
     key = name.strip().lower()
     if key not in _HARNESSES:
-            registered = ", ".join(sorted(_HARNESSES)) or "(none)"
-            raise ValueError(f"unknown harness {name!r}; registered: {registered}")
+        registered = ", ".join(sorted(_HARNESSES)) or "(none)"
+        raise ValueError(f"unknown harness {name!r}; registered: {registered}")
     return _HARNESSES[key]()
 
 

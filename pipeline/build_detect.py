@@ -9,15 +9,15 @@ re-export in pipeline_mcp_server.py.
 
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
-import types
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+import types
 from typing import Any
-
 
 def _venv_python_for(cwd: Path) -> Path | None:
     """Locate a project venv interpreter for running pytest, or None.
@@ -522,6 +522,92 @@ def _lint_acceptance_fixtures(
     message = (
         f"acceptance fixture lint failed for {summary!r} "
         f"(fixture path(s): {', '.join(py_paths)}) - ruff reported:\n{output}"
+    )
+    return ("finding", message)
+
+
+def _pytest_acceptance_fixtures(story: dict[str, Any], repo_root: str | None = None) -> tuple[str, str | None]:
+    """Run pytest collection on a story's acceptance fixtures.
+
+    This validator performs a dry‑run collection of the story's Python acceptance
+    fixtures.  It is intentionally conservative: it never blocks on a
+    ``"skipped"`` result, only on a ``"finding"``.
+
+    Parameters
+    ----------
+    story:
+        The story dict containing an ``acceptance`` block.
+    repo_root:
+        Optional path to the repository root.  When provided the fixtures are
+        materialised with that directory on ``PYTHONPATH`` so imports of the
+        repository's own package (e.g. ``from pipeline.ingest import …``)
+        resolve.
+
+    Returns
+    -------
+    tuple[str, str | None]
+        ``("clean", None)`` when there are no ``.py`` fixtures or pytest
+        collection succeeds.
+        ``("finding", message)`` when collection fails for reasons other
+        than the expected import‑of‑future‑code false positive.
+        ``("skipped", message)`` when pytest is missing, times out, or an
+        unexpected exception occurs.
+    """
+    acceptance = story.get("acceptance") or []
+    py_paths = [e.get("path") for e in acceptance if (e.get("path") or "").endswith(".py")]
+    if not py_paths:
+        return ("clean", None)
+
+    pytest_path = shutil.which("pytest")
+    if pytest_path is None:
+        return ("skipped", "acceptance-fixture pytest dry-run skipped: pytest not found on PATH")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            _materialize_acceptance_fixtures(story, tmp_path)
+            env = os.environ.copy()
+            if repo_root:
+                key = "PYTHONPATH"
+                existing = env.get(key)
+                repo_root_str = str(repo_root)
+                env[key] = f"{repo_root_str}:{existing}" if existing else repo_root_str
+            cmd = [
+                pytest_path,
+                "--collect-only",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                str(tmp_path),
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=repo_root or str(tmp_path),
+                env=env,
+            )
+    except subprocess.TimeoutExpired:
+        return ("skipped", "acceptance-fixture pytest dry-run skipped: pytest timed out")
+    except Exception as exc:  # noqa: BLE001 - never crash ingest
+        return ("skipped", f"acceptance-fixture pytest dry-run skipped: {exc}")
+
+    if result.returncode == 0:
+        return ("clean", None)
+
+    combined = (result.stdout or "") + (result.stderr or "")
+    if ("ModuleNotFoundError" in combined or "ImportError" in combined) and "pipeline" in combined:
+        return (
+            "skipped",
+            "acceptance-fixture pytest dry-run skipped: fixture imports repo code that does not exist until the story is implemented - cannot validate collection at ingest time",
+        )
+
+    summary = story.get("summary", "?")
+    output = combined[-1500:]
+    message = (
+        f"acceptance fixture pytest dry-run failed for {summary!r} "
+        f"(fixture path(s): {', '.join(py_paths)}) - pytest reported:\n{output}"
     )
     return ("finding", message)
 

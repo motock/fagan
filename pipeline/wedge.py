@@ -31,9 +31,9 @@ import it from pipeline.wedge.
 
 from __future__ import annotations
 
-from .wedge_io import collect_story_wedge_signals
+# from .wedge_io import collect_story_wedge_signals
 
-__all__ = ["collect_story_wedge_signals", "wedge_verdict"]
+__all__ = ["wedge_verdict"]
 
 
 def wedge_verdict(

@@ -722,7 +722,7 @@ everything else at its default until you have a concrete reason to change it:
 | `PIPELINE_RISK_THRESHOLD` | Leave at `low` until you've watched a `gated` run go well |
 | `PLANE_*` (4 vars) | Only if you're mirroring stories into a Plane project — skip entirely otherwise, the manifest is authoritative regardless |
 | `PIPELINE_BACKEND_DISPATCH` / `_REVIEW` / `_OVERLORD` | Only to opt a role into local-model dispatch (`ollama`/`lmstudio`/`mlx`/`local`/`auto`) instead of the `claude` default |
-
+| `PIPELINE_AGENT_HARNESS` | Unset → native harness (claude or local), set to registered harness, cross-harness selection fails closed at dispatch |
 Everything under `PIPELINE_LOCAL_*`, `LOCAL_AGENT_*`, the per-model tuning
 table, the rework/escalation budgets, and the review-fallback knobs exists to
 tune local-model dispatch once you've opted into it. They're documented in

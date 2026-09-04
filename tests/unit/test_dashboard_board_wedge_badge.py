@@ -692,6 +692,45 @@ def test_diff_board_cards_toggles_badge_in_place_across_polls():
     assert "wedged" not in set(second["S1"]["cls"].split())
 
 
+def test_diff_board_cards_rejects_malformed_bare_pair_instead_of_reshaping_it():
+    """Regression for the speculative bare-pair heuristic in _diffBoardCards
+    (static/app/render/board.js, ~line 308): ``storiesForColumn`` is a
+    malformed bare ``[key, story]`` pair here -- NOT wrapped in the outer
+    array the function's contract requires (an array of ``[key, story]``
+    pairs). This is deliberately the exact malformed shape a caller bug can
+    produce (see the existing, not-to-be-modified
+    ``test_diff_board_cards_toggles_badge_in_place_across_polls``, whose
+    ``_diff_cards_expr(healthy, wedged)`` call passes bare pairs positionally
+    instead of ``_diff_cards_expr([healthy, wedged])``).
+
+    Once ``pairs`` is used directly as ``storiesForColumn`` (no reshaping),
+    the natural ``for (const [key, s] of pairs)`` destructuring throws a
+    TypeError on the malformed shape -- the loop cannot treat a bare
+    ``[key, story]`` pair as a list of pairs, because iterating it yields the
+    string key's characters, then a plain (non-iterable) story object.
+
+    The heuristic being reverted-in launders this instead: because the bare
+    pair happens to have ``.length === 2`` with a non-array first element, it
+    gets speculatively rewrapped into ``[storiesForColumn]`` and silently
+    "succeeds" -- rendering a card as if the call were valid. That silent
+    success is the bug: it must fail loudly, not be reinterpreted.
+    """
+    proc = _run_board_js_raw(_diff_cards_expr(_entry("S1", _story())))
+    assert proc.returncode != 0, (
+        "a malformed bare [key, story] pair (not wrapped in an outer list of "
+        "pairs) must fail rather than silently succeed; got exit code 0 with "
+        f"stdout={proc.stdout!r} -- this means the speculative bare-pair "
+        "reshaping heuristic in _diffBoardCards is still present and is "
+        "silently reinterpreting the malformed call as valid input instead "
+        "of letting it fail"
+    )
+    assert "not iterable" in proc.stderr, (
+        "expected a TypeError from the natural for-of destructuring failure "
+        "once storiesForColumn is used directly as pairs (no reshaping) -- "
+        f"got stderr={proc.stderr!r}"
+    )
+
+
 # === Full in-place path (_tryUpdateBoardInPlace via renderBoard) =============
 
 def _in_place_update_expr(story_a, story_b):

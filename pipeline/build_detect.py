@@ -528,29 +528,20 @@ def _lint_acceptance_fixtures(
 def _pytest_acceptance_fixtures(story: dict, repo_root: str | None = None) -> tuple[str, str | None]:
     """Run pytest collection on a story's acceptance fixtures.
 
-    This validator performs a dry‑run collection of the story's Python acceptance
-    fixtures.  It is intentionally conservative: it never blocks on a
-    ``"skipped"`` result, only on a ``"finding"``.
+    This validator performs a dry‑run collection of the story's materialized acceptance
+    fixtures so a fixture that is lint-clean yet fails to *collect* (a module-level
+    crash, an undefined import outside the repo package) is caught before it
+    becomes a live, read-only oracle.
 
-    Parameters
-    ----------
-    story:
-        The story dict containing an ``acceptance`` block.
-    repo_root:
-        Optional path to the repository root.  When provided the fixtures are
-        materialised with that directory on ``PYTHONPATH`` so imports of the
-        repository's own package (e.g. ``from pipeline.ingest import …``)
-        resolve.
+    Like the lint validator, it returns a tuple of
+    ("clean", None), ("finding", message), or ("skipped", message).
 
-    Returns
-    -------
-    tuple[str, str | None]
-        ``("clean", None)`` when there are no ``.py`` fixtures or pytest
-        collection succeeds.
-        ``("finding", message)`` when collection fails for reasons other
-        than the expected import‑of‑future‑code false positive.
-        ``("skipped", message)`` when pytest is missing, times out, or an
-        unexpected exception occurs.
+    The `repo_root` argument is optional; if provided, the fixtures are
+    materialised with that directory on `PYTHONPATH` so imports of the repo's
+    own package (e.g. `from pipeline.ingest import …`) resolve.
+
+    This function is intentionally conservative: it never raises; any exception
+    results in a `"skipped"` outcome, mirroring the lint validator's behaviour.
     """
     acceptance = story.get("acceptance") or []
     py_paths = [e.get("path") for e in acceptance if (e.get("path") or "").endswith(".py")]

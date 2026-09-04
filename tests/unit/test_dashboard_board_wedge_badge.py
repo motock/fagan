@@ -667,7 +667,7 @@ def test_diff_board_cards_toggles_badge_in_place_across_polls():
     healthy = _entry("S1", _story())
     wedged = _entry("S1", _story(wedge=_wedge(reasons=["pid 123 is dead"])))
 
-    res = _run_board_js(_diff_cards_expr(healthy, wedged))
+    res = _run_board_js(_diff_cards_expr([healthy], [wedged]))
     first = {c["key"]: c for c in res["first"]}
     second = {c["key"]: c for c in res["second"]}
     assert first["S1"]["testId"] == second["S1"]["testId"], (
@@ -680,7 +680,7 @@ def test_diff_board_cards_toggles_badge_in_place_across_polls():
     )
     assert "wedged" in set(second["S1"]["cls"].split())
 
-    res = _run_board_js(_diff_cards_expr(wedged, healthy))
+    res = _run_board_js(_diff_cards_expr([wedged], [healthy]))
     first = {c["key"]: c for c in res["first"]}
     second = {c["key"]: c for c in res["second"]}
     assert first["S1"]["testId"] == second["S1"]["testId"]

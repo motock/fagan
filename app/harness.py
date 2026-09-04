@@ -109,8 +109,11 @@ def get_harness(name: str) -> AgentHarness:
     """
     key = name.strip().lower()
     if key not in _HARNESSES:
-        registered = ", ".join(sorted(_HARNESSES)) or "(none)"
-        raise ValueError(f"unknown harness {name!r}; registered: {registered}")
+            registered = ", ".join(sorted(_HARNESSES)) or "(none)"
+            raise ValueError(f"unknown harness {name!r}; registered: {registered}")
+    return _HARNESSES[key]()
+
+
 def resolve_harness_name(default: str) -> str:
     raw = os.environ.get("PIPELINE_AGENT_HARNESS", "")
     resolved = raw.strip().lower()

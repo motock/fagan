@@ -16,10 +16,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from pipeline.server import PipelineService
-from app.dashboard_helpers import _store
+
 from app import chat, role_registry
 from app.dashboard_helpers import (
     _LOG_TAIL_CAP,
@@ -29,10 +29,9 @@ from app.dashboard_helpers import (
     _collapse_duplicate_notifications,
     _parse_progress,
     _plan_summary,
+    _store,
     _story_last_activity,
 )
-from pipeline import guard_liveness
-from pipeline import story_metrics
 from app.dashboard_models import (
     DecisionRequest,
     DecomposeRequest,
@@ -46,9 +45,11 @@ from app.dashboard_models import (
     WorkspaceRequest,
 )
 from app.story_replay import build_replay_events
-from pipeline import config_provenance, preflight
+from pipeline import config_provenance, guard_liveness, preflight, story_metrics
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
+from pipeline.server import PipelineService
 from pipeline.wedge import collect_story_wedge_signals, wedge_verdict
+
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
 FAILURE_MODES_DATASET_PATH = Path(os.environ.get("FAILURE_MODES_DATASET_PATH", "docs/failure_modes.json")).expanduser()
 USAGE_STATE_PATH = Path(

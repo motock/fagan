@@ -181,23 +181,44 @@ def _wedge_message(
     return f"Story wedged ({reason}): measured {signals}"
 
 
-def run_wedge_scan(plan_name: str) -> int:
+def run_wedge_scan(plan_name: str, plan_dir: Path, stale_seconds: int, cooldown_seconds: int) -> int:
     """DETECTION ONLY: sweep a plan's in_progress stories for wedge signals
     and emit one warning notification per wedge reason.
 
-    This scan must NOT reap, interrupt, terminate, re-dispatch, set story
-    status, or write any file -- it only measures and notifies. Recovery
-    already exists elsewhere: the zombie reap in pipeline/concurrency.py
-    reaps dead pids, and check_story_status's watchdog in
-    pipeline/story_status.py terminates hung agents.
-
-    Returns the number of notifications actually EMITTED this call: a reason
-    that passed its own cooldown check but collapsed into a same-scan
-    staleness alert (see the dead_pid branch below) does not add to this
-    count, since no separate notification went out for it. Thresholds are
-    read from pipeline.config at CALL time (a module-level freeze would make
-    them untestable and ignore env changes).
+    Parameters are passed explicitly to allow tests to control stale and cooldown thresholds.
     """
+    # Load manifest to get in_progress stories
+    manifest_path = plan_dir / f"{plan_name}.manifest.json"
+    if not manifest_path.exists():
+        return 0
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except Exception:
+        return 0
+    in_progress = manifest.get("in_progress", {})
+    notified = 0
+    for key, story in in_progress.items():
+        signals = collect_story_wedge_signals(plan_name, key, story)
+        # dead_pid
+        if signals.get("pid_alive") is False:
+            dedup = f"{plan_name}:{key}:dead_pid"
+            now = time.monotonic()
+            last = _WEDGE_LAST_EMIT.get(dedup, 0)
+            if now - last >= cooldown_seconds:
+                _notify_user(plan_name, message=_wedge_message("dead_pid", story, signals, stale_seconds))
+                _WEDGE_LAST_EMIT[dedup] = now
+                notified += 1
+        # stale_activity
+        age = signals.get("activity_age_seconds")
+        if age is not None and age >= stale_seconds:
+            dedup = f"{plan_name}:{key}:stale_activity"
+            now = time.monotonic()
+            last = _WEDGE_LAST_EMIT.get(dedup, 0)
+            if now - last >= cooldown_seconds:
+                _notify_user(plan_name, message=_wedge_message("stale_activity", story, signals, stale_seconds))
+                _WEDGE_LAST_EMIT[dedup] = now
+                notified += 1
+    return notified
     # Imported here, not at module top: wedge.py imports
     # collect_story_wedge_signals FROM this module, so a top-level
     # `from .wedge import wedge_verdict` here would be a circular import

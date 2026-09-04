@@ -20,7 +20,7 @@ import httpx
 
 from app import inference_providers
 from app.backend_types import AgentHandle
-from app.harness import HarnessRequest, get_harness
+from app.harness import HarnessRequest, get_harness, resolve_harness_name
 from app.ollama_prompt_utils import (  # noqa: F401 (re-exported: OllamaDriver's methods reference these as bare names)
     _LOCAL_DEFAULT_MODEL,
     _LOCAL_MODEL_TUNING,
@@ -612,7 +612,13 @@ class OllamaDriver:
         acceptance = acceptance or []
         oracle_mode = bool(acceptance)
         agent_script = self._AGENT_SCRIPT_ORACLE if oracle_mode else self._AGENT_SCRIPT
-        command = get_harness('local').build_agent_command(HarnessRequest(prompt=prompt, system=system, model=resolved_model, cwd=str(cwd), acceptance=acceptance or None, options={'python_executable': str(self._VENV_PYTHON), 'agent_script': str(agent_script), 'model': resolved_model, 'system': system or '', 'task': prompt, 'endpoint': self.endpoint, 'timeout': str(self.dispatch_timeout), 'provider': self.provider.name}))
+        name = resolve_harness_name('local')
+        if name != 'local':
+            raise NotImplementedError(
+                f"PIPELINE_AGENT_HARNESS={name!r}: OllamaDriver only implements "
+                f"the 'local' harness; a cross-harness selection is a configuration error, not a silent fallback"
+            )
+        command = get_harness(name).build_agent_command(HarnessRequest(prompt=prompt, system=system, model=resolved_model, cwd=str(cwd), acceptance=acceptance or None, options={'python_executable': str(self._VENV_PYTHON), 'agent_script': str(agent_script), 'model': resolved_model, 'system': system or '', 'task': prompt, 'endpoint': self.endpoint, 'timeout': str(self.dispatch_timeout), 'provider': self.provider.name}))
         env = {
             **os.environ,
             **command.env,

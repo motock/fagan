@@ -21,7 +21,7 @@ class DummyHandle:
 def patch_get_harness(monkeypatch):
     monkeypatch.setattr("app.backend_claude.get_harness", lambda name: DummyHarness())
     monkeypatch.setattr("app.backend_ollama.get_harness", lambda name: DummyHarness())
-    monkeypatch.setattr(execution, "spawn_harness", lambda cmd, cwd, log_path, append, env: DummyHandle())
+    monkeypatch.setattr(app.backend_ollama, "_resolve_local_model", lambda model, provider=None: model)
 
 def test_claude_cross_harness_raises(monkeypatch, patch_get_harness, tmp_path):
     monkeypatch.setenv("PIPELINE_AGENT_HARNESS", "local")

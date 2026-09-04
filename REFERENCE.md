@@ -296,7 +296,9 @@ the cost gate.
   persona / risk filters and the column-level status filter), so a card
   only shows up if it matches all active filters.
 - **Story age / staleness indicators.** Cards derive an `ageLabel` from the
-- **card-badge-wedged:** a server‑derived badge that appears on a card when `story.wedge.wedged === true`. It displays the text "wedged" and shows a tooltip with the wedge reasons. The card also receives a bare `wedged` CSS class, which can be used for additional styling.
+  server-supplied `last_activity` (e.g. "12m", "3h"). `in_progress` stories
+  older than the staleness window get a `stale` class so wedged agents are
+  visible at a glance.
 - **URL deep-linking.** The selected plan and every active filter are
   encoded into the URL hash (e.g.
   `#plan=PLAN&status=todo,in_progress&persona=engineer&escalated=yes`).

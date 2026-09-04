@@ -305,18 +305,13 @@ function _tryUpdateBoardInPlace(existingBoardEl, statuses, stories, planTotal) {
 // `columnBodyEl` is the `.column-body` element.
 // `storiesForColumn` is an array of [key, story] tuples, already sorted.
 function _diffBoardCards(columnBodyEl, storiesForColumn) {
-  // Accept the production shape — an array of [key, story] pairs, as handed
-  // over by _tryUpdateBoardInPlace — or a single bare [key, story] pair,
-  // which is just a one-entry column. A bare pair is recognizable because
-  // its first element is the string key rather than another pair.
-  const pairs = storiesForColumn;
   // Map existing cards by data-key.
 const existing = Array.from(columnBodyEl.querySelectorAll('.card')).reduce((m, el) => {
     m[el.dataset.key] = el;
     return m;
   }, {});
   const newKeys = new Set();
-  for (const [key, s] of pairs) {
+  for (const [key, s] of storiesForColumn) {
     const status = s.status;
     const ageLabel = ageLabelFor(s.last_activity);
     const stale = isStaleInProgress(s);

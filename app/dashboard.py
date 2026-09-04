@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pipeline.server import PipelineService
+from app.dashboard_helpers import _store
 from app import chat, role_registry
 from app.dashboard_helpers import (
     _LOG_TAIL_CAP,
@@ -854,24 +855,6 @@ def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str
     return result
 
 
-@app.get("/api/plans/{plan_name}/metrics")
-
-def get_plan_metrics(plan_name: str) -> dict[str, Any]:
-    if plan_name not in _store.list_manifests():
-        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    notifications_path = PLAN_DIR / f"{plan_name}.notifications.jsonl"
-    records, malformed = story_metrics.load_notification_records(notifications_path)
-    story_metrics_map = story_metrics.compute_story_metrics(records)
-    stories = list(story_metrics_map.values())
-    rollup = story_metrics.compute_plan_rollup(stories)
-    return {
-        "plan": plan_name,
-        "stories": stories,
-        "rollup": rollup,
-        "malformed_lines": malformed,
-    }
-
-
 @app.get("/api/guard-liveness")
 
 def get_guard_liveness() -> dict[str, Any]:
@@ -892,9 +875,8 @@ def get_guard_liveness() -> dict[str, Any]:
         }
     repo_root = Path(__file__).resolve().parents[2]
     report = guard_liveness.check_guard_liveness(dataset, repo_root, collected_test_files=None)
-    # Adjust missing list: if a file actually exists, remove from missing
-    # No adjustment needed; check_guard_liveness already accounts for existing test files
     report["dataset_found"] = True
+    return report
     return report
     return report
 

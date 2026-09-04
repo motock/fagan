@@ -23,8 +23,10 @@ import any app.*, pipeline.*, or scripts.* module (no import cycles, ever).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
+from typing import Protocol
+
 from typing import Protocol
 __all__ = [
     "AgentHarness",

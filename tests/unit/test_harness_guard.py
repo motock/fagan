@@ -1,4 +1,4 @@
-import os
+import app
 import pytest
 from pathlib import Path
 

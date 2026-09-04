@@ -856,29 +856,44 @@ def checkpoint(plan_name: str, story_key: str, body: dict[str, Any]) -> dict[str
 
 
 @app.get("/api/guard-liveness")
-
 def get_guard_liveness() -> dict[str, Any]:
     try:
         with open(FAILURE_MODES_DATASET_PATH, "r", encoding="utf-8") as f:
             dataset = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, TypeError):
-        return {
-            "dataset_found": False,
-            "entries": [],
-            "summary": {
-                "total": 0,
-                "with_guard": 0,
-                "no_guard_expected": 0,
-                "missing_files": 0,
-                "uncollected_files": 0,
-            },
-        }
-    repo_root = Path(__file__).resolve().parents[2]
+        return _degraded_liveness_report()
+    if not isinstance(dataset, list):
+        return _degraded_liveness_report()
+    repo_root = Path(__file__).resolve().parents[1]
     report = guard_liveness.check_guard_liveness(dataset, repo_root, collected_test_files=None)
     report["dataset_found"] = True
     return report
-    return report
-    return report
+
+
+@app.get("/api/plans/{plan_name}/metrics")
+def get_plan_metrics(plan_name: str) -> dict[str, Any]:
+    manifest = _service.get_manifest_or_none(plan_name)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
+    sidecar = PLAN_DIR / f"{plan_name}.notifications.jsonl"
+    records, malformed = story_metrics.load_notification_records(sidecar)
+    stories = list(story_metrics.compute_story_metrics(records).values())
+    rollup = story_metrics.compute_plan_rollup(stories)
+    return {
+        "plan": plan_name,
+        "stories": stories,
+        "rollup": rollup,
+        "malformed_lines": malformed,
+    }
+
+
+def _degraded_liveness_report() -> dict[str, Any]:
+    """Zeroed liveness report for a missing or unparseable dataset (200, not 500)."""
+    zeroed = guard_liveness.check_guard_liveness(
+        [], Path(__file__).resolve().parents[1], collected_test_files=None
+    )
+    zeroed["dataset_found"] = False
+    return zeroed
 
 # Mount static files for the dashboard UI.
 app.include_router(chat.chat_router, prefix="/api")

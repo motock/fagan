@@ -900,3 +900,4 @@ def _degraded_liveness_report() -> dict[str, Any]:
 # Mount static files for the dashboard UI.
 app.include_router(chat.chat_router, prefix="/api")
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# End of file

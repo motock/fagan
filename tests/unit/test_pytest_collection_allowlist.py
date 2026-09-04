@@ -17,6 +17,7 @@ These tests exercise pyproject.toml's own config as-is: they run
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 

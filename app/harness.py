@@ -27,7 +27,6 @@ import os
 from dataclasses import dataclass
 from typing import Protocol
 
-from typing import Protocol
 __all__ = [
     "AgentHarness",
     "ClaudeCliHarness",

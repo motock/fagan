@@ -27,7 +27,7 @@ import {
   setNotifSeverityFilter, renderNotifications, _diffNotificationsPanel,
   filterNotifications, notificationKey,
 } from "./render/notifications.js";
-import { renderDecisions } from "./render/decisions.js";
+import { renderMaturity } from "./render/maturity.js";
 import { renderOverview, _diffOverviewPlanRows } from "./render/overview.js";
 import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle, resetCommsThread } from "./comms.js";
 import { renderUsage } from "./usage.js";

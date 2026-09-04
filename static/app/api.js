@@ -12,4 +12,12 @@ async function postJson(url) {
   return res.json();
 }
 
-export { fetchJson, postJson };
+async function fetchPlanMetrics(plan) {
+  return fetchJson(`/api/plans/${plan}/metrics`);
+}
+
+async function fetchGuardLiveness() {
+  return fetchJson(`/api/guard-liveness`);
+}
+
+export { fetchJson, postJson, fetchPlanMetrics, fetchGuardLiveness };

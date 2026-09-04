@@ -1,7 +1,7 @@
 import { state, defaultFilters, saveFilters, toggleFilter } from "../state.js";
 import { updateHash } from "../routing.js";
 import { fetchJson } from "../api.js";
-import { renderBoard, renderFilterBar, escapeHtml } from "./board.js";
+import { renderMaturity } from "./maturity.js";
 
 // plan-detail.js cannot statically `import ... from "../../app.js"`: app.js's
 // dynamic-import test harness cache-busts its own URL with a `?t=` query

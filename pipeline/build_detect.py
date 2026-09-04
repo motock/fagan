@@ -18,6 +18,8 @@ import types
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+
 def _venv_python_for(cwd: Path) -> Path | None:
     """Locate a project venv interpreter for running pytest, or None.
 

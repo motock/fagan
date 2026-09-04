@@ -44,9 +44,7 @@ The sandbox is **deny-by-default**.  Only environment variables whose names star
 with `LOCAL_AGENT_` or `PIPELINE_` are forwarded into the container via `-e
 key=value`.  All other host variables—including credentials—are **not forwarded**.
 
-If a harness needs a particular variable that is not in the allowlist, the
-operator must add it explicitly to the `env` dictionary passed to
-`spawn_harness`.
+The allowlist is absolute: the only way to forward a variable is to name it explicitly with a `LOCAL_AGENT_` or `PIPELINE_` prefix. There is no other escape hatch — a non‑prefixed key added to the `env` dictionary passed to `spawn_harness` is silently dropped by both the pre‑filter in `spawn_harness` and the filter inside `build_docker_command`.
 
 ## 5. Fail‑closed behavior matrix
 

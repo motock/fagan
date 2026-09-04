@@ -23,6 +23,7 @@ DOC_PATH = REPO_ROOT / "docs" / "specs" / "DOCKER_SANDBOX.md"
 SANDBOX_SRC_PATH = REPO_ROOT / "pipeline" / "sandbox.py"
 EXECUTION_SRC_PATH = REPO_ROOT / "pipeline" / "execution.py"
 REMOTE_EXECUTION_DOC = "docs/specs/REMOTE_EXECUTION.md"
+REMOTE_EXECUTION_DOC_PATH = REPO_ROOT / "docs" / "specs" / "REMOTE_EXECUTION.md"
 TESTING_CONFIG_GATES_RULE = ".claude/rules/testing-config-gates.md"
 
 
@@ -33,6 +34,14 @@ TESTING_CONFIG_GATES_RULE = ".claude/rules/testing-config-gates.md"
 def _doc_text() -> str:
     assert DOC_PATH.exists(), f"docs/specs/DOCKER_SANDBOX.md missing: {DOC_PATH}"
     return DOC_PATH.read_text(encoding="utf-8")
+
+
+def _remote_execution_doc_text() -> str:
+    assert REMOTE_EXECUTION_DOC_PATH.exists(), (
+        f"{REMOTE_EXECUTION_DOC_PATH} missing: docs/specs/DOCKER_SANDBOX.md "
+        "§8 links to it as a real spec, but it does not exist in the repo"
+    )
+    return REMOTE_EXECUTION_DOC_PATH.read_text(encoding="utf-8")
 
 
 def _sandbox_src() -> str:
@@ -447,4 +456,151 @@ class TestEnvVarNamesMatchCode:
         assert prefix in combined_src, (
             f"{prefix} prefix must appear in pipeline/sandbox.py or "
             "pipeline/execution.py (ground truth check)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Review regression — Blocking #1: §4 documents an env-passthrough escape
+# hatch that the code does not implement. spawn_harness (pipeline/
+# execution.py) filters the caller's `env` through the identical
+# ("LOCAL_AGENT_", "PIPELINE_") prefix tuple *before* build_docker_command
+# filters again — a non-prefixed key added to the `env` dict passed to
+# spawn_harness is silently dropped by both layers. There is no channel to
+# forward it, so the doc's current instruction to "add it explicitly to the
+# `env` dictionary passed to `spawn_harness`" is false.
+# ---------------------------------------------------------------------------
+
+class TestEnvPassthroughEscapeHatchAccuracy:
+    def test_doc_states_the_allowlist_is_absolute(self):
+        text = _doc_text().lower()
+        assert (
+            "allowlist is absolute" in text
+            or "no other escape hatch" in text
+            or "silently dropped" in text
+        ), (
+            "doc §4 must state that the LOCAL_AGENT_/PIPELINE_ prefix "
+            "allowlist is absolute: the only way to forward a variable "
+            "into the sandboxed container is to name it with a "
+            "LOCAL_AGENT_ or PIPELINE_ prefix. There is no escape hatch "
+            "via the `env` dict passed to spawn_harness — spawn_harness "
+            "re-applies the identical prefix filter before "
+            "build_docker_command filters again"
+        )
+
+    def test_doc_no_longer_claims_env_dict_addition_forwards_the_var(self):
+        text = _doc_text()
+        assert not re.search(
+            r"must add it explicitly to the `env` dictionary passed to"
+            r"\s*\n?\s*`spawn_harness`",
+            text,
+        ), (
+            "doc §4 must not instruct operators to add a non-allowlisted "
+            "variable to the `env` dictionary passed to `spawn_harness` as "
+            "a way to forward it into the container — spawn_harness "
+            "silently drops any key that doesn't start with "
+            "LOCAL_AGENT_/PIPELINE_ before it ever reaches "
+            "build_docker_command, so following this instruction produces "
+            "a silent failure on a security control"
+        )
+
+    def test_spawn_harness_actually_drops_non_allowlisted_env_vars(
+        self, monkeypatch, tmp_path
+    ):
+        """Ground truth proving §4's documented workaround does not work:
+        exercise the real spawn_harness -> build_docker_command path with
+        a non-allowlisted variable added to the `env` dict, exactly as §4
+        currently instructs operators to do, and confirm it never reaches
+        the built docker command.
+        """
+        import pipeline.execution as execution_module
+
+        monkeypatch.setenv("PIPELINE_SANDBOX", "docker")
+        monkeypatch.setenv("PIPELINE_SANDBOX_IMAGE", "test-image")
+        monkeypatch.setattr(
+            execution_module, "docker_binary_available", lambda: True
+        )
+
+        captured = {}
+
+        class _FakeProc:
+            pid = 4242
+
+        def _fake_popen(cmd, cwd, env, stdout, stderr):
+            captured["cmd"] = cmd
+            return _FakeProc()
+
+        monkeypatch.setattr(execution_module.subprocess, "Popen", _fake_popen)
+
+        log_path = tmp_path / "harness.log"
+        execution_module.spawn_harness(
+            ["echo", "hi"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+            env={"NOT_ALLOWLISTED_SECRET": "leak-me"},
+        )
+
+        built_cmd = captured["cmd"]
+        assert not any("NOT_ALLOWLISTED_SECRET" in part for part in built_cmd), (
+            "spawn_harness must silently drop a non-allowlisted variable "
+            "added to its `env` dict rather than forwarding it via `-e` — "
+            "this is the exact workaround docs/specs/DOCKER_SANDBOX.md §4 "
+            "currently instructs operators to use, and it does not work"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Review regression — Blocking #2: §8 links to docs/specs/REMOTE_EXECUTION.md,
+# which does not exist anywhere in the repo. pipeline/execution.py shows ssh
+# mode genuinely raises NotImplementedError — the missing spec must exist as
+# a stub stating that plainly.
+# ---------------------------------------------------------------------------
+
+class TestRemoteExecutionStubDoc:
+    def test_remote_execution_doc_exists(self):
+        assert REMOTE_EXECUTION_DOC_PATH.exists(), (
+            f"{REMOTE_EXECUTION_DOC_PATH} must exist: "
+            "docs/specs/DOCKER_SANDBOX.md §8 links to it as a real spec, "
+            "but it is missing from the repo"
+        )
+
+    def test_remote_execution_doc_is_not_empty(self):
+        assert len(_remote_execution_doc_text().strip()) > 0
+
+    def test_remote_execution_doc_states_not_implemented(self):
+        text = _remote_execution_doc_text().lower()
+        assert "not implemented" in text, (
+            "docs/specs/REMOTE_EXECUTION.md must plainly state that "
+            "remote/ssh execution is not yet implemented"
+        )
+
+    def test_remote_execution_doc_quotes_the_exact_not_implemented_error_message(self):
+        text = _remote_execution_doc_text()
+        # Ground truth: the exact message spawn_harness raises for ssh mode
+        # (pipeline/execution.py's _SSH_NOT_IMPLEMENTED_MSG).
+        assert "ssh execution is not implemented yet (B1 later story)" in text, (
+            "docs/specs/REMOTE_EXECUTION.md must quote the exact "
+            "NotImplementedError message raised by spawn_harness for ssh "
+            "mode, so the stub stays accurate as ground truth"
+        )
+
+    def test_remote_execution_doc_names_the_trigger_env_var_pattern(self):
+        text = _remote_execution_doc_text()
+        assert "PIPELINE_EXEC_" in text, (
+            "docs/specs/REMOTE_EXECUTION.md must name the "
+            "PIPELINE_EXEC_{ROLE} trigger that resolves to ssh mode via "
+            "resolve_execution_mode (pipeline/execution.py)"
+        )
+
+    def test_remote_execution_doc_does_not_duplicate_dispatch_default_claim(self):
+        # Mirrors TestRelationshipToRemoteExecution's non-duplication guard
+        # on the sandbox doc: the stub must not restate
+        # PIPELINE_EXEC_DISPATCH's own default-resolution semantics with a
+        # competing 'defaults to' claim.
+        text = _remote_execution_doc_text()
+        assert not re.search(
+            r"PIPELINE_EXEC_DISPATCH[^.\n]{0,60}defaults to", text, re.IGNORECASE
+        ), (
+            "docs/specs/REMOTE_EXECUTION.md must not restate "
+            "PIPELINE_EXEC_DISPATCH's own default-resolution semantics"
         )

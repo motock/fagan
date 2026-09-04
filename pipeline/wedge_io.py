@@ -41,7 +41,8 @@ from __future__ import annotations
 import os
 import subprocess
 import json
-from .wedge import _notify_user, _WEDGE_LAST_EMIT, collect_story_wedge_signals, _wedge_message
+# Importing from wedge is avoided to break circular dependency
+# The required symbols are defined in this module instead.
 
 from . import config
 

@@ -140,8 +140,9 @@ sync with the main server. Add it alongside the main server as a second
 ```
 
 The adoptable specs this server exports live in `docs/specs/`:
-`OVERLORD_POLICY_SPEC.md` (the overlord decision path) and
-`ACCEPTANCE_ORACLE_PATTERN.md` (the acceptance-oracle grading pattern).
+`OVERLORD_POLICY_SPEC.md` (the overlord decision path),
+`ACCEPTANCE_ORACLE_PATTERN.md` (the acceptance-oracle grading pattern), and
+`DOCKER_SANDBOX.md` (the opt-in Docker sandboxing behavior).
 
 ## Components at a glance
 

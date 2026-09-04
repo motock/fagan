@@ -24,8 +24,8 @@ import any app.*, pipeline.*, or scripts.* module (no import cycles, ever).
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Protocol
-
 __all__ = [
     "AgentHarness",
     "ClaudeCliHarness",
@@ -34,6 +34,7 @@ __all__ = [
     "LocalAgentHarness",
     "get_harness",
     "register_harness",
+    "resolve_harness_name",
 ]
 
 
@@ -110,7 +111,18 @@ def get_harness(name: str) -> AgentHarness:
     if key not in _HARNESSES:
         registered = ", ".join(sorted(_HARNESSES)) or "(none)"
         raise ValueError(f"unknown harness {name!r}; registered: {registered}")
-    return _HARNESSES[key]()
+def resolve_harness_name(default: str) -> str:
+    raw = os.environ.get("PIPELINE_AGENT_HARNESS", "")
+    resolved = raw.strip().lower()
+    if not resolved:
+        return default
+    if resolved in _HARNESSES:
+        return resolved
+    raise ValueError(
+        f"PIPELINE_AGENT_HARNESS={resolved!r} is not a registered harness; "
+        f"registered: {sorted(_HARNESSES)}"
+    )
+
 
 
 class ClaudeCliHarness:

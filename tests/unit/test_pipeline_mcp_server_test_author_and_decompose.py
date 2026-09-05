@@ -633,10 +633,18 @@ def test_dispatch_story_excludes_decompose_artifacts_from_worktree_tracking(
     monkeypatch.setattr(p, "_run_planner",
                         lambda *a, **k: "1. Checklist step.")
     real_popen = backend.subprocess.Popen
+    real_popen_calls = []
 
     def _discriminating_popen(cmd, **kw):
         if cmd and str(cmd[0]).endswith("python3"):
             return _FakeProc(9006)
+        if cmd and str(cmd[0]).endswith("claude"):
+            # The test-author phase spawns a real `claude -p`; fake it like
+            # the python3 executor spawn so this unit test never launches
+            # the real binary. The phase then falls open on no-commits and
+            # the monolithic dispatch path proceeds unchanged.
+            return _FakeProc(9007)
+        real_popen_calls.append(cmd)
         return real_popen(cmd, **kw)
 
     monkeypatch.setattr(backend.subprocess, "Popen", _discriminating_popen)
@@ -659,6 +667,11 @@ def test_dispatch_story_excludes_decompose_artifacts_from_worktree_tracking(
                              cwd=worktree_path, capture_output=True, text=True, check=True)
     assert ".agent_plan.md" not in staged.stdout
     assert ".agent_scratchpad.md" not in staged.stdout
+    # subprocess.run() is implemented via Popen internally, so the legitimate
+    # git fetch/worktree/add calls this flow makes through subprocess.run
+    # also land here - only assert none of them is a non-git (e.g. a leaked
+    # real `claude`) spawn.
+    assert all(cmd and cmd[0] == "git" for cmd in real_popen_calls)
 
 
 # ---------- dispatch_story wiring for the TDD-split test-author phase

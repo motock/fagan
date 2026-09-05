@@ -62,7 +62,12 @@ _UNCHANGED_JS_SHA256 = {
     # Re-pinned again alongside the COMMS_JS pin above: resetCommsThread
     # added to main.js's import-from-comms.js line and re-export block so
     # the reset-clears-history regression test can call it.
-    MAIN_JS: "5dc4cf6759bab685fb242a90509a8c6ee401bef77c9ae5fa882c42070af6ff8d",
+    # Re-pinned for the maturity-panel story (a3-maturity-metrics,
+    # 1f9f2c46): that story legitimately added the one-line
+    # `import { renderMaturityPanel } from "./render/maturity.js";`
+    # registration to main.js, so the pre-story pin no longer matched the
+    # committed file. This story never touched main.js itself.
+    MAIN_JS: "2ad934f5a417cc0d7bd06d39793d0b84e1b1853b8d30b6c4e142fe86ae401743",
 }
 
 EXPECTED_CHIP_MESSAGES = {

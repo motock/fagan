@@ -243,7 +243,17 @@ def run_tool_impl(origin, fn, args) -> str:
             if end < start:
                 return f"ERROR: line_end {end} is less than line_start {start}."
             selected = lines[start - 1:end]
-            return "".join(f"{start + i:4d}| {ln}" for i, ln in enumerate(selected))
+            # Cap the ranged path too — a wide range on a large file is the
+            # same context-blowout the whole-file cap exists for (measured:
+            # one ranged call returned 21K chars into a transcript).
+            formatted = "".join(f"{start + i:4d}| {ln}" for i, ln in enumerate(selected))
+            if len(formatted) <= 3000:
+                return formatted
+            return (
+                formatted[:3000]
+                + f"\n... [truncated; showing {args['path']} lines {start}-{end} — "
+                  f"call view_file again with a narrower line_start/line_end range to see more]"
+            )
         formatted = "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))
         if len(formatted) <= 3000:
             return formatted

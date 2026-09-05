@@ -20,6 +20,7 @@
   <main>
     <nav id="plan-list" aria-label="Plans"></nav>
     <nav id="config-nav" aria-label="Configuration"></nav>
+    <nav id="workspace-nav" aria-label="Workspace"></nav>
     <section id="plan-detail">
       <p class="empty-state">Select a plan to see its story lifecycle.</p>
     </section>
@@ -63,6 +64,17 @@
         <h3>Ignored Environment Variables</h3>
         <div id="ignored-vars-panel" class="ignored-vars-panel"></div>
       </div>
+    </section>
+    <section id="workspace-view" class="hidden">
+      <h2>Workspace</h2>
+      <div class="config-section">
+        <div id="workspace-picker"></div>
+      </div>
+      <form id="workspace-form">
+        <input id="workspace-path-input" type="text">
+        <label><input type="checkbox" id="workspace-create"> create</label>
+        <button id="workspace-select" type="submit">Use workspace</button>
+      </form>
     </section>
     <section id="comms-view" class="hidden">
       <div class="comms-head">

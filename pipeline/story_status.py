@@ -49,6 +49,7 @@ from .parsers import (
     _is_give_up_summary,
     _validate_key,
 )
+from .wedge_io import collect_story_wedge_signals
 from .rebrief import append_cleanup_guidance
 
 # The detached-grading watchdog reuses the dispatch watchdog's threshold so a
@@ -92,6 +93,37 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 elapsed = (
                     datetime.now(timezone.utc) - datetime.fromisoformat(dispatched_at)
                 ).total_seconds()
+# Determine if activity is stale
+                signals = collect_story_wedge_signals(plan_name, story_key, story)
+                activity_age = signals.get("activity_age_seconds")
+                if activity_age is not None and activity_age > DISPATCH_STALE_ACTIVITY_SECONDS:
+                    _terminate_and_checkpoint(
+                        manifest,
+                        manifest_path,
+                        plan_name,
+                        story_key,
+                        story,
+                        pid=pid,
+                        step="dispatch_watchdog_timeout",
+                        summary=(
+                            f"Dispatch watchdog: no activity for {activity_age:.0f}s; process terminated."
+                        ),
+                    )
+                    _rebrief_step_cap_struggle(  # noqa: F821
+                        story, str(Path(story["worktree"])),
+                        plan_role_config=manifest.get("role_config"),
+                        plan_name=plan_name,
+                        story_key=story_key)
+                    story["dispatch_error"] = (
+                        f"watchdog killed after {activity_age:.0f}s with no activity"
+                    )
+                    _atomic_write_json(manifest_path, manifest)
+                    return {
+                        "status": "interrupted",
+                        "pid": pid,
+                        "watchdog_killed": True,
+                    }
+                # Fallback to wall-clock watchdog if activity is unknown or not stale
                 if elapsed > DISPATCH_WATCHDOG_SECONDS:
                     _terminate_and_checkpoint(
                         manifest,
@@ -102,15 +134,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         pid=pid,
                         step="dispatch_watchdog_timeout",
                         summary=(
-                            f"Dispatch watchdog: no completion after "
-                            f"{elapsed:.0f}s; process terminated."
+                            f"Dispatch watchdog: no completion after {elapsed:.0f}s; process terminated."
                         ),
                     )
-                    # CLAUDE.md Step 9: diagnose where this implementer hung and
-                    # fold the root cause into agent_instructions so the resume
-                    # isn't a blind retry. Mirrors the step-cap branch's call
-                    # byte-for-byte (same helper, same arguments). Fail-open: a
-                    # None/errored diagnosis leaves agent_instructions untouched.
                     _rebrief_step_cap_struggle(  # noqa: F821
                         story, str(Path(story["worktree"])),
                         plan_role_config=manifest.get("role_config"),
@@ -125,6 +151,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         "pid": pid,
                         "watchdog_killed": True,
                     }
+                # No watchdog trigger
+                return {"status": "running", "pid": pid}
             return {"status": "running", "pid": pid}
         # process is zombie or gone — fall through to test detection
     except ProcessLookupError:

@@ -38,7 +38,14 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 # byte-identical to the prior pin.
 # Re-pinned for the comms TRACE-toggle story (comms-trace-toggle-01,
 # 2026-08-29): adds a #comms-trace-toggle button to the .comms-actions row.
-INDEX_HTML_SHA256 = "16da8a06de3539d0c6e53c93c0c00d57550752a39edfb3301a51c0e4134ba305"
+# Re-pinned for the workspace-picker-wiring story (25309f29, 2026-09-05):
+# that story legitimately adds workspace picker markup (#workspace-nav
+# beside #config-nav, and a new #workspace-view section with
+# #workspace-picker, #workspace-form, #workspace-path-input,
+# #workspace-create and #workspace-select) between #config-view and
+# #comms-view. This story never touched comms.js or any Comms-related
+# markup.
+INDEX_HTML_SHA256 = "d3cb99aec281c07de06954c6bf1c36bd60db2f5d5798ef6ef8ff89536aeb4dd5"
 # Re-pinned for the same touch-up pass: appendCommsMessage now renders a
 # role/timestamp "who" line and wraps content in the (already-styled)
 # .bubble element instead of setting raw innerHTML directly, plus new

@@ -13,7 +13,6 @@ import json
 import shutil
 
 import pytest
-
 from pipeline import server as p
 from pipeline import ticketing as pt
 

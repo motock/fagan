@@ -569,19 +569,41 @@ class TestRemoteExecutionStubDoc:
 
     def test_remote_execution_doc_states_not_implemented(self):
         text = _remote_execution_doc_text().lower()
-        assert "not implemented" in text, (
+        # B1 landed (f20293f): _spawn_ssh is implemented in
+        # pipeline/execution.py, so the doc must state that remote/ssh
+        # execution IS implemented rather than describe a stub.
+        assert "implemented" in text, (
             "docs/specs/REMOTE_EXECUTION.md must plainly state that "
-            "remote/ssh execution is not yet implemented"
+            "remote/ssh execution is implemented"
+        )
+        assert "not implemented" not in text, (
+            "docs/specs/REMOTE_EXECUTION.md must not claim remote/ssh "
+            "execution is unimplemented now that _spawn_ssh exists "
+            "(pipeline/execution.py)"
         )
 
     def test_remote_execution_doc_quotes_the_exact_not_implemented_error_message(self):
         text = _remote_execution_doc_text()
-        # Ground truth: the exact message spawn_harness raises for ssh mode
-        # (pipeline/execution.py's _SSH_NOT_IMPLEMENTED_MSG).
-        assert "ssh execution is not implemented yet (B1 later story)" in text, (
-            "docs/specs/REMOTE_EXECUTION.md must quote the exact "
-            "NotImplementedError message raised by spawn_harness for ssh "
-            "mode, so the stub stays accurate as ground truth"
+        # Ground truth: spawn_harness dispatches ssh mode to _spawn_ssh
+        # (pipeline/execution.py), which requires PIPELINE_REMOTE_EXEC_HOST
+        # and PIPELINE_REMOTE_SYNC_ROOT and drives the remote run through
+        # pipeline.remote_exec.
+        assert "PIPELINE_REMOTE_EXEC_HOST" in text, (
+            "docs/specs/REMOTE_EXECUTION.md must name the "
+            "PIPELINE_REMOTE_EXEC_HOST env var required by _spawn_ssh "
+            "(pipeline/execution.py), so the doc stays accurate as "
+            "ground truth"
+        )
+        assert "PIPELINE_REMOTE_SYNC_ROOT" in text, (
+            "docs/specs/REMOTE_EXECUTION.md must name the "
+            "PIPELINE_REMOTE_SYNC_ROOT env var required by _spawn_ssh "
+            "(pipeline/execution.py), so the doc stays accurate as "
+            "ground truth"
+        )
+        assert "pipeline.remote_exec" in text, (
+            "docs/specs/REMOTE_EXECUTION.md must reference the "
+            "pipeline.remote_exec supervisor module that _spawn_ssh "
+            "invokes (pipeline/execution.py)"
         )
 
     def test_remote_execution_doc_names_the_trigger_env_var_pattern(self):

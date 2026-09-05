@@ -21,7 +21,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from pipeline.workspace import validate_workspace
+from pipeline.workspace import normalize_workspace_path, validate_workspace
 
 __all__ = ["PipelineService"]
 
@@ -416,8 +416,33 @@ class PipelineService:
         return workspaces
 
     def get_active_workspace(self) -> str | None:
-        """Return the active workspace path, or None if unset."""
-        return _store.get_active_workspace()
+        """Return the active workspace path, or None if unset.
+
+        The durable record is untrusted input: ``active_workspace.json`` may
+        have been hand-edited or corrupted, so a stored spelling that would
+        be rejected at the boundary must read as UNSET rather than be handed
+        back to callers (and to the operator's UI) as a live selection. The
+        stored string is therefore re-checked against the primary control on
+        every read.
+
+        Existence is deliberately NOT required here: a workspace whose
+        directory has since been deleted is stale, not hostile, and must
+        still be reported so the save/decompose fallbacks re-validate and
+        fail closed on it at use time rather than silently proceeding as if
+        nothing were selected.
+
+        Only a security rejection maps to ``None``; any other error
+        propagates, so an unexpected failure surfaces instead of quietly
+        degrading into "no workspace selected".
+        """
+        path = _store.get_active_workspace()
+        if path is None:
+            return None
+        try:
+            normalize_workspace_path(path)
+        except ValueError:
+            return None
+        return path
 
     def set_active_workspace(self, path: str | None) -> None:
         """Set the active workspace; None clears it."""

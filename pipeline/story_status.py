@@ -7,13 +7,11 @@ Extracted verbatim from pipeline/server.py (behavior-preserving file move).
 
 import json
 import os
-import subprocess
 import sys
-import time
-import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import types
 
 from pipeline import server as _server
 from pipeline.dispatch import _find_dead_new_functions

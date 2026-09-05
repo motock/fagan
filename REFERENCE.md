@@ -429,6 +429,11 @@ Graceful degradation for optional components — absence is never an error:
   pipeline are unaffected.
 - **Docker absent** — `PIPELINE_SANDBOX=docker` falls back to unsandboxed
   execution in the isolated worktree; nothing crashes at startup.
+- **Remote exec host unset** — `PIPELINE_EXEC_DISPATCH=ssh` fails closed at
+  dispatch time with a `ValueError` naming both
+  `PIPELINE_REMOTE_EXEC_HOST` and `PIPELINE_REMOTE_SYNC_ROOT`; it never
+  silently degrades to local execution on the orchestrator host. See
+  [Remote execution](docs/specs/REMOTE_EXECUTION.md) for the full contract.
 - **MLX / launchd** — macOS-only; see the
   [Platform support](README.md#platform-support) section of README.md for the
   documented Linux alternatives. On other hosts the scheduler and MLX

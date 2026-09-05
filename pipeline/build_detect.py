@@ -555,32 +555,32 @@ def _pytest_acceptance_fixtures(story: dict, repo_root: str | None = None) -> tu
         return ("skipped", "acceptance-fixture pytest dry-run skipped: pytest not found on PATH")
 
     try:
-        tmp_dir = tempfile.mkdtemp()
-        tmp_path = Path(tmp_dir)
-        _materialize_acceptance_fixtures(story, tmp_path)
-        env = os.environ.copy()
-        if repo_root:
-            key = "PYTHONPATH"
-            existing = env.get(key)
-            repo_root_str = str(repo_root)
-            env[key] = f"{repo_root_str}:{existing}" if existing else repo_root_str
-        cmd = [
-            pytest_path,
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            str(tmp_path),
-        ]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=repo_root or str(tmp_path),
-            env=env,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            _materialize_acceptance_fixtures(story, tmp_path)
+            env = os.environ.copy()
+            if repo_root:
+                key = "PYTHONPATH"
+                existing = env.get(key)
+                repo_root_str = str(repo_root)
+                env[key] = f"{repo_root_str}:{existing}" if existing else repo_root_str
+            cmd = [
+                pytest_path,
+                "--collect-only",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                str(tmp_path),
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=repo_root or str(tmp_path),
+                env=env,
+                check=False,
+            )
     except subprocess.TimeoutExpired:
         return ("skipped", "acceptance-fixture pytest dry-run skipped: pytest timed out")
     except Exception as exc:  # noqa: BLE001 - never crash ingest

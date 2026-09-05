@@ -8,6 +8,7 @@ before it becomes a live, read-only oracle. This module tests the validator
 itself; wiring it into plan-ingest is left to a follow-up story, mirroring
 _lint_acceptance_fixtures.
 """
+import contextlib
 import os
 import shutil
 import subprocess
@@ -24,15 +25,29 @@ def _story(entries, summary="s"):
     return {"summary": summary, "acceptance": entries}
 
 
+def _fake_temporary_directory(tmp_path):
+    """Build a stand-in for ``tempfile.TemporaryDirectory`` whose ``__enter__``
+    yields ``str(tmp_path)`` so tests can inspect materialized fixture files
+    without waiting on the real context manager's cleanup.
+    """
+
+    @contextlib.contextmanager
+    def factory(*a, **k):
+        yield str(tmp_path)
+
+    return factory
+
+
 def _install_fake_pytest(monkeypatch, tmp_path, returncode=0, output=""):
-    """Stub shutil.which + subprocess.run + tempfile.mkdtemp, and return the
-    dict that fake_run populates with the captured cmd/kwargs.
+    """Stub shutil.which + subprocess.run + tempfile.TemporaryDirectory, and
+    return the dict that fake_run populates with the captured cmd/kwargs.
     """
     monkeypatch.setattr(
         "pipeline.build_detect.shutil.which", lambda name: "/usr/bin/pytest"
     )
     monkeypatch.setattr(
-        "pipeline.build_detect.tempfile.mkdtemp", lambda *a, **k: str(tmp_path)
+        "pipeline.build_detect.tempfile.TemporaryDirectory",
+        _fake_temporary_directory(tmp_path),
     )
     captured = {}
 
@@ -204,7 +219,7 @@ def test_no_acceptance_key_returns_clean_and_skips_subprocess(monkeypatch):
         "pipeline.build_detect.subprocess.run", lambda *a, **k: calls.append(1)
     )
     monkeypatch.setattr(
-        "pipeline.build_detect.tempfile.mkdtemp",
+        "pipeline.build_detect.tempfile.TemporaryDirectory",
         lambda *a, **k: calls.append(1),
     )
 
@@ -259,7 +274,8 @@ def test_subprocess_exception_returns_skipped_never_raises(monkeypatch, tmp_path
         "pipeline.build_detect.shutil.which", lambda name: "/usr/bin/pytest"
     )
     monkeypatch.setattr(
-        "pipeline.build_detect.tempfile.mkdtemp", lambda *a, **k: str(tmp_path)
+        "pipeline.build_detect.tempfile.TemporaryDirectory",
+        _fake_temporary_directory(tmp_path),
     )
 
     def raising_run(*a, **k):
@@ -280,7 +296,8 @@ def test_subprocess_timeout_returns_skipped_never_raises(monkeypatch, tmp_path):
         "pipeline.build_detect.shutil.which", lambda name: "/usr/bin/pytest"
     )
     monkeypatch.setattr(
-        "pipeline.build_detect.tempfile.mkdtemp", lambda *a, **k: str(tmp_path)
+        "pipeline.build_detect.tempfile.TemporaryDirectory",
+        _fake_temporary_directory(tmp_path),
     )
 
     def timing_out_run(cmd, **k):

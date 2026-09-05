@@ -93,48 +93,61 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 elapsed = (
                     datetime.now(timezone.utc) - datetime.fromisoformat(dispatched_at)
                 ).total_seconds()
-# Determine if activity is stale
+                # Watchdog decision order (stale-activity first, wall-clock
+                # ceiling as backstop):
+                #   1. stale activity (age > DISPATCH_STALE_ACTIVITY_SECONDS)
+                #      -> terminate with the stale-activity summary, no
+                #      elapsed gate;
+                #   2. else wall-clock backstop (elapsed >
+                #      DISPATCH_WATCHDOG_SECONDS) -> terminate with the old
+                #      summary. The backstop covers the no-signal case
+                #      (activity_age_seconds is None, e.g. within the
+                #      startup grace), the livelocked-but-heartbeating agent
+                #      (activity older than the startup grace), and any
+                #      ceiling set tighter than one startup-grace window
+                #      past its own threshold (elapsed within
+                #      DISPATCH_STARTUP_GRACE_SECONDS of the ceiling);
+                #      fresh activity beyond that margin keeps running.
+                # Both arms share ONE terminate/diagnose block: the summary
+                # and dispatch_error differ, the post-conditions are
+                # identical (SIGTERM, checkpoint, rebrief diagnosis,
+                # interrupted).
                 signals = collect_story_wedge_signals(plan_name, story_key, story)
                 activity_age = signals.get("activity_age_seconds")
-                if activity_age is not None and activity_age > DISPATCH_STALE_ACTIVITY_SECONDS:
-                    _terminate_and_checkpoint(
-                        manifest,
-                        manifest_path,
-                        plan_name,
-                        story_key,
-                        story,
-                        pid=pid,
-                        step="dispatch_watchdog_timeout",
-                        summary=(
-                            f"Dispatch watchdog: no activity for {activity_age:.0f}s (stale-activity watchdog); elapsed {elapsed:.0f}s; process terminated."
-                        ),
-                    )
-                    _rebrief_step_cap_struggle(  # noqa: F821
-                        story, str(Path(story["worktree"])),
-                        plan_role_config=manifest.get("role_config"),
-                        plan_name=plan_name,
-                        story_key=story_key)
-                    story["dispatch_error"] = (
-                        f"watchdog killed after {activity_age:.0f}s with no activity"
-                    )
-                    _atomic_write_json(manifest_path, manifest)
-                    return {
-                        "status": "interrupted",
-                        "pid": pid,
-                        "watchdog_killed": True,
-                    }
-                # Wall-clock backstop for the not-stale path (the stale
-                # branch above already returned): kills the
-                # livelocked-but-heartbeating agent (activity exists but is
-                # older than the startup grace) and covers the no-signal
-                # case (activity_age_seconds is None, e.g. within the
-                # startup grace). Fresh activity (within the grace) past
-                # the ceiling keeps running.
-                if (
-                    (activity_age is None
-                     or activity_age > DISPATCH_STARTUP_GRACE_SECONDS)
+                stale = (
+                    activity_age is not None
+                    and activity_age > DISPATCH_STALE_ACTIVITY_SECONDS
+                )
+                backstop = (
+                    not stale
                     and elapsed > DISPATCH_WATCHDOG_SECONDS
-                ):
+                    and (
+                        activity_age is None
+                        or activity_age > DISPATCH_STARTUP_GRACE_SECONDS
+                        or elapsed - DISPATCH_WATCHDOG_SECONDS
+                        <= DISPATCH_STARTUP_GRACE_SECONDS
+                    )
+                )
+                if stale or backstop:
+                    if stale:
+                        summary = (
+                            f"Dispatch watchdog: no activity for "
+                            f"{activity_age:.0f}s (stale-activity watchdog); "
+                            f"elapsed {elapsed:.0f}s; process terminated."
+                        )
+                        dispatch_error = (
+                            f"watchdog killed after {activity_age:.0f}s "
+                            f"with no activity"
+                        )
+                    else:
+                        summary = (
+                            f"Dispatch watchdog: no completion after "
+                            f"{elapsed:.0f}s; process terminated."
+                        )
+                        dispatch_error = (
+                            f"watchdog killed after {elapsed:.0f}s with "
+                            f"no completion"
+                        )
                     _terminate_and_checkpoint(
                         manifest,
                         manifest_path,
@@ -143,18 +156,20 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         story,
                         pid=pid,
                         step="dispatch_watchdog_timeout",
-                        summary=(
-                            f"Dispatch watchdog: no completion after {elapsed:.0f}s; process terminated."
-                        ),
+                        summary=summary,
                     )
+                    # CLAUDE.md Step 9: diagnose where this implementer hung
+                    # and fold the root cause into agent_instructions so the
+                    # resume isn't a blind retry. Mirrors the step-cap
+                    # branch's call byte-for-byte (same helper, same
+                    # arguments). Fail-open: a None/errored diagnosis leaves
+                    # agent_instructions untouched (no-op).
                     _rebrief_step_cap_struggle(  # noqa: F821
                         story, str(Path(story["worktree"])),
                         plan_role_config=manifest.get("role_config"),
                         plan_name=plan_name,
                         story_key=story_key)
-                    story["dispatch_error"] = (
-                        f"watchdog killed after {elapsed:.0f}s with no completion"
-                    )
+                    story["dispatch_error"] = dispatch_error
                     _atomic_write_json(manifest_path, manifest)
                     return {
                         "status": "interrupted",

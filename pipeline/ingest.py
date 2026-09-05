@@ -89,6 +89,51 @@ def _ingest_plan_impl(
                     ),
                 }
 
+    # Acceptance-fixture validation: run the lint and pytest-collection
+    # dry-run checks against every story's fixtures BEFORE the ticket
+    # provider is driven, so a blocked ingest issues zero
+    # create_epic/create_story calls (a real PlaneTicketProvider fires real
+    # plane_request POSTs there - dispatching before the gate orphans or
+    # duplicates Plane tickets when the refused ingest is retried) and
+    # writes no manifest. Only the stories in the current plan run are
+    # validated: findings stored on already-dispatched stories from a prior
+    # ingest must never veto an unrelated only_epics re-ingest. Findings are
+    # always surfaced as advisory notifications;
+    # PIPELINE_ACCEPTANCE_FIXTURE_VALIDATE_BLOCK additionally fails the
+    # ingest closed when a real finding is present. A "skipped" result
+    # (missing ruff/pytest, timeout, subprocess error) must never block -
+    # the validators themselves guarantee this contract, but the gate
+    # re-asserts it here since a known-good ingest must never be blocked
+    # by broken tooling.
+    block_raw = os.environ.get(
+        "PIPELINE_ACCEPTANCE_FIXTURE_VALIDATE_BLOCK", ""
+    ).strip().lower()
+    block_enabled = block_raw in {"1", "true", "yes", "on"}
+    blocking_findings: list[str] = []
+    for epic in plan["epics"]:
+        if only_epics and epic["summary"] not in only_epics:
+            continue
+        for story in epic.get("stories", []):
+            key = story.get("key") or story.get("summary", "?")
+            for validator in (_lint_acceptance_fixtures, _pytest_acceptance_fixtures):
+                kind, msg = validator(story, repo_root=repo_root)
+                if kind == "clean":
+                    continue
+                _notify_user(plan_name, f"{key}: {msg}")
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {msg}")
+                if kind == "finding":
+                    blocking_findings.append(f"{key}: {msg}")
+
+    if block_enabled and blocking_findings:
+        return {
+            "ok": False,
+            "error": (
+                "Acceptance-fixture validation failed "
+                "(PIPELINE_ACCEPTANCE_FIXTURE_VALIDATE_BLOCK is enabled):\n"
+                + "\n".join(blocking_findings)
+            ),
+        }
+
     manifest_path = _store.manifest_path(plan_name)
 
     with _store.transaction(plan_name) as acquired:
@@ -192,40 +237,6 @@ def _ingest_plan_impl(
         final_manifest["role_config"] = plan.get(
             "role_config", prior.get("role_config", {})
         )
-
-        # Acceptance-fixture validation: run the lint and pytest-collection
-        # dry-run checks against every story's fixtures before the manifest
-        # is written. Findings are always surfaced as advisory notifications;
-        # PIPELINE_ACCEPTANCE_FIXTURE_VALIDATE_BLOCK additionally fails the
-        # ingest closed when a real finding is present. A "skipped" result
-        # (missing ruff/pytest, timeout, subprocess error) must never block -
-        # the validators themselves guarantee this contract, but the gate
-        # re-asserts it here since a known-good ingest must never be blocked
-        # by broken tooling.
-        block_raw = os.environ.get(
-            "PIPELINE_ACCEPTANCE_FIXTURE_VALIDATE_BLOCK", ""
-        ).strip().lower()
-        block_enabled = block_raw in {"1", "true", "yes", "on"}
-        blocking_findings: list[str] = []
-        for key, story in final_manifest["stories"].items():
-            for validator in (_lint_acceptance_fixtures, _pytest_acceptance_fixtures):
-                kind, msg = validator(story, repo_root=repo_root)
-                if kind == "clean":
-                    continue
-                _notify_user(plan_name, f"{key}: {msg}")
-                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {msg}")
-                if kind == "finding":
-                    blocking_findings.append(f"{key}: {msg}")
-
-        if block_enabled and blocking_findings:
-            return {
-                "ok": False,
-                "error": (
-                    "Acceptance-fixture validation failed "
-                    "(PIPELINE_ACCEPTANCE_FIXTURE_VALIDATE_BLOCK is enabled):\n"
-                    + "\n".join(blocking_findings)
-                ),
-            }
 
         _atomic_write_json(manifest_path, final_manifest)
 

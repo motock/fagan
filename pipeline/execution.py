@@ -181,7 +181,10 @@ def spawn_harness(
     """Spawn an agent harness for ``role`` using its configured execution mode.
 
     Resolves PIPELINE_EXEC_{ROLE} first; unknown modes raise before any
-    process is spawned or log file is created (fail closed).
+    process is spawned or log file is created (fail closed). ssh mode
+    dispatches the remote driver directly and deliberately bypasses local
+    docker-sandbox resolution — the harness runs on the ssh host, so no
+    sandbox image or pinning applies.
     """
     mode = resolve_execution_mode(role)
     if mode == "ssh":

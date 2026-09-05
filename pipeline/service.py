@@ -620,7 +620,7 @@ class PipelineService:
     def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
         return _store.get_worktree_file(story, filename)
 
-    def decompose_plan(self, request: str) -> dict[str, Any]:
+    def decompose_plan(self, request: str, workspace: str | None = None) -> dict[str, Any]:
         text = _run_decompose(request)
         if not text:
             return {"ok": False, "error": "decompose backend returned no output"}
@@ -635,6 +635,11 @@ class PipelineService:
                 "error": "response JSON is missing an 'epics' list",
                 "raw": text,
             }
+        if workspace is not None:
+            validated = validate_workspace(workspace)
+            if not validated.get("ok"):
+                return {"ok": False, "error": validated.get("error") or "invalid workspace"}
+            plan["repo_root"] = validated["path"]
         return {"ok": True, "plan": plan}
 
     def set_story_status(self, plan_name: str, story_key: str, status: str) -> dict[str, Any]:

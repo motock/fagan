@@ -58,14 +58,19 @@ class RecordingTicketProvider:
 
     def __init__(self):
         self.calls = []
+        self._n = 0
+
+    def _next_id(self, prefix):
+        self._n += 1
+        return f"{prefix}-{self._n}"
 
     def create_epic(self, *args, **kwargs):
         self.calls.append(("create_epic", args, kwargs))
-        return "rec-epic"
+        return self._next_id("rec-epic")
 
     def create_story(self, *args, **kwargs):
         self.calls.append(("create_story", args, kwargs))
-        return "rec-story"
+        return self._next_id("rec-story")
 
 
 @pytest.fixture

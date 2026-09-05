@@ -267,6 +267,7 @@ The **advance-scheduler** is now a long‑lived daemon rather than a 60s launchd
 ### Environment Variables
 - **PIPELINE_SCHEDULER_INTERVAL_S** – default reconcile sweep interval (default 60 seconds).
 - **PIPELINE_SCHEDULER_HEALTH_PATH** – optional path where the daemon writes its health JSON each iteration.
+- **PIPELINE_ACCEPTANCE_FIXTURE_VALIDATE_BLOCK** – opt-in gate (default off; unset/empty means non-blocking). When set to one of `1`/`true`/`yes`/`on`, `ingest_plan` fails closed (returns `ok: False` before writing the manifest or touching Plane) if a story's acceptance fixture has a real lint or pytest-collection finding. Findings are always surfaced as advisory notifications regardless of this setting. Infrastructure failures (ruff/pytest missing, timeout, subprocess error) always fail open and never block ingest.
 
 ## Reliability & limitations
 

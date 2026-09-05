@@ -945,6 +945,8 @@ check_story_status = types.FunctionType(
 # the grading watchdog constant it reads must be reachable there. (The
 # detached-grade primitives are exported further down, after their defs.)
 _server.DETACHED_GRADE_WATCHDOG_SECONDS = DETACHED_GRADE_WATCHDOG_SECONDS
+_server.DISPATCH_STALE_ACTIVITY_SECONDS = DISPATCH_STALE_ACTIVITY_SECONDS
+_server.collect_story_wedge_signals = collect_story_wedge_signals
 
 
 GRADE_WRAPPER = """\

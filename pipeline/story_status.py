@@ -7,11 +7,13 @@ Extracted verbatim from pipeline/server.py (behavior-preserving file move).
 
 import json
 import os
+import subprocess
 import sys
+import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import types
 
 from pipeline import server as _server
 from pipeline.dispatch import _find_dead_new_functions
@@ -27,9 +29,9 @@ from .ci import _acceptance_tampered
 from .concurrency import _heavy_lock
 from .config import (
     DISPATCH_MAX_ATTEMPTS,
+    DISPATCH_STALE_ACTIVITY_SECONDS,
     DISPATCH_STARTUP_GRACE_SECONDS,
     DISPATCH_WATCHDOG_SECONDS,
-    DISPATCH_STALE_ACTIVITY_SECONDS,
     INFRA_FAILURE_FALLBACK_THRESHOLD,
     INFRA_FAILURE_LOG_SUBSTRING,
     REWORK_MAX_ATTEMPTS_NO_COMMIT,
@@ -47,8 +49,8 @@ from .parsers import (
     _is_give_up_summary,
     _validate_key,
 )
-from .wedge_io import collect_story_wedge_signals
 from .rebrief import append_cleanup_guidance
+from .wedge_io import collect_story_wedge_signals
 
 # The detached-grading watchdog reuses the dispatch watchdog's threshold so a
 # single policy governs both "how long may a grade/dispatch stay outstanding"
@@ -104,7 +106,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         pid=pid,
                         step="dispatch_watchdog_timeout",
                         summary=(
-                            f"Dispatch watchdog: no activity for {activity_age:.0f}s; process terminated."
+                            f"Dispatch watchdog: no activity for {activity_age:.0f}s (stale-activity watchdog); elapsed {elapsed:.0f}s; process terminated."
                         ),
                     )
                     _rebrief_step_cap_struggle(  # noqa: F821
@@ -121,7 +123,11 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         "pid": pid,
                         "watchdog_killed": True,
                     }
-                # Fallback to wall-clock watchdog if activity is unknown or not stale
+                # Fallback to wall-clock watchdog: only when there is NO
+                # readable activity signal (age is None, e.g. within the
+                # startup grace). Fresh-but-not-stale activity past the
+                # ceiling keeps running — the stale branch above already
+                # returned for genuinely stale activity.
                 if activity_age is None and elapsed > DISPATCH_WATCHDOG_SECONDS:
                     _terminate_and_checkpoint(
                         manifest,

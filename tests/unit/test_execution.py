@@ -248,24 +248,45 @@ class TestSpawnHarness:
         content = _poll_log(log_path, "delegated")
         assert "delegated" in content
 
-    def test_ssh_mode_raises_not_implemented_error(self, tmp_path):
-        with mock.patch.dict(os.environ, {DISPATCH_VAR: "ssh"}), pytest.raises(
-            NotImplementedError
-        ) as excinfo:
-            execution.spawn_harness(
-                [sys.executable, "-c", "print('should not run')"],
+    def test_ssh_mode_dispatches_via_remote_exec(self, tmp_path):
+        # B1 remote-SSH-execution driver is now implemented; the old
+        # NotImplementedError pin is obsolete (review Blocking 1). ssh mode
+        # must dispatch through _spawn_ssh -> `python -m pipeline.remote_exec`.
+        log_path = tmp_path / "spawn.log"
+        env = {
+            DISPATCH_VAR: "ssh",
+            "PIPELINE_REMOTE_EXEC_HOST": "gpu-host",
+            "PIPELINE_REMOTE_SYNC_ROOT": "/srv/sync",
+        }
+        with mock.patch.dict(os.environ, env), mock.patch.object(
+            execution.subprocess, "check_output", return_value="main\n"
+        ), mock.patch.object(
+            execution.subprocess,
+            "Popen",
+            return_value=backend_types.AgentHandle(pid=4242, model=""),
+        ) as fake_popen:
+            handle = execution.spawn_harness(
+                [sys.executable, "-c", "print('should not run locally')"],
                 cwd=tmp_path,
-                log_path=tmp_path / "spawn.log",
+                log_path=log_path,
                 append=False,
             )
 
-        assert str(excinfo.value) == SSH_NOT_IMPLEMENTED_MSG
+        argv = fake_popen.call_args.args[0]
+        assert argv[0:3] == [sys.executable, "-m", "pipeline.remote_exec"]
+        assert "--worktree" in argv
+        assert "--remote-url" in argv
+        assert "--host" in argv
+        assert "--spec-file" in argv
+        assert handle.pid == 4242
 
     def test_ssh_mode_does_not_fall_back_to_local_spawn(self, tmp_path):
+        # Fail closed: with ssh mode configured but the remote host/sync-root
+        # unset, spawn must raise ValueError (never silently run locally).
         log_path = tmp_path / "spawn.log"
 
         with mock.patch.dict(os.environ, {DISPATCH_VAR: "ssh"}), pytest.raises(
-            NotImplementedError
+            ValueError
         ):
             execution.spawn_harness(
                 [sys.executable, "-c", "print('should not run')"],
@@ -278,9 +299,18 @@ class TestSpawnHarness:
         assert not log_path.exists()
 
     def test_role_parameter_selects_role_specific_mode(self, tmp_path):
-        with mock.patch.dict(os.environ, {REVIEW_VAR: "ssh"}), pytest.raises(
-            NotImplementedError
-        ):
+        # role="review" resolves PIPELINE_EXEC_REVIEW; ssh mode there dispatches
+        # through the same remote_exec supervisor as the dispatch role.
+        env = {
+            REVIEW_VAR: "ssh",
+            "PIPELINE_REMOTE_EXEC_HOST": "gpu-host",
+            "PIPELINE_REMOTE_SYNC_ROOT": "/srv/sync",
+        }
+        with mock.patch.dict(os.environ, env), mock.patch.object(
+            execution.subprocess, "check_output", return_value="main\n"
+        ), mock.patch.object(
+            execution.subprocess, "Popen", return_value=mock.Mock(pid=4242)
+        ) as fake_popen:
             execution.spawn_harness(
                 [sys.executable, "-c", "print('should not run')"],
                 cwd=tmp_path,
@@ -288,6 +318,9 @@ class TestSpawnHarness:
                 append=False,
                 role="review",
             )
+
+        argv = fake_popen.call_args.args[0]
+        assert argv[0:3] == [sys.executable, "-m", "pipeline.remote_exec"]
 
     def test_bogus_mode_raises_value_error_fail_closed(self, tmp_path):
         with mock.patch.dict(os.environ, {DISPATCH_VAR: "bogus"}), pytest.raises(

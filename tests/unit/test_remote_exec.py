@@ -350,6 +350,41 @@ def test_main_never_creates_a_log_file(tmp_path, stub_ssh):
     assert logs == []
 
 
+def test_main_deletes_spec_file_after_read(tmp_path, stub_ssh):
+    """The spec file must not survive past main() returning.
+
+    The spec embeds the caller's harness env verbatim (including credentials
+    such as ANTHROPIC_API_KEY for the Claude backend); main() is the spec's
+    sole reader, so if it never unlinks the file, every ssh dispatch leaves a
+    secret-bearing JSON file behind in the shared temp dir forever. Checked
+    across two sequential dispatches (two distinct spec files) to prove
+    cleanup isn't accidentally tied to one specific path.
+    """
+    root = tmp_path
+    _make_story_worktree(root)
+    _, remote_cwd, _ = _remote_paths(root)
+
+    first_spec = _spec_file(root, ["echo", "first"], {"ANTHROPIC_API_KEY": "sk-ant-first"})
+    code = _run_main(root, _argv(root, first_spec), stub_ssh)
+    assert code == 0
+    assert not first_spec.exists()
+
+    second_spec = root / "spec-2.json"
+    second_spec.write_text(
+        json.dumps(
+            {
+                "cmd": ["echo", "second"],
+                "env": {"ANTHROPIC_API_KEY": "sk-ant-second"},
+                "branch": BRANCH,
+                "remote_cwd": str(remote_cwd),
+            }
+        )
+    )
+    code = _run_main(root, _argv(root, second_spec), stub_ssh)
+    assert code == 0
+    assert not second_spec.exists()
+
+
 # ---- main: malformed inputs and missing required fields ----
 
 

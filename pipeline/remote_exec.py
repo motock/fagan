@@ -65,7 +65,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--spec-file", required=True, dest="spec_file")
     args = parser.parse_args(argv)
 
-    spec = json.loads(Path(args.spec_file).read_text())
+    spec_file_path = Path(args.spec_file)
+    spec = json.loads(spec_file_path.read_text())
+    spec_file_path.unlink()
+    # spec file already removed
     cmd = spec["cmd"]
     env = spec["env"]
     branch = spec["branch"]

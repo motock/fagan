@@ -7,11 +7,13 @@ Extracted verbatim from pipeline/server.py (behavior-preserving file move).
 
 import json
 import os
+import subprocess
 import sys
+import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import types
 
 from pipeline import server as _server
 from pipeline.dispatch import _find_dead_new_functions
@@ -27,9 +29,9 @@ from .ci import _acceptance_tampered
 from .concurrency import _heavy_lock
 from .config import (
     DISPATCH_MAX_ATTEMPTS,
+    DISPATCH_STALE_ACTIVITY_SECONDS,
     DISPATCH_STARTUP_GRACE_SECONDS,
     DISPATCH_WATCHDOG_SECONDS,
-    DISPATCH_STALE_ACTIVITY_SECONDS,
     INFRA_FAILURE_FALLBACK_THRESHOLD,
     INFRA_FAILURE_LOG_SUBSTRING,
     REWORK_MAX_ATTEMPTS_NO_COMMIT,
@@ -47,8 +49,8 @@ from .parsers import (
     _is_give_up_summary,
     _validate_key,
 )
-from .wedge_io import collect_story_wedge_signals
 from .rebrief import append_cleanup_guidance
+from .wedge_io import collect_story_wedge_signals
 
 # The detached-grading watchdog reuses the dispatch watchdog's threshold so a
 # single policy governs both "how long may a grade/dispatch stay outstanding"

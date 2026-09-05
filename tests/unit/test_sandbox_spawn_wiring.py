@@ -22,6 +22,7 @@ Docker is never required: ``shutil.which`` is patched and Popen is faked at the
 """
 
 import shutil
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -285,7 +286,13 @@ def test_docker_mode_without_image_fails_closed(
 
 @pytest.mark.parametrize("sandbox", [None, "docker"], ids=["unset", "docker"])
 def test_ssh_branch_untouched(tmp_path, popen_calls, monkeypatch, docker_present, sandbox):
+    # B1 remote-SSH-execution driver is now implemented; the old
+    # NotImplementedError pin is obsolete (review Blocking 1). The ssh branch
+    # must dispatch via _spawn_ssh -> `python -m pipeline.remote_exec`, and it
+    # bypasses local docker-sandbox resolution entirely.
     monkeypatch.setenv("PIPELINE_EXEC_DISPATCH", "ssh")
+    monkeypatch.setenv("PIPELINE_REMOTE_EXEC_HOST", "gpu-host")
+    monkeypatch.setenv("PIPELINE_REMOTE_SYNC_ROOT", "/srv/sync")
     if sandbox is None:
         monkeypatch.delenv("PIPELINE_SANDBOX", raising=False)
     else:
@@ -294,17 +301,33 @@ def test_ssh_branch_untouched(tmp_path, popen_calls, monkeypatch, docker_present
     worktree = tmp_path / "wt"
     worktree.mkdir()
 
-    with pytest.raises(NotImplementedError) as excinfo:
-        spawn_harness(
-            ["claude"],
-            cwd=worktree,
-            log_path=tmp_path / "agent.log",
-            append=True,
-            env=None,
-        )
+    # _spawn_ssh derives the branch via git; stub it out (external boundary).
+    monkeypatch.setattr(
+        execution.subprocess,
+        "check_output",
+        lambda *a, **kw: "main\n",
+    )
 
-    assert "ssh execution is not implemented yet" in str(excinfo.value)
-    assert popen_calls == []
+    handle = spawn_harness(
+        ["claude"],
+        cwd=worktree,
+        log_path=tmp_path / "agent.log",
+        append=True,
+        env=None,
+    )
+
+    assert len(popen_calls) == 1
+    call = popen_calls[0]
+    # Expect remote_exec invocation
+    assert call["cmd"][0] == sys.executable
+    assert call["cmd"][1] == "-m"
+    assert call["cmd"][2] == "pipeline.remote_exec"
+    # remote exec flags
+    assert "--worktree" in call["cmd"]
+    assert "--remote-url" in call["cmd"]
+    assert "--host" in call["cmd"]
+    assert "--spec-file" in call["cmd"]
+    assert handle.pid == FAKE_PID
 
 
 def test_unknown_exec_mode_still_fails_closed(tmp_path, popen_calls, monkeypatch):

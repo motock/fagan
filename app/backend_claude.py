@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from app.backend_types import AgentHandle
-from app.harness import HarnessRequest, get_harness
+from app.harness import HarnessRequest, get_harness, resolve_harness_name
 from pipeline import execution
 
 # Vars that can redirect the `claude` CLI off the first-party Anthropic API
@@ -195,7 +195,13 @@ class ClaudeCliDriver:
         request = HarnessRequest(prompt=prompt, system=system, model=model,
                                  cwd=str(cwd),
                                  options={"allowed_tools": allowed_tools})
-        cmd = get_harness("claude").build_agent_command(request).argv
+        name = resolve_harness_name("claude")
+        if name != "claude":
+            raise NotImplementedError(
+                f"PIPELINE_AGENT_HARNESS={name!r}: ClaudeCliDriver only implements "
+                f"the 'claude' harness; a cross-harness selection is a configuration error, not a silent fallback"
+            )
+        cmd = get_harness(name).build_agent_command(request).argv
         handle = execution.spawn_harness(
             cmd, cwd=cwd, log_path=log_path, append=append,
             env=_first_party_claude_env(),

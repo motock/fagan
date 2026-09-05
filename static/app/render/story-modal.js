@@ -163,6 +163,10 @@ function _renderStoryModalBody(planName, story, key, notificationRecords) {
       <h3 class="modal-section">Journal</h3>
       <p class="modal-empty" data-journal-empty>No journal yet.</p>
     </div>
+    <div data-replay-slot>
+      <h3 class="modal-section">Replay</h3>
+      <p class="modal-empty" data-replay-empty>No replay data yet.</p>
+    </div>
     <div data-notifications-slot>
       <h3 class="modal-section">Notifications</h3>
       ${renderStoryModalNotifications(storyNotifications)}
@@ -207,6 +211,11 @@ function _renderStoryModalBody(planName, story, key, notificationRecords) {
   // state on error / unavailable). The race guard in loadStoryJournal
   // ensures a slow prior fetch can't clobber a newly-opened story.
   if (planName) loadStoryJournal(planName, key, body);
+
+  // Same fire-and-forget pattern for the reconstructed replay timeline
+  // (merged journal + worktree logs). See loadStoryReplay for the
+  // resilience contract.
+  if (planName) loadStoryReplay(planName, key, body);
 
   // Same fire-and-forget pattern for the worktree checklist + scratchpad
   // (Tier 0 progress view). Most stories have no checklist (not run under
@@ -296,6 +305,91 @@ async function loadStoryLog() {
   section.dataset.state = "ready";
 }
 
+// Source label -> badge color CSS var, mirroring NOTIF_SEVERITY_COLOR's
+// mapping scheme in renderStoryModalNotifications.
+const REPLAY_SOURCE_COLOR = {
+  journal: "--c-in_progress",
+  "agent.log": "--c-tests_passed",
+  "review.log": "--c-pr_open",
+};
+
+// Render one replay event (see app.story_replay.build_replay_events for the
+// {ts, source, kind, message} shape) as a timeline <li>, reusing the same
+// .timeline-item/.badge/.mono building blocks as the Journal section and
+// renderStoryModalNotifications.
+function renderReplayEvent(event) {
+  if (!event || typeof event !== "object") return "";
+  const source = event.source ? String(event.source) : "";
+  const message = event.message != null ? String(event.message) : "";
+  const tsText = event.ts ? String(event.ts) : "(no timestamp)";
+  const color = REPLAY_SOURCE_COLOR[source] || "--c-unknown";
+  return `
+    <li class="timeline-item">
+      <div class="timeline-step">
+        <span class="badge" style="--badge-color: var(${color})">${escapeHtml(source || "unknown")}</span>
+      </div>
+      <pre class="mono replay-message">${escapeHtml(message)}</pre>
+      <div class="timeline-ts muted">${escapeHtml(tsText)}</div>
+    </li>
+  `;
+}
+
+// Render the entire Replay section. `data` matches the
+// /api/plans/{plan}/stories/{story}/replay response:
+// {available, events, sources}. Mirrors renderJournal's empty-state
+// contract in plan-detail.js: missing/malformed/empty all render the same
+// placeholder.
+function renderReplay(data) {
+  if (!data || !data.available || !Array.isArray(data.events) || data.events.length === 0) {
+    return `
+      <h3 class="modal-section">Replay</h3>
+      <p class="modal-empty" data-replay-empty>No replay data yet.</p>
+    `;
+  }
+  const items = data.events.map(renderReplayEvent).filter(Boolean).join("");
+  return `
+    <h3 class="modal-section">Replay</h3>
+    <ol class="timeline" data-replay-list>${items}</ol>
+  `;
+}
+
+// Asynchronously load /api/plans/{plan}/stories/{key}/replay into the
+// Replay slot of the currently-open modal. Follows loadStoryLog's exact
+// guard pattern (modal.dataset.plan/story), not plan-detail.js's
+// module-private openStoryRef, since this function lives in a different
+// module. Never throws: any fetch error, non-200 response, or
+// available:false renders/keeps the empty-state placeholder, mirroring
+// loadStoryLog's resilience contract so a slow or failed fetch can't
+// block or blank the modal.
+async function loadStoryReplay(plan, key, container) {
+  if (!plan || !key || !container) return;
+
+  const slot = container.querySelector("[data-replay-slot]");
+  if (!slot) return;
+
+  const url = `/api/plans/${encodeURIComponent(plan)}`
+    + `/stories/${encodeURIComponent(key)}/replay`;
+
+  let body;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      body = { available: false, events: [] };
+    } else {
+      body = await res.json();
+    }
+  } catch {
+    body = { available: false, events: [] };
+  }
+
+  // Stale response guard: if the user closed or navigated the modal (or
+  // opened another story) before this fetch resolved, do nothing.
+  const modal = document.getElementById("story-modal");
+  if (!modal || modal.dataset.plan !== plan || modal.dataset.story !== key) return;
+
+  slot.innerHTML = renderReplay(body);
+}
+
 function hideStoryModal() {
   const modal = document.getElementById("story-modal");
   // Invalidate any in-flight log fetch so it can't write into a hidden
@@ -308,5 +402,5 @@ function hideStoryModal() {
 export {
   initStoryModal, filterStoryNotifications,
   renderStoryModalNotifications, showStoryModal, _renderStoryModalBody,
-  hideStoryModal,
+  hideStoryModal, renderReplay, renderReplayEvent, loadStoryReplay,
 };

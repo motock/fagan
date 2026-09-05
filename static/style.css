@@ -996,3 +996,10 @@ body.trace-off .trace-detail { display: none !important; }
 .backend-selector { margin-top: var(--sp-3); }
 .backend-selector label { margin-right: var(--sp-1); }
 .backend-selector select { padding: var(--sp-1); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+
+/* Replay timeline (story modal): reuses .timeline/.timeline-item/.badge/
+   pre.mono from the Journal section wholesale; the only new bit is a touch
+   of spacing so the message block doesn't crowd the source badge above it. */
+.modal-content .replay-message {
+  margin-top: 4px;
+}

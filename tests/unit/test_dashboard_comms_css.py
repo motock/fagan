@@ -81,7 +81,13 @@ COMMS_JS_SHA256 = "313d51a55e5b2d188cbcfbc9ee2687559779c898b1d1185f9bf0eab4136ba
 PREFIX_BEFORE_COMMS_SHA256 = "01ef90da65f18c8ca29402fd8b3a0b3bfb95869f95a137caa72cc006b9b1ea65"
 # Re-pinned post-#467 (toast severity stripe color fix) - see note above.
 TOAST_REGION_SHA256 = "dbfb98e7ac5c90643e9560c45faa9d8d04e8487c11ab55c4af82cb7c2593550c"
-SUFFIX_FROM_CONFIG_SHA256 = "bd771ee16eb69d9469a2cee103eadbd9530199bbbd4bfa9971e95704e1b0c5a6"
+# Re-pinned for the story-modal Replay timeline (9639ae41, 2026-09-05): that
+# story's brief explicitly authorizes appending new CSS at the END of
+# style.css only ("APPEND-AT-END ONLY"), which necessarily falls after the
+# "Config view styles" comment this hash guards. The addition is a single
+# minimal rule (`.modal-content .replay-message`) appended after the
+# existing suffix; nothing before the append point changed.
+SUFFIX_FROM_CONFIG_SHA256 = "3db0d5afd4698164e42487838a40a3358827f2426bcae9c6d0bc84204ea7cec3"
 
 # The 21 selectors listed in the story as having empty `{}` bodies. Several
 # have a separate, already-populated rule immediately after them (e.g.

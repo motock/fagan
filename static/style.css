@@ -975,6 +975,15 @@ main {
 .trace-chip.expanded + .trace-detail { display: block; }
 body.trace-off .trace-chip { display: none !important; }
 body.trace-off .trace-detail { display: none !important; }
+/* "wedged" badge: server-derived wedge verdict (story.wedge from
+   GET /api/plans/{plan}). Same amber token as escalated/stale, solid fill.
+   Kept at this section boundary so the Comms/Config byte-for-byte guards hold. */
+.card-badge-wedged {
+  background: var(--c-parked);
+  color: var(--bg);
+  border-color: var(--c-parked);
+}
+
 /* Config view styles */
 .config-table { width: 100%; border-collapse: collapse; }
 .config-table th, .config-table td { padding: var(--sp-2); border: 1px solid var(--border); }

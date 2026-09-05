@@ -57,6 +57,32 @@ function isStaleInProgress(story) {
   return ageMin > STALE_IN_PROGRESS_MINUTES;
 }
 
+// True only when the SERVER has attached a wedge verdict to the story
+// (story.wedge.wedged === true, set by GET /api/plans/{plan} for in_progress
+// stories). This deliberately does NOT re-derive staleness client-side —
+// last_activity aging stays isStaleInProgress's job and the `.stale` class
+// stays its signal. The two indicators must not be conflated: an aged story
+// without a server wedge verdict is not wedged. The status guard mirrors
+// isStaleInProgress's shape so a done story still carrying a stale wedge
+// object is not flagged.
+function isWedged(story) {
+  if (!story || story.status !== "in_progress") return false;
+  return Boolean(story.wedge && story.wedge.wedged === true);
+}
+
+// Build the wedged badge markup for a story the server flagged as wedged.
+// Returns "" for anything else, so callers can push unconditionally. The
+// reasons list is HTML-escaped because it is interpolated into a title
+// attribute rendered via innerHTML.
+function wedgedBadgeHtml(story) {
+  if (!isWedged(story)) return "";
+  const rawReasons = story.wedge && Array.isArray(story.wedge.reasons)
+    ? story.wedge.reasons
+    : [];
+  const reasons = rawReasons.map((r) => escapeHtml(String(r))).join(", ");
+  return `<span class="card-badge card-badge-wedged" title="Wedged: ${reasons}">wedged</span>`;
+}
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -153,6 +179,11 @@ function renderBoard(stories, existingBoardEl) {
       }
       if (s.escalated) {
         badges.push(`<span class="card-badge card-badge-escalated" title="Escalated to claude">escalated</span>`);
+      }
+      const wedgedBadge = wedgedBadgeHtml(s);
+      if (wedgedBadge) {
+        badges.push(wedgedBadge);
+        classes.push("wedged");
       }
       const badgesHtml = badges.length
         ? `<div class="card-badges">${badges.join("")}</div>`
@@ -293,6 +324,11 @@ const existing = Array.from(columnBodyEl.querySelectorAll('.card')).reduce((m, e
     if (s.escalated) {
       badges.push(`<span class="card-badge card-badge-escalated" title="Escalated to claude">escalated</span>`);
     }
+    const wedgedBadge = wedgedBadgeHtml(s);
+    if (wedgedBadge) {
+      badges.push(wedgedBadge);
+      classes.push('wedged');
+    }
     const badgesHtml = badges.length
       ? `<div class="card-badges">${badges.join('')}</div>`
       : '';
@@ -405,5 +441,6 @@ function renderFilterBar(stories) {
 
 export {
   STALE_IN_PROGRESS_MINUTES, _diffBoardCards, ageLabelFor, applyFilters, chip,
-  escapeHtml, isStaleInProgress, relativeAgeLabel, renderBoard, renderFilterBar,
+  escapeHtml, isStaleInProgress, isWedged, relativeAgeLabel, renderBoard,
+  renderFilterBar,
 };

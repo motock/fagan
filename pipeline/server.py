@@ -379,12 +379,7 @@ from .ticketing import (  # noqa: F401
     get_ticket_provider,
     plane_request,
 )
-def _run_triage_sweep(*args, **kwargs):
-    from .triage import run_triage_sweep
-    return run_triage_sweep(*args, **kwargs)
-
-# expose for tests
-run_triage_sweep = _run_triage_sweep
+from .triage import run_triage_sweep
 
 # Usage probe / dispatch routing. Tests patch pipeline_usage.<name> for the
 # threshold constants and USAGE_STATE_PATH (Option B); the autouse

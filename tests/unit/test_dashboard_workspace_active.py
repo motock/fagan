@@ -35,7 +35,6 @@ from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
 
-
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------

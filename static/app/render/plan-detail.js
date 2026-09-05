@@ -1,7 +1,8 @@
 import { state, defaultFilters, saveFilters, toggleFilter } from "../state.js";
 import { updateHash } from "../routing.js";
 import { fetchJson } from "../api.js";
-import { renderMaturity } from "./maturity.js";
+import { renderBoard, renderFilterBar, escapeHtml } from "./board.js";
+import { renderMaturityPanel } from "./maturity.js";
 
 // plan-detail.js cannot statically `import ... from "../../app.js"`: app.js's
 // dynamic-import test harness cache-busts its own URL with a `?t=` query
@@ -95,6 +96,8 @@ function _planPanelsHtml(plan) {
     <div class="panels">
       ${_notificationsPanelHtml(plan)}
       ${_decisionsPanelHtml(plan)}
+      <div class="panel" id="maturity-panel"
+           data-plan="${escapeHtml(plan.name)}"></div>
     </div>
   `;
 }
@@ -229,6 +232,16 @@ function renderPlanDetail(plan) {
     restorePlanDetailState(section, snapshot);
   } catch {
     /* snapshot stale or focus target gone; nothing to restore */
+  }
+
+  // Maturity panel: fetch on panel open/refresh (no polling loop of its own —
+  // it re-renders with the rest of the plan detail on every refresh tick).
+  // Fire-and-forget: endpoint failures collapse into an error row inside the
+  // panel rather than failing the whole plan-detail render.
+  const maturityPanel = section.querySelector
+    && section.querySelector("#maturity-panel");
+  if (maturityPanel) {
+    renderMaturityPanel(maturityPanel, plan.name).catch(() => {});
   }
 }
 

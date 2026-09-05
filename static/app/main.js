@@ -27,7 +27,8 @@ import {
   setNotifSeverityFilter, renderNotifications, _diffNotificationsPanel,
   filterNotifications, notificationKey,
 } from "./render/notifications.js";
-import { renderMaturity } from "./render/maturity.js";
+import { renderMaturityPanel } from "./render/maturity.js";
+import { renderDecisions } from "./render/decisions.js";
 import { renderOverview, _diffOverviewPlanRows } from "./render/overview.js";
 import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle, resetCommsThread } from "./comms.js";
 import { renderUsage } from "./usage.js";
@@ -332,6 +333,12 @@ if (typeof module !== "undefined" && module.exports) {
     startPolling, stopPolling, syncPollingWithVisibility, renderPlanDetail,
     showStoryModal, _renderStoryModalBody, handleCopyClick,
     filterStoryNotifications, renderStoryModalNotifications,
+    renderOverview, selectOverview, refresh, state,
+    renderPlanList, _renderPlanListFull,
+    _diffOverviewPlanRows,
+    renderNotifications,
+    _diffNotificationsPanel,
+    renderChecklist,
     filterNotifications,
     pickNewNotifications,
     pushToast,
@@ -396,10 +403,7 @@ function renderConfigError(section, message) {
     rolesBody.innerHTML =
       `<tr><td colspan="8" class="config-error">${escapeHtml(message)}</td></tr>`;
   }
-  }
-
-  globalThis.renderStoryModalNotifications = renderStoryModalNotifications;
-  globalThis.filterStoryNotifications = filterStoryNotifications;
+}
 
 async function loadRegistry() {
   try {

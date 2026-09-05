@@ -12,4 +12,13 @@ async function postJson(url) {
   return res.json();
 }
 
-export { fetchJson, postJson };
+// Maturity panel endpoints (a3-maturity-metrics).
+async function fetchPlanMetrics(plan) {
+  return fetchJson(`/api/plans/${encodeURIComponent(plan)}/metrics`);
+}
+
+async function fetchGuardLiveness() {
+  return fetchJson("/api/guard-liveness");
+}
+
+export { fetchJson, postJson, fetchPlanMetrics, fetchGuardLiveness };

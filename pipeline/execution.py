@@ -83,6 +83,15 @@ def _spawn_ssh(cmd: list[str], *, cwd: Path, log_path: Path, append: bool, env: 
     spec_file = os.fdopen(fd, "w")
     try:
         json.dump(spec, spec_file)
+    except BaseException:
+        # The reader never runs on a failed write, so the writer owns cleanup:
+        # a partial spec already holds whichever env keys were serialized
+        # (potentially credentials), and must not outlive this call.
+        try:
+            os.unlink(spec_path)
+        except OSError:
+            pass
+        raise
     finally:
         spec_file.close()
 
@@ -118,7 +127,6 @@ from pipeline.sandbox import (
 )
 
 _VALID_MODES = ("local", "ssh")
-_SSH_NOT_IMPLEMENTED_MSG = "ssh execution is not implemented yet (B1 later story)"
 
 
 def resolve_execution_mode(role: str = "dispatch") -> str:

@@ -122,7 +122,14 @@ class _FakeService:
         self.calls: list[tuple] = []
         self.decompose_result = {"ok": True, "plan": {"epics": []}}
 
-    def decompose_plan(self, request: str):
+    def get_active_workspace(self) -> str | None:
+        # Additive (story bd22dca3): the /api/decompose route now resolves a
+        # workspace via the active-workspace fallback before delegating.
+        # Returns None (no active workspace) and is deliberately NOT recorded
+        # in ``calls`` so the existing delegation assertions keep their shape.
+        return None
+
+    def decompose_plan(self, request: str, workspace: str | None = None):
         self.calls.append(("decompose_plan", request))
         return self.decompose_result
 

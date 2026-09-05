@@ -814,7 +814,12 @@ def save_plan(plan_name: str, request: SavePlanRequest):
 
 @app.post("/api/decompose")
 def decompose_route(request: DecomposeRequest):
-    result = _service.decompose_plan(request.request)
+    workspace = (
+        request.workspace
+        if request.workspace is not None
+        else _service.get_active_workspace()
+    )
+    result = _service.decompose_plan(request.request, workspace)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result

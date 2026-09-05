@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import os
 import subprocess
@@ -769,21 +770,54 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                 )
             else:
                 round_prefix = ""
+            # Token dedup (measured 2026-09-04: each rework cycle re-injected
+            # the full ~7-8K-char feedback into the SAME resumed transcript,
+            # ~22K chars over 3 rounds). If this exact feedback is already in
+            # the resumed transcript from a prior cycle, reference it instead
+            # of re-embedding it. Fail OPEN to re-injection on any read/parse
+            # problem — a token optimization must never break dispatch.
+            feedback_already_seeded = False
+            try:
+                prior_msgs = json.loads(transcript_path.read_text())
+                feedback_already_seeded = any(
+                    isinstance(m.get("content"), str) and review_feedback in m["content"]
+                    for m in prior_msgs
+                )
+            except Exception:  # noqa: BLE001 (fail open to re-injection; a token optimization must never break dispatch)
+                feedback_already_seeded = False
+            if feedback_already_seeded:
+                feedback_note = (
+                    "Original review feedback: unchanged from your previous "
+                    "rework cycle — it is already in your transcript above; "
+                    "re-read it there."
+                )
+                feedback_lead = (
+                    "The code reviewer REQUESTED CHANGES on your previous attempt. "
+                    "Address the review feedback already in your transcript above "
+                    "(unchanged from your previous rework cycle)."
+                )
+            else:
+                feedback_note = (
+                    f"Original review feedback (for reference):\n{review_feedback}"
+                )
+                feedback_lead = (
+                    "The code reviewer REQUESTED CHANGES on your previous attempt. "
+                    f"Address this feedback:\n{review_feedback}"
+                )
             if fix_checklist:
                 dispatch_kwargs["resume_append_content"] = (
                     f"{round_prefix}"
                     "The code reviewer REQUESTED CHANGES on your previous "
                     "attempt. Your tech lead has translated the feedback "
                     f"into a fix checklist:\n{fix_checklist}\n\n"
-                    f"Original review feedback (for reference):\n{review_feedback}"
+                    f"{feedback_note}"
                     f"{revised_instructions_note}"
                     f"{rework_tests_note}"
                 )
             else:
                 dispatch_kwargs["resume_append_content"] = (
                     f"{round_prefix}"
-                    "The code reviewer REQUESTED CHANGES on your previous attempt. "
-                    f"Address this feedback:\n{review_feedback}"
+                    f"{feedback_lead}"
                     f"{revised_instructions_note}"
                     f"{rework_tests_note}"
                 )

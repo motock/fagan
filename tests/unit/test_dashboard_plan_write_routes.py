@@ -100,8 +100,8 @@ def test_save_plan_valid_payload_returns_200_and_persists_file(client, plan_dir)
 def test_save_plan_delegates_to_service_with_plan_name_and_plan_json(client, plan_dir, monkeypatch):
     calls = []
 
-    def fake_save_plan(plan_name, plan_json):
-        calls.append((plan_name, plan_json))
+    def fake_save_plan(plan_name, plan_json, workspace=None):
+        calls.append((plan_name, plan_json, workspace))
         return {"ok": True, "path": "irrelevant", "epic_count": 0, "story_count": 0}
 
     monkeypatch.setattr(d._service, "save_plan", fake_save_plan)
@@ -109,12 +109,12 @@ def test_save_plan_delegates_to_service_with_plan_name_and_plan_json(client, pla
     res = client.post("/api/plans/somename/save", json={"plan_json": "{\"epics\": []}"})
 
     assert res.status_code == 200
-    assert calls == [("somename", "{\"epics\": []}")]
+    assert calls == [("somename", "{\"epics\": []}", None)]
 
 
 def test_save_plan_returns_service_result_as_is(client, plan_dir, monkeypatch):
     sentinel = {"ok": True, "path": "/x/y.json", "epic_count": 7, "story_count": 42}
-    monkeypatch.setattr(d._service, "save_plan", lambda plan_name, plan_json: sentinel)
+    monkeypatch.setattr(d._service, "save_plan", lambda plan_name, plan_json, workspace=None: sentinel)
 
     res = client.post("/api/plans/anything/save", json={"plan_json": "{}"})
 

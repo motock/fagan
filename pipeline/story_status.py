@@ -123,12 +123,18 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         "pid": pid,
                         "watchdog_killed": True,
                     }
-                # Fallback to wall-clock watchdog: only when there is NO
-                # readable activity signal (age is None, e.g. within the
-                # startup grace). Fresh-but-not-stale activity past the
-                # ceiling keeps running — the stale branch above already
-                # returned for genuinely stale activity.
-                if activity_age is None and elapsed > DISPATCH_WATCHDOG_SECONDS:
+                # Wall-clock backstop for the not-stale path (the stale
+                # branch above already returned): kills the
+                # livelocked-but-heartbeating agent (activity exists but is
+                # older than the startup grace) and covers the no-signal
+                # case (activity_age_seconds is None, e.g. within the
+                # startup grace). Fresh activity (within the grace) past
+                # the ceiling keeps running.
+                if (
+                    (activity_age is None
+                     or activity_age > DISPATCH_STARTUP_GRACE_SECONDS)
+                    and elapsed > DISPATCH_WATCHDOG_SECONDS
+                ):
                     _terminate_and_checkpoint(
                         manifest,
                         manifest_path,

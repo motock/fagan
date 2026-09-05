@@ -127,9 +127,7 @@ def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manife
       executed via :func:`execute_ruling`.
     """
     # Lazy import to avoid circular dependency
-    # Lazy import to avoid circular dependency
-    # Lazy import to avoid circular dependency
-    # from .server import PIPELINE_AUTONOMY
+    from .server import PIPELINE_AUTONOMY
 
     if PIPELINE_AUTONOMY == "dry-run":
         # Notify but do not act

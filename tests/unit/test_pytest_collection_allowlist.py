@@ -18,7 +18,6 @@ These tests exercise pyproject.toml's own config as-is: they run
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -35,7 +34,7 @@ def _bare_pytest_collect() -> subprocess.CompletedProcess[str]:
     pyproject.toml's own [tool.pytest.ini_options] config as-is.
     """
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+        ["pytest", "--collect-only", "-q"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

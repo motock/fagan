@@ -647,6 +647,7 @@ def list_workspaces_route():
 def get_workspace_route():
     return {'active': _service.get_active_workspace()}
 
+
 @app.post('/api/workspace')
 def set_workspace_route(request: WorkspaceRequest):
     result = _service.resolve_workspace(request.path, create=request.create)

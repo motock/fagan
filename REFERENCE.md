@@ -1149,4 +1149,4 @@ pipeline-tracked work (claim a story → TDD → detect the test runner → full
 suite green → `review_story` → prompt before committing).
 
 ---
-
+| `PIPELINE_AGENT_HARNESS` | *(unset)* | Unset defaults to the native harness for the driver: `claude` for `ClaudeCliDriver` and `local` for `OllamaDriver`. Setting the variable to the driver’s own harness name is a no‑op. Setting it to a different registered harness causes `dispatch()` to raise `NotImplementedError`, preventing silent misconfiguration. |

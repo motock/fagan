@@ -15,10 +15,9 @@ import {
 // it there), breaking the import-graph cycle while keeping identical
 // call-time behavior.
 let _backendErrorEl;
-let NOTIF_SEVERITY_COLOR;
+import { NOTIF_SEVERITY_COLOR } from "./notifications.js";
 function initStoryModal({ backendErrorEl, notifSeverityColor }) {
   _backendErrorEl = backendErrorEl;
-  NOTIF_SEVERITY_COLOR = notifSeverityColor;
 }
 
 // True when a value should be rendered in a monospace <pre> block instead

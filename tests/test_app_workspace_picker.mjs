@@ -496,6 +496,73 @@ await run(
   },
 );
 
+// Regression: the workspace nav handler sets state.workspaceActive = true,
+// but every OTHER nav function must clear it (the established invariant is
+// that each nav function clears every view flag it does not set). Otherwise
+// one visit to the workspace view leaks workspaceActive = true forever and
+// _applyActiveView — which checks workspaceActive before commsActive and
+// plan-detail — shows the workspace picker instead of plan detail or the
+// overview landing on every subsequent navigation.
+await run(
+  "selectPlan and selectOverview clear a stale workspaceActive so navigation is not hijacked",
+  async () => {
+    const { elements, state } = await bootstrapWiringApp();
+    const main = await import(`../static/app/main.js?wiring=${wiringImportSeq}`);
+    const planDetail = elements.get("plan-detail");
+    const workspaceView = elements.get("workspace-view");
+    const commsView = elements.get("comms-view");
+    const configView = elements.get("config-view");
+
+    // Seed the stale flag exactly as the wireWorkspaceView nav handler does.
+    await elements.get("workspace-nav").dispatch("click");
+    assertEqual(state.workspaceActive, true, "precondition: nav click sets workspaceActive");
+
+    // Follow-up navigation: clicking a plan must clear the flag and land on
+    // the plan-detail branch, not the workspace branch.
+    await main.selectPlan("plan-42");
+    assertEqual(
+      state.workspaceActive,
+      false,
+      "selectPlan must clear workspaceActive",
+    );
+    assertTrue(
+      planDetail.classList.contains("hidden") === false,
+      "plan detail should be shown after selectPlan",
+    );
+    assertTrue(
+      workspaceView.classList.contains("hidden") === true,
+      "workspace view must be hidden after selectPlan",
+    );
+
+    // Follow-up navigation: Overview must also clear the flag (idempotently)
+    // and land on the overview landing (every view element hidden).
+    await main.selectOverview();
+    assertEqual(
+      state.workspaceActive,
+      false,
+      "selectOverview must clear workspaceActive",
+    );
+    assertTrue(
+      workspaceView.classList.contains("hidden") === true,
+      "workspace view must stay hidden after selectOverview",
+    );
+    // On the overview landing the overview is rendered INTO #plan-detail
+    // (refresh's no-plan branch), so plan-detail is the visible host element.
+    assertTrue(
+      planDetail.classList.contains("hidden") === false,
+      "plan-detail (hosting the overview) should be shown on the overview landing",
+    );
+    assertTrue(
+      commsView.classList.contains("hidden") === true,
+      "comms view must be hidden on the overview landing",
+    );
+    assertTrue(
+      configView.classList.contains("hidden") === true,
+      "config view must be hidden on the overview landing",
+    );
+  },
+);
+
 await run(
   "a successful selectWorkspace (form submit) updates state and re-renders with the active marker",
   async () => {

@@ -84,6 +84,7 @@ function flashRefreshIndicator() {
 function selectOverview() {
   state.commsActive = false;
   state.configActive = false;
+  state.workspaceActive = false;
   state.selectedPlan = null;
   updateHash();
   const nav = document.getElementById("plan-list");
@@ -105,6 +106,7 @@ function selectOverview() {
 function selectComms() {
   state.commsActive = true;
   state.configActive = false;
+  state.workspaceActive = false;
   state.selectedPlan = null;
   updateCommsSubtitle();
   updateHash();
@@ -125,6 +127,7 @@ function selectComms() {
 async function selectPlan(name) {
   state.commsActive = false;
   state.configActive = false;
+  state.workspaceActive = false;
   state.selectedPlan = name;
   updateHash();
   await refresh();

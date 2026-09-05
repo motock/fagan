@@ -74,7 +74,12 @@ _UNCHANGED_JS_SHA256 = {
     # pre-story pin no longer matched the committed file. Re-pin approved
     # in review per the tests/unit/test_comms_chip_wiring.py:43-49
     # protocol.
-    MAIN_JS: "69954b8007500519b66c8328010193635dd414b096836841171d72f0adf7caa4",
+    # Re-pinned for the workspace-picker review fix (issue 3c5e36b4):
+    # review found the stale-workspaceActive nav hijack, so selectOverview/
+    # selectComms/selectPlan each gained one additive
+    # `state.workspaceActive = false;` reset beside their existing
+    # configActive/commsActive resets.
+    MAIN_JS: "fc28c86d9631f711bc64cda9032704ccd6b4624f8a01042fcdd8d8624da164b3",
 }
 
 EXPECTED_CHIP_MESSAGES = {

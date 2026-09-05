@@ -122,7 +122,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         "watchdog_killed": True,
                     }
                 # Fallback to wall-clock watchdog if activity is unknown or not stale
-                if activity_age is not None and elapsed > DISPATCH_WATCHDOG_SECONDS:
+                if activity_age is None and elapsed > DISPATCH_WATCHDOG_SECONDS:
                     _terminate_and_checkpoint(
                         manifest,
                         manifest_path,

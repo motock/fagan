@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 class SavePlanRequest(BaseModel):
     plan_json: str
+    workspace: str | None = None
 
 
 class IngestPlanRequest(BaseModel):

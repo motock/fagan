@@ -806,7 +806,8 @@ def mark_story_done_route(plan_name: str, story_key: str) -> dict[str, Any]:
 
 @app.post("/api/plans/{plan_name}/save")
 def save_plan(plan_name: str, request: SavePlanRequest):
-    result = _service.save_plan(plan_name, request.plan_json)
+    workspace = request.workspace if request.workspace is not None else _service.get_active_workspace()
+    result = _service.save_plan(plan_name, request.plan_json, workspace)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result

@@ -567,7 +567,7 @@ class TestRemoteExecutionStubDoc:
     def test_remote_execution_doc_is_not_empty(self):
         assert len(_remote_execution_doc_text().strip()) > 0
 
-    def test_remote_execution_doc_states_not_implemented(self):
+    def test_remote_execution_doc_states_implemented(self):
         text = _remote_execution_doc_text().lower()
         # B1 landed (f20293f): _spawn_ssh is implemented in
         # pipeline/execution.py, so the doc must state that remote/ssh
@@ -582,7 +582,7 @@ class TestRemoteExecutionStubDoc:
             "(pipeline/execution.py)"
         )
 
-    def test_remote_execution_doc_quotes_the_exact_not_implemented_error_message(self):
+    def test_remote_execution_doc_names_the_ssh_env_vars_and_supervisor(self):
         text = _remote_execution_doc_text()
         # Ground truth: spawn_harness dispatches ssh mode to _spawn_ssh
         # (pipeline/execution.py), which requires PIPELINE_REMOTE_EXEC_HOST

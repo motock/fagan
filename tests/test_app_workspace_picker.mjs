@@ -50,40 +50,6 @@ function record(name, ok, detail) {
   console.log(`${tag}  ${name}${detail ? ` — ${detail}` : ""}`);
 }
 
-// A skip is NOT a failure: it records ok=true with a loud, greppable reason so
-// the suite still exits 0 while making the gap visible in the output. Thrown as
-// a sentinel so run() records it exactly once.
-function skip(reason) {
-  const err = new Error(reason);
-  err.__skip__ = true;
-  err.reason = reason;
-  throw err;
-}
-
-function skipRecord(name, reason) {
-  results.push({ name, ok: true, detail: `SKIP: ${reason}` });
-  // eslint-disable-next-line no-console
-  console.log(`SKIP  ${name} — ${reason}`);
-}
-
-// Feature-detect: did main.js bind a "click" listener to #workspace-nav?
-// The hash-pinning test tests/unit/test_comms_landing_redesign.py::test_main_js_untouched
-// requires static/app/main.js to stay byte-identical to its pre-story bytes, so the
-// workspace-nav wiring this story specifies cannot exist in main.js. When the listener
-// is absent we SKIP the four listener tests (loud reason above) instead of failing on
-// behavior the pinned artifact is forbidden to contain. The state.workspaceActive test
-// and all eleven pre-existing tests still run for real.
-function navClickListenerBound(app) {
-  const nav = app.elements.get("workspace-nav");
-  const bound = nav && nav._listeners && nav._listeners.click;
-  return Array.isArray(bound) && bound.length > 0;
-}
-
-const PIN_REASON =
-  "static/app/main.js is byte-pinned by tests/unit/test_comms_landing_redesign.py::" +
-  "test_main_js_untouched (hash 2ad934f5…), so the workspace-nav/form/picker listeners " +
-  "cannot be bound in main.js; asserting them here would fail on the pinned artifact.";
-
 function assertEqual(actual, expected, label) {
   if (actual !== expected) {
     throw new Error(`${label || "values differ"}: got ${JSON.stringify(actual)} want ${JSON.stringify(expected)}`);
@@ -199,10 +165,6 @@ async function run(name, fn) {
     await fn();
     record(name, true);
   } catch (err) {
-    if (err && err.__skip__) {
-      skipRecord(name, err.reason);
-      return;
-    }
     record(name, false, err && err.message ? err.message : String(err));
   }
 }
@@ -415,11 +377,6 @@ function makeTrackedElement(id) {
       (listeners[evt] = listeners[evt] || []).push(fn);
     },
     removeEventListener: () => {},
-    // Test-introspection hook: lets the wiring tests feature-detect whether
-    // main.js actually bound a listener (see the skip rationale below).
-    get _listeners() {
-      return listeners;
-    },
     // Invokes all listeners for evt and awaits any returned promises, so
     // tests can `await dispatch(...)` and observe the handler's effects.
     dispatch: (evt, evtObj) => Promise.all((listeners[evt] || []).map((fn) => fn(evtObj))),
@@ -509,9 +466,7 @@ await run("state.workspaceActive exists and defaults to false", async () => {
 await run(
   "clicking #workspace-nav sets workspaceActive, shows the view, and populates the picker",
   async () => {
-    const app = await bootstrapWiringApp();
-    if (!navClickListenerBound(app)) return skip(PIN_REASON);
-    const { elements, state, setFetch } = app;
+    const { elements, state, setFetch } = await bootstrapWiringApp();
     setFetch(async (url) => {
       if (String(url).includes("/api/workspaces")) {
         return jsonResponse(200, { workspaces: [{ path: "/tmp/alpha", valid: true }] });
@@ -544,9 +499,7 @@ await run(
 await run(
   "a successful selectWorkspace (form submit) updates state and re-renders with the active marker",
   async () => {
-    const app = await bootstrapWiringApp();
-    if (!navClickListenerBound(app)) return skip(PIN_REASON);
-    const { elements, state, setFetch } = app;
+    const { elements, state, setFetch } = await bootstrapWiringApp();
     let selectCalls = 0;
     setFetch(async (url, opts) => {
       const u = String(url);
@@ -579,9 +532,7 @@ await run(
 await run(
   "a failed selectWorkspace (form submit) surfaces the escaped error and leaves state unchanged",
   async () => {
-    const app = await bootstrapWiringApp();
-    if (!navClickListenerBound(app)) return skip(PIN_REASON);
-    const { elements, state, setFetch } = app;
+    const { elements, state, setFetch } = await bootstrapWiringApp();
     setFetch(async (url, opts) => {
       const u = String(url);
       if (u.includes("/api/workspaces")) return jsonResponse(200, { workspaces: [] });
@@ -618,9 +569,7 @@ await run(
 await run(
   "clicking a picker item with data-path selects that workspace",
   async () => {
-    const app = await bootstrapWiringApp();
-    if (!navClickListenerBound(app)) return skip(PIN_REASON);
-    const { elements, state, setFetch } = app;
+    const { elements, state, setFetch } = await bootstrapWiringApp();
     let postedBody = null;
     setFetch(async (url, opts) => {
       const u = String(url);
@@ -648,7 +597,6 @@ await run(
 // ---------- summary ----------
 
 const failed = results.filter((r) => !r.ok).length;
-const skipped = results.filter((r) => r.ok && String(r.detail || "").startsWith("SKIP:")).length;
 // eslint-disable-next-line no-console
-console.log(`\n${results.length - failed}/${results.length} passed${skipped ? ` (${skipped} skipped)` : ""}`);
+console.log(`\n${results.length - failed}/${results.length} passed`);
 process.exit(failed === 0 ? 0 : 1);

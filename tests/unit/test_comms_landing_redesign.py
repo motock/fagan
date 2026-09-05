@@ -67,7 +67,14 @@ _UNCHANGED_JS_SHA256 = {
     # `import { renderMaturityPanel } from "./render/maturity.js";`
     # registration to main.js, so the pre-story pin no longer matched the
     # committed file. This story never touched main.js itself.
-    MAIN_JS: "2ad934f5a417cc0d7bd06d39793d0b84e1b1853b8d30b6c4e142fe86ae401743",
+    # Re-pinned for the workspace-picker story (issue 3c5e36b4, commit
+    # 979d89f): that story legitimately wired the workspace picker view
+    # into main.js (workspace.js import, workspaceActive branch in
+    # _applyActiveView, loadWorkspaceView/wireWorkspaceView), so the
+    # pre-story pin no longer matched the committed file. Re-pin approved
+    # in review per the tests/unit/test_comms_chip_wiring.py:43-49
+    # protocol.
+    MAIN_JS: "69954b8007500519b66c8328010193635dd414b096836841171d72f0adf7caa4",
 }
 
 EXPECTED_CHIP_MESSAGES = {

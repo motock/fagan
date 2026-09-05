@@ -96,6 +96,10 @@ DISPATCH_WATCHDOG_SECONDS = int(
     os.environ.get("PIPELINE_DISPATCH_WATCHDOG_SECONDS", "3600")
 )
 
+DISPATCH_STALE_ACTIVITY_SECONDS = int(
+    os.environ.get("PIPELINE_DISPATCH_STALE_ACTIVITY_SECONDS", "1800")
+)
+
 # Terminal markers the headless agent prints on the LAST line of its
 # agent.log when it hits its step cap and exits with code 2. The agent
 # has already WIP-committed its in-progress work before printing these,

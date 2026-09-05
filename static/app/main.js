@@ -32,7 +32,6 @@ import { renderDecisions } from "./render/decisions.js";
 import { renderOverview, _diffOverviewPlanRows } from "./render/overview.js";
 import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle, resetCommsThread } from "./comms.js";
 import { renderUsage } from "./usage.js";
-import { fetchWorkspaces, selectWorkspace, fetchActiveWorkspace, renderWorkspacePicker } from "./workspace.js";
 
 // plan-list.js/plan-detail.js/story-modal.js/notifications.js can't
 // statically import back from app.js (see their own comments on this)
@@ -136,28 +135,19 @@ function _applyActiveView() {
   const commsEl = document.getElementById(COMMS_VIEW_ID);
   const planDetailEl = document.getElementById("plan-detail");
   const configEl = document.getElementById("config-view");
-  const workspaceEl = document.getElementById("workspace-view");
   if (!commsEl || !planDetailEl || !configEl) return;
   if (state.configActive) {
     configEl.classList.remove("hidden");
     commsEl.classList.add("hidden");
     planDetailEl.classList.add("hidden");
-    if (workspaceEl) workspaceEl.classList.add("hidden");
-  } else if (state.workspaceActive) {
-    configEl.classList.add("hidden");
-    commsEl.classList.add("hidden");
-    planDetailEl.classList.add("hidden");
-    if (workspaceEl) workspaceEl.classList.remove("hidden");
   } else if (state.commsActive) {
     configEl.classList.add("hidden");
     commsEl.classList.remove("hidden");
     planDetailEl.classList.add("hidden");
-    if (workspaceEl) workspaceEl.classList.add("hidden");
   } else {
     configEl.classList.add("hidden");
     commsEl.classList.add("hidden");
     planDetailEl.classList.remove("hidden");
-    if (workspaceEl) workspaceEl.classList.add("hidden");
   }
 }
 
@@ -643,87 +633,6 @@ function _wireBackendSelector() {
 })();
 
 _wireBackendSelector();
-wireWorkspaceView();
-
-// ---------------------------------------------------------------------------
-// Workspace view (workspace picker wiring)
-// ---------------------------------------------------------------------------
-// Fetch the workspace list + active workspace and render the picker into
-// #workspace-picker. Never throws — fetchWorkspaces/fetchActiveWorkspace
-// already resolve to [] / null on any failure, and renderWorkspacePicker([])
-// already produces the picker's empty state.
-async function loadWorkspaceView() {
-  const picker = document.getElementById("workspace-picker");
-  const workspaces = await fetchWorkspaces();
-  const active = await fetchActiveWorkspace();
-  if (picker) picker.innerHTML = renderWorkspacePicker(workspaces, active);
-}
-
-// Wire the Workspace nav item, the workspace form, and clicks on picker
-// entries. Mirrors wireConfigNav's nav-click-opens-view shape while also
-// handling workspace selection (form submit and picker-item click share the
-// same result-handling closures below).
-function wireWorkspaceView() {
-  const nav = document.getElementById("workspace-nav");
-  if (nav) {
-    nav.addEventListener("click", async () => {
-      state.workspaceActive = true;
-      state.configActive = false;
-      state.commsActive = false;
-      _applyActiveView();
-      await loadWorkspaceView();
-    });
-  }
-
-  // Lazily created, memoized so repeated failures reuse the same element
-  // instead of appending a new one to the form each time.
-  let errorEl = null;
-  const getErrorEl = () => {
-    if (errorEl) return errorEl;
-    const form = document.getElementById("workspace-form");
-    if (!form) return null;
-    errorEl = document.createElement("span");
-    errorEl.id = "workspace-error";
-    errorEl.className = "config-error";
-    form.appendChild(errorEl);
-    return errorEl;
-  };
-
-  const applyResult = async (result) => {
-    if (result && result.ok) {
-      state.selectedWorkspace = result.path;
-      const el = getErrorEl();
-      if (el) el.innerHTML = "";
-      await loadWorkspaceView();
-    } else {
-      const el = getErrorEl();
-      if (el) el.innerHTML = escapeHtml((result && result.error) || "unknown error");
-    }
-  };
-
-  const form = document.getElementById("workspace-form");
-  if (form) {
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const input = document.getElementById("workspace-path-input");
-      const createBox = document.getElementById("workspace-create");
-      const result = await selectWorkspace(input ? input.value : "", !!(createBox && createBox.checked));
-      await applyResult(result);
-    });
-  }
-
-  const picker = document.getElementById("workspace-picker");
-  if (picker) {
-    picker.addEventListener("click", async (e) => {
-      const target = e && e.target;
-      const item = target && target.closest ? target.closest("[data-path]") : target;
-      const path = item && item.dataset ? item.dataset.path : undefined;
-      if (!path) return;
-      const result = await selectWorkspace(path, false);
-      await applyResult(result);
-    });
-  }
-}
 
 export { state, defaultFilters, loadFilters, saveFilters, STATUS_COLUMNS, BACKEND_VALUES, ESCALATED_VALUES, FILTERS_KEY } from "./state.js";
 

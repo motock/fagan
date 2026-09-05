@@ -154,6 +154,7 @@ async function bootstrapGlobals() {
 }
 
 let importSeq = 0;
+let wiringImportSeq = 0;
 async function loadWorkspaceModule() {
   await bootstrapGlobals();
   return import(`../static/app/workspace.js?picker=${++importSeq}`);
@@ -339,6 +340,259 @@ await run("index.html contains the workspace picker markup", async () => {
     );
   }
 });
+
+// ---------- wiring: nav click, picker render, select success/failure ----------
+//
+// These tests drive the wiring added to static/app/main.js: clicking
+// #workspace-nav, submitting #workspace-form, and clicking a rendered
+// picker entry. They need a document stub whose elements are STATEFUL
+// (the same object returned across repeated getElementById calls, with a
+// working classList/addEventListener/innerHTML) rather than the fresh-
+// element-per-call stub used above, so main.js's attached listeners are
+// observable and dispatchable. Bootstrapped by pointing the browser globals
+// at the wiring window and importing main.js with a unique cache-busting
+// query — NOT via the shared loadAppInto()/bootstrapGlobals() above, whose
+// app.js-only cache-bust would reuse the helper phase's main.js instance
+// (its listeners are bound to throwaway elements, and a failed helper-phase
+// evaluation would poison the bare-URL module for the whole process), so
+// wireWorkspaceView() wires listeners onto THESE tracked elements.
+//
+// Asserts only this story's additions (state.workspaceActive, the
+// workspace-nav/workspace-form/workspace-picker wiring) — never the total
+// contents of main.js or state.js.
+
+function makeTrackedElement(id) {
+  const classes = new Set();
+  const listeners = {};
+  const el = {
+    id,
+    style: {},
+    classList: {
+      add: (c) => classes.add(c),
+      remove: (c) => classes.delete(c),
+      toggle: (c, v) => (v === undefined ? (classes.has(c) ? classes.delete(c) : classes.add(c)) : (v ? classes.add(c) : classes.delete(c))),
+      contains: (c) => classes.has(c),
+    },
+    addEventListener: (evt, fn) => {
+      (listeners[evt] = listeners[evt] || []).push(fn);
+    },
+    removeEventListener: () => {},
+    // Invokes all listeners for evt and awaits any returned promises, so
+    // tests can `await dispatch(...)` and observe the handler's effects.
+    dispatch: (evt, evtObj) => Promise.all((listeners[evt] || []).map((fn) => fn(evtObj))),
+    appendChild: (child) => {
+      el.children.push(child);
+      return child;
+    },
+    setAttribute: () => {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    children: [],
+    innerHTML: "",
+    textContent: "",
+    value: "",
+    checked: false,
+    dataset: {},
+    closest: () => el,
+  };
+  return el;
+}
+
+const WIRING_TRACKED_IDS = [
+  "workspace-nav", "workspace-view", "workspace-picker", "workspace-form",
+  "workspace-path-input", "workspace-create", "comms-view", "plan-detail", "config-view",
+];
+
+async function bootstrapWiringApp() {
+  const elements = new Map();
+  for (const id of WIRING_TRACKED_IDS) elements.set(id, makeTrackedElement(id));
+  const noop = () => {};
+  let fetchImpl = async (url) => {
+    if (String(url).includes("/api/plans")) return jsonResponse(200, { plans: [] });
+    if (String(url).includes("/api/usage")) return jsonResponse(200, { available: false });
+    return jsonResponse(200, {});
+  };
+  const doc = {
+    getElementById: (id) => elements.get(id) || makeTrackedElement(`fallback:${id}`),
+    createElement: () => makeTrackedElement("created"),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    getElementsByClassName: () => [],
+    getElementsByTagName: () => [],
+    body: makeTrackedElement("body"),
+    documentElement: makeTrackedElement("documentElement"),
+    head: makeTrackedElement("head"),
+    title: "",
+    addEventListener: noop,
+    removeEventListener: noop,
+  };
+  const win = {
+    fetch: (url, opts) => fetchImpl(url, opts),
+    document: doc,
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop, clear: noop },
+    location: { href: "http://localhost/", pathname: "/", search: "", hash: "" },
+    matchMedia: () => ({ matches: false, addListener: noop, removeListener: noop }),
+    addEventListener: noop,
+    removeEventListener: noop,
+    requestAnimationFrame: () => 0,
+  };
+  win.window = win;
+  win.self = win;
+  // Mirror _app_js_loader.mjs's global wiring (these must stay set for the
+  // process lifetime), then force a FRESH main.js evaluation bound to this
+  // test's tracked elements — see the comment above.
+  globalThis.window = win;
+  for (const k of ["document", "localStorage", "fetch"]) globalThis[k] = win[k];
+  await import(`../static/app/main.js?wiring=${++wiringImportSeq}`);
+  const { state } = await import("../static/app/state.js");
+  return {
+    elements,
+    state,
+    setFetch: (fn) => {
+      fetchImpl = fn;
+    },
+  };
+}
+
+await run("state.workspaceActive exists and defaults to false", async () => {
+  const { state } = await bootstrapWiringApp();
+  assertTrue(
+    Object.prototype.hasOwnProperty.call(state, "workspaceActive"),
+    "state should have an own workspaceActive property",
+  );
+  assertEqual(state.workspaceActive, false, "state.workspaceActive default");
+});
+
+await run(
+  "clicking #workspace-nav sets workspaceActive, shows the view, and populates the picker",
+  async () => {
+    const { elements, state, setFetch } = await bootstrapWiringApp();
+    setFetch(async (url) => {
+      if (String(url).includes("/api/workspaces")) {
+        return jsonResponse(200, { workspaces: [{ path: "/tmp/alpha", valid: true }] });
+      }
+      if (String(url).includes("/api/workspace")) {
+        return jsonResponse(200, { active: "/tmp/alpha" });
+      }
+      return jsonResponse(200, {});
+    });
+    const nav = elements.get("workspace-nav");
+    const workspaceView = elements.get("workspace-view");
+    await nav.dispatch("click");
+    assertEqual(state.workspaceActive, true, "workspaceActive should be set true by the nav click");
+    assertTrue(
+      workspaceView.classList.contains("hidden") === false,
+      "getElementById('workspace-view') should be shown (hidden class removed)",
+    );
+    const picker = elements.get("workspace-picker");
+    assertTrue(
+      picker.innerHTML.includes("/tmp/alpha"),
+      "the picker should be populated via renderWorkspacePicker output",
+    );
+    assertTrue(
+      picker.innerHTML.toLowerCase().includes("(active)"),
+      "the active workspace should carry the active marker",
+    );
+  },
+);
+
+await run(
+  "a successful selectWorkspace (form submit) updates state and re-renders with the active marker",
+  async () => {
+    const { elements, state, setFetch } = await bootstrapWiringApp();
+    let selectCalls = 0;
+    setFetch(async (url, opts) => {
+      const u = String(url);
+      if (u.includes("/api/workspaces")) {
+        return jsonResponse(200, { workspaces: [{ path: "/tmp/beta", valid: true }] });
+      }
+      if (u === "/api/workspace" && (!opts || !opts.method || opts.method === "GET")) {
+        return jsonResponse(200, { active: "/tmp/beta" });
+      }
+      if (u === "/api/workspace" && opts && opts.method === "POST") {
+        selectCalls += 1;
+        return jsonResponse(200, { ok: true, path: "/tmp/beta", error: null });
+      }
+      return jsonResponse(200, {});
+    });
+    const input = elements.get("workspace-path-input");
+    input.value = "/tmp/beta";
+    const form = elements.get("workspace-form");
+    await form.dispatch("submit", { preventDefault: () => {} });
+    assertEqual(selectCalls, 1, "selectWorkspace should POST to /api/workspace once");
+    assertEqual(state.selectedWorkspace, "/tmp/beta", "state.selectedWorkspace should be updated on success");
+    const picker = elements.get("workspace-picker");
+    assertTrue(
+      picker.innerHTML.toLowerCase().includes("(active)"),
+      "re-render after a successful select should mark the workspace active",
+    );
+  },
+);
+
+await run(
+  "a failed selectWorkspace (form submit) surfaces the escaped error and leaves state unchanged",
+  async () => {
+    const { elements, state, setFetch } = await bootstrapWiringApp();
+    setFetch(async (url, opts) => {
+      const u = String(url);
+      if (u.includes("/api/workspaces")) return jsonResponse(200, { workspaces: [] });
+      if (u === "/api/workspace" && (!opts || !opts.method || opts.method === "GET")) {
+        return jsonResponse(200, {});
+      }
+      if (u === "/api/workspace" && opts && opts.method === "POST") {
+        return jsonResponse(400, { detail: `bad <path> for "you"` });
+      }
+      return jsonResponse(200, {});
+    });
+    const input = elements.get("workspace-path-input");
+    input.value = "/not/a/repo";
+    const form = elements.get("workspace-form");
+    await form.dispatch("submit", { preventDefault: () => {} });
+    assertEqual(
+      state.selectedWorkspace,
+      null,
+      "a failed select must not change state.selectedWorkspace",
+    );
+    const formChild = form.children.find((c) => c.id === "workspace-error");
+    assertTrue(formChild != null, "a #workspace-error element should be created inside the form");
+    assertTrue(
+      !formChild.innerHTML.includes("<path>"),
+      "the error message must be HTML-escaped, not injected raw",
+    );
+    assertTrue(
+      formChild.innerHTML.includes("&lt;path&gt;"),
+      "the escaped error text should be present",
+    );
+  },
+);
+
+await run(
+  "clicking a picker item with data-path selects that workspace",
+  async () => {
+    const { elements, state, setFetch } = await bootstrapWiringApp();
+    let postedBody = null;
+    setFetch(async (url, opts) => {
+      const u = String(url);
+      if (u.includes("/api/workspaces")) return jsonResponse(200, { workspaces: [] });
+      if (u === "/api/workspace" && (!opts || !opts.method || opts.method === "GET")) {
+        return jsonResponse(200, {});
+      }
+      if (u === "/api/workspace" && opts && opts.method === "POST") {
+        postedBody = JSON.parse(opts.body);
+        return jsonResponse(200, { ok: true, path: postedBody.path, error: null });
+      }
+      return jsonResponse(200, {});
+    });
+    const picker = elements.get("workspace-picker");
+    const item = makeTrackedElement("li");
+    item.dataset.path = "/tmp/gamma";
+    await picker.dispatch("click", { target: item });
+    assertTrue(postedBody != null, "selectWorkspace should have POSTed");
+    assertEqual(postedBody.path, "/tmp/gamma", "the clicked item's data-path should be selected");
+    assertEqual(postedBody.create, false, "picker-item selection should never pass create:true");
+    assertEqual(state.selectedWorkspace, "/tmp/gamma", "state.selectedWorkspace should update");
+  },
+);
 
 // ---------- summary ----------
 

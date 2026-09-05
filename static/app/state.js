@@ -37,6 +37,7 @@ window.state = {
   showArchived: false,
   commsActive: true,
   configActive: false,
+  workspaceActive: false,
 };
 
 const FILTERS_KEY = "pipeline-dashboard-filters";
@@ -56,6 +57,7 @@ function resetState() {
   state.showArchived = false;
   state.commsActive = true;
   state.configActive = false;
+  state.workspaceActive = false;
 }
 
 function loadFilters() {

@@ -21,6 +21,7 @@ class IngestPlanRequest(BaseModel):
 
 class DecomposeRequest(BaseModel):
     request: str
+    workspace: str | None = None
 
 
 class DecisionRequest(BaseModel):

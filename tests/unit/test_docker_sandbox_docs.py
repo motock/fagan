@@ -567,21 +567,27 @@ class TestRemoteExecutionStubDoc:
     def test_remote_execution_doc_is_not_empty(self):
         assert len(_remote_execution_doc_text().strip()) > 0
 
-    def test_remote_execution_doc_states_not_implemented(self):
+    def test_remote_execution_doc_states_implemented(self):
+        # B1 (pipeline/execution.py's _spawn_ssh) landed the real ssh
+        # execution path; the doc's own §1 Status section must say so,
+        # not the pre-B1 "not implemented" stub language this test used
+        # to pin.
         text = _remote_execution_doc_text().lower()
-        assert "not implemented" in text, (
+        assert "implemented" in text, (
             "docs/specs/REMOTE_EXECUTION.md must plainly state that "
-            "remote/ssh execution is not yet implemented"
+            "remote/ssh execution is implemented (B1)"
         )
 
-    def test_remote_execution_doc_quotes_the_exact_not_implemented_error_message(self):
+    def test_remote_execution_doc_names_the_spawn_harness_entrypoint(self):
+        # Ground truth: pipeline/execution.py's spawn_harness is the real
+        # entrypoint that hands off to _spawn_ssh for ssh mode - the doc
+        # must name it so the architecture description stays accurate now
+        # that there is no NotImplementedError stub message left to quote.
         text = _remote_execution_doc_text()
-        # Ground truth: the exact message spawn_harness raises for ssh mode
-        # (pipeline/execution.py's _SSH_NOT_IMPLEMENTED_MSG).
-        assert "ssh execution is not implemented yet (B1 later story)" in text, (
-            "docs/specs/REMOTE_EXECUTION.md must quote the exact "
-            "NotImplementedError message raised by spawn_harness for ssh "
-            "mode, so the stub stays accurate as ground truth"
+        assert "spawn_harness" in text and "_spawn_ssh" in text, (
+            "docs/specs/REMOTE_EXECUTION.md must name spawn_harness and "
+            "_spawn_ssh (pipeline/execution.py) as the real ssh-mode "
+            "entrypoints, now that B1 has implemented them"
         )
 
     def test_remote_execution_doc_names_the_trigger_env_var_pattern(self):

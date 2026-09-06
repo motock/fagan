@@ -281,27 +281,32 @@ def test_activity_just_over_stale_threshold_terminates_as_stale(
     assert int(match.group(1)) >= STALE_SECONDS
 
 
-def test_activity_just_under_stale_threshold_falls_back_to_backstop(
+def test_activity_just_under_stale_threshold_keeps_running(
         watchdog_env, tmp_path):
-    """Boundary (just under): age slightly <= STALE_SECONDS is NOT stale;
-    with elapsed past the ceiling the wall-clock backstop fires with the
-    OLD summary, exactly as today."""
+    """Boundary (just under): age slightly <= STALE_SECONDS is NOT stale, so
+    Rule 1 doesn't fire. Rule 2's backstop is documented as covering
+    "activity_age_seconds being None" (unknown liveness) - it must NOT
+    override a KNOWN, not-yet-stale activity signal just because elapsed is
+    also past the ceiling, or the whole feature's stated purpose ("kill on
+    stale activity INSTEAD OF absolute wall clock... terminating live
+    dispatches that were making steady progress") is defeated for any story
+    whose activity happens to sit just under the stale threshold.
+
+    Corrected 2026-09-05: this test previously asserted the opposite
+    (backstop fires here) via `activity_age is None` removed from Rule 2's
+    guard, which broke the sibling `test_fresh_activity_past_old_ceiling_
+    keeps_running` - that test is unambiguously the feature's own headline
+    "THE FIX" case (fresh/known-non-stale activity must survive an elapsed
+    ceiling that would otherwise kill it), so this boundary case must agree
+    with it rather than the reverse."""
     story = _make_story(tmp_path, dispatched_seconds_ago=7200,
                         log_age_seconds=1780)
     _write_manifest(watchdog_env.plan_dir, watchdog_env.plan_name, story)
 
     result = story_status.check_story_status(watchdog_env.plan_name, STORY_KEY)
 
-    assert result == {
-        "status": "interrupted",
-        "pid": os.getpid(),
-        "watchdog_killed": True,
-    }
-    assert len(watchdog_env.terminate_calls) == 1
-    call = watchdog_env.terminate_calls[0]
-    assert call["step"] == "dispatch_watchdog_timeout"
-    assert "stale-activity" not in (call["summary"] or "")
-    assert re.search(BACKSTOP_SUMMARY_RE, call["summary"] or ""), call["summary"]
+    assert result == {"status": "running", "pid": os.getpid()}
+    assert watchdog_env.terminate_calls == []
 
 
 def test_missing_activity_signal_past_ceiling_terminates_as_today(

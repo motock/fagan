@@ -674,7 +674,14 @@ class TestPositiveControls:
             with pytest.raises(ValueError):
                 normalize_workspace_path(bad)  # type: ignore[arg-type]
 
-    def test_http_happy_path_still_works(self, tmp_path):
+    def test_http_happy_path_still_works(self, tmp_path, plan_dir):
+        # plan_dir is required here: without it, create=True's POST
+        # /api/workspace genuinely writes active_workspace.json into the
+        # real, unmocked PLAN_DIR (found live 2026-09-05 - this test had
+        # left a stale reference to a since-deleted pytest tmp_path
+        # sitting in the real ~/.claude/plans/active_workspace.json,
+        # polluting any later, unrelated test/production read of the
+        # active workspace).
         from fastapi.testclient import TestClient
 
         from app import dashboard as d

@@ -454,10 +454,19 @@ def test_check_story_status_watchdog_timeout_invokes_rebrief_step_cap_struggle(
     worktree, and the plan's role_config/plan_name/story_key BEFORE the
     manifest is written, so the resume isn't blind. Mirrors the step-cap
     branch's own call byte-for-byte (same helper, same arguments)."""
+    # Since ACTIVITY-WATCHDOG (#578), the watchdog kills on STALE ACTIVITY
+    # first (wall-clock is only a backstop for unknown activity) - so
+    # agent.log must actually look stale, not merely be old wall-clock-wise,
+    # for this scenario to terminate at all. Stub the stale-activity
+    # threshold well under the log's age so Rule 1 fires.
     monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 60)
+    monkeypatch.setattr(p, "DISPATCH_STALE_ACTIVITY_SECONDS", 60)
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    (worktree / "agent.log").write_text("Working on it...\n")
+    agent_log = worktree / "agent.log"
+    agent_log.write_text("Working on it...\n")
+    old_mtime = time.time() - 120
+    os.utime(agent_log, (old_mtime, old_mtime))
     old_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
     _write_manifest(plan_dir, "wdrebrief", {
         "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,
@@ -521,14 +530,21 @@ def test_check_story_status_watchdog_timeout_diagnosis_lands_in_agent_instructio
     _terminate_and_checkpoint are exactly as diagnosable as the step-cap
     path's. This verifies the real _rebrief_step_cap_struggle runs (not just a
     spy) and folds the diagnosis into the persisted manifest."""
+    # See the sibling test above: the watchdog now kills on stale activity
+    # first, so agent.log must actually be stale (not just wall-clock old)
+    # for this scenario to terminate.
     monkeypatch.setattr(p, "DISPATCH_WATCHDOG_SECONDS", 60)
+    monkeypatch.setattr(p, "DISPATCH_STALE_ACTIVITY_SECONDS", 60)
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    (worktree / "agent.log").write_text(
+    agent_log = worktree / "agent.log"
+    agent_log.write_text(
         "Working on it...\n"
         "[step 3] bash: pytest -q\n"
         "stuck in a loop re-running the same failing test\n"
     )
+    old_mtime = time.time() - 120
+    os.utime(agent_log, (old_mtime, old_mtime))
     old_dispatched_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
     _write_manifest(plan_dir, "wddiag", {
         "S1": {"summary": "thing", "status": "in_progress", "pid": 4242,

@@ -93,38 +93,29 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 elapsed = (
                     datetime.now(timezone.utc) - datetime.fromisoformat(dispatched_at)
                 ).total_seconds()
-# Determine if activity is stale
+                # Determine if activity is stale
                 signals = collect_story_wedge_signals(plan_name, story_key, story)
                 activity_age = signals.get("activity_age_seconds")
+                watchdog_summary = None
+                dispatch_error = None
                 if activity_age is not None and activity_age > DISPATCH_STALE_ACTIVITY_SECONDS:
-                    _terminate_and_checkpoint(
-                        manifest,
-                        manifest_path,
-                        plan_name,
-                        story_key,
-                        story,
-                        pid=pid,
-                        step="dispatch_watchdog_timeout",
-                        summary=(
-                            f"Dispatch watchdog: no activity for {activity_age:.0f}s; process terminated."
-                        ),
+                    watchdog_summary = (
+                        f"Dispatch watchdog: no activity for {activity_age:.0f}s "
+                        f"(stale-activity watchdog); elapsed {elapsed:.0f}s; "
+                        f"process terminated."
                     )
-                    _rebrief_step_cap_struggle(  # noqa: F821
-                        story, str(Path(story["worktree"])),
-                        plan_role_config=manifest.get("role_config"),
-                        plan_name=plan_name,
-                        story_key=story_key)
-                    story["dispatch_error"] = (
+                    dispatch_error = (
                         f"watchdog killed after {activity_age:.0f}s with no activity"
                     )
-                    _atomic_write_json(manifest_path, manifest)
-                    return {
-                        "status": "interrupted",
-                        "pid": pid,
-                        "watchdog_killed": True,
-                    }
                 # Fallback to wall-clock watchdog if activity is unknown or not stale
-                if activity_age is None and elapsed > DISPATCH_WATCHDOG_SECONDS:
+                elif activity_age is None and elapsed > DISPATCH_WATCHDOG_SECONDS:
+                    watchdog_summary = (
+                        f"Dispatch watchdog: no completion after {elapsed:.0f}s; process terminated."
+                    )
+                    dispatch_error = (
+                        f"watchdog killed after {elapsed:.0f}s with no completion"
+                    )
+                if watchdog_summary is not None:
                     _terminate_and_checkpoint(
                         manifest,
                         manifest_path,
@@ -133,18 +124,14 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         story,
                         pid=pid,
                         step="dispatch_watchdog_timeout",
-                        summary=(
-                            f"Dispatch watchdog: no completion after {elapsed:.0f}s; process terminated."
-                        ),
+                        summary=watchdog_summary,
                     )
                     _rebrief_step_cap_struggle(  # noqa: F821
                         story, str(Path(story["worktree"])),
                         plan_role_config=manifest.get("role_config"),
                         plan_name=plan_name,
                         story_key=story_key)
-                    story["dispatch_error"] = (
-                        f"watchdog killed after {elapsed:.0f}s with no completion"
-                    )
+                    story["dispatch_error"] = dispatch_error
                     _atomic_write_json(manifest_path, manifest)
                     return {
                         "status": "interrupted",

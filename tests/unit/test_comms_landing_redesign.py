@@ -67,7 +67,15 @@ _UNCHANGED_JS_SHA256 = {
     # `import { renderMaturityPanel } from "./render/maturity.js";`
     # registration to main.js, so the pre-story pin no longer matched the
     # committed file. This story never touched main.js itself.
-    MAIN_JS: "2ad934f5a417cc0d7bd06d39793d0b84e1b1853b8d30b6c4e142fe86ae401743",
+    # Re-pinned for the workspace-picker-wiring story (3c5e36b4, 2026-09-06):
+    # that story's whole job was to wire the workspace picker into main.js
+    # (import fetchWorkspaces/selectWorkspace/fetchActiveWorkspace/
+    # renderWorkspacePicker from workspace.js; extend _applyActiveView and
+    # selectOverview/selectComms/selectPlan for state.workspaceActive; add
+    # loadWorkspaceView()/wireWorkspaceView()), so main.js is legitimately no
+    # longer byte-identical to this story's pre-implementation baseline.
+    # See test_main_js_untouched's own updated assertion below.
+    MAIN_JS: "9dee0f204996e367e48fe29ef058a00b9c6b73025e8782108ccdbd2f6aea81df",
 }
 
 EXPECTED_CHIP_MESSAGES = {

@@ -31,6 +31,7 @@ import { renderMaturityPanel } from "./render/maturity.js";
 import { renderDecisions } from "./render/decisions.js";
 import { renderOverview, _diffOverviewPlanRows } from "./render/overview.js";
 import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle, resetCommsThread } from "./comms.js";
+import { fetchWorkspaces, selectWorkspace, fetchActiveWorkspace, renderWorkspacePicker } from "./workspace.js";
 import { renderUsage } from "./usage.js";
 
 // plan-list.js/plan-detail.js/story-modal.js/notifications.js can't
@@ -83,6 +84,7 @@ function flashRefreshIndicator() {
 function selectOverview() {
   state.commsActive = false;
   state.configActive = false;
+  state.workspaceActive = false;
   state.selectedPlan = null;
   updateHash();
   const nav = document.getElementById("plan-list");
@@ -104,6 +106,7 @@ function selectOverview() {
 function selectComms() {
   state.commsActive = true;
   state.configActive = false;
+  state.workspaceActive = false;
   state.selectedPlan = null;
   updateCommsSubtitle();
   updateHash();
@@ -124,6 +127,7 @@ function selectComms() {
 async function selectPlan(name) {
   state.commsActive = false;
   state.configActive = false;
+  state.workspaceActive = false;
   state.selectedPlan = name;
   updateHash();
   await refresh();
@@ -135,19 +139,28 @@ function _applyActiveView() {
   const commsEl = document.getElementById(COMMS_VIEW_ID);
   const planDetailEl = document.getElementById("plan-detail");
   const configEl = document.getElementById("config-view");
+  const workspaceEl = document.getElementById("workspace-view");
   if (!commsEl || !planDetailEl || !configEl) return;
   if (state.configActive) {
     configEl.classList.remove("hidden");
+    commsEl.classList.add("hidden");
+    planDetailEl.classList.add("hidden");
+    if (workspaceEl) workspaceEl.classList.add("hidden");
+  } else if (state.workspaceActive) {
+    if (workspaceEl) workspaceEl.classList.remove("hidden");
+    configEl.classList.add("hidden");
     commsEl.classList.add("hidden");
     planDetailEl.classList.add("hidden");
   } else if (state.commsActive) {
     configEl.classList.add("hidden");
     commsEl.classList.remove("hidden");
     planDetailEl.classList.add("hidden");
+    if (workspaceEl) workspaceEl.classList.add("hidden");
   } else {
     configEl.classList.add("hidden");
     commsEl.classList.add("hidden");
     planDetailEl.classList.remove("hidden");
+    if (workspaceEl) workspaceEl.classList.add("hidden");
   }
 }
 
@@ -356,10 +369,12 @@ if (typeof module !== "undefined" && module.exports) {
     _saveRoleConfig,
     _wireBackendSelector,
     loadRegistry,
+    loadWorkspaceView,
+    wireWorkspaceView,
   };
 }
 
-export { loadRegistry };
+export { loadRegistry, loadWorkspaceView, wireWorkspaceView };
 
 
 // ---------------------------------------------------------------------------
@@ -631,6 +646,88 @@ function _wireBackendSelector() {
   item.addEventListener("click", () => renderConfigView());
   nav.appendChild(item);
 })();
+
+// ---------------------------------------------------------------------------
+// Workspace picker view (3c5e36b4)
+// ---------------------------------------------------------------------------
+// Fetch the workspace list + currently active workspace and render the
+// picker. Called on nav-open and again after a successful select so the
+// (active) marker always reflects the backend's confirmed state.
+async function loadWorkspaceView() {
+  const picker = document.getElementById("workspace-picker");
+  if (!picker) return;
+  const [workspaces, active] = await Promise.all([
+    fetchWorkspaces(),
+    fetchActiveWorkspace(),
+  ]);
+  picker.innerHTML = renderWorkspacePicker(workspaces, active);
+}
+
+// Wire the Workspace nav item (in #workspace-nav), the workspace-form
+// select/create submit, and picker-item clicks. Mirrors wireConfigNav()'s
+// nav-item pattern above.
+function wireWorkspaceView() {
+  const nav = document.getElementById("workspace-nav");
+  if (nav) {
+    const item = document.createElement("div");
+    item.className = "plan-item config-item";
+    item.innerHTML = `<div class="plan-name">Workspace</div><div class="plan-meta">active repo</div>`;
+    nav.appendChild(item);
+    // Listener lives on the nav container itself (not the rendered item),
+    // so a click anywhere in #workspace-nav opens the view.
+    nav.addEventListener("click", async () => {
+      state.workspaceActive = true;
+      state.commsActive = false;
+      state.configActive = false;
+      updateHash();
+      _applyActiveView();
+      await loadWorkspaceView();
+    });
+  }
+
+  const form = document.getElementById("workspace-form");
+  if (form) {
+    let errorEl = null;
+    form.addEventListener("submit", async (evt) => {
+      if (evt && typeof evt.preventDefault === "function") evt.preventDefault();
+      const input = document.getElementById("workspace-path-input");
+      const createEl = document.getElementById("workspace-create");
+      const path = input ? input.value : "";
+      const create = !!(createEl && createEl.checked);
+      const result = await selectWorkspace(path, create);
+      if (result && result.error) {
+        if (!errorEl) {
+          errorEl = document.createElement("div");
+          errorEl.id = "workspace-error";
+          form.appendChild(errorEl);
+        }
+        errorEl.innerHTML = escapeHtml(result.error);
+        return;
+      }
+      if (errorEl) errorEl.innerHTML = "";
+      state.selectedWorkspace = path;
+      await loadWorkspaceView();
+    });
+  }
+
+  const picker = document.getElementById("workspace-picker");
+  if (picker) {
+    picker.addEventListener("click", async (evt) => {
+      const target = evt && evt.target;
+      const li = target && typeof target.closest === "function"
+        ? target.closest("[data-path]")
+        : target;
+      const path = li && li.dataset ? li.dataset.path : undefined;
+      if (!path) return;
+      const result = await selectWorkspace(path, false);
+      if (result && !result.error) {
+        state.selectedWorkspace = path;
+        await loadWorkspaceView();
+      }
+    });
+  }
+}
+wireWorkspaceView();
 
 _wireBackendSelector();
 

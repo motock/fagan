@@ -156,7 +156,7 @@ def test_decompose_with_empty_string_workspace_is_forwarded_not_fallback(
 # No workspace anywhere: plan returned exactly as authored
 # ---------------------------------------------------------------------------
 
-def test_decompose_with_no_workspace_returns_plan_as_authored(client):
+def test_decompose_with_no_workspace_returns_plan_as_authored(client, plan_dir):
     res = client.post("/api/decompose", json={"request": "goal"})
 
     assert res.status_code == 200

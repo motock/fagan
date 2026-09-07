@@ -1,9 +1,14 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **In execution (last updated 2026-08-29).** W3a, W1a, W1b, W1c, W2,
-> W3b, `server-app-file-split`, and `workspace-selection` are all done and
-> merged. `comms-ui-design-alignment` (Comms nav/hero/toast polish) also landed
-> on top of the split modules.
+> Status: **In execution (last updated 2026-09-07).** W3a, W1a, W1b, W1c, W2,
+> W3b, `server-app-file-split`, `workspace-selection`, `local-agent-file-split`,
+> `b5-export-the-moat`, `w4-logging-correlation`, `a3-maturity-metrics`,
+> `a4-non-author-usability`, `b1-sandbox-and-harness-seam`,
+> `b1-remote-execution`, and `workspace-picker-wiring` are all done and merged.
+> `comms-ui-design-alignment` (Comms nav/hero/toast polish) also landed
+> on top of the split modules. Only **W4 (multi-tenant/enterprise)** remains
+> undone in this document's scope — see the updated "Suggested sequencing"
+> section below for the full 2026-09-07 status of every workstream.
 > **`workspace-selection` (13 stories, PRs #475, #476, #482, #485-#491, #494,
 > #496, #497 — plus the `workspace-security-followups` plan, WS-SEC-01/02,
 > PRs #489/#492) DONE 2026-08-29:** the last piece of the chat entry point's
@@ -166,7 +171,7 @@ misconfiguration incidents.
               ┌─────────────────┴──────────────────┐
               │  adapters (thin, no logic)         │
               │  • FastAPI HTTP + SSE/WebSocket    │
-              │  • FastMCP stdio  (existing tools) │
+              │  • MCP stdio  (existing tools)     │
               └─────────────────┬──────────────────┘
                                 │
               ┌─────────────────┴──────────────────┐
@@ -389,10 +394,24 @@ stories, PRs #318-#346) put `_notify_user` events onto a structured,
 process-wide bus with a file-log sink and a JSONL sidecar, and the dashboard
 now serves/dedup-collapses/filters those as structured records, including
 per-story rendering. That's a real piece of "structured logs with a stable
-field set," but it's notification events only — it doesn't mint a
+field set," but it was notification events only — it didn't mint a
 correlation ID or carry one through dispatch → review → rework → merge, and
-the dispatched agent's own `agent.log` subprocess output is still off the
-bus. This bullet stays open.
+the dispatched agent's own `agent.log` subprocess output was still off the
+bus.
+
+**DONE 2026-09-01 — plans `w4-logging-correlation` (5 stories) +
+`w4lcorr-lock-isolation` (1 story).** The notification-record schema grew an
+optional `correlation_id` field (plus attempt/role/provider/model context);
+dispatch mints one per story, persists it on the manifest, injects it into
+the agent subprocess env, and stamps its own events with it; the dispatched
+agent's own `agent.log`/transcript records now carry
+`PIPELINE_CORRELATION_ID` too (`scripts/local_agent.py`); and review,
+rework, escalation, and merge events are all stamped with the story's
+correlation ID. A story's full dispatch → review → rework → merge chain is
+now joinable by one ID across every log source, including the agent
+subprocess. This bullet is closed, and it directly unblocked the maturity
+plan's "cost per merged story" metric (see A3, DONE 2026-09-05 via
+`a3-maturity-metrics`).
 
 ---
 
@@ -570,23 +589,43 @@ The dependency order is fairly rigid:
    #496, #497 (plus `workspace-security-followups`, PRs #489/#492). See the
    top-of-doc status note. With this, a new user goes from "open the
    dashboard" to "plans dispatching" entirely in the browser — Claude Code
-   is one client, not the entry point (Goal 1).
-9. **Re-split `scripts/local_agent.py`/`local_agent_oracle.py`.** **PARTIAL,
-   2026-08-27, direct (no pipeline)** — config constants + tool schemas
-   extracted (1,723→1,530 / 1,599→1,436 lines); `run_tool`/transport/
-   `_main_impl` remain, blocked on the same `_ServerRef`-proxy rigor
-   `server-app-file-split` used, applied per-function. See scaling concern
-   #5 above for detail. Scoped follow-up, not force-completed same-session.
+   is one client, not the entry point (Goal 1). **Correction, found
+   2026-09-02:** the "picker wired into the chat UI" half of this claim was
+   overstated — `static/app/workspace.js` was imported by nothing, there was
+   no persistent active-workspace state, no frontend sent `workspace` in a
+   chat request, and neither `save_plan` caller threaded it through, so
+   WS-11's repo_root guard never actually fired for chat-authored plans.
+   Filed as `workspace-picker-wiring`; see step 8b.
+8b. **`workspace-picker-wiring` — close the 2026-09-02 gaps above.** **DONE
+   2026-09-07, 12 stories.** `GET /api/workspace` + active-workspace
+   recording, `repo_root` stamped on decompose drafts, `workspace` threaded
+   through `save_plan`'s HTTP route, the picker actually wired into
+   `static/app/main.js`, the active-workspace surface hardened against a
+   hostile durable record, and the selected workspace sent in the chat
+   `POST` body. Goal 1 is now genuinely, not just structurally, complete.
+9. **Re-split `scripts/local_agent.py`/`local_agent_oracle.py`.** **DONE
+   2026-08-31, plan `local-agent-file-split` (9 stories)** — both scripts
+   landed under 1,000 lines (999 / 947) via the `_ServerRef`-proxy pattern
+   applied per-cluster. See scaling concern #5 above for the module list.
+9b. **B1 (Docker sandbox, remote execution, agent-harness seam), B4
+   (correlation-ID logging, wedge detection, replay UI), B5 (overlord-policy
+   + acceptance-oracle specs, companion MCP server), and A3/A4 (maturity
+   metrics dashboard, install/preflight/getting-started smoke) from
+   `MATURITY_AND_UNIQUENESS_PLANS.md` — all DONE 2026-09-01 through
+   2026-09-05.** These were sequenced in that document (not this one, which
+   only tracks W1-W4); see its "Suggested ordering" section for the
+   plan-by-plan breakdown and the live-host-validation caveat on the Docker
+   sandbox and remote-execution work.
 10. **W4 — enterprise topology** (`PostgresStore`, leases, auth, structured logs),
    only where there's a real second deployment to validate against. Building it
    speculatively against an imagined tenant is exactly the over-engineering the
-   project's own standards warn about.
+   project's own standards warn about. **The only workstream this document
+   still tracks as undone, as of 2026-09-07.**
 
-Steps 1–8 are worth doing even if enterprise never happens: they're what make the
-system usable without a Claude Code session open, which is the stated goal. Steps
-7 and 9 are the change-scaling debt those workstreams accrued, and are worth
-doing on the same grounds — it's what keeps the files every future workstream
-touches editable.
+Steps 1–8b are worth doing even if enterprise never happens: they're what make
+the system usable without a Claude Code session open, which is the stated goal.
+Step 9 was the change-scaling debt those workstreams accrued, done on the same
+grounds — it's what keeps the files every future workstream touches editable.
 
 ---
 
@@ -636,27 +675,40 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   → ~~**`server-app-file-split` (split the two monolith files)**~~ **DONE
   2026-08-25, 22 stories, PRs #435-#457** → ~~**`workspace-selection` (chat
   entry point's new-user path — completes Goal 1)**~~ **DONE 2026-08-29, 13
-  stories, PRs #475-#497 (+ security followups #489/#492)** → **re-split
-  `local_agent.py`/`local_agent_oracle.py` (same concern recurring; config
-  extracted 2026-08-27, run_tool/`_main_impl` split remains as a scoped
-  follow-up)** → W4 (multi-tenant, closes B3), with B1
-  (sandboxing) and B5 (export the moat) picked up after the service seam
-  exists rather than before it — the seam now exists (W1a/W1b landed), so
-  B1/B5 are unblocked whenever they're prioritized ahead of W4.
-  Rationale: B1/B5 don't unblock anything else, while W1 was the single
+  stories, PRs #475-#497 (+ security followups #489/#492)** → ~~**re-split
+  `local_agent.py`/`local_agent_oracle.py`**~~ **DONE 2026-08-31, 9 stories
+  (`local-agent-file-split`)** → ~~**B5 (export the moat)**~~ **DONE
+  2026-09-01, 3 stories, PRs #517/#519/#520** → ~~**W4's correlation-ID
+  logging item**~~ **DONE 2026-09-01, 6 stories** → ~~**A3's
+  guard-liveness/recurrence/cost-per-story signals**~~ **DONE 2026-09-05, 9
+  stories, unblocked by the correlation-ID work** → ~~**A4's
+  install/preflight/getting-started smoke**~~ **DONE 2026-09-03, 9 stories**
+  → ~~**B1 (Docker sandbox + remote execution + agent-harness seam)**~~
+  **DONE 2026-09-05, 16 stories across two plans** → ~~**workspace-picker
+  gaps found 2026-09-02**~~ **DONE 2026-09-07, 12 stories
+  (`workspace-picker-wiring`)** → **W4 (multi-tenant, closes B3)** — the
+  only workstream still open, as of 2026-09-07.
+  Rationale: B1/B5 didn't unblock anything else, while W1 was the single
   prerequisite blocking B3, B4, and the UI-entry-point goal simultaneously —
-  front-loading it retired the most dependent work fastest.
+  front-loading it retired the most dependent work fastest. With B1/B4/B5/A3/
+  A4 all now landed, W4 (real multi-tenancy) is the only remaining item this
+  ordering rationale was ever building toward.
 
 ### Items each doc has that the other should borrow
 
 - **From maturity → here:** B4's *stuck-agent / wedge detection* as a
   first-class health signal belongs in W4. `os.kill(pid, 0)` cannot detect a
   zombie worker, and lease-based liveness (W4) is the natural place to fix it.
-- **From here → maturity:** A3's "bound the failure-mode discovery rate" is
-  trending the wrong way (19 → 50+). W4's structured logging with a correlation
-  ID carried dispatch → review → rework → merge is the tooling that makes that
-  trend analyzable rather than archaeological — every retro today is
-  hand-reconstructed from five separate log files.
+- **From here → maturity:** A3's "bound the failure-mode discovery rate" was
+  reframed 2026-08-06 into recurrence + guard-liveness + cost-per-story
+  signals, and W4's structured logging with a correlation ID carried
+  dispatch → review → rework → merge (**DONE 2026-09-01**, above) was the
+  tooling those signals needed to become measurable rather than
+  archaeological. That dependency is now resolved: `a3-maturity-metrics`
+  (**DONE 2026-09-05**) shipped the guard-liveness CLI runner, recurrence
+  alerts, and per-story/per-plan cost metrics computed from the now
+  correlation-ID-bearing notification JSONL, all surfaced on a dashboard
+  panel.
 
 ---
 

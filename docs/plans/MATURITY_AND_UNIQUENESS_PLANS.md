@@ -263,20 +263,26 @@ Reference comparables:
       still exist and get collected) is now checkable by re-running the same
       grep pattern periodically; recurrence detection is unblocked by the
       Mode/Status columns from the prior step.
-- [ ] **Replace the count with two signals that are actually actionable.**
+- [x] **Replace the count with two signals that are actually actionable —
+      DONE 2026-09-05, plan `a3-maturity-metrics` (9 stories).**
       - **Recurrence, not discovery.** A *new* mode is the system working as
         intended; a *fixed* mode reappearing is the real failure. Precedent
         for guards silently disarming exists: Mode 46 shipped a regression
         file CI never collected, and `tests/unit/test_conftest_env_isolation.py`
         was written precisely because deleting the load-bearing conftest lines
-        would not otherwise break CI.
-      - **Guard liveness.** Data now exists (25/51 confirmed paths above);
-        turning the periodic re-check into an actual automated gate (vs. a
-        one-off manual pass) is the remaining step.
+        would not otherwise break CI. Shipped: `pipeline/guard_liveness.py`
+        (pure guard-path parsing + a dataset/repo-tree checker, PRs #527/#552)
+        and a CLI runner that re-collects each cited test under pytest and
+        raises recurrence alerts (PR #557) — the "one-off manual grep" from
+        the 2026-08-06 audit is now an automated, repeatable check.
+      - **Guard liveness.** Now a live dashboard surface, not just a dataset:
+        `GET` plan-metrics/guard-liveness endpoints (PR #572) and a maturity
+        metrics + guard-liveness panel on the dashboard frontend (PR #577).
       - **Cost per merged story** (wasted dispatches, rework cycles, direct
-        repairs) is the metric that would actually show maturity improving,
-        and it is blocked on B4's structured-logs + correlation-ID item. The
-        two should be sequenced together, not tracked as independent work.
+        repairs) — unblocked by B4's correlation-ID item landing 2026-09-01
+        (see below) and shipped in the same plan: per-story/per-plan metrics
+        computed from the now-correlation-ID-bearing notification JSONL
+        records (PR #559), surfaced through the same dashboard panel.
 - [x] **Latent, found while auditing the above (2026-08-06): the `testpaths`
       allowlist is badly stale.** `pyproject.toml` pins **23** files while
       `tests/unit/` holds **104** — a bare `pytest` collects ~22% of the
@@ -517,20 +523,36 @@ stories (TDD-split stays strictly read-only). Tests in
       the removal report, closing the gap the old unscoped
       `confirm_removals=true` escape hatch left. See memory
       `project_dispatch_failure_modes` Modes 54/55 for full detail.
-- [ ] **Get CI to an enforced green baseline and tag a real release.** 703
-      commits, no real release tags (only a `w1c02-backup` checkpoint tag) —
-      adoption starts with "what version."
+- [ ] **Get CI to an enforced green baseline and tag a real release.** 900+
+      commits (2026-09-07), no real release tags (only a `w1c02-backup`
+      checkpoint tag) — adoption starts with "what version." **Still blocked
+      on the GitHub Actions billing cap, and it is not durably fixed even
+      when it looks fixed**: plan `ci-green-after-billing-reset` (3 stories,
+      2026-09-02) responded to what looked like a billing reset, but the
+      identical "recent account payments have failed" annotation recurred
+      2026-09-03 and again 2026-09-05 on every job (see
+      `project_gha_billing_block_ci_gate` memory) — a manual account-level
+      fix by the account owner is the only real resolution. Manual local
+      suite + `gh pr merge` remains the operating mode until then.
 
 ### A4. Make it usable by someone who isn't the author
 
-- [ ] **One-command install story** for a fresh, non-author clone (the
-      `.venv-mlx`, launchd plists, and absolute-path assumptions are
-      personal-machine baked-in).
-- [ ] **Externalize per-machine assumptions** (24 GB Mac, Ollama/MLX
-      coexistence, launchd) into documented requirements with graceful
-      degradation when absent.
-- [ ] **A getting-started end-to-end smoke** a stranger can run and see a
-      story merge, on the all-Claude path (no local model required).
+- [x] **One-command install story** for a fresh, non-author clone — DONE
+      2026-09-03, plan `a4-non-author-usability` (9 stories). `scripts/
+      install_checks.py` (stdlib-only prerequisite checks, A4-01) wired into
+      `scripts/install.sh` with optional Docker detection (A4-02); README
+      quickstart now explains what `install.sh` does and does not do (A4-03).
+- [x] **Externalize per-machine assumptions** into documented requirements
+      with graceful degradation — DONE, same plan. `pipeline/preflight.py`
+      (A4-04) validates the runtime environment with actionable, non-leaking
+      errors; a one-line preflight summary logs at dashboard startup (A4-05);
+      REFERENCE.md gained a "Runtime preflight" subsection on preflight
+      checks and graceful degradation.
+- [x] **A getting-started end-to-end smoke** a stranger can run and see a
+      story merge, on the all-Claude path — DONE, same plan.
+      `scripts/smoke_getting_started.py` (A4-07) runs one story to merge on
+      the claude backend against a scratch `PLAN_DIR`; README gained a
+      getting-started walkthrough subsection (A4-08).
 - [ ] **Re-enable the macOS CI leg before the repo goes public.** Commit
       7958a23 disabled the macOS runner "until repo is public" (repo is
       still private), and `test_a_job_that_runs_pytest_also_runs_on_macos`
@@ -546,10 +568,35 @@ stories (TDD-split stays strictly read-only). Tests in
 
 ### B1. Execution isolation & portability (biggest feature gaps vs OpenHands/AWF)
 
-- [ ] **Docker sandbox per worktree.** Agents currently run with full host
-      access. Table stakes for any multi-user or untrusted-input story.
-- [ ] **Remote execution backend** (a server mode, not just local subprocess).
-      Lets dispatch/review run on a GPU box while the orchestrator stays local.
+- [x] **Docker sandbox per worktree — DONE 2026-09-05, plan
+      `b1-sandbox-and-harness-seam` (9 stories).** `pipeline/sandbox.py`
+      resolves `PIPELINE_SANDBOX` (ships `'none'` by default, fails closed —
+      not silently unsandboxed — on an unrecognized value) and
+      `build_docker_command`/`docker_binary_available` construct the `docker
+      run` invocation; wired into `pipeline/execution.py`'s local spawn
+      branch so dispatch runs inside the container when opted in. Documented
+      in `docs/specs/DOCKER_SANDBOX.md`. **Caveat, read before relying on
+      this as a security boundary**: the spec itself says the container
+      shares the host's network namespace and can reach the host filesystem
+      via the Docker daemon's default settings — "not a hard security
+      boundary," in the doc's own words — and its "live-host validation"
+      section documents the one-time checks to run against a real Docker
+      install but the test suite only mocks the binary, so per this repo's
+      own `.claude/rules/testing-config-gates.md` rule those checks are not
+      yet confirmed executed against a live host.
+- [x] **Remote execution backend — DONE 2026-09-05, plan
+      `b1-remote-execution` (7 stories).** `pipeline/execution.py` gained a
+      fail-closed `PIPELINE_EXEC_DISPATCH` gate in front of every spawn site;
+      `pipeline/remote_sync.py` pushes/materializes the worktree onto a
+      remote host and syncs commits back with divergence refusal;
+      `pipeline/remote_exec.py` is the local SSH supervisor (spec file,
+      `shlex`-quoted remote shell command, exit-code propagation that treats
+      a sync-back failure as a story failure even when the remote agent
+      exited 0); `ClaudeCliDriver`/`OllamaDriver` dispatch onto this seam.
+      Documented in `docs/specs/REMOTE_EXECUTION.md` (GPU-box prerequisites,
+      env vars, failure modes). **Caveat**: no record in memory or the retro
+      log of an actual run against a live remote/GPU host — same
+      not-yet-live-validated gap as the Docker sandbox above.
 - [x] **Abstract the *inference provider*.** Done ahead of this doc: the
       `Backend` protocol in `app/backend.py` already sits between orchestration
       and execution, with `ClaudeCliDriver` and `OllamaDriver` (Ollama/LM Studio/
@@ -557,12 +604,21 @@ stories (TDD-split stays strictly read-only). Tests in
       `app/role_registry.py`. Originally bundled into the bullet below; split
       out 2026-08-05 because the two axes are different seams and only one is
       still open.
-- [ ] **Abstract the *agent harness*.** The still-open half. `claude -p` and the
-      hand-rolled local tool-calling loop are two bespoke harnesses, not one
-      interface — there is no seam at which Codex / Aider / Goose could be
-      dropped in. This is the axis that would give the multi-harness breadth
-      Agent Orchestrator has, and it is independent of which model serves the
-      tokens.
+- [x] **Abstract the *agent harness* — the seam now exists, DONE 2026-09-05,
+      same `b1-sandbox-and-harness-seam` plan.** `app/harness.py` defines the
+      `AgentHarness` protocol (`HarnessRequest`/`HarnessCommand` value types)
+      and a fail-closed registry (`get_harness`/`register_harness`, starts
+      empty, unknown names raise rather than silently defaulting); a
+      `PIPELINE_AGENT_HARNESS` env var resolves the choice, and
+      `ClaudeCliDriver`/`OllamaDriver` dispatch onto it via
+      `ClaudeCliHarness`/`LocalAgentHarness`. This closes the actual gap this
+      bullet named ("there is no seam at which a harness could be dropped
+      in") — but note it mirrors the inference-provider axis's own history
+      exactly: the seam exists with the two harnesses this project already
+      had (Claude Code CLI, the local hand-rolled loop) behind it, and no
+      third-party harness (Codex / Aider / Goose) has actually been plugged
+      in yet. That breadth question is still open; only the blocking
+      "no seam" problem is closed.
 
 ### B2. Model breadth
 
@@ -618,26 +674,24 @@ stories (TDD-split stays strictly read-only). Tests in
 > gone; the on-disk layout is private again. See
 > `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` (W1, W3b).
 
-- [~] **Structured logs + a correlation ID carried across the whole story
-      lifecycle** (dispatch → review → rework → merge, including into the agent
-      subprocess so `agent.log` joins up with orchestrator lines). Today: text
-      files with no join key (`dashboard.log` 9.5 MB, `mlx-server.log` 7 MB),
-      so every retro is hand-reconstructed from five separate logs. This is
-      also the tooling A3's "bound the failure-mode discovery rate" needs to
-      become measurable rather than archaeological — and `CLAUDE.md` already
-      mandates it, so the orchestrator currently fails its own standard.
-      **Partial progress (2026-08-14): `event-driven-pipeline-phase3` shipped
-      complete, 12/12 stories, PRs #318-#346.** `_notify_user` now emits
-      structured events (severity, dedup key) onto a process-wide bus with a
-      file-log sink and a JSONL sidecar, replacing ad hoc inline file writes;
-      the dashboard serves/collapses/filters these as structured records and
-      renders them per-story in the story detail modal. This gives
-      notification-level events a real schema and a queryable sidecar, but it
-      does **not** close this bullet: there is still no correlation ID joining
-      a story's dispatch/review/rework/merge log lines together, and
-      `agent.log` (the dispatched agent subprocess's own transcript) is not on
-      the bus — only orchestrator-side notifications are. The remaining gap is
-      narrower than before this landed, not gone.
+- [x] **Structured logs + a correlation ID carried across the whole story
+      lifecycle — DONE 2026-09-01, plans `w4-logging-correlation` (5 stories)
+      + `w4lcorr-lock-isolation` (1 story).** `event-driven-pipeline-phase3`
+      (2026-08-14, 12/12 stories, PRs #318-#346) gave notification-level
+      events a real schema and a queryable JSONL sidecar first, but left the
+      actual join key missing. This closed it: the notification-record
+      schema grew an optional `correlation_id` (plus attempt/role/provider/
+      model context, W4L-01); dispatch mints one per story, persists it on
+      the manifest, injects it into the agent subprocess env, and stamps its
+      own events with it (W4L-02); the dispatched agent's own log records
+      (`agent.log`/transcript) now carry `PIPELINE_CORRELATION_ID` too
+      (W4L-03, `scripts/local_agent.py`); and review, rework, escalation, and
+      merge events are all stamped with the story's correlation ID (W4L-04).
+      A dispatch → review → rework → merge chain is now joinable by one ID
+      across every log source, including the agent subprocess — closing the
+      exact gap the 2026-08-14 partial update left open. This also directly
+      unblocked A3's "cost per merged story" signal (see A3, DONE
+      2026-09-05).
 - [x] **Writable dashboard / control plane.** Current dashboard is read-only
       by design (good safety instinct). Add an explicit, audit-logged action
       surface (pause/resume/approve/reroute) so overlord decisions are
@@ -651,26 +705,40 @@ stories (TDD-split stays strictly read-only). Tests in
       (pause/resume/approve/reroute) flows through the same gated service
       methods every other client uses. The chat entry point (W2, PRs
       #391-#398 + #406) is the conversational control surface on the same API.
-- [ ] **Replay UI for failed runs.** The checkpoint journal + `review.log`
-      already capture enough to reconstruct a run; surface it.
-- [ ] **Stuck-agent / wedge detection** as a first-class health signal
-      (OpenHands has this; staleness badges exist but no automated recovery).
+- [x] **Replay UI for failed runs — DONE 2026-09-05, plan
+      `b4-control-surfaces` (8 stories).** A pure replay-event builder merges
+      the checkpoint journal with worktree logs; `GET
+      /api/plans/{plan}/stories/{story}/replay` exposes it; the dashboard
+      story modal renders the replay timeline.
+- [x] **Stuck-agent / wedge detection — DONE 2026-09-05, same plan** (plus
+      earlier prep stories). `pipeline/wedge.py` has a pure wedged-story
+      verdict function over configurable threshold env vars; wired into the
+      `advance_pipeline` tick as a detection-only scan; per-story wedge state
+      is exposed on the plan-detail payload and rendered as a wedged health
+      badge on dashboard board cards. **Detection only, no automated
+      recovery** — the OpenHands comparison this bullet drew was explicitly
+      about detection; auto-recovery from a wedged story is still manual.
 
 ### B5. Generalize & export the distinctive ideas (the real moat)
 
-- [ ] **Package the overlord policy as a reusable spec** (3-tier risk + audit)
-      so other harnesses can adopt it — the most portable idea, currently
-      locked inside `overlord-policy.md`.
-- [ ] **Publish the acceptance-oracle grading pattern** (don't grade the model
-      on its own tests; scope gate to fixtures; reviewer as regression
-      backstop) as a documented standalone module. FM-A is a real insight,
-      currently buried in dispatch internals.
+- [x] **Package the overlord policy as a reusable spec — DONE 2026-09-01,
+      plan `b5-export-the-moat` (3 stories, B5-01, PR #517).**
+      `docs/specs/OVERLORD_POLICY_SPEC.md` is a harness-agnostic standalone
+      spec of the 3-tier risk + audit decision policy, no longer locked
+      inside internal docs.
+- [x] **Publish the acceptance-oracle grading pattern — DONE, same plan
+      (B5-02, PR #519).** `docs/specs/ACCEPTANCE_ORACLE_PATTERN.md` documents
+      the FM-A insight (grade on fixtures, not the model's own tests; scope
+      gate; reviewer as regression backstop) as a standalone module spec.
 - [ ] **Standard benchmark integration** (SWE-bench / SWE-bench-Live)
       alongside the bespoke matrix. Enables comparison against OpenHands /
-      SWE-agent numbers, not only internal cells.
-- [ ] **MCP discoverability** — list on the MCP registry; ship a companion
-      server exposing *only* the overlord + acceptance-oracle so other
-      harnesses can adopt them piecemeal.
+      SWE-agent numbers, not only internal cells. Still open — not part of
+      `b5-export-the-moat`'s 3 stories.
+- [~] **MCP discoverability — PARTIAL, same plan (B5-03, PR #520).**
+      `pipeline/companion_server.py` ships a companion MCP server exposing
+      *only* the overlord + acceptance-oracle tools for piecemeal adoption —
+      that half is done. Listing it on the MCP registry itself has not
+      happened.
 
 ### B6. Ecosystem & community
 
@@ -715,16 +783,39 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > 2026-08-29 — 13 stories, PRs #475-#497 (+ `workspace-security-followups`
 > #489/#492)** →
 > **re-split `scripts/local_agent.py`/`local_agent_oracle.py` (same
-> file-size concern recurring at 1,723/1,599 lines) — PARTIAL 2026-08-27,
-> direct, no plan: config constants + tool schemas extracted to
-> 1,530/1,436 lines; `run_tool`/transport/`_main_impl` remain, needing the
-> same `_ServerRef`-proxy rigor `server-app-file-split` used, applied
-> per-function — scoped follow-up, not force-completed same-session** →
-> W4 (multi-tenant, closes B3). B1
-> (sandbox) and B5 (export the moat) are picked up once the service seam
-> exists, not before — the seam now exists (W1a/W1b landed), so B1/B5 are
-> unblocked whenever prioritized ahead of W4. See that doc's own "Ordering
-> conflict" section for the full rationale.
+> file-size concern recurring at 1,723/1,599 lines)** — **DONE 2026-08-31,
+> plan `local-agent-file-split` (9 stories)**: both scripts landed under
+> 1,000 lines (999 / 947) via the `_ServerRef`-proxy pattern applied
+> per-cluster — see `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`'s scaling
+> concern #5 for the module list → **B5 (export the moat) — DONE
+> 2026-09-01, plan `b5-export-the-moat` (3 stories, PRs #517/#519/#520)** →
+> **B4's correlation-ID item — DONE 2026-09-01, plans
+> `w4-logging-correlation` + `w4lcorr-lock-isolation` (6 stories)** → **A3's
+> guard-liveness/recurrence/cost-per-story signals — DONE 2026-09-05, plan
+> `a3-maturity-metrics` (9 stories), unblocked by the correlation-ID work
+> above** → **A4's install/preflight/getting-started smoke — DONE
+> 2026-09-03, plan `a4-non-author-usability` (9 stories)** → **B1 (Docker
+> sandbox + remote execution + agent-harness seam) — DONE 2026-09-05, plans
+> `b1-sandbox-and-harness-seam` (9 stories) + `b1-remote-execution` (7
+> stories)**, both with a live-host-validation caveat noted under B1 above
+> → **workspace picker wiring** — the `workspace-selection` plan's
+> last-mile gaps (picker UI wired into `main.js`, active-workspace security
+> hardening, chat/save_plan/decompose workspace threading; found 2026-09-02,
+> see `project_workspace_picker_gap` memory) — **DONE 2026-09-07, plan
+> `workspace-picker-wiring` (12 stories)** → **W4 (multi-tenant, closes
+> B3)** — still open, no plan started. See that doc's own "Ordering
+> conflict" section for the historical rationale on why B1/B5 were
+> sequenced after the service seam.
+>
+> **What's left as of 2026-09-07:** W4 (multi-tenant — closes B3), B2 (model
+> breadth / LiteLLM adapter + routing policy), B5's remaining SWE-bench
+> integration bullet and MCP-registry listing, B6 (ecosystem/releases), and
+> the two still-open A3/A4 items (enforced-green CI + a real release tag —
+> blocked on the recurring GHA billing cap; the macOS CI leg re-enable
+> before the repo goes public).
 
 Land what's half-done before building new; then extract the service seam
 that everything else — sandboxing included — is cheaper to build behind.
+As of 2026-09-07 that sequence has run its course: A1/A2 are long closed
+and A3/A4/B1/B4/B5 are now closed or landed-with-caveats; what remains
+(W4/B2/B3/B6) is genuinely new scope, not "land what's half-done."

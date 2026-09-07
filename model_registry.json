@@ -92,40 +92,40 @@
   },
   "roles": {
     "overlord": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     },
     "dispatch": {
       "provider": "ollama",
-      "model": "gpt-oss-20b-high"
+      "model": "glm"
     },
     "test_author": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     },
     "planner": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     },
     "review": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     },
     "diagnosis": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     },
     "security": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     },
     "decompose": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     },
     "chat": {
-      "provider": "claude",
-      "model": "sonnet"
+      "provider": "ollama",
+      "model": "glm"
     }
   }
 }

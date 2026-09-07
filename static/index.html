@@ -68,12 +68,15 @@
     <section id="workspace-view" class="hidden">
       <h2>Workspace</h2>
       <div class="config-section">
-        <div id="workspace-picker"></div>
+        <div id="workspace-picker" class="workspace-picker"></div>
       </div>
-      <form id="workspace-form">
-        <input id="workspace-path-input" type="text">
-        <label><input type="checkbox" id="workspace-create"> create</label>
-        <button id="workspace-select" type="submit">Use workspace</button>
+      <form id="workspace-form" class="workspace-form">
+        <label class="workspace-form-label" for="workspace-path-input">Switch workspace</label>
+        <div class="workspace-form-row">
+          <input id="workspace-path-input" type="text" class="workspace-path-input" placeholder="/path/to/a/git/repo">
+          <label class="workspace-create-label"><input type="checkbox" id="workspace-create"> Create if missing</label>
+          <button id="workspace-select" class="workspace-select-btn" type="submit">Use workspace</button>
+        </div>
       </form>
     </section>
     <section id="comms-view" class="hidden">

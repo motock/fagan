@@ -78,27 +78,70 @@ async function fetchActiveWorkspace() {
 }
 
 // Render a workspace picker as an HTML string.
-// Empty/non-array input yields an explicit empty-state string. Each entry
-// carries an escaped data-path attribute and escaped text; the entry whose
-// path matches activePath is marked active with a visible "(active)"
-// marker; valid:false entries keep the unavailable marking convention.
+// Empty/non-array input yields an explicit empty-state string. The entry
+// whose path matches activePath (if any) is pulled out into a "Current
+// workspace" block with a visible "(active)" marker; the rest render as a
+// plain clickable list carrying an escaped data-path attribute and escaped
+// text. valid:false entries are collapsed behind a <details> disclosure
+// (labelled with their count) instead of interleaved with live entries -
+// a real workspace list commonly accumulates dozens of stale sandbox paths
+// that would otherwise bury the handful of usable ones - and drop their
+// data-path attribute entirely so a dead entry can't be clicked into a
+// doomed selectWorkspace() call.
 function renderWorkspacePicker(workspaces, activePath) {
   if (!Array.isArray(workspaces) || workspaces.length === 0) {
     return "<p class=\"empty-state\">No workspaces found.</p>";
   }
-  const items = workspaces.map((w) => {
-    const path = (w && w.path) ?? "";
-    const escapedPath = escapeHtml(path);
-    const unavailable = w && w.valid === false;
-    const isActive = path === activePath;
-    const classes = [unavailable ? "unavailable" : "", isActive ? "active" : ""]
-      .filter(Boolean)
-      .join(" ");
-    const label = unavailable ? " (unavailable)" : "";
-    const activeMarker = isActive ? " (active)" : "";
-    return `<li class="${classes}" data-path="${escapedPath}">${escapedPath}${label}${activeMarker}</li>`;
-  });
-  return `<ul>${items.join("")}</ul>`;
+  const active = workspaces.find((w) => w && w.path === activePath) || null;
+  const available = workspaces.filter((w) => w && w.path !== activePath && w.valid !== false);
+  const unavailable = workspaces.filter((w) => w && w.valid === false && w.path !== activePath);
+
+  const parts = [];
+
+  if (active) {
+    const escapedPath = escapeHtml(active.path);
+    parts.push(
+      `<div class="workspace-current">` +
+        `<div class="workspace-current-head">` +
+          `<span class="workspace-current-label">Current workspace</span>` +
+          `<span class="workspace-tag workspace-tag-active">(active)</span>` +
+        `</div>` +
+        `<div class="workspace-current-path" title="${escapedPath}">${escapedPath}</div>` +
+      `</div>`,
+    );
+  }
+
+  if (available.length > 0) {
+    const rows = available
+      .map((w) => {
+        const escapedPath = escapeHtml((w && w.path) ?? "");
+        return `<li class="workspace-row" data-path="${escapedPath}" title="${escapedPath}">` +
+          `<span class="workspace-path">${escapedPath}</span></li>`;
+      })
+      .join("");
+    parts.push(`<ul class="workspace-list">${rows}</ul>`);
+  } else if (!active) {
+    parts.push("<p class=\"empty-state\">No available workspaces.</p>");
+  }
+
+  if (unavailable.length > 0) {
+    const rows = unavailable
+      .map((w) => {
+        const escapedPath = escapeHtml((w && w.path) ?? "");
+        return `<li class="workspace-row unavailable" title="${escapedPath}">` +
+          `<span class="workspace-path">${escapedPath}</span>` +
+          `<span class="workspace-tag">unavailable</span></li>`;
+      })
+      .join("");
+    parts.push(
+      `<details class="workspace-unavailable">` +
+        `<summary>${unavailable.length} unavailable</summary>` +
+        `<ul class="workspace-list">${rows}</ul>` +
+      `</details>`,
+    );
+  }
+
+  return parts.join("");
 }
 
 export {

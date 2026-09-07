@@ -45,7 +45,14 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 # #workspace-create and #workspace-select) between #config-view and
 # #comms-view. This story never touched comms.js or any Comms-related
 # markup.
-INDEX_HTML_SHA256 = "d3cb99aec281c07de06954c6bf1c36bd60db2f5d5798ef6ef8ff89536aeb4dd5"
+# Re-pinned for the workspace picker visual cleanup (2026-09-07): the
+# #workspace-view form gained a label and wrapper classes
+# (workspace-form/workspace-form-label/workspace-form-row/
+# workspace-path-input/workspace-create-label/workspace-select-btn) and
+# #workspace-picker gained a "workspace-picker" class; all IDs this test
+# suite and test_app_workspace_picker.mjs check for are unchanged. Still
+# never touched comms.js or any Comms-related markup.
+INDEX_HTML_SHA256 = "b5c0bc25b165517b5ba335fbd3992648435c4c32595321ee8befd32ec2eeb014"
 # Re-pinned for the same touch-up pass: appendCommsMessage now renders a
 # role/timestamp "who" line and wraps content in the (already-styled)
 # .bubble element instead of setting raw innerHTML directly, plus new
@@ -87,7 +94,12 @@ TOAST_REGION_SHA256 = "dbfb98e7ac5c90643e9560c45faa9d8d04e8487c11ab55c4af82cb7c2
 # "Config view styles" comment this hash guards. The addition is a single
 # minimal rule (`.modal-content .replay-message`) appended after the
 # existing suffix; nothing before the append point changed.
-SUFFIX_FROM_CONFIG_SHA256 = "3db0d5afd4698164e42487838a40a3358827f2426bcae9c6d0bc84204ea7cec3"
+# Re-pinned for the workspace picker visual cleanup (2026-09-07): appended
+# the .workspace-current/.workspace-list/.workspace-row/.workspace-form/
+# etc. rules after the existing .modal-content .replay-message rule, same
+# append-at-end pattern as the prior re-pin. Nothing before the append
+# point changed.
+SUFFIX_FROM_CONFIG_SHA256 = "17d30eca351b9e32b940567cd8fc8944aa57af52264001ff1f33bd8064bb9e0b"
 
 # The 21 selectors listed in the story as having empty `{}` bodies. Several
 # have a separate, already-populated rule immediately after them (e.g.

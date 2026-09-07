@@ -268,22 +268,6 @@ The **advance-scheduler** is now a long‑lived daemon rather than a 60s launchd
 - **PIPELINE_SCHEDULER_INTERVAL_S** – default reconcile sweep interval (default 60 seconds).
 - **PIPELINE_SCHEDULER_HEALTH_PATH** – optional path where the daemon writes its health JSON each iteration.
 
-
-## Monitoring dashboard
-
-The **Workspace picker** is a view in the monitoring dashboard that lists recent workspaces and workspaces referenced in open plans. From the picker you can:
-
-- **Select an existing workspace** (repository path) to make it the active workspace.
-- **Create a new workspace** by entering a path and toggling the create flag — the server validates the path (or creates it if missing and allowed) and records it as active.
-- **Persist the active workspace** — the selected workspace is written to `PLAN_DIR/active_workspace.json` and restored across dashboard restarts.
-
-The active workspace is the trusted `repo_root` the server uses when:
-
-- **Chat requests** send plan information to the chat model (the workspace identifies which repository the plan is for).
-- **Plan authoring** via `POST /api/plans/{name}/save` or `POST /api/decompose` — when the request includes a `workspace` parameter, the server validates it and overwrites the model-authored `repo_root` in the generated plan (WS-11), ensuring the plan is anchored to a validated repository path, not an untrusted model-generated one. The MCP `save_plan` tool's `workspace` parameter works the same way. When neither an explicit workspace nor an active workspace is set, the plan's own `repo_root` is trusted as before.
-
-See REFERENCE.md's "Monitoring dashboard" section for the full dashboard API documentation and workspace endpoint details.
-
 ## Reliability & limitations
 
 This pipeline runs real autonomous coding loops, and they fail in specific,

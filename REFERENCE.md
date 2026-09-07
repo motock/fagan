@@ -318,28 +318,6 @@ the cost gate.
   reversible via the "Show dismissed plans" toggle at the bottom of the
   sidebar.
 
-### Workspace picker and plan-authoring workspace parameter
-
-The **Workspace picker** UI view lists recent and manifest-derived workspaces
-and allows selecting an existing workspace or creating a new one. The active
-workspace selection persists in `PLAN_DIR/active_workspace.json` and is
-restored across dashboard restarts.
-
-**Dashboard workspace endpoints:**
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/workspace` | GET | Returns `{"active": <path\|null>}` — the current active workspace, or null if none is set. |
-| `/api/workspace` | POST | Accepts `{"path": <str>, "create": <bool>}`. Validates the workspace via the WS-07 rules: rejects paths with `..` or leading `~`, expands `~` to home, resolves symlinks, and (if `create: true`) creates the directory if it doesn't exist. On success returns `{"ok": true, "path": <resolved-path>}` and records the workspace as active. On validation failure returns `{"ok": false, "error": <sanitized-message>}` (400 Bad Request). |
-
-**Plan authoring with workspace parameter:**
-
-- **POST `/api/plans/{plan_name}/save`** — accepts optional `workspace` field. When provided, the server validates it and overwrites the model-authored `repo_root` in the plan JSON with the server-validated resolved path (WS-11). Returns `{"ok": false, "error": ...}` on invalid workspace.
-- **POST `/api/decompose`** — accepts optional `workspace` field. When provided, the server validates it and overwrites the `repo_root` in the generated plan. Returns `{"ok": false, "error": ...}` on invalid workspace.
-- **MCP `save_plan(plan_name, plan_json, workspace=None)` tool** — the `workspace` parameter (optional) works identically to the HTTP route above: when supplied, it is validated and the plan's `repo_root` is overwritten. The tool deliberately does **not** read the dashboard's `active_workspace.json` — it is explicit-workspace-only, keeping the MCP server and dashboard processes decoupled.
-
-When neither an explicit `workspace` parameter nor an active workspace is set, the plan's own `repo_root` (authored by the model or provided by the user) is trusted as before. Invalid workspace errors are sanitized for user display and never expose internal paths or system errors.
-
 ---
 
 ## Notification records

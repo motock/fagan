@@ -6,7 +6,12 @@ import subprocess
 from pathlib import Path
 
 from app.backend_types import AgentHandle
-from app.harness import HarnessRequest, get_harness, resolve_harness_name
+from app.harness import (
+    HarnessRequest,
+    aider_binary_available,
+    get_harness,
+    resolve_harness_name,
+)
 from pipeline import execution
 
 # Vars that can redirect the `claude` CLI off the first-party Anthropic API
@@ -196,6 +201,36 @@ class ClaudeCliDriver:
                                  cwd=str(cwd),
                                  options={"allowed_tools": allowed_tools})
         name = resolve_harness_name("claude")
+        if name == "aider":
+            # PIPELINE_AGENT_HARNESS=aider: honor the operator's selection,
+            # but only when the aider binary actually resolves on PATH.
+            # Fail closed BEFORE any spawn/worktree side effect — never fall
+            # back to the native 'claude' harness, which would run a
+            # completely different agent than the one selected.
+            available, reason = aider_binary_available()
+            if not available:
+                raise RuntimeError(
+                    "PIPELINE_AGENT_HARNESS=aider is set, but the aider binary "
+                    f"is not available: {reason}"
+                )
+            # Spawn aider exactly the way AiderHarness builds it, mirroring
+            # the native spawn below: same spawn_harness call shape, same
+            # return value. HarnessCommand.env is ADDITIONAL-vars-only (see
+            # its docstring), and spawn_local forwards env straight to
+            # subprocess.Popen(env=...), which REPLACES the child
+            # environment — so merge it over os.environ here, exactly like
+            # OllamaDriver.dispatch does, or the aider child would be
+            # spawned with an empty environment (no PATH/HOME). On this
+            # dispatch path command.env is usually {} (dispatch never
+            # supplies provider keys), but the merge is what keeps the
+            # child's inherited environment intact either way.
+            command = get_harness(name).build_agent_command(request)
+            handle = execution.spawn_harness(
+                command.argv, cwd=cwd, log_path=log_path, append=append,
+                env={**os.environ, **command.env},
+            )
+            handle.model = model
+            return handle
         if name != "claude":
             raise NotImplementedError(
                 f"PIPELINE_AGENT_HARNESS={name!r}: ClaudeCliDriver only implements "

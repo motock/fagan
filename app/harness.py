@@ -24,8 +24,28 @@ import any app.*, pipeline.*, or scripts.* module (no import cycles, ever).
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from typing import Protocol
+
+
+def aider_binary_available() -> tuple[bool, str]:
+    """Report whether the ``aider`` binary resolves on PATH.
+
+    Returns ``(True, "")`` when found, else ``(False, reason)`` naming the
+    binary and how to install it. Never raises; never executes the binary.
+    """
+    if shutil.which("aider") is None:
+        return (
+            False,
+            (
+                "the 'aider' binary was not found on PATH; install aider "
+                "(https://aider.chat/docs/install.html, e.g. "
+                "`python -m pip install aider-install && aider-install`)"
+            ),
+        )
+    return (True, "")
+
 
 __all__ = [
     "AgentHarness",
@@ -34,6 +54,7 @@ __all__ = [
     "HarnessCommand",
     "HarnessRequest",
     "LocalAgentHarness",
+    "aider_binary_available",
     "get_harness",
     "register_harness",
     "resolve_harness_name",

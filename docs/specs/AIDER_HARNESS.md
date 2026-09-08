@@ -593,6 +593,36 @@ Key-handling rules (mandatory):
   recording: they contain error text only, no key material (no key was present
   in the environment at all).
 
+## Dispatch integration (PIPELINE_AGENT_HARNESS=aider)
+
+ClaudeCliDriver.dispatch (`app/backend_claude.py`) accepts the registered
+'aider' harness when `PIPELINE_AGENT_HARNESS=aider` is set, gated behind an
+availability precheck (`app/harness.aider_binary_available`, a pure
+`shutil.which("aider")` PATH lookup that never executes the binary): if the
+binary is missing, dispatch raises `RuntimeError` naming both
+`PIPELINE_AGENT_HARNESS` and the missing binary BEFORE any spawn, worktree
+write, or other side effect — it never falls back to the native 'claude'
+harness. When available, the spawn goes through `AiderHarness`'s
+`build_agent_command` with the child environment merged as
+`{**os.environ, **command.env}` (see the caveat below).
+
+Two caveats operators must know:
+
+- **Docker-sandbox allowlist strips provider keys (pre-existing).**
+  `pipeline/execution.spawn_harness` in `PIPELINE_SANDBOX=docker` mode
+  allowlists the extra env it forwards to only keys starting with
+  `LOCAL_AGENT_` or `PIPELINE_`, so the provider-native `OPENAI_API_KEY` /
+  `ANTHROPIC_API_KEY` variables this contract relies on (see Environment
+  above) are dropped from the aider child's environment under the docker
+  sandbox. Aider under docker therefore cannot authenticate via env-carried
+  keys until the allowlist is widened; keep aider dispatch on the local
+  execution mode for now.
+- **Child env is a merge, not a replacement.** `HarnessCommand.env` carries
+  ONLY additional variables; `subprocess.Popen(env=...)` REPLACES the whole
+  child environment, so the caller must merge over `os.environ` (as
+  ClaudeCliDriver's aider branch and OllamaDriver.dispatch both do) or the
+  child loses PATH/HOME entirely.
+
 ## Exit behavior
 
 Probed 2026-09-07 in a disposable git repo (`git init probe`, one commit,

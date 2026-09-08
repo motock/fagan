@@ -13,7 +13,7 @@ import tempfile
 from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 
@@ -331,10 +331,12 @@ class ChatService:
         Maximum number of turns for the chat loop.  A positive integer is required; a non‑positive value is rejected at construction.
     """
 
-    def __init__(self, *, driver=None, http_client=None, api_base_url=None, max_turns=None):
+    def __init__(self, *, driver=None, http_client=None, api_base_url=None, max_turns=None, api_key: str | None = None):
         self._driver = driver
         self._api_base_url = api_base_url or os.environ.get("PIPELINE_CHAT_API_BASE", "http://127.0.0.1:8000")
         self._http_client = http_client or httpx.Client(base_url=self._api_base_url)
+        if api_key and hasattr(self._http_client, "headers"):
+            self._http_client.headers["X-Pipeline-Api-Key"] = api_key
         raw_max = max_turns if max_turns is not None else int(os.environ.get("PIPELINE_CHAT_MAX_TURNS", "10"))
         if raw_max <= 0:
             raise ValueError(f"max_turns must be a positive integer, got {raw_max}")
@@ -398,10 +400,13 @@ class ChatResponse(BaseModel):
 chat_router = APIRouter()
 
 @chat_router.post("/chat", response_model=ChatResponse)
-def chat_endpoint(req: ChatRequest) -> ChatResponse:
+def chat_endpoint(
+    req: ChatRequest,
+    x_pipeline_api_key: str | None = Header(default=None, alias="x-pipeline-api-key"),
+) -> ChatResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
-    svc = ChatService()
+    svc = ChatService(api_key=x_pipeline_api_key)
     result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace)
     return ChatResponse(**result)
 

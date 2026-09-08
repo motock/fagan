@@ -458,6 +458,17 @@ def test_moved_section_body_is_verbatim(title):
         assert "PIPELINE_TRANSPORT_MAX_STEPS" in reference_body and "(the legacy duplicate write was removed; nothing reads it)" in reference_body, (
             f"Section body for {title!r} in REFERENCE.md does not contain the expected transport-only variable or parenthetical."
         )
+    elif title == "Guided decomposition (the tech-lead planner)":
+        # PP-01 shipped model_registry.json with its `roles`/`routing` blocks
+        # removed (personal role routing is no longer committed), so an
+        # unconfigured planner now resolves to `claude` (the code-level
+        # default_provider) rather than the registry's `ollama`/`glm`. The
+        # original README at 2cca309~1 predates that change and still
+        # documents the old `ollama`/`glm` default, so we relax the verbatim
+        # check for this section only.
+        assert "default `claude`" in reference_body and "no longer ships a `roles` block" in reference_body, (
+            f"Section body for {title!r} in REFERENCE.md does not document the corrected claude-default planner resolution."
+        )
     else:
         if title in _LITELLM_ENUMERATION_SECTIONS:
             # litellm was registered as a backend driver (backend._DRIVERS)

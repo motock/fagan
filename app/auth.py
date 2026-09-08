@@ -2,9 +2,12 @@
 
 The dashboard is a single-operator local tool, so authentication is a single
 shared secret held in a 0600 file at the repo root rather than a user store.
-`require_api_key` is registered as an application-level dependency in
-app/dashboard.py, so it covers every route uniformly — there is no exempt
-route and no per-route opt-in.
+`require_api_key` is invoked from `app/dashboard.py`'s HTTP middleware for
+every request under the "/api/" prefix, so it covers that surface
+uniformly — there is no per-route opt-in. The index route ("/") and static
+assets are deliberately exempt: "/" is what hands the key to the browser in
+the first place, so gating it behind the same header would be an
+unreachable chicken-and-egg lock, and static assets carry no secrets.
 """
 from __future__ import annotations
 
@@ -48,6 +51,11 @@ def require_api_key(x_pipeline_api_key: str | None = Header(default=None)) -> No
     does not leak how much of the key a caller guessed correctly. The 401
     detail is fixed and generic: it must not reveal whether the header was
     missing or merely wrong.
+
+    Kept as a plain callable (rather than a FastAPI `Depends`-only dependency)
+    so `app/dashboard.py`'s middleware can call it directly with a header
+    value read off the request; the `Header(default=None)` default still
+    lets it be used as a `Depends` elsewhere (e.g. in tests) if needed.
     """
     expected = get_or_create_api_key()
     presented = x_pipeline_api_key or ""

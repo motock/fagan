@@ -33,6 +33,9 @@ def _patch_resolve_route(monkeypatch, state):
 def test_policy_can_name_third_backend(monkeypatch):
     """Criterion 1: the policy can select a backend the old two-way branch
     (local/claude only) could never return."""
+    # Explicit precondition: the policy branch only runs when the operator
+    # has not set a PIPELINE_LOCAL_MAX_RISK runtime ceiling.
+    monkeypatch.delenv("PIPELINE_LOCAL_MAX_RISK", raising=False)
     state = {"error": None, "resolution": None, "calls": []}
     state["resolution"] = RouteResolution(
         tier="strong", provider="litellm", model="openai/gpt-5-mini"
@@ -49,6 +52,11 @@ def test_policy_overrides_risk_default(monkeypatch):
     """Criterion 2: a policy selecting claude for a low-risk story wins — the
     policy is not shadowed by the old risk-based default (which would say
     local for this persona-less low-risk story)."""
+    # The policy branch is gated on the operator env being unset
+    # (PIPELINE_LOCAL_MAX_RISK is an explicit runtime ceiling that must win
+    # over the static policy); make that precondition explicit instead of
+    # silently depending on the operator's environment.
+    monkeypatch.delenv("PIPELINE_LOCAL_MAX_RISK", raising=False)
     state = {"error": None, "resolution": None, "calls": []}
     state["resolution"] = RouteResolution(
         tier="strong", provider="claude", model="claude"
@@ -56,6 +64,21 @@ def test_policy_overrides_risk_default(monkeypatch):
     _patch_resolve_route(monkeypatch, state)
 
     assert usage._route_dispatch_backend({"risk": "low"}) == "claude"
+
+
+def test_env_ceiling_overrides_policy(monkeypatch):
+    """Env precedence: PIPELINE_LOCAL_MAX_RISK set in the environment is an
+    explicit operator ceiling that wins over the static routing policy — the
+    legacy env-coupled tail runs and a low-risk story routes local even when
+    the policy names another backend."""
+    monkeypatch.setenv("PIPELINE_LOCAL_MAX_RISK", "low")
+    state = {"error": None, "resolution": None, "calls": []}
+    state["resolution"] = RouteResolution(
+        tier="strong", provider="litellm", model="openai/gpt-5-mini"
+    )
+    _patch_resolve_route(monkeypatch, state)
+
+    assert usage._route_dispatch_backend({"risk": "low"}) == "local"
 
 
 def test_regression_no_policy_falls_through(monkeypatch):
@@ -72,6 +95,7 @@ def test_fail_open_on_registry_error(monkeypatch):
     """Criterion 4: a RoleRegistryError from resolve_route must not propagate
     (the scheduler keeps dispatching) and must leave nothing latched — the
     very next call with a working policy routes normally."""
+    monkeypatch.delenv("PIPELINE_LOCAL_MAX_RISK", raising=False)
     state = {"error": None, "resolution": None, "calls": []}
     state["error"] = RoleRegistryError("route 'dispatch': bad policy key")
     _patch_resolve_route(monkeypatch, state)
@@ -91,6 +115,7 @@ def test_unknown_risk_still_defaults_to_claude(monkeypatch):
     claude, but the pre-existing code defaults a missing key to "low"
     (`story.get("risk") or "low"`) → "local"; only an UNKNOWN risk STRING is
     treated as highest → "claude". Both facts pinned here as-is."""
+    monkeypatch.delenv("PIPELINE_LOCAL_MAX_RISK", raising=False)
     state = {"error": None, "resolution": None, "calls": []}
     _patch_resolve_route(monkeypatch, state)
 

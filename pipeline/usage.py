@@ -245,7 +245,9 @@ def _check_usage_impl() -> dict[str, Any]:
 # ---------- Dispatch routing / resource gate ----------
 def _route_dispatch_backend(story: dict[str, Any]) -> str:
     """A-priori backend choice for a new dispatch (called only when
-    PIPELINE_BACKEND_DISPATCH=auto). Returns "local" or "claude".
+    PIPELINE_BACKEND_DISPATCH=auto). Returns the backend name — "local" or
+    "claude" from the legacy two-way branch, or a third backend (e.g.
+    "litellm") when a configured routing policy names one.
 
     Routes to Claude when the story is above the local risk ceiling or uses a
     security persona; otherwise tries local first (the orchestrator escalates

@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import chat, role_registry
@@ -65,14 +65,30 @@ USAGE_STATE_PATH = Path(
 WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).expanduser()
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
-# The API key gate is an application-level dependency, not a per-route one:
-# every route is covered by construction, so a route added later cannot
-# forget to opt in, and there is no allowlist to get wrong.
-app = FastAPI(
-    title="Agent Pipeline Dashboard",
-    dependencies=[Depends(require_api_key)],
-)
+# The API key gate is enforced by middleware scoped to the "/api/" prefix,
+# not an app-level FastAPI dependency covering every route. The index route
+# ("/") is what injects the key into the page for the browser to use on
+# later requests — gating "/" behind the same header it exists to hand out
+# is an unreachable chicken-and-egg lock, since a browser's first
+# navigation cannot attach a custom header. Static assets carry no secrets
+# and are exempt too. Scoping by the "/api/" prefix (rather than a
+# per-route allowlist) means a route added later under /api/ is still
+# covered by construction; only "/" and the StaticFiles mount are
+# deliberately, narrowly exempt. A cross-origin attacker page can still
+# trigger a request to "/" but cannot read the response body (same-origin
+# policy), so the exemption does not leak the key to a third party.
+app = FastAPI(title="Agent Pipeline Dashboard")
 _service = PipelineService()
+
+
+@app.middleware("http")
+async def _enforce_api_key(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        try:
+            require_api_key(request.headers.get("x-pipeline-api-key"))
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await call_next(request)
 
 logger = logging.getLogger(__name__)
 

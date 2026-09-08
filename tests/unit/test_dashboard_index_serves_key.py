@@ -108,27 +108,46 @@ def test_placeholder_marker_exists_in_source_before_head_close():
 
 
 # --------------------------------------------------------------------------
-# Serving: auth still applies globally to the dashboard route
+# Serving: the index route and static assets are deliberately exempt from
+# the API key gate. A browser's first navigation to "/" cannot attach a
+# custom header, and that request is the *only* way the browser can ever
+# learn the key (dashboard_index() is what injects it) — gating "/" behind
+# the header it exists to hand out is an unreachable chicken-and-egg lock,
+# not a security boundary. A cross-origin attacker page can still trigger
+# the request but cannot read the response body (same-origin policy), so
+# exempting "/" does not leak the key to a third party. The mutating and
+# data-bearing surface (everything under /api/) still requires the header.
 # --------------------------------------------------------------------------
 
-def test_index_without_key_header_is_rejected():
+def test_index_without_key_header_still_serves_the_page():
     resp = _client().get("/")
-    assert resp.status_code == 401
+    assert resp.status_code == 200
+    assert GLOBAL_NAME in resp.text
 
 
-def test_index_with_wrong_key_is_rejected():
+def test_index_with_wrong_key_still_serves_the_page():
     resp = _client().get("/", headers={HEADER: "not-the-real-key"})
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
-def test_index_with_empty_key_is_rejected():
+def test_index_with_empty_key_still_serves_the_page():
     resp = _client().get("/", headers={HEADER: ""})
+    assert resp.status_code == 200
+
+
+def test_other_static_assets_served_without_a_key():
+    """Only /api/* is gated; static assets carry no secrets and must be
+    reachable before the browser has ever seen the injected key."""
+    resp = _client().get("/app/api.js")
+    assert resp.status_code == 200
+
+
+def test_api_routes_still_require_the_key_after_the_index_exemption():
+    """The exemption is scoped to non-/api/ paths; /api/* stays gated."""
+    resp = _client().get("/api/health")
     assert resp.status_code == 401
 
-
-def test_other_static_assets_still_served_with_valid_key():
-    """Only the index route is rewritten; the StaticFiles mount still works."""
-    resp = _client().get("/app/api.js", headers=_auth_headers())
+    resp = _client().get("/api/health", headers=_auth_headers())
     assert resp.status_code == 200
 
 

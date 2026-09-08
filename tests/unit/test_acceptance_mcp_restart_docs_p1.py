@@ -304,7 +304,6 @@ class TestOtherChecklistItemsUntouched:
 
     UNCHECKED_MUST_STAY_UNCHECKED: ClassVar[list[str]] = [
         "Get CI to an enforced green baseline",
-        "One-command install story",
     ]
 
     CHECKED_MUST_STAY_CHECKED: ClassVar[list[str]] = [
@@ -315,6 +314,7 @@ class TestOtherChecklistItemsUntouched:
         "P0 (same retro) — stabilize the flaky-under-load",
         "Finish the MLX validate re-run.",
         "Mode 31 (2026-07-22, FIXED 2026-08-05",
+        "One-command install story",
     ]
 
     def test_known_unchecked_items_still_unchecked(self):

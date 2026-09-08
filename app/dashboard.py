@@ -17,10 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from app import chat, role_registry
+from app.auth import require_api_key
 from app.dashboard_helpers import (
     _LOG_TAIL_CAP,
     _LOG_TAIL_DEFAULT,
@@ -63,7 +64,13 @@ USAGE_STATE_PATH = Path(
 WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).expanduser()
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
-app = FastAPI(title="Agent Pipeline Dashboard")
+# The API key gate is an application-level dependency, not a per-route one:
+# every route is covered by construction, so a route added later cannot
+# forget to opt in, and there is no allowlist to get wrong.
+app = FastAPI(
+    title="Agent Pipeline Dashboard",
+    dependencies=[Depends(require_api_key)],
+)
 _service = PipelineService()
 
 logger = logging.getLogger(__name__)

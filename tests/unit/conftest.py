@@ -77,3 +77,32 @@ def plan_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(ppers, "PLAN_DIR", d)
     monkeypatch.setattr(pcon, "PLAN_DIR", d)
     return d
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_test_client(monkeypatch):
+    """Attach the dashboard's API key header to every TestClient in this suite.
+
+    app/dashboard.py registers `require_api_key` as an application-level
+    dependency, so every route now answers 401 without an
+    X-Pipeline-Api-Key header. The ~29 existing dashboard/chat test modules
+    each build their own `TestClient(d.app)` and none send that header;
+    patching the constructor here attaches it in one place instead of
+    editing every call site. This adds the credential the tests were always
+    implicitly running with — it does not relax the check itself.
+
+    Caller-supplied headers win, so a test can still pass a wrong key (or
+    pop the header off `client.headers`) to exercise the denial path.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_or_create_api_key
+
+    original_init = TestClient.__init__
+
+    def _init_with_api_key(self, *args, headers=None, **kwargs):
+        merged = {"X-Pipeline-Api-Key": get_or_create_api_key()}
+        merged.update(headers or {})
+        original_init(self, *args, headers=merged, **kwargs)
+
+    monkeypatch.setattr(TestClient, "__init__", _init_with_api_key)

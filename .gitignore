@@ -8,6 +8,9 @@ node_modules
 
 # Dashboard start/stop script runtime artifacts (scripts/dashboard.sh)
 .dashboard.*.pid
+
+# Dashboard HTTP API shared secret (app/auth.py) — never commit this.
+.dashboard_api_key
 .venv-mlx/
 .DS_Store
 *.bak

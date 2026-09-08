@@ -17,6 +17,7 @@ both see the same isolated temp path.
 """
 
 import json
+import logging
 import os
 import re
 import sys
@@ -39,6 +40,8 @@ from .config import (
 from .parsers import _atomic_write_json
 from .paths import USAGE_STATE_PATH
 from .persona import _persona_requires_claude, _story_has_unwinnable_local_scope
+
+logger = logging.getLogger(__name__)
 
 # ---------- Usage probe ----------
 # Legacy format (Claude Code ≤ ~Jun 2026): "Current session: N% used · resets …"
@@ -248,6 +251,24 @@ def _route_dispatch_backend(story: dict[str, Any]) -> str:
     security persona; otherwise tries local first (the orchestrator escalates
     to Claude a-posteriori if the local run fails).
     """
+    resolution = None
+    try:
+        resolution = role_registry.resolve_route("dispatch", story=story)
+    except (role_registry.RoleRegistryError, NotImplementedError, ValueError) as exc:
+        # Deliberate asymmetry: resolve_route fails CLOSED on a bad routing
+        # block (it raises), but this call site fails OPEN to the pre-policy
+        # behavior below. This function runs on every dispatch tick from
+        # advance_pipeline, so a typo in a routing block must degrade to
+        # today's backend choice rather than freeze the pipeline — the same
+        # fail-open-on-config-garbage posture as _role_resource_ok's except
+        # clause below. The loud failure still surfaces in tests and in this
+        # warning.
+        logger.warning(
+            "dispatch routing policy error (%s); using built-in backend selection",
+            exc,
+        )
+    if resolution is not None:
+        return resolution.provider
     # Read at call time so tests can monkeypatch the env and re-import isn't needed.
     max_risk = os.environ.get("PIPELINE_LOCAL_MAX_RISK", PIPELINE_LOCAL_MAX_RISK).lower()
     max_risk_rank = _RISK_ORDER.get(max_risk, _RISK_ORDER["low"])

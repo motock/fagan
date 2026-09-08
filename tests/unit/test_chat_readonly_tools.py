@@ -53,6 +53,140 @@ class _FakeHttpClient:
         return _FakeResponse(self.responses[url])
 
 
+# --------------------------------------------------------------------------- #
+# read_file tool (workspace file-read story)
+#
+# Extends the read-only registry coverage with the ``read_file`` tool:
+# registration shape, prompt derivation, HTTP wiring (URL + ``params=`` kwarg),
+# and error propagation. Self-contained; fails with KeyError('read_file')
+# until the TOOLS entry lands.
+# --------------------------------------------------------------------------- #
+class _Boom(RuntimeError):
+    """Distinct exception type so propagation tests can assert identity."""
+
+
+class _ReadFileRecordingClient:
+    """Fake ``http_client`` whose ``.get`` records the URL and ``params=``.
+
+    Mirrors httpx's keyword-only ``params`` argument: only a ``params=`` kwarg
+    is captured, so a tool that smuggles the path into the URL string instead
+    of the query string fails the assertions below.
+    """
+
+    def __init__(self, response) -> None:
+        self._response = response
+        self.calls: list[tuple[str, object]] = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs.get("params")))
+        return self._response
+
+
+class _RaisingClient:
+    """Fake ``http_client`` whose ``.get`` always raises the scripted error."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.calls = 0
+
+    def get(self, url, **kwargs):
+        self.calls += 1
+        raise self._exc
+
+
+_READ_FILE_CANNED = {
+    "path": "some/file.py",
+    "content": "print('hi')\n",
+    "truncated": False,
+}
+
+
+def test_read_file_tool_is_registered_with_documented_shape():
+    entry = TOOLS["read_file"]  # KeyError here == implementation not landed yet
+    assert set(entry) == {"description", "params", "execute"}
+    assert entry["description"] == "Read a file from the active workspace by relative path."
+    assert entry["params"] == {"path": "str"}
+    assert callable(entry["execute"])
+
+
+def test_read_file_is_derived_into_system_prompt_not_hand_edited():
+    # SYSTEM_PROMPT must keep being assembled as prefix + derived sentence +
+    # final sentence; read_file has to reach the prompt through
+    # _available_tools_sentence() (derived from TOOLS), not a hand edit.
+    assert SYSTEM_PROMPT == (
+        chat_module._SYSTEM_PROMPT_PREFIX
+        + chat_module._available_tools_sentence()
+        + chat_module._FINAL_SENTENCE
+    )
+    sentence = chat_module._available_tools_sentence()
+    assert "read_file" in sentence
+    assert "read_file" in SYSTEM_PROMPT
+
+
+def test_read_file_execute_gets_workspace_file_endpoint_with_path_param():
+    client = _ReadFileRecordingClient(_FakeResponse(_READ_FILE_CANNED))
+    result = TOOLS["read_file"]["execute"](client, "http://testbase", path="some/file.py")
+    assert len(client.calls) == 1
+    url, params = client.calls[0]
+    assert url == "/api/workspace/file"
+    assert params == {"path": "some/file.py"}
+    assert result == _READ_FILE_CANNED
+
+
+def test_read_file_execute_threads_api_base_url_through_resolve_tool_url():
+    transport = _FakeTransport(payload=_READ_FILE_CANNED)
+    client = httpx.Client(transport=transport, base_url="")
+    result = TOOLS["read_file"]["execute"](client, "http://testbase", path="some/file.py")
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert str(request.url).startswith("http://testbase/api/workspace/file")
+    assert request.url.params["path"] == "some/file.py"
+    assert result == _READ_FILE_CANNED
+
+
+def test_read_file_execute_propagates_client_errors_without_local_catch():
+    # The execute lambda must NOT swallow transport errors; _execute_tool is
+    # the layer that catches tool exceptions, so the lambda stays transparent.
+    boom = _Boom("workspace file read failed")
+    client = _RaisingClient(boom)
+    with pytest.raises(_Boom) as excinfo:
+        TOOLS["read_file"]["execute"](client, "http://testbase", path="some/file.py")
+    assert client.calls == 1
+    assert excinfo.value is boom
+    assert str(excinfo.value) == "workspace file read failed"
+
+
+def test_read_file_execute_requires_path_arg():
+    client = _ReadFileRecordingClient(_FakeResponse(_READ_FILE_CANNED))
+    with pytest.raises(TypeError):
+        TOOLS["read_file"]["execute"](client, "http://testbase")
+    assert client.calls == []  # argument binding failed before any HTTP call
+
+
+def test_read_file_execute_tolerates_extra_kwargs():
+    client = _ReadFileRecordingClient(_FakeResponse(_READ_FILE_CANNED))
+    TOOLS["read_file"]["execute"](client, "http://testbase", path="some/file.py", plan_name="ignored")
+    assert client.calls == [("/api/workspace/file", {"path": "some/file.py"})]
+
+
+@pytest.mark.parametrize(
+    "raw_path",
+    [
+        "",  # empty: boundary value, passed through untouched
+        "f",  # single character
+        "a b/dir c/file name.py",  # spaces must not be pre-quoted client-side
+        "up/../down.py",  # traversal-looking paths are the server's gate, not the tool's
+        "ünïcode/文件.py",  # non-ascii passes through verbatim
+        "x" * 4096,  # long path boundary
+    ],
+)
+def test_read_file_execute_passes_path_through_verbatim(raw_path):
+    client = _ReadFileRecordingClient(_FakeResponse(_READ_FILE_CANNED))
+    result = TOOLS["read_file"]["execute"](client, "http://testbase", path=raw_path)
+    assert client.calls == [("/api/workspace/file", {"path": raw_path})]
+    assert result == _READ_FILE_CANNED
+
+
 class _FakeTransport:
     """An ``httpx`` transport that records requests and returns JSON bodies.
 

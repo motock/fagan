@@ -11,22 +11,53 @@ gpt-oss-20b-high, whose driver is the same OllamaDriver that the legacy
 software-engineer story routes exactly as it did before the block shipped.
 """
 
+import json
+
 import pytest
 
 from app.role_registry import load_registry, resolve_route
 
 LOW_RISK_STORY = {"risk": "low", "persona": "software-engineer"}
 
+# A minimal, well-formed routing.dispatch block: used by the tests below so
+# they exercise load_registry/resolve_route's resolution logic rather than
+# today's live model_registry.json contents — .claude/rules/
+# testing-config-gates.md: "test the resolution logic, not today's
+# configured values." A live-file read is what made these tests fragile
+# under legitimate reconfiguration of the shipped registry.
+_SYNTHETIC_DISPATCH_REGISTRY = {
+    "providers": {"ollama": {"models": {"gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"}}}},
+    "routing": {
+        "dispatch": {
+            "default_tier": "local_default",
+            "tiers": {
+                "local_default": {"provider": "ollama", "model": "gpt-oss-20b-high"},
+            },
+            "rules": [],
+        }
+    },
+}
 
-def test_routing_block_declares_dispatch():
-    reg = load_registry()
+
+def test_routing_block_declares_dispatch(tmp_path):
+    """A model_registry.json declaring a routing.dispatch block loads with
+    'routing'/'dispatch' present — load_registry's own file-parsing
+    behavior, exercised against a synthetic registry file rather than the
+    live model_registry.json."""
+    registry_path = tmp_path / "model_registry.json"
+    registry_path.write_text(json.dumps(_SYNTHETIC_DISPATCH_REGISTRY))
+    reg = load_registry(path=registry_path)
     assert "routing" in reg
     assert "dispatch" in reg["routing"]
 
 
 def test_dispatch_default_tier_resolves():
-    reg = load_registry()
-    resolution = resolve_route("dispatch", story=LOW_RISK_STORY, registry=reg)
+    """resolve_route must resolve a value for a role whose routing block
+    declares a default_tier — exercised against a synthetic registry, not
+    the live model_registry.json."""
+    resolution = resolve_route(
+        "dispatch", story=LOW_RISK_STORY, registry=_SYNTHETIC_DISPATCH_REGISTRY
+    )
     assert resolution is not None
 
 
@@ -87,12 +118,30 @@ def test_dispatch_low_risk_story_resolves_repeatably():
 
 
 def test_routing_rules_only_use_supported_predicates():
-    """Every shipped rule's `when` keys are within the two supported
-    predicates (max_risk, persona) — anything else makes resolve_route raise,
-    so this doubles as a cheap well-formedness guard."""
-    reg = load_registry()
+    """Every rule's `when` keys must be within the two predicates
+    resolve_route actually supports (max_risk, persona) — anything else
+    makes resolve_route raise. Exercised against a synthetic registry
+    whose rules use both supported predicates, confirming resolve_route
+    accepts them without raising, rather than against the live
+    model_registry.json's current rule set."""
+    reg = {
+        "providers": {"ollama": {"models": {"gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"}}}},
+        "routing": {
+            "dispatch": {
+                "default_tier": "local_default",
+                "tiers": {
+                    "local_default": {"provider": "ollama", "model": "gpt-oss-20b-high"},
+                },
+                "rules": [
+                    {"when": {"max_risk": "low"}, "tier": "local_default"},
+                    {"when": {"persona": "software-engineer"}, "tier": "local_default"},
+                ],
+            }
+        },
+    }
     for rule in reg["routing"]["dispatch"].get("rules", []):
         assert set(rule.get("when", {})) <= {"max_risk", "persona"}
+    resolve_route("dispatch", story=LOW_RISK_STORY, registry=reg)
 
 
 @pytest.mark.parametrize(

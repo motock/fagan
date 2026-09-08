@@ -23,7 +23,7 @@
           "persona": "software-engineer",
           "model": "sonnet",
           "risk": "low",
-          "backend": "optional: claude | local | ollama | lmstudio | mlx | auto",
+          "backend": "optional: claude | local | ollama | lmstudio | mlx | litellm | auto",
           "key": "optional explicit story key; omit to auto-mint a UUID"
         }
       ]

@@ -807,7 +807,7 @@ def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
 # (see pipeline-story-schema.md). patch_story validates against this BEFORE
 # writing so an invalid value fails closed and leaves the manifest unchanged.
 _VALID_STORY_BACKENDS = frozenset(
-    {"claude", "local", "ollama", "lmstudio", "mlx", "auto"}
+    {"claude", "local", "ollama", "lmstudio", "mlx", "litellm", "auto"}
 )
 
 

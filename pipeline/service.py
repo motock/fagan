@@ -153,7 +153,7 @@ _PATCHABLE_STORY_FIELDS = frozenset(
     )
 )
 _VALID_STORY_BACKENDS = frozenset(
-    {"claude", "local", "ollama", "lmstudio", "mlx", "auto"}
+    {"claude", "local", "ollama", "lmstudio", "mlx", "litellm", "auto"}
 )
 _dispatch_story_impl = _ServerRef("_dispatch_story_impl")
 _original_review_story = _ServerRef("_original_review_story")

@@ -41,6 +41,13 @@ class RoleResolution:
     model: str
 
 
+@dataclass(frozen=True)
+class RouteResolution:
+    tier: str
+    provider: str
+    model: str
+
+
 def _registry_path() -> Path:
     override = os.environ.get(_REGISTRY_PATH_ENV)
     return Path(override) if override else _DEFAULT_REGISTRY_PATH
@@ -153,3 +160,116 @@ def resolve_role(
             )
 
     return RoleResolution(provider=provider, model=model)
+
+
+def resolve_route(
+    role: str,
+    *,
+    story: dict | None = None,
+    registry: dict | None = None,
+    plan_role_config: dict | None = None,
+) -> RouteResolution | None:
+    """Resolve a routing tier for `role` from the registry's optional
+    `routing` block (plan-level `routing` beats the registry's own, mirroring
+    how plan_role_config beats the registry in resolve_role).
+
+    A missing routing block, or a role missing from it, is NOT an error —
+    returns None so the caller keeps its own existing behavior untouched
+    (the registry is fully optional, like load_registry()).
+
+    Resolution: evaluate `rules` IN ORDER and take the FIRST whose `when`
+    clause matches the story dict; otherwise fall back to `default_tier`;
+    then look the chosen tier up in `tiers` and resolve provider+model
+    through the same validation resolve_role performs — the tier's model is
+    a friendly name checked against providers.<provider>.models, and the
+    returned `model` is that entry's concrete `tag`, never the friendly
+    name.
+
+    Supported `when` predicates, exactly these two: `max_risk` (matches when
+    the story's risk is at or below the named level; a missing/unknown risk
+    is treated as the HIGHEST risk, fail closed) and `persona` (exact string
+    match on story["persona"]). Any other predicate key raises
+    RoleRegistryError naming the exact bad key — never silently ignored,
+    since that would make a rule appear to apply when it does not.
+    """
+    reg = registry if registry is not None else load_registry()
+    routing = (plan_role_config or {}).get("routing") or reg.get("routing") or {}
+    route_cfg = routing.get(role)
+    if not route_cfg:
+        return None
+
+    tiers = route_cfg.get("tiers", {})
+    rules = route_cfg.get("rules", [])
+    story = story or {}
+
+    # Risk ranking for the max_risk predicate — a local copy of
+    # pipeline.config._RISK_ORDER rather than an import: pipeline.* modules
+    # import app.role_registry (dispatch, overlord, planner, review, ...), so
+    # importing pipeline back from here would create a circular import.
+    risk_order = {"low": 0, "medium": 1, "high": 2}
+
+    # Fail closed on the WHOLE block before evaluating anything: a typo in a
+    # later rule (unknown predicate, unknown tier) must never lurk silently
+    # until the day it becomes the first match.
+    default_tier = route_cfg.get("default_tier")
+    if default_tier not in tiers:
+        raise RoleRegistryError(
+            f"routing.{role} default_tier {default_tier!r} is not declared "
+            f"under routing.{role}.tiers"
+        )
+    for rule in rules:
+        for predicate, value in rule.get("when", {}).items():
+            if predicate == "max_risk":
+                if str(value).lower() not in risk_order:
+                    raise RoleRegistryError(
+                        f"routing.{role} rule names unknown max_risk level "
+                        f"{value!r} (expected one of "
+                        f"{sorted(risk_order)})"
+                    )
+            elif predicate != "persona":
+                raise RoleRegistryError(
+                    f"routing.{role} rule uses unrecognized 'when' predicate "
+                    f"{predicate!r} (supported: max_risk, persona)"
+                )
+        if rule.get("tier") not in tiers:
+            raise RoleRegistryError(
+                f"routing.{role} rule names tier {rule.get('tier')!r}, which "
+                f"is not declared under routing.{role}.tiers"
+            )
+
+    chosen_tier = default_tier
+    for rule in rules:
+        when = rule.get("when", {})
+        for predicate, value in when.items():
+            if predicate == "max_risk":
+                max_rank = risk_order[str(value).lower()]
+                story_rank = risk_order.get(
+                    str(story.get("risk") or "").lower(), risk_order["high"]
+                )
+                if story_rank > max_rank:
+                    break
+            elif story.get("persona") != value:
+                break
+        else:
+            chosen_tier = rule["tier"]
+            break
+
+    tier_cfg = tiers[chosen_tier]
+    provider = str(tier_cfg.get("provider") or "").strip().lower()
+    providers = reg.get("providers", {})
+    if provider not in providers:
+        raise RoleRegistryError(
+            f"routing.{role}.tiers.{chosen_tier} names unknown provider "
+            f"{provider!r} (not declared under providers)"
+        )
+    model_name = tier_cfg.get("model")
+    provider_models = providers[provider].get("models", {})
+    if model_name not in provider_models:
+        raise RoleRegistryError(
+            f"routing.{role}.tiers.{chosen_tier} names unknown model "
+            f"{model_name!r} for provider {provider!r} (not declared under "
+            f"providers.{provider}.models)"
+        )
+    return RouteResolution(
+        tier=chosen_tier, provider=provider, model=provider_models[model_name]["tag"]
+    )

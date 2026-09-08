@@ -32,6 +32,37 @@ def h2_headings(text: str) -> list[str]:
     return headings
 
 
+# REFERENCE.md sections whose backend enumerations were corrected to list
+# litellm after it was registered as a backend driver (backend._DRIVERS).
+# The pre-split README at 2cca309~1 predates that registration, so the
+# verbatim guard for these sections compares with the litellm tokens
+# normalized away (see _without_litellm) while separately requiring
+# litellm to still be present.
+_LITELLM_ENUMERATION_SECTIONS = frozenset(
+    {
+        "MCP tools reference",
+        "Plan / story schema",
+        "Per-role provider/model configuration",
+    }
+)
+
+
+def _without_litellm(text: str) -> str:
+    """Remove the litellm tokens added to REFERENCE.md's backend
+    enumerations so the verbatim guard still compares everything else
+    byte-for-byte against the pre-split README (2cca309~1), which predates
+    litellm's registration as a backend driver. The three patterns are the
+    exact insertion forms used by the doc correction:
+    '  `litellm` \\| `auto`' (wrapped bullet), 'mlx | litellm | auto'
+    (schema/example/field docs), and '`lmstudio` / `litellm`' (provider list).
+    """
+    return (
+        text.replace("`litellm` \\| ", "")
+        .replace(" litellm |", "")
+        .replace(" / `litellm`", "")
+    )
+
+
 # ---------------------------------------------------------------------------
 # REFERENCE.md existence & title
 # ---------------------------------------------------------------------------
@@ -428,6 +459,20 @@ def test_moved_section_body_is_verbatim(title):
             f"Section body for {title!r} in REFERENCE.md does not contain the expected transport-only variable or parenthetical."
         )
     else:
+        if title in _LITELLM_ENUMERATION_SECTIONS:
+            # litellm was registered as a backend driver (backend._DRIVERS)
+            # after the README/REFERENCE split, and REFERENCE.md's backend
+            # enumerations were corrected to list it so the docs state what
+            # the code accepts (ingest_plan/patch_story validate against
+            # backend._DRIVERS | {"auto"}). The pre-split README at 2cca309~1
+            # predates that registration, so compare with the litellm tokens
+            # normalized away — and separately require litellm to still be
+            # present, so the normalization can never mask its removal.
+            assert "litellm" in reference_body, (
+                f"Section body for {title!r} in REFERENCE.md must enumerate "
+                f"litellm among the accepted backend values."
+            )
+            reference_body = _without_litellm(reference_body)
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
             f"identical to the original README.md section. The move was supposed "

@@ -286,11 +286,6 @@ class TestExecuteTurnNegative:
 # Module-level invariants
 # --------------------------------------------------------------------------- #
 class TestModuleInvariants:
-    @pytest.mark.skip(reason="Populated by later story")
-    def test_tools_registry_is_empty_by_default(self) -> None:
-        # This story must NOT populate TOOLS; a later story adds real tools.
-        assert TOOLS == {}
-
     def test_tools_is_a_dict(self) -> None:
         assert isinstance(TOOLS, dict)
 

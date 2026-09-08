@@ -232,6 +232,13 @@ TOOLS: dict[str, dict] = {
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/files"), params={"path": path}).json()
         ),
     },
+    "search_code": {
+        "description": "Search the active workspace for a text pattern (grep-style) and return matching lines with file and line number.",
+        "params": {"pattern": "str"},
+        "execute": lambda http_client, api_base_url, pattern, **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/search"), params={"pattern": pattern}).json()
+        ),
+    },
 }
 
 

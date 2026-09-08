@@ -79,6 +79,60 @@ def plan_dir(tmp_path, monkeypatch):
     return d
 
 
+
+# test_backend_*.py and test_acceptance_ollama_chat_retry.py instantiate
+# OllamaDriver directly and call .complete()/.dispatch() to exercise its
+# real retry/parsing/probe logic against a mocked HTTP transport - stubbing
+# the method itself out from under them would make every assertion measure
+# the stub instead of the driver. Excluded from the default stub below;
+# every other file in the suite gets the fast no-op by default.
+_REAL_OLLAMA_DRIVER_MODULES = {
+    "test_backend_resource_status",
+    "test_backend_review_loop",
+    "test_backend_claude_driver_misc",
+    "test_backend_local_provider_dispatch",
+    "test_backend_tuning_knobs",
+    "test_backend_role_routing_complete",
+    "test_acceptance_ollama_chat_retry",
+    "test_role_call_timeout",
+    "test_role_call_timeout_messages",
+    "test_chat_bare_passthrough",
+}
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_ollama_seams_default(request, monkeypatch):
+    """Suite-wide default: stub the live-Ollama HTTP seams dispatch_story
+    fires on every fresh local-family dispatch (the guided-decomposition
+    planner's /api/chat call, the /api/tags loaded-model probe, and the
+    serving-parallelism probe) to fast no-ops, so a test file that drives
+    dispatch_story for real without its own stub doesn't silently pay for a
+    live network round-trip.
+
+    This is the same seam test_pipeline_mcp_server_*.py's own
+    `_hermetic_ollama_seams` fixture (see _pipeline_mcp_server_test_helpers.py)
+    already stubs for that file family - promoted here so a new test file
+    can't reintroduce the same non-hermetic-dispatch bug two other files
+    (test_w4l_dispatch_correlation.py, test_tdd_split_always_on.py) hit
+    live: each drove real dispatch_story() calls with no stub in sight and
+    paid tens of seconds per call once every role started routing to a
+    cloud-backed model (4e11de2). A test that needs the real seam value
+    overrides it with its own `monkeypatch.setattr` afterward, which runs
+    later on this same function-scoped monkeypatch and wins.
+    """
+    module = request.module.__name__.rsplit(".", 1)[-1]
+    from app import backend
+    from pipeline import server as p
+
+    if module not in _REAL_OLLAMA_DRIVER_MODULES:
+        monkeypatch.setattr(
+            backend.OllamaDriver, "complete", lambda self, prompt, **kw: ""
+        )
+        monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: set())
+        monkeypatch.setattr(backend, "_ollama_serving_parallelism", lambda: None)
+    monkeypatch.setattr(p, "diagnose_failure", lambda *a, **k: None)
+
+
 @pytest.fixture(autouse=True)
 def _authenticated_test_client(monkeypatch):
     """Attach the dashboard's API key header to every TestClient in this suite.

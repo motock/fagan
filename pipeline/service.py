@@ -539,7 +539,7 @@ class PipelineService:
         active = self.get_active_workspace()
         if active is None:
             return {'ok': False, 'error': 'no active workspace'}
-        if not isinstance(pattern, str) or pattern == '':
+        if not isinstance(pattern, str) or '\x00' in pattern or pattern == '':
             return {'ok': False, 'error': 'invalid pattern'}
         try:
             result = subprocess.run(
@@ -555,6 +555,8 @@ class PipelineService:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )

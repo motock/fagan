@@ -161,7 +161,7 @@ class _Sentinel(BaseException):
 
 
 class _RecordingService:
-    constructed: list = []
+    constructed: ClassVar[list] = []
 
     def __init__(self, *args, **kwargs):
         type(self).constructed.append(kwargs)

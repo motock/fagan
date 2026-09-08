@@ -16,7 +16,11 @@ pythonpath = ["."]
 # This now mirrors the same `--ignore` flags CI and build_detect.py pass
 # explicitly, instead of a hand‑maintained file list that silently rots as
 # new test files are added.
-addopts = "--ignore=tests/benchmark --ignore=tests/experiments"
+# `-n auto` (pytest-xdist) fans the suite out across all available cores by
+# default, so a bare `pytest` invocation is parallel without anyone having to
+# remember the flag. The suite is xdist-safe (isolated tmp_path dirs,
+# ephemeral ports via _free_port(), monkeypatched env) - see 8822b38.
+addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
 
 [tool.ruff.lint.per-file-ignores]
 # Acceptance fixtures are read-only oracle content: their worktree bytes are

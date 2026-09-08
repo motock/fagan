@@ -334,7 +334,13 @@ class ChatService:
     def __init__(self, *, driver=None, http_client=None, api_base_url=None, max_turns=None, api_key: str | None = None):
         self._driver = driver
         self._api_base_url = api_base_url or os.environ.get("PIPELINE_CHAT_API_BASE", "http://127.0.0.1:8000")
-        self._http_client = http_client or httpx.Client(base_url=self._api_base_url)
+        # The decompose tool resolves synchronously over this client to a real
+        # product-analyst LLM call (15-90s+); httpx's 5s default times out on
+        # essentially every decompose turn. Injected clients are left untouched.
+        self._http_client = http_client or httpx.Client(
+            base_url=self._api_base_url,
+            timeout=httpx.Timeout(600.0, connect=10.0),
+        )
         if api_key and hasattr(self._http_client, "headers"):
             self._http_client.headers["X-Pipeline-Api-Key"] = api_key
         raw_max = max_turns if max_turns is not None else int(os.environ.get("PIPELINE_CHAT_MAX_TURNS", "10"))

@@ -18,6 +18,7 @@ model_fallback, before resolve_role's own registry step runs).
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 from collections.abc import Callable
@@ -26,6 +27,18 @@ from pathlib import Path
 
 _REGISTRY_PATH_ENV = "PIPELINE_MODEL_REGISTRY_PATH"
 _DEFAULT_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "model_registry.json"
+
+# Parse-once memo of model_registry.json contents, keyed by the file's
+# identity (resolved path + dev/inode/mtime_ns/size). Every load_registry()
+# call returns a copy.deepcopy of the cached master, so a caller mutating
+# the dict it got back (e.g. pipeline/service.py's set_role_default
+# setdefault) can never poison a later caller's view — the exact
+# order/worker-dependent contamination signature seen under pytest-xdist.
+# The stat tuple in the key means a rewritten/redirected file is always
+# re-parsed (no stale path or stale contents survive an env change or an
+# in-place rewrite), and reset_registry_cache() drops the memo entirely
+# (tests/unit/conftest.py's autouse fixture calls it around every test).
+_MASTER_REGISTRY_CACHE: dict[tuple, dict] = {}
 
 
 class RoleRegistryError(ValueError):
@@ -53,6 +66,31 @@ def _registry_path() -> Path:
     return Path(override) if override else _DEFAULT_REGISTRY_PATH
 
 
+def _registry_cache_key(target: Path) -> tuple | None:
+    """Identity of the file on disk right now, or None if it is absent.
+
+    Includes dev/inode/mtime_ns/size so any rewrite (os.replace swaps the
+    inode; write_text bumps mtime_ns) produces a different key and forces a
+    re-parse — a stale entry can never be served for changed content.
+    """
+    try:
+        st = target.stat()
+    except OSError:
+        return None
+    return (str(target), st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def reset_registry_cache() -> None:
+    """Drop every memoized parsed registry.
+
+    Isolation seam for the test suite (tests/unit/conftest.py's autouse
+    _isolate_registry_state fixture calls it before and after each test):
+    guarantees no parsed-registry state survives across tests on a shared
+    xdist worker, whatever a previous test did to the dict it got back.
+    """
+    _MASTER_REGISTRY_CACHE.clear()
+
+
 def load_registry(path: Path | None = None) -> dict:
     """Load and validate model_registry.json.
 
@@ -60,9 +98,26 @@ def load_registry(path: Path | None = None) -> dict:
     returns {}. Malformed JSON, or a roles.* entry naming a provider/model
     not declared under providers.*, raises RoleRegistryError naming the
     exact bad key.
+
+    Isolation contract: the returned dict is a private deep copy — mutating
+    it never affects what any other load_registry() call returns (the
+    parsed master is memoized per file version only to avoid re-reading an
+    unchanged file, and every copy is independent). A changed
+    PIPELINE_MODEL_REGISTRY_PATH, an explicit path=, or a rewritten file
+    is always observed fresh; reset_registry_cache() drops the memo.
     """
     target = path if path is not None else _registry_path()
+    key = _registry_cache_key(target)
+    if key is not None:
+        cached = _MASTER_REGISTRY_CACHE.get(key)
+        if cached is not None:
+            return copy.deepcopy(cached)
     if not target.exists():
+        # The file is gone: any memoized version of it is dead weight that
+        # can never be served again (its stat key no longer exists), so
+        # prune it rather than serving or keeping stale contents.
+        for old_key in [k for k in _MASTER_REGISTRY_CACHE if k[0] == str(target)]:
+            del _MASTER_REGISTRY_CACHE[old_key]
         return {}
     try:
         data = json.loads(target.read_text())
@@ -86,7 +141,14 @@ def load_registry(path: Path | None = None) -> dict:
                 f"provider {provider!r} (not declared under "
                 f"providers.{provider}.models)"
             )
-    return data
+    if key is not None:
+        # Keep at most one entry per path: a rewritten file's old version
+        # (differing dev/ino/mtime_ns/size) is dead weight that can never be
+        # served again, so prune it rather than letting the memo grow.
+        for old_key in [k for k in _MASTER_REGISTRY_CACHE if k[0] == key[0]]:
+            del _MASTER_REGISTRY_CACHE[old_key]
+        _MASTER_REGISTRY_CACHE[key] = data
+    return copy.deepcopy(data)
 
 
 def _fallback_value(model_fallback: str | Callable[[], str | None] | None) -> str | None:

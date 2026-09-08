@@ -32,12 +32,36 @@ def test_dispatch_default_tier_resolves():
 
 def test_dispatch_default_tier_matches_roles_dispatch():
     """The shipped block is inert: its default tier resolves to the same
-    backend the dispatch role already uses. roles.dispatch names the ollama
-    provider; the tier names the "local" provider — both are local-transport
-    names (pipeline.config._LOCAL_BACKEND_NAMES) backed by the same
-    OllamaDriver family, and both select the same concrete model, read from
-    the live registry so nothing is hardcoded here."""
-    reg = load_registry()
+    backend the dispatch role already uses. Asserted against a synthetic
+    registry fixture — never the live model_registry.json (the resolution
+    logic is what's under test, not today's configured values; a live-file
+    read here is what made this test order/worker-dependent under xdist).
+    The fixture mirrors the shipped contract: routing.dispatch's default
+    tier names the same provider/model pair that roles.dispatch does."""
+    reg = {
+        "providers": {
+            "ollama": {
+                "models": {
+                    "gpt-oss-20b-high": {"tag": "gpt-oss-20b-high:latest"},
+                }
+            },
+        },
+        "roles": {
+            "dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"},
+        },
+        "routing": {
+            "dispatch": {
+                "default_tier": "local_default",
+                "tiers": {
+                    "local_default": {
+                        "provider": "ollama",
+                        "model": "gpt-oss-20b-high",
+                    },
+                },
+                "rules": [],
+            }
+        },
+    }
     resolution = resolve_route("dispatch", story=LOW_RISK_STORY, registry=reg)
     roles_dispatch = reg["roles"]["dispatch"]
     # Same concrete model as roles.dispatch, however the registry surfaces it

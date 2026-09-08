@@ -32,6 +32,34 @@ def _isolate_environ():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_registry_state():
+    """Reset the model-registry memo around every test (function-scoped,
+    autouse — mirrors _isolate_environ).
+
+    app.role_registry.load_registry() memoizes the parsed model_registry.json
+    per file version (stat-keyed) and returns a deep copy of that master, so
+    a test that mutates the dict it got back can no longer poison a later
+    caller. This fixture is the belt-and-braces guarantee that NO parsed
+    registry state survives across tests on a shared pytest-xdist worker:
+    before each test the memo is dropped (so the test re-parses whatever its
+    environment points at — a leaked PIPELINE_MODEL_REGISTRY_PATH from a
+    prior test can still redirect it, but never serve stale contents), and
+    after each test it is dropped again (so a test that poisoned the memo
+    cannot leak into the next test on the same worker).
+
+    Without this, order/worker-dependent contamination is possible: worker
+    runs [test_A (rewrites/redirects the registry), test_B (reads it)] —
+    with the before-each reset, test_B's load_registry() always observes
+    pristine state regardless of what test_A left behind.
+    """
+    from app import role_registry
+
+    role_registry.reset_registry_cache()
+    yield
+    role_registry.reset_registry_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_plan_dir(tmp_path_factory, monkeypatch):
     """Redirect pipeline.persistence.PLAN_DIR away from the operator's real
     ~/.claude/plans/ for every test in this suite by default.

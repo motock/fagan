@@ -1,5 +1,12 @@
 {
   "providers": {
+    "local": {
+      "models": {
+        "gpt-oss-20b-high": {
+          "tag": "gpt-oss-20b-high:latest"
+        }
+      }
+    },
     "litellm": {"models": {"gpt5-mini": {"tag": "openai/gpt-5-mini"}}},
     "claude": {
       "models": {
@@ -48,6 +55,39 @@
     },
     "lmstudio": {
       "models": {}
+    }
+  },
+  "routing": {
+    "dispatch": {
+      "tiers": {
+        "local_default": {
+          "provider": "local",
+          "model": "gpt-oss-20b-high"
+        },
+        "claude_default": {
+          "provider": "claude",
+          "model": "sonnet"
+        }
+      },
+      "rules": [
+        {
+          "when": {"persona": "security-engineer"},
+          "tier": "claude_default"
+        },
+        {
+          "when": {"max_risk": "low"},
+          "tier": "local_default"
+        },
+        {
+          "when": {"max_risk": "medium"},
+          "tier": "claude_default"
+        },
+        {
+          "when": {"max_risk": "high"},
+          "tier": "claude_default"
+        }
+      ],
+      "default_tier": "local_default"
     }
   },
   "roles": {

@@ -622,6 +622,134 @@ main {
 .decision .decision-q { font-weight: 600; }
 .decision .decision-meta { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
 
+/* === Maturity panel (a3-maturity-metrics) ===============================
+   Sits alongside Notifications / Overlord decisions inside .panels, but is
+   rendered wholesale by maturity.js (it owns its own <h3>, not .panel's),
+   so its heading is restyled here to match the sibling panel chrome
+   exactly rather than inheriting .panel h3 by DOM position. Reads as a
+   telemetry strip, not a card: labeled stat cells with tabular-nums mono
+   values, consistent with the plan board's own instrument-panel idiom. */
+.maturity-panel .maturity-heading {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-base);
+  border-bottom: 1px solid var(--border);
+}
+
+.maturity-panel .maturity-metrics,
+.maturity-panel .maturity-guard {
+  padding: var(--sp-2) var(--sp-3);
+}
+.maturity-panel .maturity-guard {
+  border-top: 1px solid var(--border-soft);
+}
+
+.maturity-rollup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+.maturity-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.maturity-stat-label {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.maturity-stat-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.maturity-stories {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.maturity-stories th {
+  text-align: left;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--text-dim);
+  font-weight: var(--fw-medium);
+  border-bottom: 1px solid var(--border);
+}
+.maturity-stories td {
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.maturity-stories .maturity-story-key {
+  font-family: var(--font-sans);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.maturity-stories tr:last-child td { border-bottom: none; }
+.maturity-stories tr:hover td { background: var(--panel-2); }
+
+.maturity-liveness-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2) 0;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.maturity-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--c-done);
+  box-shadow: 0 0 4px var(--c-done);
+}
+.maturity-summary-warn .maturity-status-dot {
+  background: var(--c-failed);
+  box-shadow: 0 0 4px var(--c-failed);
+}
+.maturity-summary-ok { color: var(--text); }
+
+.maturity-alerts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.maturity-alert-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--c-failed);
+  background: var(--panel-2);
+  font-size: var(--fs-xs);
+}
+.maturity-alert-mode { font-family: var(--font-mono); color: var(--text); }
+.maturity-alert-reason { color: var(--text-dim); }
+.maturity-alert-files { color: var(--text-muted); }
+
+.maturity-error,
+.maturity-empty,
+.maturity-muted {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.maturity-error-row { padding: var(--sp-2) var(--sp-3); }
+.maturity-error-row summary { color: var(--c-failed); font-size: var(--fs-sm); cursor: pointer; }
+.maturity-error-detail { color: var(--text-dim); font-size: var(--fs-xs); margin: var(--sp-1) 0 0 0; }
+
 .modal {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
   background: rgba(0,0,0,0.6);

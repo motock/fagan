@@ -37,7 +37,7 @@ function _metricsRow(story) {
   const escalations = story && story.escalations ? story.escalations : 0;
   return (
     `<tr class="maturity-story-row">`
-    + `<td class="maturity-story-key">${key}</td>`
+    + `<td class="maturity-story-key" title="${key}">${key}</td>`
     + `<td class="maturity-story-merged">${merged}</td>`
     + `<td class="maturity-story-rework">${rework}</td>`
     + `<td class="maturity-story-escalations">${escalations}</td>`
@@ -60,10 +60,22 @@ function _metricsSection(metrics) {
     : escapeHtml(String(costPerMerged));
   return `
     <div class="maturity-rollup">
-      <span class="maturity-rollup-stories-merged">${rollup.stories_merged ?? 0}</span>
-      <span class="maturity-rollup-rework">${rollup.total_rework_cycles ?? 0}</span>
-      <span class="maturity-rollup-escalations">${rollup.total_escalations ?? 0}</span>
-      <span class="maturity-rollup-cost">${costDisplay}</span>
+      <div class="maturity-stat">
+        <span class="maturity-stat-label">merged</span>
+        <span class="maturity-stat-value maturity-rollup-stories-merged">${rollup.stories_merged ?? 0}</span>
+      </div>
+      <div class="maturity-stat">
+        <span class="maturity-stat-label">rework</span>
+        <span class="maturity-stat-value maturity-rollup-rework">${rollup.total_rework_cycles ?? 0}</span>
+      </div>
+      <div class="maturity-stat">
+        <span class="maturity-stat-label">escalations</span>
+        <span class="maturity-stat-value maturity-rollup-escalations">${rollup.total_escalations ?? 0}</span>
+      </div>
+      <div class="maturity-stat">
+        <span class="maturity-stat-label">cost / merged story</span>
+        <span class="maturity-stat-value maturity-rollup-cost">${costDisplay}</span>
+      </div>
     </div>
     <table class="maturity-stories">
       <thead>
@@ -116,7 +128,10 @@ function _guardSection(guard) {
   const healthy = missing === 0 && uncollected === 0;
   const summaryClass = healthy ? "maturity-summary-ok" : "maturity-summary-warn";
   return `
-    <p class="maturity-liveness-summary ${summaryClass}">${withGuard}/${total} modes cite a guard; ${missing} missing, ${uncollected} uncollected</p>
+    <p class="maturity-liveness-summary ${summaryClass}">
+      <span class="maturity-status-dot"></span>
+      ${withGuard}/${total} modes cite a guard; ${missing} missing, ${uncollected} uncollected
+    </p>
     ${_recurrenceAlerts(summary, guard.entries)}
   `;
 }

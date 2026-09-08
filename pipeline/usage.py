@@ -310,6 +310,21 @@ def _role_resource_ok(
     is still gated by Claude's usage poller (the env default), freezing review
     whenever Claude's session/weekly usage maxes out even though review never
     touches Claude (live incident, 2026-07-28: a mode30 plan with
+    role_config review=ollama/glm had review permanently deferred as
+    review_paused while Claude usage sat at 100%). Only review is resolved this
+    way: dispatch's real backend is per-story via _route_dispatch_backend
+    (env-local-first), so passing plan_role_config for dispatch would mismatch
+    and re-introduce the same bug. The override branch only fires when a
+    plan/registry provider actually exists, so an unconfigured install or an
+    env=auto review resolves identically to before.
+
+    role_config is plan-level and OPTIONAL (pipeline-story-schema.md) - most
+    plans never set it, so plan_role_config is routinely None here (a bare
+    `manifest.get("role_config")`). The registry can still name a review
+    provider on its own (model_registry.json's roles.review), and
+    role_registry.resolve_role already null-safes a None plan_role_config
+    internally (`(plan_role_config or {}).get(role, {})`). Gating this whole
+    block on `plan_role_config is not None` therefore reintroduced exactly
     the bug this function exists to fix, just one layer up: a plan with no
     role_config at all fell straight to the env-based Claude default below
     regardless of what the registry said, while _run_reviewer's own

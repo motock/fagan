@@ -327,8 +327,8 @@ class MLXProvider:
         timeout: float | None = None, think: bool | str | None = None,
     ) -> dict:
         # think accepted for signature parity with LocalInferenceProvider -
-        # mlx_lm.server's OpenAI-compatible endpoint has no equivalent field,
-        # so it's intentionally unused here.
+        # mlx_lm.server's OpenAI-compatible endpoint has no equivalent
+        # field, so it's intentionally unused here.
         endpoint = (endpoint or self.default_endpoint).rstrip("/")
         body = {
             "messages": messages, "stream": False,
@@ -371,10 +371,119 @@ class MLXProvider:
             return False, f"MLX endpoint {endpoint} unreachable: {e}"
 
 
+class LiteLLMProvider:
+    """LiteLLM's Python SDK (an OPTIONAL extra: pip install litellm) - a
+    router that talks straight to whichever upstream vendor the model string
+    names (e.g. "anthropic/claude-...", "openai/gpt-..."), returning the
+    same OpenAI-shaped response LMStudioProvider/MLXProvider already
+    translate:
+
+    - Non-streaming response: a pydantic-ish ModelResponse whose
+      choices[0].message carries .role/.content/.tool_calls and whose usage
+      carries .prompt_tokens/.completion_tokens. The message is normalized
+      to a plain dict via .model_dump() when available, falling back to
+      dict()/attribute access - never subscripting, LiteLLM's response
+      objects are not dicts.
+    - litellm is imported LAZILY inside these method bodies, never at module
+      top level, so this module keeps importing cleanly on a machine with no
+      litellm installed (it stays an optional extra in the dependency
+      policy; reachable() reports it as not-reachable instead of raising).
+    - There is no local server to point at (the SDK talks straight to the
+      upstream vendor), so default_endpoint is "" and a non-empty
+      PIPELINE_LOCAL_ENDPOINT_LITELLM, when set, is forwarded to litellm as
+      its api_base.
+    - Per-request `temperature` is honored. There is no per-request
+      context-window control like Ollama's options.num_ctx - `num_ctx` is
+      instead sent as `max_tokens` (an output-length budget, not a true
+      equivalent), consistent with LMStudioProvider/MLXProvider.
+    - LiteLLM is a router, not a server: it has no loaded-model concept, so
+      loaded_models() returns an empty set without any network call (same as
+      MLXProvider).
+    """
+
+    name = "litellm"
+    default_endpoint = ""
+
+    def chat(
+        self, messages: list, *, model: str, num_ctx: int, temperature: float,
+        tools: list | None = None, endpoint: str | None = None,
+        timeout: float | None = None, think: bool | str | None = None,
+    ) -> dict:
+        # Lazy import: litellm is an optional extra, so it must never appear
+        # at module top level (reachable() below uses the same pattern).
+        import litellm
+
+        # think accepted for signature parity with LocalInferenceProvider -
+        # litellm.completion() has no equivalent field, so it's intentionally
+        # unused here.
+        # None (defaulted or explicit) is coerced to the resolved role-call
+        # timeout - never an unbounded request (2026-09-02 freeze).
+        wire_timeout = (
+            timeout if timeout is not None else resolve_role_call_timeout()
+        )
+        kwargs: dict = {
+            "model": model, "messages": messages, "temperature": temperature,
+            "max_tokens": num_ctx, "timeout": wire_timeout,
+        }
+        if tools:
+            kwargs["tools"] = tools
+        if endpoint:
+            kwargs["api_base"] = endpoint
+        # LiteLLM raises its own exception type for 429s; resolve it by NAME
+        # off the lazily-imported module (never a module-scope import, which
+        # would break the optional-dependency policy) and re-raise as
+        # RateLimitedError so the orchestrator routes it to the deferral path
+        # instead of burning the rework budget. Any other error propagates
+        # unchanged - an auth error must surface, not defer forever.
+        rate_limit_cls = getattr(
+            getattr(litellm, "exceptions", None), "RateLimitError", None
+        )
+        try:
+            resp = litellm.completion(**kwargs)
+        except Exception as exc:
+            if rate_limit_cls is not None and isinstance(exc, rate_limit_cls):
+                raise RateLimitedError(
+                    f"litellm rate limit for model {model}: {exc}"
+                ) from exc
+            raise
+        message = resp.choices[0].message
+        if hasattr(message, "model_dump"):
+            message = message.model_dump()
+        elif hasattr(message, "keys"):
+            message = dict(message)
+        else:
+            message = {
+                "role": getattr(message, "role", "assistant"),
+                "content": getattr(message, "content", None),
+            }
+        usage = getattr(resp, "usage", None)
+        return {
+            "message": message,
+            "prompt_eval_count": getattr(usage, "prompt_tokens", None) or 0,
+            "eval_count": getattr(usage, "completion_tokens", None) or 0,
+        }
+
+    def loaded_models(self, endpoint: str) -> set[str]:
+        # LiteLLM is a router, not a server: no loaded-model concept (same
+        # as MLXProvider's one-model-per-process case). Never raises.
+        return set()
+
+    def reachable(self, endpoint: str) -> tuple[bool, str]:
+        try:
+            import litellm  # noqa: F401
+        except ImportError:
+            return False, (
+                "litellm package not installed; install with "
+                "pip install litellm"
+            )
+        return True, ""
+
+
 _PROVIDERS: dict[str, type] = {
     "ollama": OllamaProvider,
     "lmstudio": LMStudioProvider,
     "mlx": MLXProvider,
+    "litellm": LiteLLMProvider,
 }
 
 

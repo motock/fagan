@@ -18,6 +18,7 @@ every test run and break the patch targets).
 
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
@@ -520,6 +521,58 @@ class PipelineService:
                 )
         entries.sort(key=lambda e: e['name'])
         return {'ok': True, 'path': relative_path, 'entries': entries}
+
+    def search_workspace(self, pattern: str, *, max_results: int = 200) -> dict:
+        """Search the active workspace with grep and return matching lines.
+
+        Mirrors :meth:`read_workspace_file` / :meth:`list_workspace_directory`'s
+        error-shape conventions: every failure mode returns a dict with ``ok``
+        false and a fixed generic error string; grep's stderr, the workspace
+        path, and the pattern are never echoed back to the caller.
+
+        The grep command is passed to :func:`subprocess.run` as a LIST argv --
+        never ``shell=True`` and never string-interpolated -- so *pattern*
+        travels as a single argv element and is structurally incapable of shell
+        injection regardless of its content.  grep's exit code 1 means "nothing
+        matched" and is reported as a successful empty search, not an error.
+        """
+        active = self.get_active_workspace()
+        if active is None:
+            return {'ok': False, 'error': 'no active workspace'}
+        if not isinstance(pattern, str) or pattern == '':
+            return {'ok': False, 'error': 'invalid pattern'}
+        try:
+            result = subprocess.run(
+                [
+                    'grep',
+                    '-rn',
+                    '-I',
+                    '--exclude-dir=.git',
+                    '-e',
+                    pattern,
+                    '--',
+                    active,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {'ok': False, 'error': 'search timed out'}
+        except FileNotFoundError:
+            return {'ok': False, 'error': 'search failed'}
+        if result.returncode == 0:
+            lines = result.stdout.splitlines()
+            truncated = len(lines) > max_results
+            return {
+                'ok': True,
+                'matches': lines[:max_results],
+                'truncated': truncated,
+            }
+        if result.returncode == 1:
+            return {'ok': True, 'matches': [], 'truncated': False}
+        return {'ok': False, 'error': 'search failed'}
 
     def set_active_workspace(self, path: str | None) -> None:
         """Set the active workspace; None clears it."""

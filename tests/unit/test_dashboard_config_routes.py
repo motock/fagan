@@ -50,7 +50,7 @@ REGISTRY_PATH_ENV = "PIPELINE_MODEL_REGISTRY_PATH"
 
 # The documented allowlist of valid story `backend` values (mirrors
 # pipeline/server.py's _VALID_STORY_BACKENDS = backend._DRIVERS | {"auto"}).
-_VALID_BACKENDS = frozenset({"claude", "local", "ollama", "lmstudio", "mlx", "auto"})
+_VALID_BACKENDS = frozenset({"claude", "local", "ollama", "lmstudio", "mlx", "litellm", "auto"})
 
 
 # --------------------------------------------------------------------------- #

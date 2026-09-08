@@ -19,7 +19,7 @@ This is a detailed reference for the Autonomous SDLC Agent Pipeline's quickstart
   issues), tag with `agent-pipeline`, write `<plan>.manifest.json`. Carries each
   story's `persona`, `model`, `risk`, and `backend` into the manifest. A
   story's `backend` (`claude` \| `local` \| `ollama` \| `lmstudio` \| `mlx` \|
-  `auto`) pins its dispatch provider from the plan itself, independent of the
+  `litellm` \| `auto`) pins its dispatch provider from the plan itself, independent of the
   process-wide `PIPELINE_BACKEND_DISPATCH` — an unknown value is rejected at
   ingest time with a clear error, before any Plane side effects.
 - `get_role_config(plan_name=None)` — show the resolved `(provider, model)`
@@ -462,7 +462,7 @@ Graceful degradation for optional components — absence is never an error:
           "persona": "software-engineer",
           "model": "sonnet",
           "risk": "low",
-          "backend": "optional: claude | local | ollama | lmstudio | mlx | auto",
+          "backend": "optional: claude | local | ollama | lmstudio | mlx | litellm | auto",
           "key": "optional explicit story key; omit to auto-mint a UUID"
         }
       ]
@@ -492,7 +492,7 @@ Graceful degradation for optional components — absence is never an error:
 - `acceptance` — *optional* array of `{path, source}` read-only test fixtures. When present, the harness writes each `source` to `path` in the worktree (read-only — the agent may not edit them) and the oracle grades the run on whether the implementation makes them pass. Omit it for ordinary TDD stories where the agent writes its own tests per `agent_instructions`; the story then runs on the base harness with a "tests pass" bar. Do **not** use `acceptance_criteria` or a list of strings — `ingest_plan` reads `acceptance` and expects `{path, source}` dicts; a list of strings raises `TypeError: string indices must be integers` in `dispatch_story`.
 - `key` — optional explicit story key; omit to auto-mint a UUID. `dependencies` may reference a story by its exact `summary` string or its explicit `key`.
 - `backend` — *optional*, per-story dispatch provider override:
-  `claude | local | ollama | lmstudio | mlx | auto`. Pins that one story to
+  `claude | local | ollama | lmstudio | mlx | litellm | auto`. Pins that one story to
   a specific provider from the plan itself, independent of the process-wide
   `PIPELINE_BACKEND_DISPATCH`. `ingest_plan` validates it against the
   registered drivers and rejects an unknown value before any Plane calls.
@@ -545,7 +545,7 @@ treat it as a prompt to re-check the fixture, not a hard gate.
 Every pipeline role — **overlord**, **planner** (the guided-decomposition
 checklist role), **dispatch** (the implementer), **review**, and
 **decompose** (`decompose_plan`) — is independently configurable to a
-provider (`claude` / `ollama` / `mlx` / `lmstudio`) and a model.
+provider (`claude` / `ollama` / `mlx` / `lmstudio` / `litellm`) and a model.
 `model_registry.json` (repo root, or `PIPELINE_MODEL_REGISTRY_PATH`) is the
 single editable place to see and change what's available, instead of
 scattered env vars:
@@ -778,12 +778,12 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_WEEK_PAUSE_THRESHOLD` | `90` | `%` of the **week** window that trips the gate |
 | `PIPELINE_WEEK_RESUME_THRESHOLD` | `70` | `%` the **week** window must drop below to clear the gate |
 | `PIPELINE_STATE_DIR` | *(unset → the pipeline-owned plans/manifests root, i.e. `PLAN_DIR`'s base)* | Override for the detached-grading state root. The detached grade's `result.json`/`grading.log` are written under `<state_root>/grading/<story_id>/` (mode `0o700`) and read back from exactly the path persisted in the story's manifest. Security rationale: the grade verdict and its log must live where the code under test cannot write — an agent-writable worktree would let a graded agent forge a passing verdict (`{"returncode": 0, ...}`) during its own build and bypass the acceptance gate at the collect tick. The default derives from the same root that owns the plans/manifests, so no operator setup is required; a *relative* `PIPELINE_STATE_DIR` value resolves against that fixed plans/manifests base (never the scheduler's CWD), so the spawn tick and the later collect tick resolve the same absolute path even if the daemon's working directory changes between them. |
-| `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` \| `auto` (layered local-first with Claude fallback — see below) |
-| `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
-| `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local` |
-| `PIPELINE_BACKEND_PLANNER` | *(unset → registry `ollama`)* | Backend for the guided-decomposition planner (the always-on in-story checklist + rework-feedback checklist role): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Resolution priority: a plan's `role_config.planner` → this env var → `model_registry.json`'s `roles.planner` (pinned to `ollama` in production) → default `ollama`. Unset resolves to the registry's `ollama`, not a mirror of dispatch — set this to pin the planner to a different provider than dispatch, e.g. dispatch on `ollama` with the planner on `mlx`. Only local-family dispatch runs the planner; a `claude` dispatch skips it. |
+| `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local` \| `auto` (layered local-first with Claude fallback — see below) |
+| `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local` |
+| `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local` |
+| `PIPELINE_BACKEND_PLANNER` | *(unset → registry `ollama`)* | Backend for the guided-decomposition planner (the always-on in-story checklist + rework-feedback checklist role): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local`. Resolution priority: a plan's `role_config.planner` → this env var → `model_registry.json`'s `roles.planner` (pinned to `ollama` in production) → default `ollama`. Unset resolves to the registry's `ollama`, not a mirror of dispatch — set this to pin the planner to a different provider than dispatch, e.g. dispatch on `ollama` with the planner on `mlx`. Only local-family dispatch runs the planner; a `claude` dispatch skips it. |
 | `PIPELINE_LOCAL_PLANNER_MODEL` | *(unset)* | Top-priority *model* override for the planner, mirroring `PIPELINE_LOCAL_REVIEW_MODEL`: a concrete provider tag (e.g. `gpt-oss:20b`, `qwen3-coder:30b`) that wins over both `role_config` and the registry, but only when the resolved planner provider is local-family (`ollama`/`lmstudio`/`mlx`/`local`) — a bare Ollama tag never leaks into a Claude planner. Unset leaves the model to `role_config`/registry resolution. |
-| `PIPELINE_BACKEND_DECOMPOSE` | `claude` | Backend for the `decompose_plan` tool (turns a raw request into epics/stories JSON via the product-analyst persona): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Independent of the interactive `product-analyst` subagent (invoked via the `Agent` tool), which is always Claude and unaffected by this setting. |
+| `PIPELINE_BACKEND_DECOMPOSE` | `claude` | Backend for the `decompose_plan` tool (turns a raw request into epics/stories JSON via the product-analyst persona): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local`. Independent of the interactive `product-analyst` subagent (invoked via the `Agent` tool), which is always Claude and unaffected by this setting. |
 | `PIPELINE_DECOMPOSE_SCRATCHPAD` | `on` | Whether guided decomposition maintains the `.agent_scratchpad.md` cross-sub-step memory (`on` \| `off`). `off` runs the checklist-only ablation. |
 | `PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV` | *(unset)* | Off by default: every `claude` subprocess call strips `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL`/`CLAUDE_CODE_USE_BEDROCK`/`CLAUDE_CODE_USE_VERTEX` from its environment so an interactive session's 3rd-party-provider redirect can't silently leak into dispatch/review/overlord. Set truthy only for a legitimate enterprise Bedrock/Vertex deployment that intentionally routes the CLI elsewhere — see "Claude backend provider isolation" below. |
 | `PIPELINE_LOCAL_PROVIDER` | `ollama` | Wire protocol the `local` alias's `complete()`/`resource_status()` speak when a role is set to the generic `local` name: `ollama` \| `mlx` \| `lmstudio`. Naming the provider directly in `PIPELINE_BACKEND_<ROLE>` (`ollama`/`lmstudio`/`mlx`, RELIABILITY_PLAN.md T16) pins that provider for that role regardless of this setting — `local` stays a permanent back-compat alias (existing manifests persist `"backend": "local"`) and is the only name this variable actually affects. All three providers are working, live-validated implementations (including real tool-calling round trips and, for `lmstudio`, a full multi-turn review-loop convergence to a verdict). Neither `mlx` (targets `mlx_lm.server`) nor `lmstudio` (targets LM Studio's local server) has a per-request context-window control like Ollama's `num_ctx` — both send that value as `max_tokens` instead. `lmstudio`'s loaded-model check uses its own `/api/v0/models` (`state: loaded/not-loaded`), not Ollama's `/api/ps`, and LM Studio JIT-loads a model on its first request (~30s for a small model) rather than expecting it pre-loaded. **Does not yet affect `dispatch()`** — the coding-agent subprocess always talks to Ollama's native API regardless of this setting (`MODEL_PROVIDER_ABSTRACTION_PLAN.md` S3, deferred). **MLX/LM Studio model names are Hugging Face repo ids with `/` rather than Ollama-style `:` tags** — `_resolve_local_model` treats any model string containing `:` or `/` as a concrete model tag, so a Hugging Face repo id (e.g. `mlx-community/Qwen2.5-1.5B-Instruct-4bit`, `google/gemma-4-e4b`) can be passed directly as a raw `model=` value; only a model string with neither marker is treated as a tier name and resolved via `PIPELINE_LOCAL_MODEL_DEFAULT`/`_OPUS`/`_SONNET`/`_HAIKU`. |

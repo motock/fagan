@@ -54,7 +54,13 @@ _UNCHANGED_JS_SHA256 = {
     # merged 2026-09-02): that story legitimately extended the chat POST
     # body with the selected workspace id, so the pre-#541 pin no longer
     # matched the committed file. This story never touched comms.js.
-    COMMS_JS: "313d51a55e5b2d188cbcfbc9ee2687559779c898b1d1185f9bf0eab4136ba830",
+    # Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that
+    # story's whole job was to make every dashboard fetch carry the
+    # X-Pipeline-Api-Key header, so the /api/chat raw fetch in
+    # sendCommsMessage() now builds its headers with the shared secret
+    # (Content-Type preserved). comms.js is legitimately no longer
+    # byte-identical to this story's pre-implementation baseline.
+    COMMS_JS: "6c22e7c021af19244095178172e9dbe344b489545e0fea4f86537e0fc5529cb2",
     # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
     # subtitle...") legitimately added the updateCommsSubtitle() call to
     # main.js after this story's own pre-implementation baseline was
@@ -75,7 +81,14 @@ _UNCHANGED_JS_SHA256 = {
     # loadWorkspaceView()/wireWorkspaceView()), so main.js is legitimately no
     # longer byte-identical to this story's pre-implementation baseline.
     # See test_main_js_untouched's own updated assertion below.
-    MAIN_JS: "9dee0f204996e367e48fe29ef058a00b9c6b73025e8782108ccdbd2f6aea81df",
+    # Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that
+    # story's whole job was to make every dashboard fetch carry the
+    # X-Pipeline-Api-Key header, so main.js's three raw fetch sites
+    # (/api/config/providers GET, role-config POST, story /patch POST) now
+    # build their headers with the shared secret (Content-Type preserved).
+    # main.js is legitimately no longer byte-identical to this story's
+    # pre-implementation baseline.
+    MAIN_JS: "15137c187446648a472d008e528ae3835d7e8e078ffcb062df229c9578f0057a",
 }
 
 EXPECTED_CHIP_MESSAGES = {

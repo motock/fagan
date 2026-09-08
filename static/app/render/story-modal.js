@@ -263,7 +263,10 @@ async function loadStoryLog() {
 
   let body;
   try {
-    const res = await fetch(url);
+    const headers = {};
+    const apiKey = window.__PIPELINE_API_KEY__;
+    if (apiKey) headers["X-Pipeline-Api-Key"] = apiKey;
+    const res = await fetch(url, { headers });
     if (!res.ok) {
       // Endpoint gone or the plan/story was renamed between modal open
       // and fetch: render empty state, don't raise.
@@ -372,7 +375,10 @@ async function loadStoryReplay(plan, key, container) {
 
   let body;
   try {
-    const res = await fetch(url);
+    const headers = {};
+    const apiKey = window.__PIPELINE_API_KEY__;
+    if (apiKey) headers["X-Pipeline-Api-Key"] = apiKey;
+    const res = await fetch(url, { headers });
     if (!res.ok) {
       body = { available: false, events: [] };
     } else {

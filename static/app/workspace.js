@@ -9,7 +9,10 @@ import { escapeHtml } from "./render/board.js";
 // Returns the array of workspaces on success, or [] on any error.
 async function fetchWorkspaces() {
   try {
-    const res = await fetch("/api/workspaces");
+    const headers = {};
+    const key = window.__PIPELINE_API_KEY__;
+    if (key) headers["X-Pipeline-Api-Key"] = key;
+    const res = await fetch("/api/workspaces", { headers });
     if (!res.ok) return [];
     const body = await res.json();
     const arr = Array.isArray(body.workspaces) ? body.workspaces : [];
@@ -25,7 +28,12 @@ async function selectWorkspace(path, create) {
   try {
     const res = await fetch("/api/workspace", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: (() => {
+        const h = { "Content-Type": "application/json" };
+        const key = window.__PIPELINE_API_KEY__;
+        if (key) h["X-Pipeline-Api-Key"] = key;
+        return h;
+      })(),
       body: JSON.stringify({ path, create }),
     });
     if (res.ok) {
@@ -68,7 +76,10 @@ function renderWorkspaceList(workspaces) {
 // never-throw convention).
 async function fetchActiveWorkspace() {
   try {
-    const res = await fetch("/api/workspace");
+    const headers = {};
+    const key = window.__PIPELINE_API_KEY__;
+    if (key) headers["X-Pipeline-Api-Key"] = key;
+    const res = await fetch("/api/workspace", { headers });
     if (!res.ok) return null;
     const body = await res.json();
     return typeof body.active === "string" && body.active.length > 0 ? body.active : null;

@@ -93,14 +93,28 @@ def _authenticated_test_client(monkeypatch):
 
     Caller-supplied headers win, so a test can still pass a wrong key (or
     pop the header off `client.headers`) to exercise the denial path.
+
+    Modules in _SELF_MANAGED_AUTH_MODULES build their own TestClients and
+    manage their own auth headers (including deliberately sending none to
+    exercise the 401 denial path), so the force-attach is skipped for them
+    — attaching a valid key there would make the denial path unrunnable
+    (a headerless request is impossible, so an expected 401 comes back 200).
     """
     from fastapi.testclient import TestClient
 
     from app.auth import get_or_create_api_key
 
+    self_managed = {
+        "test_dashboard_index_serves_key",
+    }
+
     original_init = TestClient.__init__
 
     def _init_with_api_key(self, *args, headers=None, **kwargs):
+        module = os.environ.get("PYTEST_CURRENT_TEST", "").split("::")[0]
+        module = module.rsplit("/", 1)[-1].removesuffix(".py")
+        if module in self_managed:
+            return original_init(self, *args, **kwargs)
         merged = {"X-Pipeline-Api-Key": get_or_create_api_key()}
         merged.update(headers or {})
         original_init(self, *args, headers=merged, **kwargs)

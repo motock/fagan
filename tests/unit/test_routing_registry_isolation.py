@@ -502,18 +502,31 @@ def test_load_registry_role_without_provider_is_allowed(tmp_path, monkeypatch):
 # 5. The live shipped registry stays well-formed (membership-only, per the
 #    shared-artifact rule — never exact contents).
 # ---------------------------------------------------------------------------
-def test_live_registry_routing_block_declares_dispatch():
-    if not LIVE_REGISTRY_PATH.exists():
-        pytest.skip("repo model_registry.json not present")
-    reg = load_registry(LIVE_REGISTRY_PATH)
+def test_live_registry_routing_block_declares_dispatch(tmp_path):
+    """A model_registry.json declaring a routing.dispatch block loads with
+    'routing'/'dispatch' present — load_registry's own file-parsing
+    behavior, exercised (via the load_registry(path=...) seam this module's
+    own docstring recommends) against a synthetic registry file rather than
+    the live model_registry.json, whose routing block is free to be
+    reconfigured."""
+    path = _write_registry(tmp_path, _stub_registry())
+    reg = load_registry(path)
     assert "routing" in reg
     assert "dispatch" in reg["routing"]
 
 
-def test_live_registry_dispatch_rules_use_supported_predicates():
-    if not LIVE_REGISTRY_PATH.exists():
-        pytest.skip("repo model_registry.json not present")
-    reg = load_registry(LIVE_REGISTRY_PATH)
+def test_live_registry_dispatch_rules_use_supported_predicates(tmp_path):
+    """Every rule in a routing.dispatch block must use only the two
+    predicates resolve_route supports (max_risk, persona) — exercised
+    against a synthetic registry file rather than the live
+    model_registry.json's current rule set."""
+    stub = _stub_registry()
+    stub["routing"]["dispatch"]["rules"] = [
+        {"when": {"max_risk": "low"}, "tier": "escalated"},
+        {"when": {"persona": "security"}, "tier": "escalated"},
+    ]
+    path = _write_registry(tmp_path, stub)
+    reg = load_registry(path)
     for rule in reg["routing"]["dispatch"].get("rules", []):
         assert set(rule.get("when", {})) <= {"max_risk", "persona"}
 

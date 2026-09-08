@@ -529,8 +529,17 @@ def test_review_story_first_review_passes_no_since_sha(plan_dir, agents_dir, mon
 def test_run_reviewer_ordinary_review_still_honors_local_backend_setting(agents_dir, monkeypatch):
     """Regression guard for T12: forcing the security pass onto Claude must
     not leak into the ordinary code-reviewer pass, which should still honor
-    PIPELINE_BACKEND_REVIEW=local exactly as before."""
+    PIPELINE_BACKEND_REVIEW=local exactly as before.
+
+    Stubs role_registry.load_registry with a synthetic fixture declaring a
+    roles.review entry (pattern already used elsewhere in this file, e.g.
+    test_run_security_reviewer_routes_via_plan_role_config_security),
+    rather than depending on the live model_registry.json's roles.review
+    entry — .claude/rules/testing-config-gates.md: test the resolution
+    logic, not today's configured values."""
     monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "local")
+    fake_registry = {"providers": {}, "roles": {"review": {"provider": "claude", "model": "sonnet"}}}
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: fake_registry)
     captured = {}
 
     class _FakeDriver:
@@ -547,11 +556,11 @@ def test_run_reviewer_ordinary_review_still_honors_local_backend_setting(agents_
     p._run_reviewer("/tmp/some-worktree", "agent/some-branch")
 
     assert captured["role"] == "review"
-    # model_registry.json now carries an explicit "review" entry
-    # (claude/sonnet), so _run_reviewer passes the env-resolved provider
-    # ("local", since PIPELINE_BACKEND_REVIEW wins) explicitly through to
-    # get_backend instead of leaving it to get_backend's own internal
-    # lookup - same real backend, just resolved one layer earlier now.
+    # The stubbed registry carries an explicit "review" entry (claude/
+    # sonnet), so _run_reviewer passes the env-resolved provider ("local",
+    # since PIPELINE_BACKEND_REVIEW wins) explicitly through to get_backend
+    # instead of leaving it to get_backend's own internal lookup - same
+    # real backend, just resolved one layer earlier now.
     assert captured["name"] == "local"
 
 

@@ -18,15 +18,23 @@ negative path, and every mechanically-checkable requirement the task
 states.
 """
 import json
-from pathlib import Path
 
 import pytest
 
 from app import role_registry as rr
 from pipeline import config_provenance as cp
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_REGISTRY_PATH = _REPO_ROOT / "model_registry.json"
+# Synthetic registry fixture (moved above its first use): a chat role
+# entry paired with a providers.claude.sonnet declaration. Used throughout
+# this module instead of the live model_registry.json so these tests
+# exercise load_registry/resolve_role/effective_role_config's own
+# resolution logic and stay stable across any legitimate reconfiguration
+# of the live registry's chat role — .claude/rules/testing-config-gates.md:
+# "test the resolution logic, not today's configured values."
+_SYNTHETIC_CHAT_REGISTRY = {
+    "providers": {"claude": {"models": {"sonnet": {"tag": "sonnet"}}}},
+    "roles": {"chat": {"provider": "claude", "model": "sonnet"}},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -78,20 +86,28 @@ def test_pipeline_roles_preserves_original_eight():
 # ---------------------------------------------------------------------------
 # 2. model_registry.json has a roles.chat entry pairing claude/sonnet.
 # ---------------------------------------------------------------------------
-def test_model_registry_has_chat_role_entry():
-    """model_registry.json must declare a roles.chat block."""
-    data = json.loads(_REGISTRY_PATH.read_text())
+def test_model_registry_has_chat_role_entry(tmp_path):
+    """A model_registry.json declaring a roles.chat block must parse with
+    'chat' present under roles — load_registry's own file-parsing
+    behavior, exercised against a synthetic registry file rather than the
+    live model_registry.json (whose chat role is free to be
+    reconfigured)."""
+    registry_path = tmp_path / "model_registry.json"
+    registry_path.write_text(json.dumps(_SYNTHETIC_CHAT_REGISTRY))
+    data = rr.load_registry(path=registry_path)
     roles = data.get("roles", {})
-    assert "chat" in roles, "model_registry.json roles block must include 'chat'"
+    assert "chat" in roles, "parsed registry's roles block must include 'chat'"
 
 
-def test_model_registry_chat_has_a_provider():
+def test_model_registry_chat_has_a_provider(tmp_path):
     """The chat role must declare SOME provider — which one is a
-    reconfigurable operational choice (see model_registry.json's roles
-    block for the current default), not a fact this test should pin. See
+    reconfigurable operational choice, not a fact this test should pin. See
     test_model_registry_chat_pairs_with_declared_provider_model for the
-    check that the declared value is actually valid."""
-    data = json.loads(_REGISTRY_PATH.read_text())
+    check that the declared value is actually valid. Exercised against a
+    synthetic registry file, not the live model_registry.json."""
+    registry_path = tmp_path / "model_registry.json"
+    registry_path.write_text(json.dumps(_SYNTHETIC_CHAT_REGISTRY))
+    data = rr.load_registry(path=registry_path)
     chat = data["roles"]["chat"]
     provider = chat.get("provider")
     assert isinstance(provider, str) and provider, (
@@ -99,11 +115,14 @@ def test_model_registry_chat_has_a_provider():
     )
 
 
-def test_model_registry_chat_has_a_model():
+def test_model_registry_chat_has_a_model(tmp_path):
     """The chat role must declare SOME model — see
     test_model_registry_chat_has_a_provider for why this doesn't pin a
-    specific value."""
-    data = json.loads(_REGISTRY_PATH.read_text())
+    specific value. Exercised against a synthetic registry file, not the
+    live model_registry.json."""
+    registry_path = tmp_path / "model_registry.json"
+    registry_path.write_text(json.dumps(_SYNTHETIC_CHAT_REGISTRY))
+    data = rr.load_registry(path=registry_path)
     chat = data["roles"]["chat"]
     model = chat.get("model")
     assert isinstance(model, str) and model, (
@@ -111,12 +130,15 @@ def test_model_registry_chat_has_a_model():
     )
 
 
-def test_model_registry_chat_pairs_with_declared_provider_model():
+def test_model_registry_chat_pairs_with_declared_provider_model(tmp_path):
     """The chat role's provider+model must both be declared under
     providers.* — load_registry enforces this and would raise
     RoleRegistryError otherwise. This is the load-time validation the
-    task calls out."""
-    data = rr.load_registry()
+    task calls out, exercised against a synthetic registry file rather
+    than the live model_registry.json."""
+    registry_path = tmp_path / "model_registry.json"
+    registry_path.write_text(json.dumps(_SYNTHETIC_CHAT_REGISTRY))
+    data = rr.load_registry(path=registry_path)
     providers = data["providers"]
     chat = data["roles"]["chat"]
     assert chat["provider"] in providers, (
@@ -145,13 +167,10 @@ def test_load_registry_does_not_raise_with_chat_role():
 # test_model_registry_chat_uses_ollama_provider) - CLAUDE.md's "Testing
 # Configuration-Driven Logic" section: assert against a stubbed fixture,
 # never against whatever the real config currently contains.
+#
+# (_SYNTHETIC_CHAT_REGISTRY is defined near the top of this module, above
+# its first use in section 2.)
 # ---------------------------------------------------------------------------
-_SYNTHETIC_CHAT_REGISTRY = {
-    "providers": {"claude": {"models": {"sonnet": {"tag": "sonnet"}}}},
-    "roles": {"chat": {"provider": "claude", "model": "sonnet"}},
-}
-
-
 def test_resolve_role_chat_returns_claude_provider():
     """resolve_role(role='chat', registry=<claude/sonnet fixture>) must
     return a RoleResolution whose provider is claude, without raising."""
@@ -171,9 +190,11 @@ def test_resolve_role_chat_returns_sonnet_tag_model():
 
 
 def test_resolve_role_chat_does_not_raise():
-    """Headline: resolving the chat role with the real registry raises
-    nothing."""
-    rr.resolve_role("chat", registry=rr.load_registry())
+    """Headline: resolving the chat role raises nothing, given a synthetic
+    registry that declares a valid chat provider/model pairing (decoupled
+    from the live model_registry.json's current chat role, per the
+    config-gates testing rule)."""
+    rr.resolve_role("chat", registry=_SYNTHETIC_CHAT_REGISTRY)
 
 
 # ---------------------------------------------------------------------------
@@ -188,8 +209,11 @@ def test_effective_role_config_includes_chat_entry():
 
 
 def test_effective_role_config_chat_entry_error_is_none():
-    """The chat entry must resolve cleanly — error is None."""
-    result = cp.effective_role_config(registry=rr.load_registry(), environ={})
+    """The chat entry must resolve cleanly — error is None — given a
+    synthetic registry with a valid chat pairing (decoupled from the live
+    model_registry.json's current chat role, per the config-gates testing
+    rule)."""
+    result = cp.effective_role_config(registry=_SYNTHETIC_CHAT_REGISTRY, environ={})
     chat_entry = next(e for e in result if e["role"] == "chat")
     assert chat_entry["error"] is None, (
         f"expected chat entry error None, got {chat_entry['error']!r}"

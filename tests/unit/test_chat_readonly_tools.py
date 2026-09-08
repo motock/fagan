@@ -633,3 +633,170 @@ def test_list_directory_execute_passes_path_through_verbatim(raw_path):
     result = TOOLS["list_directory"]["execute"](client, "http://testbase", path=raw_path)
     assert client.calls == [("/api/workspace/files", {"path": raw_path})]
     assert result == _LIST_DIRECTORY_CANNED
+
+
+# --------------------------------------------------------------------------- #
+# search_code tool (workspace code-search story)
+#
+# Completes the read-only tool tier (read_file, list_directory, search_code):
+# registration shape, required-``pattern`` signature, prompt derivation, HTTP
+# wiring (URL + ``params=`` kwarg), and error propagation. Mirrors the two
+# prior tool sections above but hits ``/api/workspace/search`` and, like
+# ``read_file`` (unlike ``list_directory``), ``pattern`` is REQUIRED — a
+# grep-style search has no meaningful default. No write, git, or exec tool
+# belongs to this story; those are later epics with their own confirmation
+# gating and audit logging. Self-contained; fails with KeyError('search_code')
+# until the TOOLS entry lands.
+# --------------------------------------------------------------------------- #
+_SEARCH_CODE_DESCRIPTION = (
+    "Search the active workspace for a text pattern (grep-style) and return "
+    "matching lines with file and line number."
+)
+
+_SEARCH_CODE_CANNED = {
+    "pattern": "TODO",
+    "matches": [
+        {"file": "app/chat.py", "line": 12, "text": "# TODO: tighten the gate"},
+        {"file": "tests/unit/test_x.py", "line": 3, "text": "# TODO second match"},
+    ],
+}
+
+
+class _SearchCodeRecordingClient(_ReadFileRecordingClient):
+    """Recording client that refuses POSTs.
+
+    ``search_code`` belongs to the read-only tier and must issue a GET; if an
+    implementation routes it through ``.post`` the happy-path test below fails
+    with an explicit "must GET, not POST" message instead of a confusing
+    AttributeError on a fake that has no ``post`` at all.
+    """
+
+    def post(self, url, *args, **kwargs):
+        raise AssertionError(f"search_code must GET, not POST (got POST {url!r})")
+
+
+def test_search_code_tool_is_registered_with_documented_shape():
+    entry = TOOLS["search_code"]  # KeyError here == implementation not landed yet
+    assert set(entry) == {"description", "params", "execute"}
+    assert entry["description"] == _SEARCH_CODE_DESCRIPTION
+    assert entry["params"] == {"pattern": "str"}
+    assert callable(entry["execute"])
+
+
+def test_read_only_tier_membership_is_complete():
+    # This story completes the read-only tier (read_file, list_directory,
+    # search_code). Membership only: TOOLS is a shared registry that later
+    # stories keep extending, so this must NOT pin the registry's total
+    # contents or ordering.
+    assert {"read_file", "list_directory", "search_code"} <= set(TOOLS)
+
+
+def test_search_code_execute_is_a_lambda_with_required_pattern_and_kwargs():
+    # Documented lambda shape: (http_client, api_base_url, pattern, **kwargs).
+    # Unlike list_directory's defaulted path, pattern is REQUIRED — omitting
+    # it must fail argument binding, not silently search for ''.
+    import inspect
+
+    execute = TOOLS["search_code"]["execute"]
+    assert execute.__name__ == "<lambda>", (
+        "execute must be a lambda, mirroring the read_file/list_directory entries"
+    )
+    params = inspect.signature(execute).parameters
+    assert list(params)[:2] == ["http_client", "api_base_url"]
+    assert "pattern" in params
+    assert params["pattern"].default is inspect.Parameter.empty
+    assert params["pattern"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    ), "execute must accept **kwargs so extra model-supplied args are tolerated"
+
+
+def test_search_code_is_derived_into_system_prompt_not_hand_edited():
+    # SYSTEM_PROMPT must keep being assembled as prefix + derived sentence +
+    # final sentence; search_code has to reach the prompt through
+    # _available_tools_sentence() (derived from TOOLS), not a hand edit.
+    assert SYSTEM_PROMPT == (
+        chat_module._SYSTEM_PROMPT_PREFIX
+        + chat_module._available_tools_sentence()
+        + chat_module._FINAL_SENTENCE
+    )
+    sentence = chat_module._available_tools_sentence()
+    assert "search_code" in sentence
+    assert _SEARCH_CODE_DESCRIPTION in sentence
+    assert "search_code" in SYSTEM_PROMPT
+
+
+def test_search_code_execute_gets_workspace_search_endpoint_with_pattern_param():
+    client = _SearchCodeRecordingClient(_FakeResponse(_SEARCH_CODE_CANNED))
+    result = TOOLS["search_code"]["execute"](client, "http://testbase", pattern="TODO")
+    assert len(client.calls) == 1
+    url, params = client.calls[0]
+    assert url == "/api/workspace/search"
+    assert params == {"pattern": "TODO"}
+    assert result == _SEARCH_CODE_CANNED
+
+
+def test_search_code_execute_threads_api_base_url_through_resolve_tool_url():
+    transport = _FakeTransport(payload=_SEARCH_CODE_CANNED)
+    client = httpx.Client(transport=transport, base_url="")
+    result = TOOLS["search_code"]["execute"](client, "http://testbase", pattern="TODO")
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert str(request.url).startswith("http://testbase/api/workspace/search")
+    assert request.url.params["pattern"] == "TODO"
+    assert result == _SEARCH_CODE_CANNED
+
+
+def test_search_code_execute_propagates_client_errors_without_local_catch():
+    # The execute lambda must NOT swallow transport errors; _execute_tool is
+    # the layer that catches tool exceptions, so the lambda stays transparent.
+    boom = _Boom("workspace code search failed")
+    client = _RaisingClient(boom)
+    with pytest.raises(_Boom) as excinfo:
+        TOOLS["search_code"]["execute"](client, "http://testbase", pattern="TODO")
+    assert client.calls == 1
+    assert excinfo.value is boom
+    assert str(excinfo.value) == "workspace code search failed"
+
+
+def test_search_code_execute_requires_pattern_arg():
+    client = _ReadFileRecordingClient(_FakeResponse(_SEARCH_CODE_CANNED))
+    with pytest.raises(TypeError) as excinfo:
+        TOOLS["search_code"]["execute"](client, "http://testbase")
+    assert client.calls == []  # argument binding failed before any HTTP call
+    assert "pattern" in str(excinfo.value)
+
+
+def test_search_code_execute_accepts_pattern_positionally():
+    # The documented signature binds pattern as the third positional arg.
+    client = _ReadFileRecordingClient(_FakeResponse(_SEARCH_CODE_CANNED))
+    result = TOOLS["search_code"]["execute"](client, "http://testbase", "TODO")
+    assert client.calls == [("/api/workspace/search", {"pattern": "TODO"})]
+    assert result == _SEARCH_CODE_CANNED
+
+
+def test_search_code_execute_tolerates_extra_kwargs():
+    client = _ReadFileRecordingClient(_FakeResponse(_SEARCH_CODE_CANNED))
+    TOOLS["search_code"]["execute"](
+        client, "http://testbase", pattern="TODO", plan_name="ignored"
+    )
+    assert client.calls == [("/api/workspace/search", {"pattern": "TODO"})]
+
+
+@pytest.mark.parametrize(
+    "raw_pattern",
+    [
+        "",  # empty: boundary value, passed through untouched (server decides semantics)
+        "x",  # single character
+        "a b&c=d",  # query-string metacharacters must ride in params=, not be hand-embedded
+        ".*[]()?",  # regex metacharacters are the server's concern, not the tool's
+        "up/../down",  # traversal-looking input is the server's gate, not the tool's
+        "ünïcode/ pattern",  # non-ascii + space passes through verbatim
+        "x" * 4096,  # long pattern boundary
+    ],
+)
+def test_search_code_execute_passes_pattern_through_verbatim(raw_pattern):
+    client = _ReadFileRecordingClient(_FakeResponse(_SEARCH_CODE_CANNED))
+    result = TOOLS["search_code"]["execute"](client, "http://testbase", pattern=raw_pattern)
+    assert client.calls == [("/api/workspace/search", {"pattern": raw_pattern})]
+    assert result == _SEARCH_CODE_CANNED

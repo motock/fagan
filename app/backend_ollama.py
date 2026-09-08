@@ -62,6 +62,13 @@ REVIEW_PROACTIVE_TRIM_THRESHOLD = float(
 
 _REVIEW_LOG_TRUNCATE = 2000
 
+# Providers whose models are served off-host (e.g. litellm fronts a remote
+# API): a hosted model has no local VRAM/RAM footprint, so a free-memory
+# reading is not evidence about whether it can serve - resource_status()
+# skips the free-memory floor for these providers (reachability still
+# applies). Future hosted providers extend this registry.
+_HOSTED_PROVIDERS = frozenset({"litellm"})
+
 
 class OllamaDriver:
     """Backend driver for Ollama's native /api/chat endpoint.
@@ -765,7 +772,10 @@ class OllamaDriver:
         the live calibration behind the default fraction). Like every other
         component here it fails open - an unresolvable tag, a cloud-served
         tag with no local footprint, or an unreadable total-RAM figure all
-        leave dispatch permitted.
+        leave dispatch permitted. The floor is likewise skipped for hosted
+        providers (_HOSTED_PROVIDERS): their models are served off-host with
+        no local VRAM/RAM footprint, so a free-memory reading is not evidence
+        about whether they can serve.
         """
         try:
             ok, reason = self.provider.reachable(self.endpoint)
@@ -783,7 +793,14 @@ class OllamaDriver:
             "PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL
         )
         free_mb = self._free_memory_mb()
-        if free_mb is not None and not tag.endswith(":cloud"):
+        # Hosted providers (see _HOSTED_PROVIDERS) serve their models
+        # off-host: a hosted model has no local VRAM/RAM footprint, so a
+        # free-memory reading is not evidence about whether it can serve -
+        # skip the floor for them the same way it is skipped for :cloud
+        # tags (reachability above still applies).
+        if free_mb is not None and not (
+            tag.endswith(":cloud") or self.provider.name in _HOSTED_PROVIDERS
+        ):
             provider_env = f"PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_{self.provider.name.upper()}"
             floor_mb = int(os.environ.get(
                 provider_env,

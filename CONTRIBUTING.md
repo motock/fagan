@@ -30,6 +30,10 @@ scripts/install.sh --dev   # venv + requirements-dev.txt (adds pytest, ruff)
 .venv/bin/python -m ruff check .    # must be clean
 ```
 
+Add `-n auto` (pytest-xdist, already in `requirements-dev.txt`) to fan the suite out across
+your machine's cores while iterating — it's the same suite, just parallel, so it must produce
+the same pass/fail set as the sequential run.
+
 - Keep PRs focused — one concern per PR, under ~400 lines of diff as a
   guideline (see CLAUDE.md's "Pull request size"). A large change is better
   submitted as a sequence of smaller reviewable PRs than one big one.

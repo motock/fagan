@@ -73,8 +73,12 @@ jobs:
         # change whose only failing tests are in a new file merges red to
         # master (PR #197). Unit tests live under tests/unit/; --ignore keeps
         # the benchmark/experiments dirs (which aren't correctness suites) out
-        # of collection.
-        run: pytest -q --override-ini=testpaths=. --ignore=tests/benchmark --ignore=tests/experiments
+        # of collection. `-n auto` (pytest-xdist) fans the suite out across
+        # the runner's cores; the suite is already xdist-safe (isolated
+        # tmp_path dirs, ephemeral ports via _free_port(), monkeypatched env)
+        # since nothing but this flag changed between a green sequential run
+        # and a green parallel one.
+        run: pytest -q --override-ini=testpaths=. --ignore=tests/benchmark --ignore=tests/experiments -n auto
 
   lint:
     name: Lint (ruff)

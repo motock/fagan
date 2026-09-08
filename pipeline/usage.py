@@ -250,6 +250,16 @@ def _route_dispatch_backend(story: dict[str, Any]) -> str:
     Routes to Claude when the story is above the local risk ceiling or uses a
     security persona; otherwise tries local first (the orchestrator escalates
     to Claude a-posteriori if the local run fails).
+
+    A configured routing policy (role_registry.resolve_route) is consulted
+    first and honored verbatim — including a claude or third-backend choice —
+    but ONLY while the operator has not pinned a runtime ceiling: a
+    PIPELINE_LOCAL_MAX_RISK set in the environment is an explicit operator
+    override the static policy block cannot see, so in that case the legacy
+    gate below owns the whole decision (it reads the env at call time, and
+    owns the security-persona and unwinnable-scope checks too). Precedence:
+    explicit runtime ceiling > static routing policy > built-in default. See
+    docs/specs/MULTI_LLM_ROUTING.md §5.
     """
     resolution = None
     try:
@@ -267,7 +277,7 @@ def _route_dispatch_backend(story: dict[str, Any]) -> str:
             "dispatch routing policy error (%s); using built-in backend selection",
             exc,
         )
-    if resolution is not None:
+    if resolution is not None and "PIPELINE_LOCAL_MAX_RISK" not in os.environ:
         return resolution.provider
     # Read at call time so tests can monkeypatch the env and re-import isn't needed.
     max_risk = os.environ.get("PIPELINE_LOCAL_MAX_RISK", PIPELINE_LOCAL_MAX_RISK).lower()
@@ -300,21 +310,6 @@ def _role_resource_ok(
     is still gated by Claude's usage poller (the env default), freezing review
     whenever Claude's session/weekly usage maxes out even though review never
     touches Claude (live incident, 2026-07-28: a mode30 plan with
-    role_config review=ollama/glm had review permanently deferred as
-    review_paused while Claude usage sat at 100%). Only review is resolved this
-    way: dispatch's real backend is per-story via _route_dispatch_backend
-    (env-local-first), not role_registry, so passing plan_role_config for
-    dispatch would mismatch and re-introduce the same bug. The override branch
-    only fires when a plan/registry provider actually exists, so an
-    unconfigured install or an env=auto review resolves identically to before.
-
-    role_config is plan-level and OPTIONAL (pipeline-story-schema.md) - most
-    plans never set it, so plan_role_config is routinely None here (a bare
-    `manifest.get("role_config")`). The registry can still name a review
-    provider on its own (model_registry.json's roles.review), and
-    role_registry.resolve_role already null-safes a None plan_role_config
-    internally (`(plan_role_config or {}).get(role, {})`). Gating this whole
-    block on `plan_role_config is not None` therefore reintroduced exactly
     the bug this function exists to fix, just one layer up: a plan with no
     role_config at all fell straight to the env-based Claude default below
     regardless of what the registry said, while _run_reviewer's own

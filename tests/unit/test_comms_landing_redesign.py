@@ -88,7 +88,16 @@ _UNCHANGED_JS_SHA256 = {
     # build their headers with the shared secret (Content-Type preserved).
     # main.js is legitimately no longer byte-identical to this story's
     # pre-implementation baseline.
-    MAIN_JS: "15137c187446648a472d008e528ae3835d7e8e078ffcb062df229c9578f0057a",
+    # Re-pinned for the roles provider→model dropdown-cascade story
+    # (eb8b1ac6, 2026-09-08): that story's whole job was to make the Model
+    # dropdown in the Roles table Edit row repopulate when the Provider
+    # dropdown changes, so main.js gained the top-level
+    # buildModelOptionsHtml() helper (exported for the node-eval harness),
+    # renderRoleEdit() now delegates its Model-select markup to it, and
+    # _renderConfigRoles() wires a change listener on each .edit-provider
+    # select. main.js is legitimately no longer byte-identical to this
+    # story's pre-implementation baseline.
+    MAIN_JS: "560db6bab8f4c15b8e821fb6404d3f4ff4dec3fb4e8539289c69770033202737",
 }
 
 EXPECTED_CHIP_MESSAGES = {

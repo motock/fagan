@@ -637,10 +637,12 @@ It is **always on** for any **local-family** dispatch backend — Claude doesn't
 need the crutch, so a `claude` dispatch skips it. There is no on/off toggle: the
 planner runs on every local-family story's first dispatch (never on a resume)
 and on every rework cycle. The planner is its own independently routable role
-(default `ollama`/`glm` via `model_registry.json`), so it can run on a different
-provider than dispatch — set `PIPELINE_BACKEND_PLANNER` to pin the provider
-(e.g. dispatch on `ollama`, plan on `mlx`) and `PIPELINE_LOCAL_PLANNER_MODEL` to
-pin the model tag.
+(default `claude`, via `default_provider`, unless the operator's own
+`model_registry.local.json`/`role_config` pins it elsewhere — the shipped
+`model_registry.json` no longer ships a `roles` block), so it can run on a
+different provider than dispatch — set `PIPELINE_BACKEND_PLANNER` to pin the
+provider (e.g. dispatch on `ollama`, plan on `mlx`) and
+`PIPELINE_LOCAL_PLANNER_MODEL` to pin the model tag.
 
 - **Initial checklist (`_run_planner`).** On a story's *first* dispatch (never
   on a resume — the checklist is planned once), the planner turns
@@ -781,7 +783,7 @@ an unconfigured deployment would 404 on every scheduled tick, burn the
 | `PIPELINE_BACKEND_DISPATCH` | `claude` | Backend for dispatch (coding) agents: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local` \| `auto` (layered local-first with Claude fallback — see below) |
 | `PIPELINE_BACKEND_REVIEW` | `claude` | Backend for the code-reviewer persona: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local` |
 | `PIPELINE_BACKEND_OVERLORD` | `claude` | Backend for overlord decisions: `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local` |
-| `PIPELINE_BACKEND_PLANNER` | *(unset → registry `ollama`)* | Backend for the guided-decomposition planner (the always-on in-story checklist + rework-feedback checklist role): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local`. Resolution priority: a plan's `role_config.planner` → this env var → `model_registry.json`'s `roles.planner` (pinned to `ollama` in production) → default `ollama`. Unset resolves to the registry's `ollama`, not a mirror of dispatch — set this to pin the planner to a different provider than dispatch, e.g. dispatch on `ollama` with the planner on `mlx`. Only local-family dispatch runs the planner; a `claude` dispatch skips it. |
+| `PIPELINE_BACKEND_PLANNER` | *(unset → `claude`)* | Backend for the guided-decomposition planner (the always-on in-story checklist + rework-feedback checklist role): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local`. Resolution priority: a plan's `role_config.planner` → this env var → `model_registry.json`'s `roles.planner` (absent from the shipped registry; only present if the operator supplies their own `model_registry.local.json`, selected via `PIPELINE_MODEL_REGISTRY_PATH`) → code-level `default_provider` (`claude`). Unset resolves to `claude`, not a mirror of dispatch — set this to pin the planner to a different provider than dispatch, e.g. dispatch on `ollama` with the planner on `mlx`. Only local-family dispatch runs the planner; a `claude` dispatch skips it. |
 | `PIPELINE_LOCAL_PLANNER_MODEL` | *(unset)* | Top-priority *model* override for the planner, mirroring `PIPELINE_LOCAL_REVIEW_MODEL`: a concrete provider tag (e.g. `gpt-oss:20b`, `qwen3-coder:30b`) that wins over both `role_config` and the registry, but only when the resolved planner provider is local-family (`ollama`/`lmstudio`/`mlx`/`local`) — a bare Ollama tag never leaks into a Claude planner. Unset leaves the model to `role_config`/registry resolution. |
 | `PIPELINE_BACKEND_DECOMPOSE` | `claude` | Backend for the `decompose_plan` tool (turns a raw request into epics/stories JSON via the product-analyst persona): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `litellm` \| `local`. Independent of the interactive `product-analyst` subagent (invoked via the `Agent` tool), which is always Claude and unaffected by this setting. |
 | `PIPELINE_DECOMPOSE_SCRATCHPAD` | `on` | Whether guided decomposition maintains the `.agent_scratchpad.md` cross-sub-step memory (`on` \| `off`). `off` runs the checklist-only ablation. |

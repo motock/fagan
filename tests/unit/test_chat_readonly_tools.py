@@ -501,3 +501,135 @@ class TestModuleInvariants:
         # PART 3 populates the registry; it must no longer be empty.
         assert TOOLS != {}
         assert {"list_plans", "get_plan", "health"} <= set(TOOLS.keys())
+
+
+# --------------------------------------------------------------------------- #
+# list_directory tool (workspace directory-listing story)
+#
+# Extends the read-only registry coverage with the ``list_directory`` tool:
+# registration shape, defaulted-``path`` signature, prompt derivation, HTTP
+# wiring (URL + ``params=`` kwarg), and error propagation. Mirrors the
+# ``read_file`` section above but hits ``/api/workspace/files`` (plural) and,
+# unlike ``read_file``, must NOT raise when ``path`` is omitted — the default
+# is ``''``. Self-contained; fails with KeyError('list_directory') until the
+# TOOLS entry lands.
+# --------------------------------------------------------------------------- #
+_LIST_DIRECTORY_DESCRIPTION = (
+    "List the immediate contents of a directory in the active workspace "
+    "by relative path (non-recursive)."
+)
+
+_LIST_DIRECTORY_CANNED = {
+    "path": "some/dir",
+    "entries": [
+        {"name": "subdir", "type": "dir"},
+        {"name": "notes.txt", "type": "file"},
+    ],
+}
+
+
+def test_list_directory_tool_is_registered_with_documented_shape():
+    entry = TOOLS["list_directory"]  # KeyError here == implementation not landed yet
+    assert set(entry) == {"description", "params", "execute"}
+    assert entry["description"] == _LIST_DIRECTORY_DESCRIPTION
+    assert entry["params"] == {"path": "str"}
+    assert callable(entry["execute"])
+
+
+def test_list_directory_execute_signature_takes_defaulted_path_and_kwargs():
+    # Documented lambda shape: (http_client, api_base_url, path='', **kwargs).
+    # The '' default is what separates this tool from read_file, whose path
+    # argument is required.
+    import inspect
+
+    params = inspect.signature(TOOLS["list_directory"]["execute"]).parameters
+    assert list(params)[:2] == ["http_client", "api_base_url"]
+    assert "path" in params
+    assert params["path"].default == ""
+    assert params["path"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    ), "execute must accept **kwargs so extra model-supplied args are tolerated"
+
+
+def test_list_directory_is_derived_into_system_prompt_not_hand_edited():
+    # SYSTEM_PROMPT must keep being assembled as prefix + derived sentence +
+    # final sentence; list_directory has to reach the prompt through
+    # _available_tools_sentence() (derived from TOOLS), not a hand edit.
+    assert SYSTEM_PROMPT == (
+        chat_module._SYSTEM_PROMPT_PREFIX
+        + chat_module._available_tools_sentence()
+        + chat_module._FINAL_SENTENCE
+    )
+    sentence = chat_module._available_tools_sentence()
+    assert "list_directory" in sentence
+    assert "list_directory" in SYSTEM_PROMPT
+
+
+def test_list_directory_execute_gets_workspace_files_endpoint_with_path_param():
+    client = _ReadFileRecordingClient(_FakeResponse(_LIST_DIRECTORY_CANNED))
+    result = TOOLS["list_directory"]["execute"](client, "http://testbase", path="some/dir")
+    assert len(client.calls) == 1
+    url, params = client.calls[0]
+    assert url == "/api/workspace/files"
+    assert params == {"path": "some/dir"}
+    assert result == _LIST_DIRECTORY_CANNED
+
+
+def test_list_directory_execute_threads_api_base_url_through_resolve_tool_url():
+    transport = _FakeTransport(payload=_LIST_DIRECTORY_CANNED)
+    client = httpx.Client(transport=transport, base_url="")
+    result = TOOLS["list_directory"]["execute"](client, "http://testbase", path="some/dir")
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert str(request.url).startswith("http://testbase/api/workspace/files")
+    assert request.url.params["path"] == "some/dir"
+    assert result == _LIST_DIRECTORY_CANNED
+
+
+def test_list_directory_execute_propagates_client_errors_without_local_catch():
+    # The execute lambda must NOT swallow transport errors; _execute_tool is
+    # the layer that catches tool exceptions, so the lambda stays transparent.
+    boom = _Boom("workspace directory listing failed")
+    client = _RaisingClient(boom)
+    with pytest.raises(_Boom) as excinfo:
+        TOOLS["list_directory"]["execute"](client, "http://testbase", path="some/dir")
+    assert client.calls == 1
+    assert excinfo.value is boom
+    assert str(excinfo.value) == "workspace directory listing failed"
+
+
+def test_list_directory_execute_defaults_to_empty_path_when_omitted():
+    # The documented default: calling with no path argument must NOT raise
+    # TypeError (read_file's path is required; list_directory's is not) and
+    # must still issue the GET with params={'path': ''}.
+    client = _ReadFileRecordingClient(_FakeResponse(_LIST_DIRECTORY_CANNED))
+    result = TOOLS["list_directory"]["execute"](client, "http://testbase")
+    assert client.calls == [("/api/workspace/files", {"path": ""})]
+    assert result == _LIST_DIRECTORY_CANNED
+
+
+def test_list_directory_execute_tolerates_extra_kwargs():
+    client = _ReadFileRecordingClient(_FakeResponse(_LIST_DIRECTORY_CANNED))
+    TOOLS["list_directory"]["execute"](
+        client, "http://testbase", path="some/dir", plan_name="ignored"
+    )
+    assert client.calls == [("/api/workspace/files", {"path": "some/dir"})]
+
+
+@pytest.mark.parametrize(
+    "raw_path",
+    [
+        "",  # empty: boundary value, passed through untouched
+        "d",  # single character
+        "a b/dir c",  # spaces must not be pre-quoted client-side
+        "up/../down",  # traversal-looking paths are the server's gate, not the tool's
+        "ünïcode/目录",  # non-ascii passes through verbatim
+        "x" * 4096,  # long path boundary
+    ],
+)
+def test_list_directory_execute_passes_path_through_verbatim(raw_path):
+    client = _ReadFileRecordingClient(_FakeResponse(_LIST_DIRECTORY_CANNED))
+    result = TOOLS["list_directory"]["execute"](client, "http://testbase", path=raw_path)
+    assert client.calls == [("/api/workspace/files", {"path": raw_path})]
+    assert result == _LIST_DIRECTORY_CANNED

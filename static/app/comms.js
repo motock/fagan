@@ -141,7 +141,12 @@ async function sendCommsMessage(text) {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: (() => {
+        const h = { 'Content-Type': 'application/json' };
+        const key = window.__PIPELINE_API_KEY__;
+        if (key) h['X-Pipeline-Api-Key'] = key;
+        return h;
+      })(),
       body: JSON.stringify({ plan_name: state.selectedPlan, message: trimmed, workspace: state.selectedWorkspace, history: commsHistory })
     });
     if (!res.ok) throw new Error('non-2xx');

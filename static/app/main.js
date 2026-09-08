@@ -422,7 +422,10 @@ function renderConfigError(section, message) {
 
 async function loadRegistry() {
   try {
-    const res = await fetch("/api/config/providers");
+    const headers = {};
+    const apiKey = window.__PIPELINE_API_KEY__;
+    if (apiKey) headers["X-Pipeline-Api-Key"] = apiKey;
+    const res = await fetch("/api/config/providers", { headers });
     if (!res.ok) return {};
     const data = await res.json();
     return { providers: data.providers || {} };
@@ -508,7 +511,12 @@ async function _saveRoleConfig(role, provider, model, plan, errorEl) {
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: (() => {
+        const h = { "Content-Type": "application/json" };
+        const apiKey = window.__PIPELINE_API_KEY__;
+        if (apiKey) h["X-Pipeline-Api-Key"] = apiKey;
+        return h;
+      })(),
       body: JSON.stringify({ provider, model }),
     });
     if (!res.ok) {
@@ -616,7 +624,12 @@ function _wireBackendSelector() {
         `/api/plans/${encodeURIComponent(plan)}/stories/${encodeURIComponent(key)}/patch`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: (() => {
+            const h = { "Content-Type": "application/json" };
+            const apiKey = window.__PIPELINE_API_KEY__;
+            if (apiKey) h["X-Pipeline-Api-Key"] = apiKey;
+            return h;
+          })(),
           body: JSON.stringify({ backend }),
         }
       );

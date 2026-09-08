@@ -22,6 +22,8 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 #
 # NOTE: these are per-story self-guards, not permanent regression oracles.
 # INDEX_HTML_SHA256 and TOAST_REGION_SHA256 were pinned when this story (#458)
+# was implemented. INDEX_HTML_SHA256 has been re-pinned as later stories
+# legitimately touched index.html (see the comment at the pin below).
 # ran and have since been superseded twice over by later, legitimately merged
 # sibling stories that touch these exact same shared files: #466 ("Build the
 # Comms landing hero copy...") edited index.html and added CSS near the Comms
@@ -52,7 +54,13 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 # #workspace-picker gained a "workspace-picker" class; all IDs this test
 # suite and test_app_workspace_picker.mjs check for are unchanged. Still
 # never touched comms.js or any Comms-related markup.
-INDEX_HTML_SHA256 = "b5c0bc25b165517b5ba335fbd3992648435c4c32595321ee8befd32ec2eeb014"
+INDEX_HTML_SHA256 = "2ee2ef22673d7aa362e690978eb4f01977fe42e417aec2d15ea22e31e3eca87b"
+# Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that story's
+# whole job was to inject the dashboard shared secret into the served HTML, so
+# static/index.html gained the <!--PIPELINE_API_KEY--> placeholder marker
+# immediately before </head> (the server str.replace()s it at request time).
+# index.html is legitimately no longer byte-identical to this story's
+# pre-implementation baseline.
 # Re-pinned for the same touch-up pass: appendCommsMessage now renders a
 # role/timestamp "who" line and wraps content in the (already-styled)
 # .bubble element instead of setting raw innerHTML directly, plus new
@@ -75,7 +83,13 @@ INDEX_HTML_SHA256 = "b5c0bc25b165517b5ba335fbd3992648435c4c32595321ee8befd32ec2e
 # merged 2026-09-02): that story legitimately extended the chat POST body
 # with the selected workspace id, so the pre-#541 pin no longer matched the
 # committed file. This story never touched comms.js.
-COMMS_JS_SHA256 = "313d51a55e5b2d188cbcfbc9ee2687559779c898b1d1185f9bf0eab4136ba830"
+# Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that
+# story's whole job was to make every dashboard fetch carry the
+# X-Pipeline-Api-Key header, so the /api/chat raw fetch in
+# sendCommsMessage() now builds its headers with the shared secret
+# (Content-Type preserved). comms.js is legitimately no longer
+# byte-identical to this story's pre-implementation baseline.
+COMMS_JS_SHA256 = "6c22e7c021af19244095178172e9dbe344b489545e0fea4f86537e0fc5529cb2"
 
 # sha256 of the style.css regions this story must not touch: everything
 # before the "Comms view styles" comment, the "Toast stack styles" section

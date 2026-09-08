@@ -99,7 +99,13 @@ COMMS_JS_SHA256 = "6c22e7c021af19244095178172e9dbe344b489545e0fea4f86537e0fc5529
 # legitimately adds sidebar rules to the plan-list region - that region sits
 # inside this prefix, so the pin must move with it. Only that insertion
 # changed; the rest of the prefix is byte-identical to the prior pin.
-PREFIX_BEFORE_COMMS_SHA256 = "01ef90da65f18c8ca29402fd8b3a0b3bfb95869f95a137caa72cc006b9b1ea65"
+# Re-pinned post-fb25c66 (Maturity panel restyle): that commit's whole job
+# was adding the "=== Maturity panel (a3-maturity-metrics) ===" CSS block
+# (markup/CSS only, no behavior change), which lands before the "Comms view
+# styles" marker and so falls inside this guarded prefix. Only that
+# insertion changed; the rest of the prefix is byte-identical to the prior
+# pin.
+PREFIX_BEFORE_COMMS_SHA256 = "b6ceb89d74a21034ea7e8f60dd1c056e5c97cb8fb90500d0eb13d00b0c5e382e"
 # Re-pinned post-#467 (toast severity stripe color fix) - see note above.
 TOAST_REGION_SHA256 = "dbfb98e7ac5c90643e9560c45faa9d8d04e8487c11ab55c4af82cb7c2593550c"
 # Re-pinned for the story-modal Replay timeline (9639ae41, 2026-09-05): that

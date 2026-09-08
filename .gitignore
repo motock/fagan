@@ -19,6 +19,11 @@ node_modules
 # Local scratch/runtime state (not source)
 .local/
 
+# Operator's personal per-role model routing (provider/model chosen per
+# role), selected via PIPELINE_MODEL_REGISTRY_PATH (app/role_registry.py's
+# _registry_path) instead of the shipped provider-neutral model_registry.json.
+model_registry.local.json
+
 # Per-story agent working artifacts (never part of the source diff; see
 # pipeline/paths.py's _WORKTREE_LOG_EXCLUDES). Untracking .agent_scratchpad.md
 # fixed a bug where every dispatched agent wrote its own unrelated progress

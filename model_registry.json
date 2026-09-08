@@ -61,8 +61,8 @@
     "dispatch": {
       "tiers": {
         "local_default": {
-          "provider": "local",
-          "model": "gpt-oss-20b-high"
+          "provider": "ollama",
+          "model": "glm"
         },
         "claude_default": {
           "provider": "claude",

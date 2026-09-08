@@ -537,7 +537,7 @@ stories (TDD-split stays strictly read-only). Tests in
 
 ### A4. Make it usable by someone who isn't the author
 
-- [x] **One-command install story** for a fresh, non-author clone — DONE
+- [ ] **One-command install story** for a fresh, non-author clone — DONE
       2026-09-03, plan `a4-non-author-usability` (9 stories). `scripts/
       install_checks.py` (stdlib-only prerequisite checks, A4-01) wired into
       `scripts/install.sh` with optional Docker detection (A4-02); README

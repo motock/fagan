@@ -12,8 +12,8 @@ module owns:
 Fail-closed: ``get_harness`` raises ValueError for unknown names and never
 substitutes a default harness — the same loud-failure posture as
 ``get_backend()`` for unknown drivers and the PIPELINE_EXEC_DISPATCH
-fail-closed pattern. The registry starts EMPTY; adapters (the 'claude' and
-'local' harnesses of later stories) register themselves into it, and it is
+fail-closed pattern. The registry starts EMPTY; adapters (the 'claude',
+'local', and 'aider' harnesses) register themselves into it, and it is
 never cleared or reset.
 
 Import hygiene: ONLY the stdlib is imported here (dataclasses/typing).

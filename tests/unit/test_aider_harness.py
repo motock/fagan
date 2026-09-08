@@ -299,3 +299,39 @@ def test_unknown_but_nonempty_model_passes_through_unchanged():
         )
     )
     assert command.argv[command.argv.index(MODEL_FLAG) + 1] == "Qwen2.5-Coder-7B"
+
+
+def test_aider_probe_argv_matches_spec_probe_order():
+    # Exact-equality pin of the FULL argv in the spec's probe order (all 8
+    # contract flags, copied verbatim and in order from
+    # docs/specs/AIDER_HARNESS.md — its "Exit behavior" probe plus the
+    # --no-fancy-input contract-table row). Equality, not membership, is
+    # what gives this test its teeth: a dropped flag fails on length
+    # (7 != 8), a swapped pair fails at the first differing index, and an
+    # acceptance leak (--test/--test-cmd) fails on length (9 != 8) — none of
+    # which per-flag membership assertions can see. The request carries a
+    # non-None acceptance on purpose: Aider has no oracle concept, so the
+    # expected argv contains no --test/--test-cmd, pinning the
+    # acceptance-ignored contract in the same assertion.
+    command = AiderHarness().build_agent_command(
+        HarnessRequest(
+            prompt="fix the bug in foo.py",
+            system=None,
+            model="glm-4.6",
+            cwd=".",
+            acceptance=["pytest -q tests/unit/test_aider_harness.py"],
+            options=None,
+        )
+    )
+    expected = [
+        "aider",
+        "--model", "glm-4.6",
+        "--message", "fix the bug in foo.py",
+        "--yes-always",
+        "--no-auto-commits",
+        "--no-dirty-commits",
+        "--no-pretty",
+        "--no-stream",
+        "--no-fancy-input",
+    ]
+    assert command.argv == expected

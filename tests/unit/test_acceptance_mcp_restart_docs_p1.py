@@ -313,6 +313,7 @@ class TestOtherChecklistItemsUntouched:
         "Split the 74 KB README",
         "P0 (same retro) — stabilize the flaky-under-load",
         "Finish the MLX validate re-run.",
+        "One-command install story",
         "Mode 31 (2026-07-22, FIXED 2026-08-05",
         "One-command install story",
     ]

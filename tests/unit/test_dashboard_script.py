@@ -21,8 +21,11 @@ from pathlib import Path
 
 import pytest
 
+from app.auth import get_or_create_api_key
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "dashboard.sh"
+_API_KEY_HEADER = "X-Pipeline-Api-Key"
 
 
 # --- helpers --------------------------------------------------------------
@@ -59,12 +62,24 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _authed_request(url: str) -> urllib.request.Request:
+    """Build a GET carrying the dashboard API key.
+
+    The dashboard registers `require_api_key` as an application-level
+    dependency, so /api/health answers 401 without this header. The script
+    tests spawn a real subprocess, so the in-process TestClient patch in
+    conftest.py does not reach them — the key is read from the same
+    .dashboard_api_key file the running dashboard creates.
+    """
+    return urllib.request.Request(url, headers={_API_KEY_HEADER: get_or_create_api_key()})
+
+
 def _wait_healthy(port: int, timeout_s: float = 15.0) -> bool:
     deadline = time.monotonic() + timeout_s
     url = f"http://127.0.0.1:{port}/api/health"
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1) as resp:
+            with urllib.request.urlopen(_authed_request(url), timeout=1) as resp:
                 if resp.status == 200:
                     return True
         except (urllib.error.URLError, ConnectionResetError, OSError):
@@ -77,12 +92,16 @@ def _wait_healthy(port: int, timeout_s: float = 15.0) -> bool:
 def _health_unreachable(port: int, timeout_s: float = 5.0) -> bool:
     """True if /api/health refuses the connection. Returns on the first
     refused connect (URLError/OSError) — used after `stop` to confirm the
-    server is down, where the process is dead and every attempt refuses."""
+    server is down, where the process is dead and every attempt refuses.
+
+    The request carries the API key so a still-running server answers 200
+    (caught below as "still up") rather than 401 — without the header a 401
+    is an HTTPError, a URLError subclass, and would be misread as "down"."""
     deadline = time.monotonic() + timeout_s
     url = f"http://127.0.0.1:{port}/api/health"
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1):
+            with urllib.request.urlopen(_authed_request(url), timeout=1):
                 # If we got *any* response, the server is still up.
                 return False
         except (urllib.error.URLError, ConnectionResetError, OSError):

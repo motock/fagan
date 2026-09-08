@@ -22,12 +22,14 @@ _LOCAL_DEFAULT_MODEL = "devstral:24b"
 
 def _resolve_local_model(tier: str, provider: str = "ollama") -> str:
     # A value containing ':' (Ollama's tag separator, e.g. "devstral:24b")
-    # is already a concrete model tag, not a tier name - return as-is
+    # or '/' (LiteLLM's vendor/model form, e.g. "openai/gpt-5-mini") is
+    # already a concrete model tag, not a tier name - return as-is
     # rather than looking it up in _LOCAL_TIER_ENV, where it would never
     # match and silently fall back to PIPELINE_LOCAL_MODEL_DEFAULT instead
     # of the caller's explicit choice (see _run_reviewer's
-    # PIPELINE_LOCAL_REVIEW_MODEL override).
-    if ":" in tier:
+    # PIPELINE_LOCAL_REVIEW_MODEL override). Tier names are always bare
+    # lowercase words, so neither separator can appear in a legitimate tier.
+    if ":" in tier or "/" in tier:
         return tier
     default = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL)
     env_var = _LOCAL_TIER_ENV.get(tier.lower())

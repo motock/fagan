@@ -18,6 +18,7 @@ These tests exercise pyproject.toml's own config as-is: they run
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,10 +32,15 @@ def _bare_pytest_collect() -> subprocess.CompletedProcess[str]:
     """Run exactly what a bare `pytest` invocation collects.
 
     No --override-ini, no --ignore: the whole point is to exercise
-    pyproject.toml's own [tool.pytest.ini_options] config as-is.
+    pyproject.toml's own [tool.pytest.ini_options] config as-is. Invoked via
+    `sys.executable -m pytest` rather than a bare `pytest` on PATH: addopts
+    now includes `-n auto` (pytest-xdist), and an unrelated `pytest` earlier
+    on PATH (e.g. a global Homebrew install) may not have that plugin even
+    though the project's own venv - the one actually running this suite -
+    does.
     """
     return subprocess.run(
-        ["pytest", "--collect-only", "-q"],
+        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

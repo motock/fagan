@@ -34,7 +34,7 @@ def _isolate_environ():
 @pytest.fixture(autouse=True)
 def _isolate_registry_state():
     """Reset the model-registry memo around every test (function-scoped,
-    autouse — mirrors _isolate_environ).
+    autouse - mirrors _isolate_environ).
 
     app.role_registry.load_registry() memoizes the parsed model_registry.json
     per file version (stat-keyed) and returns a deep copy of that master, so
@@ -42,13 +42,13 @@ def _isolate_registry_state():
     caller. This fixture is the belt-and-braces guarantee that NO parsed
     registry state survives across tests on a shared pytest-xdist worker:
     before each test the memo is dropped (so the test re-parses whatever its
-    environment points at — a leaked PIPELINE_MODEL_REGISTRY_PATH from a
+    environment points at - a leaked PIPELINE_MODEL_REGISTRY_PATH from a
     prior test can still redirect it, but never serve stale contents), and
     after each test it is dropped again (so a test that poisoned the memo
     cannot leak into the next test on the same worker).
 
     Without this, order/worker-dependent contamination is possible: worker
-    runs [test_A (rewrites/redirects the registry), test_B (reads it)] —
+    runs [test_A (rewrites/redirects the registry), test_B (reads it)] -
     with the before-each reset, test_B's load_registry() always observes
     pristine state regardless of what test_A left behind.
     """
@@ -171,7 +171,7 @@ def _authenticated_test_client(monkeypatch):
     each build their own `TestClient(d.app)` and none send that header;
     patching the constructor here attaches it in one place instead of
     editing every call site. This adds the credential the tests were always
-    implicitly running with — it does not relax the check itself.
+    implicitly running with - it does not relax the check itself.
 
     Caller-supplied headers win, so a test can still pass a wrong key (or
     pop the header off `client.headers`) to exercise the denial path.
@@ -179,7 +179,7 @@ def _authenticated_test_client(monkeypatch):
     Modules in _SELF_MANAGED_AUTH_MODULES build their own TestClients and
     manage their own auth headers (including deliberately sending none to
     exercise the 401 denial path), so the force-attach is skipped for them
-    — attaching a valid key there would make the denial path unrunnable
+    - attaching a valid key there would make the denial path unrunnable
     (a headerless request is impossible, so an expected 401 comes back 200).
     """
     from fastapi.testclient import TestClient
@@ -188,6 +188,7 @@ def _authenticated_test_client(monkeypatch):
 
     self_managed = {
         "test_dashboard_index_serves_key",
+        "test_chat_internal_loopback_auth",
     }
 
     original_init = TestClient.__init__

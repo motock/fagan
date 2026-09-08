@@ -268,6 +268,7 @@ class TestMaturityOtherChecklistItemsUntouched:
     CHECKED_MUST_STAY_CHECKED: ClassVar[list[str]] = [
         "Finish the `pipeline_mcp_server.py` decomposition",
         "Ship or kill guided decomposition",
+        "One-command install story",
         "Split the 74 KB README",
         "Fix the test-isolation leak",
         "Mode 31 (2026-07-22, FIXED 2026-08-05",

@@ -474,6 +474,53 @@ class PipelineService:
             return {'ok': False, 'error': 'not a text file'}
         return {'ok': True, 'path': relative_path, 'content': content}
 
+    def list_workspace_directory(self, relative_path: str = '') -> dict:
+        """List the immediate children of a directory in the active workspace.
+
+        Mirrors :meth:`read_workspace_file`'s error-shape conventions: every
+        failure mode returns a dict with ``ok`` false and a fixed generic
+        error string; the resolved or rejected path is never echoed back to
+        the caller.  Only IMMEDIATE children are listed -- the listing never
+        recurses into subdirectories (unbounded recursion is a
+        resource-exhaustion risk).
+
+        ``relative_path`` of ``''`` (the default) or ``'.'`` addresses the
+        workspace root itself; ``resolve_within_workspace`` rejects the empty
+        spelling outright, so the empty path is mapped onto ``'.'`` before
+        resolution.
+        """
+        active = self.get_active_workspace()
+        if active is None:
+            return {'ok': False, 'error': 'no active workspace'}
+        import pipeline.workspace_fs as _workspace_fs
+        # resolve_within_workspace rejects the empty spelling outright; the
+        # brief mandates that '' addresses the workspace ROOT, so map it onto
+        # the resolver's canonical root spelling for resolution only -- the
+        # echoed 'path' stays the caller's original spelling.  Any other
+        # non-str value passes through unchanged and is rejected below.
+        resolve_spelling = '.' if relative_path == '' else relative_path
+        try:
+            resolved = _workspace_fs.resolve_within_workspace(
+                active, resolve_spelling
+            )
+        except ValueError:
+            return {'ok': False, 'error': 'invalid path'}
+        if not os.path.exists(resolved):
+            return {'ok': False, 'error': 'not found'}
+        if not os.path.isdir(resolved):
+            return {'ok': False, 'error': 'not a directory'}
+        entries = []
+        with os.scandir(resolved) as scan:
+            for entry in scan:
+                entries.append(
+                    {
+                        'name': entry.name,
+                        'type': 'dir' if entry.is_dir() else 'file',
+                    }
+                )
+        entries.sort(key=lambda e: e['name'])
+        return {'ok': True, 'path': relative_path, 'entries': entries}
+
     def set_active_workspace(self, path: str | None) -> None:
         """Set the active workspace; None clears it."""
         _store.set_active_workspace(path)

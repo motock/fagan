@@ -234,7 +234,11 @@ applied deliberately rather than discovered per-test.
 > hardening (`chat-security-hardening`, `chat-ingest-risk-lock`) landed in
 > PRs #402-#407. The direct-repair worktree file-read/propose-patch/apply
 > surface this doc's open question raised is **not** part of W2 and remains a
-> scoped follow-on (see Open questions).
+> scoped follow-on (see Open questions). Its READ half (workspace file-read /
+> directory-list / code-search endpoints + matching chat tools, behind
+> shared-secret API auth) shipped 2026-09-08 via plan
+> `CHAT_CODEBASE_PARITY_PLAN` (9 stories, PRs #601/#603/#604/#606-#611);
+> the write/apply half remains gated — see Open questions.
 
 The UI chatbot is **a client of W1's API**, and its own agent loop. It is not a
 new orchestrator, and it must not grow its own copy of the state machine.
@@ -718,14 +722,24 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   supervision, or only for planning and control?**~~ **RESOLVED 2026-08-20** —
   yes, chat must cover direct-repair of a stuck worktree, not just planning and
   control. This is a substantially bigger ask than W2's read/control tool
-  registry: it needs a worktree file-read + propose-patch + apply HTTP surface
-  (no such route or chat tool exists yet), and — because it's a prompt-reachable
-  arbitrary-write path — it needs its own security review per this doc's
-  existing constraint that "a prompt-injected chatbot must not be able to widen
-  its own authority." Sequencing: ship the Comms UI (nav promotion + toasts)
-  first since it's scoped against tools that already exist; scope the
-  direct-repair tool surface as its own follow-on workstream with a
-  security-engineer gate before any implementation stories are written.
+  registry: it needs a worktree file-read + propose-patch + apply HTTP surface,
+  and — because it's a prompt-reachable arbitrary-write path — it needs its own
+  security review per this doc's existing constraint that "a prompt-injected
+  chatbot must not be able to widen its own authority." **Update 2026-09-08** —
+  the READ half shipped via plan `CHAT_CODEBASE_PARITY_PLAN` (9 stories, PRs
+  #601/#603/#604/#606-#611): shared-secret API-key auth on the dashboard HTTP
+  API (#601, frontend sends the key on every request, #606), a workspace-scoped
+  path-resolution guard (#603), and workspace file-read / directory-list /
+  code-search service+API endpoints (#604/#607/#609) each backed by a matching
+  chat tool (read_file #608, list_directory #610, search_code #611). **The
+  write/apply half — propose-patch + apply against a worktree — is still
+  unshipped and is the remaining scope of this question.** Its precondition is
+  unchanged: it is a prompt-reachable arbitrary-write path and needs a
+  security-engineer gate before any implementation story is written. (The
+  original sequencing note — ship the Comms UI first, then scope direct-repair
+  as its own follow-on workstream — is overtaken by events: the Comms UI and
+  the read half have both landed; only the gated write/apply workstream
+  remains.)
 - ~~**Single binary or split services?**~~ **RESOLVED for local 2026-08-15**
   — W1c decided to extend the existing `app/dashboard.py` FastAPI app rather
   than stand up a second service (simplest for a single local-install process;

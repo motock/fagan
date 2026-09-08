@@ -523,8 +523,8 @@ stories (TDD-split stays strictly read-only). Tests in
       the removal report, closing the gap the old unscoped
       `confirm_removals=true` escape hatch left. See memory
       `project_dispatch_failure_modes` Modes 54/55 for full detail.
-- [ ] **Get CI to an enforced green baseline and tag a real release.** 900+
-      commits (2026-09-07), no real release tags (only a `w1c02-backup`
+- [ ] **Get CI to an enforced green baseline and tag a real release.** 953
+      commits (2026-09-08), no real release tags (only a `w1c02-backup`
       checkpoint tag) — adoption starts with "what version." **Still blocked
       on the GitHub Actions billing cap, and it is not durably fixed even
       when it looks fixed**: plan `ci-green-after-billing-reset` (3 stories,
@@ -613,21 +613,39 @@ stories (TDD-split stays strictly read-only). Tests in
       `ClaudeCliDriver`/`OllamaDriver` dispatch onto it via
       `ClaudeCliHarness`/`LocalAgentHarness`. This closes the actual gap this
       bullet named ("there is no seam at which a harness could be dropped
-      in") — but note it mirrors the inference-provider axis's own history
-      exactly: the seam exists with the two harnesses this project already
-      had (Claude Code CLI, the local hand-rolled loop) behind it, and no
-      third-party harness (Codex / Aider / Goose) has actually been plugged
-      in yet. That breadth question is still open; only the blocking
-      "no seam" problem is closed.
+      in") — and the seam now has a second real harness behind it:
+      `AiderHarness` (the third-party aider CLI, aider-chat 0.86.2) landed
+      2026-09-08 in `app/harness.py` (PRs #593/#596/#597), registered as
+      `"aider"`, with a fail-closed guard when the aider binary is missing
+      from PATH or the harness is cross-selected, and its CLI contract
+      documented in `docs/specs/AIDER_HARNESS.md`. **Caveat, narrowed
+      2026-09-08**: the seam is no longer the untested part — but harness
+      breadth is not a solved problem. Aider is one adapter against one
+      third-party CLI, exercised by unit tests on the argv builder and the
+      availability guard; there is still no record of an aider dispatch run
+      against a real worktree, and Codex / Goose remain unplugged. The
+      breadth question stays open on that evidence, not on the seam.
 
 ### B2. Model breadth
 
-- [ ] **LiteLLM (or equivalent) adapter** for 100+ LLMs instead of
-      per-provider drivers. The per-role registry is already the right shape;
-      swap the driver layer behind it.
-- [ ] **Multi-LLM routing** (cheap model for reads/orientation, strong model
-      for edits/review). `auto` escalation is the seed; generalize it to a
-      routing policy, not just local→Claude.
+- [x] **LiteLLM (or equivalent) adapter** for 100+ LLMs instead of
+      per-provider drivers — DONE 2026-09-08, plan
+      `b2-litellm-routing-and-aider-harness` (11 stories). `LiteLLMProvider`
+      in `app/inference_providers.py` (PR #592) with LiteLLM model strings
+      passed through `_resolve_local_model` unchanged (PR #595) and `litellm`
+      registered as a `Backend` driver name (PR #594); hosted-provider
+      dispatch skips the on-device memory gates in `resource_status` (PR
+      #598). Documented in `docs/specs/LITELLM_PROVIDER.md` (PR #602). The
+      per-role registry was already the right shape; the driver layer behind
+      it is what swapped.
+- [x] **Multi-LLM routing** (cheap model for reads/orientation, strong model
+      for edits/review) — DONE 2026-09-08, same plan. `app/role_registry.py`
+      gained a routing-policy schema and `resolve_route()` (PR #599); auto
+      dispatch routes through `resolve_route` in `_route_dispatch_backend`
+      (PR #600), and the routing policy is honored only when no runtime
+      ceiling is set (PR #605). Documented in `docs/specs/MULTI_LLM_ROUTING.md`.
+      `auto` escalation was the seed; it is now a routing policy, not just
+      local→Claude.
 
 ### B3. Scale & multi-tenancy
 
@@ -802,17 +820,34 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > last-mile gaps (picker UI wired into `main.js`, active-workspace security
 > hardening, chat/save_plan/decompose workspace threading; found 2026-09-02,
 > see `project_workspace_picker_gap` memory) — **DONE 2026-09-07, plan
-> `workspace-picker-wiring` (12 stories)** → **W4 (multi-tenant, closes
+> `workspace-picker-wiring` (12 stories)** → **chat↔codebase parity — DONE
+> 2026-09-08, plan `CHAT_CODEBASE_PARITY_PLAN` (9 stories, PRs #601/#603/
+> #604/#606-#611)**: shared-secret API-key auth on the dashboard HTTP API
+> (#601, with the dashboard frontend sending the key on every request,
+> #606), a workspace-scoped path-resolution guard (#603), and workspace
+> file-read / directory-list / code-search service+API endpoints (#604/
+> #607/#609) each backed by a matching chat tool (read_file #608,
+> list_directory #610, search_code #611). **What this plan does NOT close**:
+> the "Open questions" entry this doc's sibling
+> `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md` resolved 2026-08-20 said chat must
+> eventually cover *direct repair of a stuck worktree*, needing "worktree
+> file-read + propose-patch + apply." Only the READ half shipped above; the
+> write/apply half (propose-patch + apply against a worktree) is still
+> untracked scope — see that doc's "Open questions" section, where it is now
+> filed explicitly with its precondition intact: it is a prompt-reachable
+> arbitrary-write path and needs a security-engineer gate before any
+> implementation story is written. → **W4 (multi-tenant, closes
 > B3)** — still open, no plan started. See that doc's own "Ordering
 > conflict" section for the historical rationale on why B1/B5 were
 > sequenced after the service seam.
 >
-> **What's left as of 2026-09-07:** W4 (multi-tenant — closes B3), B2 (model
-> breadth / LiteLLM adapter + routing policy), B5's remaining SWE-bench
-> integration bullet and MCP-registry listing, B6 (ecosystem/releases), and
-> the two still-open A3/A4 items (enforced-green CI + a real release tag —
-> blocked on the recurring GHA billing cap; the macOS CI leg re-enable
-> before the repo goes public).
+> **What's left as of 2026-09-08:** W4 (multi-tenant — closes B3), B5's
+> remaining SWE-bench integration bullet and MCP-registry listing, B6
+> (ecosystem/releases), the two still-open A3/A4 items (enforced-green CI +
+> a real release tag — blocked on the recurring GHA billing cap; the macOS
+> CI leg re-enable before the repo goes public), and the worktree
+> write/apply half of chat-driven repair (gated — see above). B2 (model
+> breadth) closed 2026-09-08; see the B2 section.
 
 Land what's half-done before building new; then extract the service seam
 that everything else — sandboxing included — is cheaper to build behind.

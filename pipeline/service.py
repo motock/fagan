@@ -444,6 +444,36 @@ class PipelineService:
             return None
         return path
 
+    def read_workspace_file(self, relative_path: str, *, max_bytes: int = 200_000) -> dict:
+        """Read a UTF-8 text file from the active workspace.
+
+        Resolves ``relative_path`` inside the active workspace via
+        :func:`pipeline.workspace_fs.resolve_within_workspace` and returns
+        its contents as text.  Every failure mode returns a dict with
+        ``ok`` false and a fixed generic error string; the resolved or
+        rejected path is never echoed back to the caller.  The size guard
+        runs before the file is opened, so an oversized file is never read
+        into memory.
+        """
+        active = self.get_active_workspace()
+        if active is None:
+            return {'ok': False, 'error': 'no active workspace'}
+        import pipeline.workspace_fs as _workspace_fs
+        try:
+            resolved = _workspace_fs.resolve_within_workspace(active, relative_path)
+        except ValueError:
+            return {'ok': False, 'error': 'invalid path'}
+        if not os.path.isfile(resolved):
+            return {'ok': False, 'error': 'not found'}
+        if os.path.getsize(resolved) > max_bytes:
+            return {'ok': False, 'error': 'file too large'}
+        try:
+            with open(resolved, 'r', encoding='utf-8') as fh:
+                content = fh.read()
+        except UnicodeDecodeError:
+            return {'ok': False, 'error': 'not a text file'}
+        return {'ok': True, 'path': relative_path, 'content': content}
+
     def set_active_workspace(self, path: str | None) -> None:
         """Set the active workspace; None clears it."""
         _store.set_active_workspace(path)

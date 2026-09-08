@@ -665,6 +665,14 @@ def set_workspace_route(request: WorkspaceRequest):
     return result
 
 
+@app.get('/api/workspace/file')
+def read_workspace_file_route(path: str):
+    result = _service.read_workspace_file(path)
+    if not result.get('ok'):
+        raise HTTPException(status_code=400, detail=result.get('error'))
+    return result
+
+
 @app.post("/api/config/roles/{role}")
 def set_role_default_route(role: str, body: RoleDefaultBody) -> dict[str, Any]:
     """Delegates to _service.set_role_default(role, body.provider, body.model).

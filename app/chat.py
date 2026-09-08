@@ -225,6 +225,13 @@ TOOLS: dict[str, dict] = {
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/file"), params={"path": path}).json()
         ),
     },
+    "list_directory": {
+        "description": "List the immediate contents of a directory in the active workspace by relative path (non-recursive).",
+        "params": {"path": "str"},
+        "execute": lambda http_client, api_base_url, path='', **kwargs: (
+            http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/files"), params={"path": path}).json()
+        ),
+    },
 }
 
 

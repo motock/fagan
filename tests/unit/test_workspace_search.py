@@ -598,3 +598,93 @@ def test_route_rejects_missing_auth_header(monkeypatch):
     ) as bad:
         response = bad.get("/api/workspace/search", params={"pattern": "x"})
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Regression: reviewer-blocking failure modes that violated the documented
+# "every branch returns a dict, never raises" contract.
+#
+# Bug 1 -- NUL byte in pattern: Starlette percent-decodes "%00", so the route
+# (and any direct caller) can hand search_workspace a str containing U+0000.
+# That string passes the existing empty/non-str check, but Python refuses NUL
+# bytes in argv, so subprocess.run(['grep', '-e', 'a\x00b', ...]) raises
+# ValueError("embedded null byte"), which the except clause did not catch ->
+# HTTP 500.  Contract: a NUL byte is just another invalid pattern.
+#
+# Bug 2 -- non-UTF-8 grep output: under LC_ALL=C (typical Docker/CI) grep
+# treats every byte as valid, so -I does not filter a Latin-1 text file and
+# emits the raw high byte in the matched line; text=True then decodes stdout
+# STRICTLY as UTF-8 and raises UnicodeDecodeError -> HTTP 500.  The sibling
+# read_workspace_file already treats undecodable bytes as a handled failure
+# mode, so the search path must decode with errors='replace' instead.
+#
+# These tests run the REAL subprocess (no fake grep) so the pre-fix failure
+# is exactly the reviewer-verified exception, not a stub artifact.
+# ---------------------------------------------------------------------------
+
+
+def test_nul_byte_pattern_is_invalid(service, monkeypatch, tmp_path):
+    """A pattern containing U+0000 -> 'invalid pattern', never ValueError.
+
+    Regression: "a\\x00b" passed the empty/non-str check and then blew up
+    inside subprocess.run with ``ValueError: embedded null byte`` (Python
+    refuses NUL bytes in argv), escaping as an HTTP 500.  It must be rejected
+    with the same dict the empty/non-str rejection returns.
+    """
+    _stub_active_workspace(monkeypatch, service, str(tmp_path))
+    result = service.search_workspace("a\x00b")
+    assert result == {"ok": False, "error": "invalid pattern"}
+
+
+def test_route_nul_byte_pattern_is_400_not_500(client, monkeypatch, tmp_path):
+    """GET /api/workspace/search?pattern=a%00b -> 400, never a 500.
+
+    Regression: Starlette percent-decodes %00, so the handler received the
+    3-char string "a\\x00b", which passed validation and made the real
+    subprocess.run raise ValueError -> unhandled -> HTTP 500.  The route must
+    map the service's 'invalid pattern' rejection to 400 like every other
+    not-ok result.  The REAL service method runs (only the active workspace
+    is pointed at tmp_path) so the pre-fix failure is the exact ValueError.
+    """
+    from app import dashboard
+
+    monkeypatch.setattr(
+        dashboard._service, "get_active_workspace", lambda: str(tmp_path)
+    )
+    store = getattr(service_mod, "_store", None)
+    if store is not None and hasattr(store, "get_active_workspace"):
+        monkeypatch.setattr(
+            store, "get_active_workspace", lambda *a, **k: str(tmp_path)
+        )
+    # Literal URL (not params=) so the raw %00 reaches the handler and is
+    # percent-decoded into U+0000, exactly as a real client sends it.
+    response = client.get("/api/workspace/search?pattern=a%00b")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid pattern"
+
+
+@requires_grep
+def test_non_utf8_match_line_decoded_with_replacement(
+    service, monkeypatch, tmp_path
+):
+    """A matched line with a non-UTF-8 byte -> ok with U+FFFD, never raise.
+
+    Regression: under LC_ALL=C grep treats every byte as valid, so -I does
+    not skip this Latin-1 text file and emits the raw 0xE9 byte in the
+    matched line; text=True decoded stdout strictly as UTF-8 and raised
+    UnicodeDecodeError ("'utf-8' codec can't decode byte 0xe9"), escaping as
+    an HTTP 500.  Grep's output must be decoded with errors='replace' so the
+    undecodable byte surfaces as U+FFFD instead of raising.
+    """
+    monkeypatch.setenv("LC_ALL", "C")
+    monkeypatch.setenv("LANG", "C")
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    latin1_file = tmp_path / "menu.latin1.txt"
+    # Binary write: no encoding layer may rewrite the raw 0xE9 byte.
+    with open(latin1_file, "wb") as fh:
+        fh.write(b"caf\xe9 menu\n")
+    _stub_active_workspace(monkeypatch, service, str(tmp_path))
+    result = service.search_workspace("caf")
+    assert result["ok"] is True
+    assert result["truncated"] is False
+    assert any("caf\ufffd menu" in m for m in result["matches"]), result

@@ -374,7 +374,7 @@ if (typeof module !== "undefined" && module.exports) {
   };
 }
 
-export { loadRegistry, loadWorkspaceView, wireWorkspaceView };
+export { loadRegistry, loadWorkspaceView, wireWorkspaceView, buildModelOptionsHtml };
 
 
 // ---------------------------------------------------------------------------
@@ -476,6 +476,27 @@ function _renderConfigRoles(section, roles, registry, plan) {
       _saveRoleConfig(role, provider, model, plan, errorEl);
     });
   });
+
+  tbody.querySelectorAll(".edit-provider").forEach((select) => {
+    select.addEventListener("change", () => {
+      const row = select.closest("tr");
+      const modelSelect = row && row.querySelector(".edit-model");
+      if (!modelSelect) return;
+      modelSelect.innerHTML = buildModelOptionsHtml(providers, select.value, "");
+    });
+  });
+}
+
+function buildModelOptionsHtml(providers, provider, currentModel) {
+  const models = (providers && providers[provider] && providers[provider].models) || {};
+  const modelNames = Object.keys(models);
+  const options = modelNames.map((name) =>
+    `<option value="${escapeHtml(name)}" ${name === currentModel ? "selected" : ""}>${escapeHtml(name)}</option>`
+  );
+  if (currentModel && modelNames.indexOf(currentModel) === -1) {
+    options.unshift(`<option value="${escapeHtml(currentModel)}" selected>${escapeHtml(currentModel)}</option>`);
+  }
+  return options.join("");
 }
 
 function renderRoleEdit(role, providers) {
@@ -487,15 +508,8 @@ function renderRoleEdit(role, providers) {
   const providerOpts = providerNames.map((p) =>
     `<option value="${escapeHtml(p)}" ${p === currentProvider ? "selected" : ""}>${escapeHtml(p)}</option>`
   ).join("");
-  const models = (providers[currentProvider] && providers[currentProvider].models) || {};
-  const modelNames = Object.keys(models);
   const currentModel = role.model || "";
-  if (modelNames.indexOf(currentModel) === -1 && currentModel) {
-    modelNames.unshift(currentModel);
-  }
-  const modelOpts = modelNames.map((m) =>
-    `<option value="${escapeHtml(m)}" ${m === currentModel ? "selected" : ""}>${escapeHtml(m)}</option>`
-  ).join("");
+  const modelOpts = buildModelOptionsHtml(providers, currentProvider, currentModel);
   return `
     <select class="edit-provider" aria-label="Provider for ${escapeHtml(role.role)}">${providerOpts}</select>
     <select class="edit-model" aria-label="Model for ${escapeHtml(role.role)}">${modelOpts}</select>

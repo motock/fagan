@@ -152,7 +152,9 @@ def test_chat_endpoint_declares_x_pipeline_api_key_header_param():
     sig = inspect.signature(chat_mod.chat_endpoint)
     assert "x_pipeline_api_key" in sig.parameters
     default = sig.parameters["x_pipeline_api_key"].default
-    assert isinstance(default, fastapi.Header)
+    # fastapi.Header is a factory function, not a class - the object it
+    # returns is a fastapi.params.Header (a pydantic FieldInfo subclass).
+    assert isinstance(default, fastapi.params.Header)
     assert default.alias == "x-pipeline-api-key"
     assert default.default is None
 

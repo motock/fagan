@@ -12,8 +12,8 @@ module owns:
 Fail-closed: ``get_harness`` raises ValueError for unknown names and never
 substitutes a default harness — the same loud-failure posture as
 ``get_backend()`` for unknown drivers and the PIPELINE_EXEC_DISPATCH
-fail-closed pattern. The registry starts EMPTY; adapters (the 'claude' and
-'local' harnesses of later stories) register themselves into it, and it is
+fail-closed pattern. The registry starts EMPTY; adapters (the 'claude',
+'local', and 'aider' harnesses) register themselves into it, and it is
 never cleared or reset.
 
 Import hygiene: ONLY the stdlib is imported here (dataclasses/typing).
@@ -29,6 +29,7 @@ from typing import Protocol
 
 __all__ = [
     "AgentHarness",
+    "AiderHarness",
     "ClaudeCliHarness",
     "HarnessCommand",
     "HarnessRequest",
@@ -216,3 +217,107 @@ class LocalAgentHarness:
 
 
 register_harness("local", LocalAgentHarness)
+
+
+class AiderHarness:
+    """Harness adapter for the third-party `aider` CLI (aider-chat 0.86.2).
+
+    Stateless and pure: no I/O, no subprocess, no cached per-call state —
+    every command is derived from the request alone, and a rejected call
+    leaves nothing behind. The single source of truth for every flag emitted
+    below is docs/specs/AIDER_HARNESS.md (the aider --help capture and its
+    contract table); no flag is invented here.
+
+    Documented compromises (both are the spec's own Gap verdicts, not
+    silent drops):
+
+    - ``request.system``: Aider has NO system-prompt flag (the capture has no
+      such option; its system prompts are fixed per edit-format), so the
+      system text is PREPENDED to the prompt inside the one ``--message``
+      element, separated by a blank line. The separator is emitted only when
+      system text exists — never unconditionally.
+    - ``request.acceptance``: IGNORED. Aider has no oracle concept; its
+      ``--test``/``--test-cmd`` flags are a single self-run command that also
+      fixes failures (mutating the worktree), not pipeline-graded acceptance.
+      Per the spec, acceptance stays with the pipeline, which runs it after
+      aider exits.
+
+    Unknown-but-nonempty model strings pass through UNCHANGED: this class is
+    a pure argv builder, and validating vendor model names is not its job
+    (the registry-name normalization ``.strip().lower()`` is deliberately
+    NOT applied to the model — ``"GLM-4"`` must not become ``"glm-4"``).
+
+    API keys are NEVER placed in argv (argv is world-readable via ``ps`` for
+    the process's whole lifetime). A key supplied in ``request.options``
+    (``openai_api_key`` / ``anthropic_api_key``, mirroring aider's
+    ``--openai-api-key`` / ``--anthropic-api-key`` flags) is emitted only in
+    ``HarnessCommand.env`` under the provider-native variable litellm
+    actually consults (docs/specs/AIDER_HARNESS.md, Environment). ``env``
+    carries ONLY those additional variables — never a copy of ``os.environ``
+    (the caller merges).
+    """
+
+    def build_agent_command(self, request: HarnessRequest) -> HarnessCommand:
+        """Build the non-interactive `aider` argv (+ key env) for ``request``."""
+        # Validate FIRST, before any argv exists: a whitespace-only prompt
+        # would otherwise launch aider with no instruction at all (a non-empty
+        # "   " string is truthy, so `if not request.prompt` alone would let
+        # it through).
+        if not (request.prompt or "").strip():
+            raise ValueError(
+                f"HarnessRequest.prompt is empty or whitespace-only "
+                f"({request.prompt!r}); aider would be launched with no "
+                f"instruction"
+            )
+        if not (request.model or "").strip():
+            raise ValueError(
+                f"HarnessRequest.model is empty or whitespace-only "
+                f"({request.model!r}); aider would fall back to its own "
+                f"default model instead of the requested one"
+            )
+        # Options are read only via `.get` — every key here is optional, so
+        # `request.options=None` must yield no key and no crash (the
+        # near-miss `request.options["openai_api_key"]` raises TypeError on
+        # None). Unknown keys are ignored by contract.
+        options = request.options or {}
+        openai_key = options.get("openai_api_key")
+        anthropic_key = options.get("anthropic_api_key")
+        # system handling: the spec's contract table resolves the
+        # system/convention-file row as "NO equivalent" — there is no
+        # system-prompt flag to use — so the prepend path below is the
+        # documented compromise. The separator appears only when system text
+        # exists (system=None must leave the message element exactly the
+        # prompt, not "\n\n<prompt>").
+        if request.system:
+            message = f"{request.system}\n\n{request.prompt}"
+        else:
+            message = request.prompt
+        # request.acceptance is deliberately IGNORED: Aider has no oracle
+        # concept (see class docstring) — acceptance stays with the pipeline.
+        # Flag order mirrors the spec's own probe invocation
+        # (`aider --model M --message x --yes-always --no-auto-commits
+        # --no-dirty-commits --no-pretty --no-stream`); --no-fancy-input is
+        # the contract table's row for the non-interactive child's raw-mode
+        # terminal handling.
+        argv = [
+            "aider",
+            "--model", request.model,
+            "--message", message,
+            "--yes-always",
+            "--no-auto-commits",
+            "--no-dirty-commits",
+            "--no-pretty",
+            "--no-stream",
+            "--no-fancy-input",
+        ]
+        # env carries ONLY the additional variables this harness requires —
+        # never a copy of os.environ (the caller merges over its own env).
+        env: dict = {}
+        if openai_key:
+            env["OPENAI_API_KEY"] = openai_key
+        if anthropic_key:
+            env["ANTHROPIC_API_KEY"] = anthropic_key
+        return HarnessCommand(argv=argv, env=env)
+
+
+register_harness("aider", AiderHarness)

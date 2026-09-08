@@ -19,6 +19,7 @@ mechanics that fixture does not:
 from __future__ import annotations
 
 import inspect
+from typing import ClassVar
 
 import fastapi
 import pytest

@@ -309,7 +309,6 @@ class TestMaxTurnsBoundaryValidation:
     """
 
     def test_should_reject_negative_max_turns_at_construction(self) -> None:
-        import pytest
 
         with pytest.raises(ValueError):
             ChatService(
@@ -320,7 +319,6 @@ class TestMaxTurnsBoundaryValidation:
             )
 
     def test_should_reject_zero_max_turns_at_construction(self) -> None:
-        import pytest
 
         with pytest.raises(ValueError):
             ChatService(
@@ -333,7 +331,6 @@ class TestMaxTurnsBoundaryValidation:
     def test_should_reject_negative_env_var_max_turns_at_construction(
         self, monkeypatch
     ) -> None:
-        import pytest
 
         monkeypatch.setenv("PIPELINE_CHAT_MAX_TURNS", "-5")
         with pytest.raises(ValueError):
@@ -349,7 +346,6 @@ class TestMaxTurnsBoundaryValidation:
         itself must raise ``ValueError`` so no broken instance is ever created
         and ``execute_turn`` can never be reached to raise ``UnboundLocalError``.
         """
-        import pytest
 
         with pytest.raises(ValueError):
             svc = ChatService(

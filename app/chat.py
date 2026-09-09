@@ -288,17 +288,76 @@ def _parse_tool_calls(text: str) -> list[dict]:
 
 
 
+def _signature_mismatch_error(
+    name: str, execute, args: dict, http_client, api_base_url: str
+) -> str | None:
+    """Return an actionable error message when *args* cannot be bound to the
+    tool's ``execute`` signature, or ``None`` when the ``TypeError`` came from
+    inside the tool body (which must keep its bare ``str(exc)`` message).
+
+    The check re-binds the exact argument tuple ``_execute_tool`` passes, so a
+    genuine mismatch is confirmed without re-invoking the tool and without any
+    network traffic.  Registry params are read defensively (``.get``) because
+    registered fake entries in the tests carry no ``params`` key.
+    """
+    import inspect
+
+    try:
+        sig = inspect.signature(execute)
+    except (TypeError, ValueError):  # pragma: no cover - exotic callables
+        return None
+    try:
+        sig.bind(http_client, api_base_url, **args)
+    except TypeError:
+        pass  # confirmed: the call itself cannot bind -> signature mismatch
+    else:
+        return None  # TypeError was raised by the tool body, not the signature
+    declared = TOOLS.get(name, {}).get("params") or {}
+    if declared:
+        expected = list(declared)
+    else:
+        expected = [
+            param_name
+            for param_name, param in sig.parameters.items()
+            if param_name not in ("http_client", "api_base_url")
+            and param.kind
+            in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+        ]
+    supplied = ", ".join(sorted(args)) or "none"
+    expected_str = ", ".join(expected) or "none"
+    return (
+        f"Error: tool '{name}' received invalid arguments. "
+        f"Supplied arguments: {supplied}. "
+        f"Expected parameters for {name}: {expected_str}. "
+        f"Re-call {name} with exactly these argument names."
+    )
+
+
 def _execute_tool(name: str, args: dict, http_client, api_base_url: str) -> dict:
     """Execute a tool by name.
 
     If the tool is unknown, return ``{"error": "unknown tool: <name>"}``.  On
     success, return ``{"result": <return value>}``.  Any exception raised by
-    the tool's ``execute`` callable is caught and returned as an error dict.
+    the tool's ``execute`` callable is caught and returned as an error dict --
+    except a signature-mismatch ``TypeError`` (the model called the tool with
+    wrong or missing argument names), which is returned as an actionable error
+    naming the tool, the supplied arguments and the tool's declared params.
     """
     if name not in TOOLS:
         return {"error": f"unknown tool: {name}"}
+    execute = TOOLS[name]["execute"]
     try:
-        result = TOOLS[name]["execute"](http_client, api_base_url, **args)
+        result = execute(http_client, api_base_url, **args)
+    except TypeError as exc:
+        message = _signature_mismatch_error(
+            name, execute, args, http_client, api_base_url
+        )
+        if message is None:
+            return {"error": str(exc)}
+        return {"error": message}
     except Exception as exc:  # pragma: no cover - exercised via tests  # noqa: BLE001
         return {"error": str(exc)}
     return {"result": result}

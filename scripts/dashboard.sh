@@ -41,15 +41,12 @@ elif command -v python3 >/dev/null 2>&1;  then PYBIN=python3
 elif command -v python  >/dev/null 2>&1;  then PYBIN=python
 else PYBIN=""; fi
 
-# Operator-local config overrides (gitignored, see .dashboard.env.example):
-# sourced with allexport so every var reaches the uvicorn process env — e.g.
-# PIPELINE_BACKEND_CHAT / PIPELINE_BACKEND_DECOMPOSE / PIPELINE_LOCAL_MODEL_DEFAULT.
+# Operator-local config overrides (gitignored): the shared pipeline-env
+# helper sources .pipeline.env then .dashboard.env with allexport so every
+# var reaches the uvicorn process env — e.g. PIPELINE_BACKEND_CHAT /
+# PIPELINE_BACKEND_DECOMPOSE / PIPELINE_LOCAL_MODEL_DEFAULT.
 # Sourcing overwrites caller-exported vars, so the file is durable operator intent.
-if [ -f "$ROOT/.dashboard.env" ]; then
-  set -a
-  . "$ROOT/.dashboard.env"
-  set +a
-fi
+. "$ROOT/scripts/pipeline-env.sh"
 
 DASHBOARD_HOST="${DASHBOARD_HOST:-127.0.0.1}"
 DASHBOARD_PORT="${DASHBOARD_PORT:-8000}"

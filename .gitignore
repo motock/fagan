@@ -8,12 +8,17 @@ node_modules
 
 # Dashboard start/stop script runtime artifacts (scripts/dashboard.sh)
 .dashboard.*.pid
+.scheduler.pid
 
 # Dashboard HTTP API shared secret (app/auth.py) — never commit this.
 .dashboard_api_key
 # Operator-local dashboard env (sourced by scripts/dashboard.sh at start);
 # copy .dashboard.env.example to .dashboard.env to activate.
 .dashboard.env
+# Operator-local pipeline env shared by scripts/dashboard.sh and
+# scripts/scheduler.sh (sourced via scripts/pipeline-env.sh at start);
+# copy .pipeline.env.example to .pipeline.env to activate.
+.pipeline.env
 .venv-mlx/
 .DS_Store
 *.bak

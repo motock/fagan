@@ -359,7 +359,9 @@ def run_daemon() -> int:
         os.close(lock_fd)
         return 1
 
-    health_path = os.environ.get("PIPELINE_SCHEDULER_HEALTH_PATH") or None
+    health_path = os.environ.get("PIPELINE_SCHEDULER_HEALTH_PATH") or str(
+        PLAN_DIR / ".scheduler_health.json"
+    )
 
     bus = build_bus()
 

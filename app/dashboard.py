@@ -166,7 +166,50 @@ def _write_archived_plans(archived: set[str]) -> None:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "plan_dir": str(PLAN_DIR)}
+    """Liveness plus config-agreement: is the scheduler on the same config?
+
+    ``plan_dir`` keeps its existing meaning (the resolved canonical plan dir).
+    ``scheduler`` is the config fingerprint the scheduler daemon writes to
+    ``<plan_dir>/.scheduler_health.json`` (the CFG-B2 default path), or
+    ``None`` when that file is absent / unreadable / empty / malformed or
+    carries no usable ``config`` object. ``config_mismatch`` lists the
+    dashboard-resolved fields whose values differ from that fingerprint
+    (``plan_dir`` and ``worktree_root``); ``[]`` when they agree or when
+    there is no fingerprint to compare.
+
+    Fail-soft (mirrors ``_degraded_liveness_report``): any problem reading or
+    parsing the fingerprint degrades to ``scheduler=None`` /
+    ``config_mismatch=[]`` with HTTP 200 — a health check must never 500.
+    """
+    plan_dir = str(PLAN_DIR)
+    scheduler: Any = None
+    config_mismatch: list[str] = []
+    try:
+        # Re-read from disk on every request: the scheduler may write (or
+        # remove) the fingerprint between calls, so nothing is cached here.
+        fingerprint_path = PLAN_DIR / ".scheduler_health.json"
+        with open(fingerprint_path, "r", encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+        if isinstance(payload, dict) and isinstance(payload.get("config"), dict):
+            scheduler = payload["config"]
+            resolved = {"plan_dir": plan_dir, "worktree_root": str(WORKTREE_ROOT)}
+            config_mismatch = [
+                field
+                for field, dashboard_value in resolved.items()
+                if field in scheduler and scheduler[field] != dashboard_value
+            ]
+    except Exception:  # noqa: BLE001 (deliberate: read-only health degrades, never 500s)
+        # Absent, unreadable (including a directory at that path), empty,
+        # invalid-JSON or wrong-shaped fingerprints all degrade to "no
+        # fingerprint" rather than turning a health check into a 500.
+        scheduler = None
+        config_mismatch = []
+    return {
+        "ok": True,
+        "plan_dir": plan_dir,
+        "scheduler": scheduler,
+        "config_mismatch": config_mismatch,
+    }
 
 
 @app.get("/api/dispatch_health")

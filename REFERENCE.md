@@ -409,6 +409,13 @@ dispatch: the plan directory resolves and is writable (`PLAN_DIR` env var, else
 requires the Claude Code CLI on `PATH` — and `model_registry.json` loads as a
 JSON object.
 
+The dispatch-backend check mirrors what real per-story dispatch execution
+resolves (`pipeline/dispatch.py` reads `PIPELINE_BACKEND_DISPATCH` directly,
+default `claude`) and deliberately does NOT consult `model_registry.json`'s
+`roles.dispatch` key — real dispatch never reads it (the only registry path
+into real routing is the separate `auto` → `routing.dispatch` lookup), so a
+registry-based check could green-light a provider dispatch will never invoke.
+
 | Check | Status when it fails | Observable behavior |
 | --- | --- | --- |
 | `PLAN_DIR` unwritable (or its parent not writable) | FAIL | `raise_on_failure()` raises `PreflightError` — fix permissions or point `PLAN_DIR` elsewhere |
@@ -416,6 +423,7 @@ JSON object.
 | `claude` CLI absent while backend is `claude` | FAIL | `PreflightError` — install the CLI or reject the backend at startup |
 | `model_registry.json` unloadable/malformed | FAIL | `PreflightError` — check the file exists, is valid JSON, is readable |
 | local-family backend (`ollama`, `lmstudio`, `mlx`, `local`, `auto`) with its provider CLI absent | WARN only | logged in the summary; dispatch fails later until the provider is installed |
+| unrecognized `PIPELINE_BACKEND_DISPATCH` value (not `claude` or local-family) | WARN only | logged in the summary with the known backend names; dispatch fails later until the variable is corrected |
 
 The dashboard logs this summary once at startup (`startup preflight: N ok, N
 warn, N fail`) but never blocks on it — only `raise_on_failure()` turns FAIL

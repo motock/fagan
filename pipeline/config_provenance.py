@@ -309,6 +309,9 @@ def resolve_env_var(name, default=None, *, environ=None, plist_env=None, mcp_env
         for layer in layers:
             layer["value"] = "***"
 
+    for layer in layers:
+        layer["effective_in_process"] = layer["layer"] == source
+
     return {
         "name": name,
         "effective": effective,

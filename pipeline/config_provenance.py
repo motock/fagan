@@ -242,6 +242,13 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     EnvVarSpec("PIPELINE_WEDGE_NOTIFY_COOLDOWN_SECONDS", "3600"),
     EnvVarSpec("PIPELINE_WEDGE_SCAN_ENABLED", "1"),
     EnvVarSpec("PIPELINE_WEDGE_STALE_ACTIVITY_SECONDS", "1800"),
+    # Path variables (see pipeline/paths.py) — catalogued so they appear in
+    # the effective-config view. Defaults mirror paths.py exactly.
+    EnvVarSpec("PLAN_DIR", "~/.claude/plans"),
+    EnvVarSpec("WORKTREE_ROOT", "~/.claude/worktrees"),
+    EnvVarSpec("AGENTS_DIR", "~/.claude/agents"),
+    EnvVarSpec("OVERLORD_POLICY", "~/.claude/overlord-policy.md"),
+    EnvVarSpec("USAGE_STATE_PATH", "~/.claude/usage_state.json"),
 )
 
 def _is_secret(name: str) -> bool:

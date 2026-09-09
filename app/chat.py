@@ -113,12 +113,13 @@ TOOLS: dict[str, dict] = {
     },
     "save_plan": {
         "description": (
-            "Save a plan JSON string to a named plan. plan_json must be the plan"
-            " serialized to a JSON string, not a JSON object. Shape: {epics:"
-            " [{summary, stories: [{summary, agent_instructions, dependencies,"
-            " persona, model, risk}]}]}. summary is required on every epic and"
-            " every story. Do not emit title, acceptance_criteria, or depends_on."
-            " Those fields do not exist in this schema."
+            "Save a plan JSON string to a named plan; the payload is later parsed"
+            " by ingest_plan. plan_json must be the plan serialized to a JSON"
+            " string, not a JSON object. Shape: {epics: [{summary, stories:"
+            " [{summary, agent_instructions, dependencies, persona, model,"
+            " risk}]}]}. summary is required on every epic and every story. Do not"
+            " emit title, acceptance_criteria, or depends_on. Those fields do not"
+            " exist in this schema."
         ),
         "params": {"plan_name": "str", "plan_json": "str"},
         "execute": lambda http_client, api_base_url, plan_name, plan_json, **kwargs: (

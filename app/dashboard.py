@@ -50,20 +50,19 @@ from app.dashboard_models import (
 from app.story_replay import build_replay_events
 from pipeline import config_provenance, guard_liveness, preflight, story_metrics
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
+from pipeline.live_ref import LiveRef
 from pipeline.server import PipelineService
 from pipeline.wedge import collect_story_wedge_signals, wedge_verdict
 
-PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
+PLAN_DIR = LiveRef("PLAN_DIR")
 FAILURE_MODES_DATASET_PATH = Path(os.environ.get("FAILURE_MODES_DATASET_PATH", "docs/failure_modes.json")).expanduser()
-USAGE_STATE_PATH = Path(
-    os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_state.json")
-).expanduser()
+USAGE_STATE_PATH = LiveRef("USAGE_STATE_PATH")
 # Where dispatched stories' worktrees live — the same root
 # pipeline_mcp_server.WORKTREE_ROOT reads (default ~/.claude/worktrees, see
 # pipeline_mcp_server.py). The dashboard's contract includes read access
 # to agent artifacts in a story's worktree, and write access to the
 # pipeline via `_service`.
-WORKTREE_ROOT = Path(os.environ.get("WORKTREE_ROOT", "~/.claude/worktrees")).expanduser()
+WORKTREE_ROOT = LiveRef("WORKTREE_ROOT")
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
 # The API key gate is enforced by middleware scoped to the "/api/" prefix,

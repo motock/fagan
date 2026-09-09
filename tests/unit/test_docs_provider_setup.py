@@ -100,7 +100,7 @@ def _h3_section_body(text: str, title: str) -> str:
         if line.startswith(f"### {title}") and start is None:
             start = i
             continue
-        if start is not None and (line.startswith("## ") or line.startswith("### ")):
+        if start is not None and line.startswith(("## ", "### ")):
             end = i
             break
     assert start is not None, f"'### {title}' not found"

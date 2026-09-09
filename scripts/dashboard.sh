@@ -121,8 +121,16 @@ ensure_python() {
   fi
 }
 
+ensure_dashboard_deps() {
+  if ! "$PYBIN" -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
+    echo "ERROR: dashboard dependencies missing (fastapi/uvicorn not importable). Fix: $PYBIN -m pip install -r requirements-dashboard.txt" >&2
+    exit 1
+  fi
+}
+
 cmd_start() {
   ensure_python
+  ensure_dashboard_deps
 
   if is_running; then
     local pid

@@ -50,10 +50,11 @@ cp overlord-policy.md ~/.claude/overlord-policy.md
 # 4. Restart Claude Code (or start a new session) so it picks up the MCP server
 ```
 
-`scripts/install.sh` creates the `.venv`, installs `requirements.txt`, and reports
-on the tools the pipeline shells out to — required: `git`, `gh`, and the `claude`
-CLI; optional: `ollama` and `docker` — with graceful-degradation messaging, and is
-safe to re-run. It does **not** register the MCP server, set environment
+`scripts/install.sh` creates the `.venv`, installs `requirements.txt` and
+`requirements-dashboard.txt` (the dashboard's `fastapi`/`uvicorn` deps, installed
+on every run), and reports on the tools the pipeline shells out to — required:
+`git`, `gh`, and the `claude` CLI; optional: `ollama` and `docker` — with
+graceful-degradation messaging, and is safe to re-run. It does **not** register the MCP server, set environment
 variables, or install the persona subagents — steps 2–4 above cover those. With
 nothing but the `claude` backend configured, `ollama`/`docker` being absent is
 expected, not an error.
@@ -323,6 +324,37 @@ The **advance-scheduler** is now a long‑lived daemon rather than a 60s launchd
 ### Environment Variables
 - **PIPELINE_SCHEDULER_INTERVAL_S** – default reconcile sweep interval (default 60 seconds).
 - **PIPELINE_SCHEDULER_HEALTH_PATH** – optional path where the daemon writes its health JSON each iteration.
+
+### Rendering the launchd files for your machine
+
+The committed `launchd/*.plist` files and `launchd/pipeline-logs.newsyslog.conf`
+are a reference copy: they carry the maintainer's own absolute paths (a
+`/Users/<name>/...` home directory, a specific model cache path) and will not
+work unedited on another machine. A fresh install regenerates them with
+`scripts/generate_launchd_plists.sh`, which fills the templates in
+`scripts/launchd/` from three flags:
+
+- `--repo-root` — the pipeline checkout the rendered files should point at
+  (default: the repo that contains the script).
+- `--out-dir` — where the rendered files are written (default:
+  `<repo-root>/launchd`).
+- `--mlx-model-path` — the local MLX model directory baked into the
+  mlx-supervisor plist. As an alternative to the flag you can set the
+  `MLX_MODEL_PATH` environment variable; the flag wins when both are given.
+  The script fails closed — it exits with an error — when neither is supplied.
+
+The same script also renders `launchd/pipeline-logs.newsyslog.conf` from
+`pipeline-logs.newsyslog.conf.template`, substituting only the repo root.
+
+```bash
+scripts/generate_launchd_plists.sh \
+  --repo-root "$HOME/.claude/mcp-servers/pipeline" \
+  --out-dir "$HOME/.claude/mcp-servers/pipeline/launchd" \
+  --mlx-model-path "$HOME/.cache/qwen2.5_coder_14b_manual"
+```
+
+These launchd files are macOS-only — see [Platform support](#platform-support);
+on Linux, run the entry points under your own init system instead.
 
 ## Reliability & limitations
 

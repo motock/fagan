@@ -186,8 +186,15 @@ def _story_dispatch_is_on_device(story: dict[str, Any]) -> bool:
     explicit ``backend`` field resolves to the env-default backend, so it
     counts even when that default is ``claude`` — only an explicitly
     claude-routed story (``story["backend"] == "claude"``) is exempt.
+
+    Falls back to ``dispatched_model`` (the concrete tag dispatch_story
+    resolved and actually launched) when the plan-authored ``model`` field
+    is unset — a story dispatched with no explicit ``model`` override still
+    lands on a concrete backend/tag, and that tag is what determines its
+    real footprint. Reading only ``model`` treated every such story as
+    on-device even when it was actually dispatched to a ``:cloud`` model.
     """
-    tag = story.get("model")
+    tag = story.get("model") or story.get("dispatched_model")
     if tag and tag.endswith(":cloud"):
         return False
     return story.get("backend") != "claude"
@@ -339,7 +346,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # resolves to the env-default on-device model, which the blanket
             # gate already accounts for - interrupt it only when the blanket
             # gate is down for a non-memory reason (preserving old behavior).
-            tag = story.get("model")
+            # Falls back to dispatched_model: a story with no plan-authored
+            # `model` override still resolves to a concrete tag at dispatch
+            # time, and that's the tag that determines its real footprint
+            # (see _story_dispatch_is_on_device).
+            tag = story.get("model") or story.get("dispatched_model")
             if tag and tag.endswith(":cloud"):
                 continue
             if tag:
@@ -470,8 +481,16 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 continue
             # Per-story poll gate — mirrors the interruption gate (lines above):
             # poll only stories that survive this tick (were NOT interrupted).
+            # tag falls back to dispatched_model (see _story_dispatch_is_
+            # on_device): a story with no plan-authored `model` override
+            # still resolves to a concrete tag at dispatch time, and reading
+            # only `model` silently dropped every such :cloud dispatch into
+            # the blanket-gate branch below, starving it of polling whenever
+            # the blanket gate read down (live incident: PUB-01 finished and
+            # exited but was never re-polled, so its dead pid was never
+            # graded).
             story_backend = _resolve_dispatch_backend(story, env_backend)
-            tag = story.get("model")
+            tag = story.get("model") or story.get("dispatched_model")
             if story_backend != "claude" and tag and tag.endswith(":cloud"):
                 pass  # :cloud is never interrupted by the local memory gate
             elif story_backend == "claude" or not tag:

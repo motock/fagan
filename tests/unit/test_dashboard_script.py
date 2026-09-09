@@ -413,3 +413,107 @@ def test_restart_cycles_pid_on_same_port(env):
         )
 
     _run_script("stop", env=env_)
+
+# --- .dashboard.env sourcing (DASHENV-1) -----------------------------------
+
+
+def _backup_env_file_or_skip(tmp_path: Path) -> Path | None:
+    """Move any pre-existing operator .dashboard.env aside, or skip.
+
+    Fail closed: the tests below write/delete REPO_ROOT/.dashboard.env, which
+    on an operator machine holds real routing config. If we cannot guarantee
+    restoration (backup move failed), we skip BEFORE touching anything rather
+    than risk clobbering the real file.
+    """
+    env_file = REPO_ROOT / ".dashboard.env"
+    if not env_file.exists():
+        return None
+    backup = tmp_path / ".dashboard.env.operator-backup"
+    try:
+        env_file.rename(backup)
+    except OSError:
+        pytest.skip(
+            "could not back up pre-existing .dashboard.env; refusing to clobber it"
+        )
+    return backup
+
+
+def _restore_env_file(backup: Path | None) -> None:
+    """Undo the test's .dashboard.env write: restore backup or remove ours."""
+    env_file = REPO_ROOT / ".dashboard.env"
+    if backup is not None and backup.exists():
+        try:
+            backup.rename(env_file)
+        except OSError:
+            pytest.fail(
+                f"could not restore .dashboard.env backup from {backup}; "
+                "operator file is NOT lost but must be restored manually"
+            )
+    elif env_file.exists():
+        env_file.unlink()
+
+
+def _wait_healthy_on(host: str, port: int, timeout_s: float = 15.0) -> bool:
+    """_wait_healthy against an arbitrary host (the file-provided one)."""
+    deadline = time.monotonic() + timeout_s
+    url = f"http://{host}:{port}/api/health"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(_authed_request(url), timeout=1) as resp:
+                if resp.status == 200:
+                    return True
+        except (urllib.error.URLError, ConnectionResetError, OSError):
+            time.sleep(0.05)
+    return False
+
+
+def test_dashboard_env_file_is_sourced(env, tmp_path: Path):
+    """.dashboard.env (gitignored, operator-local) must be sourced by
+    scripts/dashboard.sh at start: a DASHBOARD_HOST written ONLY to the file
+    (never exported to the subprocess env) must reach the script's host
+    resolution — and, because sourcing overwrites caller-exported vars, it
+    must beat the fixture's exported DASHBOARD_HOST=127.0.0.1."""
+    env_, port = env
+    backup = _backup_env_file_or_skip(tmp_path)
+    try:
+        (REPO_ROOT / ".dashboard.env").write_text("DASHBOARD_HOST=127.0.0.99\n")
+        # The value may only come from the sourced file, never from inheritance.
+        assert env_.get("DASHBOARD_HOST") != "127.0.0.99"
+        res = _run_script("start", env=env_)
+        assert res.returncode == 0, (
+            f"start failed: stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
+        assert "http://127.0.0.99:" in res.stdout, (
+            f".dashboard.env was not sourced (default host leaked into start "
+            f"output): {res.stdout!r}"
+        )
+        # Stronger proof: uvicorn itself bound to the file-provided host.
+        assert _wait_healthy_on("127.0.0.99", port), (
+            f"dashboard never became healthy on 127.0.0.99:{port}; "
+            f"start stdout={res.stdout!r}"
+        )
+    finally:
+        _run_script("stop", env=env_)
+        _restore_env_file(backup)
+
+
+def test_dashboard_start_without_env_file_uses_default_host(env, tmp_path: Path):
+    """Negative sibling: with NO .dashboard.env present, start behaves as
+    today — default host 127.0.0.1 (guards the no-file no-op path)."""
+    env_, port = env
+    backup = _backup_env_file_or_skip(tmp_path)
+    try:
+        assert not (REPO_ROOT / ".dashboard.env").exists()
+        res = _run_script("start", env=env_)
+        assert res.returncode == 0, (
+            f"start failed: stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
+        assert "http://127.0.0.1:" in res.stdout, (
+            f"expected default host 127.0.0.1 with no .dashboard.env: {res.stdout!r}"
+        )
+        assert _wait_healthy(port), (
+            f"dashboard never became healthy on port {port}; start stdout={res.stdout!r}"
+        )
+    finally:
+        _run_script("stop", env=env_)
+        _restore_env_file(backup)

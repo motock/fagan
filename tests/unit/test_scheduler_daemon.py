@@ -754,10 +754,16 @@ def test_run_daemon_interval_s_zero_value_returns_1(run_daemon_env, monkeypatch,
     assert capsys.readouterr().err.strip() != ""
 
 
-def test_run_daemon_health_path_is_none_when_env_unset(run_daemon_env):
+def test_run_daemon_health_path_defaults_to_plan_dir_when_env_unset(run_daemon_env):
+    # CFG-B2: with PIPELINE_SCHEDULER_HEALTH_PATH unset, run_daemon() defaults
+    # the health file to PLAN_DIR / ".scheduler_health.json" (the pre-CFG-B2
+    # behavior was health_path=None, i.e. no health file at all). Mirrors
+    # tests/unit/test_scheduler_health_default.py.
     mod.run_daemon()
     daemon = FakeSchedulerDaemon.instances[0]
-    assert daemon.kwargs["health_path"] is None
+    passed = daemon.kwargs["health_path"]
+    assert passed is not None
+    assert pathlib.Path(passed) == pathlib.Path(mod.PLAN_DIR) / ".scheduler_health.json"
 
 
 def test_run_daemon_health_path_set_from_env(run_daemon_env, monkeypatch):

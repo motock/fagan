@@ -156,8 +156,8 @@ class TestSignatureMismatchEnrichment:
     ):
         attempts = []
 
-        def _mismatch(http_client, api_base_url, **kwargs):
-            attempts.append(dict(kwargs))
+        def _mismatch(http_client, api_base_url, required):
+            attempts.append({"required": required})
             raise TypeError(
                 "_mismatch() missing 1 required positional argument: 'required'"
             )

@@ -140,7 +140,10 @@ def _assert_log_clean(repo: Path) -> None:
 
 def test_dashboard_sh_is_valid_bash() -> None:
     result = subprocess.run(
-        ["bash", "-n", str(DASHBOARD_SH)], capture_output=True, text=True
+        ["bash", "-n", str(DASHBOARD_SH)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
 

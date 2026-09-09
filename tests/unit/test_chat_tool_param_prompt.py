@@ -56,9 +56,9 @@ class TestSavePlanParamsRendered:
     def test_save_plan_entry_full_format(self):
         # The whole save_plan entry, pinning the '; args: ' separator and the
         # ', ' join between params (membership of one entry, not the sentence).
+        description = chat_module.TOOLS["save_plan"]["description"]
         assert (
-            "save_plan (Save a plan JSON to a named plan.; "
-            "args: plan_name: str, plan_json: str)"
+            f"save_plan ({description}; args: plan_name: str, plan_json: str)"
         ) in _sentence()
 
     def test_old_format_without_args_is_gone(self):

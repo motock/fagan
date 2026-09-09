@@ -15,6 +15,13 @@
 #                    via `os.setsid()`, so `stop` kills the whole process
 #                    group — reloader master and worker both).
 #
+# Operator-local overrides (.dashboard.env, gitignored — see
+# .dashboard.env.example): sourced with allexport at start when present,
+# so e.g. PIPELINE_BACKEND_CHAT / PIPELINE_BACKEND_DECOMPOSE /
+# PIPELINE_LOCAL_MODEL_DEFAULT survive a restart from a bare shell.
+# Sourcing overwrites caller-exported env — the file is durable operator
+# intent.
+#
 # Artifacts in repo root:
 #   .dashboard.<port>.pid   pid of the running uvicorn process (master when
 #                    reload), one per DASHBOARD_PORT so independent instances
@@ -65,6 +72,10 @@ Env:
   DASHBOARD_HOST   (default 127.0.0.1)
   DASHBOARD_PORT   (default 8000)
   DASHBOARD_RELOAD 1 to pass --reload to uvicorn (dev only)
+
+Operator-local overrides: .dashboard.env (gitignored; see
+.dashboard.env.example) is sourced at start when present and overrides
+caller-exported env, so provider routing survives restarts from any shell.
 
 Pid is written to .dashboard.<port>.pid and logs to dashboard.log in the repo root.
 EOF

@@ -659,7 +659,7 @@ class TestResolveEnvVarLayerShape:
             "X", default="40", environ={"X": "60"}, plist_env={"X": "60"}, mcp_env={}
         )
         for layer in result["layers"]:
-            assert set(layer.keys()) == {"layer", "value", "restart_required"}
+            assert set(layer.keys()) == {"layer", "value", "restart_required", "effective_in_process"}
 
     def test_env_layers_restart_required_true(self):
         """process_env, launchd_plist, mcp_server_env all have restart_required True."""

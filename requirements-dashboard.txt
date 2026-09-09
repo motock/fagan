@@ -1,5 +1,5 @@
 # Dependencies for the read-only monitoring dashboard (dashboard.py).
-# Optional - only needed if you run the dashboard. Install with:
-#   pip install -r requirements-dashboard.txt
+# Dashboard dependencies - installed automatically by scripts/install.sh and
+# required to run the dashboard (scripts/dashboard.sh).
 fastapi>=0.141.1
 uvicorn>=0.52.4

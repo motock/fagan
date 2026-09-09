@@ -43,6 +43,12 @@ fi
 echo "==> Installing $REQ"
 "$PYBIN" -m pip install --quiet --upgrade pip
 "$PYBIN" -m pip install --quiet -r "$ROOT/$REQ"
+
+# Dashboard deps (fastapi, uvicorn): required by scripts/dashboard.sh and now
+# installed by default. pip install is idempotent, so re-runs are safe; on
+# --dev this is a harmless duplicate because requirements-dev.txt already
+# includes requirements-dashboard.txt.
+"$PYBIN" -m pip install --quiet -r "$ROOT/requirements-dashboard.txt"
 echo "==> Python deps installed:"
 "$PYBIN" -m pip list 2>/dev/null | grep -iE '^(mcp|httpx|pytest) ' || true
 

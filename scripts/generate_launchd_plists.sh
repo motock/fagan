@@ -67,4 +67,12 @@ for kind in $KINDS; do
         "$src" > "$dst"
 done
 
+# The newsyslog rotation config is templated the same way as the plists and
+# rendered with the SAME {{REPO_ROOT}} substitution as the loop above - it
+# carries no {{HOME}} or {{MLX_MODEL_PATH}} tokens, so only REPO_ROOT is
+# substituted and its output must not vary with --mlx-model-path.
+NEWSYSLOG_SRC="${TEMPLATE_DIR}/pipeline-logs.newsyslog.conf.template"
+NEWSYSLOG_DST="${OUT_DIR}/pipeline-logs.newsyslog.conf"
+sed -e "s|{{REPO_ROOT}}|${REPO_ROOT}|g" "$NEWSYSLOG_SRC" > "$NEWSYSLOG_DST"
+
 chmod +x "$0"

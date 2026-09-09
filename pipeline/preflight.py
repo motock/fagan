@@ -57,6 +57,7 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
 
     The checks are read-only: nothing is created, written, or executed.
     """
+
     results = []
 
     # -- check a: PLAN_DIR --------------------------------------------------
@@ -141,6 +142,14 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
 
     # -- check c: dispatch backend ------------------------------------------
     # Read the env var at call time (never at import time) and normalize it.
+    # This deliberately mirrors real per-story dispatch execution and nothing
+    # else: pipeline/dispatch.py, advance.py, and escalation.py all resolve
+    # the backend as PIPELINE_BACKEND_DISPATCH (default "claude") and never
+    # consult model_registry.json's roles.dispatch key (the only registry
+    # path into real routing is the separate "auto" -> routing.dispatch
+    # lookup). Resolving via role_registry.resolve_role here would green-light
+    # a provider real dispatch will never invoke -- the same false-green
+    # defect class this check exists to prevent, just on another provider.
     raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
     backend = (raw_backend or "claude").strip().lower() or "claude"
 

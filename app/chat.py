@@ -40,7 +40,7 @@ _SYSTEM_PROMPT_PREFIX = (
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
     "If no tool calls are needed, simply answer in natural language. "
     "You can read plan and story status, journals, logs, and checklists. You can execute control actions (dispatch, interrupt, patch, review, advance, pause, resume, mark done). All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it. "
-    "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
+    "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. When calling save_plan, pass the decompose result plan JSON verbatim as plan_json (a JSON string) - do not rewrite, summarize, or re-derive it; keep its epics/stories fields exactly as decompose returned them. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
     "You can surface decisions the overlord has ruled on by calling list_decisions. If the user wants to override or supplement a ruling, record their answer via answer_decision. Human answers are appended to the same decision log as overlord rulings, preserving the audit trail. "
 )
 _FINAL_SENTENCE = "Call tools to gather information, then provide a natural-language reply."
@@ -245,8 +245,15 @@ TOOLS: dict[str, dict] = {
 def _available_tools_sentence() -> str:
     """Build the "Available tools: ..." sentence from every name currently
     registered in TOOLS, so the prompt can never drift out of sync with the
-    registry the way the old frozen sentence did."""
-    entries = [f"{name} ({TOOLS[name]['description']})" for name in sorted(TOOLS)]
+    registry the way the old frozen sentence did. Each entry also renders the
+    registered params ("args: name: type, ...", or "args: none" when the tool
+    takes none), so the model sees the real argument names instead of guessing
+    them - the drift that made it invent wrong argument names for save_plan."""
+    entries = []
+    for name in sorted(TOOLS):
+        params = TOOLS[name].get("params") or {}
+        params_str = ", ".join(f"{k}: {v}" for k, v in params.items()) or "none"
+        entries.append(f"{name} ({TOOLS[name]['description']}; args: {params_str})")
     return "Available tools: " + ", ".join(entries) + " "
 
 

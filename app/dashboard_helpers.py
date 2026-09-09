@@ -140,6 +140,62 @@ def _collapse_duplicate_notifications(records: list[dict]) -> list[dict]:
     return result
 
 
+def _consolidate_stories_by_key(stories: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse ``compute_story_metrics`` groups that share a story_key.
+
+    A story's correlation_id is minted on first dispatch, so notification
+    records emitted before that point group by the bare story_key while
+    later records (including ``story_merged``) group by correlation_id -
+    the same story can therefore surface as two separate groups with
+    conflicting ``merged`` flags. The maturity table's grain is one row per
+    story, so merge any groups sharing a non-null story_key: sum the raw
+    counters, OR the merged flags, and recompute ``cost`` as one plus the
+    merged counters (never sum the raw ``cost`` fields, which would double
+    the fixed +1 baseline). Groups with no story_key (a notification with
+    neither story_key nor correlation_id, e.g. a plan-level notice) are
+    dropped entirely - they describe no single story and don't belong in a
+    per-story table.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for story in stories:
+        key = story.get("story_key")
+        if not key:
+            continue
+        if key not in merged:
+            merged[key] = {
+                "story_key": key,
+                "correlation_id": None,
+                "dispatch_failures": 0,
+                "rework_cycles": 0,
+                "escalations": 0,
+                "merged": False,
+                "merged_ts": None,
+            }
+            order.append(key)
+        target = merged[key]
+        target["dispatch_failures"] += story.get("dispatch_failures", 0) or 0
+        target["rework_cycles"] += story.get("rework_cycles", 0) or 0
+        target["escalations"] += story.get("escalations", 0) or 0
+        if story.get("merged"):
+            target["merged"] = True
+            if target["merged_ts"] is None:
+                target["merged_ts"] = story.get("merged_ts")
+        if target["correlation_id"] is None and story.get("correlation_id"):
+            target["correlation_id"] = story["correlation_id"]
+    result = []
+    for key in order:
+        payload = merged[key]
+        payload["cost"] = (
+            1
+            + payload["dispatch_failures"]
+            + payload["rework_cycles"]
+            + payload["escalations"]
+        )
+        result.append(payload)
+    return result
+
+
 def _parse_progress(plan_text: str | None, scratchpad_text: str | None) -> dict | None:
     """Parse progress from the tech-lead checklist and executor scratchpad.
 

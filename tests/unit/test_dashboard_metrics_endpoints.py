@@ -265,6 +265,82 @@ def test_metrics_endpoint_surfaces_malformed_line_count(plan_dir, client):
 # ---------------------------------------------------------------------------
 
 
+def test_metrics_endpoint_consolidates_split_groups_for_same_story_key(plan_dir, client):
+    """A story's correlation_id is minted on first dispatch and can be absent
+    from earlier notification records; pipeline.story_metrics.compute_story_metrics
+    groups per-record (correlation_id when present, else story_key), so the
+    same story can surface as two raw groups - one keyed by correlation_id
+    (carrying later events, e.g. story_merged) and one keyed by the bare
+    story_key (carrying earlier events). The maturity table's grain is one
+    row per story, so the endpoint must consolidate these into a single row
+    instead of showing the same story twice with conflicting merged flags."""
+    plan = "split-story-plan"
+    _write_manifest(plan_dir, plan, {"S1": {"summary": "x", "status": "done"}})
+    lines = [
+        json.dumps(_record("S1", "dispatch_failed", "t0", "d0")),
+        json.dumps(_record("S1", "story_merged", "t1", "d1", correlation_id="c-1")),
+    ]
+    _write_notification_lines(plan_dir, plan, lines)
+
+    res = client.get(f"/api/plans/{plan}/metrics")
+    assert res.status_code == 200
+    body = res.json()
+
+    assert len(body["stories"]) == 1, "same story_key must collapse to one row"
+    story = body["stories"][0]
+    assert story["story_key"] == "S1"
+    assert story["merged"] is True
+    assert story["dispatch_failures"] == 1
+    assert story["cost"] == 2  # 1 baseline + 1 dispatch failure, not double-counted
+    assert body["rollup"]["stories_total"] == 1
+    assert body["rollup"]["stories_merged"] == 1
+    assert body["rollup"]["cost_per_merged_story"] == 2.0
+
+
+def test_metrics_endpoint_consolidation_sums_counters_across_split_groups(plan_dir, client):
+    plan = "split-counters-plan"
+    _write_manifest(plan_dir, plan, {"S1": {"summary": "x", "status": "in_progress"}})
+    lines = [
+        json.dumps(_record("S1", "dispatch_failed", "t0", "d0")),
+        json.dumps(_record("S1", "tests_failed", "t1", "d1", correlation_id="c-1")),
+        json.dumps(_record("S1", "escalated", "t2", "d2", correlation_id="c-1")),
+    ]
+    _write_notification_lines(plan_dir, plan, lines)
+
+    res = client.get(f"/api/plans/{plan}/metrics")
+    assert res.status_code == 200
+    body = res.json()
+
+    assert len(body["stories"]) == 1
+    story = body["stories"][0]
+    assert story["dispatch_failures"] == 1
+    assert story["rework_cycles"] == 1
+    assert story["escalations"] == 1
+    assert story["merged"] is False
+    assert story["cost"] == 4  # 1 + 1 + 1 + 1
+
+
+def test_metrics_endpoint_drops_uncorrelated_group_from_stories_list(plan_dir, client):
+    """A notification with neither story_key nor correlation_id (e.g. a
+    plan-level notice like "MCP servers touched, restart needed") is real
+    data but is not a story - it must not render as a fake "?" row in the
+    per-story table."""
+    plan = "plan-level-notice"
+    _write_manifest(plan_dir, plan, {"S1": {"summary": "x", "status": "done"}})
+    lines = [
+        json.dumps(_record(None, "mcp_restart_needed", "t0", "d0")),
+        json.dumps(_record("S1", "story_merged", "t1", "d1")),
+    ]
+    _write_notification_lines(plan_dir, plan, lines)
+
+    res = client.get(f"/api/plans/{plan}/metrics")
+    assert res.status_code == 200
+    body = res.json()
+
+    assert [s["story_key"] for s in body["stories"]] == ["S1"]
+    assert body["rollup"]["stories_total"] == 1
+
+
 def test_metrics_endpoint_404_for_unknown_plan(plan_dir, client):
     """Consistent with GET /api/plans/{plan_name}'s existing not-found
     behavior: a 404 naming the missing plan, not a 200 with empty data."""

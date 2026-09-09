@@ -29,6 +29,7 @@ from app.dashboard_helpers import (
     _acceptance_slice,
     _aggregate_stories,
     _collapse_duplicate_notifications,
+    _consolidate_stories_by_key,
     _parse_progress,
     _plan_summary,
     _store,
@@ -941,6 +942,7 @@ def get_plan_metrics(plan_name: str) -> dict[str, Any]:
     sidecar = PLAN_DIR / f"{plan_name}.notifications.jsonl"
     records, malformed = story_metrics.load_notification_records(sidecar)
     stories = list(story_metrics.compute_story_metrics(records).values())
+    stories = _consolidate_stories_by_key(stories)
     rollup = story_metrics.compute_plan_rollup(stories)
     return {
         "plan": plan_name,

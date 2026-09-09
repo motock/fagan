@@ -305,11 +305,7 @@ def resolve_env_var(name, default=None, *, environ=None, plist_env=None, mcp_env
 
     masked = _is_secret(name)
     if masked:
-        # Only an environment-supplied value is sensitive; a code default is
-        # public (it lives in this repo), so `effective` keeps the raw default
-        # when the var is absent from environ. Layer values are always masked.
-        if name in environ:
-            effective = "***"
+        effective = "***"
         for layer in layers:
             layer["value"] = "***"
 

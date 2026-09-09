@@ -174,7 +174,7 @@ class TestMaskedSecretVar:
             environ={}, plist_env={self.NAME: "s3cr3t"}, mcp_env={},
         )
         assert result["masked"] is True
-        assert result["effective"] == "fallback"
+        assert result["effective"] == "***"
         assert all(l["value"] == "***" for l in result["layers"])
         assert _layer(result, "launchd_plist")["effective_in_process"] is False
         assert _layer(result, "code_default")["effective_in_process"] is True

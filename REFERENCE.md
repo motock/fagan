@@ -181,7 +181,6 @@ todo ──dispatch──► in_progress ──tests+lint pass──► (review)
    ├──────────────────────────── redispatch (rework, w/ feedback) ─────────────────┘
    └─ rework budget exhausted ─► parked
 ```
-```
 
 `interrupted` is distinct from `failed`: it means the agent was stopped (by
 `interrupt_story`, e.g. the usage gate) with its work checkpointed, not that
@@ -554,7 +553,7 @@ scattered env vars:
 {
   "providers": {
     "claude":   {"models": {"opus": {"tag": "opus"}, "sonnet": {"tag": "sonnet"}}},
-    "ollama":   {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}, "glm": {"tag": "glm-4.7-flash:cloud"}}},
+    "ollama":   {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}, "glm": {"tag": "glm-5.3-flash:cloud"}}},
     "mlx":      {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}}
   },
   "roles": {
@@ -565,11 +564,18 @@ scattered env vars:
 
 `providers.<name>.models.<friendly name>.tag` maps a short name (what you'd
 say out loud — "gpt-oss", "qwen") to the literal string a provider expects
-(an Ollama tag, an MLX model path, or a Claude tier). `roles.<role>` sets
-that role's default `(provider, model)` — resolved via the friendly name
-above, so a typo is caught immediately rather than silently falling back to
+(an Ollama tag, an MLX model path, or a Claude tier). A `roles` entry pairs
+a role with a `(provider, model)` — resolved via the friendly name above,
+so a typo is caught immediately rather than silently falling back to
 some other model. Both sections are optional and can be partial; an
 unconfigured role falls through to today's existing behavior unchanged.
+
+The shipped `model_registry.json` deliberately ships **no `roles` block** —
+this project decouples from any single provider, so the operator chooses.
+Keep a personal `roles` block out of the repo in the gitignored
+`model_registry.local.json` (repo root) and point
+`PIPELINE_MODEL_REGISTRY_PATH` at it; the env var works with any registry
+JSON path.
 
 **Resolution priority** (`role_registry.resolve_role`, highest wins), the
 same for provider and model independently:
@@ -580,8 +586,10 @@ same for provider and model independently:
    the existing `PIPELINE_LOCAL_MODEL_*`/`PIPELINE_LOCAL_REVIEW_MODEL`/
    `PIPELINE_LOCAL_PLANNER_MODEL` vars) — unchanged, still the fastest way
    to override ad hoc.
-3. `model_registry.json`'s `roles.<role>` entry.
-4. The role's existing hardcoded/persona-frontmatter default.
+3. The registry file's `roles.<role>` entry (`model_registry.json`, or
+   whichever file `PIPELINE_MODEL_REGISTRY_PATH` names).
+4. The role's existing hardcoded/persona-frontmatter default — for
+   dispatch/review this is the `claude` backend.
 
 Use `get_role_config(plan_name=None)` to see what actually resolves right
 now (optionally layered with a specific plan's `role_config`) before
@@ -718,11 +726,20 @@ This repo defines over a hundred `PIPELINE_*`/`LOCAL_AGENT_*` variables, but
 the overwhelming majority are tuning knobs with sane defaults — empirically-set
 timeouts, retry budgets, and per-model overrides that only matter once you're
 running local dispatch at scale. **A first deployment using the default
-`claude` backend for every role needs none of them.** Set these, and leave
-everything else at its default until you have a concrete reason to change it:
+`claude` backend for every role needs none of the `PIPELINE_*` tuning knobs
+below — but it does need provider selection and tool authorization (see
+*Per-role provider/model configuration* above and README's *Provider
+selection & authorization*): the shipped registry
+routes no roles, so set `PIPELINE_BACKEND_<ROLE>` (or a `roles` block in a
+`PIPELINE_MODEL_REGISTRY_PATH` registry) per role, and run `gh auth login`
+plus the Claude Code CLI's own login before the first dispatch. Set these,
+and leave everything else at its default until you have a concrete reason to
+change it:
 
 | Variable | Why you'd set it on day one |
 |---|---|
+| `PIPELINE_BACKEND_<ROLE>` | **Required setup, not a tuning knob**: the shipped `model_registry.json` ships no `roles` routing, so each role falls back to the `claude` backend unless you select a provider — via this var (e.g. `PIPELINE_BACKEND_DISPATCH=ollama`), a plan's `role_config`, or a `roles` block in a registry file pointed at by `PIPELINE_MODEL_REGISTRY_PATH` |
+| `PIPELINE_MODEL_REGISTRY_PATH` | Point the pipeline at your own registry JSON — conventionally the gitignored `model_registry.local.json`, which keeps personal per-role routing out of the repo |
 | `REPO_ROOT` | Point the pipeline at the project it should operate on — almost always required; defaults to `.` |
 | `PLAN_DIR` | Only if you don't want plans/manifests in the default `~/.claude/plans` |
 | `PIPELINE_AUTONOMY` | Set to `dry-run` for your first plan on any new deployment (see Autonomy levels below); move to `gated` once you trust it |

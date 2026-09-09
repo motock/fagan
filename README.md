@@ -28,8 +28,10 @@ Windows is untested.
 ## Quickstart
 
 This gets the MCP server registered and a first plan running end-to-end.
-`claude`-backend dispatch/review (the default) needs no local model — it
-shells out to the Claude Code CLI.
+Dispatch/review default to the `claude` backend, which needs no local model —
+it shells out to the Claude Code CLI. The shipped registry deliberately ships
+no role routing, so provider selection is a setup step, not a default: see
+**Provider selection & authorization** below.
 
 ```bash
 # 1. Clone and install the Python environment
@@ -75,18 +77,72 @@ Start with `PIPELINE_AUTONOMY=dry-run` (plans and logs only, nothing is
 dispatched or merged) until you've watched one plan run and trust the gates —
 see [Autonomy levels](REFERENCE.md#configuration-environment-variables).
 
-**Only using the `claude` backend?** Skip every `PIPELINE_LOCAL_*`,
-`PIPELINE_BACKEND_*=ollama/lmstudio/mlx`, and Ollama/MLX/LM Studio setup
-entirely — those only matter if you opt a role into local-model dispatch.
-See [Minimal configuration](REFERENCE.md#minimal-configuration) for the
-handful of variables actually worth setting on day one, versus the ~100 that
-exist purely for tuning.
+**Only using the `claude` backend?** The `PIPELINE_LOCAL_*` and
+`PIPELINE_BACKEND_*=ollama/lmstudio/mlx` variables, and Ollama/MLX/LM Studio
+setup, only matter if you opt a role into local-model dispatch — but provider
+selection itself is still a required setup step (the shipped registry routes
+nothing; see **Provider selection & authorization** below), and even the
+`claude` path needs two credentials before the first dispatch: `gh auth login`
+(the pipeline opens and merges PRs through the GitHub CLI) and the Claude Code
+CLI's own login. See
+[Minimal configuration](REFERENCE.md#minimal-configuration) for the handful of
+variables actually worth setting on day one, versus the ~100 that exist purely
+for tuning.
+
+### Provider selection & authorization
+
+**Provider selection is a required setup step.** The shipped
+`model_registry.json` deliberately declares which models exist per provider
+but ships **no `roles` routing**: this project decouples from any single
+provider, so the operator chooses. There are two supported ways to select a
+provider per role, checked in this order by `resolve_role`:
+
+1. **Plan role config** — a plan's per-role `provider`/`model` beats
+   everything below.
+2. **`PIPELINE_BACKEND_<ROLE>` environment variables** — e.g.
+   `PIPELINE_BACKEND_DISPATCH=ollama` opts the dispatch role into Ollama.
+3. **A `roles` block in a registry file** — see below.
+4. **The caller's own fallback** — for dispatch/review this is the `claude`
+   backend.
+
+The same two registry files work for both selection styles:
+
+- **`PIPELINE_MODEL_REGISTRY_PATH`** points the pipeline at any registry
+  JSON you like.
+- **`model_registry.local.json`** (repo root) is the convention for a
+  personal registry: it is gitignored, so your per-role routing stays out of
+  the repo. Point `PIPELINE_MODEL_REGISTRY_PATH` at it, or copy it over
+  `model_registry.json` locally if you prefer not to set the variable.
+
+A `roles` block names a provider and a *friendly* model name per role; the
+friendly name must exist under that provider's `models` in the same file, and
+the concrete tag is resolved from there. A typo raises an error rather than
+silently falling back.
+
+**Authorization matrix.** Selecting a provider also selects which credentials
+you must establish first — `scripts/install_checks.py` probes these and
+reports `unauthorized` (remedy: a login, not an install) where it can:
+
+| Provider / tool | Credential needed | How to establish it |
+| --- | --- | --- |
+| `git` / `gh` | GitHub auth (the pipeline opens and merges PRs through `gh`) | `gh auth login` |
+| `claude` backend | Claude Code CLI's own login | `claude auth login` (check: `claude auth status`) |
+| any `:cloud` ollama tag | An ollama.com account, signed into the **local daemon** | `ollama signin` |
+| `litellm` backend | Per-vendor API keys | See [docs/specs/LITELLM_PROVIDER.md](docs/specs/LITELLM_PROVIDER.md) |
+| on-device ollama / lmstudio / mlx tag | Nothing extra | — |
+
+On the `:cloud` rows: those calls are proxied through `https://ollama.com` by
+the local ollama daemon, which sends its own credential — the pipeline sends
+no credential of its own. `:cloud` tags are the *only* ollama tags that need
+a sign-in; purely on-device tags need nothing beyond the daemon running.
 
 ### Getting-started walkthrough
 
 No local model is required anywhere in this walkthrough: with
-`PIPELINE_BACKEND_DISPATCH=claude` (the default) dispatch and review shell out
-to the Claude Code CLI and never touch ollama.
+`PIPELINE_BACKEND_DISPATCH=claude` (set it explicitly, or add a `roles` block
+to a local registry — the shipped registry routes nothing; see **Provider
+selection & authorization** above) dispatch and
+review shell out to the Claude Code CLI and never touch ollama.
 
 1. **Install** — one command: `scripts/install.sh` (see the quickstart above
    for what it does and does not do).

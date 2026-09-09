@@ -469,6 +469,33 @@ def test_moved_section_body_is_verbatim(title):
         assert "default `claude`" in reference_body and "no longer ships a `roles` block" in reference_body, (
             f"Section body for {title!r} in REFERENCE.md does not document the corrected claude-default planner resolution."
         )
+    elif title == "Status lifecycle":
+        # PP-05 removed a stray ``` fence that sat immediately after the
+        # lifecycle diagram's closing fence in the pre-split README (a
+        # markdown bug: it opened an unterminated code block that swallowed
+        # every following section, and desynced the fence tracker this
+        # file's _h2_section_body relies on). Normalize the doubled fence on
+        # the original side — and require the stray fence to actually be
+        # gone, so the normalization can never mask its reintroduction.
+        assert "```\n```" not in reference_body, (
+            f"Section body for {title!r} in REFERENCE.md must not contain the "
+            f"stray doubled ``` fence after the lifecycle diagram."
+        )
+        original_body = original_body.replace("```\n```", "```", 1)
+    elif title == "Per-role provider/model configuration":
+        # PP-05 corrected the example registry's ollama tag: the pre-split
+        # README at 2cca309~1 showed `glm-4.7-flash:cloud`, which is not a
+        # tag the merged model_registry.json ships (the catalog has
+        # `glm-5.3-flash:cloud`), and tests/unit/test_docs_provider_setup.py
+        # requires the fictional tag to be gone. Normalize the corrected tag
+        # on both sides — and require the correction to actually be present,
+        # so the normalization can never mask a revert to the stale tag.
+        assert "glm-5.3-flash:cloud" in reference_body and "glm-4.7-flash" not in reference_body, (
+            f"Section body for {title!r} in REFERENCE.md must show the real "
+            f"glm-5.3-flash:cloud tag, not the fictional glm-4.7-flash one."
+        )
+        reference_body = reference_body.replace("glm-5.3-flash:cloud", "glm-4.7-flash:cloud")
+        original_body = original_body.replace("glm-4.7-flash:cloud", "glm-4.7-flash:cloud")
     else:
         if title in _LITELLM_ENUMERATION_SECTIONS:
             # litellm was registered as a backend driver (backend._DRIVERS)

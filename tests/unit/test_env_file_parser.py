@@ -22,9 +22,9 @@ import os
 from pathlib import Path
 
 import pytest
-from pipeline.env_file import find_env_file, parse_env_file
 
 from pipeline import env_file
+from pipeline.env_file import find_env_file, parse_env_file
 
 # ---------------------------------------------------------------------------
 # parse_env_file: happy path

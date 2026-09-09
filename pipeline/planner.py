@@ -524,6 +524,38 @@ def _dispatch_strength_tier(plan_role_config: dict | None = None) -> str:
     return "local"
 
 
+def _run_decompose_detailed(
+    request: str, *, plan_role_config: dict | None = None
+) -> tuple[str | None, str | None]:
+    """Decompose with the cause preserved: returns (text, error).
+
+    Mirrors _run_decompose's resolution and fail-open behavior, but instead
+    of silently discarding the backend's exception, returns it as a
+    diagnostic string so callers (the /api/decompose route, the chat
+    dashboard) can tell a claude-CLI auth/cap failure apart from a
+    proxy model-not-found 404 or a slow-but-working call. (text, None) on
+    success; (None, "<ExcType>: <detail>") on any backend failure.
+    """
+    resolution = role_registry.resolve_role(
+        "decompose",
+        plan_role_config=plan_role_config,
+        model_fallback=lambda: _persona_default_model("product-analyst") or "opus",
+    )
+    tier = _dispatch_strength_tier(plan_role_config=plan_role_config)
+    system = _persona_body("product-analyst") + _STRENGTH_TIER_GUIDANCE[tier]
+    try:
+        text = backend.get_backend("decompose", name=resolution.provider).complete(
+            request,
+            system=system,
+            model=resolution.model,
+            allowed_tools="Read",
+        )
+    except Exception as exc:  # noqa: BLE001 (deliberate fail-open, per contract above)
+        return None, f"{type(exc).__name__}: {exc}"
+    text = (text or "").strip()
+    return (text or None), None
+
+
 def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str | None:
     """Call a bounded, single-turn LLM (the product-analyst persona) to turn
     a raw goal/feature request into epics/stories JSON matching save_plan's
@@ -541,25 +573,11 @@ def _run_decompose(request: str, *, plan_role_config: dict | None = None) -> str
     guidance resolved from the "dispatch" role (see _dispatch_strength_tier),
     so the story splitting/detail matches the implementer these stories will
     actually run on.
+
+    Callers that need the underlying failure cause (for surfacing to a user)
+    use _run_decompose_detailed instead.
     """
-    resolution = role_registry.resolve_role(
-        "decompose",
-        plan_role_config=plan_role_config,
-        model_fallback=lambda: _persona_default_model("product-analyst") or "opus",
-    )
-    tier = _dispatch_strength_tier(plan_role_config=plan_role_config)
-    system = _persona_body("product-analyst") + _STRENGTH_TIER_GUIDANCE[tier]
-    try:
-        text = backend.get_backend("decompose", name=resolution.provider).complete(
-            request,
-            system=system,
-            model=resolution.model,
-            allowed_tools="Read",
-        )
-    except Exception:  # noqa: BLE001 (deliberate fail-open to None on any exception, per this function's docstring)
-        return None
-    text = (text or "").strip()
-    return text or None
+    return _run_decompose_detailed(request, plan_role_config=plan_role_config)[0]
 
 
 __all__ = [
@@ -581,6 +599,7 @@ __all__ = [
     "_rework_requires_new_tests",
     "_rework_test_author_prompt",
     "_run_decompose",
+    "_run_decompose_detailed",
     "_run_planner",
     "_run_rework_planner",
     "_run_rework_test_author_phase",

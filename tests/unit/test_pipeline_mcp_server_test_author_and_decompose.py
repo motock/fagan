@@ -25,7 +25,7 @@ from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
 def test_decompose_plan_malformed_json_fails_with_raw_text_preserved(
     agents_dir, monkeypatch,
 ):
-    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: "not json at all")
+    monkeypatch.setattr(p, "_run_decompose_detailed", lambda request, **k: ("not json at all", None))
 
     result = p.decompose_plan("Build a CLI todo app.")
 
@@ -35,7 +35,7 @@ def test_decompose_plan_malformed_json_fails_with_raw_text_preserved(
 
 
 def test_decompose_plan_rejects_json_missing_epics_list(agents_dir, monkeypatch):
-    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: '{"not_epics": []}')
+    monkeypatch.setattr(p, "_run_decompose_detailed", lambda request, **k: ('{"not_epics": []}', None))
 
     result = p.decompose_plan("Build a CLI todo app.")
 
@@ -46,7 +46,7 @@ def test_decompose_plan_rejects_json_missing_epics_list(agents_dir, monkeypatch)
 def test_decompose_plan_fails_open_when_backend_returns_none(agents_dir, monkeypatch):
     """_run_decompose already fails open (returns None) on a broken backend -
     decompose_plan must surface that as ok=False, never raise."""
-    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: None)
+    monkeypatch.setattr(p, "_run_decompose_detailed", lambda request, **k: (None, None))
 
     result = p.decompose_plan("Build a CLI todo app.")
 

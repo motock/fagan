@@ -358,7 +358,16 @@ class ChatService:
             return self._resolved_driver, self._resolved_model
         from app import backend, role_registry
 
-        resolution = role_registry.resolve_role("chat", registry=role_registry.load_registry())
+        # model_fallback keeps /api/chat working on machines with no chat role
+        # configured (e.g. the PP-01 provider-neutral registry, roles:{}), the
+        # same degrade path _run_decompose already uses.
+        from pipeline.config import DEFAULT_MODEL
+
+        resolution = role_registry.resolve_role(
+            "chat",
+            registry=role_registry.load_registry(),
+            model_fallback=lambda: DEFAULT_MODEL,
+        )
         driver = backend.get_backend("chat", name=resolution.provider)
         self._resolved_driver = driver
         self._resolved_model = resolution.model

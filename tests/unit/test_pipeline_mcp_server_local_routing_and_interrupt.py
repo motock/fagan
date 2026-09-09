@@ -666,7 +666,7 @@ def test_run_decompose_returns_none_on_empty_response(agents_dir, monkeypatch):
 
 def test_decompose_plan_happy_path_parses_fenced_json(agents_dir, monkeypatch):
     plan_json = json.dumps({"epics": [{"summary": "E1", "stories": []}]})
-    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: f"```json\n{plan_json}\n```")
+    monkeypatch.setattr(p, "_run_decompose_detailed", lambda request, **k: (f"```json\n{plan_json}\n```", None))
 
     result = p.decompose_plan("Build a CLI todo app.")
 

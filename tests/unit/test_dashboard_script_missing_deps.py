@@ -381,6 +381,7 @@ def test_tests_do_not_invoke_the_real_venv(tmp_path: Path) -> None:
         [str(stub), "-c", "import fastapi, uvicorn"],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert probe.returncode == 1
 

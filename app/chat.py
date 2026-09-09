@@ -295,6 +295,22 @@ def _parse_tool_calls(text: str) -> list[dict]:
     return calls
 
 
+def _looks_like_unparsed_tool_call(response: str) -> bool:
+    """Return True when *response* is a stalled tool call, not a reply.
+
+    True iff the literal ``[TOOL_CALL]`` marker appears in *response* AND
+    ``_parse_tool_calls(response)`` yields nothing (malformed JSON, missing
+    closer, missing/mistyped keys, prose inside the tags).  False whenever the
+    marker is absent entirely -- a genuine conversational reply must keep
+    taking the existing fast path and end the turn immediately -- and also
+    when the marker is present but at least one call parses (the normal tool
+    path runs instead of a nudge).  Pure: no instance state, no caching.
+    """
+    if "[TOOL_CALL]" not in response:
+        return False
+    return _parse_tool_calls(response) == []
+
+
 
 def _signature_mismatch_error(
     name: str, execute, args: dict, http_client, api_base_url: str
@@ -461,6 +477,25 @@ class ChatService:
             response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
             parsed = _parse_tool_calls(response)
             if not parsed:
+                if _looks_like_unparsed_tool_call(response):
+                    # The model emitted a [TOOL_CALL] marker but nothing inside
+                    # it parsed: this is a stalled tool call, not a
+                    # conversational reply. Spend this turn (already counted
+                    # above) on one nudge re-prompt and let the loop continue
+                    # exactly as it does for a normal tool-result turn -- no
+                    # extra counter, no state beyond current_prompt (precedent:
+                    # the review loop's nudge handling in app/backend_ollama.py).
+                    current_prompt = (
+                        "Your previous response contained a [TOOL_CALL] marker "
+                        "but it could not be parsed as a tool call. Here is "
+                        "exactly what you produced:\n"
+                        f"{response}\n"
+                        "Re-emit the tool call using exactly this tag/JSON "
+                        "shape, with valid JSON (no trailing commas, a string "
+                        '"name" and a dict "args"):\n'
+                        '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
+                    )
+                    continue
                 return {"reply": response, "tool_calls": tool_calls_made, "turns": turns}
             for call in parsed:
                 result = _execute_tool(call["name"], call["args"], self._http_client, self._api_base_url)

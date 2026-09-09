@@ -1,0 +1,21 @@
+# newsyslog rotation for the pipeline's launchd logs.
+#
+# Even with httpx/httpcore quieted (see pipeline_mcp_server.py), an unattended
+# overnight system can still accumulate stderr over weeks — and a crash loop or
+# a future chatty dependency could flood again. launchd does not rotate its
+# StandardOut/StandardError files, so bound them here. newsyslog covers ALL
+# output (logging, bare prints, tracebacks) since it rotates the files by path.
+#
+# Install (one-time, needs sudo):
+#   sudo cp launchd/pipeline-logs.newsyslog.conf /etc/newsyslog.d/com.claude.pipeline.conf
+# newsyslog runs ~hourly via /System/Library/LaunchDaemons/com.apple.newsyslog.plist;
+# force a pass with:  sudo newsyslog -nv   (dry-run)  /  sudo newsyslog -v
+#
+# Fields: logfilename  mode  count  size(KB)  when  flags
+#   count 5, size 5120 KB  -> keep 5 rotated files, rotate at ~5 MB each.
+#   flags: J = compress rotated files with bzip2; N = don't signal any process.
+# logfilename                                                                  mode count size  when flags
+{{REPO_ROOT}}/advance-scheduler.log         644  5     5120  *    NJ
+{{REPO_ROOT}}/advance-scheduler.err.log     644  5     5120  *    NJ
+{{REPO_ROOT}}/usage-poller.log              644  5     5120  *    NJ
+{{REPO_ROOT}}/usage-poller.err.log          644  5     5120  *    NJ

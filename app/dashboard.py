@@ -938,7 +938,7 @@ def get_plan_metrics(plan_name: str) -> dict[str, Any]:
     manifest = _service.get_manifest_or_none(plan_name)
     if manifest is None:
         raise HTTPException(status_code=404, detail=f"No manifest for plan '{plan_name}'")
-    sidecar = PLAN_DIR / f"{plan_name}.notifications.jsonl"
+    sidecar = _service.get_notification_sidecar_path(plan_name)
     records, malformed = story_metrics.load_notification_records(sidecar)
     stories = list(story_metrics.compute_story_metrics(records).values())
     stories = _consolidate_stories_by_key(stories)

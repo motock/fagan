@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from pipeline.workspace import normalize_workspace_path, validate_workspace
@@ -349,6 +350,18 @@ class PipelineService:
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
         _validate_key(plan_name)
         return _store.get_manifest_or_none(plan_name)
+
+    def get_notification_sidecar_path(self, plan_name: str) -> Path:
+        """Return the notifications sidecar Path for a plan (CFG-A3).
+
+        Narrow path accessor so route layers stop composing the on-disk
+        layout themselves. Reads PLAN_DIR through the module LiveRef at call
+        time — no I/O, no parsing, no state — so
+        ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...)`` keeps
+        landing exactly as it does for the rest of the store seam.
+        """
+        _validate_key(plan_name)
+        return PLAN_DIR / f"{plan_name}.notifications.jsonl"
 
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]

@@ -14,6 +14,10 @@ node_modules
 # Operator-local dashboard env (sourced by scripts/dashboard.sh at start);
 # copy .dashboard.env.example to .dashboard.env to activate.
 .dashboard.env
+# Operator-local pipeline env shared by scripts/dashboard.sh and
+# scripts/scheduler.sh (sourced via scripts/pipeline-env.sh at start);
+# copy .pipeline.env.example to .pipeline.env to activate.
+.pipeline.env
 .venv-mlx/
 .DS_Store
 *.bak

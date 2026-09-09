@@ -177,12 +177,13 @@ class SchedulerDaemon:
         """
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as fh:
-            # Story CFG-B1: publish the resolved config alongside health.
-            # {**health(), ...} builds a NEW dict so health()'s return value
-            # (and its pinned six-key set) is never mutated.
-            json.dump(
-                {**self.health(), "config": self.config_fingerprint()}, fh
-            )
+            # Review round 2: the payload is exactly health(). The round-trip
+            # contract pinned by test_write_health_produces_file_that_round_
+            # trips_to_health_dict is json.load(file) == daemon.health(), and
+            # health() must keep its pinned six-key set. The config
+            # fingerprint stays available in-process via config_fingerprint()
+            # and is deliberately NOT merged into the file payload.
+            json.dump(self.health(), fh)
         os.replace(tmp_path, path)
 
     def _scan_with_watchdog(self, scan_fn):

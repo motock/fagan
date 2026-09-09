@@ -19,36 +19,11 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
+from pipeline.live_ref import LiveRef
+
 __all__ = ["FileStore", "Store", "_TransactionLock"]
 
-
-class _ServerRef:
-    """Delegates to the *current* ``pipeline.server`` binding for a name.
-
-    The class bodies below reference ``PLAN_DIR``, ``WORKTREE_ROOT``,
-    ``_plan_lock``, ``_append_decision`` and ``_append_journal`` as bare module
-    globals. The test suite patches ``pipeline.server`` for those names (e.g.
-    ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", tmp_path)``), so these
-    bindings must read the live ``pipeline.server`` value at call time rather
-    than hold a copy imported at module load (which would freeze the real
-    ~/.claude/plans path into every test run).
-    """
-
-    def __init__(self, name: str):
-        self._name = name
-
-    def _value(self):
-        from . import server as _server
-        return getattr(_server, self._name)
-
-    def __getattr__(self, attr: str):
-        return getattr(self._value(), attr)
-
-    def __call__(self, *args, **kwargs):
-        return self._value()(*args, **kwargs)
-
-    def __truediv__(self, other):
-        return self._value() / other
+_ServerRef = LiveRef
 
 
 PLAN_DIR = _ServerRef("PLAN_DIR")

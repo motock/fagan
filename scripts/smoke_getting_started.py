@@ -15,7 +15,9 @@ Scratch layout (everything under one tmp root):
 CRITICAL ORDERING: pipeline/paths.py reads PLAN_DIR/WORKTREE_ROOT from
 os.environ AT IMPORT TIME, so this script sets those env vars BEFORE the
 first pipeline.* import (all pipeline imports are lazy, inside functions,
-after the env writes). A fail-closed guard then re-verifies the resolved
+after the env writes). app.role_registry is imported the same way - lazily,
+inside the backend guard, never at module scope. A fail-closed guard then
+re-verifies the resolved
 ``pipeline.paths.PLAN_DIR`` module attribute (not the env var - a stale
 cached module would make an env-only check lie) is inside the scratch root
 and aborts nonzero otherwise.
@@ -23,7 +25,13 @@ and aborts nonzero otherwise.
 Exit codes:
     0  PASS - story merged (status "done"); story key + PR URL printed
     1  the ``claude`` CLI is not on PATH (install hint printed)
-    2  PIPELINE_BACKEND_DISPATCH resolves to a local-family/unknown backend
+    2  the dispatch role resolves to a local-family/unknown backend - or
+       cannot be resolved at all. The effective backend is resolved the
+       same way production resolves it: app.role_registry.resolve_role(
+       "dispatch"), whose precedence chain is the PIPELINE_BACKEND_DISPATCH
+       env var, then model_registry.json's roles.dispatch entry, then the
+       claude default - so a registry-routed local provider with the env
+       var unset is caught too (a bare env-var check would pass it).
     3  the bounded poll timed out (default 30 min, checked every 15 s)
     4  the story reached a terminal failure status (failed/parked)
     5  fail-closed abort: resolved pipeline paths landed outside the scratch
@@ -46,6 +54,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -58,35 +67,149 @@ POLL_INTERVAL_S = 15  # poll every 15 seconds
 TERMINAL_FAILURE_STATUSES = ("failed", "parked")
 
 
-def _require_claude_backend(value: str | None = None) -> None:
-    """Fail closed unless the dispatch backend resolves to ``claude``.
+class _DispatchResolutionError(Exception):
+    """The dispatch role could not be resolved to a usable (provider, model).
 
-    Pure when *value* is handed in as a string; with no argument the env var
-    ``PIPELINE_BACKEND_DISPATCH`` is read (absent -> ``claude``, matching
-    pipeline/dispatch.py's ``os.environ.get(..., "claude")`` resolution).
-    Normalization mirrors the dispatch chain exactly (``.strip().lower()`` -
-    see pipeline/dispatch.py and pipeline/advance.py). Every local-family
-    value (auto/ollama/lmstudio/mlx/local), empty strings and unknown values
-    exit 2: the smoke must never silently depend on a local backend. This
-    guard never mutates os.environ.
+    Raised by the guard's default resolver when app.role_registry rejects
+    the dispatch role (e.g. nothing configured anywhere, or the resolved
+    model is not declared under the resolved provider). The guard turns it
+    into exit code 2 with an operator-facing "choose a provider" message.
     """
-    raw = value if value is not None else os.environ.get("PIPELINE_BACKEND_DISPATCH")
-    if raw is None:
-        raw = "claude"
-    normalized = raw.strip().lower()
-    if normalized == "claude":
-        print("smoke: backend guard OK: PIPELINE_BACKEND_DISPATCH resolves to claude")
+
+
+def _require_claude_backend(
+    value: str | None = None,
+    *,
+    resolver: Callable[[], tuple[str, str, str]] | None = None,
+) -> None:
+    """Fail closed unless the dispatch role resolves to the ``claude`` backend.
+
+    Two modes:
+
+    *value* handed in as a string (pure, no I/O): the legacy env-value
+    check. Normalization mirrors the dispatch chain exactly
+    (``.strip().lower()`` - see pipeline/dispatch.py and pipeline/advance.py).
+    Every local-family value (auto/ollama/lmstudio/mlx/local), empty strings
+    and unknown values exit 2: the smoke must never silently depend on a
+    local backend. This mode never mutates os.environ.
+
+    *value* left unset (what ``main()``/``run_smoke()`` use): the EFFECTIVE
+    backend is resolved through the same chain production uses -
+    ``app.role_registry.resolve_role("dispatch")`` - via *resolver* (a
+    callable returning ``(provider, model, source)``; the default resolver
+    is defined below and imports app.role_registry lazily, inside this
+    function, because pipeline/paths.py reads env vars at import time - see
+    the module docstring). Exit 2 when the resolved provider is anything
+    but ``claude`` (local family, unknown, empty) or when resolution fails
+    outright; the printed message names the provider AND model AND where
+    the choice came from (env var vs registry) so the operator can change
+    it. This guard never mutates os.environ.
+    """
+    if value is not None:
+        raw = value
+        normalized = raw.strip().lower()
+        if normalized == "claude":
+            print("smoke: backend guard OK: PIPELINE_BACKEND_DISPATCH resolves to claude")
+            return
+        print(
+            f"smoke: refusing to run: PIPELINE_BACKEND_DISPATCH={raw!r} "
+            f"(normalized {normalized!r}) is not the claude backend.",
+            file=sys.stderr,
+        )
+        print(
+            "This smoke must never silently depend on a local backend "
+            "(ollama/lmstudio/mlx/local/auto) or an unknown value. Fix: unset "
+            "PIPELINE_BACKEND_DISPATCH or set PIPELINE_BACKEND_DISPATCH=claude, "
+            "and make sure the `claude` CLI is installed and on PATH.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    def _default_dispatch_resolver() -> tuple[str, str, str]:
+        """Resolve the dispatch role exactly the way production does.
+
+        CRITICAL ORDERING: app.role_registry is imported HERE, not at module
+        scope (see the module docstring). resolve_role applies production's
+        precedence chain - PIPELINE_BACKEND_DISPATCH env var, then
+        model_registry.json's roles.dispatch entry, then the claude default -
+        and validates the model against providers.<provider>.models. The
+        model fallback mirrors the dispatch chain's own bottom default
+        (PIPELINE_DEFAULT_MODEL, else "sonnet" - pipeline/config.py's
+        DEFAULT_MODEL), so a bare checkout resolves to claude exactly as
+        production dispatch would.
+        """
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        try:
+            from app.role_registry import (
+                RoleRegistryError,
+                load_registry,
+                resolve_role,
+            )
+        except ImportError as exc:
+            raise _DispatchResolutionError(
+                f"cannot import app.role_registry ({exc}); run this script "
+                "from a repo checkout with its dependencies installed."
+            ) from exc
+        try:
+            resolution = resolve_role(
+                "dispatch",
+                model_fallback=lambda: os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet"),
+            )
+        except RoleRegistryError as exc:
+            raise _DispatchResolutionError(str(exc)) from exc
+        env_raw = os.environ.get("PIPELINE_BACKEND_DISPATCH", "").strip()
+        if env_raw:
+            source = "env var PIPELINE_BACKEND_DISPATCH"
+        else:
+            role_cfg = load_registry().get("roles", {}).get("dispatch", {})
+            if role_cfg.get("provider") or role_cfg.get("model"):
+                source = "model_registry.json (roles.dispatch)"
+            else:
+                source = (
+                    "defaults (PIPELINE_BACKEND_DISPATCH unset and no "
+                    "roles.dispatch entry in model_registry.json)"
+                )
+        return resolution.provider, resolution.model, source
+
+    try:
+        provider, model, source = (
+            resolver if resolver is not None else _default_dispatch_resolver
+        )()
+    except _DispatchResolutionError as exc:
+        print(
+            "smoke: refusing to run: the dispatch role could not be resolved "
+            f"to a usable (provider, model) pair: {exc}",
+            file=sys.stderr,
+        )
+        print(
+            "Fix: choose a provider explicitly - set "
+            "PIPELINE_BACKEND_DISPATCH=claude (and make sure the `claude` CLI "
+            "is installed and on PATH), or add a roles.dispatch entry to "
+            "model_registry.json routing dispatch at the claude provider.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+
+    if provider.strip().lower() == "claude":
+        print(
+            f"smoke: backend guard OK: dispatch resolves to claude "
+            f"(model {model!r}) via {source}"
+        )
         return
     print(
-        f"smoke: refusing to run: PIPELINE_BACKEND_DISPATCH={raw!r} "
-        f"(normalized {normalized!r}) is not the claude backend.",
+        f"smoke: refusing to run: the dispatch role resolves to "
+        f"{provider!r} (model {model!r}) via {source} - not the claude "
+        "backend.",
         file=sys.stderr,
     )
     print(
         "This smoke must never silently depend on a local backend "
-        "(ollama/lmstudio/mlx/local/auto) or an unknown value. Fix: unset "
-        "PIPELINE_BACKEND_DISPATCH or set PIPELINE_BACKEND_DISPATCH=claude, "
-        "and make sure the `claude` CLI is installed and on PATH.",
+        "(ollama/lmstudio/mlx/local/auto) or an unknown value. Fix: change "
+        f"{source} to route dispatch at the claude backend (set "
+        "PIPELINE_BACKEND_DISPATCH=claude, or fix the roles.dispatch entry "
+        "in model_registry.json), and make sure the `claude` CLI is "
+        "installed and on PATH.",
         file=sys.stderr,
     )
     raise SystemExit(2)
@@ -349,7 +472,11 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
         time.sleep(min(POLL_INTERVAL_S, deadline - now))
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    resolver: Callable[[], tuple[str, str, str]] | None = None,
+) -> int:
     parser = argparse.ArgumentParser(
         prog="smoke_getting_started",
         description=(
@@ -381,7 +508,8 @@ def main(argv: list[str] | None = None) -> int:
         # Backend guard first: under a local-family/unknown dispatch backend
         # the script must exit 2 even on a machine without the claude CLI
         # (a bare CI runner), not 1 for the missing CLI.
-        _require_claude_backend()  # exits 2 on a local-family/unknown value
+        _require_claude_backend(resolver=resolver)  # exits 2 on a
+        # local-family/unknown/unresolvable dispatch backend
         if shutil.which("claude") is None:
             print(
                 "precondition FAIL: the `claude` CLI was not found on PATH; "

@@ -23,10 +23,14 @@ from pipeline import execution
 # the audit sidecar still reports "backend": "claude". Stripped by default
 # from every ClaudeCliDriver subprocess call; PIPELINE_CLAUDE_ALLOW_PROVIDER_ENV
 # opts back into full inheritance for legitimate enterprise Bedrock/Vertex
-# deployments.
+# deployments. Claude Code's model-alias vars (ANTHROPIC_DEFAULT_OPUS_MODEL,
+# ANTHROPIC_DEFAULT_SONNET_MODEL, and ANTHROPIC_DEFAULT_HAIKU_MODEL) redirect
+# the CLI's tier selection and are stripped for the same reason.
 _CLAUDE_PROVIDER_REDIRECT_VARS = (
     "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
     "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
     "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
 )
 

@@ -115,6 +115,9 @@ _PROVIDER_REDIRECT_ENV_SAMPLE = {
     "ANTHROPIC_API_KEY": "not-a-real-key",
     "ANTHROPIC_MODEL": "some-other-vendor-model",
     "ANTHROPIC_SMALL_FAST_MODEL": "some-other-vendor-model-fast",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "some-other-vendor-model",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "some-other-vendor-model",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "some-other-vendor-model-fast",
     "CLAUDE_CODE_USE_BEDROCK": "1",
     "CLAUDE_CODE_USE_VERTEX": "1",
 }

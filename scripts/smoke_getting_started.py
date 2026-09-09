@@ -15,7 +15,9 @@ Scratch layout (everything under one tmp root):
 CRITICAL ORDERING: pipeline/paths.py reads PLAN_DIR/WORKTREE_ROOT from
 os.environ AT IMPORT TIME, so this script sets those env vars BEFORE the
 first pipeline.* import (all pipeline imports are lazy, inside functions,
-after the env writes). A fail-closed guard then re-verifies the resolved
+after the env writes). app.role_registry is imported the same way - lazily,
+inside the backend guard's advisory registry note, never at module scope.
+A fail-closed guard then re-verifies the resolved
 ``pipeline.paths.PLAN_DIR`` module attribute (not the env var - a stale
 cached module would make an env-only check lie) is inside the scratch root
 and aborts nonzero otherwise.
@@ -23,7 +25,13 @@ and aborts nonzero otherwise.
 Exit codes:
     0  PASS - story merged (status "done"); story key + PR URL printed
     1  the ``claude`` CLI is not on PATH (install hint printed)
-    2  PIPELINE_BACKEND_DISPATCH resolves to a local-family/unknown backend
+    2  PIPELINE_BACKEND_DISPATCH resolves to a local-family/unknown backend.
+       The guard mirrors the resolution real dispatch actually performs
+       (pipeline/dispatch.py, pipeline/advance.py, pipeline/preflight.py):
+       the raw env var, .strip().lower(), default "claude" - the registry's
+       roles.dispatch entry never gates dispatch (it only feeds the
+       dashboard display and decompose-time sizing), so it is reported
+       as an advisory note only, never as the dispatch decision.
     3  the bounded poll timed out (default 30 min, checked every 15 s)
     4  the story reached a terminal failure status (failed/parked)
     5  fail-closed abort: resolved pipeline paths landed outside the scratch
@@ -46,6 +54,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -58,28 +67,165 @@ POLL_INTERVAL_S = 15  # poll every 15 seconds
 TERMINAL_FAILURE_STATUSES = ("failed", "parked")
 
 
-def _require_claude_backend(value: str | None = None) -> None:
+class _DispatchResolutionError(Exception):
+    """The advisory registry note could not be produced.
+
+    Raised by the guard's advisory registry note when app.role_registry
+    cannot be imported or rejects the registry contents. Purely diagnostic:
+    the note never gates the guard's pass/fail decision (exit codes come
+    from the env-var resolution alone), so any failure here is swallowed
+    after printing a one-line warning.
+    """
+
+
+def _require_claude_backend(
+    value: str | None = None,
+    *,
+    resolver: Callable[[], tuple[str, str, str]] | None = None,
+) -> None:
     """Fail closed unless the dispatch backend resolves to ``claude``.
 
-    Pure when *value* is handed in as a string; with no argument the env var
-    ``PIPELINE_BACKEND_DISPATCH`` is read (absent -> ``claude``, matching
-    pipeline/dispatch.py's ``os.environ.get(..., "claude")`` resolution).
-    Normalization mirrors the dispatch chain exactly (``.strip().lower()`` -
-    see pipeline/dispatch.py and pipeline/advance.py). Every local-family
-    value (auto/ollama/lmstudio/mlx/local), empty strings and unknown values
-    exit 2: the smoke must never silently depend on a local backend. This
-    guard never mutates os.environ.
+    Two modes:
+
+    *value* handed in as a string (pure, no I/O): the legacy env-value
+    check. Normalization mirrors the dispatch chain exactly
+    (``.strip().lower()`` - see pipeline/dispatch.py and pipeline/advance.py).
+    Every local-family value (auto/ollama/lmstudio/mlx/local), empty strings
+    and unknown values exit 2: the smoke must never silently depend on a
+    local backend. This mode never mutates os.environ.
+
+    *value* left unset (what ``main()``/``run_smoke()`` use): the guard
+    resolves the backend the way real dispatch actually does - via
+    *resolver* (a callable returning ``(provider, model, source)``; the
+    default resolver mirrors pipeline/preflight.py's check c exactly: the
+    raw ``PIPELINE_BACKEND_DISPATCH`` env var, ``(raw or "claude")
+    .strip().lower() or "claude"``). Real dispatch NEVER consults
+    app.role_registry for provider selection - the registry's
+    roles.dispatch entry only feeds the dashboard display and decompose-time
+    sizing - so the registry is never part of the resolution; on a PASS it
+    is reported as a separate, clearly-labeled, best-effort ADVISORY note
+    (never gating, never affecting the exit code). Exit 2 when the resolved
+    provider is anything but ``claude`` (local family, unknown, empty); the
+    printed message names the resolved provider AND where the choice came
+    from so the operator can change it. This guard never mutates os.environ.
     """
-    raw = value if value is not None else os.environ.get("PIPELINE_BACKEND_DISPATCH")
-    if raw is None:
-        raw = "claude"
-    normalized = raw.strip().lower()
-    if normalized == "claude":
-        print("smoke: backend guard OK: PIPELINE_BACKEND_DISPATCH resolves to claude")
+    if value is not None:
+        raw = value
+        normalized = raw.strip().lower()
+        if normalized == "claude":
+            print("smoke: backend guard OK: PIPELINE_BACKEND_DISPATCH resolves to claude")
+            return
+        print(
+            f"smoke: refusing to run: PIPELINE_BACKEND_DISPATCH={raw!r} "
+            f"(normalized {normalized!r}) is not the claude backend.",
+            file=sys.stderr,
+        )
+        print(
+            "This smoke must never silently depend on a local backend "
+            "(ollama/lmstudio/mlx/local/auto) or an unknown value. Fix: unset "
+            "PIPELINE_BACKEND_DISPATCH or set PIPELINE_BACKEND_DISPATCH=claude, "
+            "and make sure the `claude` CLI is installed and on PATH.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    def _default_dispatch_resolver() -> tuple[str, str, str]:
+        """Resolve the dispatch backend the way real dispatch actually does.
+
+        Mirrors pipeline/preflight.py's check c (and pipeline/dispatch.py /
+        pipeline/advance.py's env_backend read) EXACTLY: the raw
+        ``PIPELINE_BACKEND_DISPATCH`` env var, ``(raw or "claude")
+        .strip().lower() or "claude"``. Deliberately NO registry
+        consultation: app.role_registry.resolve_role("dispatch") is used in
+        production only for the dashboard display and decompose-time sizing,
+        never to pick the backend a story dispatches on - honoring the
+        registry here would make the smoke disagree with the system it
+        guards (e.g. refuse to run when roles.dispatch="local" is set for
+        those unrelated use cases while real dispatch correctly uses claude).
+
+        Returns (provider, model, source). The model is the dispatch
+        chain's own bottom default (PIPELINE_DEFAULT_MODEL, else "sonnet" -
+        pipeline/config.py's DEFAULT_MODEL), reported for operator context
+        only; it does not influence the pass/fail decision.
+        """
+        raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
+        backend = (raw_backend or "claude").strip().lower() or "claude"
+        model = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
+        if os.environ.get("PIPELINE_BACKEND_DISPATCH") is None:
+            source = (
+                "defaults (PIPELINE_BACKEND_DISPATCH unset -> claude, "
+                "matching pipeline/dispatch.py)"
+            )
+        else:
+            source = "env var PIPELINE_BACKEND_DISPATCH"
+        return backend, model, source
+
+    def _advise_if_registry_differs(provider: str) -> None:
+        """Best-effort ADVISORY note about the registry's roles.dispatch entry.
+
+        The registry entry never gates dispatch (see
+        _default_dispatch_resolver), but if it names a DIFFERENT provider
+        than the one dispatch will actually use, the operator deserves a
+        one-line heads-up that the two signals have drifted apart - the
+        entry only feeds the dashboard display and decompose-time sizing.
+        Purely informational: swallows every failure (missing module,
+        malformed registry) after a one-line warning and NEVER exits
+        nonzero. CRITICAL ORDERING: app.role_registry is imported HERE,
+        not at module scope (see the module docstring).
+        """
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        try:
+            from app.role_registry import load_registry
+
+            role_cfg = load_registry().get("roles", {}).get("dispatch", {})
+            registry_provider = (role_cfg.get("provider") or "").strip().lower()
+            if not registry_provider or registry_provider == provider:
+                return
+            print(
+                f"smoke: note (advisory, does not affect this check): "
+                f"model_registry.json's roles.dispatch entry names provider "
+                f"{registry_provider!r}, but dispatch actually resolves via "
+                f"PIPELINE_BACKEND_DISPATCH to {provider!r} - the registry "
+                "entry only feeds the dashboard display and decompose-time "
+                "sizing, never real dispatch."
+            )
+        except Exception as exc:  # noqa: BLE001 - advisory only, never gating
+            print(
+                "smoke: note (advisory registry check skipped): "
+                f"{exc}",
+                file=sys.stderr,
+            )
+
+    try:
+        provider, model, source = (
+            resolver if resolver is not None else _default_dispatch_resolver
+        )()
+    except _DispatchResolutionError as exc:
+        print(
+            "smoke: refusing to run: the dispatch backend could not be "
+            f"resolved: {exc}",
+            file=sys.stderr,
+        )
+        print(
+            "Fix: choose a provider explicitly - set "
+            "PIPELINE_BACKEND_DISPATCH=claude (and make sure the `claude` CLI "
+            "is installed and on PATH).",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+
+    if provider.strip().lower() == "claude":
+        print(
+            f"smoke: backend guard OK: dispatch resolves to claude "
+            f"(model {model!r}) via {source}"
+        )
+        _advise_if_registry_differs(provider.strip().lower())
         return
     print(
-        f"smoke: refusing to run: PIPELINE_BACKEND_DISPATCH={raw!r} "
-        f"(normalized {normalized!r}) is not the claude backend.",
+        f"smoke: refusing to run: PIPELINE_BACKEND_DISPATCH resolves to "
+        f"{provider!r} (model {model!r}) via {source} - not the claude "
+        "backend.",
         file=sys.stderr,
     )
     print(
@@ -349,7 +495,11 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
         time.sleep(min(POLL_INTERVAL_S, deadline - now))
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    resolver: Callable[[], tuple[str, str, str]] | None = None,
+) -> int:
     parser = argparse.ArgumentParser(
         prog="smoke_getting_started",
         description=(
@@ -381,7 +531,8 @@ def main(argv: list[str] | None = None) -> int:
         # Backend guard first: under a local-family/unknown dispatch backend
         # the script must exit 2 even on a machine without the claude CLI
         # (a bare CI runner), not 1 for the missing CLI.
-        _require_claude_backend()  # exits 2 on a local-family/unknown value
+        _require_claude_backend(resolver=resolver)  # exits 2 on a
+        # local-family/unknown/unresolvable dispatch backend
         if shutil.which("claude") is None:
             print(
                 "precondition FAIL: the `claude` CLI was not found on PATH; "

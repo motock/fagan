@@ -1,6 +1,6 @@
 # Development dependencies (the test suite + lint). Includes the runtime deps.
 -r requirements.txt
 -r requirements-dashboard.txt
-pytest>=9.1.1
+pytest==9.1.1  # Pinned EXACT: pytest's exit code gates every merge (CI test job + pipeline test gate); the repo rule is to pin exactly any tool whose exit code gates a merge.
 pytest-xdist==3.8.0
 ruff==0.16.5

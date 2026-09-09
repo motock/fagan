@@ -114,11 +114,13 @@ cleanup_pid_file() {
   return 1
 }
 
-ensure_python() {
-  if [ -z "$PYBIN" ]; then
-    echo "ERROR: no python found (.venv/bin/python or python3 on PATH). Run scripts/install.sh first." >&2
-    exit 1
+ensure_python () {
+  if [ -n "$PYBIN" ]; then
+    return 0
   fi
+  # error path for ensure_python()
+  echo "ERROR: no python found (.venv/bin/python or python3 on PATH). Run scripts/install.sh first." >&2
+  exit 1
 }
 
 ensure_dashboard_deps() {

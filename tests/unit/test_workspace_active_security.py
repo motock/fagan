@@ -426,7 +426,7 @@ def _stub_decompose_backend(monkeypatch):
     """
     plan = {"epics": [{"summary": "E", "stories": [{"summary": "S"}]}]}
     raw = "```json\n" + json.dumps(plan) + "\n```"
-    monkeypatch.setattr(p, "_run_decompose", lambda request, **kwargs: raw)
+    monkeypatch.setattr(p, "_run_decompose_detailed", lambda request, **kwargs: (raw, None))
 
 
 @pytest.mark.parametrize(

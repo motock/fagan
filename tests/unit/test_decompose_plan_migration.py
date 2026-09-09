@@ -236,13 +236,20 @@ def test_method_has_no_self_attribute_access_to_globals():
 
 
 def test_method_calls_run_decompose_as_bare_name():
-    """R1: _run_decompose must be called as a bare name, not self._run_decompose."""
+    """R1: the decompose backend call must be a bare name, not self.*_decompose*.
+
+    Authorized edit (error-detail change, 2026-09-08): the seam moved from
+    `_run_decompose` to `_run_decompose_detailed(request) -> (text, error)` so
+    the /api/decompose route can surface the backend's failure cause instead
+    of a bare "returned no output" (see tests/unit/test_decompose_error_detail.py).
+    The invariant under test — free-variable bare-name call, never
+    self._run_decompose — is unchanged."""
     method = _method_on_class()
     if method is None:
         pytest.fail("PipelineService.decompose_plan does not exist yet")
     source = inspect.getsource(method)
-    assert "_run_decompose(request)" in source, (
-        "method must call _run_decompose(request) as a bare name"
+    assert "_run_decompose_detailed(request)" in source, (
+        "method must call _run_decompose_detailed(request) as a bare name"
     )
     assert "self._run_decompose" not in source, (
         "method must NOT call self._run_decompose (R1: free variables stay free)"
@@ -312,8 +319,12 @@ def test_method_has_no_docstring():
 
 
 def test_method_first_statement_is_run_decompose_call():
-    """R4/R5: the first executable statement must be `text = _run_decompose(request)`,
-    exactly as in the original body (no reordering)."""
+    """R4/R5: the first executable statement must be the decompose backend
+    call as an assignment to `text`, with no reordering before it.
+
+    Authorized edit (error-detail change, 2026-09-08): the called seam moved
+    from `_run_decompose` to `_run_decompose_detailed` (same position, same
+    argument); see test_method_calls_run_decompose_as_bare_name's docstring."""
     method = _method_on_class()
     if method is None:
         pytest.fail("PipelineService.decompose_plan does not exist yet")
@@ -324,17 +335,20 @@ def test_method_first_statement_is_run_decompose_call():
     func = mod.body[0]
     assert isinstance(func, ast.FunctionDef)
     first = func.body[0]
-    # First statement: text = _run_decompose(request)
+    # First statement: text, backend_error = _run_decompose_detailed(request)
     assert isinstance(first, ast.Assign), (
         f"first statement must be an assignment, got {type(first).__name__}"
     )
-    assert len(first.targets) == 1
-    assert isinstance(first.targets[0], ast.Name)
-    assert first.targets[0].id == "text", "first assignment target must be 'text'"
     assert isinstance(first.value, ast.Call)
     assert isinstance(first.value.func, ast.Name)
-    assert first.value.func.id == "_run_decompose", (
-        "first statement must call bare _run_decompose"
+    assert first.value.func.id == "_run_decompose_detailed", (
+        "first statement must call bare _run_decompose_detailed"
+    )
+    # Unpacks both return values: text, backend_error = ...
+    targets = first.targets if not isinstance(first.targets[0], ast.Tuple) else list(first.targets[0].elts)
+    names = [t.id for t in targets]
+    assert names == ["text", "backend_error"], (
+        f"first statement must unpack (text, backend_error), got {names}"
     )
 
 
@@ -366,7 +380,12 @@ def test_method_body_matches_original_logic():
 
 
 def _patch_run_decompose(monkeypatch, return_value):
-    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: return_value)
+    """Stub the service-level decompose seam. Authorized edit (error-detail
+    change, 2026-09-08): the seam is now `_run_decompose_detailed`, returning
+    (text, error); these tests only drive the text, so error is always None."""
+    monkeypatch.setattr(
+        p, "_run_decompose_detailed", lambda request, **k: (return_value, None)
+    )
 
 
 def test_method_happy_path_through_singleton(agents_dir, monkeypatch):

@@ -123,6 +123,7 @@ advance_pipeline = _ServerRef("advance_pipeline")
 _persona_default_model = _ServerRef("_persona_default_model")
 DEFAULT_MODEL = _ServerRef("DEFAULT_MODEL")
 _run_decompose = _ServerRef("_run_decompose")
+_run_decompose_detailed = _ServerRef("_run_decompose_detailed")
 _extract_json_block = _ServerRef("_extract_json_block")
 _VALID_STORY_STATUSES = frozenset(
     (
@@ -778,9 +779,12 @@ class PipelineService:
         return _store.get_worktree_file(story, filename)
 
     def decompose_plan(self, request: str, workspace: str | None = None) -> dict[str, Any]:
-        text = _run_decompose(request)
+        text, backend_error = _run_decompose_detailed(request)
         if not text:
-            return {"ok": False, "error": "decompose backend returned no output"}
+            error = "decompose backend returned no output"
+            if backend_error:
+                error = f"{error} ({backend_error})"
+            return {"ok": False, "error": error}
         candidate = _extract_json_block(text)
         try:
             plan = json.loads(candidate)

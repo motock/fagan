@@ -58,7 +58,7 @@ def _stub_decompose_backend(monkeypatch):
     """
     plan = {"epics": [{"title": "Epic", "stories": [{"title": "Story"}]}]}
     raw = "```json\n" + json.dumps(plan) + "\n```"
-    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: raw)
+    monkeypatch.setattr(p, "_run_decompose_detailed", lambda request, **k: (raw, None))
     monkeypatch.setattr(
         "pipeline.service.validate_workspace",
         lambda path: (

@@ -293,6 +293,7 @@ from .planner import (  # noqa: F401
     _rework_requires_new_tests,
     _rework_test_author_prompt,
     _run_decompose,
+    _run_decompose_detailed,
     _run_planner,
     _run_rework_planner,
     _run_rework_test_author_phase,

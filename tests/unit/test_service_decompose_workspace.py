@@ -55,9 +55,15 @@ def _method():
 
 
 def _patch_run_decompose(monkeypatch, return_value):
-    """Stub the free-variable ``_run_decompose`` (mirrors
-    test_decompose_plan_migration.py's ``_patch_run_decompose``)."""
-    monkeypatch.setattr(p, "_run_decompose", lambda request, **k: return_value)
+    """Stub the free-variable decompose seam (mirrors
+    test_decompose_plan_migration.py's ``_patch_run_decompose``).
+
+    Authorized edit (error-detail change, 2026-09-08): the seam is now
+    ``_run_decompose_detailed``, returning (text, error); these tests only
+    drive the text, so error is always None."""
+    monkeypatch.setattr(
+        p, "_run_decompose_detailed", lambda request, **k: (return_value, None)
+    )
 
 
 def _install_fake_validate_workspace(monkeypatch, *, valid_path=None, calls=None):

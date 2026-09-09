@@ -103,6 +103,7 @@ def test_no_dead_parse_helper_call_sites_remain():
 # patterns would reappear, so we forbid them directly too.
 _FORBIDDEN_PATTERNS = [
     r"PLAN_DIR\.glob\s*\(",   # globbing the plan directory for manifests
+    r"PLAN_DIR\s*/\s*f[\"']",  # f-string path composition off PLAN_DIR (CFG-A3 regression)
 ]
 
 

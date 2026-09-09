@@ -84,6 +84,13 @@ class ClaudeCliDriver:
         role: str = "complete",
     ) -> str:
         cmd = ["claude", "-p", prompt, "--model", model]
+        # Least privilege: complete() never passes --mcp-config, so
+        # --strict-mcp-config leaves the single-shot completion subprocess
+        # with ZERO MCP servers - it must not recursively see this repo's own
+        # pipeline-control tools (dispatch_story, ingest_plan, approve_merge,
+        # ...) regardless of the invoking user's global ~/.claude.json or
+        # which role (chat, planner, overlord, review) called complete().
+        cmd += ["--strict-mcp-config"]
         if bare:
             cmd += ["--bare"]
         if system:

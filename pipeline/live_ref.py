@@ -8,7 +8,20 @@ WHY this indirection exists: the test suite patches attributes on
 ``monkeypatch.setattr(pipeline.server, "PLAN_DIR", ...)`` would never be
 seen. A :class:`LiveRef` re-reads ``pipeline.server.<name>`` on every
 access, so patches land and the value is always the current one.
+
+WHY the explicit ``__str__`` / ``__repr__`` / ``__fspath__`` dunders: Python
+resolves *implicit* dunder invocation (``str(x)``, ``repr(x)``,
+``os.fspath(x)``, f-strings, logging) on the TYPE, not the instance, and
+``object.__str__``/``object.__repr__`` always exist on the type. So
+``__getattr__`` — which only fires when normal lookup FAILS — is never
+consulted for them, and without explicit definitions ``str(ref)`` leaked
+``"<pipeline.live_ref.LiveRef object at 0x...>"`` (e.g. through
+``app/dashboard.py``'s ``/api/health`` ``plan_dir`` field). The three
+dunders below forward to the CURRENTLY wrapped value, re-resolved per call,
+so they follow live re-patches exactly like ``__getattr__``/``__truediv__``
+do and never snapshot or cache the target.
 """
+import os
 
 
 class LiveRef:
@@ -36,3 +49,12 @@ class LiveRef:
 
     def __truediv__(self, other):
         return self._value() / other
+
+    def __str__(self):
+        return str(self._value())
+
+    def __repr__(self):
+        return repr(self._value())
+
+    def __fspath__(self):
+        return os.fspath(self._value())

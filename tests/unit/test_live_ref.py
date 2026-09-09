@@ -89,6 +89,81 @@ def test_getattr_delegates_to_the_patched_path(monkeypatch):
     assert ref.suffix == ".json"
 
 
+# ---------------------------------------------------------------------------
+# Regression tests: implicit dunder invocation resolves on the TYPE, so before
+# LiveRef defines __str__/__repr__/__fspath__ itself, str(ref)/repr(ref)/
+# os.fspath(ref) fall through to object.__str__/object.__repr__ (which exist on
+# the type, so __getattr__ is never consulted) and return
+# "<pipeline.live_ref.LiveRef object at 0x...>". These tests pin the fix: the
+# three dunders must forward to the CURRENTLY wrapped Path, live (no caching).
+# ---------------------------------------------------------------------------
+
+
+def test_str_returns_the_wrapped_path(monkeypatch):
+    import os
+
+    from pipeline.live_ref import LiveRef
+
+    base = Path("/tmp/live-ref-str-plans")
+    monkeypatch.setattr(server, _PROBE_PATH, base, raising=False)
+    ref = LiveRef(_PROBE_PATH)
+
+    assert str(ref) == str(base)
+    assert "LiveRef object" not in str(ref)
+    assert os.fspath(ref) == str(base)
+
+
+def test_repr_returns_the_wrapped_path(monkeypatch):
+    from pipeline.live_ref import LiveRef
+
+    base = Path("/tmp/live-ref-repr-plans")
+    monkeypatch.setattr(server, _PROBE_PATH, base, raising=False)
+    ref = LiveRef(_PROBE_PATH)
+
+    assert repr(ref) == repr(base)
+    assert "LiveRef object" not in repr(ref)
+
+
+def test_fspath_returns_the_wrapped_path(monkeypatch):
+    import os
+
+    from pipeline.live_ref import LiveRef
+
+    base = Path("/tmp/live-ref-fspath-plans")
+    monkeypatch.setattr(server, _PROBE_PATH, base, raising=False)
+    ref = LiveRef(_PROBE_PATH)
+
+    assert os.fspath(ref) == str(base)
+    assert os.fspath(ref) == os.fspath(base)
+
+
+def test_str_repr_fspath_follow_a_live_repatch_no_caching(monkeypatch):
+    """str/repr/fspath must read the CURRENT target at call time.
+
+    Patch a first directory, take str(), re-patch to a second directory: all
+    three dunders must now report the second. A memoized __str__ or any
+    snapshot taken at construction/first-call would keep returning the first
+    path and fail this test.
+    """
+    import os
+
+    from pipeline.live_ref import LiveRef
+
+    first = Path("/tmp/live-ref-str-first-plans")
+    second = Path("/tmp/live-ref-str-second-plans")
+
+    monkeypatch.setattr(server, _PROBE_PATH, first, raising=False)
+    ref = LiveRef(_PROBE_PATH)
+    assert str(ref) == str(first)
+
+    monkeypatch.setattr(server, _PROBE_PATH, second, raising=False)
+
+    assert str(ref) == str(second)
+    assert repr(ref) == repr(second)
+    assert os.fspath(ref) == str(second)
+    assert str(ref) != str(first)
+
+
 def test_call_delegates_with_args_and_kwargs(monkeypatch):
     from pipeline.live_ref import LiveRef
 

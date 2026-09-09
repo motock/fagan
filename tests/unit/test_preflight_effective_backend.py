@@ -1,20 +1,20 @@
-"""Tests for pipeline.preflight check c: the EFFECTIVE dispatch backend (PP-02).
+"""Tests for pipeline.preflight check c: the dispatch backend check (PP-02).
 
-check c used to read PIPELINE_BACKEND_DISPATCH (defaulting to "claude") and
-stop there, so on a host where the env var is unset but model_registry.json
-routes the dispatch role to ollama, preflight reported "claude" — a false
-green on the exact surface a first-time operator trusts. These tests pin the
-rewritten contract: check c resolves the dispatch role the way production
-does (app.role_registry.resolve_role's plan -> env -> registry -> default
-chain) and reports the resolved provider AND model.
+Contract (corrected after review): check c reports the backend that real
+per-story dispatch execution will actually run -- PIPELINE_BACKEND_DISPATCH
+(default "claude"), exactly as pipeline/dispatch.py:291-294 resolves it via
+_resolve_dispatch_backend. Real dispatch NEVER consults model_registry.json's
+roles.dispatch key (the only registry path into real routing is the separate
+"auto" -> routing.dispatch lookup), so this check must not either: resolving
+via role_registry.resolve_role would green-light a provider real dispatch
+will never invoke -- the same false-green defect class this check exists to
+prevent, just on another provider.
 
 Repo rule (`.claude/rules/testing-config-gates.md`): test the resolution
-logic, never today's configured values. Every test stubs the registry via
-app.role_registry.load_registry / resolve_role (monkeypatch) and injects
-`which`, so no assertion depends on the live model_registry.json or the
-host's installed CLIs. run_preflight is called WITHOUT registry_loader so
-check c takes its production path (app.role_registry), which is the surface
-these tests stub.
+logic, never today's configured values. Every test injects `which`, and the
+registry stub RAISES if consulted -- proving check c never touches the
+registry (including resolve_role's own registry=None -> load_registry()
+internal path) and never depends on the live model_registry.json.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ import sys
 
 import pytest
 
-from app import role_registry
 from pipeline import preflight
 
 
@@ -40,20 +39,12 @@ def _none_which(name):
     return
 
 
-def _registry_with_dispatch(dispatch=None):
-    """Synthetic registry payload; `dispatch` is the roles.dispatch entry."""
-    return {
-        "providers": {
-            "claude": {"models": {"sonnet": {"tag": "claude-sonnet-4"}}},
-            "ollama": {
-                "models": {"glm-5.3-flash:cloud": {"tag": "glm-5.3-flash:cloud"}}
-            },
-        },
-        "roles": {
-            "overlord": {"provider": "claude", "model": "sonnet"},
-            **({"dispatch": dispatch} if dispatch is not None else {}),
-        },
-    }
+def _registry_that_must_not_be_consulted():
+    raise AssertionError(
+        "check c consulted the model registry; real dispatch execution "
+        "(pipeline/dispatch.py) resolves PIPELINE_BACKEND_DISPATCH directly "
+        "and never reads roles.dispatch"
+    )
 
 
 def _find_dispatch(results):
@@ -68,206 +59,187 @@ def _find_dispatch(results):
     return matches[0]
 
 
-# --------------------------------------------------------------------------- #
-# Effective resolution: registry wins when the env var is unset.
-# --------------------------------------------------------------------------- #
-def test_env_unset_registry_routes_dispatch_to_ollama_message_names_ollama(
-    tmp_path, monkeypatch
-):
+@pytest.fixture(autouse=True)
+def _forbid_registry_consultation(monkeypatch):
+    """Fail loudly if check c reads the registry through any path.
+
+    Covers both a direct `from app import role_registry` import and
+    resolve_role's own registry=None -> load_registry() internal fallback.
+    """
+    from app import role_registry
+
+    monkeypatch.setattr(
+        role_registry, "load_registry", _registry_that_must_not_be_consulted
+    )
     monkeypatch.setattr(
         role_registry,
-        "load_registry",
-        lambda: _registry_with_dispatch(
-            {"provider": "ollama", "model": "glm-5.3-flash:cloud"}
-        ),
+        "resolve_role",
+        _registry_that_must_not_be_consulted,
     )
-    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
-
-    results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
-    check = _find_dispatch(results)
-    assert check["status"] == "ok"
-    lowered = check["message"].lower()
-    assert "ollama" in lowered
-    assert "glm-5.3-flash:cloud" in lowered
-    # The false green this story fixes: the raw-env default must not appear.
-    assert "claude" not in lowered
+    yield
 
 
-def test_resolved_provider_probes_its_own_cli_not_claudes(tmp_path, monkeypatch):
+# --------------------------------------------------------------------------- #
+# Default: env unset -> "claude" (what pipeline/dispatch.py will actually run).
+# --------------------------------------------------------------------------- #
+def test_env_unset_defaults_to_claude_and_probes_the_claude_cli(
+    tmp_path, monkeypatch
+):
     probed = []
 
-    def _recording_which(name):
+    def recording_which(name):
         probed.append(name)
         return f"/fake/bin/{name}"
 
-    monkeypatch.setattr(
-        role_registry,
-        "load_registry",
-        lambda: _registry_with_dispatch(
-            {"provider": "ollama", "model": "glm-5.3-flash:cloud"}
-        ),
-    )
     monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
 
-    results = preflight.run_preflight(plan_dir=tmp_path, which=_recording_which)
+    results = preflight.run_preflight(
+        plan_dir=tmp_path, which=recording_which
+    )
     check = _find_dispatch(results)
     assert check["status"] == "ok"
-    assert "ollama" in probed
-    assert "claude" not in probed
+    assert "claude" in check["message"].lower()
+    assert "claude" in probed
 
 
-# --------------------------------------------------------------------------- #
-# Priority: the env var outranks the registry.
-# --------------------------------------------------------------------------- #
-def test_env_claude_outranks_registry_ollama(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        role_registry,
-        "load_registry",
-        lambda: _registry_with_dispatch(
-            {"provider": "ollama", "model": "glm-5.3-flash:cloud"}
-        ),
-    )
-    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "claude")
-
-    results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
-    check = _find_dispatch(results)
-    assert check["status"] == "ok"
-    lowered = check["message"].lower()
-    assert "claude" in lowered
-    assert "ollama" not in lowered
-
-
-# --------------------------------------------------------------------------- #
-# Status rules per resolved provider.
-# --------------------------------------------------------------------------- #
-def test_resolved_local_family_provider_absent_is_warn_and_actionable(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(
-        role_registry,
-        "load_registry",
-        lambda: _registry_with_dispatch(
-            {"provider": "ollama", "model": "glm-5.3-flash:cloud"}
-        ),
-    )
+def test_env_unset_with_claude_cli_absent_is_fail(tmp_path, monkeypatch):
     monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
 
     results = preflight.run_preflight(plan_dir=tmp_path, which=_none_which)
     check = _find_dispatch(results)
-    # Graceful degradation, matching the existing local-family behavior.
+    assert check["status"] == "fail"
+    lowered = check["message"].lower()
+    assert "claude" in lowered
+    assert "install" in lowered or "cli" in lowered
+
+
+# --------------------------------------------------------------------------- #
+# Boundary: empty / whitespace env value counts as unset -> "claude" default.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_empty_or_whitespace_env_value_falls_back_to_claude(
+    raw, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", raw)
+
+    results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
+    check = _find_dispatch(results)
+    assert check["status"] == "ok"
+    assert "claude" in check["message"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# Env value wins over any registry content (registry must not be consulted).
+# --------------------------------------------------------------------------- #
+def test_env_ollama_selects_ollama_and_probes_its_cli(tmp_path, monkeypatch):
+    probed = []
+
+    def recording_which(name):
+        probed.append(name)
+        return f"/fake/bin/{name}"
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "ollama")
+
+    results = preflight.run_preflight(
+        plan_dir=tmp_path, which=recording_which
+    )
+    check = _find_dispatch(results)
+    assert check["status"] == "ok"
+    assert "ollama" in check["message"].lower()
+    assert "ollama" in probed
+    assert "claude" not in probed
+
+
+def test_env_value_is_stripped_and_lowercased(tmp_path, monkeypatch):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "  CLAUDE  ")
+
+    results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
+    check = _find_dispatch(results)
+    assert check["status"] == "ok"
+    assert "claude" in check["message"].lower()
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", " Ollama ")
+    results = preflight.run_preflight(plan_dir=tmp_path, which=_none_which)
+    check = _find_dispatch(results)
+    assert check["status"] == "warn"
+    assert "ollama" in check["message"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# Status rules per selected backend.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("backend", ["ollama", "lmstudio", "mlx", "local", "auto"])
+def test_local_family_backend_absent_is_warn_never_fail(
+    backend, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", backend)
+
+    results = preflight.run_preflight(plan_dir=tmp_path, which=_none_which)
+    # Graceful degradation: warn, never fail, never raise.
+    assert _find_dispatch(results)["status"] == "warn"
+
+
+def test_local_family_absent_warn_message_names_provider_and_fix(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "ollama")
+
+    results = preflight.run_preflight(plan_dir=tmp_path, which=_none_which)
+    check = _find_dispatch(results)
     assert check["status"] == "warn"
     lowered = check["message"].lower()
     assert "ollama" in lowered
     assert "install" in lowered or "configur" in lowered
 
 
-def test_resolved_claude_provider_absent_is_fail(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        role_registry,
-        "load_registry",
-        lambda: _registry_with_dispatch({"provider": "claude", "model": "sonnet"}),
+def test_lmstudio_maps_to_the_lms_cli(tmp_path, monkeypatch):
+    probed = []
+
+    def recording_which(name):
+        probed.append(name)
+        return f"/fake/bin/{name}"
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "lmstudio")
+
+    results = preflight.run_preflight(
+        plan_dir=tmp_path, which=recording_which
     )
-    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
-
-    results = preflight.run_preflight(plan_dir=tmp_path, which=_none_which)
-    check = _find_dispatch(results)
-    assert check["status"] == "fail"
-    assert "claude" in check["message"].lower()
-
-
-# --------------------------------------------------------------------------- #
-# NEW warn case: nothing configured from any source.
-# --------------------------------------------------------------------------- #
-def test_nothing_configured_anywhere_warns_naming_both_ways_to_fix(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(
-        role_registry, "load_registry", lambda: _registry_with_dispatch(None)
-    )
-    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
-
-    results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
-    check = _find_dispatch(results)
-    # Even with every CLI present, an unconfigured dispatch role is a warn:
-    # the built-in default must never be presented as the operator's choice.
-    assert check["status"] == "warn"
-    assert "PIPELINE_BACKEND_DISPATCH" in check["message"]
-    assert "model_registry.json" in check["message"]
-    assert "claude" not in check["message"].lower()
-
-
-# --------------------------------------------------------------------------- #
-# Negative: resolution raises -> fail, class name only, nothing leaks.
-# --------------------------------------------------------------------------- #
-def test_resolution_failure_is_fail_naming_only_the_exception_class(
-    tmp_path, monkeypatch
-):
-    leak_path = str(tmp_path / "model_registry.json")
-    leak_token = "sk-fake-preflight-secret-xyz"
-    leak_env_value = "sk-fake-env-backend-value"
-
-    class _FakeResolutionError(RuntimeError):
-        pass
-
-    def _boom_resolve(*args, **kwargs):
-        raise _FakeResolutionError(
-            f"role 'dispatch' unreadable at {leak_path} token={leak_token}"
-        )
-
-    monkeypatch.setattr(role_registry, "resolve_role", _boom_resolve)
-    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", leak_env_value)
-
-    results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
-    check = _find_dispatch(results)
-    assert check["status"] == "fail"
-    message = check["message"]
-    assert "_FakeResolutionError" in message  # the exception CLASS name
-    assert leak_token not in message  # never str(exc)
-    assert leak_path not in message  # never a path carried by the exception
-    assert leak_env_value not in message  # never an env value
-    assert str(tmp_path) not in message
-
-
-# --------------------------------------------------------------------------- #
-# Boundary: empty / whitespace env value is treated as unset.
-# --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("raw", ["", "   "])
-def test_empty_or_whitespace_env_value_is_treated_as_unset(
-    raw, tmp_path, monkeypatch
-):
-    monkeypatch.setattr(
-        role_registry,
-        "load_registry",
-        lambda: _registry_with_dispatch(
-            {"provider": "ollama", "model": "glm-5.3-flash:cloud"}
-        ),
-    )
-    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", raw)
-
-    results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
     check = _find_dispatch(results)
     assert check["status"] == "ok"
-    lowered = check["message"].lower()
-    assert "ollama" in lowered  # the registry was consulted
-    assert "claude" not in lowered
+    assert "lms" in probed
 
 
 # --------------------------------------------------------------------------- #
-# The lazy import itself must never crash preflight.
+# Unrecognized value: never crash, never pass silently.
 # --------------------------------------------------------------------------- #
-def test_registry_module_import_failure_is_fail_never_crash(tmp_path, monkeypatch):
-    # Simulate a broken registry module: block the submodule in sys.modules
-    # AND drop the attribute the `from app import role_registry` fallback
-    # would otherwise satisfy (the package was already imported by conftest).
-    import app
-
-    monkeypatch.setitem(sys.modules, "app.role_registry", None)
-    monkeypatch.delattr(app, "role_registry")
+def test_unknown_backend_value_warns_naming_the_known_set(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "carrier-pigeon")
 
     results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
     check = _find_dispatch(results)
-    assert check["status"] == "fail"
-    # The exception CLASS name only (ModuleNotFoundError subclasses
-    # ImportError); never str(exc), which would carry the module path.
-    assert "ModuleNotFoundError" in check["message"]
-    assert "app/role_registry.py" not in check["message"]
+    assert check["status"] == "warn"
+    lowered = check["message"].lower()
+    assert "carrier-pigeon" in lowered
+    assert "ollama" in lowered  # one of the known backends is named
+
+
+# --------------------------------------------------------------------------- #
+# The check must stay read-only w.r.t. the registry even if app.role_registry
+# itself is broken (no import at module top, no crash at call time).
+# --------------------------------------------------------------------------- #
+def test_check_c_never_imports_the_registry_module(tmp_path, monkeypatch):
+    import app
+
+    # Block the submodule in sys.modules AND drop the attribute the
+    # `from app import role_registry` fallback would otherwise satisfy.
+    monkeypatch.setitem(sys.modules, "app.role_registry", None)
+    monkeypatch.delattr(app, "role_registry")
+    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
+
+    results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
+    check = _find_dispatch(results)
+    # The env-var check does not care: it still reports the claude default.
+    assert check["status"] == "ok"
+    assert "claude" in check["message"].lower()

@@ -11,6 +11,9 @@ node_modules
 
 # Dashboard HTTP API shared secret (app/auth.py) — never commit this.
 .dashboard_api_key
+# Operator-local dashboard env (sourced by scripts/dashboard.sh at start);
+# copy .dashboard.env.example to .dashboard.env to activate.
+.dashboard.env
 .venv-mlx/
 .DS_Store
 *.bak

@@ -15,6 +15,13 @@
 #                    via `os.setsid()`, so `stop` kills the whole process
 #                    group — reloader master and worker both).
 #
+# Operator-local overrides (.dashboard.env, gitignored — see
+# .dashboard.env.example): sourced with allexport at start when present,
+# so e.g. PIPELINE_BACKEND_CHAT / PIPELINE_BACKEND_DECOMPOSE /
+# PIPELINE_LOCAL_MODEL_DEFAULT survive a restart from a bare shell.
+# Sourcing overwrites caller-exported env — the file is durable operator
+# intent.
+#
 # Artifacts in repo root:
 #   .dashboard.<port>.pid   pid of the running uvicorn process (master when
 #                    reload), one per DASHBOARD_PORT so independent instances
@@ -33,6 +40,16 @@ elif [ -x "$ROOT/.venv/bin/python"  ]; then PYBIN="$ROOT/.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1;  then PYBIN=python3
 elif command -v python  >/dev/null 2>&1;  then PYBIN=python
 else PYBIN=""; fi
+
+# Operator-local config overrides (gitignored, see .dashboard.env.example):
+# sourced with allexport so every var reaches the uvicorn process env — e.g.
+# PIPELINE_BACKEND_CHAT / PIPELINE_BACKEND_DECOMPOSE / PIPELINE_LOCAL_MODEL_DEFAULT.
+# Sourcing overwrites caller-exported vars, so the file is durable operator intent.
+if [ -f "$ROOT/.dashboard.env" ]; then
+  set -a
+  . "$ROOT/.dashboard.env"
+  set +a
+fi
 
 DASHBOARD_HOST="${DASHBOARD_HOST:-127.0.0.1}"
 DASHBOARD_PORT="${DASHBOARD_PORT:-8000}"
@@ -55,6 +72,10 @@ Env:
   DASHBOARD_HOST   (default 127.0.0.1)
   DASHBOARD_PORT   (default 8000)
   DASHBOARD_RELOAD 1 to pass --reload to uvicorn (dev only)
+
+Operator-local overrides: .dashboard.env (gitignored; see
+.dashboard.env.example) is sourced at start when present and overrides
+caller-exported env, so provider routing survives restarts from any shell.
 
 Pid is written to .dashboard.<port>.pid and logs to dashboard.log in the repo root.
 EOF

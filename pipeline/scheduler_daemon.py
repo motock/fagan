@@ -143,6 +143,32 @@ class SchedulerDaemon:
             snapshot["last_scan_timeout_ts"] = self._last_scan_timeout_ts
         return snapshot
 
+    def config_fingerprint(self) -> dict:
+        """Return the config THIS process actually resolved (story CFG-B1).
+
+        Additive surface only: this deliberately lives OUTSIDE ``health()``
+        because existing tests pin health()'s exact key set. Every value is
+        read at call time (module-attribute access, nothing cached on self)
+        so a patched ``pipeline.paths.PLAN_DIR`` is visible immediately and
+        the fingerprint always describes the current process.
+
+        ``dispatch_backend`` is ``None`` when ``PIPELINE_BACKEND_DISPATCH``
+        is unset or empty — never a ``KeyError`` and never an empty string.
+        """
+        # Imported lazily (not at module scope) so the values are read live
+        # on every call; ``from pipeline.paths import PLAN_DIR`` at the top
+        # of this module is an import-time snapshot and must not be used.
+        from pipeline import config, paths
+
+        return {
+            "plan_dir": str(paths.PLAN_DIR),
+            "worktree_root": str(paths.WORKTREE_ROOT),
+            "autonomy": config.PIPELINE_AUTONOMY,
+            "dispatch_backend": os.environ.get("PIPELINE_BACKEND_DISPATCH")
+            or None,
+            "pid": os.getpid(),
+        }
+
     def write_health(self, path: str) -> None:
         """Atomically write the health JSON to *path*.
 
@@ -151,7 +177,12 @@ class SchedulerDaemon:
         """
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as fh:
-            json.dump(self.health(), fh)
+            # Story CFG-B1: publish the resolved config alongside health.
+            # {**health(), ...} builds a NEW dict so health()'s return value
+            # (and its pinned six-key set) is never mutated.
+            json.dump(
+                {**self.health(), "config": self.config_fingerprint()}, fh
+            )
         os.replace(tmp_path, path)
 
     def _scan_with_watchdog(self, scan_fn):

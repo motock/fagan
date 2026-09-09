@@ -127,26 +127,6 @@ def collect_checks(which=shutil.which, py_version=None):
     module keeps exactly two top-level functions (a base-suite guarantee).
     """
 
-    def subprocess_runner(argv, timeout):
-        """Run argv; return (returncode, stdout, stderr).
-
-        Raises only what subprocess.run raises (TimeoutExpired, OSError);
-        the caller treats every failure mode as an unverified probe, never
-        a crash.
-        """
-        proc = subprocess.run(
-            list(argv),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        return proc.returncode, proc.stdout, proc.stderr
-
-    def urllib_urlopen(request, timeout=None):
-        """Default daemon HTTP seam: a thin urllib.request.urlopen alias."""
-        return urllib.request.urlopen(request, timeout=timeout)
-
     def cli_auth_status(argv, runner):
         """Probe a CLI's auth state; never raise, never hang.
 
@@ -214,10 +194,6 @@ def collect_checks(which=shutil.which, py_version=None):
             if '"loggedin": false' in lowered:
                 return "unauthorized", "not signed in"
             return "unknown", "auth probe failed"
-            if '"loggedin": false' in lowered:
-                    return "unauthorized", "not signed in"
-                    return "unknown", "auth probe failed"
-            return "ok", ""
         if name == "ollama":
             result = ollama_signed_in(_URLOPEN)
             if result is None:

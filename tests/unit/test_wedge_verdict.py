@@ -212,6 +212,55 @@ def test_both_reasons_fire_sorted():
     assert verdict["reasons"] == sorted(verdict["reasons"])
 
 
+# ---------- agent_done: the completion-marker gate on dead_pid ----------
+
+
+def test_dead_pid_with_agent_done_true_is_not_wedged():
+    """A dead pid whose worktree carries a completion marker finished
+    legitimately: no dead_pid reason, no wedge, and the measured reading
+    carries agent_done so the verdict is diagnosable from its own output."""
+    v = wedge_verdict(False, None, STALE, agent_done=True)
+    assert v["wedged"] is False
+    assert v["reasons"] == []
+    assert v["measured"]["agent_done"] is True
+
+
+def test_dead_pid_with_agent_done_false_is_still_wedged():
+    """Default (marker absent) reproduces today's behavior exactly: the dead
+    pid is still a wedge."""
+    v = wedge_verdict(False, None, STALE, agent_done=False)
+    assert v["wedged"] is True
+    assert v["reasons"] == ["dead_pid"]
+
+
+def test_agent_done_true_does_not_suppress_stale_activity_reason():
+    """Only dead_pid is gated: a finished-but-long-ungraded story whose
+    activity is also stale still surfaces stale_activity on its own."""
+    v = wedge_verdict(False, STALE + 1, STALE, agent_done=True)
+    assert v["wedged"] is True
+    assert v["reasons"] == ["stale_activity"]
+
+
+def test_agent_done_defaults_to_false_for_existing_call_sites():
+    """Every pre-existing 3-positional-arg call site must keep today's
+    verdict: omitting agent_done behaves exactly like agent_done=False."""
+    v = wedge_verdict(False, None, STALE)
+    assert v["wedged"] is True
+    assert v["reasons"] == ["dead_pid"]
+    assert v["measured"]["agent_done"] is False
+
+
+def test_agent_done_true_travels_in_measured_alongside_other_fields():
+    """The measured dict keeps pid_alive/activity_age_seconds and gains
+    agent_done (same diagnosability contract as the existing fields)."""
+    v = wedge_verdict(False, 2731.2, STALE, agent_done=True)
+    assert v["measured"] == {
+        "pid_alive": False,
+        "activity_age_seconds": 2731.2,
+        "agent_done": True,
+    }
+
+
 def test_output_deterministic_across_calls():
     first = wedge_verdict(False, 2731.2, 1800)
     second = wedge_verdict(False, 2731.2, 1800)

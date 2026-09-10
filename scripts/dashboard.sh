@@ -111,6 +111,42 @@ cleanup_pid_file() {
   return 1
 }
 
+wait_until_listening() {
+  # wait_until_listening <pid> <host> <port> <timeout_s>
+  #
+  # Return 0 as soon as <host>:<port> accepts a TCP connection, 1 on the
+  # deadline — or immediately if <pid> dies while waiting (a dead server
+  # will never listen; no point waiting out the clock).
+  #
+  # One python process polls in-process (not one spawn per attempt) so the
+  # common case costs a single interpreter start, and the probe is a plain
+  # TCP connect — the same condition a client's first health request needs.
+  # No HTTP is sent, so the app-level API-key dependency is never involved
+  # and the probe cannot 401.
+  local pid="$1" host="$2" port="$3" timeout_s="$4"
+  "$PYBIN" -c '
+import os, socket, sys, time
+pid, host, port, timeout_s = (
+    int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), float(sys.argv[4]),
+)
+deadline = time.monotonic() + timeout_s
+while True:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        raise SystemExit(1)  # server died mid-start: it will never listen
+    except PermissionError:
+        pass  # exists but not ours — treat as alive
+    try:
+        with socket.create_connection((host, port), timeout=0.25):
+            raise SystemExit(0)  # accepting connections: done waiting
+    except OSError:
+        if time.monotonic() >= deadline:
+            raise SystemExit(1)
+        time.sleep(0.05)
+' "$pid" "$host" "$port" "$timeout_s"
+}
+
 ensure_python () {
   if [ -n "$PYBIN" ]; then
     return 0
@@ -175,12 +211,22 @@ os.execvp(sys.executable, args)
   local pid=$!
 
   echo "$pid" >"$PID_FILE"
-  # Brief settle so the master pid is observable. If uvicorn died
-  # immediately (port in use, bad config) the pid file is still a useful
-  # breadcrumb — stop will treat it as stale and clean it up.
-  sleep 0.2
-  if pid_alive "$pid"; then
+  # Wait until the server is actually LISTENing on the printed host:port
+  # before reporting success. A bare `pid_alive` check is not enough: under
+  # load (e.g. the full test suite on many xdist workers) interpreter start
+  # + app import + startup preflight can take seconds, so a 0.2s settle
+  # printed "started" while the socket was still not accepting — stdout
+  # claimed success while every health poll hit connection-refused until
+  # the caller's own timeout. The printed URL and the launch args are the
+  # same variables, so the only divergence was timing; closing it here makes
+  # "started, pid …, http://…" mean the port is really accepting.
+  if wait_until_listening "$pid" "$DASHBOARD_HOST" "$DASHBOARD_PORT" 10; then
     echo "started, pid $pid, http://$DASHBOARD_HOST:$DASHBOARD_PORT"
+  elif pid_alive "$pid"; then
+    # Still alive but not accepting within the budget: report it honestly
+    # instead of a URL that does not work yet. The pid file stays as a
+    # breadcrumb — stop/status still work on it.
+    echo "started, pid $pid (not accepting connections yet — see $LOG_FILE)"
   else
     echo "started, pid $pid (process exited early — see $LOG_FILE)"
   fi

@@ -1,0 +1,658 @@
+"""Structural wiring tests for scripts/standalone-setup.sh (standalone provisioning).
+
+The story adds ONE supported command that provisions a standalone instance and
+REFUSES to report success unless the dashboard and the scheduler agree::
+
+    scripts/standalone-setup.sh up | down | status
+        [--repo-root DIR] [--data-dir DIR] [--target-repo DIR]
+        [--port PORT] [--autonomy MODE] [--force]
+
+House rules honoured here (mirrors tests/unit/test_install_script_wiring.py):
+
+* the script is never executed beyond ``bash -n``: no dashboard is started, no
+  scheduler is spawned, no HTTP request is made and no data directory is
+  created -- this is a unit suite over the script's SOURCE TEXT;
+* assertions are membership/ordering based against fixed anchors, never on the
+  file's total contents, line count or a hash;
+* scripts/dashboard.sh and scripts/scheduler.sh are shared artifacts this
+  story must NOT modify, so they are only probed for existence (loudly), and
+  no test pins their contents.
+
+Contract pinned here for the implementer (each assertion below is a contract
+line; satisfy them in the cheapest way that keeps the script correct):
+
+* subcommands dispatch as ``up)`` / ``down)`` / ``status)`` case branches (or
+  ``cmd_up()``-style functions, or ``[ "$1" = "up" ]`` tests);
+* the shared env file is ``.pipeline.env``; the keys PLAN_DIR, WORKTREE_ROOT
+  and PIPELINE_AUTONOMY are written as one adjacent block whose lines carry no
+  tilde (the file is sourced with ``set -a`` and gets no tilde expansion), and
+  the data dir is absolutised (``cd ... && pwd``, ``readlink -f`` or
+  ``realpath``) before those values are written;
+* defaults: port 8001 (never 8000), data dir ``~/pipeline-standalone``
+  (HOME-anchored), autonomy ``dry-run``;
+* the /api/health verification polls with retries + sleep, sends the
+  x-pipeline-api-key header (key from ``app.auth.get_or_create_api_key``),
+  asserts ``plan_dir`` equals the intended path, and treats a non-empty
+  ``config_mismatch`` as fatal: non-zero exit, message naming the diverging
+  fields, and NO success banner in that branch;
+* ``down`` stops both processes and says the scratch data stays put;
+  ``status`` prints the resolved paths and both processes' state.
+
+RED state: scripts/standalone-setup.sh does not exist yet, so every test fails
+with an explicit "TDD RED" message.  That is the intended TDD state, not a bug
+in this suite.
+"""
+
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SCRIPT = _REPO_ROOT / "scripts" / "standalone-setup.sh"
+
+_DASHBOARD_SH = "scripts/dashboard.sh"
+_SCHEDULER_SH = "scripts/scheduler.sh"
+_ENV_FILE = ".pipeline.env"
+_ENV_KEYS = ("PLAN_DIR", "WORKTREE_ROOT", "PIPELINE_AUTONOMY")
+_OPTIONS = (
+    "--repo-root",
+    "--data-dir",
+    "--target-repo",
+    "--port",
+    "--autonomy",
+    "--force",
+)
+
+# Dependencies from earlier stories; fail loudly (not skip) if they vanished,
+# so a broken dependency is never silently green.
+for _dep in (_DASHBOARD_SH, _SCHEDULER_SH):
+    if not (_REPO_ROOT / _dep).exists():
+        raise ImportError(
+            f"TDD dependency missing: {_dep} does not exist. "
+            "standalone-setup.sh launches both of them."
+        )
+
+
+# --------------------------------------------------------------------------- #
+# helpers (source-text probes only -- the script is never executed)
+# --------------------------------------------------------------------------- #
+def _require_script():
+    if not _SCRIPT.exists():
+        pytest.fail(
+            f"TDD RED state: {_SCRIPT} does not exist yet. "
+            "scripts/standalone-setup.sh is the implementation this suite "
+            "drives; write it (see this module's docstring for the contract)."
+        )
+
+
+def _source():
+    _require_script()
+    return _SCRIPT.read_text(encoding="utf-8")
+
+
+def _code_lines(source):
+    """Non-blank, non-comment lines (inline comments after code stay)."""
+    return [
+        ln
+        for ln in source.splitlines()
+        if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+
+
+def _code(source):
+    return "\n".join(_code_lines(source))
+
+
+def _line_containing(source, *needles):
+    """First code line containing all needles, else None."""
+    for ln in _code_lines(source):
+        if all(needle in ln for needle in needles):
+            return ln
+    return None
+
+
+def _line_index(source, *needles):
+    """Index (into code lines) of the first line containing all needles."""
+    for i, ln in enumerate(_code_lines(source)):
+        if all(needle in ln for needle in needles):
+            return i
+    return None
+
+
+def _find(source, pattern):
+    """(index, line) of the first code line matching regex, else (None, None)."""
+    for i, ln in enumerate(_code_lines(source)):
+        if re.search(pattern, ln):
+            return i, ln
+    return None, None
+
+
+def _dispatch_line_index(lines, name):
+    """Index of the line that dispatches subcommand `name`, else None."""
+    case_pat = re.compile(r"^\s*" + name + r"\)")
+    func_pat = re.compile(r"^\s*(?:cmd_|do_)?" + name + r"\s*\(\)")
+    test_pat = re.compile(
+        r'\[\s*"\$\{?[A-Za-z_0-9]+(?::-[^}]*)?\}?"\s*=\s*"' + name + r'"\s*\]'
+    )
+    for i, ln in enumerate(lines):
+        if case_pat.match(ln) or func_pat.match(ln) or test_pat.search(ln):
+            return i
+    return None
+
+
+def _dispatches_subcommand(source, name):
+    return _dispatch_line_index(_code_lines(source), name) is not None
+
+
+def _subcommand_region(source, name, span=30):
+    """Code lines from the subcommand's dispatch line onward (bounded)."""
+    lines = _code_lines(source)
+    i = _dispatch_line_index(lines, name)
+    if i is None:
+        return []
+    return lines[i : i + span]
+
+
+def _mismatch_region(source, span=30):
+    """Code lines from the first config_mismatch mention onward (bounded)."""
+    idx = _line_index(source, "config_mismatch")
+    if idx is None:
+        return []
+    return _code_lines(source)[idx : idx + span]
+
+
+def _is_banner_line(ln):
+    """A success-banner-looking output line (echo/printf of success/ready)."""
+    low = ln.lower()
+    looks_success = (
+        "==>" in ln
+        or "success" in low
+        or "ready" in low
+        or "is up" in low
+    )
+    is_output = re.search(r"\b(?:echo|printf|cat|log|say)\b", ln) is not None
+    return looks_success and is_output
+
+
+def _data_dir_var(source):
+    """The variable name that holds the default data dir, if discoverable."""
+    for ln in _code_lines(source):
+        if "pipeline-standalone" in ln:
+            m = re.search(r"([A-Z_][A-Z_0-9]*)\s*=", ln)
+            if m:
+                return m.group(1)
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# (a) existence, syntax, subcommands, options
+# --------------------------------------------------------------------------- #
+def test_script_exists_and_is_executable():
+    """The entrypoint exists, is executable and has a bash shebang."""
+    _require_script()
+    mode = _SCRIPT.stat().st_mode
+    assert mode & 0o111, (
+        f"{_SCRIPT} must be executable (chmod +x); got mode {oct(mode)}"
+    )
+    first = _SCRIPT.read_text(encoding="utf-8").splitlines()[0]
+    assert first.startswith("#!"), "missing shebang line"
+    assert "bash" in first, f"shebang must use bash, got {first!r}"
+
+
+def test_bash_n_parses_the_script_cleanly():
+    """NEGATIVE: `bash -n scripts/standalone-setup.sh` exits 0."""
+    _require_script()
+    proc = subprocess.run(
+        ["bash", "-n", str(_SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"bash -n rejected scripts/standalone-setup.sh "
+        f"(exit {proc.returncode}):\n{proc.stderr}"
+    )
+
+
+def test_script_defines_up_down_and_status_subcommands():
+    """up, down and status are each dispatched by the script."""
+    src = _source()
+    missing = [
+        name
+        for name in ("up", "down", "status")
+        if not _dispatches_subcommand(src, name)
+    ]
+    assert not missing, f"subcommands not dispatched: {missing}"
+
+
+def test_script_declares_all_documented_options():
+    """--repo-root/--data-dir/--target-repo/--port/--autonomy/--force all parsed."""
+    src = _source()
+    code = _code(src)
+    missing = [opt for opt in _OPTIONS if opt not in code]
+    assert not missing, f"documented options missing from the parser: {missing}"
+
+
+def test_script_runs_under_set_e_strict_mode():
+    """A provisioning entrypoint must fail loudly: `set -e` (or stricter)."""
+    assert re.search(r"(?m)^\s*set\s+-[a-zA-Z]*e", _source()), (
+        "the script must enable errexit (e.g. `set -euo pipefail`)"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# (b) wiring: dashboard.sh, scheduler.sh, .pipeline.env, no MCP
+# --------------------------------------------------------------------------- #
+def test_script_references_dashboard_scheduler_and_env_file():
+    """All three wiring anchors appear on code lines (not just comments)."""
+    src = _source()
+    for literal in (_DASHBOARD_SH, _SCHEDULER_SH, _ENV_FILE):
+        line = _line_containing(src, literal)
+        assert line is not None, f"missing code reference to {literal!r}"
+
+
+def test_env_file_is_written_before_both_processes_are_launched():
+    """Ordering: .pipeline.env is written before dashboard.sh/scheduler.sh run,
+    so both pick up the shared env file (keep the script linear)."""
+    src = _source()
+    env_idx = _line_index(src, _ENV_FILE)
+    dash_idx = _line_index(src, _DASHBOARD_SH)
+    sched_idx = _line_index(src, _SCHEDULER_SH)
+    assert None not in (env_idx, dash_idx, sched_idx), "wiring anchors missing"
+    assert env_idx < dash_idx, (
+        ".pipeline.env must be written before scripts/dashboard.sh is launched"
+    )
+    assert env_idx < sched_idx, (
+        ".pipeline.env must be written before scripts/scheduler.sh is launched"
+    )
+
+
+def test_no_mcp_registration():
+    """NEGATIVE: standalone means no MCP registration, ever."""
+    src = _source()
+    assert "claude mcp add" not in src, (
+        "standalone setup must not register an MCP server (`claude mcp add`)"
+    )
+    assert "mcp add" not in _code(src), (
+        "no `mcp add` invocation may appear on a code line"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# (c) up: repo root, venv resolution, data dirs, scratch repo
+# --------------------------------------------------------------------------- #
+def test_up_resolves_repo_root_from_bash_source():
+    """The repo root is resolved from BASH_SOURCE (install.sh idiom) and
+    --repo-root is an accepted override."""
+    src = _source()
+    root_line = _line_containing(src, "BASH_SOURCE", "dirname")
+    assert root_line is not None, (
+        "repo root must be resolved from BASH_SOURCE (like scripts/install.sh)"
+    )
+    assert "--repo-root" in _code(src), "--repo-root must be accepted"
+
+
+def test_up_resolves_the_venv_python():
+    """The venv interpreter (not bare `python3`) is what the script drives."""
+    src = _source()
+    assert _line_containing(src, ".venv") is not None, ".venv must be resolved"
+    assert _line_containing(src, "bin/python") is not None, (
+        "the venv interpreter (<venv>/bin/python3) must be resolved"
+    )
+
+
+def test_up_fails_actionably_when_venv_is_missing():
+    """No .venv -> non-zero exit with a message naming scripts/install.sh."""
+    src = _source()
+    idx, guard = _find(
+        src,
+        r"\.venv.*(-x|-d|-f)|(-x|-d|-f)[^\n]*\"\$\{?(PYBIN|VENV)",
+    )
+    assert guard is not None, (
+        "the script must existence-test the .venv (or the venv python) before "
+        "launching anything"
+    )
+    assert "scripts/install.sh" in src, (
+        "the no-venv error message must name scripts/install.sh"
+    )
+    window = _code_lines(src)[max(0, idx - 2) : idx + 6]
+    assert any(
+        re.search(r"\bexit\s+[1-9]\b|\bdie\b", ln) for ln in window
+    ), (
+        "the missing-.venv branch must exit non-zero with an actionable message"
+    )
+
+
+def test_up_creates_plans_and_worktrees_directories():
+    """<data-dir>/plans and <data-dir>/worktrees are mkdir -p'd."""
+    src = _source()
+    for name in ("plans", "worktrees"):
+        line = _line_containing(src, "mkdir", name)
+        assert line is not None, (
+            f"`up` must mkdir the {name!r} directory under the data dir"
+        )
+
+
+def test_up_creates_scratch_repo_only_when_target_repo_absent():
+    """A scratch git repo is git-inited at <data-dir>/repo, guarded on
+    --target-repo being unset."""
+    src = _source()
+    git_idx = _line_index(src, "git init")
+    assert git_idx is not None, (
+        "`up` must create a scratch git repo (`git init`) when --target-repo "
+        "is not supplied"
+    )
+    lines = _code_lines(src)
+    scratch_at_repo = (
+        _line_containing(src, "git init", "repo") is not None
+        or _line_containing(src, "mkdir", "repo") is not None
+    )
+    assert scratch_at_repo, "the scratch repo must live at <data-dir>/repo"
+    target_idx = _line_index(src, "--target-repo")
+    assert target_idx is not None, "--target-repo must be parsed"
+    assert target_idx < git_idx, (
+        "--target-repo must be handled before the scratch repo is created"
+    )
+    guard_context = lines[max(0, git_idx - 4) : git_idx]
+    assert any(
+        re.search(r"\bif\b|\[ -z|\[ -n|:-|\belse\b", ln) for ln in guard_context
+    ), "scratch repo creation must be guarded on --target-repo being unset"
+
+
+# --------------------------------------------------------------------------- #
+# (d) the CFG-D1 shared env file contract
+# --------------------------------------------------------------------------- #
+def test_env_file_writes_plan_dir_worktree_root_and_autonomy():
+    """PLAN_DIR, WORKTREE_ROOT and PIPELINE_AUTONOMY are written into
+    .pipeline.env as one adjacent block."""
+    src = _source()
+    lines = _code_lines(src)
+    idxs = []
+    for key in _ENV_KEYS:
+        idx = None
+        for i, ln in enumerate(lines):
+            if f"{key}=" in ln or (key in ln and "%s" in ln) or f'"{key}"' in ln:
+                idx = i
+                break
+        assert idx is not None, f"{key} is never written by the script"
+        idxs.append(idx)
+    span = max(idxs) - min(idxs)
+    assert span <= 12, (
+        "the three env keys must be written as one adjacent block "
+        f"(span={span} code lines)"
+    )
+    window = lines[max(0, min(idxs) - 8) : max(idxs) + 4]
+    assert any(
+        _ENV_FILE in ln or "ENV_FILE" in ln for ln in window
+    ), (
+        "the env keys must be written INTO .pipeline.env (redirect/tee/heredoc "
+        "onto the env file)"
+    )
+
+
+def test_env_values_are_absolute_not_tilde():
+    """Env values are ABSOLUTE: no tilde in the written lines, and the data
+    dir is absolutised (cd/pwd, readlink -f or realpath)."""
+    src = _source()
+    for ln in _code_lines(src):
+        for key in ("PLAN_DIR", "WORKTREE_ROOT"):
+            if f"{key}=" in ln:
+                assert "~" not in ln, (
+                    f"{key} must be written as an absolute path, without a "
+                    f"tilde (the sourced env file does no tilde expansion): "
+                    f"{ln!r}"
+                )
+    data_dir_line = _line_containing(src, "pipeline-standalone")
+    assert data_dir_line is not None, (
+        "the default --data-dir must be ~/pipeline-standalone"
+    )
+    home_anchored = "HOME" in data_dir_line or re.search(
+        r"(?<![\w\"])~/pipeline-standalone", data_dir_line
+    )
+    assert home_anchored, (
+        f"the data dir default must be HOME-anchored, got {data_dir_line!r}"
+    )
+    var = _data_dir_var(src)
+    assert var is not None, "could not locate the data-dir variable"
+    absolutised = (
+        _line_containing(src, var, "pwd")
+        or _line_containing(src, var, "readlink")
+        or _line_containing(src, var, "realpath")
+    )
+    assert absolutised is not None, (
+        f"{var} must be absolutised (cd ... && pwd, readlink -f or realpath) "
+        "before PLAN_DIR/WORKTREE_ROOT are derived from it"
+    )
+
+
+def test_existing_env_file_is_backed_up_unless_force():
+    """An existing .pipeline.env is backed up (guarded by an existence test),
+    and --force is parsed before that backup decision."""
+    src = _source()
+    lines = _code_lines(src)
+    backup_idx, backup_line = _find(
+        src,
+        r"(bak|backup|\.save)",
+    )
+    assert backup_line is not None and (
+        _ENV_FILE in backup_line or "ENV_FILE" in backup_line
+    ), (
+        "an existing .pipeline.env must be backed up (e.g. .pipeline.env.bak) "
+        "rather than clobbered"
+    )
+    force_idx = _line_index(src, "--force")
+    assert force_idx is not None, "--force must be parsed"
+    assert force_idx < backup_idx, (
+        "--force must be handled before the backup decision is made"
+    )
+    guard_context = lines[max(0, backup_idx - 5) : backup_idx]
+    assert any(
+        re.search(r"-f\s|-e\s|-s\s|\[\[", ln) for ln in guard_context
+    ), "the backup must be guarded by an existence test on the env file"
+    window = lines[max(0, backup_idx - 6) : backup_idx + 6]
+    assert any("force" in ln.lower() for ln in window), (
+        "the backup must be skippable with --force"
+    )
+
+
+def test_autonomy_defaults_to_dry_run():
+    """PIPELINE_AUTONOMY defaults to dry-run."""
+    src = _source()
+    assert _line_containing(src, "PIPELINE_AUTONOMY") is not None, (
+        "PIPELINE_AUTONOMY must be written"
+    )
+    code = _code(src)
+    markers = (':-dry-run', ':-"dry-run"', ":-'dry-run'", '="dry-run"', "=dry-run")
+    assert any(marker in code for marker in markers), (
+        "PIPELINE_AUTONOMY must default to dry-run "
+        "(e.g. AUTONOMY=\"${AUTONOMY:-dry-run}\")"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# (e) launch + the verify step that gates success
+# --------------------------------------------------------------------------- #
+def test_up_launches_dashboard_and_scheduler():
+    """Both helpers are invoked (not merely mentioned in comments)."""
+    src = _source()
+    dash = _line_containing(src, _DASHBOARD_SH)
+    sched = _line_containing(src, _SCHEDULER_SH)
+    assert dash is not None and sched is not None
+    for line, name in ((dash, "dashboard"), (sched, "scheduler")):
+        assert "$" in line or "bash" in line or re.search(r"\bsh\b", line), (
+            f"{name} must be invoked, not merely mentioned: {line!r}"
+        )
+
+
+def test_health_poll_hits_api_health_with_retries():
+    """GET /api/health is polled (retry loop + sleep) until it answers."""
+    src = _source()
+    idx = _line_index(src, "/api/health")
+    assert idx is not None, "`up` must verify GET /api/health before succeeding"
+    window = _code_lines(src)[max(0, idx - 6) : idx + 12]
+    text = "\n".join(window)
+    assert re.search(r"\buntil\b|\bwhile\b|\bfor\b|--retry", text), (
+        "the health check must poll/retry until the server answers"
+    )
+    assert "sleep" in text, "the poll must sleep between attempts"
+
+
+def test_health_url_uses_the_configured_port():
+    """The health URL is built from the configured --port (default 8001)."""
+    line = _line_containing(_source(), "http", "PORT")
+    assert line is not None, (
+        "the /api/health URL must be built from the configured port variable"
+    )
+
+
+def test_health_request_sends_the_api_key_header():
+    """The health request carries x-pipeline-api-key, keyed via
+    app.auth.get_or_create_api_key."""
+    src = _source()
+    assert _line_containing(src, "x-pipeline-api-key") is not None, (
+        "the health request must send the x-pipeline-api-key header"
+    )
+    assert _line_containing(src, "get_or_create_api_key") is not None, (
+        "the API key must be obtained from app.auth.get_or_create_api_key"
+    )
+    assert _line_containing(src, "app.auth") is not None, (
+        "the key lookup must go through the app.auth module"
+    )
+    health_idx = _line_index(src, "/api/health")
+    key_idx = _line_index(src, "x-pipeline-api-key")
+    assert health_idx is not None and key_idx is not None
+    assert abs(health_idx - key_idx) <= 8, (
+        "the x-pipeline-api-key header must be attached to the /api/health "
+        "request itself"
+    )
+
+
+def test_health_verification_asserts_plan_dir_matches_intended_path():
+    """The health payload's plan_dir is asserted against the intended path."""
+    src = _source()
+    idx = _line_index(src, "plan_dir")
+    assert idx is not None, (
+        "the /api/health plan_dir field must be asserted against the intended "
+        "PLAN_DIR"
+    )
+    window = _code_lines(src)[max(0, idx - 6) : idx + 8]
+    assert any(
+        ("PLAN_DIR" in ln or "DATA_DIR" in ln or "plans" in ln) for ln in window
+    ), "plan_dir must be compared with the intended path"
+
+
+def test_config_mismatch_branch_exits_non_zero_and_names_fields():
+    """A non-empty config_mismatch exits non-zero with a message naming the
+    diverging fields."""
+    src = _source()
+    region = _mismatch_region(src)
+    assert region, "config_mismatch from /api/health must be checked"
+    text = "\n".join(region)
+    assert re.search(r"\b(?:exit|return)\s+[1-9]\b|\bdie\b", text), (
+        "a non-empty config_mismatch must exit non-zero"
+    )
+    assert any(
+        re.search(r"\b(?:echo|printf|cat|log|die|fail|err)\b.*\$", ln)
+        for ln in region
+    ), (
+        "the mismatch message must name the diverging fields (interpolate the "
+        "config_mismatch value into the error output)"
+    )
+
+
+def test_success_banner_is_not_printed_on_mismatch():
+    """No success banner inside the config_mismatch branch; the happy path
+    does print one."""
+    src = _source()
+    region = _mismatch_region(src)
+    assert region, "config_mismatch guard missing"
+    banners = [ln for ln in region if _is_banner_line(ln)]
+    assert not banners, (
+        "a success banner must NOT be printed when config_mismatch is "
+        f"non-empty: {banners!r}"
+    )
+    assert any(
+        _is_banner_line(ln) for ln in _code_lines(src)
+    ), "the happy path must print a success banner (e.g. '==> standalone up')"
+
+
+# --------------------------------------------------------------------------- #
+# (f) defaults
+# --------------------------------------------------------------------------- #
+def test_default_port_is_8001_not_8000():
+    """Default --port is 8001 and nothing defaults to 8000."""
+    src = _source()
+    port_line = _line_containing(src, "8001")
+    assert port_line is not None, "the default port must be 8001"
+    assert "PORT" in port_line or re.search(r"(?i)\bport\b", port_line), (
+        f"8001 must be the port default, got {port_line!r}"
+    )
+    code = _code(src)
+    for banned in (":-8000", "=8000", '"8000"', "'8000'"):
+        assert banned not in code, (
+            f"the port must not default to 8000 (found {banned!r}); an "
+            "operator's existing dashboard may already own 8000"
+        )
+
+
+def test_default_data_dir_is_pipeline_standalone_under_home():
+    """Default --data-dir is ~/pipeline-standalone."""
+    line = _line_containing(_source(), "pipeline-standalone")
+    assert line is not None, "the default --data-dir must be ~/pipeline-standalone"
+
+
+# --------------------------------------------------------------------------- #
+# (g) down / status
+# --------------------------------------------------------------------------- #
+def test_down_stops_both_processes_and_keeps_scratch_data():
+    """`down` stops BOTH processes and says the scratch data stays put."""
+    src = _source()
+    region = _subcommand_region(src, "down")
+    assert region, "down subcommand missing"
+    text = "\n".join(region)
+    assert re.search(r"\b(?:kill|pkill|stop)\b", text), (
+        "down must stop the launched processes"
+    )
+    low = text.lower()
+    assert "dashboard" in low and "scheduler" in low, (
+        "down must stop BOTH the dashboard and the scheduler"
+    )
+    kept = _find(
+        src,
+        r"kept|left in place|preserv|remain|untouch|not delet|won.t be delet",
+    )
+    assert kept[1] is not None, (
+        "down must say that the scratch data is left in place (not deleted)"
+    )
+    for ln in region:
+        if re.search(r"\brm\s+-r?f?\w*\b", ln):
+            assert not re.search(
+                r"DATA_DIR|pipeline-standalone|/plans|/worktrees|/repo\b", ln
+            ), f"down must not delete the scratch data: {ln!r}"
+
+
+def test_status_reports_paths_and_process_state():
+    """`status` prints the resolved paths and both processes' state."""
+    src = _source()
+    region = _subcommand_region(src, "status")
+    assert region, "status subcommand missing"
+    text = "\n".join(region)
+    assert re.search(
+        r"PLAN_DIR|WORKTREE_ROOT|DATA_DIR|data-dir|pipeline-standalone", text
+    ), "status must print the resolved paths"
+    assert re.search(
+        r"running|stopped|pgrep|ps\s|lsof|kill -0|curl",
+        text,
+        re.IGNORECASE,
+    ), "status must print both processes' state"
+
+
+def test_no_destructive_removal_of_user_data():
+    """NEGATIVE: nothing in the script rm's the data dir or its contents."""
+    for ln in _code_lines(_source()):
+        if re.search(r"\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b", ln):
+            assert not re.search(
+                r"DATA_DIR|pipeline-standalone|/plans|/worktrees|/repo\b", ln
+            ), f"the script must never delete user data: {ln!r}"

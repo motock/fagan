@@ -14,6 +14,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -118,7 +120,6 @@ def _spawn_ssh(cmd: list[str], *, cwd: Path, log_path: Path, append: bool, env: 
 
 
 
-
 from app.backend_types import AgentHandle
 from pipeline.sandbox import (
     build_docker_command,
@@ -148,6 +149,36 @@ def resolve_execution_mode(role: str = "dispatch") -> str:
     return raw
 
 
+def _tail_ts_sidecar(
+    log_path: Path, ts_path: Path, proc, stop: threading.Event
+) -> None:
+    """Tail ``log_path`` and append one ISO-8601 UTC timestamp to the
+    ``.ts`` sidecar per line, until the child exits and the log is drained.
+
+    Runs on a daemon thread so the spawn stays non-blocking; the sidecar
+    file itself is created/truncated by the caller with the log's own mode
+    before this thread starts, so this tailer only ever appends.
+    """
+    with (
+        open(ts_path, "a", encoding="utf-8") as ts_file,
+        open(log_path, "r", encoding="utf-8", errors="replace") as log_file,
+    ):
+        while True:
+            line = log_file.readline()
+            if line:
+                ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                ts_file.flush()
+                continue
+            poll = getattr(proc, "poll", None)
+            if callable(poll) and poll() is not None:
+                # Child exited: drain whatever landed after the last poll.
+                for line in log_file:
+                    ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                ts_file.flush()
+                return
+            stop.wait(0.05)
+
+
 def spawn_local(
     cmd: list[str],
     *,
@@ -160,12 +191,55 @@ def spawn_local(
 
     Behavior-identical to the existing driver spawn sites: the child inherits
     the log file descriptor, so writes continue after this function returns.
-    ``model`` stays empty here — the drivers set it after spawn, as today.
+    ``model`` stays empty here -- the drivers set it after spawn, as today.
+
+    Also writes a per-line ISO-8601 UTC timestamp sidecar at
+    ``str(log_path) + ".ts"`` (one line per agent.log line, same
+    append/truncate semantics as log_path) via a background daemon
+    thread draining the child's merged stdout+stderr. agent.log's own
+    bytes are unaffected -- only the write mechanism changed from a
+    raw fd redirect to a line-by-line relay, so every existing
+    consumer that scans agent.log's raw content (STEP_CAP_MARKERS,
+    INFRA_FAILURE_LOG_SUBSTRING, rebrief.py's anchored regexes,
+    wedge_io.py's mtime check) is unaffected. Note: this does mean
+    child output is decoded as UTF-8 (errors="replace") in the drain
+    relay rather than passed through as raw bytes -- a deliberate,
+    narrow trade-off (agent CLIs emit UTF-8 text) required to
+    timestamp lines at all. The Popen call passes only the five
+    arguments every spawn site has always passed (cmd/cwd/env/stdout/
+    stderr) so existing Popen seams keep binding; text decoding happens
+    in the drain loop, not via Popen text-mode kwargs.
     """
-    with open(log_path, "a" if append else "w") as log_file:
-        proc = subprocess.Popen(
-            cmd, cwd=cwd, env=env, stdout=log_file, stderr=log_file
-        )
+    mode = "a" if append else "w"
+    # The drain thread owns these handles and closes them in its finally; a
+    # with-block here would close them while the background relay is live.
+    log_file = open(log_path, mode, encoding="utf-8", errors="replace")  # noqa: SIM115
+    ts_path = log_path.with_name(log_path.name + ".ts")
+    ts_file = open(ts_path, mode, encoding="utf-8")  # noqa: SIM115
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    def _drain() -> None:
+        stream = getattr(proc, "stdout", None)
+        try:
+            if stream is not None:
+                for raw in stream:
+                    log_file.write(raw.decode("utf-8", errors="replace"))
+                    log_file.flush()
+                    ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                    ts_file.flush()
+        finally:
+            if stream is not None:
+                stream.close()
+            log_file.close()
+            ts_file.close()
+
+    threading.Thread(target=_drain, daemon=True).start()
     return AgentHandle(pid=proc.pid, model="")
 
 
@@ -207,4 +281,22 @@ def spawn_harness(
             }
         )
         cmd = build_docker_command(str(cwd), cmd, allowlisted_env)
-    return spawn_local(cmd, cwd=cwd, log_path=log_path, append=append, env=env)
+    # Local/docker path: keep the byte-identical fd-redirect spawn (the child
+    # inherits the log file descriptor, so agent.log's bytes and the Popen
+    # call shape are exactly what they have always been), and produce the
+    # per-line ISO-8601 UTC timestamp sidecar with a background daemon tailer
+    # instead of a pipe relay.
+    with open(log_path, "a" if append else "w") as log_file:
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, env=env, stdout=log_file, stderr=log_file
+        )
+    ts_path = log_path.with_name(log_path.name + ".ts")
+    with open(ts_path, "a" if append else "w", encoding="utf-8"):
+        pass  # create/truncate the sidecar with the log's own mode
+    stop = threading.Event()
+    threading.Thread(
+        target=_tail_ts_sidecar,
+        args=(log_path, ts_path, proc, stop),
+        daemon=True,
+    ).start()
+    return AgentHandle(pid=proc.pid, model="")

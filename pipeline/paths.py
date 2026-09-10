@@ -52,8 +52,8 @@ USAGE_STATE_PATH = Path(os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_stat
 # copy that had leaked onto the default branch - terminal-failing an
 # otherwise-green story's merge gate (P3-6, 3/3 attempts exhausted).
 _WORKTREE_LOG_EXCLUDES = (
-    "agent.log", "review.log", ".agent_plan.md", ".agent_scratchpad.md",
-    ".agent_plan_src_hash",
+    "agent.log", "agent.log.ts", "review.log", ".agent_plan.md",
+    ".agent_scratchpad.md", ".agent_plan_src_hash",
 )
 
 

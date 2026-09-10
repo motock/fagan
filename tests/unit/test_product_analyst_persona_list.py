@@ -100,17 +100,19 @@ def test_persona_guidance_names_every_dispatchable_persona():
 
 def test_closed_list_matches_the_bundled_agent_files():
     """Every persona the guidance names exists as agents/<name>.md, and every
-    dispatchable agent file (except overlord.md, the orchestrator) is named -
-    the list is closed AND accurate, not just closed."""
+    dispatchable agent file (except overlord.md, the orchestrator, and
+    product-analyst.md itself, the decomposer that writes this guidance) is
+    named - the list is closed AND accurate, not just closed."""
     src = _persona_source()
     for name in _CLOSED_PERSONAS:
         assert (_AGENTS_DIR / f"{name}.md").exists(), (
             f"the guidance names {name!r} but agents/{name}.md does not exist"
         )
+    not_dispatch_targets = {"overlord", "product-analyst"}
     dispatchable = sorted(
         p.stem
         for p in _AGENTS_DIR.glob("*.md")
-        if p.stem != "overlord"
+        if p.stem not in not_dispatch_targets
     )
     unnamed = [name for name in dispatchable if f"`{name}`" not in src]
     assert not unnamed, (

@@ -159,22 +159,24 @@ def _tail_ts_sidecar(
     file itself is created/truncated by the caller with the log's own mode
     before this thread starts, so this tailer only ever appends.
     """
-    with open(ts_path, "a", encoding="utf-8") as ts_file:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as log_file:
-            while True:
-                line = log_file.readline()
-                if line:
+    with (
+        open(ts_path, "a", encoding="utf-8") as ts_file,
+        open(log_path, "r", encoding="utf-8", errors="replace") as log_file,
+    ):
+        while True:
+            line = log_file.readline()
+            if line:
+                ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                ts_file.flush()
+                continue
+            poll = getattr(proc, "poll", None)
+            if callable(poll) and poll() is not None:
+                # Child exited: drain whatever landed after the last poll.
+                for line in log_file:
                     ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
-                    ts_file.flush()
-                    continue
-                poll = getattr(proc, "poll", None)
-                if callable(poll) and poll() is not None:
-                    # Child exited: drain whatever landed after the last poll.
-                    for line in log_file.readlines():
-                        ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
-                    ts_file.flush()
-                    return
-                stop.wait(0.05)
+                ts_file.flush()
+                return
+            stop.wait(0.05)
 
 
 def spawn_local(
@@ -209,9 +211,11 @@ def spawn_local(
     in the drain loop, not via Popen text-mode kwargs.
     """
     mode = "a" if append else "w"
-    log_file = open(log_path, mode, encoding="utf-8", errors="replace")
+    # The drain thread owns these handles and closes them in its finally; a
+    # with-block here would close them while the background relay is live.
+    log_file = open(log_path, mode, encoding="utf-8", errors="replace")  # noqa: SIM115
     ts_path = log_path.with_name(log_path.name + ".ts")
-    ts_file = open(ts_path, mode, encoding="utf-8")
+    ts_file = open(ts_path, mode, encoding="utf-8")  # noqa: SIM115
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
@@ -282,11 +286,13 @@ def spawn_harness(
     # call shape are exactly what they have always been), and produce the
     # per-line ISO-8601 UTC timestamp sidecar with a background daemon tailer
     # instead of a pipe relay.
-    log_file = open(log_path, "a" if append else "w")
-    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=log_file, stderr=log_file)
+    with open(log_path, "a" if append else "w") as log_file:
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, env=env, stdout=log_file, stderr=log_file
+        )
     ts_path = log_path.with_name(log_path.name + ".ts")
-    ts_file = open(ts_path, "a" if append else "w", encoding="utf-8")
-    ts_file.close()
+    with open(ts_path, "a" if append else "w", encoding="utf-8"):
+        pass  # create/truncate the sidecar with the log's own mode
     stop = threading.Event()
     threading.Thread(
         target=_tail_ts_sidecar,

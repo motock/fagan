@@ -303,6 +303,17 @@ def test_collect_signals_returns_the_two_documented_keys(plan_dir):
     assert set(sig) == {"pid_alive", "activity_age_seconds", "agent_done"}
 
 
+def test_collect_signals_docstring_documents_agent_done_key():
+    """CHANGE 1's docstring requirement: the 'Returns' description on
+    collect_story_wedge_signals must mention the new agent_done key
+    alongside pid_alive / activity_age_seconds."""
+    doc = wedge_io.collect_story_wedge_signals.__doc__ or ""
+    assert "agent_done" in doc, (
+        "collect_story_wedge_signals' Returns docstring must document the "
+        f"agent_done key; got: {doc!r}"
+    )
+
+
 def test_collect_signals_agent_done_true_when_marker_file_present(plan_dir):
     """An unconsumed .agent_done marker in the worktree -> agent_done True
     (pipeline/watchers.py's scan_done_markers renames it to .agent_done.consumed

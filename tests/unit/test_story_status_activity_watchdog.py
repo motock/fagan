@@ -552,12 +552,18 @@ def test_story_status_pulls_collect_story_wedge_signals_from_wedge_io():
 
 def test_wedge_signal_reader_contract_unchanged(tmp_path):
     """Seam guard: wedge_io.collect_story_wedge_signals keeps its
-    {'pid_alive', 'activity_age_seconds'} contract (this story must NOT
-    modify pipeline/wedge_io.py)."""
+    {'pid_alive', 'activity_age_seconds', 'agent_done'} contract (the
+    WEDGEAGENTDONE-1 story added the agent_done completion-marker key;
+    the watchdog branch must keep consuming the shared wedge_io.py
+    reader unchanged)."""
     from pipeline.wedge_io import collect_story_wedge_signals
 
     signals = collect_story_wedge_signals(
         "plan-alpha", STORY_KEY,
         {"pid": os.getpid(), "worktree": str(tmp_path)},
     )
-    assert set(signals) == {"pid_alive", "activity_age_seconds"}
+    assert set(signals) == {
+        "pid_alive",
+        "activity_age_seconds",
+        "agent_done",
+    }

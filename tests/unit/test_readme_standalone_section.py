@@ -366,7 +366,7 @@ def test_provider_authorization_prerequisite_still_applies() -> None:
     lines = _readme_lines()
     fenced = _fenced_line_numbers(lines)
     section = "\n".join(_standalone_section_lines(lines, fenced))
-    assert re.search(r"provider", section, re.I), (
+    assert re.search(r"provider", section, re.IGNORECASE), (
         "the standalone section must mention provider authorization"
     )
     assert re.search(r"authoriz", section, re.I), (

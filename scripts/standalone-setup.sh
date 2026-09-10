@@ -168,12 +168,27 @@ cmd_up() {
 
   # Scratch layout: plans + worktrees always; a scratch git repo only when
   # the caller did not supply their own target repo.
-  mkdir -p "$DATA_DIR/plans" "$DATA_DIR/worktrees"
+  mkdir -p "$DATA_DIR/plans" "$DATA_DIR/worktrees" "$DATA_DIR/agents"
   if [ -z "$TARGET_REPO" ]; then
     TARGET_REPO="$DATA_DIR/repo"
     git init -q "$DATA_DIR/repo"
   fi
   echo "==> target repo: $TARGET_REPO"
+
+  AGENTS_DIR="$DATA_DIR/agents"
+
+  # Provision the standalone instance's OWN persona set from the repo's
+  # bundled agents/*.md, non-destructively (-n), so a fresh install never
+  # depends on the operator's global ~/.claude/agents/ already being
+  # populated. That directory's name is historical - persona files are
+  # plain system-prompt templates read by _persona_body(), unrelated to
+  # which dispatch backend actually executes a story; a pure-ollama setup
+  # needs these exactly as much as a Claude-backed one. -n means a re-run
+  # of `up` never clobbers an already-customized persona in $AGENTS_DIR.
+  if [ -d "$REPO_ROOT/agents" ]; then
+    cp -n "$REPO_ROOT"/agents/*.md "$AGENTS_DIR/" 2>/dev/null || true
+  fi
+  echo "==> provisioned personas: $AGENTS_DIR"
 
   PLAN_DIR="$DATA_DIR/plans"
   WORKTREE_ROOT="$DATA_DIR/worktrees"
@@ -192,6 +207,7 @@ cmd_up() {
     echo "PLAN_DIR=\"$PLAN_DIR\""
     echo "WORKTREE_ROOT=\"$WORKTREE_ROOT\""
     echo "PIPELINE_AUTONOMY=\"$AUTONOMY\""
+    echo "AGENTS_DIR=\"$AGENTS_DIR\""
   } >"$ENV_FILE"
   echo "==> wrote $ENV_FILE"
 

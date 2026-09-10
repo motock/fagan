@@ -55,9 +55,16 @@ def _resolve_chat_api_base_url(request: Request | None = None) -> str | None:
     deliberate override -- e.g. a reverse-proxied deployment where the
     browser's own host:port is not the correct address for server-to-server
     calls). Otherwise, when a real incoming `request` is available, derive
-    the base URL from it (request.base_url) -- this is what makes chat's
-    internal tool calls self-correct to whatever host/port the dashboard is
-    ACTUALLY bound to, instead of ChatService's own hardcoded
+    the base URL from the ASGI ``server`` scope entry plus
+    ``request.url.scheme`` -- NEVER from ``request.base_url`` or the
+    client-supplied ``Host`` header: in Starlette 1.6.0 ``URL(scope=...)``
+    prefers the ``Host`` header over the ASGI ``server`` entry, so
+    ``request.base_url`` is attacker-controlled (any client holding the
+    shared dashboard key could send ``Host: evil.example`` and make every
+    internal tool call -- carrying ``X-Pipeline-Api-Key`` -- target the
+    attacker-chosen host:port). The ASGI ``server`` entry is what makes
+    chat's internal tool calls self-correct to whatever host/port the
+    dashboard is ACTUALLY bound to, instead of ChatService's own hardcoded
     127.0.0.1:8000 fallback. Returns None (falls through to ChatService's
     own default) when neither is available -- e.g. a plain Python call with
     no request object, as several existing tests make directly.
@@ -66,7 +73,17 @@ def _resolve_chat_api_base_url(request: Request | None = None) -> str | None:
     if override:
         return override
     if request is not None:
-        return str(request.base_url).rstrip("/")
+        server = request.scope.get("server")
+        if server:
+            host = server[0]
+            port = server[1] if len(server) > 1 else None
+            scheme = request.url.scheme
+            host_part = f"[{host}]" if ":" in host else host
+            if port in (None, 0) or (scheme, port) in (("http", 80), ("https", 443)):
+                netloc = host_part
+            else:
+                netloc = f"{host_part}:{port}"
+            return f"{scheme}://{netloc}"
     return None
 
 

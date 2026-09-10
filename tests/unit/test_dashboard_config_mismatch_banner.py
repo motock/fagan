@@ -53,6 +53,21 @@ class DashboardConfigMismatchBannerTest(unittest.TestCase):
         cls.index_html = _read(INDEX_HTML)
         cls.main_js = _read(MAIN_JS)
 
+    def _health_helper(self):
+        """Return (name, body) of the api.js function that fetches
+        /api/health, or (None, None). Slices between `async function`
+        declarations so brace matching can't misfire."""
+        src = self.api_js
+        starts = list(re.finditer(r"async\s+function\s+(\w+)\s*\(", src))
+        for i, m in enumerate(starts):
+            end = starts[i + 1].start() if i + 1 < len(starts) else src.find("export", m.start())
+            if end == -1:
+                end = len(src)
+            body = src[m.start():end]
+            if "/api/health" in body:
+                return m.group(1), body
+        return None, None
+
     # --- 1. static/app/api.js: one fetch function for /api/health ---------
 
     def test_api_js_references_api_health_endpoint(self):
@@ -60,39 +75,33 @@ class DashboardConfigMismatchBannerTest(unittest.TestCase):
         self.assertIn("/api/health", self.api_js)
 
     def test_api_js_health_fetch_is_a_named_function(self):
-        """The health fetch lives in a named async helper, like
+        """The /api/health fetch lives in a named async helper, like
         fetchGuardLiveness/fetchPlanMetrics — not an inline fetch call."""
-        self.assertRegex(
-            self.api_js,
-            r"async\s+function\s+\w*[Hh]ealth\w*\s*\(",
-            "api.js should define a named health fetch helper",
+        name, _ = self._health_helper()
+        self.assertIsNotNone(
+            name,
+            "api.js should define a named async function that fetches /api/health",
         )
 
     def test_api_js_health_helper_uses_existing_auth_and_error_idiom(self):
         """Same auth-header handling + error handling as the other helpers:
         either it delegates to fetchJson (which injects X-Pipeline-Api-Key
         and throws on !ok) or it does both itself."""
-        m = re.search(
-            r"async\s+function\s+(\w*[Hh]ealth\w*)\s*\([^)]*\)\s*\{(?P<body>.*?)\n\}",
-            self.api_js,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(m, "health helper body not found in api.js")
-        body = m.group("body")
+        _, body = self._health_helper()
+        self.assertIsNotNone(body, "health helper body not found in api.js")
         uses_fetch_json = "fetchJson(" in body
         has_auth = 'X-Pipeline-Api-Key' in body
         has_error = ("!res.ok" in body) or ("throw" in body) or ("catch" in body)
         self.assertTrue(
-            (uses_fetch_json and (has_auth or True)) or (has_auth and has_error),
+            uses_fetch_json or (has_auth and has_error),
             "health helper must reuse fetchJson or handle auth + errors itself",
         )
-        self.assertIn("/api/health", body)
 
     def test_api_js_exports_the_health_helper(self):
         """The helper is exported so main.js can import it."""
-        m = re.search(r"async\s+function\s+(\w*[Hh]ealth\w*)\s*\(", self.api_js)
-        self.assertIsNotNone(m)
-        self.assertRegex(self.api_js, r"export\s*\{[^}]*\b" + re.escape(m.group(1)) + r"\b")
+        name, _ = self._health_helper()
+        self.assertIsNotNone(name)
+        self.assertRegex(self.api_js, r"export\s*\{[^}]*\b" + re.escape(name) + r"\b")
 
     # --- 2. static/index.html: ONE hidden banner element near the top -----
 
@@ -144,9 +153,9 @@ class DashboardConfigMismatchBannerTest(unittest.TestCase):
     def test_main_js_fetches_health_on_load(self):
         """main.js invokes the health helper exported by api.js at load time
         (not behind an unrelated user action only)."""
-        m = re.search(r"async\s+function\s+(\w*[Hh]ealth\w*)\s*\(", self.api_js)
-        self.assertIsNotNone(m, "api.js must define the health helper first")
-        self.assertIn(m.group(1), self.main_js, "main.js must call the health helper")
+        name, _ = self._health_helper()
+        self.assertIsNotNone(name, "api.js must define the health helper first")
+        self.assertIn(name, self.main_js, "main.js must call the health helper")
 
     # --- banner text names fields + the two plan stores -------------------
 
@@ -189,10 +198,9 @@ class DashboardConfigMismatchBannerTest(unittest.TestCase):
         """FAIL SOFT: the health call is wrapped in try/catch or .catch so an
         unreachable /api/health cannot throw during page boot. The guard must
         sit on the health wiring itself, not just anywhere in main.js."""
-        m = re.search(r"async\s+function\s+(\w*[Hh]ealth\w*)\s*\(", self.api_js)
-        self.assertIsNotNone(m, "api.js must define the health helper first")
-        helper = m.group(1)
-        call_at = self.main_js.find(helper)
+        name, _ = self._health_helper()
+        self.assertIsNotNone(name, "api.js must define the health helper first")
+        call_at = self.main_js.find(name)
         self.assertNotEqual(call_at, -1, "main.js must call the health helper")
         region = self.main_js[max(0, call_at - 400): call_at + 600]
         self.assertTrue(

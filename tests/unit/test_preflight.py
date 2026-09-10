@@ -126,8 +126,11 @@ def test_run_preflight_returns_four_well_formed_checks_all_ok(tmp_path):
         plan_dir=tmp_path, which=_ok_which, registry_loader=_ok_registry
     )
     assert isinstance(results, list)
-    # Exactly one dict per briefed check: PLAN_DIR, git, dispatch, registry.
-    assert len(results) == 4
+    # One dict per check. Cumulative list: the four briefed checks plus the
+    # SCHEDULER_CONFIG startup check (see
+    # tests/unit/test_preflight_scheduler_config.py, which locates its entry
+    # by name and never pins the total).
+    assert len(results) == 5
     for check in results:
         assert set(check) == {"name", "status", "message"}
         assert check["status"] in {"ok", "warn", "fail"}
@@ -139,7 +142,7 @@ def test_run_preflight_returns_four_well_formed_checks_all_ok(tmp_path):
     assert any("dispatch" in n.lower() for n in names)
     assert any("registry" in n.lower() for n in names)
     summary = preflight.summarize(results)
-    assert "4 ok" in summary
+    assert "5 ok" in summary
     assert "0 warn" in summary
     assert "0 fail" in summary
 
@@ -556,7 +559,10 @@ def test_module_defines_exactly_the_three_briefed_functions():
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     ]
     classes = [node.name for node in tree.body if isinstance(node, ast.ClassDef)]
-    assert set(functions) == {"run_preflight", "summarize", "raise_on_failure"}
+    # The three briefed functions must exist; module-level helpers (e.g. a
+    # _read_scheduler_fingerprint helper for the SCHEDULER_CONFIG check) are
+    # allowed, so this is a superset check, not an exact set.
+    assert {"run_preflight", "summarize", "raise_on_failure"} <= set(functions)
     assert "PreflightError" in classes
     assert callable(preflight.run_preflight)
     assert callable(preflight.summarize)

@@ -503,13 +503,15 @@ def _dispatch_write_index(src):
     """
     lines = _code_lines(src)
     candidates = [
-        i for i, ln in enumerate(lines) if "PIPELINE_BACKEND_DISPATCH=" in ln
+        i
+        for i, ln in enumerate(lines)
+        if "PIPELINE_BACKEND_DISPATCH=" in ln and "==>" not in ln
     ]
     for i in candidates:
         if _DISPATCH_WRITE_RE.search(lines[i]):
             return i
     for i in candidates:
-        if "$" in lines[i] and "==>" not in lines[i]:
+        if "$" in lines[i]:
             return i
     return None
 

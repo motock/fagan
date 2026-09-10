@@ -398,6 +398,9 @@ def test_advance_pipeline_real_git_fetch_failure_counts_attempt_and_notifies(
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
     monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    notes: list[str] = []
+    monkeypatch.setattr(p, "_notify_user",
+        lambda plan, msg, **kwargs: notes.append(msg))
 
     result = p.advance_pipeline("realfail")
 

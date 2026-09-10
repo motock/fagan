@@ -202,6 +202,51 @@ The adoptable specs this server exports live in `docs/specs/`:
 `ACCEPTANCE_ORACLE_PATTERN.md` (the acceptance-oracle grading pattern), and
 `DOCKER_SANDBOX.md` (the opt-in Docker sandboxing behavior).
 
+### Running standalone (dashboard + scheduler, no MCP server)
+
+The dashboard exposes the same operations as the MCP tools — save/ingest a
+plan, decompose a goal, dispatch a story, advance, review, approve merge — so
+the pipeline can run without registering an MCP server at all: drive it from
+the dashboard UI and let the scheduler advance ready stories on its own. The
+supported path is one command:
+
+```bash
+scripts/standalone-setup.sh up
+```
+
+`up` provisions a scratch data dir (default `~/pipeline-standalone`), writes
+the shared operator env file with absolute paths, starts the dashboard and the
+scheduler through their existing helper scripts, and then refuses to report
+success until `GET /api/health` answers with an empty `config_mismatch` and
+the intended `plan_dir`. Main options: `--data-dir DIR` (default
+`~/pipeline-standalone`), `--target-repo DIR` (default: a scratch repo under
+the data dir), `--port PORT` (default 8001), `--autonomy MODE` (default
+`dry-run`), plus `--repo-root` and `--force`. `down` stops both processes and
+leaves the scratch data in place; `status` prints the resolved paths and both
+processes' state.
+
+Both long-running processes read the same operator env file:
+`scripts/dashboard.sh` and `scripts/scheduler.sh` both source
+`.pipeline.env` (gitignored; see `.pipeline.env.example`) first, then
+`.dashboard.env` (gitignored; see `.dashboard.env.example`) second, so
+existing dashboard-only installs keep their current last-write precedence —
+`.dashboard.env` still works and simply overrides `.pipeline.env` where they
+overlap.
+
+Because the dashboard and the scheduler are separate processes, `PLAN_DIR`
+must match between the two: the scheduler writes a config fingerprint to
+`<plan_dir>/.scheduler_health.json`, and `/api/health` reports
+`config_mismatch` listing the fields where the dashboard's resolved config
+differs from that fingerprint. A non-empty `config_mismatch` means the UI and
+the scheduler are working different plan stores — check that both were
+started with the same `PLAN_DIR` (the standalone script writes one env file
+for exactly this reason, and fails hard on a non-empty `config_mismatch`).
+
+The normal prerequisites still apply in standalone mode: `gh auth login` for
+the PR/merge path (the pipeline opens and merges PRs through the GitHub CLI),
+and provider authorization for whichever backend is configured — see
+**Provider selection & authorization** above.
+
 ## Components at a glance
 
 | Piece | Location | Role |

@@ -791,18 +791,32 @@ class PipelineService:
     def get_worktree_file(self, story: dict[str, Any], filename: str) -> dict[str, Any]:
         return _store.get_worktree_file(story, filename)
 
+    _DECOMPOSE_JSON_RETRY_ATTEMPTS = 2
+
     def decompose_plan(self, request: str, workspace: str | None = None) -> dict[str, Any]:
         text, backend_error = _run_decompose_detailed(request)
-        if not text:
-            error = "decompose backend returned no output"
-            if backend_error:
-                error = f"{error} ({backend_error})"
-            return {"ok": False, "error": error}
-        candidate = _extract_json_block(text)
-        try:
-            plan = json.loads(candidate)
-        except json.JSONDecodeError as e:
-            return {"ok": False, "error": f"invalid JSON: {e}", "raw": text}
+        plan: Any = None
+        parse_error: json.JSONDecodeError | None = None
+        retries_left = PipelineService._DECOMPOSE_JSON_RETRY_ATTEMPTS - 1
+        while True:
+            if not text:
+                error = "decompose backend returned no output"
+                if backend_error:
+                    error = f"{error} ({backend_error})"
+                return {"ok": False, "error": error}
+            candidate = _extract_json_block(text)
+            try:
+                plan = json.loads(candidate)
+                parse_error = None
+                break
+            except json.JSONDecodeError as e:
+                parse_error = e
+                if retries_left <= 0:
+                    break
+                retries_left -= 1
+                text, backend_error = _run_decompose_detailed(request)
+        if parse_error is not None:
+            return {"ok": False, "error": f"invalid JSON: {parse_error}", "raw": text}
         if not isinstance(plan, dict) or not isinstance(plan.get("epics"), list):
             return {
                 "ok": False,

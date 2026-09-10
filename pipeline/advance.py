@@ -420,6 +420,15 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 free_device_slots -= 1
             try:
                 result = dispatch_story(plan_name, key)
+                if isinstance(result, dict) and result.get("ok") is False:
+                    # dispatch_story now returns a structured failure (e.g. a
+                    # git fetch/worktree-add error) instead of letting the
+                    # underlying subprocess.CalledProcessError escape as an
+                    # unhandled exception - re-raise here so this loop's
+                    # existing attempt-counting/failed-status/notify-user
+                    # handling below (unchanged) still triggers exactly as
+                    # it did when dispatch_story used to raise directly.
+                    raise RuntimeError(result.get("error", "dispatch failed"))
                 if not (isinstance(result, dict) and result.get("skipped")):
                     summary["dispatched"].append(key)
                 else:

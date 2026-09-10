@@ -134,27 +134,51 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         journal = _read_journal(plan_name, story_key) if resuming else []
 
         if not resuming:
-            with _scoped_repo_root(plan_name) as repo_root:
-                with _try_acquire_git_lock(repo_root) as acquired:
-                    if acquired:
-                        subprocess.run(
-                            ["git", "fetch", "origin", _default_branch()],
-                            cwd=repo_root,
-                            check=True,
-                        )
-                subprocess.run(
-                    [
-                        "git",
-                        "worktree",
-                        "add",
-                        "-b",
-                        branch,
-                        str(worktree_path),
-                        f"origin/{_default_branch()}",
-                    ],
-                    cwd=repo_root,
-                    check=True,
-                )
+            try:
+                with _scoped_repo_root(plan_name) as repo_root:
+                    with _try_acquire_git_lock(repo_root) as acquired:
+                        if acquired:
+                            subprocess.run(
+                                ["git", "fetch", "origin", _default_branch()],
+                                cwd=repo_root,
+                                check=True,
+                                capture_output=True,
+                                text=True,
+                            )
+                    subprocess.run(
+                        [
+                            "git",
+                            "worktree",
+                            "add",
+                            "-b",
+                            branch,
+                            str(worktree_path),
+                            f"origin/{_default_branch()}",
+                        ],
+                        cwd=repo_root,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+            except subprocess.CalledProcessError as e:
+                # A fresh dispatch's git setup (fetch + worktree add) can fail
+                # for reasons outside the story itself - e.g. repo_root has no
+                # usable 'origin' remote, or git can't authenticate. Left
+                # uncaught, this used to escape all the way to an unhandled
+                # 500 with an EMPTY body (no JSON), which broke every caller's
+                # response.json() with "Expecting value: line 1 column 1 (char
+                # 0)" - reproduced live twice via chat's dispatch_story tool
+                # call. Return a structured, actionable failure instead.
+                stderr = (e.stderr or "").strip()
+                detail = f": {stderr}" if stderr else ""
+                return {
+                    "ok": False,
+                    "error": (
+                        f"git setup failed for repo_root {str(repo_root)!r} "
+                        f"(command {' '.join(e.cmd)!r}, exit {e.returncode})"
+                        f"{detail}"
+                    ),
+                }
             _exclude_worktree_logs_from_tracking(Path(repo_root))
             # A fresh worktree has no .venv (gitignored) - give it its own
             # complete one now rather than let it fall back to (and

@@ -277,12 +277,15 @@ def test_resuming_dispatch_with_changes_requested_status_does_not_raise_or_touch
 
 
 # ---------- Negative / boundary cases ----------
-def test_fetch_failure_raises_and_never_creates_worktree(
+def test_fetch_failure_returns_ok_false_and_never_creates_worktree(
     plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
 ):
-    """origin unreachable -> `git fetch` exits non-zero -> check=True raises,
-    and the worktree-add step (and the worktree directory) must never be
-    reached."""
+    """origin unreachable -> `git fetch` exits non-zero -> caught and
+    surfaced as a structured {"ok": False, "error": ...} result instead of
+    an uncaught CalledProcessError (which used to escape all the way to an
+    unhandled 500 with an empty body - see pipeline/dispatch.py's
+    _dispatch_story_impl). The worktree-add step (and the worktree
+    directory) must still never be reached."""
     repo = tmp_path / "repo"
     _run(["git", "init", "-q", "-b", "main", str(repo)], tmp_path)
     _run(["git", "config", "user.email", "t@e.com"], repo)
@@ -300,19 +303,20 @@ def test_fetch_failure_raises_and_never_creates_worktree(
     monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
 
-    with pytest.raises(subprocess.CalledProcessError):
-        p.dispatch_story("fetchfail", "S1")
+    result = p.dispatch_story("fetchfail", "S1")
 
+    assert result["ok"] is False
+    assert "git setup failed" in result["error"]
     assert not (worktree_root / "S1").exists()
 
 
-def test_origin_branch_missing_raises_rather_than_creating_stale_worktree(
+def test_origin_branch_missing_returns_ok_false_rather_than_creating_stale_worktree(
     plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
 ):
     """origin exists and is reachable but has no ref for the branch dispatch
     is told to fetch (a misconfigured default branch) -> the fetch for that
-    specific ref fails -> raises, no worktree is silently created from
-    whatever stale state happened to be on disk."""
+    specific ref fails -> returns {"ok": False, ...}, no worktree is
+    silently created from whatever stale state happened to be on disk."""
     _origin, repo, _branch = _make_origin_and_repo(tmp_path, branch="main")
 
     _write_manifest(plan_dir, "badbranch", {
@@ -323,7 +327,92 @@ def test_origin_branch_missing_raises_rather_than_creating_stale_worktree(
     monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
 
-    with pytest.raises(subprocess.CalledProcessError):
-        p.dispatch_story("badbranch", "S1")
+    result = p.dispatch_story("badbranch", "S1")
 
+    assert result["ok"] is False
+    assert not (worktree_root / "S1").exists()
+
+
+def test_worktree_add_failure_returns_ok_false_not_raise(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    """fetch succeeds but `git worktree add` fails (branch name already
+    exists) -> also caught by the same try/except as the fetch failure,
+    returning {"ok": False, ...} rather than raising."""
+    _origin, repo, branch = _make_origin_and_repo(tmp_path)
+    # Pre-create the branch name dispatch_story will try to use, so
+    # `git worktree add -b agent/s1 ...` collides ("branch already exists").
+    _run(["git", "branch", "agent/s1", branch], repo)
+
+    _write_manifest(plan_dir, "wtaddfail", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    }, repo_root=repo)
+    monkeypatch.setattr(p, "_default_branch", lambda: branch)
+    monkeypatch.setattr(pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+
+    result = p.dispatch_story("wtaddfail", "S1")
+
+    assert result["ok"] is False
+    assert "git setup failed" in result["error"]
+    # The structured error must name the repo_root, the failing command and
+    # its exit code, and carry git's stderr - the stderr detail is only
+    # present when the subprocess.run calls capture output
+    # (capture_output=True, text=True); without it e.stderr is None and the
+    # detail is empty.
+    assert f"repo_root {str(repo)!r}" in result["error"]
+    assert "'git worktree add" in result["error"]
+    # git's exit code for a failed `worktree add` varies by version (128 on
+    # older gits, 255 on 2.55+); assert a nonzero exit is reported, not a
+    # specific one.
+    assert "exit 128" in result["error"] or "exit 255" in result["error"]
+    assert "already exists" in result["error"]
+    assert not (worktree_root / "S1").exists()
+
+
+def test_advance_pipeline_real_git_fetch_failure_counts_attempt_and_notifies(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    """Integration: a REAL git fetch failure (unreachable origin, exactly
+    the live-reproduced bug) reaching dispatch_story through a real
+    advance_pipeline tick - not a mocked-raising dispatch_story - must
+    still trigger the tick's existing attempt-counting/notify-user logic.
+    Proves the ok:False-to-raise conversion in the tick loop (Change 2)
+    actually wires up end to end, not just against a hand-written mock."""
+    repo = tmp_path / "repo"
+    _run(["git", "init", "-q", "-b", "main", str(repo)], tmp_path)
+    _run(["git", "config", "user.email", "t@e.com"], repo)
+    _run(["git", "config", "user.name", "t"], repo)
+    (repo / "f.txt").write_text("x\n")
+    _run(["git", "add", "-A"], repo)
+    _run(["git", "commit", "-qm", "init"], repo)
+    _run(["git", "remote", "add", "origin", "/nonexistent/path/does/not/exist"], repo)
+
+    _write_manifest(plan_dir, "realfail", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    }, repo_root=repo)
+    monkeypatch.setattr(p, "PIPELINE_AUTONOMY", "full")
+    monkeypatch.setattr(p, "DISPATCH_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    monkeypatch.setattr(pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
+    notes: list[str] = []
+    monkeypatch.setattr(p, "_notify_user",
+        lambda plan, msg, **kwargs: notes.append(msg))
+
+    result = p.advance_pipeline("realfail")
+
+    manifest = json.loads((plan_dir / "realfail.manifest.json").read_text())
+    story = manifest["stories"]["S1"]
+    assert story["status"] == "todo"
+    assert story["dispatch_attempts"] == 1
+    # attempts=1 < DISPATCH_MAX_ATTEMPTS=3, so the tick's RETRY branch runs:
+    # it never writes `dispatch_error` (only the give-up branch does), but it
+    # does notify the user with str(e) - the re-raised RuntimeError text,
+    # which carries dispatch_story's structured "git setup failed ..." error.
+    assert "dispatch_error" not in story
+    assert any("git setup failed" in m for m in notes), notes
+    assert "S1" in result["notify"]
     assert not (worktree_root / "S1").exists()

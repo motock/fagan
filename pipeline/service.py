@@ -17,6 +17,7 @@ every test run and break the patch targets).
 """
 
 import json
+import logging
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from pipeline.workspace import normalize_workspace_path, validate_workspace
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["PipelineService"]
 
@@ -904,7 +907,25 @@ class PipelineService:
             return {"ok": True, "story_key": story_key, "story": story}
 
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
-        return _dispatch_story_impl(plan_name, story_key)
+        try:
+            return _dispatch_story_impl(plan_name, story_key)
+        except ValueError:
+            # _validate_key's rejection of a malformed plan/story key (path
+            # traversal, disallowed characters) is a deliberate input-
+            # validation signal - see
+            # test_pipeline_mcp_server_review_role_registry.py's
+            # test_dispatch_story_rejects_traversal_plan_name/_story_key,
+            # which assert this raises ValueError. Let it keep propagating
+            # as-is; only genuinely unexpected failures below are converted.
+            raise
+        except Exception as e:
+            logger.exception(
+                "dispatch_story failed for plan=%s story=%s", plan_name, story_key
+            )
+            return {
+                "ok": False,
+                "error": f"dispatch failed: {type(e).__name__}: {e}",
+            }
 
     def review_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)

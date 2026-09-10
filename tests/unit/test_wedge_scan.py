@@ -291,13 +291,81 @@ def test_pid_is_alive_false_on_process_lookup_error(monkeypatch):
 def test_collect_signals_returns_the_two_documented_keys(plan_dir):
     """Master's collect_story_wedge_signals (dashboard-decoration story,
     8b11b51c, pipeline/wedge_io.py) returns pid_alive + activity_age_seconds
-    only -- no "sources" key. (Originally asserted a third "sources" key,
-    from this branch's own now-superseded inline duplicate of the gatherer;
-    that duplicate is dropped in favor of the shared wedge_io.py
-    implementation dashboard.py already depends on, so the test now pins
-    that implementation's actual, already-shipped return shape instead.)"""
+    + agent_done -- no "sources" key. (Originally asserted a third "sources"
+    key, from this branch's own now-superseded inline duplicate of the
+    gatherer; that duplicate is dropped in favor of the shared wedge_io.py
+    implementation dashboard.py already depends on, so the test pins that
+    implementation's return shape. The agent_done key is this story's
+    deliberate, requested contract change: the collector now reports whether
+    the worktree carries a .agent_done / .agent_done.consumed completion
+    marker so the verdict can spare finished agents the dead_pid reason.)"""
     sig = wedge_io.collect_story_wedge_signals(PLAN, None, {"status": "in_progress"})
-    assert set(sig) == {"pid_alive", "activity_age_seconds"}
+    assert set(sig) == {"pid_alive", "activity_age_seconds", "agent_done"}
+
+
+def test_collect_signals_docstring_documents_agent_done_key():
+    """CHANGE 1's docstring requirement: the 'Returns' description on
+    collect_story_wedge_signals must mention the new agent_done key
+    alongside pid_alive / activity_age_seconds."""
+    doc = wedge_io.collect_story_wedge_signals.__doc__ or ""
+    assert "agent_done" in doc, (
+        "collect_story_wedge_signals' Returns docstring must document the "
+        f"agent_done key; got: {doc!r}"
+    )
+
+
+def test_collect_signals_agent_done_true_when_marker_file_present(plan_dir):
+    """An unconsumed .agent_done marker in the worktree -> agent_done True
+    (pipeline/watchers.py's scan_done_markers renames it to .agent_done.consumed
+    only after processing, so its presence still proves a legitimate finish)."""
+    worktree = plan_dir / "wt_done"
+    worktree.mkdir()
+    (worktree / ".agent_done").write_text("{}")
+    sig = wedge_io.collect_story_wedge_signals(
+        PLAN, None, {"pid": 1, "worktree": str(worktree)}
+    )
+    assert sig["agent_done"] is True
+
+
+def test_collect_signals_agent_done_true_when_consumed_marker_present(plan_dir):
+    """An already-consumed .agent_done.consumed marker (processed on a prior
+    tick, still sitting in the worktree) -> agent_done True as well."""
+    worktree = plan_dir / "wt_done2"
+    worktree.mkdir()
+    (worktree / ".agent_done.consumed").write_text("{}")
+    sig = wedge_io.collect_story_wedge_signals(
+        PLAN, None, {"pid": 1, "worktree": str(worktree)}
+    )
+    assert sig["agent_done"] is True
+
+
+def test_collect_signals_agent_done_false_when_no_marker(plan_dir):
+    """A worktree with no completion marker -> agent_done False (the pid may
+    genuinely have died mid-work; the verdict must stay free to wedge it)."""
+    worktree = plan_dir / "wt_nodone"
+    worktree.mkdir()
+    sig = wedge_io.collect_story_wedge_signals(
+        PLAN, None, {"pid": 1, "worktree": str(worktree)}
+    )
+    assert sig["agent_done"] is False
+
+
+def test_scan_dead_pid_suppressed_when_agent_done_marker_present(plan_dir, monkeypatch):
+    """End-to-end wiring (run_wedge_scan -> wedge_verdict): a dead pid whose
+    worktree carries a .agent_done marker is NOT notified as wedged. Grades
+    the scan's agent_done=signals.get("agent_done", False) pass-through: with
+    the marker present the dead_pid reason must never fire, so the scan
+    emits nothing (activity is fresh -- no journal, no agent.log -- so
+    stale_activity cannot fire either)."""
+    worktree = plan_dir / "wt_scan_done"
+    worktree.mkdir()
+    (worktree / ".agent_done").write_text("{}")
+    story = _story(pid=12345, worktree=str(worktree))
+    _, emitted = _wedge_setup(monkeypatch, plan_dir, story)
+    monkeypatch.setattr(wedge_io, "_pid_is_alive", lambda pid: False)
+
+    assert wedge_io.run_wedge_scan(PLAN) == 0
+    assert emitted == []
 
 
 def test_collect_signals_pid_alive_none_without_int_pid(plan_dir, monkeypatch):

@@ -17,6 +17,10 @@ the environment, or reads a clock. Callers pass in
   own. Negative ages (future mtime / clock skew) are never reasons either.
 - ``stale_seconds``: threshold resolved by the caller from pipeline.config
   (WEDGE_STALE_ACTIVITY_SECONDS).
+- ``agent_done``: True when the story's worktree carries a completion marker
+  (``.agent_done`` or the already-consumed ``.agent_done.consumed``), proving
+  the agent process exited after a legitimate finish -- such a story is never
+  a ``dead_pid`` wedge, though ``stale_activity`` stays orthogonal.
 
 The verdict carries the measured reading next to the threshold so a
 mis-thresholded detector is diagnosable from its own output (see
@@ -40,6 +44,7 @@ def wedge_verdict(
     pid_alive: bool | None,
     activity_age_seconds: float | None,
     stale_seconds: int,
+    agent_done: bool = False,
 ) -> dict:
     """Return the wedged-story verdict for the given measurements.
 
@@ -52,7 +57,7 @@ def wedge_verdict(
     # collapsed by the caller's liveness check) is a wedge reason. `is False`
     # matters -- `if not pid_alive:` would wrongly fire for None (a story
     # that merely has no pid field), because `not None` is True.
-    if pid_alive is False:
+    if pid_alive is False and not agent_done:
         reasons.append("dead_pid")
 
     # Strictly greater: age exactly equal to the threshold is NOT wedged.
@@ -65,12 +70,22 @@ def wedge_verdict(
     # Deterministic output regardless of the order the checks fired in.
     reasons.sort()
 
+    # agent_done travels in measured only when it can actually change the
+    # verdict -- i.e. when the dead_pid gate consults it (pid_alive is
+    # False). For healthy or unknown-liveness stories the field would be
+    # constant noise, and the measured dict stays exactly
+    # {"pid_alive", "activity_age_seconds"} (the pinned healthy-story
+    # contract in tests/unit/test_wedge_verdict.py).
+    measured = {
+        "pid_alive": pid_alive,
+        "activity_age_seconds": activity_age_seconds,
+    }
+    if pid_alive is False:
+        measured["agent_done"] = agent_done
+
     return {
         "wedged": len(reasons) > 0,
         "reasons": reasons,
-        "measured": {
-            "pid_alive": pid_alive,
-            "activity_age_seconds": activity_age_seconds,
-        },
+        "measured": measured,
         "thresholds": {"stale_seconds": stale_seconds},
     }

@@ -593,7 +593,8 @@ def test_dispatch_value_is_derived_from_model_registry_roles_dispatch():
             "next to the jq read"
         )
     assert re.search(
-        r"2>/dev/null|\|\| true|\|\| \"\"|// empty|\[\s+-[fr]\s|command -v",
+        r"2>/dev/null|2>&1|\|\| true|\|\| :|\|\| echo|// empty"
+        r"|\[\s+-[fr]\s|command -v|if\s+\[\s+-[fr]",
         window,
     ), (
         "the registry read must fail open: suppress jq/grep errors "

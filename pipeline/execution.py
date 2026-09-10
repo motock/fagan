@@ -14,6 +14,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -160,12 +162,50 @@ def spawn_local(
 
     Behavior-identical to the existing driver spawn sites: the child inherits
     the log file descriptor, so writes continue after this function returns.
-    ``model`` stays empty here — the drivers set it after spawn, as today.
+    ``model`` stays empty here -- the drivers set it after spawn, as today.
+
+    Also writes a per-line ISO-8601 UTC timestamp sidecar at
+    ``str(log_path) + ".ts"`` (one line per agent.log line, same
+    append/truncate semantics as log_path) via a background daemon
+    thread draining the child's merged stdout+stderr. agent.log's own
+    bytes are unaffected -- only the write mechanism changed from a
+    raw fd redirect to a line-by-line relay, so every existing
+    consumer that scans agent.log's raw content (STEP_CAP_MARKERS,
+    INFRA_FAILURE_LOG_SUBSTRING, rebrief.py's anchored regexes,
+    wedge_io.py's mtime check) is unaffected. Note: this does mean
+    child output is now decoded as UTF-8 (errors="replace") rather
+    than passed through as raw bytes -- a deliberate, narrow trade-off
+    (agent CLIs emit UTF-8 text) required to timestamp lines at all.
     """
-    with open(log_path, "a" if append else "w") as log_file:
-        proc = subprocess.Popen(
-            cmd, cwd=cwd, env=env, stdout=log_file, stderr=log_file
-        )
+    mode = "a" if append else "w"
+    log_file = open(log_path, mode, encoding="utf-8", errors="replace")
+    ts_path = log_path.with_name(log_path.name + ".ts")
+    ts_file = open(ts_path, mode, encoding="utf-8")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+
+    def _drain() -> None:
+        try:
+            for line in proc.stdout:
+                log_file.write(line)
+                log_file.flush()
+                ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                ts_file.flush()
+        finally:
+            proc.stdout.close()
+            log_file.close()
+            ts_file.close()
+
+    threading.Thread(target=_drain, daemon=True).start()
     return AgentHandle(pid=proc.pid, model="")
 
 

@@ -337,6 +337,43 @@ def test_up_creates_plans_and_worktrees_directories():
         )
 
 
+def test_up_creates_agents_directory():
+    """<data-dir>/agents is mkdir -p'd, alongside plans and worktrees."""
+    src = _source()
+    line = _line_containing(src, "mkdir", "agents")
+    assert line is not None, (
+        "`up` must mkdir the 'agents' directory under the data dir"
+    )
+
+
+def test_up_provisions_agents_dir_from_repo_bundled_personas_non_destructively():
+    """The repo's bundled agents/*.md personas are copied into the
+    provisioned AGENTS_DIR, non-destructively (so a re-run never clobbers an
+    operator's already-customized personas), guarded on the source directory
+    existing - mirrors the README's manual `cp agents/*.md ~/.claude/agents/`
+    step, but scoped under DATA_DIR so a fresh install never depends on the
+    operator's global ~/.claude/agents/ already being populated (fixes:
+    every dispatch_story call failing with FileNotFoundError: No persona
+    named ... on a genuinely fresh machine, regardless of dispatch
+    backend)."""
+    src = _source()
+    cp_idx, cp_line = _find(src, r"\bcp\b.*agents.*\.md")
+    assert cp_line is not None, (
+        "`up` must copy the repo's bundled agents/*.md persona files into "
+        "the provisioned AGENTS_DIR"
+    )
+    assert "-n" in cp_line or "--no-clobber" in cp_line, (
+        "the persona copy must be non-destructive (cp -n / --no-clobber) so "
+        f"a re-run of `up` never overwrites a customized persona: {cp_line!r}"
+    )
+    lines = _code_lines(src)
+    guard_context = lines[max(0, cp_idx - 3) : cp_idx]
+    assert any(re.search(r"\bif\b|\[ -d", ln) for ln in guard_context), (
+        "the persona copy must be guarded by an existence test on the "
+        "repo's agents/ source directory"
+    )
+
+
 def test_up_creates_scratch_repo_only_when_target_repo_absent():
     """A scratch git repo is git-inited at <data-dir>/repo, guarded on
     --target-repo being unset."""
@@ -391,6 +428,40 @@ def test_env_file_writes_plan_dir_worktree_root_and_autonomy():
     ), (
         "the env keys must be written INTO .pipeline.env (redirect/tee/heredoc "
         "onto the env file)"
+    )
+
+
+def test_env_file_writes_agents_dir_absolute_no_tilde():
+    """AGENTS_DIR is written into .pipeline.env, absolute, no tilde -
+    mirrors PLAN_DIR/WORKTREE_ROOT's contract (CFG-D1)."""
+    src = _source()
+    line = _line_containing(src, "AGENTS_DIR=")
+    assert line is not None, (
+        "AGENTS_DIR must be written into .pipeline.env, alongside PLAN_DIR/"
+        "WORKTREE_ROOT/PIPELINE_AUTONOMY, so the dashboard and scheduler "
+        "processes launched by `up` resolve personas from the provisioned "
+        "data dir rather than falling back to the operator's global "
+        "~/.claude/agents/ default"
+    )
+    assert "~" not in line, (
+        f"AGENTS_DIR must be written as an absolute path, without a tilde "
+        f"(the sourced env file does no tilde expansion): {line!r}"
+    )
+
+
+def test_agents_dir_is_provisioned_before_both_processes_are_launched():
+    """AGENTS_DIR is written into .pipeline.env before dashboard.sh/
+    scheduler.sh run, same ordering contract as PLAN_DIR/WORKTREE_ROOT."""
+    src = _source()
+    agents_idx = _line_index(src, "AGENTS_DIR=")
+    dash_idx = _line_index(src, _DASHBOARD_SH)
+    sched_idx = _line_index(src, _SCHEDULER_SH)
+    assert None not in (agents_idx, dash_idx, sched_idx), "wiring anchors missing"
+    assert agents_idx < dash_idx, (
+        "AGENTS_DIR must be written before scripts/dashboard.sh is launched"
+    )
+    assert agents_idx < sched_idx, (
+        "AGENTS_DIR must be written before scripts/scheduler.sh is launched"
     )
 
 

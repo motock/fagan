@@ -71,8 +71,16 @@ Produce plans as JSON matching the pipeline's `save_plan` schema:
   reserve it only when pre-specifying the exact acceptance test, not as a
   place for prose criteria.
 
-- `persona` — which SDLC role should implement this story (`software-engineer`,
-  `solution-architect`, `mobile-engineer`, `security-engineer`, etc.).
+- `persona` — which SDLC role should implement this story. Choose EXACTLY one
+  of the personas that actually exist as dispatchable agents (anything else
+  fails at dispatch time with `FileNotFoundError: No persona named ... `,
+  deep inside `_build_dispatch_command` — this has happened live): `software-engineer`,
+  `solution-architect`, `mobile-engineer`, `mobile-architect`,
+  `security-engineer`, `qa-test-engineer`, `tech-writer`,
+  `devops-release-engineer`, `ux-mobile-principal`, `code-reviewer`.
+  Default to `software-engineer` for ordinary backend/API/service/library work —
+  there is no separate "backend-engineer" or "frontend-engineer" persona.
+  Never invent a persona name outside this list.
 - `model` — `opus` | `sonnet` | `haiku`. Default to `sonnet`; reserve `opus` for
   judgment-heavy or security-sensitive stories; `haiku` for docs/trivial.
 - `risk` — `low` | `medium` | `high`. Mark anything irreversible, security-,

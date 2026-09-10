@@ -625,6 +625,23 @@ def get_story_replay(
             # A wiped/empty log contributes nothing: it is not a source
             # (no empty list is passed on) and does not flip available.
             continue
+        if name == "agent.log":
+            # AGENTLOGTS-1's sidecar: one ISO-8601 timestamp per
+            # agent.log line, same order. Zip the matching tail of it
+            # onto `tail` so build_replay_events' existing
+            # _split_leading_timestamp parses real timestamps instead
+            # of rendering every line as an untimed event. Fail open:
+            # a missing/short/corrupt sidecar (older worktree from
+            # before this feature, or a story this format never
+            # reached) leaves `tail` exactly as it is today.
+            ts_res = _store.get_worktree_file(story, "agent.log.ts")
+            if ts_res["available"]:
+                ts_lines = ts_res["text"].splitlines()
+                ts_tail = ts_lines[-len(tail):]
+                if len(ts_tail) == len(tail):
+                    tail = [
+                        f"{ts} {line}" for ts, line in zip(ts_tail, tail)
+                    ]
         source_flags[name] = True
         log_sources[name] = tail
     events = build_replay_events(entries, log_sources)

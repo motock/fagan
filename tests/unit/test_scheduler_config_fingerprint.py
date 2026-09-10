@@ -120,14 +120,12 @@ def test_health_keys_are_exactly_the_pinned_six():
 
 
 def test_write_health_json_has_health_keys_plus_config(tmp_path):
-    """write_health() emits exactly the six health keys health() returns.
+    """write_health() emits the six health keys plus the config fingerprint.
 
-    Review round 2 ruled the round-trip contract is the invariant:
-    ``json.load(file) == daemon.health()``. The config fingerprint is an
-    in-process surface (``config_fingerprint()``) and is deliberately NOT
-    merged into the file payload — merging it broke the round-trip equality
-    pinned by test_scheduler_daemon.py, which no implementation could satisfy
-    alongside health()'s pinned six-key set.
+    Corrected contract (CFG-B5): the file payload is ``health()`` plus a
+    ``"config"`` key equal to ``config_fingerprint()`` — exactly the six
+    pinned health keys and nothing else. ``health()`` itself still returns
+    exactly the six keys; only the file gains ``config``.
     """
     daemon = _make_daemon()
     path = tmp_path / "health.json"
@@ -136,29 +134,31 @@ def test_write_health_json_has_health_keys_plus_config(tmp_path):
         data = json.load(fh)
     for key in _HEALTH_KEYS:
         assert key in data, f"write_health() dropped health key {key!r}"
-    assert data == daemon.health(), (
-        "write_health() must serialize exactly health() (round-trip "
-        "contract); got extra keys "
-        f"{sorted(set(data) - set(daemon.health()))}"
+    assert "config" in data, "write_health() must include the config fingerprint"
+    assert data["config"] == daemon.config_fingerprint(), (
+        "write_health()'s config key must match config_fingerprint()"
+    )
+    assert set(data.keys()) == set(_HEALTH_KEYS) | {"config"}, (
+        "write_health() must emit exactly the six health keys plus "
+        f"'config'; got {sorted(data.keys())}"
     )
 
 
 def test_write_health_config_matches_config_fingerprint(tmp_path):
-    """config_fingerprint() is intact and NOT leaked into the health file.
+    """config_fingerprint() is written into the health file under "config".
 
-    The fingerprint stays available in-process; the file payload is exactly
-    health() (round-trip contract, review round 2).
+    Corrected contract (CFG-B5): the fingerprint is no longer in-process
+    only — write_health() merges it into the file payload so the dashboard's
+    /api/health can compare it against its own resolution.
     """
     daemon = _make_daemon()
     path = tmp_path / "health.json"
     daemon.write_health(str(path))
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
-    assert data == daemon.health()
-    assert "config" not in data, (
-        "the fingerprint must not leak into the health file payload"
-    )
+    assert "config" in data, "config_fingerprint() must be in the health file"
     fingerprint = daemon.config_fingerprint()
+    assert data["config"] == fingerprint
     assert set(_FINGERPRINT_KEYS) <= set(fingerprint)
 
 

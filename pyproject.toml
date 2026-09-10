@@ -49,6 +49,10 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
 # from tests/unit/_dashboard_helpers.py and use them as test-function
 # parameters.
 "tests/unit/test_dashboard_*.py" = ["F811"]
+# Same fixture-sharing pattern as above: the CFG-B5 wiring test imports the
+# client pytest fixture from tests/unit/_dashboard_helpers.py and uses it as
+# a test-function parameter.
+"tests/unit/test_scheduler_dashboard_fingerprint_wiring.py" = ["F811"]
 # Same fixture-sharing pattern as above: test_backend.py was split into
 # test_backend_*.py files that import the _clean_transport_env pytest
 # fixture from tests/unit/_backend_helpers.py and use it as a test-function

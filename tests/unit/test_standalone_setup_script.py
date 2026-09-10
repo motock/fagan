@@ -540,6 +540,14 @@ def test_env_file_writes_pipeline_backend_dispatch_inside_env_block():
         f'lands in the same >"$ENV_FILE" redirect (write at code line '
         f"{write_idx}, closer at {closer_idx})"
     )
+    gap = closer_idx - autonomy_idx
+    assert gap <= 4, (
+        "keep the derivation (jq/grep read, guard, status echo) BEFORE the "
+        "brace block and echo only the single PIPELINE_BACKEND_DISPATCH line "
+        "inside it: the sibling env-keys adjacency contract tolerates at most "
+        f"3 extra code lines between the PIPELINE_AUTONOMY echo and the "
+        f'}} >"$ENV_FILE" closer (gap={gap})'
+    )
     line = _code_lines(src)[write_idx]
     assert _DISPATCH_WRITE_RE.search(line), (
         "the written value must be quoted and variable-derived, never a "

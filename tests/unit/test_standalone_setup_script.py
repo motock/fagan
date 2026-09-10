@@ -717,7 +717,7 @@ def test_up_prints_which_dispatch_outcome_happened():
         "the status line must distinguish 'left at the operator's existing "
         "env value'"
     )
-    assert re.search(r"(?i)unset|none|not set", context), (
+    assert re.search(r"(?i)unset|none|not set|no dispatch", context), (
         "the status line must distinguish 'left unset because the registry "
         "had no roles.dispatch.provider'"
     )

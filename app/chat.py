@@ -13,7 +13,7 @@ import tempfile
 from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 
@@ -46,6 +46,28 @@ _SYSTEM_PROMPT_PREFIX = (
 )
 _FINAL_SENTENCE = "Call tools to gather information, then provide a natural-language reply."
 
+
+
+def _resolve_chat_api_base_url(request: Request | None = None) -> str | None:
+    """Resolve ChatService's internal api_base_url for one /api/chat call.
+
+    An explicit PIPELINE_CHAT_API_BASE env var always wins (an operator's
+    deliberate override -- e.g. a reverse-proxied deployment where the
+    browser's own host:port is not the correct address for server-to-server
+    calls). Otherwise, when a real incoming `request` is available, derive
+    the base URL from it (request.base_url) -- this is what makes chat's
+    internal tool calls self-correct to whatever host/port the dashboard is
+    ACTUALLY bound to, instead of ChatService's own hardcoded
+    127.0.0.1:8000 fallback. Returns None (falls through to ChatService's
+    own default) when neither is available -- e.g. a plain Python call with
+    no request object, as several existing tests make directly.
+    """
+    override = os.environ.get("PIPELINE_CHAT_API_BASE")
+    if override:
+        return override
+    if request is not None:
+        return str(request.base_url).rstrip("/")
+    return None
 
 
 def _resolve_tool_url(http_client, api_base_url: str, path: str) -> str:
@@ -527,11 +549,12 @@ chat_router = APIRouter()
 @chat_router.post("/chat", response_model=ChatResponse)
 def chat_endpoint(
     req: ChatRequest,
+    request: Request = None,
     x_pipeline_api_key: str | None = Header(default=None, alias="x-pipeline-api-key"),
 ) -> ChatResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
-    svc = ChatService(api_key=x_pipeline_api_key)
+    svc = ChatService(api_key=x_pipeline_api_key, api_base_url=_resolve_chat_api_base_url(request))
     result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace)
     return ChatResponse(**result)
 

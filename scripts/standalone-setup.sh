@@ -129,6 +129,18 @@ expand_data_dir() {
   esac
 }
 
+# Absolutise DATA_DIR for the read-only subcommands (down/status), exactly the
+# way `up` resolves it — but WITHOUT mkdir: a relative --data-dir re-resolves
+# against each invocation's cwd, so state written by `up` would otherwise
+# become invisible to `down`/`status` run from another directory, and `down`
+# would report success while signalling nothing.
+resolve_data_dir_readonly() {
+  expand_data_dir
+  if ! DATA_DIR="$(cd "$DATA_DIR" 2>/dev/null && pwd)"; then
+    die "data dir not found: $DATA_DIR"
+  fi
+}
+
 resolve_data_dir() {
   expand_data_dir
   mkdir -p "$DATA_DIR"
@@ -173,9 +185,13 @@ cmd_up() {
     echo "==> backed up existing env file to $BACKUP"
   fi
   {
-    echo "PLAN_DIR=$PLAN_DIR"
-    echo "WORKTREE_ROOT=$WORKTREE_ROOT"
-    echo "PIPELINE_AUTONOMY=$AUTONOMY"
+    # Values are quoted: this file is sourced with `set -a`, and an unquoted
+    # value containing spaces (e.g. --data-dir "/tmp/dash state") would be
+    # parsed as an assignment prefix plus a bogus command name, silently
+    # truncating the path downstream.
+    echo "PLAN_DIR=\"$PLAN_DIR\""
+    echo "WORKTREE_ROOT=\"$WORKTREE_ROOT\""
+    echo "PIPELINE_AUTONOMY=\"$AUTONOMY\""
   } >"$ENV_FILE"
   echo "==> wrote $ENV_FILE"
 
@@ -210,7 +226,15 @@ cmd_up() {
 verify_health() {
   local health_url="http://127.0.0.1:${PORT}/api/health"
   local key
-  key="$("$VENV_PY" -c 'from app.auth import get_or_create_api_key; print(get_or_create_api_key())')"
+  # The venv does NOT install the `app` package (install.sh only pip-installs
+  # requirements*.txt; pyproject's pythonpath=["."] is pytest-only), so a bare
+  # `"$VENV_PY" -c 'from app.auth import ...'` resolves `app` via the CALLER's
+  # cwd: from anywhere but the repo root, `up` dies with ModuleNotFoundError
+  # after both processes are already running — or silently reads a foreign
+  # checkout's key.  Force cwd to $REPO_ROOT; a PYTHONPATH prefix alone would
+  # not suffice, because for `python -c` the cwd (sys.path[0]) precedes
+  # PYTHONPATH, so a foreign checkout's app/ would still shadow $REPO_ROOT.
+  key="$(cd "$REPO_ROOT" && "$VENV_PY" -c 'from app.auth import get_or_create_api_key; print(get_or_create_api_key())')"
 
   local resp=""
   local attempts=60
@@ -270,7 +294,13 @@ stop_recorded_pid() {
 
 cmd_down() {
   resolve_repo_root
-  expand_data_dir
+  resolve_data_dir_readonly
+  # `down` must never report success while signalling nothing: if `up` never
+  # recorded a pid here (wrong data dir, or the dir was never provisioned),
+  # fail loudly instead of printing the success banner.
+  if [ ! -f "$DATA_DIR/dashboard.pid" ] && [ ! -f "$DATA_DIR/scheduler.pid" ]; then
+    die "no pid files under $DATA_DIR — \`up\` never recorded a dashboard or scheduler there; nothing to stop"
+  fi
   echo "stopping dashboard"
   stop_recorded_pid "$DATA_DIR/dashboard.pid"
   echo "stopping scheduler"
@@ -283,7 +313,7 @@ cmd_down() {
 # --------------------------------------------------------------------------- #
 cmd_status() {
   resolve_repo_root
-  expand_data_dir
+  resolve_data_dir_readonly
   echo "repo root:     $REPO_ROOT"
   echo "data dir:      $DATA_DIR"
   echo "plan dir:      $DATA_DIR/plans"
@@ -318,6 +348,15 @@ main() {
   local cmd="$1"
   shift
   parse_options "$@"
+
+  # Fail fast on invalid input, before anything is started or written.
+  case "$PORT" in
+    ''|*[!0-9]*) die "--port must be numeric: $PORT" ;;
+  esac
+  if [ -n "$TARGET_REPO" ] && [ ! -d "$TARGET_REPO/.git" ]; then
+    die "--target-repo must be an existing git repo: $TARGET_REPO"
+  fi
+
   case "$cmd" in
     up) cmd_up ;;
     down) cmd_down ;;

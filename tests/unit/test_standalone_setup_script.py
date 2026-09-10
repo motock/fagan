@@ -38,9 +38,10 @@ line; satisfy them in the cheapest way that keeps the script correct):
 * ``down`` stops both processes and says the scratch data stays put;
   ``status`` prints the resolved paths and both processes' state.
 
-RED state: scripts/standalone-setup.sh does not exist yet, so every test fails
-with an explicit "TDD RED" message.  That is the intended TDD state, not a bug
-in this suite.
+Status: scripts/standalone-setup.sh exists and every test in this module
+passes (the two review-regression probes at the bottom were RED when added
+and went GREEN once the script's cwd-independent key lookup and `down`
+fail-loud behaviour landed).
 """
 
 import re

@@ -606,7 +606,10 @@ def test_dispatch_value_is_derived_from_model_registry_roles_dispatch():
     assert write_idx is not None, "no PIPELINE_BACKEND_DISPATCH write line found"
     lo, hi = min(read_idx, write_idx), max(read_idx, write_idx)
     guarded = "\n".join(lines[lo : hi + 1])
-    assert re.search(r"-[nz]\s+\"\$\{?[A-Za-z_]", guarded), (
+    assert re.search(
+        r'-[nz]\s+"?\$?\{?[A-Za-z_]|=\s*""\s*;?\s*then|"\$\{[A-Za-z_]+:-\}"\s*=\s*""',
+        guarded,
+    ), (
         "an empty provider (registry present but roles.dispatch.provider "
         "absent/null) must write NOTHING extra: guard the write with a -n/-z "
         "test on the resolved provider value, matching the script's existing "

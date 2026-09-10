@@ -216,6 +216,42 @@ def test_healthy_in_progress_story_gets_explicit_wedged_false(
     assert wedge["measured"]["activity_age_seconds"] == 5.0
 
 
+def test_dead_pid_with_agent_done_true_is_not_wedged_in_response(
+    client, plan_dir, wedged_setup, monkeypatch
+):
+    """End-to-end: the collector reporting agent_done=True with a dead pid
+    must yield an explicitly NOT-wedged story in the response (the finished
+    agent is spared the dead_pid reason), and the measured reading travels
+    with agent_done so the dashboard verdict is diagnosable from its own
+    output."""
+    calls: list[str] = []
+    _stub_collector(
+        monkeypatch,
+        {
+            "S1": {
+                "pid_alive": False,
+                "activity_age_seconds": None,
+                "agent_done": True,
+            }
+        },
+        calls,
+    )
+    _write_manifest(
+        plan_dir,
+        PLAN,
+        {"S1": {"summary": "finished", "status": "in_progress", "pid": 999}},
+    )
+
+    res = client.get(f"/api/plans/{PLAN}")
+
+    assert res.status_code == 200
+    wedge = res.json()["stories"]["S1"]["wedge"]
+    assert wedge["wedged"] is False
+    assert wedge["reasons"] == []
+    assert wedge["measured"]["agent_done"] is True
+    assert wedge["measured"]["pid_alive"] is False
+
+
 def test_healthy_story_at_exact_threshold_is_not_wedged(
     client, plan_dir, wedged_setup, monkeypatch
 ):

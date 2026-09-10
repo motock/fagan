@@ -142,11 +142,16 @@ def test_wedge_verdict_signature_and_annotations():
         "pid_alive",
         "activity_age_seconds",
         "stale_seconds",
+        "agent_done",
     ]
     hints = get_type_hints(wedge_verdict)
     assert hints.get("pid_alive") == bool | None
     assert hints.get("activity_age_seconds") == float | None
     assert hints.get("stale_seconds") is int
+    assert hints.get("agent_done") is bool
+    # The 4th parameter defaults to False so every existing 3-positional-arg
+    # call site keeps today's behavior unchanged.
+    assert signature.parameters["agent_done"].default is False
 
 
 # ---------- result shape ----------

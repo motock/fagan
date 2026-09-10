@@ -22,7 +22,8 @@ surfaces are patched to raise before calling the function).
 Contract under test:
 - returns {"wedged": bool, "reasons": list[str], "measured": {...},
   "thresholds": {"stale_seconds": stale_seconds}};
-- pid_alive False -> reason "dead_pid";
+- pid_alive False with agent_done False -> reason "dead_pid"; agent_done
+  True suppresses exactly that reason and nothing else;
 - activity_age_seconds > stale_seconds (strictly greater; equal is NOT wedged)
   -> reason "stale_activity"; negative age (future mtime / clock skew) is
   never a reason;

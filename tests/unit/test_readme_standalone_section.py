@@ -288,7 +288,7 @@ def test_dashboard_mcp_parity_documented() -> None:
     lines = _readme_lines()
     fenced = _fenced_line_numbers(lines)
     section = "\n".join(_standalone_section_lines(lines, fenced))
-    assert re.search(r"same\s+(operations|tools|actions)", section, re.I), (
+    assert re.search(r"same\s+(operations|tools|actions)", section, re.IGNORECASE), (
         "the standalone section must say the dashboard exposes the same "
         "operations as the MCP tools"
     )

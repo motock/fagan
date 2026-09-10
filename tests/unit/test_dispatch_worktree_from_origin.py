@@ -405,6 +405,11 @@ def test_advance_pipeline_real_git_fetch_failure_counts_attempt_and_notifies(
     story = manifest["stories"]["S1"]
     assert story["status"] == "todo"
     assert story["dispatch_attempts"] == 1
-    assert "git setup failed" in story.get("dispatch_error", "")
+    # attempts=1 < DISPATCH_MAX_ATTEMPTS=3, so the tick's RETRY branch runs:
+    # it never writes `dispatch_error` (only the give-up branch does), but it
+    # does notify the user with str(e) - the re-raised RuntimeError text,
+    # which carries dispatch_story's structured "git setup failed ..." error.
+    assert "dispatch_error" not in story
+    assert any("git setup failed" in m for m in notes), notes
     assert "S1" in result["notify"]
     assert not (worktree_root / "S1").exists()

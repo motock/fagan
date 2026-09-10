@@ -19,6 +19,8 @@ for _key in list(os.environ):
     if _key.startswith(_ISOLATED_ENV_PREFIXES):
         del os.environ[_key]
 
+# CFG env bootstrap: pipeline/__init__.py reads <repo_root>/.pipeline.env at import time; this opt-out makes that loader inert for the whole pytest run so a developer's repo-root file (e.g. PLAN_DIR written by CFG-D2's standalone-setup.sh) never leaks into the suite. Set AFTER the scrub loop above (it deletes every PIPELINE_* key) and before any pipeline import can occur.
+os.environ["PIPELINE_SKIP_ENV_FILE"] = "1"
 
 @pytest.fixture(autouse=True)
 def _isolate_environ():

@@ -246,17 +246,35 @@ verify_health() {
 # --------------------------------------------------------------------------- #
 # `down`: stop both processes, keep the scratch data
 # --------------------------------------------------------------------------- #
+stop_recorded_pid() {
+  # Only ever signal a pid recorded in OUR pidfile under the data dir — never
+  # a pattern match, which could hit an operator's unrelated dashboard.
+  local pidfile="$1"
+  [ -f "$pidfile" ] || return 0
+  local pid
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  [ -n "$pid" ] || return 0
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    # Give the process a moment to exit, then escalate to SIGKILL.
+    local waited=0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 5 ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+}
+
 cmd_down() {
   resolve_repo_root
   expand_data_dir
   echo "stopping dashboard"
-  if [ -f "$DATA_DIR/dashboard.pid" ]; then
-    kill "$(cat "$DATA_DIR/dashboard.pid" 2>/dev/null)" 2>/dev/null || true
-  fi
+  stop_recorded_pid "$DATA_DIR/dashboard.pid"
   echo "stopping scheduler"
-  if [ -f "$DATA_DIR/scheduler.pid" ]; then
-    kill "$(cat "$DATA_DIR/scheduler.pid" 2>/dev/null)" 2>/dev/null || true
-  fi
+  stop_recorded_pid "$DATA_DIR/scheduler.pid"
   echo "standalone down; scratch data kept in place at $DATA_DIR (not deleted)"
 }
 

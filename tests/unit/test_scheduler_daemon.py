@@ -474,7 +474,7 @@ def test_write_health_produces_file_that_round_trips_to_health_dict(tmp_path):
     assert path.exists()
     with open(path) as fh:
         on_disk = json.load(fh)
-    assert on_disk == f.daemon.health()
+    assert on_disk == {**f.daemon.health(), "config": f.daemon.config_fingerprint()}
 
 
 def test_write_health_leaves_no_tmp_file(tmp_path):
@@ -551,7 +551,7 @@ def test_run_once_writes_health_file_when_health_path_configured(tmp_path):
 
     with open(path) as fh:
         on_disk = json.load(fh)
-    assert on_disk == f.daemon.health()
+    assert on_disk == {**f.daemon.health(), "config": f.daemon.config_fingerprint()}
 
 
 def test_run_once_writes_no_file_when_health_path_is_none(tmp_path):

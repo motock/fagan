@@ -174,16 +174,17 @@ class SchedulerDaemon:
 
         The file is written to ``<path>.tmp`` first and then moved into place
         with :func:`os.replace` for atomicity.
+
+        The file payload is ``{**health(), "config": config_fingerprint()}``:
+        the six pinned health keys plus the config fingerprint this process
+        resolved, so the dashboard's ``/api/health`` (and the preflight
+        divergence check) can compare it against their own resolution.
+        ``health()`` itself still returns exactly its pinned six-key set —
+        the ``config`` key exists only in the file.
         """
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as fh:
-            # Review round 2: the payload is exactly health(). The round-trip
-            # contract pinned by test_write_health_produces_file_that_round_
-            # trips_to_health_dict is json.load(file) == daemon.health(), and
-            # health() must keep its pinned six-key set. The config
-            # fingerprint stays available in-process via config_fingerprint()
-            # and is deliberately NOT merged into the file payload.
-            json.dump(self.health(), fh)
+            json.dump({**self.health(), "config": self.config_fingerprint()}, fh)
         os.replace(tmp_path, path)
 
     def _scan_with_watchdog(self, scan_fn):

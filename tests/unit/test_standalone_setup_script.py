@@ -35,8 +35,19 @@ line; satisfy them in the cheapest way that keeps the script correct):
   asserts ``plan_dir`` equals the intended path, and treats a non-empty
   ``config_mismatch`` as fatal: non-zero exit, message naming the diverging
   fields, and NO success banner in that branch;
-* ``down`` stops both processes and says the scratch data stays put;
-  ``status`` prints the resolved paths and both processes' state.
+ * ``down`` stops both processes and says the scratch data stays put;
+   ``status`` prints the resolved paths and both processes' state.
+ * ``up`` derives PIPELINE_BACKEND_DISPATCH from model_registry.json's
+   ``.roles.dispatch.provider`` (jq if available, grep/sed or the existing
+   ``$VENV_PY -c`` style as fallback) and writes it -- quoted, like every
+   value here -- into the SAME brace block, AFTER the PIPELINE_AUTONOMY line
+   and BEFORE ``} >"$ENV_FILE"``; the write is guarded by a set-u-safe
+   ``${PIPELINE_BACKEND_DISPATCH:-}`` emptiness test so an operator's own
+   exported value always wins, and a missing/unreadable/provider-less
+   registry silently writes nothing extra (fail open -- no die/exit near the
+   derivation); one ``==> `` status line says which of the three outcomes
+   happened (registry / operator's env / unset).  The env-first resolution
+   in pipeline/dispatch.py is out of scope and must not change.
 
 Status: scripts/standalone-setup.sh exists and every test in this module
 passes (the two review-regression probes at the bottom were RED when added
@@ -462,6 +473,275 @@ def test_agents_dir_is_provisioned_before_both_processes_are_launched():
     )
     assert agents_idx < sched_idx, (
         "AGENTS_DIR must be written before scripts/scheduler.sh is launched"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# PIPELINE_BACKEND_DISPATCH: `up` derives the dispatch backend from
+# model_registry.json's roles.dispatch.provider and writes it into the SAME
+# env-writing brace block -- unless the operator already exported their own
+# PIPELINE_BACKEND_DISPATCH, which always wins.  Source-text probes only, like
+# everything above: the runtime check (registry provider "ollama", env unset,
+# `up` -> .pipeline.env contains PIPELINE_BACKEND_DISPATCH="ollama") is
+# verified by hand per the story brief; this suite pins the source contract
+# that produces it.  AGENTSPROV-1's AGENTS_DIR provisioning is a sibling
+# story's work and has its own probes above -- these tests never pin the env
+# block's total contents, only membership/ordering against fixed anchors.
+# --------------------------------------------------------------------------- #
+_DISPATCH_WRITE_RE = re.compile(r'PIPELINE_BACKEND_DISPATCH=\\?"[$%]')
+
+
+def _dispatch_write_index(src):
+    """Index (into code lines) of the line WRITING PIPELINE_BACKEND_DISPATCH
+    into the env file, else None.
+
+    The written value must be quoted and variable-derived (the block's own
+    comment explains why every value is quoted), so the primary probe demands
+    a (possibly backslash-escaped) double quote followed by a `$` expansion --
+    which also rules out a hardcoded provider name; a printf '%s' form matches
+    via the `%` arm of the character class.
+    """
+    lines = _code_lines(src)
+    candidates = [
+        i
+        for i, ln in enumerate(lines)
+        if "PIPELINE_BACKEND_DISPATCH=" in ln and "==>" not in ln
+    ]
+    for i in candidates:
+        if _DISPATCH_WRITE_RE.search(lines[i]):
+            return i
+    for i in candidates:
+        if "$" in lines[i]:
+            return i
+    return None
+
+
+def test_env_file_writes_pipeline_backend_dispatch_inside_env_block():
+    """PIPELINE_BACKEND_DISPATCH is written into .pipeline.env inside the same
+    brace block: after the PIPELINE_AUTONOMY line, before } >"$ENV_FILE."""
+    src = _source()
+    autonomy_idx = _line_index(src, "PIPELINE_AUTONOMY=")
+    closer_idx = _line_index(src, '>"$ENV_FILE"')
+    write_idx = _dispatch_write_index(src)
+    assert autonomy_idx is not None, "the PIPELINE_AUTONOMY write line is missing"
+    assert closer_idx is not None, 'the } >"$ENV_FILE" block closer is missing'
+    assert write_idx is not None, (
+        "cmd_up() never writes PIPELINE_BACKEND_DISPATCH into .pipeline.env; "
+        "echo it into the env-writing brace block, quoted and derived from the "
+        "registry (see the sibling PLAN_DIR/WORKTREE_ROOT/PIPELINE_AUTONOMY/"
+        "AGENTS_DIR echoes for the exact style)"
+    )
+    assert autonomy_idx < write_idx, (
+        "PIPELINE_BACKEND_DISPATCH must be written after the PIPELINE_AUTONOMY "
+        "line in the env block"
+    )
+    assert write_idx < closer_idx, (
+        "PIPELINE_BACKEND_DISPATCH must be echoed INSIDE the brace block so it "
+        f'lands in the same >"$ENV_FILE" redirect (write at code line '
+        f"{write_idx}, closer at {closer_idx})"
+    )
+    gap = closer_idx - autonomy_idx
+    assert gap <= 4, (
+        "keep the derivation (jq/grep read, guard, status echo) BEFORE the "
+        "brace block and echo only the single PIPELINE_BACKEND_DISPATCH line "
+        "inside it: the sibling env-keys adjacency contract tolerates at most "
+        f"3 extra code lines between the PIPELINE_AUTONOMY echo and the "
+        f'}} >"$ENV_FILE" closer (gap={gap})'
+    )
+    line = _code_lines(src)[write_idx]
+    assert _DISPATCH_WRITE_RE.search(line), (
+        "the written value must be quoted and variable-derived, never a "
+        f"hardcoded provider name (mirror echo \"KEY=\\\"$VAR\\\"\")): {line!r}"
+    )
+
+
+def test_dispatch_value_is_derived_from_model_registry_roles_dispatch():
+    """The written value is READ from model_registry.json's
+    .roles.dispatch.provider, never hardcoded."""
+    src = _source()
+    lines = _code_lines(src)
+    read_idx = next(
+        (
+            i
+            for i, ln in enumerate(lines)
+            if "roles.dispatch" in ln and "==>" not in ln
+        ),
+        None,
+    )
+    if read_idx is None:
+        # A grep/sed fallback has no dotted jq path; it targets the same
+        # "dispatch"/"provider" keys inside model_registry.json instead.
+        read_idx = next(
+            (
+                i
+                for i, ln in enumerate(lines)
+                if "model_registry" in ln
+                and '"dispatch"' in ln
+                and "provider" in ln
+                and "==>" not in ln
+            ),
+            None,
+        )
+    assert read_idx is not None, (
+        "the dispatch value must be read from model_registry.json's "
+        "roles.dispatch.provider (jq path `.roles.dispatch.provider`, or a "
+        'grep/sed over the same "dispatch"/"provider" keys) -- a hardcoded '
+        "backend name would desync the script from the registry"
+    )
+    window = "\n".join(lines[max(0, read_idx - 4) : read_idx + 5])
+    assert "model_registry" in window, (
+        "the roles.dispatch lookup must target model_registry.json (no "
+        f"model_registry reference near code line {read_idx})"
+    )
+    if "jq" in window:
+        assert re.search(r"\bgrep\b|\bsed\b|VENV_PY|python", window), (
+            "jq is not guaranteed to be installed (verify_health deliberately "
+            "parses JSON with the venv python, 'no jq dependency'): keep a "
+            "fallback (grep/sed one-liner or the existing $VENV_PY -c style) "
+            "next to the jq read"
+        )
+    assert re.search(
+        r"2>/dev/null|2>&1|\|\| true|\|\| :|\|\| echo|// empty"
+        r"|\[\s+-[fr]\s|command -v|if\s+\[\s+-[fr]",
+        window,
+    ), (
+        "the registry read must fail open: suppress jq/grep errors "
+        "(2>/dev/null, || true, jq's // empty) or pre-test the file "
+        "(-f/-r/command -v) so a missing, unreadable or malformed "
+        "model_registry.json writes nothing extra instead of killing `up`"
+    )
+    write_idx = _dispatch_write_index(src)
+    assert write_idx is not None, "no PIPELINE_BACKEND_DISPATCH write line found"
+    lo, hi = min(read_idx, write_idx), max(read_idx, write_idx)
+    guarded = "\n".join(lines[lo : hi + 1])
+    assert re.search(
+        r'-[nz]\s+"?\$?\{?[A-Za-z_]|=\s*""\s*;?\s*then|"\$\{[A-Za-z_]+:-\}"\s*=\s*""',
+        guarded,
+    ), (
+        "an empty provider (registry present but roles.dispatch.provider "
+        "absent/null) must write NOTHING extra: guard the write with a -n/-z "
+        "test on the resolved provider value, matching the script's existing "
+        "[ -n ... ] style"
+    )
+
+
+def test_operator_env_value_wins_over_registry_default():
+    """NEGATIVE/boundary: an operator-exported PIPELINE_BACKEND_DISPATCH is
+    never silently overridden -- the write is conditional on a set-u-safe
+    emptiness test of the operator's own value, placed before the write."""
+    src = _source()
+    lines = _code_lines(src)
+    guard_idx = None
+    for i, ln in enumerate(lines):
+        if re.search(r"\$\{PIPELINE_BACKEND_DISPATCH:-", ln) or re.search(
+            r'\[\s+-[nz]\s+"\$PIPELINE_BACKEND_DISPATCH\s*"', ln
+        ):
+            guard_idx = i
+            break
+    assert guard_idx is not None, (
+        "the write must be conditional on the operator's own environment: test "
+        "${PIPELINE_BACKEND_DISPATCH:-} (the script runs under `set -euo "
+        "pipefail`, so a bare $PIPELINE_BACKEND_DISPATCH would abort under "
+        "set -u when the variable is unset) before writing the "
+        "registry-derived value"
+    )
+    write_idx = _dispatch_write_index(src)
+    assert write_idx is not None, "no PIPELINE_BACKEND_DISPATCH write line found"
+    assert guard_idx <= write_idx, (
+        "the operator-env guard must run BEFORE (or on the same line as, via "
+        f"||) the registry-derived write (guard at code line {guard_idx}, "
+        f"write at {write_idx}) so an explicit operator choice always wins "
+        "over the convenience default"
+    )
+
+
+def test_dispatch_derivation_never_kills_up_on_registry_problems():
+    """NEGATIVE: a missing, unreadable or provider-less model_registry.json
+    must silently write nothing extra -- no die/exit anywhere near the
+    derivation (the default-to-claude fallback in pipeline/dispatch.py is
+    legitimate for a genuinely unconfigured install and must not become an
+    error here)."""
+    src = _source()
+    lines = _code_lines(src)
+    anchors = [i for i, ln in enumerate(lines) if "model_registry" in ln]
+    write_idx = _dispatch_write_index(src)
+    if write_idx is not None:
+        anchors.append(write_idx)
+    assert anchors, (
+        "no dispatch-derivation anchors found (model_registry reference / "
+        "write line) -- the derivation this story adds is missing entirely"
+    )
+    for i in anchors:
+        window = "\n".join(lines[max(0, i - 2) : i + 3])
+        assert not re.search(r"\b(die|exit)\b", window), (
+            "the dispatch derivation must fail open: no die/exit may sit near "
+            f"the registry read or the write (code line {i}):\n{window}"
+        )
+
+
+def test_dispatch_write_happens_before_both_processes_are_launched():
+    """Same ordering contract as PLAN_DIR/WORKTREE_ROOT/AGENTS_DIR: the
+    registry-derived value is in the env file before dashboard.sh and
+    scheduler.sh source it."""
+    src = _source()
+    write_idx = _dispatch_write_index(src)
+    dash_idx = _line_index(src, _DASHBOARD_SH)
+    sched_idx = _line_index(src, _SCHEDULER_SH)
+    assert None not in (write_idx, dash_idx, sched_idx), "wiring anchors missing"
+    assert write_idx < dash_idx, (
+        "PIPELINE_BACKEND_DISPATCH must be written before scripts/dashboard.sh "
+        "is launched"
+    )
+    assert write_idx < sched_idx, (
+        "PIPELINE_BACKEND_DISPATCH must be written before scripts/scheduler.sh "
+        "is launched"
+    )
+
+
+def test_up_prints_which_dispatch_outcome_happened():
+    """One `==> ` status line says which of the three outcomes happened:
+    set from the registry / left at the operator's existing env value / left
+    unset because the registry had no roles.dispatch.provider."""
+    src = _source()
+    lines = _code_lines(src)
+    status_idx = [
+        i
+        for i, ln in enumerate(lines)
+        if "==>" in ln and "PIPELINE_BACKEND_DISPATCH" in ln
+    ]
+    assert status_idx, (
+        'print one `echo "==> ..."` status line naming PIPELINE_BACKEND_DISPATCH '
+        "so a user watching `up` run can see which outcome happened (mirrors "
+        'the existing `echo "==> wrote $ENV_FILE"` verbosity)'
+    )
+    context = "\n".join(
+        "\n".join(lines[max(0, i - 3) : i + 4]) for i in status_idx
+    )
+    assert re.search(r"(?i)registr", context), (
+        "the status line must distinguish 'set from model_registry.json' "
+        "(name the registry)"
+    )
+    assert re.search(r"(?i)operator|existing|already", context), (
+        "the status line must distinguish 'left at the operator's existing "
+        "env value'"
+    )
+    assert re.search(r"(?i)unset|none|not set|no dispatch", context), (
+        "the status line must distinguish 'left unset because the registry "
+        "had no roles.dispatch.provider'"
+    )
+
+
+def test_dispatch_py_env_first_resolution_stays_intact():
+    """Tripwire (out-of-scope guard): this story only makes standalone-setup.sh
+    populate the env var on a fresh install; the env-first dispatch resolution
+    in pipeline/dispatch.py is deliberate and must not be touched."""
+    dispatch_py = _REPO_ROOT / "pipeline" / "dispatch.py"
+    assert dispatch_py.exists(), "pipeline/dispatch.py is missing"
+    assert "PIPELINE_BACKEND_DISPATCH" in dispatch_py.read_text(encoding="utf-8"), (
+        "pipeline/dispatch.py no longer references PIPELINE_BACKEND_DISPATCH; "
+        "if the env-first resolution moved elsewhere, re-point this tripwire -- "
+        "but do NOT change the resolution priority as part of the "
+        "standalone-setup story"
     )
 
 

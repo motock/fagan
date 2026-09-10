@@ -190,6 +190,22 @@ cmd_up() {
   fi
   echo "==> provisioned personas: $AGENTS_DIR"
 
+  # PIPELINE_BACKEND_DISPATCH: an explicit operator env var always wins;
+  # otherwise default from model_registry.json roles.dispatch.provider;
+  # fail open (write nothing extra) if the registry is missing/unreadable
+  # or has no roles.dispatch.provider.  The operator's value is captured
+  # once from the live shell environment (never from a previous run's
+  # .pipeline.env), so run N's written value can never go sticky.
+  local _dispatch_operator="${PIPELINE_BACKEND_DISPATCH:-}"
+  local _dispatch_provider=""
+  if [ -z "$_dispatch_operator" ]; then
+    if command -v jq >/dev/null 2>&1; then
+      _dispatch_provider="$(jq -r '.roles.dispatch.provider // empty' "$REPO_ROOT/model_registry.json" 2>/dev/null || true)"
+    else
+      _dispatch_provider="$(sed -n '/"dispatch"/,/}/ { s/.*"provider"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p; }' "$REPO_ROOT/model_registry.json" 2>/dev/null | head -n 1 || true)"
+    fi
+  fi
+
   PLAN_DIR="$DATA_DIR/plans"
   WORKTREE_ROOT="$DATA_DIR/worktrees"
 
@@ -208,8 +224,16 @@ cmd_up() {
     echo "WORKTREE_ROOT=\"$WORKTREE_ROOT\""
     echo "PIPELINE_AUTONOMY=\"$AUTONOMY\""
     echo "AGENTS_DIR=\"$AGENTS_DIR\""
+    [ -n "$_dispatch_provider" ] && echo "PIPELINE_BACKEND_DISPATCH=\"$_dispatch_provider\"" || true
   } >"$ENV_FILE"
   echo "==> wrote $ENV_FILE"
+  if [ -n "$_dispatch_operator" ]; then
+    echo "==> PIPELINE_BACKEND_DISPATCH kept from operator's environment (${_dispatch_operator})"
+  elif [ -n "$_dispatch_provider" ]; then
+    echo "==> PIPELINE_BACKEND_DISPATCH set from model_registry.json roles.dispatch.provider (${_dispatch_provider})"
+  else
+    echo "==> PIPELINE_BACKEND_DISPATCH left unset (no roles.dispatch.provider in model_registry.json)"
+  fi
 
   # Both helper scripts source scripts/pipeline-env.sh, which sources the env
   # file written above with `set -a`, so both pick up PLAN_DIR /

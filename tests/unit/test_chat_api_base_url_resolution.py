@@ -300,3 +300,58 @@ def test_chat_service_init_still_accepts_optional_api_base_url_keyword():
 def test_resolve_tool_url_signature_untouched():
     sig = inspect.signature(chat_mod._resolve_tool_url)
     assert list(sig.parameters)[:2] == ["http_client", "api_base_url"]
+
+
+# ---------------------------------------------------------------------------
+# 5. SSRF regression: a client-supplied Host header must NOT be able to steer
+#    the internal call target.  In Starlette 1.6.0, URL(scope=...) prefers the
+#    client-supplied ``Host`` header over the ASGI ``server`` entry, so
+#    ``request.base_url`` is attacker-controlled when uvicorn is run directly
+#    with no TrustedHostMiddleware.  The internal call target must come from
+#    ``scope["server"]`` (+ ``scope["scheme"]``), never from client headers.
+# ---------------------------------------------------------------------------
+
+
+def _make_request_with_host_header(
+    host_header: bytes,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    scheme: str = "http",
+) -> StarletteRequest:
+    """Same shape as _make_request, but the client sends a Host header."""
+    scope = {
+        "type": "http",
+        "scheme": scheme,
+        "server": (host, port),
+        "path": "/api/chat",
+        "headers": [(b"host", host_header)],
+        "query_string": b"",
+    }
+    return StarletteRequest(scope)
+
+
+def test_client_supplied_host_header_cannot_redirect_internal_calls(monkeypatch):
+    """Attacker POSTs /api/chat with ``Host: evil.example:9999``.
+
+    uvicorn is bound to 127.0.0.1:8000, so ``scope["server"]`` is
+    ("127.0.0.1", 8000).  The resolved internal base URL must be
+    ``http://127.0.0.1:8000`` -- the pre-fix code returned
+    ``http://evil.example:9999`` here (request.base_url honours the Host
+    header), which made every internal tool call -- carrying the shared
+    ``X-Pipeline-Api-Key`` -- hit the attacker-chosen host.
+    """
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    attacker_request = _make_request_with_host_header(b"evil.example:9999")
+    resolved = chat_mod._resolve_chat_api_base_url(attacker_request)
+    assert resolved == "http://127.0.0.1:8000"
+    assert "evil.example" not in resolved
+
+
+def test_benign_scope_without_host_header_resolves_to_same_loopback_target(monkeypatch):
+    """Immediately after the attacker's request, a legitimate request with an
+    empty header list still has scope["server"] == ("127.0.0.1", 8000) and must
+    resolve to the SAME target -- resolution is per-request, so nothing from
+    the attacker's Host header may survive into it."""
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    benign_request = _make_request(host="127.0.0.1", port=8000)
+    assert chat_mod._resolve_chat_api_base_url(benign_request) == "http://127.0.0.1:8000"

@@ -117,7 +117,8 @@ def collect_story_wedge_signals(plan_name: str, story_key: str, story: dict) -> 
     """Measure one story's wedge signals. Read-only; never raises.
 
     Returns ``{"pid_alive": bool | None, "activity_age_seconds": float |
-    None}`` (see module docstring for the three-valued semantics).
+    None, "agent_done": bool}`` (see module docstring for the three-valued
+    semantics).
     """
     pid = story.get("pid")
     is_int_pid = isinstance(pid, int) and not isinstance(pid, bool)
@@ -148,9 +149,18 @@ def collect_story_wedge_signals(plan_name: str, story_key: str, story: dict) -> 
     else:
         activity_age_seconds = now - newest_mtime
 
+    agent_done = False
+    if isinstance(worktree, str) and worktree:
+        wt = Path(worktree)
+        agent_done = (
+            (wt / ".agent_done").exists()
+            or (wt / ".agent_done.consumed").exists()
+        )
+
     return {
         "pid_alive": pid_alive,
         "activity_age_seconds": activity_age_seconds,
+        "agent_done": agent_done,
     }
 
 
@@ -231,7 +241,10 @@ def run_wedge_scan(plan_name: str) -> int:
             continue
         signals = collect_story_wedge_signals(plan_name, story_key, story)
         verdict = wedge_verdict(
-            signals["pid_alive"], signals["activity_age_seconds"], stale_threshold
+            signals["pid_alive"],
+            signals["activity_age_seconds"],
+            stale_threshold,
+            agent_done=signals.get("agent_done", False),
         )
         if not verdict["wedged"]:
             continue

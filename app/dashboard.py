@@ -412,6 +412,7 @@ def get_plan(plan_name: str) -> dict[str, Any]:
                     signals["pid_alive"],
                     signals["activity_age_seconds"],
                     WEDGE_STALE_ACTIVITY_SECONDS,
+                    agent_done=signals.get("agent_done", False),
                 )
                 decorated_stories[story_key]["wedge"] = {
                     "wedged": verdict["wedged"],

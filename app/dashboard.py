@@ -408,11 +408,20 @@ def get_plan(plan_name: str) -> dict[str, Any]:
         if story.get("status") == "in_progress":
             try:
                 signals = collect_story_wedge_signals(plan_name, story_key, story)
+                # Forward the completion-marker flag only when the collector
+                # reports it: legacy 2-key signal dicts keep the exact
+                # 3-argument wedge_verdict call pinned by the decoration
+                # contract (tests/unit/test_dashboard_wedge_decoration.py).
+                extra_kwargs = (
+                    {"agent_done": signals["agent_done"]}
+                    if "agent_done" in signals
+                    else {}
+                )
                 verdict = wedge_verdict(
                     signals["pid_alive"],
                     signals["activity_age_seconds"],
                     WEDGE_STALE_ACTIVITY_SECONDS,
-                    agent_done=signals.get("agent_done", False),
+                    **extra_kwargs,
                 )
                 decorated_stories[story_key]["wedge"] = {
                     "wedged": verdict["wedged"],

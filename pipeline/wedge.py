@@ -70,13 +70,22 @@ def wedge_verdict(
     # Deterministic output regardless of the order the checks fired in.
     reasons.sort()
 
+    # agent_done travels in measured only when it can actually change the
+    # verdict -- i.e. when the dead_pid gate consults it (pid_alive is
+    # False). For healthy or unknown-liveness stories the field would be
+    # constant noise, and the measured dict stays exactly
+    # {"pid_alive", "activity_age_seconds"} (the pinned healthy-story
+    # contract in tests/unit/test_wedge_verdict.py).
+    measured = {
+        "pid_alive": pid_alive,
+        "activity_age_seconds": activity_age_seconds,
+    }
+    if pid_alive is False:
+        measured["agent_done"] = agent_done
+
     return {
         "wedged": len(reasons) > 0,
         "reasons": reasons,
-        "measured": {
-            "pid_alive": pid_alive,
-            "activity_age_seconds": activity_age_seconds,
-            "agent_done": agent_done,
-        },
+        "measured": measured,
         "thresholds": {"stale_seconds": stale_seconds},
     }

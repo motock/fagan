@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -46,6 +47,23 @@ def _poll_log(log_path: Path, marker: str | None = None) -> str:
             if content.strip():
                 return content
         elif marker in content:
+            return content
+        time.sleep(_POLL_INTERVAL_SECONDS)
+    return content
+
+
+def _poll_log_line_count(log_path: Path, expected_lines: int) -> str:
+    """Poll log_path until it has at least `expected_lines` non-empty lines,
+    then return the content. Returns last-seen content on timeout so the
+    caller's assertion failure shows what actually landed."""
+    deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
+    content = ""
+    while time.monotonic() < deadline:
+        try:
+            content = log_path.read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+        if len([ln for ln in content.splitlines() if ln.strip()]) >= expected_lines:
             return content
         time.sleep(_POLL_INTERVAL_SECONDS)
     return content
@@ -183,6 +201,239 @@ class TestSpawnLocal:
         content = _poll_log(log_path, "absent")
         assert "absent" in content
         assert "ambient-value" not in content
+
+    def test_writes_a_ts_sidecar_file_with_one_line_per_log_line(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+
+        execution.spawn_local(
+            [sys.executable, "-c", "print('a'); print('b')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        content = _poll_log(log_path, "b")
+        assert content.splitlines() == ["a", "b"]
+        ts_path = tmp_path / "spawn.log.ts"
+        ts_lines = _poll_log(ts_path).splitlines()
+        assert len(ts_lines) == 2
+
+    def test_ts_sidecar_lines_are_parseable_iso8601(self, tmp_path):
+        from datetime import datetime
+        log_path = tmp_path / "spawn.log"
+
+        execution.spawn_local(
+            [sys.executable, "-c", "print('hi')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        _poll_log(log_path, "hi")
+        ts_content = _poll_log(tmp_path / "spawn.log.ts")
+        line = ts_content.splitlines()[0]
+        datetime.fromisoformat(line)  # raises if unparseable
+
+    def test_ts_sidecar_append_false_truncates_existing_sidecar(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+        ts_path = tmp_path / "spawn.log.ts"
+        ts_path.write_text("stale-ts-line\n", encoding="utf-8")
+
+        execution.spawn_local(
+            [sys.executable, "-c", "print('fresh')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        _poll_log(log_path, "fresh")
+        ts_content = _poll_log(ts_path)
+        assert "stale-ts-line" not in ts_content
+
+    def test_ts_sidecar_append_true_appends_to_existing_sidecar(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+        log_path.write_text("first line\n", encoding="utf-8")
+        ts_path = tmp_path / "spawn.log.ts"
+        ts_path.write_text("2020-01-01T00:00:00+00:00\n", encoding="utf-8")
+
+        execution.spawn_local(
+            [sys.executable, "-c", "print('second line')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=True,
+        )
+
+        _poll_log(log_path, "second line")
+        ts_content = _poll_log(ts_path)
+        assert "2020-01-01T00:00:00+00:00" in ts_content
+        assert len(ts_content.splitlines()) == 2
+
+    def test_ts_sidecar_timestamps_are_utc_with_explicit_zero_offset(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+
+        execution.spawn_local(
+            [sys.executable, "-c", "print('utc-probe')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        _poll_log(log_path, "utc-probe")
+        ts_content = _poll_log_line_count(tmp_path / "spawn.log.ts", 1)
+        parsed = datetime.fromisoformat(ts_content.splitlines()[0])
+        assert parsed.tzinfo is not None, "timestamp must be tz-aware, not naive"
+        assert parsed.utcoffset() == timedelta(0), "timestamp must be UTC (zero offset)"
+
+    def test_ts_sidecar_line_count_matches_agent_log_line_count(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+
+        execution.spawn_local(
+            [sys.executable, "-c", "print('l1'); print('l2'); print('l3')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        log_content = _poll_log(log_path, "l3")
+        ts_content = _poll_log_line_count(tmp_path / "spawn.log.ts", 3)
+        assert len(log_content.splitlines()) == 3
+        assert len(ts_content.splitlines()) == 3
+
+    def test_ts_sidecar_order_matches_log_line_order(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+
+        execution.spawn_local(
+            [sys.executable, "-c", "print('first'); print('second')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        log_lines = _poll_log(log_path, "second").splitlines()
+        ts_lines = _poll_log_line_count(tmp_path / "spawn.log.ts", 2).splitlines()
+        assert log_lines == ["first", "second"]
+        assert len(ts_lines) == 2
+        first_ts = datetime.fromisoformat(ts_lines[0])
+        second_ts = datetime.fromisoformat(ts_lines[1])
+        assert first_ts <= second_ts, "timestamps must follow log-line order"
+
+    def test_ts_sidecar_created_empty_when_child_writes_nothing(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+
+        execution.spawn_local(
+            [sys.executable, "-c", "pass"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        ts_path = tmp_path / "spawn.log.ts"
+        deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
+        while time.monotonic() < deadline and not ts_path.exists():
+            time.sleep(_POLL_INTERVAL_SECONDS)
+        assert ts_path.exists(), "sidecar must exist even with zero child output"
+        assert ts_path.read_text(encoding="utf-8") == ""
+
+    def test_ts_sidecar_replaces_invalid_utf8_bytes_without_raising(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+
+        execution.spawn_local(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(b'bad:\\xff\\n')",
+            ],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        content = _poll_log_line_count(log_path, 1)
+        assert "bad:" in content
+        try:
+            strict = log_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            strict = None
+        assert strict is not None, "agent.log must be valid UTF-8 (errors='replace')"
+        assert "\ufffd" in strict, "invalid child bytes must decode as U+FFFD"
+        ts_content = _poll_log_line_count(tmp_path / "spawn.log.ts", 1)
+        assert len(ts_content.splitlines()) == 1
+
+    def test_stderr_output_is_relayed_and_timestamped_too(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+
+        execution.spawn_local(
+            [sys.executable, "-c", "import sys; sys.stderr.write('err-line\\n')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        content = _poll_log(log_path, "err-line")
+        assert "err-line" in content
+        ts_content = _poll_log_line_count(tmp_path / "spawn.log.ts", 1)
+        assert len(ts_content.splitlines()) == 1
+
+    def test_ts_sidecar_path_is_derived_from_log_path_in_nested_dir(self, tmp_path):
+        log_dir = tmp_path / "worktree"
+        log_dir.mkdir()
+        log_path = log_dir / "agent.log"
+
+        execution.spawn_local(
+            [sys.executable, "-c", "print('nested')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        _poll_log(log_path, "nested")
+        ts_content = _poll_log_line_count(log_dir / "agent.log.ts", 1)
+        assert len(ts_content.splitlines()) == 1
+
+    def test_spawn_local_returns_before_child_output_is_relayed(self, tmp_path):
+        log_path = tmp_path / "spawn.log"
+
+        handle = execution.spawn_local(
+            [sys.executable, "-c", "import time; time.sleep(1.0); print('late')"],
+            cwd=tmp_path,
+            log_path=log_path,
+            append=False,
+        )
+
+        assert isinstance(handle, backend_types.AgentHandle)
+        assert handle.pid > 0
+        early = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        assert "late" not in early, "spawn_local must not block on the drain loop"
+
+        content = _poll_log(log_path, "late")
+        assert "late" in content
+
+    def test_drain_relay_uses_background_daemon_thread_not_fd_redirect(self):
+        fn_src = inspect.getsource(execution.spawn_local)
+        assert "threading.Thread" in fn_src
+        assert "daemon=True" in fn_src
+        assert "subprocess.PIPE" in fn_src
+        assert "stderr=subprocess.STDOUT" in fn_src
+        assert "datetime.now(timezone.utc)" in fn_src
+        assert "stdout=log_file" not in fn_src
+        assert "stderr=log_file" not in fn_src
+
+    def test_module_imports_threading_and_utc_datetime(self):
+        source = Path(execution.__file__).read_text(encoding="utf-8")
+        assert re.search(r"^import threading$", source, re.MULTILINE) is not None
+        assert (
+            re.search(r"^from datetime import datetime, timezone$", source, re.MULTILINE)
+            is not None
+        )
+
+    def test_spawn_local_signature_unchanged(self):
+        sig = inspect.signature(execution.spawn_local)
+        assert list(sig.parameters) == ["cmd", "cwd", "log_path", "append", "env"]
+        assert sig.parameters["cmd"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        for name in ("cwd", "log_path", "append", "env"):
+            assert sig.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        assert sig.parameters["env"].default is None
+        assert _annotation_name(sig.return_annotation) == "AgentHandle"
 
 
 class TestResolveExecutionMode:

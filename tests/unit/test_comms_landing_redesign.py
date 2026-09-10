@@ -97,7 +97,12 @@ _UNCHANGED_JS_SHA256 = {
     # _renderConfigRoles() wires a change listener on each .edit-provider
     # select. main.js is legitimately no longer byte-identical to this
     # story's pre-implementation baseline.
-    MAIN_JS: "560db6bab8f4c15b8e821fb6404d3f4ff4dec3fb4e8539289c69770033202737",
+    # Re-pinned for the config-mismatch banner story (CFG-E4, 962fbde):
+    # that story's whole job was to surface a dashboard/scheduler config
+    # divergence in the UI, so main.js gained the fetchHealth import plus a
+    # self-contained checkConfigMismatch() helper (guarded, fail-soft) and
+    # one boot-sequence call. No Comms-related code was touched.
+    MAIN_JS: "7532d6acb387650dcff7ea6be0c03944a1d09efad0900e23b3dd097d6d6a547f",
 }
 
 EXPECTED_CHIP_MESSAGES = {

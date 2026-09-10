@@ -54,7 +54,13 @@ COMMS_JS = STATIC_DIR / "app" / "comms.js"
 # #workspace-picker gained a "workspace-picker" class; all IDs this test
 # suite and test_app_workspace_picker.mjs check for are unchanged. Still
 # never touched comms.js or any Comms-related markup.
-INDEX_HTML_SHA256 = "2ee2ef22673d7aa362e690978eb4f01977fe42e417aec2d15ea22e31e3eca87b"
+# Re-pinned for the config-mismatch banner story (CFG-E4, 962fbde): that
+# story's whole job was to surface a dashboard/scheduler config divergence
+# in the UI, so static/index.html gained one hidden
+# <div id="config-mismatch-banner" class="config-mismatch-banner hidden"
+# role="alert"></div> immediately after the usage-banner div (the
+# usage-banner precedent). No Comms-related markup was touched.
+INDEX_HTML_SHA256 = "cfbfe3486128520a6d942f4938d697f34ecc910360fdf58cda344bb5f4669ed8"
 # Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that story's
 # whole job was to inject the dashboard shared secret into the served HTML, so
 # static/index.html gained the <!--PIPELINE_API_KEY--> placeholder marker

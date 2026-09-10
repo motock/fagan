@@ -35,4 +35,11 @@ async function fetchGuardLiveness() {
   return fetchJson("/api/guard-liveness");
 }
 
-export { fetchJson, postJson, fetchPlanMetrics, fetchGuardLiveness };
+// Health endpoint (CFG-B3): reports the canonical plan dir and flags a
+// dashboard/scheduler config mismatch. Same fetchJson idiom — auth header
+// injected, throws on non-OK so callers can fail soft.
+async function fetchHealth() {
+  return fetchJson("/api/health");
+}
+
+export { fetchJson, postJson, fetchPlanMetrics, fetchGuardLiveness, fetchHealth };

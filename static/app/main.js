@@ -33,6 +33,28 @@ import { renderOverview, _diffOverviewPlanRows } from "./render/overview.js";
 import { renderToolTraceHtml, appendCommsMessage, sendCommsMessage, updateCommsSubtitle, resetCommsThread } from "./comms.js";
 import { fetchWorkspaces, selectWorkspace, fetchActiveWorkspace, renderWorkspacePicker } from "./workspace.js";
 import { renderUsage } from "./usage.js";
+import { fetchHealth } from "./api.js";
+
+// CFG-E4: surface a dashboard/scheduler config divergence on load. Fail
+// soft: the health check is detached from the refresh() data chain and
+// swallows its own errors, so an unreachable /api/health never blocks
+// the dashboard from rendering — the banner simply stays hidden.
+async function checkConfigMismatch() {
+  const banner = document.getElementById("config-mismatch-banner");
+  if (!banner) return;
+  try {
+    const health = await fetchHealth();
+    const config_mismatch = health && health.config_mismatch;
+    if (Array.isArray(config_mismatch) && config_mismatch.length > 0) {
+      banner.textContent =
+        `Config mismatch: the dashboard and the scheduler are working ` +
+        `different plan stores (differing fields: ${config_mismatch.join(", ")}).`;
+      banner.classList.remove("hidden");
+    }
+  } catch {
+    /* /api/health unreachable or erroring — banner stays hidden */
+  }
+}
 
 // plan-list.js/plan-detail.js/story-modal.js/notifications.js can't
 // statically import back from app.js (see their own comments on this)
@@ -336,6 +358,7 @@ loadFilters();
 applyHashToState();
 window.addEventListener("hashchange", applyHashToState);
 refresh();
+checkConfigMismatch();
 startPolling();
 
 // Expose helpers for node-based smoke tests. Guarded so the file still works

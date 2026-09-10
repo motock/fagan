@@ -302,7 +302,7 @@ def test_pipeline_runs_without_registering_an_mcp_server() -> None:
     assert re.search(
         r"without registering|no MCP server|without the MCP|without an MCP",
         section,
-        re.I,
+        re.IGNORECASE,
     ), (
         "the standalone section must say the pipeline can run without "
         "registering an MCP server at all"

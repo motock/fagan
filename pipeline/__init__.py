@@ -27,6 +27,14 @@ def _load_env_file(repo_root: str | os.PathLike[str], environ: dict[str, str]) -
 
     - Opt-out: ``PIPELINE_SKIP_ENV_FILE=1`` in the REAL process environment
       makes this a no-op (the ``environ`` argument is only the write target).
+      Skip wins over the override below: skip means skip.
+    - Path override: ``PIPELINE_ENV_FILE`` in the ``environ`` argument names an
+      explicit env file to load INSTEAD of ``<repo_root>/.pipeline.env``. This
+      lets an operator keep the env file OUTSIDE the repo (launchd/standalone
+      case) and lets tests point at per-test files instead of the shared repo
+      root. Unset or empty means the default repo-root lookup. A named file
+      that does not exist loads nothing: no fallback to the repo-root file,
+      no exception.
     - Never raises: a missing, unreadable or malformed file leaves ``environ``
       completely untouched. The file is parsed in full before any key is
       copied, so a broken file cannot inject a partial set of keys.
@@ -42,9 +50,19 @@ def _load_env_file(repo_root: str | os.PathLike[str], environ: dict[str, str]) -
         # avoids any circular import (env_file imports nothing from pipeline).
         from pipeline import env_file
 
-        env_path = env_file.find_env_file(repo_root)
-        if env_path is None:
-            return
+        # Explicit-path override (CFG-E2): read from the ``environ`` argument
+        # (the mapping being populated), NOT os.environ, so callers and tests
+        # can scope it. Unset/empty -> default repo-root lookup; a named file
+        # that does not exist loads NOTHING (no fallback, no raise).
+        override = environ.get("PIPELINE_ENV_FILE")
+        if override:
+            if not os.path.isfile(override):
+                return
+            env_path = override
+        else:
+            env_path = env_file.find_env_file(repo_root)
+            if env_path is None:
+                return
         # Parse the WHOLE file into a dict before touching environ: a
         # malformed or unreadable file must leave the environment completely
         # unchanged (no partial injection).

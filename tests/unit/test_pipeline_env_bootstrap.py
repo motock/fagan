@@ -27,9 +27,15 @@ The real end-to-end behaviour is proven via SUBPROCESS runs with
 ``PIPELINE_SKIP_ENV_FILE`` unset, simulating a launchd-style bare
 ``python -m pipeline.scheduler_daemon`` launch.
 
-Cleanup: every repo-root ``.pipeline.env`` these tests create is removed (or a
-pre-existing developer file restored) in fixture teardown, even on failure —
-a leaked file would corrupt every later test run.
+xdist safety: NO test in this module creates, modifies or deletes any file in
+the repo root. The suite runs under ``-n auto`` (pytest-xdist), which
+distributes these tests across worker processes; a shared repo-root
+``.pipeline.env`` would be created/overwritten/deleted by racing workers —
+one worker deleting the file another worker's subprocess is about to read
+(the CFG-E2 merge-gate failure). Env files live only under per-test
+``tmp_path`` and are selected via the ``PIPELINE_ENV_FILE`` override. The
+default (no-override) repo-root lookup is still exercised by passing
+``tmp_path`` AS the ``repo_root`` argument to the loader directly.
 """
 
 import importlib
@@ -78,30 +84,15 @@ def _child_env():
     }
 
 
-@pytest.fixture
-def repo_env_file():
-    """Install a repo-root .pipeline.env; remove/restore it on teardown.
+def _write_env_file(tmp_path, content):
+    """Write .pipeline.env under tmp_path and return its path.
 
-    Restores a pre-existing developer file byte-for-byte instead of deleting
-    it, and registers the target BEFORE writing so even a mid-write failure
-    gets cleaned up.
+    tmp_path is pytest's per-test, per-worker directory, so this never touches
+    the shared repo root and is xdist-safe by construction.
     """
-    target = REPO_ROOT / ENV_FILE_NAME
-    saved = target.read_bytes() if target.exists() else None
-    installed = []
-
-    def _install(content):
-        installed.append(target)
-        target.write_text(content, encoding="utf-8")
-        return target
-
-    yield _install
-
-    if installed:
-        if saved is None:
-            target.unlink(missing_ok=True)
-        else:
-            target.write_bytes(saved)
+    target = tmp_path / ENV_FILE_NAME
+    target.write_text(content, encoding="utf-8")
+    return target
 
 
 def test_loader_function_exists_with_environ_parameter():
@@ -176,11 +167,11 @@ def test_loader_unreadable_or_malformed_file_leaves_environ_unchanged(
     assert environ == {"PLAN_DIR": "/unchanged"}
 
 
-def test_import_inert_under_pytest(repo_env_file, tmp_path):
+def test_import_inert_under_pytest(tmp_path):
     """With 'pytest' in sys.modules, importing pipeline injects nothing."""
     assert "pytest" in sys.modules  # precondition: this is the guard's trigger
     plan_dir = tmp_path / "plans" / "from-env-file"
-    repo_env_file(f"PLAN_DIR={plan_dir}\nWORKTREE_ROOT={tmp_path / 'wt'}\n")
+    _write_env_file(tmp_path, f"PLAN_DIR={plan_dir}\nWORKTREE_ROOT={tmp_path / 'wt'}\n")
     # Strip the opt-out so the pytest-modules guard is the ONLY active guard.
     os.environ.pop("PIPELINE_SKIP_ENV_FILE", None)
     before = os.environ.get("PLAN_DIR")
@@ -190,10 +181,10 @@ def test_import_inert_under_pytest(repo_env_file, tmp_path):
     assert os.environ.get("PLAN_DIR") != str(plan_dir)
 
 
-def test_import_inert_via_opt_out(repo_env_file, tmp_path):
+def test_import_inert_via_opt_out(tmp_path):
     """With PIPELINE_SKIP_ENV_FILE=1 the loader does nothing."""
     plan_dir = tmp_path / "plans" / "optout"
-    repo_env_file(f"PLAN_DIR={plan_dir}\n")
+    _write_env_file(tmp_path, f"PLAN_DIR={plan_dir}\n")
     os.environ["PIPELINE_SKIP_ENV_FILE"] = "1"
     before = os.environ.get("PLAN_DIR")
     module = _fresh_import_pipeline()
@@ -202,15 +193,18 @@ def test_import_inert_via_opt_out(repo_env_file, tmp_path):
     assert os.environ.get("PLAN_DIR") != str(plan_dir)
 
 
-def test_subprocess_bootstrap_picks_up_env_file(repo_env_file, tmp_path):
+def test_subprocess_bootstrap_picks_up_env_file(tmp_path):
     """The real proof: a bare-python launch (launchd-style) reads the file.
 
     cwd is the repo root, PIPELINE_SKIP_ENV_FILE is unset, PLAN_DIR is absent
-    from the child env — the printed PLAN_DIR must come from .pipeline.env.
+    from the child env — the printed PLAN_DIR must come from the env file,
+    selected via PIPELINE_ENV_FILE pointing at tmp_path (xdist-safe: the file
+    is per-test, never the shared repo root).
     """
     plan_dir = tmp_path / "plans" / "subprocess"
-    repo_env_file(f"PLAN_DIR={plan_dir}\n")
+    env_path = _write_env_file(tmp_path, f"PLAN_DIR={plan_dir}\n")
     child_env = _child_env()
+    child_env["PIPELINE_ENV_FILE"] = str(env_path)
     assert "PLAN_DIR" not in child_env
     assert "PIPELINE_SKIP_ENV_FILE" not in child_env
     proc = subprocess.run(
@@ -226,11 +220,15 @@ def test_subprocess_bootstrap_picks_up_env_file(repo_env_file, tmp_path):
     assert Path(proc.stdout.strip()) == plan_dir
 
 
-def test_subprocess_opt_out_prints_default(repo_env_file, tmp_path):
-    """Negative: PIPELINE_SKIP_ENV_FILE=1 -> the default path is printed."""
+def test_subprocess_opt_out_prints_default(tmp_path):
+    """Negative: PIPELINE_SKIP_ENV_FILE=1 -> the default path is printed.
+
+    PIPELINE_ENV_FILE is set too: skip must beat the override.
+    """
     plan_dir = tmp_path / "plans" / "optout-subprocess"
-    repo_env_file(f"PLAN_DIR={plan_dir}\n")
+    env_path = _write_env_file(tmp_path, f"PLAN_DIR={plan_dir}\n")
     child_env = _child_env()
+    child_env["PIPELINE_ENV_FILE"] = str(env_path)
     child_env["PIPELINE_SKIP_ENV_FILE"] = "1"
     proc = subprocess.run(
         [sys.executable, "-c", _SUBPROCESS_CODE],
@@ -262,4 +260,72 @@ def test_init_source_wires_guards_precedence_and_no_circular_imports():
             assert not re.search(r"\b(paths|config|server)\b", stripped), (
                 f"pipeline/__init__.py must not import paths/config/server: "
                 f"{stripped!r}"
+            )
+
+
+def test_override_loads_named_file_not_repo_root(tmp_path):
+    """PIPELINE_ENV_FILE selects THAT file, not <repo_root>/.pipeline.env."""
+    named = tmp_path / "elsewhere.env"
+    named.write_text("PLAN_DIR=/from-override\n", encoding="utf-8")
+    # A decoy at the default repo-root location must NOT be read.
+    (tmp_path / ENV_FILE_NAME).write_text(
+        "PLAN_DIR=/from-repo-root\n", encoding="utf-8"
+    )
+    environ = {"PIPELINE_ENV_FILE": str(named)}
+    pipeline._load_env_file(tmp_path, environ)
+    assert environ["PIPELINE_ENV_FILE"] == str(named)  # write target, untouched
+    assert environ["PLAN_DIR"] == "/from-override"
+
+
+def test_override_nonexistent_loads_nothing_no_fallback(tmp_path):
+    """A named file that does not exist: no raise, NO repo-root fallback."""
+    (tmp_path / ENV_FILE_NAME).write_text(
+        "PLAN_DIR=/from-repo-root\n", encoding="utf-8"
+    )
+    environ = {"PIPELINE_ENV_FILE": str(tmp_path / "missing.env"), "PLAN_DIR": "/unchanged"}
+    pipeline._load_env_file(tmp_path, environ)
+    assert environ == {
+        "PIPELINE_ENV_FILE": str(tmp_path / "missing.env"),
+        "PLAN_DIR": "/unchanged",
+    }
+
+
+def test_override_empty_string_behaves_as_unset(tmp_path):
+    """PIPELINE_ENV_FILE='' is treated as unset -> default repo-root lookup."""
+    (tmp_path / ENV_FILE_NAME).write_text(
+        "PLAN_DIR=/from-repo-root\n", encoding="utf-8"
+    )
+    environ = {"PIPELINE_ENV_FILE": ""}
+    pipeline._load_env_file(tmp_path, environ)
+    assert environ["PLAN_DIR"] == "/from-repo-root"
+
+
+def test_skip_env_file_wins_over_override(tmp_path, monkeypatch):
+    """PIPELINE_SKIP_ENV_FILE=1 beats PIPELINE_ENV_FILE: skip means skip."""
+    named = tmp_path / "elsewhere.env"
+    named.write_text("PLAN_DIR=/from-override\n", encoding="utf-8")
+    environ = {"PIPELINE_ENV_FILE": str(named), "PLAN_DIR": "/unchanged"}
+    monkeypatch.setattr(os, "environ", {"PIPELINE_SKIP_ENV_FILE": "1"})
+    pipeline._load_env_file(tmp_path, environ)
+    assert environ == {"PIPELINE_ENV_FILE": str(named), "PLAN_DIR": "/unchanged"}
+
+
+def test_module_writes_no_repo_root_env_file():
+    """XDIST-SAFETY regression: this module must never write the repo root.
+
+    The CFG-E2 merge-gate failure was workers racing on the shared
+    <repo_root>/.pipeline.env. Assert this file's own source never constructs
+    a write target by joining a repo root with the env file name.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    for line in source.splitlines():
+        stripped = line.strip()
+        if "ENV_FILE_NAME" in stripped and (
+            "REPO_ROOT" in stripped or "repo_root" in stripped
+        ):
+            # Only the tmp_path helper may reference the name, and it must
+            # anchor on tmp_path, never on a repo root.
+            assert "tmp_path / ENV_FILE_NAME" in stripped, (
+                f"test module must not join a repo root with the env file "
+                f"name for writing: {stripped!r}"
             )

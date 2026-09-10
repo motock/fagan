@@ -364,22 +364,9 @@ def summarize(results):
     never check messages, which may contain absolute paths or other values
     that must not be echoed into logs.
     """
-    # The summary tallies the four briefed checks (PLAN_DIR, git, dispatch
-    # backend, model registry). SCHEDULER_CONFIG is the startup check
-    # run_preflight() appends to the cumulative results list (name must
-    # match _check_scheduler_config); its state is carried by its own entry
-    # in that list, not by this line, so the briefed-check counts stay
-    # stable as more checks are added.
-    startup_check_names = frozenset({"SCHEDULER_CONFIG"})
-    counted = [
-        check
-        for check in results
-        if isinstance(check, dict)
-        and check.get("name") not in startup_check_names
-    ]
     counts = {"ok": 0, "warn": 0, "fail": 0}
     warn_names = []
-    for check in counted:
+    for check in results:
         status = check.get("status") if isinstance(check, dict) else None
         if status in counts:
             counts[status] += 1

@@ -142,7 +142,7 @@ def test_run_preflight_returns_four_well_formed_checks_all_ok(tmp_path):
     assert any("dispatch" in n.lower() for n in names)
     assert any("registry" in n.lower() for n in names)
     summary = preflight.summarize(results)
-    assert "4 ok" in summary
+    assert "5 ok" in summary
     assert "0 warn" in summary
     assert "0 fail" in summary
 

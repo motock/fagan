@@ -500,3 +500,285 @@ class TestWorktreeContainment:
         res = _get(client)
         assert res.status_code == 200
         assert res.json()["available"] is False
+
+
+# ---------------------------------------------------------------------------
+# AGENTLOGTS-2: the agent.log tail is prefixed with agent.log.ts sidecar
+# timestamps before reaching build_replay_events
+#
+# AGENTLOGTS-1 made spawn_local write a per-line ISO-8601 timestamp sidecar
+# at <worktree>/agent.log.ts (one timestamp per agent.log line, same order).
+# get_story_replay must zip the MATCHING TAIL of that sidecar onto the
+# agent.log tail so build_replay_events' existing _split_leading_timestamp
+# parses real timestamps instead of rendering every line untimed (ts None).
+#
+# Fail open, exactly as specified:
+#   * sidecar missing            -> raw tail, unchanged
+#   * sidecar shorter than tail  -> raw tail, unchanged (no misalignment)
+#   * sidecar longer than tail   -> the LAST len(tail) sidecar lines win
+#   * sidecar present and equal  -> every agent.log event carries its
+#                                   sidecar timestamp
+# review.log has NO sidecar and is never prefixed. app/story_replay.py is
+# untouched - only the string reaching _split_leading_timestamp changes.
+#
+# The happy-path test is RED until the sidecar zip exists (agent.log lines
+# below deliberately carry no embedded timestamp, so ts can only come from
+# the sidecar); the fail-open tests are regression guards that must pass
+# before AND after the change.
+# ---------------------------------------------------------------------------
+
+SIDE_TS_1 = "2025-06-01T08:00:00Z"
+SIDE_TS_2 = "2025-06-01T08:01:00Z"
+SIDE_TS_3 = "2025-06-01T08:02:00Z"
+SIDE_TS_4 = "2025-06-01T08:03:00Z"
+SIDE_TS_5 = "2025-06-01T08:04:00Z"
+
+
+class TestAgentLogTsSidecar:
+    """agent.log.ts sidecar zip-onto-tail in get_story_replay."""
+
+    @staticmethod
+    def _agent_events(body):
+        return [e for e in body["events"] if e["source"] == "agent.log"]
+
+    # -- happy path ---------------------------------------------------------
+
+    def test_sidecar_timestamps_reach_agent_events(
+        self, client, plan_dir, worktree_dir
+    ):
+        """2-line agent.log + matching 2-line sidecar: each agent.log event
+        carries its sidecar timestamp, and the message is still the bare
+        log line (the prefix is consumed by _split_leading_timestamp)."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(
+            worktree_dir,
+            "S1",
+            {
+                # Plain lines with NO embedded timestamp: the only way these
+                # events can carry a ts is via the sidecar prefix.
+                "agent.log": "line one\nline two\n",
+                "agent.log.ts": f"{SIDE_TS_1}\n{SIDE_TS_2}\n",
+            },
+        )
+        body = _get(client).json()
+        assert body["available"] is True
+        assert body["sources"]["agent.log"] is True
+        events = self._agent_events(body)
+        assert len(events) == 2
+        # ts comes from the sidecar, NOT from the line content
+        assert [e["ts"] for e in events] == [SIDE_TS_1, SIDE_TS_2]
+        assert all(e["ts"] is not None for e in events)
+        # the original line content survives the prefixing
+        assert "line one" in events[0]["message"]
+        assert "line two" in events[1]["message"]
+
+    def test_sidecar_tail_alignment_with_lines_param(
+        self, client, plan_dir, worktree_dir
+    ):
+        """The zip must use the matching TAIL of the sidecar
+        (ts_lines[-len(tail):]), so ?lines=2 pairs the last 2 log lines
+        with the last 2 sidecar timestamps - never sidecar head."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(
+            worktree_dir,
+            "S1",
+            {
+                "agent.log": "l1\nl2\nl3\nl4\nl5\n",
+                "agent.log.ts": (
+                    f"{SIDE_TS_1}\n{SIDE_TS_2}\n{SIDE_TS_3}\n"
+                    f"{SIDE_TS_4}\n{SIDE_TS_5}\n"
+                ),
+            },
+        )
+        body = _get(client, query="?lines=2").json()
+        events = self._agent_events(body)
+        assert len(events) == 2
+        assert [e["ts"] for e in events] == [SIDE_TS_4, SIDE_TS_5]
+        assert "l4" in events[0]["message"]
+        assert "l5" in events[1]["message"]
+        assert not any("l1" in e["message"] for e in events)
+        assert not any(e["ts"] in (SIDE_TS_1, SIDE_TS_2, SIDE_TS_3) for e in events)
+
+    def test_sidecar_longer_than_log_uses_last_matching_lines(
+        self, client, plan_dir, worktree_dir
+    ):
+        """A sidecar with MORE lines than agent.log (e.g. left over from a
+        longer previous run) still aligns: the last len(tail) sidecar lines
+        pair with the tail, extra leading sidecar lines are ignored."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(
+            worktree_dir,
+            "S1",
+            {
+                "agent.log": "alpha\nbeta\n",
+                "agent.log.ts": f"{SIDE_TS_1}\n{SIDE_TS_2}\n{SIDE_TS_3}\n",
+            },
+        )
+        body = _get(client).json()
+        events = self._agent_events(body)
+        assert len(events) == 2
+        assert [e["ts"] for e in events] == [SIDE_TS_2, SIDE_TS_3]
+        assert "alpha" in events[0]["message"]
+        assert "beta" in events[1]["message"]
+
+    def test_single_line_log_and_sidecar(self, client, plan_dir, worktree_dir):
+        """Boundary: one log line, one sidecar line."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(
+            worktree_dir,
+            "S1",
+            {"agent.log": "only line\n", "agent.log.ts": f"{SIDE_TS_1}\n"},
+        )
+        body = _get(client).json()
+        events = self._agent_events(body)
+        assert len(events) == 1
+        assert events[0]["ts"] == SIDE_TS_1
+        assert "only line" in events[0]["message"]
+
+    # -- fail open: missing / short / empty sidecar -------------------------
+
+    def test_missing_sidecar_leaves_tail_unchanged(
+        self, client, plan_dir, worktree_dir
+    ):
+        """agent.log with NO agent.log.ts at all (older worktree from before
+        AGENTLOGTS-1): the response is exactly today's - events still render
+        from the raw tail and ts stays None. Fail open, never raise."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(worktree_dir, "S1", {"agent.log": "alpha\nbeta\n"})
+        res = _get(client)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["available"] is True
+        assert body["sources"]["agent.log"] is True
+        events = self._agent_events(body)
+        assert len(events) >= 1
+        assert all(e["ts"] is None for e in events)
+        assert "alpha" in events[0]["message"]
+        assert "beta" in events[-1]["message"]
+
+    def test_short_sidecar_falls_back_to_raw_tail(
+        self, client, plan_dir, worktree_dir
+    ):
+        """Sidecar with FEWER lines than the agent.log tail (worktree created
+        mid-migration): must fall back to the untouched raw tail - no
+        timestamp may be misaligned onto the wrong line, and no raise."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(
+            worktree_dir,
+            "S1",
+            {
+                "agent.log": "alpha\nbeta\ngamma\n",
+                "agent.log.ts": f"{SIDE_TS_1}\n",
+            },
+        )
+        res = _get(client)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["available"] is True
+        assert body["sources"]["agent.log"] is True
+        events = self._agent_events(body)
+        assert len(events) >= 1
+        # fallback: the raw tail is used verbatim, so nothing is timed
+        assert all(e["ts"] is None for e in events)
+        assert not any(
+            e["ts"] == SIDE_TS_1 for e in events
+        ), "sidecar timestamp misaligned onto a wrong (short-sidecar) line"
+        # all three raw lines still render, in order
+        assert "alpha" in events[0]["message"]
+        assert "gamma" in events[-1]["message"]
+
+    def test_empty_sidecar_falls_back_to_raw_tail(
+        self, client, plan_dir, worktree_dir
+    ):
+        """Boundary: a present-but-empty (0-line) sidecar is a length
+        mismatch against a non-empty tail -> raw tail, ts None."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(
+            worktree_dir,
+            "S1",
+            {"agent.log": "alpha\nbeta\n", "agent.log.ts": ""},
+        )
+        res = _get(client)
+        assert res.status_code == 200
+        events = self._agent_events(res.json())
+        assert len(events) >= 1
+        assert all(e["ts"] is None for e in events)
+        assert "alpha" in events[0]["message"]
+        assert "beta" in events[-1]["message"]
+
+    def test_corrupt_sidecar_line_never_raises(
+        self, client, plan_dir, worktree_dir
+    ):
+        """A full-length but non-timestamp sidecar line must not 500: worst
+        case the line renders untimed, and the original content is still
+        present in the message."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(
+            worktree_dir,
+            "S1",
+            {"agent.log": "alpha\n", "agent.log.ts": "not-a-timestamp\n"},
+        )
+        res = _get(client)
+        assert res.status_code == 200
+        events = self._agent_events(res.json())
+        assert len(events) >= 1
+        assert all(e["ts"] is None for e in events)
+        assert "alpha" in events[-1]["message"]
+
+    # -- review.log is out of scope -----------------------------------------
+
+    def test_review_log_is_never_sidecar_prefixed(
+        self, client, plan_dir, worktree_dir
+    ):
+        """review.log has no sidecar: even with a review.log.ts file present
+        in the worktree, review.log lines must be consumed raw (ts None for
+        plain lines), proving the sidecar zip is gated to agent.log only."""
+        _write_manifest(plan_dir, "demo", {"S1": _dispatched_story(worktree_dir)})
+        _write_worktree(
+            worktree_dir,
+            "S1",
+            {
+                "review.log": "review line one\nreview line two\n",
+                "review.log.ts": f"{SIDE_TS_1}\n{SIDE_TS_2}\n",
+            },
+        )
+        res = _get(client)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["sources"]["review.log"] is True
+        review = [e for e in body["events"] if e["source"] == "review.log"]
+        assert len(review) >= 1
+        assert all(e["ts"] is None for e in review)
+        assert "review line one" in review[0]["message"]
+
+    # -- static assertions on the specified change --------------------------
+
+    def test_dashboard_reads_sidecar_via_get_worktree_file(self):
+        src = Path("app/dashboard.py").read_text(encoding="utf-8")
+        assert '"agent.log.ts"' in src, (
+            "get_story_replay must fetch the agent.log.ts sidecar via "
+            '_store.get_worktree_file(story, "agent.log.ts")'
+        )
+
+    def test_sidecar_zip_gated_to_agent_log_only(self):
+        src = Path("app/dashboard.py").read_text(encoding="utf-8")
+        assert 'if name == "agent.log":' in src, (
+            "the sidecar zip must be gated to the agent.log source only"
+        )
+        # review.log handling must not gain any sidecar reference
+        assert '"review.log.ts"' not in src
+
+    def test_fail_open_comment_present(self):
+        src = Path("app/dashboard.py").read_text(encoding="utf-8")
+        assert "Fail open" in src, (
+            "the sidecar branch must document the fail-open contract"
+        )
+
+    def test_story_replay_module_untouched(self):
+        """app/story_replay.py keeps owning _split_leading_timestamp; the
+        dashboard must not grow its own copy - only the input string changes."""
+        replay_src = Path("app/story_replay.py").read_text(encoding="utf-8")
+        dash_src = Path("app/dashboard.py").read_text(encoding="utf-8")
+        assert "def _split_leading_timestamp" in replay_src
+        assert "def _split_leading_timestamp" not in dash_src
+        assert "from app.story_replay import build_replay_events" in dash_src

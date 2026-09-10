@@ -363,7 +363,10 @@ def test_worktree_add_failure_returns_ok_false_not_raise(
     # detail is empty.
     assert f"repo_root {str(repo)!r}" in result["error"]
     assert "'git worktree add" in result["error"]
-    assert "exit 128" in result["error"]
+    # git's exit code for a failed `worktree add` varies by version (128 on
+    # older gits, 255 on 2.55+); assert a nonzero exit is reported, not a
+    # specific one.
+    assert "exit 128" in result["error"] or "exit 255" in result["error"]
     assert "already exists" in result["error"]
     assert not (worktree_root / "S1").exists()
 

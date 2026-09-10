@@ -42,6 +42,88 @@ class PreflightError(RuntimeError):
     """Raised by raise_on_failure() when any check reports status "fail"."""
 
 
+def _check_scheduler_config(plan_dir, worktree_root):
+    """Compare the scheduler's config fingerprint against THIS process's.
+
+    Reads ``<plan_dir>/.scheduler_health.json`` (the CFG-B2 path the
+    scheduler daemon writes) and diffs its ``config.plan_dir`` /
+    ``config.worktree_root`` against the values run_preflight() already
+    resolved — the same comparison /api/health performs (CFG-B3), surfaced
+    at startup instead of only on demand.
+
+    Outcomes:
+        agreement              -> "ok"   (message names the matching plan dir)
+        divergence             -> "warn" (NOT "fail": a divergence must never
+                                          block startup; the message names
+                                          both values and which field differs)
+        file absent            -> "ok"   (a standalone or not-yet-started
+                                          scheduler is a normal state, not a
+                                          problem; message says none found)
+        malformed / unreadable -> "warn" (never an exception)
+
+    Read-only: the fingerprint is never created, written, or removed here.
+    """
+    fingerprint_path = os.path.join(str(plan_dir), ".scheduler_health.json")
+    try:
+        if not os.path.exists(fingerprint_path):
+            return {
+                "name": "SCHEDULER_CONFIG",
+                "status": "ok",
+                "message": (
+                    "no scheduler fingerprint found at "
+                    f"{fingerprint_path} (a standalone or not-yet-started "
+                    "scheduler is normal)"
+                ),
+            }
+        with open(fingerprint_path, "r", encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("config"), dict
+        ):
+            raise TypeError("fingerprint carries no usable config object")
+        fingerprint = payload["config"]
+        fp_plan_dir = fingerprint["plan_dir"]
+        fp_worktree_root = fingerprint["worktree_root"]
+    except Exception as exc:  # noqa: BLE001 - any fingerprint problem is a warn
+        # Non-leaking: report the error CLASS name only, never str(exc) /
+        # repr(exc) (they may carry env values or file contents).
+        return {
+            "name": "SCHEDULER_CONFIG",
+            "status": "warn",
+            "message": (
+                f"scheduler fingerprint at {fingerprint_path} is malformed "
+                f"or unreadable ({type(exc).__name__}) — cannot compare "
+                "scheduler config against this process"
+            ),
+        }
+
+    problems = []
+    if str(fp_plan_dir) != str(plan_dir):
+        problems.append(
+            f"plan_dir: fingerprint={fp_plan_dir} resolved={plan_dir}"
+        )
+    if worktree_root is not None and str(fp_worktree_root) != str(
+        worktree_root
+    ):
+        problems.append(
+            f"worktree_root: fingerprint={fp_worktree_root} "
+            f"resolved={worktree_root}"
+        )
+    if problems:
+        return {
+            "name": "SCHEDULER_CONFIG",
+            "status": "warn",
+            "message": (
+                "scheduler config divergence: " + "; ".join(problems)
+            ),
+        }
+    return {
+        "name": "SCHEDULER_CONFIG",
+        "status": "ok",
+        "message": f"scheduler config matches resolved plan dir: {plan_dir}",
+    }
+
+
 def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
     """Run the four preflight checks; return one result dict per check.
 
@@ -254,6 +336,23 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
                     f"{type(registry_payload).__name__}"
                 ),
             })
+
+    # -- check e: scheduler config fingerprint --------------------------------
+    # CFG-B4: surface dashboard/scheduler config divergence at STARTUP, not
+    # only on demand (/api/health). Compares the fingerprint the scheduler
+    # daemon writes to <plan_dir>/.scheduler_health.json against the values
+    # resolved above (plan_path) and by this process. WORKTREE_ROOT is read
+    # at call time exactly the way PLAN_DIR is resolved above; when the
+    # operator has set it this is identical to pipeline.paths.WORKTREE_ROOT
+    # (env-or-default), and when it is unset the field is not compared (the
+    # built-in default is not a configured value a scheduler must agree with).
+    # A divergence is a warn, never a fail: it must not block startup
+    # (raise_on_failure() raises only on fail-status checks).
+    env_worktree_root = os.environ.get("WORKTREE_ROOT")
+    worktree_root = (
+        Path(env_worktree_root).expanduser() if env_worktree_root else None
+    )
+    results.append(_check_scheduler_config(plan_path, worktree_root))
 
     return results
 

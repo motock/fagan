@@ -10,7 +10,9 @@ this repo's convention - there is no shared conftest.py.
 """
 import inspect
 import json
+import logging
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -19,9 +21,11 @@ from app import (
     pipeline_mcp_server,  # noqa: F401  backward compat
 )
 from pipeline import concurrency as pcon
+from pipeline import dispatch as pdisp
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import server as p
+from pipeline import service as psvc
 from pipeline import ticketing as pt
 
 
@@ -416,3 +420,80 @@ def test_advance_pipeline_real_git_fetch_failure_counts_attempt_and_notifies(
     assert any("git setup failed" in m for m in notes), notes
     assert "S1" in result["notify"]
     assert not (worktree_root / "S1").exists()
+
+
+# ---------- Outer try/except backstop in PipelineService.dispatch_story ----------
+#
+# DISPATCHGITFAIL-1 already gave _dispatch_story_impl (pipeline/dispatch.py) a
+# git-specific handler for subprocess.CalledProcessError during worktree
+# setup. This story layers an OUTER backstop in PipelineService.dispatch_story
+# (pipeline/service.py) so ANY other exception comes back as a structured
+# {"ok": False, "error": ...} instead of escaping as an unhandled 500 - with
+# an explicit `except ValueError: raise` carve-out so _validate_key's
+# deliberate rejection of malformed plan/story keys keeps propagating.
+
+def test_dispatch_story_returns_ok_false_for_an_unexpected_non_git_exception(
+    plan_dir, worktree_root, agents_dir, monkeypatch, caplog,
+):
+    """A failure unrelated to git setup (e.g. the live-reproduced
+    FileNotFoundError from an invalid persona name deep in
+    _build_dispatch_command) must also come back as a structured
+    {"ok": False, ...} result, not an uncaught exception - this is the
+    backstop for any failure DISPATCHGITFAIL-1's git-specific handler
+    doesn't cover."""
+    monkeypatch.setattr(
+        p, "_dispatch_story_impl",
+        lambda plan_name, story_key: (_ for _ in ()).throw(
+            FileNotFoundError("No persona named backend-engineer at ...")
+        ),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        result = p.dispatch_story("anyplan", "S1")
+
+    assert result["ok"] is False
+    assert "FileNotFoundError" in result["error"]
+    # Exact documented shape: f"dispatch failed: {type(e).__name__}: {e}"
+    assert result["error"] == (
+        "dispatch failed: FileNotFoundError: No persona named backend-engineer at ..."
+    )
+    # The failure must be logged via logger.exception with plan/story context
+    # (the "dispatch_story failed for plan=%s story=%s" record), not silently
+    # swallowed.
+    assert any(
+        r.levelno == logging.ERROR
+        and "dispatch_story failed" in r.getMessage()
+        and "anyplan" in r.getMessage()
+        and "S1" in r.getMessage()
+        for r in caplog.records
+    ), caplog.records
+
+
+def test_dispatch_story_still_raises_valueerror_for_invalid_keys_after_backstop_added(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """The broad Exception catch-all must not swallow _validate_key's
+    deliberate ValueError for a malformed key - it should keep propagating
+    exactly as it did before this story's change."""
+    with pytest.raises(ValueError, match="invalid"):
+        p.dispatch_story("../evil", "S1")
+
+
+def test_dispatch_story_backstop_plumbing_lives_in_service_module():
+    """The backstop's plumbing must be added to pipeline/service.py itself:
+    an `import logging` alongside the existing stdlib imports, a module-level
+    `logger = logging.getLogger(__name__)`, and a dispatch_story body that
+    re-raises ValueError before the broad Exception handler. DISPATCHGITFAIL-1's
+    git-specific handler must still exist in pipeline/dispatch.py (membership
+    check only - later stories may extend that module)."""
+    service_src = Path(psvc.__file__).read_text()
+    assert "import logging" in service_src
+    assert "logger = logging.getLogger(__name__)" in service_src
+    assert "except ValueError" in service_src
+    assert "except Exception as e" in service_src
+    assert "logger.exception(" in service_src
+    assert 'f"dispatch failed: {type(e).__name__}: {e}"' in service_src
+
+    dispatch_src = Path(pdisp.__file__).read_text()
+    assert "except subprocess.CalledProcessError" in dispatch_src
+    assert "git setup failed" in dispatch_src

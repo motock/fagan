@@ -369,6 +369,6 @@ def test_provider_authorization_prerequisite_still_applies() -> None:
     assert re.search(r"provider", section, re.IGNORECASE), (
         "the standalone section must mention provider authorization"
     )
-    assert re.search(r"authoriz", section, re.I), (
+    assert re.search(r"authoriz", section, re.IGNORECASE), (
         "the standalone section must mention provider authorization"
     )

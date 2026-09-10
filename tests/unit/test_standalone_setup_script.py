@@ -38,13 +38,15 @@ line; satisfy them in the cheapest way that keeps the script correct):
 * ``down`` stops both processes and says the scratch data stays put;
   ``status`` prints the resolved paths and both processes' state.
 
-RED state: scripts/standalone-setup.sh does not exist yet, so every test fails
-with an explicit "TDD RED" message.  That is the intended TDD state, not a bug
-in this suite.
+Status: scripts/standalone-setup.sh exists and every test in this module
+passes (the two review-regression probes at the bottom were RED when added
+and went GREEN once the script's cwd-independent key lookup and `down`
+fail-loud behaviour landed).
 """
 
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -656,3 +658,87 @@ def test_no_destructive_removal_of_user_data():
             assert not re.search(
                 r"DATA_DIR|pipeline-standalone|/plans|/worktrees|/repo\b", ln
             ), f"the script must never delete user data: {ln!r}"
+
+
+# --------------------------------------------------------------------------- #
+# (review regressions, REQUEST_CHANGES): the API-key lookup must not resolve
+# `app` via the caller's cwd, and `down` must never report success when it
+# found no pid file to signal.  Unlike the probes above, the `down` test
+# EXECUTES the script -- but only against an empty temp data dir: no
+# processes are started, nothing is signalled, no repo state is touched.
+# --------------------------------------------------------------------------- #
+def test_api_key_lookup_imports_app_from_repo_root_not_caller_cwd():
+    """verify_health()'s API-key lookup must force cwd to the repo root.
+
+    The venv does NOT install the `app` package (scripts/install.sh only
+    pip-installs requirements*.txt; pyproject's pythonpath=["."] is
+    pytest-only), so a bare `"$VENV_PY" -c 'from app.auth import ...'`
+    resolves `app` from the CALLER's cwd.  From any cwd other than the repo
+    root, `up` then dies with ModuleNotFoundError AFTER both processes are
+    already running -- or, when the ambient cwd holds a different checkout's
+    app/, silently reads that repo's key and misdiagnoses "dashboard did not
+    become healthy" after 60s of 401 polls.  The lookup must be wrapped as
+    `( cd "$REPO_ROOT" && "$VENV_PY" -c ... )`; a PYTHONPATH prefix alone is
+    NOT sufficient, because for `python -c` the cwd (sys.path[0]) precedes
+    PYTHONPATH, so a foreign checkout's app/ would still shadow $REPO_ROOT.
+    """
+    src = _source()
+    idx = _line_index(src, "from app.auth import")
+    assert idx is not None, (
+        "the API-key lookup (`from app.auth import get_or_create_api_key`) "
+        "is gone from the script; re-point this probe at wherever the key "
+        "is now looked up"
+    )
+    lines = _code_lines(src)
+    # The cd-guard may sit on the lookup's own line or a few lines above it
+    # (multi-line subshell), so probe a small window around the import.
+    window = "\n".join(lines[max(0, idx - 4) : idx + 2])
+    same_line = re.search(
+        r'cd\s+"\$REPO_ROOT"\s*\\?\s*(?:\d?>\s*\S+\s*)?&&\s*"?\$\{?VENV_PY\}?',
+        window,
+    )
+    guarded_next_line = re.search(
+        r'cd\s+"\$REPO_ROOT"[^\n]*\|\|[^\n]*\n\s*"?\$\{?VENV_PY\}?', window
+    )
+    assert same_line or guarded_next_line, (
+        "the $VENV_PY invocation importing `app` (the API-key lookup in "
+        "verify_health) is cwd-dependent: it resolves `app` via the caller's "
+        "cwd, but `app` is NOT installed in the venv.  Wrap the lookup as "
+        '`( cd "$REPO_ROOT" && "$VENV_PY" -c ... )` -- a PYTHONPATH prefix '
+        "alone is not sufficient, because for `python -c` the cwd "
+        "(sys.path[0]) precedes PYTHONPATH.  Offending line: "
+        f"{lines[idx]!r}"
+    )
+
+
+def test_down_against_unprovisioned_data_dir_exits_nonzero():
+    """`down` must not report success when it found no pid file to signal.
+
+    `down`/`status` only tilde-expand DATA_DIR and never absolutise it
+    (unlike `up`'s `cd ... && pwd`), so a relative --data-dir combined with a
+    changed cwd resolves to a directory that was never provisioned -- and
+    `down` used to print its success banner and exit 0 anyway.
+    """
+    with tempfile.TemporaryDirectory(prefix="standalone-down-") as tmp:
+        data_dir = Path(tmp) / "never-provisioned"
+        data_dir.mkdir()
+        proc = subprocess.run(
+            ["bash", str(_SCRIPT), "down", "--data-dir", str(data_dir)],
+            cwd=tmp,  # deliberately NOT the repo root
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert proc.returncode != 0, (
+            "`down` against a data dir with no pid files exited 0: it "
+            "reported success while signalling nothing.  `down` must resolve "
+            "DATA_DIR exactly like `up` (absolutise via `cd ... && pwd`, "
+            "dying if it does not resolve) and must exit non-zero when it "
+            "finds no pid file to signal.\n"
+            f"--- stdout ---\n{proc.stdout}--- stderr ---\n{proc.stderr}"
+        )
+        assert data_dir.is_dir(), (
+            "`down` must leave the scratch data in place (no destructive "
+            "rm), even when it finds nothing to stop"
+        )

@@ -187,21 +187,69 @@ def _plan_lock(plan_name: str):
             acquired = True
         except BlockingIOError:
             acquired = False
+        if not acquired and _contended_in_process(plan_name):
+            # The flock is held by another thread of THIS process, which may
+            # be about to open a _released_plan_lock window around a slow
+            # phase. Retry briefly instead of failing on the first try: the
+            # contender's os.open/flock can land in the window between the
+            # holder starting that thread and opening the window, and a
+            # first-try BlockingIOError there is a scheduling artifact, not
+            # a real "the lock is busy" answer. Cross-process contention
+            # never reaches this branch, so skipped:"locked" semantics for
+            # other processes are unchanged.
+            grace_end = time.monotonic() + _PLAN_LOCK_CONTENTION_GRACE_SECONDS
+            while not acquired and time.monotonic() < grace_end:
+                time.sleep(0.005)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                except BlockingIOError:
+                    pass
         if acquired:
             held.add(plan_name)
             _held_plan_lock_fds()[plan_name] = fd
+            with _process_plan_holders_lock:
+                _process_plan_holders.add(plan_name)
         try:
             yield acquired
         finally:
             if acquired:
                 held.discard(plan_name)
                 _held_plan_lock_fds().pop(plan_name, None)
+                with _process_plan_holders_lock:
+                    _process_plan_holders.discard(plan_name)
                 fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
 
 
 _plan_lock_state = threading.local()
+
+# Process-wide registry of plans whose flock SOME thread of this process
+# currently holds (or is holding a _released_plan_lock window open for).
+# _plan_lock's contended path uses it to tell intra-process contention apart
+# from cross-process contention: within one process the holder may be about
+# to drop the flock via _released_plan_lock, so a brief retry is warranted;
+# across processes another process owns the lock and failing fast
+# (skipped:"locked") is the contract that keeps dispatch from hanging on a
+# live MCP server (the W4L-02 root cause).
+_process_plan_holders: set[str] = set()
+_process_plan_holders_lock = threading.Lock()
+
+# How long a contended _plan_lock keeps retrying when the contention is with
+# a lock this process holds. Long enough to bridge the scheduler latency
+# between a contender thread starting and the holder's _released_plan_lock
+# window opening (observed ~1-10ms under pytest-xdist load), short enough
+# that a genuinely held intra-process lock still fails fast.
+_PLAN_LOCK_CONTENTION_GRACE_SECONDS = 0.05
+
+
+def _contended_in_process(plan_name: str) -> bool:
+    """True iff some thread of THIS process currently holds (or is releasing
+    and about to re-acquire) the plan flock — i.e. the contention is
+    intra-process, not from another process."""
+    with _process_plan_holders_lock:
+        return plan_name in _process_plan_holders
 
 
 def _held_plan_locks() -> set[str]:

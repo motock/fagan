@@ -37,6 +37,7 @@ from .config import (
     WEEK_RESUME_THRESHOLD,
     WEEKLY_REQUEST_THRESHOLD,
 )
+from .config_provenance import PIPELINE_ROLES
 from .parsers import _atomic_write_json
 from .paths import USAGE_STATE_PATH
 from .persona import _persona_requires_claude, _story_has_unwinnable_local_scope
@@ -387,6 +388,75 @@ def _role_resource_ok(
     return bool(status.get("ok", True)), status.get("reason", "")
 
 
+def collect_backend_status(plan_role_config: dict | None = None) -> list[dict]:
+    """Read-only per-role backend report for the dashboard banner. Never raises; fails open.
+
+    For every role in config_provenance.PIPELINE_ROLES, resolve the backend that
+    serves it (exactly as _role_resource_ok does, via role_registry.resolve_role
+    with plan_role_config forwarded) and report that backend's resource_status().
+    resource_status() is probed at most ONCE per distinct provider and the
+    result (including a probe failure) is reused for every role on that
+    provider, because the Ollama driver's probe is a live network reachability
+    check. The cache is local to this call so a later call re-probes.
+
+    FAIL OPEN: a resolution error, an unknown provider, a raising probe or a
+    malformed probe payload all yield ok=True rows with a reason naming the
+    failure. This is a diagnostic feeding a dashboard banner — a probe error
+    must never be mistaken for a tripped gate (see CLAUDE.md, Resource Gates).
+    """
+    rows: list[dict] = []
+    probe_cache: dict[str, tuple[bool, str]] = {}
+    for role in PIPELINE_ROLES:
+        try:
+            resolution = role_registry.resolve_role(
+                role,
+                plan_role_config=plan_role_config,
+                registry=role_registry.load_registry(),
+            )
+            provider = resolution.provider
+            model = resolution.model
+        except Exception as exc:  # noqa: BLE001 - diagnostic must never raise
+            rows.append(
+                {
+                    "role": role,
+                    "provider": "",
+                    "model": "",
+                    "ok": True,
+                    "reason": f"role resolution failed: {exc!r}",
+                }
+            )
+            continue
+        if provider not in probe_cache:
+            try:
+                driver = backend.get_backend(role, name=provider)
+                status = driver.resource_status()
+            except Exception as exc:  # noqa: BLE001 - diagnostic must never raise
+                # Cache the fail-open verdict too: the provider was probed once.
+                probe_cache[provider] = (True, f"backend probe failed: {exc!r}")
+            else:
+                if isinstance(status, dict) and "ok" in status:
+                    probe_cache[provider] = (
+                        bool(status["ok"]),
+                        str(status.get("reason", "")),
+                    )
+                else:
+                    probe_cache[provider] = (
+                        True,
+                        f"malformed resource_status result: {status!r}",
+                    )
+        ok, reason = probe_cache[provider]
+        rows.append(
+            {
+                "role": role,
+                "provider": provider,
+                "model": model,
+                "ok": ok,
+                "reason": reason,
+            }
+        )
+    return rows
+
+
 __all__ = [
     "_DAILY_REQ_RE",
     "_SESSION_USAGE_RE",
@@ -401,4 +471,5 @@ __all__ = [
     "_usage_gate",
     "_usage_state_age_seconds",
     "_write_usage_state",
+    "collect_backend_status",
 ]

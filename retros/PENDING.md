@@ -155,3 +155,9 @@ if a precise date is needed when writing one of these up.
 - chat-tool-call-reliability — completed 2026-09-09, 2 stories
 - chat-claude-tool-protocol-clarity — completed 2026-09-09, 1 stories
 - config-unification — completed 2026-09-10, 17 stories
+- chat-loopback-port-fix — completed 2026-09-10, 1 stories
+- decompose-json-retry-fix — completed 2026-09-10, 1 stories
+- dispatch-git-setup-failure-fix — completed 2026-09-10, 2 stories
+- standalone-agents-provisioning-fix — completed 2026-09-10, 2 stories
+- wedge-and-logts-fix — completed 2026-09-10, 3 stories
+- readme-pitch-fix — completed 2026-09-11, 1 stories

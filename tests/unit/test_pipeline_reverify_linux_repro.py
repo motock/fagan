@@ -16,6 +16,11 @@ fake that fails ``git`` is not a realistic checkout.
 import json
 
 from pipeline import server as p
+# Same fixture-sharing pattern as the other split test files (see
+# pyproject.toml per-file-ignores): the imported fixture names are used as
+# same-named test-function parameters, which ruff's F811 flags as a
+# redefinition - a false positive, since pytest resolves the parameter to the
+# imported fixture.
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _read_manifest,
     agents_dir,

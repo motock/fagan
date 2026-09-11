@@ -46,9 +46,22 @@ def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
     * A marker file named ``.agent_done`` in the worktree triggers an event.
       The file contents must be valid JSON; otherwise a warning is logged and
       the marker is left untouched for debugging.
-    * After successfully publishing an event the marker file is renamed to
-      ``.agent_done.consumed`` using :func:`os.replace` so it will not be
-      processed again on subsequent scans.
+    * The marker file is renamed to ``.agent_done.consumed`` with
+      :func:`os.replace` BEFORE the event is published.  The rename is the
+      claim: two concurrent scan passes can be in flight at once (the
+      scheduler watchdog abandons a slow worker thread without killing it),
+      and only the pass that wins the rename ever publishes the marker, so a
+      story can never be double‑dispatched.
+    * ``FileNotFoundError`` from the rename means another pass already claimed
+      the marker; that pass logs at DEBUG and publishes nothing.  Any other
+      ``OSError`` is logged as an ERROR and the marker is left on disk
+      unrenamed, so a later scan can claim and publish it once the problem is
+      fixed.
+    * If ``bus.publish`` raises after a successful claim, the marker is
+      already consumed and that completion is NOT re‑published.  This is
+      deliberate: ``advance_all_plans``' reconcile sweep independently reaps
+      ``in_progress`` stories whose pid is dead, so a dropped marker costs one
+      reconcile cycle, whereas a double‑publish costs a plan‑lock pile‑up.
     """
 
     events: list[dict] = []
@@ -91,14 +104,29 @@ def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
             logger.exception("Unexpected error reading %s", marker_path)
             continue
 
+        # Claim the marker BEFORE publishing.  The bus is in-process and
+        # synchronous and publish can run for minutes while holding the plan
+        # lock, so renaming first is the only way to guarantee that exactly
+        # one concurrent scan pass publishes a given marker.
+        try:
+            os.replace(marker_path, os.path.join(worktree, ".agent_done.consumed"))
+        except FileNotFoundError:
+            # Another scan pass already claimed this marker.  Expected and
+            # benign when two passes race; log quietly and publish nothing.
+            logger.debug(
+                "Marker %s already claimed by another scan pass", marker_path
+            )
+            continue
+        except OSError:
+            # The marker could not be claimed; leave it on disk unrenamed so
+            # a later scan can retry.  Never publish a marker we could not
+            # claim.
+            logger.exception("Failed to rename %s", marker_path)
+            continue
+
         event = make_event("agent_done", plan, story_key=story_key, payload=payload)
         bus.publish(event)
         events.append(event)
-
-        try:
-            os.replace(marker_path, os.path.join(worktree, ".agent_done.consumed"))
-        except Exception:
-            logger.exception("Failed to rename %s", marker_path)
 
     return events
 

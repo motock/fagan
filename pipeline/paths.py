@@ -52,7 +52,14 @@ USAGE_STATE_PATH = Path(os.environ.get("USAGE_STATE_PATH", "~/.claude/usage_stat
 # copy that had leaked onto the default branch - terminal-failing an
 # otherwise-green story's merge gate (P3-6, 3/3 attempts exhausted).
 _WORKTREE_LOG_EXCLUDES = (
-    "agent.log", "agent.log.ts", "review.log", ".agent_plan.md",
+    # "*.log.ts" (not just "agent.log.ts"): spawn_local writes a timestamp
+    # sidecar for EVERY log it opens - agent.log, review.log, test_author.log,
+    # rework_test_author.log and grading.log - and the repo .gitignore's
+    # "*.log" does NOT match "foo.log.ts". Naming only agent.log.ts left the
+    # other four untracked-and-unignored, so _commit_wip's `git add -A` swept
+    # them into story commits (a stray test_author.log.ts reached
+    # agent/chatreload-1 on 2026-09-11).
+    "agent.log", "*.log.ts", "review.log", ".agent_plan.md",
     ".agent_scratchpad.md", ".agent_plan_src_hash",
 )
 

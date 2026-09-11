@@ -235,8 +235,8 @@ def test_resolution_receives_plan_role_config_and_registry(monkeypatch):
 
 
 def test_resource_status_called_with_no_arguments(monkeypatch):
-    _install(monkeypatch, {role: ("fake", "m") for role in PIPELINE_ROLES})
-    _, drivers, _, _ = _install(monkeypatch, {role: ("fake", "m") for role in PIPELINE_ROLES})
+    mapping = {role: ("fake", "m") for role in PIPELINE_ROLES}
+    _, drivers, _, _ = _install(monkeypatch, mapping)
     pipeline_usage.collect_backend_status()
     for driver in drivers.values():
         assert driver.calls == 1

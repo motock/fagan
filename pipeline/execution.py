@@ -179,6 +179,38 @@ def _tail_ts_sidecar(
             stop.wait(0.05)
 
 
+def _spawn_fd_redirect(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    log_path: Path,
+    append: bool,
+    env: dict | None = None,
+) -> AgentHandle:
+    """Byte-identical fd-redirect local spawn (the pre-AGENTLOGTS-1 shape).
+
+    The child inherits the log file descriptor, so agent.log's bytes and the
+    Popen call shape are exactly what they have always been; the per-line
+    ISO-8601 UTC timestamp sidecar is produced by a background daemon tailer
+    instead of a pipe relay. Used by ``spawn_harness``'s default local path
+    via ``spawn_local(_fd_redirect=True)``.
+    """
+    with open(log_path, "a" if append else "w") as log_file:
+        proc = subprocess.Popen(
+            cmd, cwd=cwd, env=env, stdout=log_file, stderr=log_file
+        )
+    ts_path = log_path.with_name(log_path.name + ".ts")
+    with open(ts_path, "a" if append else "w", encoding="utf-8"):
+        pass  # create/truncate the sidecar with the log's own mode
+    stop = threading.Event()
+    threading.Thread(
+        target=_tail_ts_sidecar,
+        args=(log_path, ts_path, proc, stop),
+        daemon=True,
+    ).start()
+    return AgentHandle(pid=proc.pid, model="")
+
+
 def spawn_local(
     cmd: list[str],
     *,
@@ -186,6 +218,8 @@ def spawn_local(
     log_path: Path,
     append: bool,
     env: dict | None = None,
+    line_filter=None,
+    _fd_redirect: bool = False,
 ) -> AgentHandle:
     """Spawn ``cmd`` locally, streaming stdout/stderr into ``log_path``.
 
@@ -196,8 +230,9 @@ def spawn_local(
     Also writes a per-line ISO-8601 UTC timestamp sidecar at
     ``str(log_path) + ".ts"`` (one line per agent.log line, same
     append/truncate semantics as log_path) via a background daemon
-    thread draining the child's merged stdout+stderr. agent.log's own
-    bytes are unaffected -- only the write mechanism changed from a
+    thread draining the child's merged stdout+stderr. agent.log's
+    own bytes are unaffected unless a ``line_filter`` is supplied --
+    only the write mechanism changed from a
     raw fd redirect to a line-by-line relay, so every existing
     consumer that scans agent.log's raw content (STEP_CAP_MARKERS,
     INFRA_FAILURE_LOG_SUBSTRING, rebrief.py's anchored regexes,
@@ -209,8 +244,34 @@ def spawn_local(
     arguments every spawn site has always passed (cmd/cwd/env/stdout/
     stderr) so existing Popen seams keep binding; text decoding happens
     in the drain loop, not via Popen text-mode kwargs.
+
+    ``line_filter`` is an optional keyword-only callable (default
+    ``None`` = today's byte-identical behavior). When supplied, it is
+    called with each decoded output line and must return an iterable
+    of lines to write; a trailing ``"\n"`` is added to any returned
+    line missing one, and one timestamp row is written per WRITTEN
+    line so the ``.ts`` sidecar keeps its one-row-per-log-line
+    invariant. A returned empty iterable writes nothing for that input
+    line (and no timestamp row). If the callable raises for a line,
+    the original decoded line is written instead and the drain
+    continues with subsequent lines.
+
+    ``_fd_redirect`` is an internal keyword-only switch (default
+    ``False``): when True the child inherits the log file descriptor
+    (the byte-identical fd-redirect spawn shape) and the drain relay is
+    skipped, so no ``.ts`` sidecar is written by this call. It exists
+    so ``spawn_harness`` can route every local dispatch through this
+    public entrypoint while preserving the fd-redirect contract for the
+    default no-filter path; callers should not pass it.
     """
     mode = "a" if append else "w"
+    if _fd_redirect and line_filter is None:
+        # Byte-identical fd-redirect spawn: the child inherits the log file
+        # descriptor, so agent.log's bytes and the Popen call shape are
+        # exactly what they have always been.
+        return _spawn_fd_redirect(
+            cmd, cwd=cwd, log_path=log_path, append=append, env=env
+        )
     # The drain thread owns these handles and closes them in its finally; a
     # with-block here would close them while the background relay is live.
     log_file = open(log_path, mode, encoding="utf-8", errors="replace")  # noqa: SIM115
@@ -229,10 +290,22 @@ def spawn_local(
         try:
             if stream is not None:
                 for raw in stream:
-                    log_file.write(raw.decode("utf-8", errors="replace"))
-                    log_file.flush()
-                    ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
-                    ts_file.flush()
+                    text = raw.decode("utf-8", errors="replace")
+                    if line_filter is None:
+                        out_lines = [text]
+                    else:
+                        try:
+                            out_lines = [
+                                ln if ln.endswith("\n") else ln + "\n"
+                                for ln in line_filter(text)
+                            ]
+                        except Exception:  # noqa: BLE001 - fallback beats a dead drain thread
+                            out_lines = [text]
+                    for out in out_lines:
+                        log_file.write(out)
+                        log_file.flush()
+                        ts_file.write(datetime.now(timezone.utc).isoformat() + "\n")
+                        ts_file.flush()
         finally:
             if stream is not None:
                 stream.close()
@@ -251,6 +324,7 @@ def spawn_harness(
     append: bool,
     env: dict | None = None,
     role: str = "dispatch",
+    line_filter=None,
 ) -> AgentHandle:
     """Spawn an agent harness for ``role`` using its configured execution mode.
 
@@ -281,22 +355,17 @@ def spawn_harness(
             }
         )
         cmd = build_docker_command(str(cwd), cmd, allowlisted_env)
-    # Local/docker path: keep the byte-identical fd-redirect spawn (the child
-    # inherits the log file descriptor, so agent.log's bytes and the Popen
-    # call shape are exactly what they have always been), and produce the
-    # per-line ISO-8601 UTC timestamp sidecar with a background daemon tailer
-    # instead of a pipe relay.
-    with open(log_path, "a" if append else "w") as log_file:
-        proc = subprocess.Popen(
-            cmd, cwd=cwd, env=env, stdout=log_file, stderr=log_file
-        )
-    ts_path = log_path.with_name(log_path.name + ".ts")
-    with open(ts_path, "a" if append else "w", encoding="utf-8"):
-        pass  # create/truncate the sidecar with the log's own mode
-    stop = threading.Event()
-    threading.Thread(
-        target=_tail_ts_sidecar,
-        args=(log_path, ts_path, proc, stop),
-        daemon=True,
-    ).start()
-    return AgentHandle(pid=proc.pid, model="")
+    # Local dispatch always goes through the public spawn_local entrypoint
+    # (looked up as the bare module-level global on every call, so patching
+    # execution.spawn_local intercepts it). A supplied line_filter rides the
+    # pipe-relay path; with no filter _fd_redirect keeps the byte-identical
+    # fd-redirect spawn the sandbox-wiring contract pins.
+    return spawn_local(
+        cmd,
+        cwd=cwd,
+        log_path=log_path,
+        append=append,
+        env=env,
+        line_filter=line_filter,
+        _fd_redirect=line_filter is None,
+    )

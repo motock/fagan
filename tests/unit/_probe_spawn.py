@@ -7,6 +7,12 @@ import sys
 
 from pipeline import server as p
 from pipeline import story_status as ss
+from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
+    _clear_caches,
+    agents_dir,
+    plan_dir,
+    worktree_root,
+)
 
 
 def test_probe_spawn_on_macos(plan_dir, worktree_root, agents_dir, monkeypatch):

@@ -631,301 +631,306 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 )
                 summary["notify"].append("review_paused")
 
-        # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
-        manifest = json.loads(manifest_path.read_text())
-        stories = manifest["stories"]
-        for key, story in stories.items():
-            if story["status"] != "pr_open":
-                continue
-            decision = _merge_decision(story)
-            if decision["action"] != "merge":
-                story["status"] = "parked"
-                story["parked_reason"] = decision["reason"]
-                _notify_user(
-                    plan_name,
-                    f"{key} parked: {decision['reason']}",
-                    **(
-                        {"correlation_id": story["correlation_id"]}
-                        if story.get("correlation_id")
-                        else {}
-                    ),
-                )
-                summary["parked"].append(key)
-                summary["notify"].append(key)
-                continue
+        _adjudicate_merges(plan_name, summary)
 
-            # Mode 9: rebase onto current origin/master + CI gate before merge,
-            # so a stale-base branch can't land cross-story breakage or a
-            # ruff-red PR onto main. Failures count against merge_attempts just
-            # like a transient `gh pr merge` failure (see MERGE_MAX_ATTEMPTS).
-            worktree = story.get("worktree", "")
-            # Resolve the worktree's ACTUAL HEAD branch (a rework round can
-            # leave it on an alias agent/<key>-<suffix>) so the gate's rebase,
-            # push, CI poll and _merge_pr all operate on the one branch
-            # _merge_pr merges. The hardcoded convention name previously
-            # named a branch a prior _merge_pr had already deleted ("src
-            # refspec ... does not match any") or a stale twin, and the CI
-            # poll queried a SHA that was never pushed to it. The resolver
-            # itself fails open to the convention name when the worktree
-            # cannot be probed, so no local fallback is needed here - and
-            # none may be added: a locally computed convention branch is the
-            # exact mistake the round-2 review finding names.
-            from .pr import _resolve_story_branch
+    return {"ok": True, **summary}
 
-            if worktree and Path(worktree).is_dir():
-                branch = _resolve_story_branch(worktree, key)
-            else:
-                # No worktree to probe (missing/anomalous): nothing was
-                # dispatched, so no alias can exist. Hand the gate NO
-                # branch at all - a locally computed convention branch is
-                # the exact mistake the round-2 review finding names, and
-                # the gate's own is_dir guard skips rebase/push for a
-                # missing worktree without spawning a subprocess (the
-                # CI-gate-disabled path must run zero subprocesses, see
-                # test_advance_pipeline_ci_gate_disabled_skips_ci).
-                branch = ""
-            gate_error = ""
-            ci_definitive_fail = False
-            ci_wait = False
-            # S5: a story already polling a pending CI run must not
-            # re-rebase/force-push on every tick - with the non-blocking CI
-            # poll that mints a new SHA whenever origin/master moved,
-            # restarting CI and burning Actions minutes. Skip straight to
-            # polling the exact SHA recorded on the first pending observation.
-            if story.get("ci_pending_sha"):
-                pushed_sha = story["ci_pending_sha"]
-            else:
-                gate_error, pushed_sha = _rebase_and_push_for_merge(plan_name, key, branch, worktree)
-            if not gate_error:
-                poll_branch = branch or _degraded_ci_branch(key)
-                ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
-                if ci["state"] == "cancelled" and not story.get(
-                    "ci_rerun_attempted"
-                ):
-                    # Worth exactly one automatic rerun before treating it
-                    # as a failure - an abnormal queue delay can cancel
-                    # jobs with no code-quality signal at all.
-                    story["ci_rerun_attempted"] = True
-                    _ci_rerun(pushed_sha)
-                    ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
-                if ci["state"] == "fail":
-                    gate_error = f"ci fail: {ci['error']}"
-                    # Only a genuine test-failure verdict is "definitive" -
-                    # cancelled (queue/infra flake, already given one
-                    # auto-rerun above) and pending are NOT, and must keep
-                    # retrying via the ordinary merge_attempts path below,
-                    # not consume rework budget.
-                    ci_definitive_fail = True
-                elif ci["state"] == "cancelled":
-                    gate_error = f"ci fail: {ci['error']}"
-                elif ci["state"] == "pending":
-                    story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
-                    story["ci_pending_sha"] = pushed_sha
-                    if _ci_pending_expired(story["ci_pending_since"]):
-                        _notify_user(
-                            plan_name,
-                            f"{key} CI has been pending since "
-                            f"{story['ci_pending_since']} and exceeded the "
-                            f"merge-gate pending bound; giving up on the wait.",
-                            story_key=key,
-                            severity="warning",
-                            event="ci_pending_stalled",
-                            dedup_key=f"ci_pending_stalled:{key}",
-                            **(
-                                {"correlation_id": story["correlation_id"]}
-                                if story.get("correlation_id")
-                                else {}
-                            ),
-                        )
-                        story.pop("ci_pending_since", None)
-                        story.pop("ci_pending_sha", None)
-                        gate_error = f"ci pending: {ci['error']}"
-                    else:
-                        ci_wait = True
-                if ci["state"] != "pending":
-                    story.pop("ci_pending_since", None)
-                    story.pop("ci_pending_sha", None)
-            if ci_wait:
-                summary["ci_pending"].append(key)
-                continue
-            if not gate_error:
-                # Independent of review: re-run the acceptance oracle
-                # against the just-rebased branch right before merging.
-                # Closes the gap CI alone can't (a repo without CI, or a
-                # CI-independent slip between tests_passed and review).
-                acc = _reverify_acceptance(story, worktree, key)
-                if acc["state"] == "fail":
-                    gate_error = f"acceptance reverify fail: {acc['error']}"
-            if not gate_error:
-                # Independent of tests: a green suite doesn't mean the
-                # project actually builds (PR #48 merged with `npm run
-                # build` broken - retro §3.1).
-                build = _reverify_build(worktree)
-                if build["state"] == "fail":
-                    gate_error = f"build reverify fail: {build['error']}"
 
-            if gate_error:
-                # Opt-in (PIPELINE_REWORK_ON_CI_FAIL=1): a DEFINITIVE CI test
-                # failure - not a transient rebase/push error, not
-                # pending/cancelled - can be caused by the agent's own
-                # committed test file rather than the reviewed implementation
-                # (the reviewer is acceptance-scoped and never saw it). Retrying
-                # an unchanged branch identically MERGE_MAX_ATTEMPTS times can
-                # never fix that; hand the CI failure back to the implementer as
-                # rework feedback instead, bounded by the SAME rework budget
-                # review_story uses, so a story that never converges still
-                # parks/escalates rather than looping forever. See
-                # MERGE_CI_REWORK_PLAN.md, 2026-07-17 (gpt-oss retry_backoff /
-                # token_bucket: ground-truth-correct code abandoned because the
-                # agent's own broken self-test tripped this gate).
-                rework_ok = (
-                    ci_definitive_fail
-                    and os.environ.get("PIPELINE_REWORK_ON_CI_FAIL", "0") == "1"
-                )
-                if rework_ok:
-                    # Bound by MERGE_MAX_ATTEMPTS via the merge_attempts
-                    # counter, which PERSISTS across the rework -> review
-                    # APPROVE -> merge-gate cycle. rework_attempts does NOT:
-                    # the review APPROVE path pops it on every pass (the
-                    # reviewer APPROVEs because it is acceptance-scoped and
-                    # the oracle is green), so reusing rework_attempts here
-                    # loops forever - each CI-fail re-increments 0->1 and the
-                    # cap never exhausts (verified 2026-07-17 on token_bucket:
-                    # four identical "routed to rework (1/3)" notifications,
-                    # same broken assertion every round). merge_attempts is
-                    # the merge gate's own counter and is not reset by review,
-                    # so it bounds the loop: MERGE_MAX_ATTEMPTS rework rounds,
-                    # then the fall-through below terminal-fails.
-                    rework_ok = story.get("merge_attempts", 0) < MERGE_MAX_ATTEMPTS
-
-                if rework_ok:
-                    attempts = story.get("merge_attempts", 0) + 1
-                    story["merge_attempts"] = attempts
-                    # L1 (REVIEWER_ESCALATION_PLAN.md): flag this rework as
-                    # CI-triggered so the next dispatch_story raises the
-                    # agent's done-bar to full-suite-green (env
-                    # LOCAL_AGENT_REWORK_FULL_SUITE). Without it the rework
-                    # keeps the oracle-green bar and re-fails CI on the same
-                    # assertion every round (the agent's own broken test is
-                    # invisible to the acceptance-scoped oracle/reviewer).
-                    story["ci_rework"] = True
-                    story["review_feedback"] = _ci_rework_feedback(gate_error, attempts)
-                    story["status"] = "changes_requested"
-                    _notify_user(
-                        plan_name,
-                        f"{key} merge-gate CI failed ({gate_error}); "
-                        f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).",
-                        event="merge_ci_rework",
-                        **(
-                            {
-                                "correlation_id": story["correlation_id"],
-                                "attempt": story.get("dispatch_attempts", 0),
-                            }
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["notify"].append(key)
-                    continue
-
-                attempts = story.get("merge_attempts", 0) + 1
-                story["merge_attempts"] = attempts
-                if attempts >= MERGE_MAX_ATTEMPTS:
-                    story["status"] = "failed"
-                    story["merge_error"] = gate_error
-                    _notify_user(
-                        plan_name,
-                        f"{key} merge gate failed {attempts}x "
-                        f"({gate_error}); giving up - needs human intervention.",
-                        event="merge_gate_failed",
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["failed"].append(key)
-                else:
-                    # leave pr_open; the next tick retries within budget.
-                    _notify_user(
-                        plan_name,
-                        f"{key} merge gate attempt {attempts}/"
-                        f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.",
-                        event="merge_gate_retry",
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                summary["notify"].append(key)
-                continue
-
-            # _merge_pr removes the worktree and deletes the branch, so the
-            # self-source diff must be taken BEFORE the merge, not after.
-            mcp_touched = _mcp_self_source_touched(
-                worktree, f"origin/{_default_branch()}"
-            )
-            try:
-                _merge_pr(story.get("worktree", ""), key)
-            except Exception as e:  # noqa: BLE001 (gh/git transient failure - see MERGE_MAX_ATTEMPTS)
-                attempts = story.get("merge_attempts", 0) + 1
-                story["merge_attempts"] = attempts
-                if attempts >= MERGE_MAX_ATTEMPTS:
-                    story["status"] = "failed"
-                    story["merge_error"] = str(e)
-                    _notify_user(
-                        plan_name,
-                        f"{key} merge failed {attempts}x "
-                        f"({e}); giving up - needs human intervention.",
-                        event="merge_failed",
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                    summary["failed"].append(key)
-                else:
-                    # leave pr_open; the next tick retries within budget.
-                    _notify_user(
-                        plan_name,
-                        f"{key} merge attempt {attempts}/"
-                        f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.",
-                        event="merge_retry",
-                        **(
-                            {"correlation_id": story["correlation_id"]}
-                            if story.get("correlation_id")
-                            else {}
-                        ),
-                    )
-                summary["notify"].append(key)
-                continue
-            story["status"] = "done"
-            story.pop("merge_attempts", None)
-            story.pop("parked_reason", None)
-            story.pop("ci_rerun_attempted", None)
-            story.pop("ci_rework", None)  # L1: clear the rework flag on done
-            _mark_plane_done(key, plan_name)
+def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
+    manifest_path = _store.manifest_path(plan_name)
+    # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
+    manifest = json.loads(manifest_path.read_text())
+    stories = manifest["stories"]
+    for key, story in stories.items():
+        if story["status"] != "pr_open":
+            continue
+        decision = _merge_decision(story)
+        if decision["action"] != "merge":
+            story["status"] = "parked"
+            story["parked_reason"] = decision["reason"]
             _notify_user(
                 plan_name,
-                f"{key} merged",
-                story_key=key,
-                event="story_merged",
+                f"{key} parked: {decision['reason']}",
                 **(
                     {"correlation_id": story["correlation_id"]}
                     if story.get("correlation_id")
                     else {}
                 ),
             )
-            # A fully-done self-repo plan must enter the retro backlog no
-            # matter which path marked the last story done (dedup inside
-            # _record_retro_pending makes repeat calls across ticks safe).
-            _maybe_record_retro(plan_name, manifest)
-            if mcp_touched:
-                _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
-                summary["notify"].append(key)
-            summary["merged"].append(key)
-        _atomic_write_json(manifest_path, manifest)
+            summary["parked"].append(key)
+            summary["notify"].append(key)
+            continue
 
-    return {"ok": True, **summary}
+        # Mode 9: rebase onto current origin/master + CI gate before merge,
+        # so a stale-base branch can't land cross-story breakage or a
+        # ruff-red PR onto main. Failures count against merge_attempts just
+        # like a transient `gh pr merge` failure (see MERGE_MAX_ATTEMPTS).
+        worktree = story.get("worktree", "")
+        # Resolve the worktree's ACTUAL HEAD branch (a rework round can
+        # leave it on an alias agent/<key>-<suffix>) so the gate's rebase,
+        # push, CI poll and _merge_pr all operate on the one branch
+        # _merge_pr merges. The hardcoded convention name previously
+        # named a branch a prior _merge_pr had already deleted ("src
+        # refspec ... does not match any") or a stale twin, and the CI
+        # poll queried a SHA that was never pushed to it. The resolver
+        # itself fails open to the convention name when the worktree
+        # cannot be probed, so no local fallback is needed here - and
+        # none may be added: a locally computed convention branch is the
+        # exact mistake the round-2 review finding names.
+        from .pr import _resolve_story_branch
+
+        if worktree and Path(worktree).is_dir():
+            branch = _resolve_story_branch(worktree, key)
+        else:
+            # No worktree to probe (missing/anomalous): nothing was
+            # dispatched, so no alias can exist. Hand the gate NO
+            # branch at all - a locally computed convention branch is
+            # the exact mistake the round-2 review finding names, and
+            # the gate's own is_dir guard skips rebase/push for a
+            # missing worktree without spawning a subprocess (the
+            # CI-gate-disabled path must run zero subprocesses, see
+            # test_advance_pipeline_ci_gate_disabled_skips_ci).
+            branch = ""
+        gate_error = ""
+        ci_definitive_fail = False
+        ci_wait = False
+        # S5: a story already polling a pending CI run must not
+        # re-rebase/force-push on every tick - with the non-blocking CI
+        # poll that mints a new SHA whenever origin/master moved,
+        # restarting CI and burning Actions minutes. Skip straight to
+        # polling the exact SHA recorded on the first pending observation.
+        if story.get("ci_pending_sha"):
+            pushed_sha = story["ci_pending_sha"]
+        else:
+            gate_error, pushed_sha = _rebase_and_push_for_merge(plan_name, key, branch, worktree)
+        if not gate_error:
+            poll_branch = branch or _degraded_ci_branch(key)
+            ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
+            if ci["state"] == "cancelled" and not story.get(
+                "ci_rerun_attempted"
+            ):
+                # Worth exactly one automatic rerun before treating it
+                # as a failure - an abnormal queue delay can cancel
+                # jobs with no code-quality signal at all.
+                story["ci_rerun_attempted"] = True
+                _ci_rerun(pushed_sha)
+                ci = _merge_gate_ci_status(poll_branch, sha=pushed_sha)
+            if ci["state"] == "fail":
+                gate_error = f"ci fail: {ci['error']}"
+                # Only a genuine test-failure verdict is "definitive" -
+                # cancelled (queue/infra flake, already given one
+                # auto-rerun above) and pending are NOT, and must keep
+                # retrying via the ordinary merge_attempts path below,
+                # not consume rework budget.
+                ci_definitive_fail = True
+            elif ci["state"] == "cancelled":
+                gate_error = f"ci fail: {ci['error']}"
+            elif ci["state"] == "pending":
+                story.setdefault("ci_pending_since", datetime.now(timezone.utc).isoformat())
+                story["ci_pending_sha"] = pushed_sha
+                if _ci_pending_expired(story["ci_pending_since"]):
+                    _notify_user(
+                        plan_name,
+                        f"{key} CI has been pending since "
+                        f"{story['ci_pending_since']} and exceeded the "
+                        f"merge-gate pending bound; giving up on the wait.",
+                        story_key=key,
+                        severity="warning",
+                        event="ci_pending_stalled",
+                        dedup_key=f"ci_pending_stalled:{key}",
+                        **(
+                            {"correlation_id": story["correlation_id"]}
+                            if story.get("correlation_id")
+                            else {}
+                        ),
+                    )
+                    story.pop("ci_pending_since", None)
+                    story.pop("ci_pending_sha", None)
+                    gate_error = f"ci pending: {ci['error']}"
+                else:
+                    ci_wait = True
+            if ci["state"] != "pending":
+                story.pop("ci_pending_since", None)
+                story.pop("ci_pending_sha", None)
+        if ci_wait:
+            summary["ci_pending"].append(key)
+            continue
+        if not gate_error:
+            # Independent of review: re-run the acceptance oracle
+            # against the just-rebased branch right before merging.
+            # Closes the gap CI alone can't (a repo without CI, or a
+            # CI-independent slip between tests_passed and review).
+            acc = _reverify_acceptance(story, worktree, key)
+            if acc["state"] == "fail":
+                gate_error = f"acceptance reverify fail: {acc['error']}"
+        if not gate_error:
+            # Independent of tests: a green suite doesn't mean the
+            # project actually builds (PR #48 merged with `npm run
+            # build` broken - retro §3.1).
+            build = _reverify_build(worktree)
+            if build["state"] == "fail":
+                gate_error = f"build reverify fail: {build['error']}"
+
+        if gate_error:
+            # Opt-in (PIPELINE_REWORK_ON_CI_FAIL=1): a DEFINITIVE CI test
+            # failure - not a transient rebase/push error, not
+            # pending/cancelled - can be caused by the agent's own
+            # committed test file rather than the reviewed implementation
+            # (the reviewer is acceptance-scoped and never saw it). Retrying
+            # an unchanged branch identically MERGE_MAX_ATTEMPTS times can
+            # never fix that; hand the CI failure back to the implementer as
+            # rework feedback instead, bounded by the SAME rework budget
+            # review_story uses, so a story that never converges still
+            # parks/escalates rather than looping forever. See
+            # MERGE_CI_REWORK_PLAN.md, 2026-07-17 (gpt-oss retry_backoff /
+            # token_bucket: ground-truth-correct code abandoned because the
+            # agent's own broken self-test tripped this gate).
+            rework_ok = (
+                ci_definitive_fail
+                and os.environ.get("PIPELINE_REWORK_ON_CI_FAIL", "0") == "1"
+            )
+            if rework_ok:
+                # Bound by MERGE_MAX_ATTEMPTS via the merge_attempts
+                # counter, which PERSISTS across the rework -> review
+                # APPROVE -> merge-gate cycle. rework_attempts does NOT:
+                # the review APPROVE path pops it on every pass (the
+                # reviewer APPROVEs because it is acceptance-scoped and
+                # the oracle is green), so reusing rework_attempts here
+                # loops forever - each CI-fail re-increments 0->1 and the
+                # cap never exhausts (verified 2026-07-17 on token_bucket:
+                # four identical "routed to rework (1/3)" notifications,
+                # same broken assertion every round). merge_attempts is
+                # the merge gate's own counter and is not reset by review,
+                # so it bounds the loop: MERGE_MAX_ATTEMPTS rework rounds,
+                # then the fall-through below terminal-fails.
+                rework_ok = story.get("merge_attempts", 0) < MERGE_MAX_ATTEMPTS
+
+            if rework_ok:
+                attempts = story.get("merge_attempts", 0) + 1
+                story["merge_attempts"] = attempts
+                # L1 (REVIEWER_ESCALATION_PLAN.md): flag this rework as
+                # CI-triggered so the next dispatch_story raises the
+                # agent's done-bar to full-suite-green (env
+                # LOCAL_AGENT_REWORK_FULL_SUITE). Without it the rework
+                # keeps the oracle-green bar and re-fails CI on the same
+                # assertion every round (the agent's own broken test is
+                # invisible to the acceptance-scoped oracle/reviewer).
+                story["ci_rework"] = True
+                story["review_feedback"] = _ci_rework_feedback(gate_error, attempts)
+                story["status"] = "changes_requested"
+                _notify_user(
+                    plan_name,
+                    f"{key} merge-gate CI failed ({gate_error}); "
+                    f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).",
+                    event="merge_ci_rework",
+                    **(
+                        {
+                            "correlation_id": story["correlation_id"],
+                            "attempt": story.get("dispatch_attempts", 0),
+                        }
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
+                summary["notify"].append(key)
+                continue
+
+            attempts = story.get("merge_attempts", 0) + 1
+            story["merge_attempts"] = attempts
+            if attempts >= MERGE_MAX_ATTEMPTS:
+                story["status"] = "failed"
+                story["merge_error"] = gate_error
+                _notify_user(
+                    plan_name,
+                    f"{key} merge gate failed {attempts}x "
+                    f"({gate_error}); giving up - needs human intervention.",
+                    event="merge_gate_failed",
+                    **(
+                        {"correlation_id": story["correlation_id"]}
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
+                summary["failed"].append(key)
+            else:
+                # leave pr_open; the next tick retries within budget.
+                _notify_user(
+                    plan_name,
+                    f"{key} merge gate attempt {attempts}/"
+                    f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.",
+                    event="merge_gate_retry",
+                    **(
+                        {"correlation_id": story["correlation_id"]}
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
+            summary["notify"].append(key)
+            continue
+
+        # _merge_pr removes the worktree and deletes the branch, so the
+        # self-source diff must be taken BEFORE the merge, not after.
+        mcp_touched = _mcp_self_source_touched(
+            worktree, f"origin/{_default_branch()}"
+        )
+        try:
+            _merge_pr(story.get("worktree", ""), key)
+        except Exception as e:  # noqa: BLE001 (gh/git transient failure - see MERGE_MAX_ATTEMPTS)
+            attempts = story.get("merge_attempts", 0) + 1
+            story["merge_attempts"] = attempts
+            if attempts >= MERGE_MAX_ATTEMPTS:
+                story["status"] = "failed"
+                story["merge_error"] = str(e)
+                _notify_user(
+                    plan_name,
+                    f"{key} merge failed {attempts}x "
+                    f"({e}); giving up - needs human intervention.",
+                    event="merge_failed",
+                    **(
+                        {"correlation_id": story["correlation_id"]}
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
+                summary["failed"].append(key)
+            else:
+                # leave pr_open; the next tick retries within budget.
+                _notify_user(
+                    plan_name,
+                    f"{key} merge attempt {attempts}/"
+                    f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.",
+                    event="merge_retry",
+                    **(
+                        {"correlation_id": story["correlation_id"]}
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
+            summary["notify"].append(key)
+            continue
+        story["status"] = "done"
+        story.pop("merge_attempts", None)
+        story.pop("parked_reason", None)
+        story.pop("ci_rerun_attempted", None)
+        story.pop("ci_rework", None)  # L1: clear the rework flag on done
+        _mark_plane_done(key, plan_name)
+        _notify_user(
+            plan_name,
+            f"{key} merged",
+            story_key=key,
+            event="story_merged",
+            **(
+                {"correlation_id": story["correlation_id"]}
+                if story.get("correlation_id")
+                else {}
+            ),
+        )
+        # A fully-done self-repo plan must enter the retro backlog no
+        # matter which path marked the last story done (dedup inside
+        # _record_retro_pending makes repeat calls across ticks safe).
+        _maybe_record_retro(plan_name, manifest)
+        if mcp_touched:
+            _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
+            summary["notify"].append(key)
+        summary["merged"].append(key)
+    _atomic_write_json(manifest_path, manifest)

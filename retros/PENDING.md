@@ -161,3 +161,9 @@ if a precise date is needed when writing one of these up.
 - standalone-agents-provisioning-fix — completed 2026-09-10, 2 stories
 - wedge-and-logts-fix — completed 2026-09-10, 3 stories
 - readme-pitch-fix — completed 2026-09-11, 1 stories
+- macos-ci-reenable — completed 2026-09-11, 1 stories
+- ci-green — completed 2026-09-11, 2 stories
+- ci-unmasked-failures — completed 2026-09-11, 2 stories
+- fallback-retry-final — completed 2026-09-11, 1 stories
+- ci-gate-visible — completed 2026-09-11, 1 stories
+- release-docs — completed 2026-09-11, 2 stories

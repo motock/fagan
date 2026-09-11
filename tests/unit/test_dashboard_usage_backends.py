@@ -12,6 +12,7 @@ The collector is always stubbed here — these tests never probe a real backend.
 import copy
 import json
 import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient

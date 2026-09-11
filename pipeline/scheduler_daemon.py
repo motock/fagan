@@ -133,6 +133,47 @@ def _reconcile_join_timeout_seconds() -> float:
     return value
 
 
+# Abandon-restart escape hatch (story LOCKSTARVE-C2): process death is the
+# only thing that releases a flock, and the launchd job
+# com.claude.pipeline.advance-scheduler has KeepAlive=true, so exiting IS the
+# recovery. After this many CONSECUTIVE watchdog-worker abandonments (scan or
+# reconcile) the daemon writes its health file, logs an ERROR naming a leaked
+# plan lock as the suspected cause, and raises SystemExit(1) so launchd
+# restarts the process and the leaked ``_plan_lock`` flock is released.
+_ABANDON_RESTART_THRESHOLD_ENV = "PIPELINE_SCAN_ABANDON_RESTART_THRESHOLD"
+_DEFAULT_ABANDON_RESTART_THRESHOLD = 3
+
+
+def _abandon_restart_threshold() -> int:
+    """Read the abandon-restart threshold from the environment, per call.
+
+    Mirrors :func:`_scan_join_timeout_seconds`' idiom: the value is read from
+    the environment on every call (never cached on the daemon, so a live env
+    change is honoured) and a malformed value degrades to the default (3)
+    with a warning instead of crashing the loop.
+
+    Deliberate difference from the join-timeout helpers: a value <= 0 is
+    returned UNCHANGED and DISABLES the escape hatch entirely (the daemon
+    never restarts itself), rather than being substituted with the default.
+    An operator must be able to turn the hatch off; clamping <= 0 to the
+    default would silently re-arm a hatch the operator explicitly disabled.
+    """
+    raw = os.environ.get(_ABANDON_RESTART_THRESHOLD_ENV)
+    if raw is None:
+        return _DEFAULT_ABANDON_RESTART_THRESHOLD
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "%s must be an integer, got %r; using default %d",
+            _ABANDON_RESTART_THRESHOLD_ENV,
+            raw,
+            _DEFAULT_ABANDON_RESTART_THRESHOLD,
+        )
+        return _DEFAULT_ABANDON_RESTART_THRESHOLD
+    return value
+
+
 class SchedulerDaemon:
     """Drives the event-driven pipeline's scan + reconcile cadence.
 
@@ -184,6 +225,16 @@ class SchedulerDaemon:
         # ``reconcile_timed_out`` counter keeps reflecting the earlier
         # timeout.
         self._last_reconcile_attempt_timed_out = False
+        # Abandon-restart escape hatch state (story LOCKSTARVE-C2): the
+        # CONSECUTIVE watchdog-worker abandonment streak. Incremented only in
+        # ``_run_with_watchdog``'s abandonment branch (one point covers both
+        # the scan and reconcile phases) and reset to 0 by ``run_once`` on
+        # any tick whose phases all completed normally — consecutive, never
+        # cumulative, so abandonments spread across a healthy day never
+        # trigger a restart. Surfaced in ``health()`` only while non-zero
+        # (the gated ``scan_timed_out`` pattern) so a clean tick's key set
+        # stays byte-for-byte unchanged.
+        self._consecutive_abandons = 0
 
     def start(self) -> None:
         """Perform an immediate reconcile sweep on startup.
@@ -224,6 +275,11 @@ class SchedulerDaemon:
             snapshot["last_reconcile_timeout_ts"] = (
                 self._last_reconcile_timeout_ts
             )
+        if self._consecutive_abandons:
+            # Abandon-restart streak (story LOCKSTARVE-C2), gated exactly
+            # like ``scan_timed_out``: present only once it is non-zero so
+            # the clean-tick key set stays byte-for-byte unchanged.
+            snapshot["consecutive_abandonments"] = self._consecutive_abandons
         return snapshot
 
     def config_fingerprint(self) -> dict:
@@ -291,7 +347,10 @@ class SchedulerDaemon:
         KNOWN LIMITATION (do not fix here): abandoning the worker leaves any
         plan ``_plan_lock`` held by the wedged call locked until the process
         dies — the watchdog converts a total freeze into a degraded-but-alive
-        scheduler; lock recovery is future work.
+        scheduler; lock recovery is future work. The escape hatch (story
+        LOCKSTARVE-C2) bounds the damage: after
+        ``PIPELINE_SCAN_ABANDON_RESTART_THRESHOLD`` consecutive abandonments
+        the daemon exits so launchd restarts it and the flock is released.
         """
         box = {}
 
@@ -319,6 +378,12 @@ class SchedulerDaemon:
         # plan _plan_lock held by the wedged call locked until the process
         # dies; the watchdog converts a total freeze into a degraded-but-alive
         # scheduler, and lock recovery is future work.
+        # LOCKSTARVE-C2: count the abandonment toward the consecutive streak
+        # that drives the abandon-restart escape hatch. Both phases route
+        # through here, so this single increment point covers scan and
+        # reconcile; a watched fn that RAISES is a failed call, not an
+        # abandonment, and leaves the streak untouched.
+        self._consecutive_abandons += 1
         return False, elapsed
 
     def _scan_with_watchdog(self, scan_fn):
@@ -328,6 +393,15 @@ class SchedulerDaemon:
         rename-and-delegate shape used elsewhere in this codebase, e.g.
         ``_advance_pipeline_locked`` / ``_advance_pipeline_locked_impl``),
         kept so existing callers and tests are untouched.
+
+        KNOWN LIMITATION (inherited from ``_run_with_watchdog``): abandoning
+        the worker leaves any plan ``_plan_lock`` held by the wedged call
+        locked until the process dies. Escape hatch (story LOCKSTARVE-C2):
+        after ``PIPELINE_SCAN_ABANDON_RESTART_THRESHOLD`` (default 3)
+        CONSECUTIVE abandonments the daemon writes health, logs an ERROR, and
+        raises ``SystemExit(1)`` so launchd (KeepAlive=true) restarts the
+        process — process death is the only thing that releases the leaked
+        flock; values <= 0 disable the hatch.
         """
         return self._run_with_watchdog(
             scan_fn, timeout_s=_scan_join_timeout_seconds(), label="scan"
@@ -341,9 +415,19 @@ class SchedulerDaemon:
         ``interval_s`` has elapsed on the injected clock since the last
         reconcile. Exceptions from either are logged and swallowed so a single
         bad plan cannot kill the loop.
+
+        If the consecutive watchdog-abandonment streak has reached
+        ``PIPELINE_SCAN_ABANDON_RESTART_THRESHOLD`` (story LOCKSTARVE-C2),
+        the health file is written first and THEN ``SystemExit(1)`` is
+        raised, so launchd restarts the process and releases any leaked plan
+        flock.
         """
         scanned = False
         reconciled = False
+        # Streak snapshot for this tick (story LOCKSTARVE-C2): if no phase
+        # abandons a worker below, every phase completed normally and the
+        # streak ends — reset it after the phases.
+        streak_at_start = self._consecutive_abandons
 
         # Scan phase – always attempted, count regardless of success. The scan
         # runs in a worker thread bounded by a join deadline (story sh-02) so
@@ -419,11 +503,45 @@ class SchedulerDaemon:
                 self._last_reconcile_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
                 self._last_reconcile = now
 
+        # LOCKSTARVE-C2: a tick in which no phase abandoned a worker means
+        # every phase completed normally, so the consecutive-abandonment
+        # streak ends. The reset happens BEFORE the threshold check (and
+        # before the health write, so the file reflects the reset) — the
+        # threshold is re-read from the env per call, and checking it first
+        # could exit on a healthy tick after an operator lowered the
+        # threshold under an existing streak.
+        if self._consecutive_abandons == streak_at_start:
+            self._consecutive_abandons = 0
+
         if self._health_path is not None:
             try:
                 self.write_health(self._health_path)
             except Exception:  # pragma: no cover - unlikely but safe
                 logger.exception("write_health failed")
+
+        # Abandon-restart escape hatch (story LOCKSTARVE-C2): process death
+        # is the only thing that releases a flock, and the launchd job has
+        # KeepAlive=true, so exiting IS the recovery. This runs AFTER the
+        # health write so the final state is observable on disk, and it
+        # raises SystemExit (never the hard process-kill, which would skip
+        # the health write). SystemExit inherits BaseException, so the
+        # ``except Exception`` handlers above let it propagate. ``>=`` rather
+        # than ``==``: a single tick can abandon more than one worker's worth
+        # of streak (e.g. an operator lowering the threshold mid-streak), and
+        # that must still restart.
+        threshold = _abandon_restart_threshold()
+        if threshold > 0 and self._consecutive_abandons >= threshold:
+            logger.error(
+                "%d consecutive watchdog worker abandonment(s) reached the "
+                "abandon-restart threshold of %d (%s); a leaked plan "
+                "_plan_lock held by an abandoned worker is the suspected "
+                "cause, and process death is the only thing that releases "
+                "the flock — exiting so launchd restarts the daemon",
+                self._consecutive_abandons,
+                threshold,
+                _ABANDON_RESTART_THRESHOLD_ENV,
+            )
+            raise SystemExit(1)
 
         return {"scanned": scanned, "reconciled": reconciled}
 

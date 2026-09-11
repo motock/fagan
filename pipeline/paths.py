@@ -59,7 +59,7 @@ _WORKTREE_LOG_EXCLUDES = (
     # other four untracked-and-unignored, so _commit_wip's `git add -A` swept
     # them into story commits (a stray test_author.log.ts reached
     # agent/chatreload-1 on 2026-09-11).
-    "agent.log", "*.log.ts", "review.log", ".agent_plan.md",
+    "agent.log", "*.log.ts", "*.log.raw", "review.log", ".agent_plan.md",
     ".agent_scratchpad.md", ".agent_plan_src_hash",
 )
 

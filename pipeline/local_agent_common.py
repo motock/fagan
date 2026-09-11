@@ -484,7 +484,7 @@ def exclude_runtime_artifacts() -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.read_text() if path.exists() else ""
-        additions = [p for p in ("agent.log", "__pycache__/", "*.pyc", ".agent_transcript.json") if p not in existing]
+        additions = [p for p in ("agent.log", "__pycache__/", "*.pyc", ".agent_transcript.json", "*.log.raw") if p not in existing]
         if additions:
             path.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "")
                             + "\n".join(additions) + "\n")

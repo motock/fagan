@@ -305,8 +305,10 @@ def test_gate_default_unchanged_env_unset_means_enabled():
         [
             sys.executable,
             "-c",
-            "import pipeline.server, pipeline.ci; "
-            "print(pipeline.ci.PIPELINE_MERGE_CI_GATE)",
+            (
+                "import pipeline.server, pipeline.ci; "
+                "print(pipeline.ci.PIPELINE_MERGE_CI_GATE)"
+            ),
         ],
         cwd=str(REPO_ROOT),
         env=env,

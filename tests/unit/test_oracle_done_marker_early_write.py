@@ -60,11 +60,6 @@ def green_oracle(monkeypatch, oracle):
 def marker_spy(monkeypatch, oracle):
     """Record every write_done_marker call without writing anything."""
     calls = []
-    if not hasattr(oracle, "write_done_marker"):
-        pytest.fail(
-            "scripts/local_agent_oracle.py must define a module-level "
-            "write_done_marker(rc) helper (PLANREFRESH-2) before the "
-            "no-marker-on-red paths can be spied")
     monkeypatch.setattr(oracle, "write_done_marker", calls.append)
     return calls
 

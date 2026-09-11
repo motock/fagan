@@ -40,6 +40,7 @@
 - `description` is read only for the Plane issue body when Plane is enabled; the manifest and dispatch prompt do not use it — treat it as optional human context for plan review.
 - `backend` (optional) pins this one story's dispatch provider, independent of the process-wide `PIPELINE_BACKEND_DISPATCH`. `ingest_plan` rejects an unrecognized value at ingest time. Omit to use the process-wide default.
 - `role_config` (optional, plan-level — a sibling of `epics`, not a story field): per-role provider/model overrides for `overlord`/`planner`/`dispatch`/`review`/`decompose`, e.g. `{"review": {"provider": "mlx", "model": "qwen"}}`. See the README's "Per-role provider/model configuration" section and `model_registry.json` for the full priority chain and available providers/models.
+- `dispatch_lease_expires_at` / `dispatch_lease_owner_pid` (runtime, written by `pipeline/dispatch_lease.py` — do NOT set these by hand in a plan file): the dispatch lease that stops a released plan lock from double-dispatching a story (LOCKSTARVE-B2). `dispatch_lease_expires_at` is an ISO-8601 UTC timestamp string (`now + PIPELINE_DISPATCH_LEASE_TTL_SECONDS`, default 1800); `dispatch_lease_owner_pid` is the claimer's `os.getpid()` (diagnostic only, never trusted for ownership). A missing/malformed/expired lease is re-claimable (fail secure); a live lease is never stolen.
 
 ## Do not invent fields
 

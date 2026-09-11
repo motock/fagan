@@ -18,8 +18,8 @@ asking for the gap to be closed rather than a quick merge.
 ## Setup
 
 ```bash
-git clone https://github.com/motock/claude-pipeline-mcp.git
-cd claude-pipeline-mcp
+git clone https://github.com/motock/fagan.git
+cd fagan
 scripts/install.sh --dev   # venv + requirements-dev.txt (adds pytest, ruff)
 ```
 

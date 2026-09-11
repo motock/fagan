@@ -1,6 +1,6 @@
-# Autonomous SDLC Agent Pipeline
+# Fagan
 
-[![CI](https://github.com/motock/claude-pipeline-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/motock/claude-pipeline-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/motock/fagan/actions/workflows/ci.yml/badge.svg)](https://github.com/motock/fagan/actions/workflows/ci.yml)
 
 **Spend tokens on judgment, not typing.**
 
@@ -59,8 +59,8 @@ authorization** below.
 
 ```bash
 # 1. Clone and install the Python environment
-git clone https://github.com/motock/claude-pipeline-mcp.git
-cd claude-pipeline-mcp
+git clone https://github.com/motock/fagan.git
+cd fagan
 scripts/install.sh          # creates .venv, installs requirements.txt
 
 # 2. Register the MCP server with Claude Code (adjust the path to where you cloned it)

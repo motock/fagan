@@ -58,10 +58,21 @@ def green_oracle(monkeypatch, oracle):
 
 @pytest.fixture
 def marker_spy(monkeypatch, oracle):
-    """Record every write_done_marker call without writing anything."""
+    """Record every write_done_marker call without writing anything.
+
+    Left unarmed (calls stays unusable) if the PLANREFRESH-2 helper does not
+    exist yet; each spy test asserts its presence first so those cases FAIL
+    with a clear message instead of ERRORing in fixture setup."""
     calls = []
-    monkeypatch.setattr(oracle, "write_done_marker", calls.append)
+    if hasattr(oracle, "write_done_marker"):
+        monkeypatch.setattr(oracle, "write_done_marker", calls.append)
     return calls
+
+
+def _require_write_done_marker(oracle):
+    assert hasattr(oracle, "write_done_marker"), (
+        "scripts/local_agent_oracle.py must define a module-level "
+        "write_done_marker(rc) helper (PLANREFRESH-2)")
 
 
 def _read_marker(cwd):

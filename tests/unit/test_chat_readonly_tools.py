@@ -104,7 +104,7 @@ _READ_FILE_CANNED = {
 def test_read_file_tool_is_registered_with_documented_shape():
     entry = TOOLS["read_file"]  # KeyError here == implementation not landed yet
     assert set(entry) == {"description", "params", "execute"}
-    assert entry["description"] == "Read a file from the active workspace by relative path."
+    assert entry["description"] == "Read a file by relative path."
     assert entry["params"] == {"path": "str"}
     assert callable(entry["execute"])
 
@@ -515,8 +515,8 @@ class TestModuleInvariants:
 # TOOLS entry lands.
 # --------------------------------------------------------------------------- #
 _LIST_DIRECTORY_DESCRIPTION = (
-    "List the immediate contents of a directory in the active workspace "
-    "by relative path (non-recursive)."
+    "List the immediate contents of a directory by relative path "
+    "(non-recursive)."
 )
 
 _LIST_DIRECTORY_CANNED = {
@@ -649,7 +649,7 @@ def test_list_directory_execute_passes_path_through_verbatim(raw_path):
 # until the TOOLS entry lands.
 # --------------------------------------------------------------------------- #
 _SEARCH_CODE_DESCRIPTION = (
-    "Search the active workspace for a text pattern (grep-style) and return "
+    "Search for a text pattern (grep-style) and return "
     "matching lines with file and line number."
 )
 

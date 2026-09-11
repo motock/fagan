@@ -72,7 +72,7 @@ def _probe_acquire(plan_name, timeout=5.0):
         try:
             with concurrency._plan_lock(plan_name) as ok:
                 result["acquired"] = bool(ok)
-        except Exception as exc:  # recorded, classified below
+        except Exception as exc:  # noqa: BLE001 - recorded, classified below
             result["error"] = exc
 
     thread = threading.Thread(target=run, daemon=True)

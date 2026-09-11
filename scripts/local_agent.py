@@ -105,6 +105,7 @@ from app import (
 from pipeline import (
     edit_guards,  # noqa: F401 (kept: tests assert la.edit_guards is edit_guards; moved run_tool_impl reads it via origin["edit_guards"])
 )
+from pipeline.agent_log_format import format_step
 from pipeline.local_agent_common import (
     CWD,
     PersistingList,
@@ -228,9 +229,28 @@ def emit_step_line(step: int, message: str, correlation_id: str = "") -> str:
     ``read_correlation_id()`` explicitly. The suffix is computed fresh per
     call and never accumulated.
     """
-    line = f"[step {step}] {message}"
-    if correlation_id:
-        line += f" [cid={correlation_id}]"
+    idx = message.find(": ")
+    if idx != -1:
+        arg = message[idx + 2:]
+        if len(arg) <= 120:
+            line = format_step(
+                step, message[:idx], arg, correlation_id=correlation_id
+            )
+        else:
+            # format_step truncates its argument to arg[:120]
+            # (pipeline/agent_log_format.py), but the pre-delegation
+            # emit_step_line never truncated.  The DONE call site passes a
+            # free-form summary, so render long arguments verbatim here —
+            # exactly the old f-string — instead of losing characters past
+            # char 120 (build_detect._last_done_summary takes the summary
+            # verbatim into story_status._is_give_up_summary).
+            line = f"[step {step}] {message}"
+            if correlation_id:
+                line += f" [cid={correlation_id}]"
+    else:
+        line = f"[step {step}] {message}"
+        if correlation_id:
+            line += f" [cid={correlation_id}]"
     print(line, flush=True)
     return line
 

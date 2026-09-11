@@ -79,9 +79,15 @@ class TestEncodingHelperPresent:
     def test_quote_imported(self) -> None:
         # The module must import urllib.parse.quote (or from urllib.parse
         # import quote) so the helper can use it without a local import.
-        import importlib
-
-        mod = importlib.reload(importlib.import_module("app.chat"))
+        # Deliberately NOT importlib.reload(): reload() rebinds app.chat's
+        # module-level TOOLS to a NEW dict, orphaning the reference every
+        # other test module captured via `from app.chat import TOOLS`, so
+        # their monkeypatch.setitem writes land in a dict _execute_tool no
+        # longer reads. That broke 7 tests in
+        # test_chat_tool_arg_error_enrichment.py whenever xdist put the two
+        # files in one worker in this order (caught by the macOS CI leg,
+        # 2026-09-11). The already-imported module proves the same property.
+        mod = chat_module
         # Either a `quote` name or `urllib.parse` module attribute works.
         assert hasattr(mod, "quote") or (
             hasattr(mod, "urllib") and hasattr(mod.urllib.parse, "quote")

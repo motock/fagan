@@ -7,6 +7,7 @@ This module implements the ChatService class, which orchestrates a single turn o
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -14,6 +15,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 
@@ -627,6 +629,35 @@ def chat_endpoint(
     svc = ChatService(api_key=x_pipeline_api_key, api_base_url=_resolve_chat_api_base_url(request))
     result = svc.execute_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace)
     return ChatResponse(**result)
+
+
+def _sse_pack(event: dict) -> str:
+    return f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
+
+
+@chat_router.post("/chat/stream")
+def chat_stream_endpoint(
+    req: ChatRequest,
+    request: Request = None,
+    x_pipeline_api_key: str | None = Header(default=None, alias="x-pipeline-api-key"),
+):
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="message must not be empty")
+    svc = ChatService(api_key=x_pipeline_api_key, api_base_url=_resolve_chat_api_base_url(request))
+
+    def event_stream():
+        try:
+            for event in svc.stream_turn(req.message, plan_name=req.plan_name, history=req.history, workspace=req.workspace):
+                yield _sse_pack(event)
+        except Exception:
+            logging.getLogger("pipeline").exception("chat stream failed")
+            yield _sse_pack({"type": "error", "data": {"message": "chat stream failed"}})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 """
 End of file

@@ -86,7 +86,9 @@ _service = PipelineService()
 async def _enforce_api_key(request: Request, call_next):
     if request.url.path.startswith("/api/"):
         try:
-            require_api_key(request.headers.get("x-pipeline-api-key"))
+            require_api_key(
+                request.headers.get("x-pipeline-api-key"), request.url.path
+            )
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     return await call_next(request)

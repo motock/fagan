@@ -54,6 +54,29 @@ USAGE_BLIND_LOG_INTERVAL = int(os.environ.get("USAGE_BLIND_LOG_INTERVAL", "60"))
 # <=0 disables the cap (dispatch every ready story each tick).
 MAX_CONCURRENT_AGENTS = int(os.environ.get("PIPELINE_MAX_CONCURRENT_AGENTS", "3"))
 
+# Cap on how many stories ONE plan may dispatch in a single tick, regardless
+# of backend. The MAX_CONCURRENT_AGENTS cap above only bounds ON-DEVICE
+# concurrency: a cloud-backed dispatch bypasses it entirely, so a tick can
+# otherwise launch every ready :cloud story back-to-back. Each dispatch pays
+# a synchronous test-author + planner call while the tick holds the plan's
+# _plan_lock, so an unbounded run holds that lock for minutes and refuses
+# external approve_merge calls with "plan busy (scheduler tick in progress)".
+# This is an additional, independent bound layered on top of the device-slot
+# math: a story deferred by it keeps its current dispatch-eligible status
+# (todo/interrupted) and the next tick picks it up. <=0 disables the cap
+# (dispatch every ready story each tick). A malformed value degrades to the
+# default instead of raising: a bad operator override must not take a tick
+# down.
+def _int_env(name: str, default: int) -> int:
+    """Read an int env var; a malformed value degrades to the default."""
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+PIPELINE_MAX_DISPATCH_PER_TICK = _int_env("PIPELINE_MAX_DISPATCH_PER_TICK", 1)
+
 # Error budget for the merge step. _merge_pr shells out to `gh`/`git push`,
 # any of which can fail transiently (network, a momentary GitHub 5xx). Rather
 # than crash the tick or burn the story on the first hiccup, a failed merge
@@ -298,6 +321,7 @@ __all__ = [
     "MERGE_MAX_ATTEMPTS",
     "PIPELINE_AUTONOMY",
     "PIPELINE_LOCAL_MAX_RISK",
+    "PIPELINE_MAX_DISPATCH_PER_TICK",
     "PIPELINE_REVIEWER_AUTO_FIX",
     "PIPELINE_RISK_THRESHOLD",
     "PLANE_MAX_ATTEMPTS",

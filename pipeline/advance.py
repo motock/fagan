@@ -20,7 +20,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .concurrency import PlanLockReacquireTimeout, _released_plan_lock
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
+from .dispatch_lease import claim_dispatch_lease
 from .wedge_io import run_wedge_scan
 
 
@@ -434,12 +436,38 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 if not status.get("ok", True):
                     gated.append(key)
                     continue
+            # LOCKSTARVE-B3: claim the cross-tick/cross-process dispatch
+            # lease (LOCKSTARVE-B2) before releasing the plan lock around
+            # dispatch_story below. The check-then-set must run against a
+            # FRESH on-disk read, not the top-of-tick in-memory `story` - an
+            # earlier iteration of this same loop already released and
+            # re-acquired the lock once, so another owner may have claimed
+            # this story's lease or advanced its status during that window.
+            # Claiming against the stale in-memory copy would both miss a
+            # live lease already on disk and clobber it with our own.
+            m = json.loads(manifest_path.read_text())
+            fresh_story = m["stories"].get(key)
+            if fresh_story is None:
+                # A re-ingest during an earlier release window can drop this
+                # story entirely - skip it rather than KeyError the tick.
+                continue
+            if fresh_story["status"] not in ("todo", "interrupted", "changes_requested"):
+                # Another process already advanced this story during a
+                # release window; re-dispatching it would be the same
+                # double-dispatch by a different route.
+                continue
+            if not claim_dispatch_lease(fresh_story):
+                continue
+            # Persist the claim BEFORE releasing the lock - an unpersisted
+            # lease protects nothing.
+            _atomic_write_json(manifest_path, m)
             if capped and on_device:
                 # Only a dispatch that actually launches on-device consumes
                 # the slot; a cloud dispatch must not touch the counter.
                 free_device_slots -= 1
             try:
-                result = dispatch_story(plan_name, key)
+                with _released_plan_lock(plan_name):
+                    result = dispatch_story(plan_name, key)
                 if isinstance(result, dict) and result.get("ok") is False:
                     # dispatch_story now returns a structured failure (e.g. a
                     # git fetch/worktree-add error) instead of letting the
@@ -464,12 +492,32 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     summary["dispatched"].append(key)
                 else:
                     summary.setdefault("skipped", []).append(key)
+            except PlanLockReacquireTimeout:
+                # The plan flock could not be re-acquired after the released
+                # window: this thread no longer holds it, so any further
+                # manifest mutation this tick makes would race whichever
+                # other thread/process took it over. Re-raise rather than
+                # letting the broad handler below treat this as an ordinary
+                # dispatch failure - that would bump dispatch_attempts and
+                # keep writing the manifest with no lock held, and (if the
+                # timeout fires after dispatch_story already launched the
+                # agent) misattribute a healthy in-progress story as a
+                # failed dispatch. Let the tick abort with this cause
+                # instead; the next tick starts clean.
+                raise
             except Exception as e:  # noqa: BLE001 (git fetch/worktree/backend launch failure)
                 # Re-read: dispatch_story only writes the manifest on a
                 # successful launch, so on a raise the on-disk status is
                 # still todo/interrupted - bump the attempt counter there.
+                # This also clears the dispatch lease from the SAME fresh
+                # read: the lock was released around dispatch_story above,
+                # so the manifest may have changed underneath us and only a
+                # freshly re-read copy may be written back (never the stale
+                # top-of-tick `manifest`/`stories`/`story` references).
                 m = json.loads(manifest_path.read_text())
                 st = m["stories"][key]
+                st.pop("dispatch_lease_expires_at", None)
+                st.pop("dispatch_lease_owner_pid", None)
                 attempts = st.get("dispatch_attempts", 0) + 1
                 st["dispatch_attempts"] = attempts
                 # W4L-04: stamp the story's dispatch-failure notifications with
@@ -503,6 +551,15 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         **_cid_kwargs,
                     )
                 summary["notify"].append(key)
+                _atomic_write_json(manifest_path, m)
+            else:
+                # Dispatch succeeded (or was skipped due to store-lock
+                # contention): clear the lease from a fresh read too, for the
+                # same stale-reference reason as the except branch above.
+                m = json.loads(manifest_path.read_text())
+                st = m["stories"][key]
+                st.pop("dispatch_lease_expires_at", None)
+                st.pop("dispatch_lease_owner_pid", None)
                 _atomic_write_json(manifest_path, m)
 
         # 2. Poll running agents: tests fail -> notify (or escalate); tests pass

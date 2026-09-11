@@ -15,15 +15,18 @@ print and ``main()``'s marker write, and the completed work was discarded as
 * a marker write failure never changes the run's outcome.
 """
 
-import importlib.util
 import inspect
 import json
 import os
-import sys
 from datetime import datetime
 from pathlib import Path
 
 import pytest
+
+from tests.unit._local_agent_oracle_test_helpers import (  # noqa: F401
+    _isolate_environ,
+    lao,
+)
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 ORACLE_SOURCE_PATH = SCRIPTS_DIR / "local_agent_oracle.py"
@@ -31,20 +34,10 @@ MARKER_NAME = ".agent_done"
 EXPECTED_DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}
 
 
-def _load_oracle():
-    """Load scripts/local_agent_oracle.py the same way the repo's oracle test
-    helpers do (spec_from_file_location, not sys.path games)."""
-    spec = importlib.util.spec_from_file_location(
-        "local_agent_oracle", str(ORACLE_SOURCE_PATH))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.fixture(scope="module")
 def oracle():
-    return _load_oracle()
+    """The shared, already-loaded scripts/local_agent_oracle.py module."""
+    return lao
 
 
 @pytest.fixture

@@ -25,6 +25,7 @@ _HEALTH_KEYS = {
     "last_error",
     "reconcile_count",
     "scan_count",
+    "reconcile_timed_out",
 }
 
 _FINGERPRINT_KEYS = (

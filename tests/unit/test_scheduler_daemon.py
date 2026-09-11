@@ -359,6 +359,7 @@ def test_health_has_expected_keys():
         "last_error",
         "reconcile_count",
         "scan_count",
+        "reconcile_timed_out",
     }
 
 

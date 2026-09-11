@@ -221,7 +221,7 @@ def test_dashboard_imports_collect_backend_status_from_pipeline_usage():
 
 
 def test_usage_route_defined_exactly_once():
-    src = open(d.__file__).read()
-    assert len(re.findall(r"^def usage\(", src, re.M)) == 1
+    src = Path(d.__file__).read_text()
+    assert len(re.findall(r"^def usage\(", src, re.MULTILINE)) == 1
     hits = [r for r in d.app.routes if getattr(r, "path", None) == "/api/usage"]
     assert len(hits) == 1

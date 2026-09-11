@@ -12,7 +12,7 @@ from app.harness import (
     get_harness,
     resolve_harness_name,
 )
-from pipeline import claude_log_translate, execution
+from pipeline import execution
 
 # Vars that can redirect the `claude` CLI off the first-party Anthropic API
 # (Bedrock/Vertex, a custom ANTHROPIC_BASE_URL, or an injected auth token/key)
@@ -248,32 +248,9 @@ class ClaudeCliDriver:
                 f"the 'claude' harness; a cross-harness selection is a configuration error, not a silent fallback"
             )
         cmd = get_harness(name).build_agent_command(request).argv
-        # stream-json -> canonical agent.log translation (LOG-05): every raw
-        # NDJSON line is preserved verbatim in a <log_path>.raw sidecar while
-        # the main log gets "[step N] <tool>:" / "] DONE:" lines. The state is
-        # minted PER DISPATCH CALL so concurrent dispatches never share a step
-        # counter. The sidecar write is best-effort (mirrors
-        # record_token_usage's try/except OSError): a failed sidecar write
-        # must never break the dispatch or the drain thread.
-        state = claude_log_translate.new_state()
-        raw_log_path = Path(log_path).with_name(log_path.name + ".raw")
-        first_raw_write = not append
-
-        def _capture_raw_and_translate(line):
-            nonlocal first_raw_write
-            try:
-                mode = "w" if first_raw_write else "a"
-                with open(raw_log_path, mode) as raw_fh:
-                    raw_fh.write(line if line.endswith("\n") else line + "\n")
-                first_raw_write = False
-            except OSError:
-                pass
-            return claude_log_translate.translate_line(line, state)
-
         handle = execution.spawn_harness(
             cmd, cwd=cwd, log_path=log_path, append=append,
             env=_first_party_claude_env(),
-            line_filter=_capture_raw_and_translate,
         )
         handle.model = model
         return handle

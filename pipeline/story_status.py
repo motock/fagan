@@ -96,6 +96,15 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 # Determine if activity is stale
                 signals = collect_story_wedge_signals(plan_name, story_key, story)
                 activity_age = signals.get("activity_age_seconds")
+                # A redispatch reuses the worktree, so agent.log can carry an
+                # mtime from a PREVIOUS attempt far older than this dispatch.
+                # Activity cannot be staler than the dispatch that produced
+                # it: clamp to `elapsed` so a freshly launched agent is never
+                # killed before it has had a chance to write. Fires only
+                # once THIS dispatch has itself been quiet past the
+                # threshold.
+                if activity_age is not None:
+                    activity_age = min(activity_age, elapsed)
                 watchdog_summary = None
                 dispatch_error = None
                 if activity_age is not None and activity_age > DISPATCH_STALE_ACTIVITY_SECONDS:

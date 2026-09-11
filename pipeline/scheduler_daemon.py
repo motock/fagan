@@ -13,6 +13,7 @@ import datetime as _dt
 import fcntl
 import json
 import logging
+import math
 import os
 import signal as _signal_module
 import sys
@@ -45,7 +46,10 @@ def _scan_join_timeout_seconds() -> float:
     """Read the scan join deadline from the environment, per call.
 
     Malformed values degrade to the default (900s) instead of crashing the
-    loop: a bad operator override must never take the daemon down.
+    loop: a bad operator override must never take the daemon down. This
+    includes non-finite values: ``inf`` would disable the watchdog entirely
+    (a bounded join against infinity never fires) and ``nan`` gives
+    ``Thread.join`` unspecified behaviour.
     """
     raw = os.environ.get(_SCAN_JOIN_TIMEOUT_ENV)
     if raw is None:
@@ -55,6 +59,14 @@ def _scan_join_timeout_seconds() -> float:
     except ValueError:
         logger.warning(
             "%s must be a number, got %r; using default %gs",
+            _SCAN_JOIN_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_SCAN_JOIN_TIMEOUT_S,
+        )
+        return _DEFAULT_SCAN_JOIN_TIMEOUT_S
+    if not math.isfinite(value):
+        logger.warning(
+            "%s must be finite, got %r; using default %gs",
             _SCAN_JOIN_TIMEOUT_ENV,
             raw,
             _DEFAULT_SCAN_JOIN_TIMEOUT_S,
@@ -83,9 +95,11 @@ _DEFAULT_RECONCILE_JOIN_TIMEOUT_S = 900.0
 def _reconcile_join_timeout_seconds() -> float:
     """Read the reconcile join deadline from the environment, per call.
 
-    Mirrors :func:`_scan_join_timeout_seconds` exactly: malformed and
-    non-positive values degrade to the default (900s) instead of crashing
-    the loop — a bad operator override must never take the daemon down.
+    Mirrors :func:`_scan_join_timeout_seconds` exactly: malformed,
+    non-positive, and non-finite values degrade to the default (900s)
+    instead of crashing the loop — a bad operator override must never take
+    the daemon down, and a non-finite deadline must never silently disable
+    the watchdog.
     """
     raw = os.environ.get(_RECONCILE_JOIN_TIMEOUT_ENV)
     if raw is None:
@@ -95,6 +109,14 @@ def _reconcile_join_timeout_seconds() -> float:
     except ValueError:
         logger.warning(
             "%s must be a number, got %r; using default %gs",
+            _RECONCILE_JOIN_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_RECONCILE_JOIN_TIMEOUT_S,
+        )
+        return _DEFAULT_RECONCILE_JOIN_TIMEOUT_S
+    if not math.isfinite(value):
+        logger.warning(
+            "%s must be finite, got %r; using default %gs",
             _RECONCILE_JOIN_TIMEOUT_ENV,
             raw,
             _DEFAULT_RECONCILE_JOIN_TIMEOUT_S,
@@ -154,6 +176,14 @@ class SchedulerDaemon:
         # tests were reconciled to admit it.
         self._reconcile_timed_out = 0
         self._last_reconcile_timeout_ts = None
+        # Per-attempt flag backing health()'s additive
+        # ``last_reconcile_timeout_ts``: True only while the MOST RECENT
+        # reconcile attempt timed out. Reset at the start of every attempt so
+        # a later clean tick's health() returns exactly the seven pinned keys
+        # again (no stale timestamp leaking in) while the cumulative
+        # ``reconcile_timed_out`` counter keeps reflecting the earlier
+        # timeout.
+        self._last_reconcile_attempt_timed_out = False
 
     def start(self) -> None:
         """Perform an immediate reconcile sweep on startup.
@@ -182,12 +212,18 @@ class SchedulerDaemon:
             "scan_count": self._scan_count,
             "reconcile_timed_out": self._reconcile_timed_out,
         }
-        # The scan watchdog fields stay additive-only: they appear only once a
-        # timeout has happened so the clean-tick health() key set stays what
-        # the pinned tests admit (reconcile_timed_out is always present).
+        # The watchdog timestamp fields stay additive-only: each appears only
+        # on a tick whose phase actually timed out, so the clean-tick
+        # health() key set stays exactly the seven pinned keys
+        # (reconcile_timed_out is always present; the scan counter is
+        # surfaced additively alongside its timestamp, mirroring it).
         if self._scan_timed_out:
             snapshot["scan_timed_out"] = self._scan_timed_out
             snapshot["last_scan_timeout_ts"] = self._last_scan_timeout_ts
+        if self._last_reconcile_attempt_timed_out:
+            snapshot["last_reconcile_timeout_ts"] = (
+                self._last_reconcile_timeout_ts
+            )
         return snapshot
 
     def config_fingerprint(self) -> dict:
@@ -223,11 +259,16 @@ class SchedulerDaemon:
         with :func:`os.replace` for atomicity.
 
         The file payload is ``{**health(), "config": config_fingerprint()}``:
-        the six pinned health keys plus the config fingerprint this process
-        resolved, so the dashboard's ``/api/health`` (and the preflight
-        divergence check) can compare it against their own resolution.
-        ``health()`` itself still returns exactly its pinned six-key set —
-        the ``config`` key exists only in the file.
+        the seven pinned health keys (the six originally pinned keys plus the
+        always-present ``reconcile_timed_out`` counter) plus the config
+        fingerprint this process resolved, so the dashboard's
+        ``/api/health`` (and the preflight divergence check) can compare it
+        against their own resolution. ``health()`` itself returns exactly
+        that pinned seven-key set on a clean tick — the ``config`` key
+        exists only in the file. On a timeout tick the watchdog fields
+        (``scan_timed_out``/``last_scan_timeout_ts`` when the scan timed
+        out, ``last_reconcile_timeout_ts`` when the reconcile timed out)
+        are additive extras in both the dict and the file.
         """
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as fh:
@@ -336,10 +377,18 @@ class SchedulerDaemon:
 
         now = self._clock()
         if now - self._last_reconcile >= self._interval_s:
+            # Capture the deadline once: the timeout branch below must log
+            # the deadline that was actually enforced, not re-read mutable
+            # env state a second time.
+            timeout_s = _reconcile_join_timeout_seconds()
+            # This attempt starts clean: the additive
+            # last_reconcile_timeout_ts must reflect only the most recent
+            # attempt, never an earlier tick's timeout.
+            self._last_reconcile_attempt_timed_out = False
             try:
                 completed, outcome = self._run_with_watchdog(
                     self._reconcile_fn,
-                    timeout_s=_reconcile_join_timeout_seconds(),
+                    timeout_s=timeout_s,
                     label="reconcile",
                 )
                 if completed:
@@ -351,11 +400,12 @@ class SchedulerDaemon:
                         "(PIPELINE_RECONCILE_JOIN_TIMEOUT_SECONDS); "
                         "abandoning the worker after %.1fs and continuing "
                         "the loop",
-                        _reconcile_join_timeout_seconds(),
+                        timeout_s,
                         elapsed_s,
                     )
                     self._reconcile_timed_out += 1
                     self._last_reconcile_timeout_ts = time.time()
+                    self._last_reconcile_attempt_timed_out = True
                     self._last_error = (
                         f"reconcile_fn stalled past the join deadline "
                         f"({elapsed_s:.1f}s elapsed); worker abandoned"

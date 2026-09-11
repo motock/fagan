@@ -443,6 +443,20 @@ def test_malformed_join_timeout_env_degrades_instead_of_crashing(
     assert "scanned" in result
 
 
+@pytest.mark.parametrize("bad", ["inf", "nan"])
+def test_non_finite_join_timeout_env_degrades_to_default(monkeypatch, caplog, bad):
+    """``inf`` would disable the watchdog (join never fires) and ``nan``
+    gives Thread.join unspecified behaviour; both must degrade to 900.0
+    with a warning, exactly like the other malformed values."""
+    monkeypatch.setenv(ENV_VAR, bad)
+    with caplog.at_level(logging.WARNING):
+        value = mod._scan_join_timeout_seconds()
+    assert value == 900.0
+    assert any(r.levelno >= logging.WARNING for r in caplog.records), (
+        f"non-finite {bad!r} must be warned about, not silently accepted"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Worker-thread hygiene: exactly one per tick, daemon-flagged, reaped
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from unittest import mock
 
 import pytest
 
@@ -450,3 +451,118 @@ def test_known_limitation_docstring_preserved():
         "the known limitation must still document that abandoning the worker "
         "leaves the plan _plan_lock held until the process dies"
     )
+
+
+# ---------------------------------------------------------------------------
+# Review item 3: the timeout timestamp must be readable, not write-only
+# ---------------------------------------------------------------------------
+
+def test_timeout_tick_exposes_last_reconcile_timeout_ts_additively(monkeypatch):
+    """A reconcile-timeout tick surfaces ``last_reconcile_timeout_ts``.
+
+    Mirrors the scan path, which additively exposes both ``scan_timed_out``
+    and ``last_scan_timeout_ts`` on a timeout tick. The field must be gated
+    on "this tick timed out" — NOT on "the attribute is not None" — so a
+    later clean tick returns exactly the seven pinned keys again (no stale
+    timestamp leaking into every subsequent tick) while ``reconcile_timed_out``
+    keeps reflecting the earlier timeout (a clean tick must not reset it).
+    """
+    monkeypatch.delenv(SCAN_ENV, raising=False)
+    monkeypatch.setenv(RECONCILE_ENV, "0.3")
+    release = threading.Event()
+    reconcile = WedgeOnce(release)
+    f = make_daemon(interval_s=0, reconcile_fn=reconcile)
+    try:
+        t0 = time.time()
+        result, _elapsed = run_once_bounded(f.daemon)
+        t1 = time.time()
+        assert result["reconciled"] is False
+        health = f.daemon.health()
+        assert "last_reconcile_timeout_ts" in health, (
+            "a reconcile-timeout tick must expose last_reconcile_timeout_ts "
+            "additively, mirroring the scan path's last_scan_timeout_ts"
+        )
+        assert t0 <= health["last_reconcile_timeout_ts"] <= t1
+
+        # Follow-up clean tick: the additive timestamp must disappear again
+        # (per-tick-timeout gate, not an is-not-None gate) and the counter
+        # must survive.
+        release.set()
+        second, _ = run_once_bounded(f.daemon)
+        assert second["reconciled"] is True
+        # Imported here (not at module top) so this test fails on its own
+        # terms rather than at collection if the pin module moves.
+        from tests.unit.test_scheduler_config_fingerprint import _HEALTH_KEYS
+
+        clean = f.daemon.health()
+        assert set(clean.keys()) == set(_HEALTH_KEYS), (
+            f"a clean tick after a timeout must return exactly the pinned "
+            f"seven keys with no stale additive timestamp; got "
+            f"{sorted(clean.keys())}"
+        )
+        assert clean["reconcile_timed_out"] == 1, (
+            "a clean tick must not reset the timeout counter"
+        )
+    finally:
+        release.set()
+
+
+# ---------------------------------------------------------------------------
+# Review item 5: non-finite env values must degrade to the default
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", ["inf", "nan"])
+def test_reconcile_join_timeout_env_non_finite_degrades_to_default(
+    monkeypatch, caplog, bad
+):
+    """``inf`` would disable the watchdog (join never fires) and ``nan``
+    gives Thread.join unspecified behaviour; both must degrade to 900.0."""
+    monkeypatch.setenv(RECONCILE_ENV, bad)
+    with caplog.at_level(logging.WARNING):
+        value = mod._reconcile_join_timeout_seconds()
+    assert value == 900.0
+    assert any(r.levelno >= logging.WARNING for r in caplog.records), (
+        f"non-finite {bad!r} must be warned about, not silently accepted"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Review item 4: the timeout log must use the captured deadline
+# ---------------------------------------------------------------------------
+
+def test_timeout_log_uses_captured_deadline_not_reread_env(monkeypatch, caplog):
+    """The timeout branch must log the ``timeout_s`` it actually enforced.
+
+    Re-reading ``_reconcile_join_timeout_seconds()`` for the log message
+    reads mutable env state a second time: if the env changed (or is
+    patched) between the two reads, the log names a deadline that was never
+    enforced. The reader is patched with two different return values; the
+    first (0.5) is the real join deadline, the second (30.0) must never be
+    read — so the log must name 0.5 and the reader must be called exactly
+    once per timeout tick.
+    """
+    monkeypatch.delenv(SCAN_ENV, raising=False)
+    reader = mock.Mock(side_effect=[0.5, 30.0])
+    monkeypatch.setattr(mod, "_reconcile_join_timeout_seconds", reader)
+    release = threading.Event()
+    reconcile = WedgeOnce(release)
+    f = make_daemon(interval_s=0, reconcile_fn=reconcile)
+    try:
+        with caplog.at_level(logging.ERROR):
+            result, _elapsed = run_once_bounded(f.daemon)
+        assert result["reconciled"] is False
+        assert reader.call_count == 1, (
+            "the deadline must be read once and reused, not re-read for the "
+            "log message"
+        )
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("0.5" in m for m in messages), (
+            f"the stall log must name the enforced deadline 0.5; got "
+            f"{messages!r}"
+        )
+        assert not any("30" in m for m in messages), (
+            f"the stall log must not name a deadline that was never "
+            f"enforced; got {messages!r}"
+        )
+    finally:
+        release.set()

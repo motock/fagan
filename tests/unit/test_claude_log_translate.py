@@ -509,9 +509,12 @@ def test_module_defines_exactly_the_two_public_functions_and_no_class():
 
 def test_story_is_additive_no_existing_module_wires_the_translator():
     root = Path(__file__).resolve().parents[2]
+    module_itself = root / "pipeline" / "claude_log_translate.py"
     offenders = []
     for dir_name in ("pipeline", "app", "scripts"):
         for path in sorted((root / dir_name).rglob("*.py")):
+            if path == module_itself:
+                continue  # the module may name itself; no one else may wire it
             if "claude_log_translate" in path.read_text(encoding="utf-8"):
                 offenders.append(str(path.relative_to(root)))
     assert offenders == []

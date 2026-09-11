@@ -1,6 +1,6 @@
 # Reference
 
-This is a detailed reference for the Autonomous SDLC Agent Pipeline's quickstart guide (README.md). It contains all sections that were moved from README.
+This is a detailed reference for Fagan's quickstart guide (README.md). It contains all sections that were moved from README.
 
 ## MCP tools reference
 

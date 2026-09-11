@@ -1,4 +1,4 @@
-"""Autonomous SDLC Agent Pipeline package.
+"""Fagan - autonomous SDLC agent pipeline package.
 
 Deliberately does NOT re-export server's public surface here (e.g. via
 `from .server import *`): server.py defines an MCP tool function named

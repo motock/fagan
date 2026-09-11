@@ -176,6 +176,14 @@ class TestEffectiveEnvConfigMissingFiles:
 
     def test_no_raise_when_source_files_missing(self, monkeypatch, tmp_path):
         mod = _import_module()
+        # Control the environment instead of assuming it is empty: this
+        # test asserts the code_default path, so any catalogued var that
+        # happens to be exported by the surrounding process (CI sets
+        # AGENTS_DIR; see .github/workflows/ci.yml) would otherwise
+        # resolve to process_env and fail. See
+        # .claude/rules/testing-config-gates.md.
+        for spec in mod.ENV_VAR_CATALOG:
+            monkeypatch.delenv(spec.name, raising=False)
         # Point both path env vars at nonexistent paths.
         missing_plist = tmp_path / "no-such-scheduler.plist"
         missing_json = tmp_path / "no-such-claude.json"
@@ -188,6 +196,33 @@ class TestEffectiveEnvConfigMissingFiles:
         # Every entry resolves to code_default (nothing set anywhere).
         for entry in result:
             assert entry["source"] == "code_default"
+
+    def test_ambient_catalogued_env_var_does_not_leak_into_defaults(
+        self, monkeypatch, tmp_path
+    ):
+        """Simulates CI's ambient AGENTS_DIR: a catalogued var genuinely
+        present in the process env must surface as source='process_env';
+        the sibling test's cleanup loop is what keeps such a var out of
+        the code_default path."""
+        mod = _import_module()
+        monkeypatch.setenv("AGENTS_DIR", str(tmp_path / "agents"))
+        for spec in mod.ENV_VAR_CATALOG:
+            if spec.name != "AGENTS_DIR":
+                monkeypatch.delenv(spec.name, raising=False)
+        monkeypatch.setenv(
+            "PIPELINE_SCHEDULER_PLIST_PATH", str(tmp_path / "none.plist")
+        )
+        monkeypatch.setenv(
+            "PIPELINE_CLAUDE_JSON_PATH", str(tmp_path / "none.json")
+        )
+        result = mod.effective_env_config()
+        agents = next(e for e in result if e["name"] == "AGENTS_DIR")
+        assert agents["source"] == "process_env"
+        # Follow-up call: the env still holds AGENTS_DIR (the scoped loop
+        # never touched it), so a second call must report the same source.
+        result2 = mod.effective_env_config()
+        agents2 = next(e for e in result2 if e["name"] == "AGENTS_DIR")
+        assert agents2["source"] == "process_env"
 
     def test_no_raise_when_source_files_missing_with_environ(self, monkeypatch, tmp_path):
         """Even with environ set, missing files must not raise."""

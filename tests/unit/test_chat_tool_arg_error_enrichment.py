@@ -52,6 +52,10 @@ def test_imported_tools_registry_is_still_the_live_module_object():
     dict _execute_tool no longer reads, and every tool looks unknown. Fails
     loudly and specifically instead of as seven confusing 'unknown tool'
     errors (see CHATRELOAD-1, caught by the macOS CI leg 2026-09-11).
+
+    Note: this canary only fires when the polluting app.chat reload runs
+    earlier on the same xdist worker; it cannot detect pollution in other
+    workers or a reload that happens after it.
     """
     import importlib
 

@@ -124,6 +124,11 @@ def test_all_spawned_log_sidecars_are_excluded():
         assert fnmatch.fnmatch(name + ".ts", "*.log.ts") is True, (
             f'"*.log.ts" must match the sidecar {name + ".ts"!r}'
         )
+    # Boundary: the glob must NOT over-match the plain logs themselves -
+    # they keep their own literal entries ("agent.log", "review.log") and
+    # must not be silently reclassified as sidecars.
+    assert fnmatch.fnmatch("agent.log", "*.log.ts") is False
+    assert fnmatch.fnmatch("review.log", "*.log.ts") is False
 
 
 def test_paths_py_documents_why_the_glob_is_needed():

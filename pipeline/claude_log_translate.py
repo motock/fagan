@@ -31,8 +31,21 @@ __all__ = ["new_state", "translate_line"]
 
 # Claude emits CamelCase tool names ("Bash", "Read", "Edit", "Web-Search",
 # "mcp__fs__read"); the consumer regex wants ``[a-z_]+``. Lowercase, then map
-# every non-alphanumeric to "_" so the emitted name always matches.
-_TOOL_NAME_CLEAN = re.compile(r"[^a-z0-9]")
+# EVERY character outside ``[a-z_]`` to "_" - digits included, so a
+# digit-containing name such as ``mcp__db2__query`` becomes
+# ``mcp__db___query`` and the emitted step line still matches the consumer's
+# ``([a-z_]+):`` run. Runs of underscores are NOT collapsed: existing
+# ``mcp__server__tool`` double-underscore names must survive verbatim.
+_TOOL_NAME_CLEAN = re.compile(r"[^a-z_]")
+
+# agent.log is one entry per physical line: an embedded newline in a tool
+# argument or a result summary would split one event into several lines, and
+# the orphan fragments match no consumer regex (the step regexes and the
+# ``"] DONE:"`` scan are all line-anchored). Collapse every newline flavour
+# to a single space before delegating to the formatters. The non-JSON
+# pass-through is deliberately NOT hardened: the CLI's own plain-text
+# warnings must survive verbatim at the top of agent.log.
+_NEWLINE_CLEAN = re.compile(r"\r\n|\n|\r")
 
 
 def new_state() -> dict:
@@ -102,6 +115,10 @@ def _step_lines(obj: dict, state: dict) -> list[str]:
             arg = inp["path"]
         else:
             arg = json.dumps(inp, separators=(",", ":"))
+        # One event, one physical line: an embedded newline in the argument
+        # would split the step entry and the orphan fragment matches no
+        # consumer regex.
+        arg = _NEWLINE_CLEAN.sub(" ", arg)
         lines.append(format_step(state["step"], tool, arg))
         state["step"] += 1
     return lines
@@ -112,11 +129,30 @@ def _done_line(obj: dict, state: dict) -> list[str]:
 
     The result text is not truncated (``format_done`` applies no 120-char
     rule) and the counter is NOT bumped: only tool_use is a step.
+
+    A failed result (``is_error`` true, or a ``subtype`` like
+    ``error_max_turns``) still emits exactly one DONE line - so
+    ``build_detect._last_done_summary`` terminates on THIS result instead of
+    a stale earlier success - but the summary is marked
+    ``error: <result text or subtype>`` so a drained log never reports a
+    failure as a blank success.
     """
     text = obj.get("result")
     if not isinstance(text, str):
         text = ""
-    return [format_done(state["step"], text)]
+    text = _NEWLINE_CLEAN.sub(" ", text)
+    subtype = obj.get("subtype")
+    failed = bool(obj.get("is_error")) or (
+        isinstance(subtype, str) and subtype.startswith("error")
+    )
+    if failed:
+        marker = text if text.strip() else (
+            subtype if isinstance(subtype, str) and subtype else "error"
+        )
+        summary = f"error: {marker}"
+    else:
+        summary = text
+    return [format_done(state["step"], summary)]
 
 
 def translate_line(raw: str, state: dict) -> list[str]:

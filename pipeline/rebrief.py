@@ -38,12 +38,7 @@ CLEANUP_HEADER = "=== WORKTREE HYGIENE (read this too) ==="
 FACTS_HEADER = "=== PRIOR-ATTEMPT FACTS (measured from the worktree, not guessed) ==="
 
 # Tool names the local agent prints in its `[step N] <tool>: ...` log lines.
-# "edit"/"write" are the Claude CLI's Edit/Write tools, lowercased by the
-# stream-json translator (LOG-03) when it emits this grammar - they edit the
-# worktree exactly like str_replace/create_file.
-_EDIT_TOOLS = frozenset(
-    {"create_file", "str_replace", "replace_lines", "restore_file", "edit", "write"}
-)
+_EDIT_TOOLS = frozenset({"create_file", "str_replace", "replace_lines", "restore_file"})
 
 # Static allowlist of test-runner tokens (never runtime language detection):
 # a bash command containing one of these counts as "the agent ran the tests".

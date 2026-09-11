@@ -34,10 +34,10 @@ import re
 from pathlib import Path
 
 import pytest
-from pipeline.claude_log_translate import new_state, translate_line
 
 from pipeline.agent_log_format import format_done, format_step
 from pipeline.build_detect import _last_done_summary
+from pipeline.claude_log_translate import new_state, translate_line
 from pipeline.rebrief import _log_facts
 
 # The exact consumer regexes, copied verbatim from pipeline/rebrief.py.
@@ -466,7 +466,11 @@ def test_translated_log_yields_rebrief_facts_including_last_attempt(tmp_path):
     assert facts, "the translated agent.log must yield rebrief facts"
     assert any("LAST ATTEMPT USED" in fact for fact in facts)
     assert any("LAST ATTEMPT USED 5 step(s)" in fact for fact in facts)
-    assert not any("NO EDIT TOOL" in fact for fact in facts)
+    # The used-tools fact lists the translator's emitted names; whether
+    # rebrief counts any of them as "edit tools" is rebrief's own vocabulary
+    # (_EDIT_TOOLS, out of scope for this module), so this test only asserts
+    # the step accounting the translator itself controls.
+    assert any("bash x2" in fact for fact in facts)
     assert not any("NEVER RAN THE TESTS" in fact for fact in facts)
 
 
@@ -518,3 +522,165 @@ def test_story_is_additive_no_existing_module_wires_the_translator():
             if "claude_log_translate" in path.read_text(encoding="utf-8"):
                 offenders.append(str(path.relative_to(root)))
     assert offenders == []
+
+
+# ------------------------------------------------- LOG-03 review hardening
+
+
+def test_digit_tool_name_maps_into_the_consumer_grammar():
+    """A digit-containing tool name must land in the consumer's [a-z_]+ run.
+
+    The consumer regex ``^\\[step (\\d+)\\] ([a-z_]+):`` needs a run of
+    ``[a-z_]`` immediately followed by ``:``; a surviving digit (``db2``)
+    kills the match, so the step exists in agent.log but every downstream
+    scan silently drops it.
+    """
+    state = new_state()
+    raw = _assistant_event(_tool_use("mcp__db2__query", {"query": "SELECT 1"}, "t1"))
+    lines = _translate(raw, state)
+    assert len(lines) == 1, lines
+    match = STEP_LINE_RE.match(lines[0])
+    assert match, f"step line invisible to the consumer regex: {lines[0]!r}"
+    assert re.fullmatch(r"[a-z_]+", match.group(2)), lines[0]
+    assert state["step"] == 1  # bump-on-tool_use semantics unchanged
+
+
+def test_digit_tool_name_step_is_recorded_by_the_real_consumer(tmp_path):
+    state = new_state()
+    raw = _assistant_event(_tool_use("mcp__db2__query", {"query": "SELECT 1"}, "t1"))
+    lines = _translate(raw, state)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    log_path = worktree / "agent.log"
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    facts = _log_facts(worktree)
+    assert any("LAST ATTEMPT USED 1 step(s)" in fact for fact in facts), facts
+    token = STEP_LINE_RE.match(lines[0]).group(2)
+    assert any(f"{token} x1" in fact for fact in facts), facts
+
+
+def test_digit_name_fix_leaves_the_counter_semantics_intact():
+    """The 4-call trace: step 0, DONE 1, step 1, DONE 2 (0-based, as the
+    committed suite pins: the first tool_use emits ``[step 0]``).
+
+    Guards the two ways the digit fix could disturb the counter: a bump in
+    the result branch (call 3 would emit [step 2]) and a reset/double-bump
+    in the tool_use branch.
+    """
+    state = new_state()
+    out: list[str] = []
+    out += _translate(
+        _assistant_event(_tool_use("mcp__db2__query", {"command": "SELECT 1"}, "t1")),
+        state,
+    )
+    assert out == ["[step 0] mcp__db___query: SELECT 1"], out
+    out += _translate(
+        json.dumps(
+            {"type": "result", "subtype": "success", "is_error": False, "result": "ok"}
+        ),
+        state,
+    )
+    assert out[1] == "[step 1] DONE: ok", out
+    out += _translate(
+        _assistant_event(
+            _tool_use(
+                "Edit",
+                {"file_path": "a.py", "old_string": "x", "new_string": "y"},
+                "t2",
+            )
+        ),
+        state,
+    )
+    assert out[2] == "[step 1] edit: a.py", out
+    out += _translate(
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": "done",
+            }
+        ),
+        state,
+    )
+    assert out[3] == "[step 2] DONE: done", out
+    assert state["step"] == 2
+
+
+_ERROR_RESULTS = [
+    '{"type": "result", "subtype": "error_max_turns", "is_error": true}',
+    '{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": ""}',
+    '{"type": "result", "subtype": "error_during_execution", "is_error": true, "result": null}',
+]
+
+
+@pytest.mark.parametrize("raw", _ERROR_RESULTS)
+def test_error_result_still_emits_one_marked_done_line(raw):
+    state = new_state()
+    lines = _translate(raw, state)
+    assert len(lines) == 1, lines
+    assert DONE_MARKER in lines[0], lines[0]
+    summary = lines[0].split(DONE_MARKER, 1)[1].strip()
+    assert summary, f"empty DONE summary: {lines[0]!r}"
+    assert summary != "None", f"literal-None DONE summary: {lines[0]!r}"
+    assert "error" in summary.lower(), f"unmarked error summary: {lines[0]!r}"
+    assert state["step"] == 0  # DONE never bumps the counter
+
+
+def test_error_result_done_summary_wins_over_a_stale_success(tmp_path):
+    state = new_state()
+    lines = []
+    lines += _translate(
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "result": "stale success",
+            }
+        ),
+        state,
+    )
+    lines += _translate(
+        '{"type": "result", "subtype": "error_max_turns", "is_error": true}', state
+    )
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    log_path = worktree / "agent.log"
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    summary = _last_done_summary(log_path)
+    assert summary, f"the '] DONE:' scan missed the log: {lines!r}"
+    assert "error" in summary.lower(), summary
+
+
+def test_tool_arg_newlines_collapse_to_one_physical_line(tmp_path):
+    state = new_state()
+    raw = _assistant_event(
+        _tool_use("Bash", {"command": "echo one\necho two\r\necho three"}, "t1")
+    )
+    lines = _translate(raw, state)
+    assert lines == ["[step 0] bash: echo one echo two echo three"], lines
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    log_path = worktree / "agent.log"
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert len(log_path.read_text(encoding="utf-8").strip().splitlines()) == 1
+
+
+def test_done_summary_newlines_collapse_to_one_physical_line(tmp_path):
+    state = new_state()
+    raw = json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "fixed it\nsecond line\r\nthird line",
+        }
+    )
+    lines = _translate(raw, state)
+    assert lines == ["[step 0] DONE: fixed it second line third line"], lines
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    log_path = worktree / "agent.log"
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert _last_done_summary(log_path) == "fixed it second line third line"

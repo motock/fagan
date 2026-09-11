@@ -649,7 +649,7 @@ def test_list_directory_execute_passes_path_through_verbatim(raw_path):
 # until the TOOLS entry lands.
 # --------------------------------------------------------------------------- #
 _SEARCH_CODE_DESCRIPTION = (
-    "Search the active workspace for a text pattern (grep-style) and return "
+    "Search for a text pattern (grep-style) and return "
     "matching lines with file and line number."
 )
 

@@ -1,10 +1,13 @@
 """Story sh-03: the scheduler daemon must publish the config it resolved.
 
 ``SchedulerDaemon.config_fingerprint()`` is a NEW additive surface; the
-existing ``health()`` dict must stay byte-for-byte the six keys pinned by
-``test_scheduler_daemon.py::test_health_has_expected_keys``. These tests
-enforce both halves: the new fingerprint exists, and ``health()`` did not
-grow.
+existing ``health()`` dict must stay byte-for-byte the seven keys pinned by
+``test_scheduler_daemon.py::test_health_has_expected_keys`` (the six
+originally pinned keys plus the always-present ``reconcile_timed_out``
+counter, added by LOCKSTARVE-C1). These tests enforce both halves: the new
+fingerprint exists, and ``health()`` did not grow past this pin — the
+watchdog timestamp fields (``scan_timed_out``/``last_scan_timeout_ts`` and
+``last_reconcile_timeout_ts``) remain additive-only on timeout ticks.
 """
 
 import json
@@ -25,6 +28,7 @@ _HEALTH_KEYS = {
     "last_error",
     "reconcile_count",
     "scan_count",
+    "reconcile_timed_out",
 }
 
 _FINGERPRINT_KEYS = (
@@ -109,23 +113,25 @@ def test_config_fingerprint_dispatch_backend_reflects_env(monkeypatch):
     assert daemon.config_fingerprint()["dispatch_backend"] == "fake-backend"
 
 
-def test_health_keys_are_exactly_the_pinned_six():
+def test_health_keys_are_exactly_the_pinned_seven():
     """REGRESSION: health() must not widen because of the fingerprint work.
 
     This is the point of the story — assert exact set equality here so the
-    additive ``config`` payload can never leak into health().
+    additive ``config`` payload can never leak into health(). The pin is the
+    seven keys of ``_HEALTH_KEYS``: the six originally pinned keys plus the
+    always-present ``reconcile_timed_out`` counter (LOCKSTARVE-C1).
     """
     daemon = _make_daemon()
     assert set(daemon.health().keys()) == _HEALTH_KEYS
 
 
 def test_write_health_json_has_health_keys_plus_config(tmp_path):
-    """write_health() emits the six health keys plus the config fingerprint.
+    """write_health() emits the seven health keys plus the config fingerprint.
 
     Corrected contract (CFG-B5): the file payload is ``health()`` plus a
-    ``"config"`` key equal to ``config_fingerprint()`` — exactly the six
-    pinned health keys and nothing else. ``health()`` itself still returns
-    exactly the six keys; only the file gains ``config``.
+    ``"config"`` key equal to ``config_fingerprint()`` — exactly the seven
+    pinned health keys and nothing else on a clean tick. ``health()`` itself
+    still returns exactly those seven keys; only the file gains ``config``.
     """
     daemon = _make_daemon()
     path = tmp_path / "health.json"
@@ -139,7 +145,7 @@ def test_write_health_json_has_health_keys_plus_config(tmp_path):
         "write_health()'s config key must match config_fingerprint()"
     )
     assert set(data.keys()) == set(_HEALTH_KEYS) | {"config"}, (
-        "write_health() must emit exactly the six health keys plus "
+        "write_health() must emit exactly the seven health keys plus "
         f"'config'; got {sorted(data.keys())}"
     )
 

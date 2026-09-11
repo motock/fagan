@@ -1080,6 +1080,18 @@ def test_advance_pipeline_retries_on_local_fallback_model(
                 stdout = ""
                 stderr = ""
             return _Gone()
+        if cmd and cmd[0] == "git":
+            # A real checkout has a working git: the reap/teardown path
+            # legitimately runs git (last_test_check's rev-parse, the
+            # escalation's worktree remove / branch -D). Failing git here
+            # made _commit_wip's non-benign guard abort the tick on hosts
+            # where the grade path reaches it, instead of requeueing the
+            # story onto the fallback model.
+            class _GitOk:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _GitOk()
         return _FailResult()
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
     monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))

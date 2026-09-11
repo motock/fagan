@@ -158,6 +158,11 @@ def _hermetic_ollama_seams_default(request, monkeypatch):
         )
         monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: set())
         monkeypatch.setattr(backend, "_ollama_serving_parallelism", lambda: None)
+        monkeypatch.setattr(
+            backend.OllamaDriver,
+            "resource_status",
+            lambda self, model_tag=None: {"ok": True, "reason": ""},
+        )
     monkeypatch.setattr(p, "diagnose_failure", lambda *a, **k: None)
 
 

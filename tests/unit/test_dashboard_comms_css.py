@@ -15,7 +15,6 @@ import pytest
 STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
 STYLE_CSS = STATIC_DIR / "style.css"
 INDEX_HTML = STATIC_DIR / "index.html"
-COMMS_JS = STATIC_DIR / "app" / "comms.js"
 
 # static/index.html and static/app/comms.js as of this dispatch (before the
 # CSS-only implementation). This story must not touch either file.

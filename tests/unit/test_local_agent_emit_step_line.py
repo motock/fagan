@@ -358,3 +358,74 @@ def test_no_other_local_agent_sibling_file_touched():
         assert "format_step" not in text, (
             f"{path.name} must not be touched by this story"
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression: ": " arguments longer than 120 chars must stay verbatim
+# ---------------------------------------------------------------------------
+
+
+def test_done_summary_over_120_chars_is_verbatim(monkeypatch, capsys):
+    """Regression (review blocking): ``emit_step_line`` routes ``": "``-
+    separated messages through ``pipeline.agent_log_format.format_step``,
+    which truncates its argument to ``arg[:120]``.  The OLD ``emit_step_line``
+    never truncated, so byte-identity breaks exactly for arguments longer
+    than 120 chars.  The only production call site passes
+    ``f"DONE: {args.get('summary', '')}"`` — free-form text — so a surrender
+    phrase beyond char 120 must still reach agent.log verbatim:
+    ``build_detect._last_done_summary`` prints the DONE summary argument
+    verbatim and ``story_status`` feeds it to ``_is_give_up_summary`` for
+    ``failure_kind="give_up"`` classification.
+    """
+    la = _load_agent(monkeypatch)
+    arg = "R" * 120 + " I give up"  # 130 chars: 10 past the 120-char cut
+    message = "DONE: " + arg  # 136 chars
+    assert len(arg) == 130
+    assert len(message) == 136
+    line = la.emit_step_line(7, message)
+    expected = f"[step 7] {message}"
+    assert line == expected, (
+        "emit_step_line must render ': '-separated messages verbatim with no "
+        f"truncation; got {line!r}, want {expected!r} (the ' I give up' tail "
+        "beyond char 120 must not be dropped)"
+    )
+    assert " I give up" in line
+    # Follow-up call: the opt-out must be per-call (keyword argument), so a
+    # short DONE immediately after still renders byte-identically and the log
+    # contains both lines in full, in order — no truncation state carries
+    # between calls.
+    line2 = la.emit_step_line(8, "DONE: ok")
+    assert line2 == "[step 8] DONE: ok"
+    assert capsys.readouterr().out == line + "\n" + line2 + "\n"
+
+
+def test_done_summary_134_chars_attempt_failed_gives_up_is_verbatim(
+    monkeypatch, capsys
+):
+    """Regression (review blocking): the argument after ``"DONE: "`` is
+    15*8 == 120 padding chars + 8 chars of ``"gives up"`` == 128 chars, so
+    the full message is 134 chars.  ``format_step`` slices ``arg[:120]``, so
+    the pre-fix line is ``"DONE: " + arg[:120]`` (126 chars of message,
+    ending ``"...attempt failed "``) — ``"gives up"`` (message chars 127-134)
+    is dropped.  Downstream the damage is permanent: agent.log persists, and
+    ``build_detect._last_done_summary`` takes the summary verbatim into
+    ``story_status`` -> ``_is_give_up_summary`` (parsers.py:285), so a
+    surrender phrase past char 120 is invisible and
+    ``failure_kind="give_up"`` is missed.  The fix must hold per-call, so a
+    follow-up ``"DONE: ok"`` call must also be written verbatim.
+    """
+    la = _load_agent(monkeypatch)
+    message = "DONE: " + ("attempt failed " * 8) + "gives up"
+    assert len(message) == 134
+    line = la.emit_step_line(9, message)
+    expected = f"[step 9] {message}"
+    assert line == expected, (
+        f"emit_step_line must render the DONE summary verbatim; got "
+        f"{line!r} ({len(line)} chars), want {expected!r} (134-char message "
+        "verbatim — 'gives up' must not be cut at char 120)"
+    )
+    assert line.endswith(message)
+    # Follow-up call: the fix must hold per-call, not just once.
+    line2 = la.emit_step_line(10, "DONE: ok")
+    assert line2 == "[step 10] DONE: ok"
+    assert capsys.readouterr().out == line + "\n" + line2 + "\n"

@@ -15,7 +15,7 @@ print and ``main()``'s marker write, and the completed work was discarded as
 * a marker write failure never changes the run's outcome.
 """
 
-import importlib
+import importlib.util
 import inspect
 import json
 import os
@@ -32,9 +32,14 @@ EXPECTED_DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}
 
 
 def _load_oracle():
-    if str(SCRIPTS_DIR) not in sys.path:
-        sys.path.insert(0, str(SCRIPTS_DIR))
-    return importlib.import_module("local_agent_oracle")
+    """Load scripts/local_agent_oracle.py the same way the repo's oracle test
+    helpers do (spec_from_file_location, not sys.path games)."""
+    spec = importlib.util.spec_from_file_location(
+        "local_agent_oracle", str(ORACLE_SOURCE_PATH))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture(scope="module")

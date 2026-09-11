@@ -265,6 +265,30 @@ class _LockStealingDispatch:
             self._thread.join(5.0)
 
 
+class _StealsS2DuringS1Dispatch:
+    """Fake dispatch_story: while "dispatching" s1 (i.e. during s1's
+    released-lock window), directly writes a live lease + in_progress
+    status + pid onto s2 on disk - simulating a second process claiming
+    and dispatching s2 during that window. Records every key it's called
+    with, so the test can assert s2 was never itself passed to dispatch_story
+    by THIS tick."""
+
+    def __init__(self, manifest_path):
+        self.manifest_path = manifest_path
+        self.calls = []
+
+    def __call__(self, plan_name, key):
+        self.calls.append(key)
+        if key == "s1":
+            m = json.loads(self.manifest_path.read_text())
+            m["stories"]["s2"]["dispatch_lease_expires_at"] = _future_iso()
+            m["stories"]["s2"]["dispatch_lease_owner_pid"] = 424242
+            m["stories"]["s2"]["status"] = "in_progress"
+            m["stories"]["s2"]["pid"] = 424242
+            advance_module._atomic_write_json(self.manifest_path, m)
+        return {"ok": True}
+
+
 class _ConcurrentMutationDispatch:
     """Fake dispatch_story for the stale-reference regression guard: while
     this call is "in flight", a second thread tries to genuinely acquire
@@ -443,6 +467,48 @@ class TestDispatchLeaseGuards:
         assert final["dispatch_attempts"] == 1
         assert "dispatch_lease_expires_at" not in final
         assert "dispatch_lease_owner_pid" not in final
+
+
+# ---------------------------------------------------------------------------
+# Regression guard: the check-then-set for the SECOND (and later) story in a
+# tick's `ready` list must run against a fresh on-disk read, not the
+# top-of-tick in-memory copy - an earlier iteration's own released-lock
+# window can let another owner claim that later story's lease first.
+
+
+class TestLeaseClaimedDuringEarlierReleaseWindow:
+    def test_lease_claimed_during_an_earlier_release_window_is_honoured(
+        self, monkeypatch, tmp_path
+    ):
+        path = _write_manifest(
+            tmp_path,
+            {"s1": _story(key="s1"), "s2": _story(key="s2")},
+        )
+        _seed_common(monkeypatch, path)
+        # This regression needs the loop to reach a second iteration (s2)
+        # within the same tick; _seed_common pins the per-tick cap to 1 for
+        # its sibling tests - override AFTER calling it (last write wins),
+        # on both modules, the same way _seed_common itself does.
+        monkeypatch.setattr(
+            config_module, "PIPELINE_MAX_DISPATCH_PER_TICK", 2, raising=False
+        )
+        monkeypatch.setattr(
+            advance_module, "PIPELINE_MAX_DISPATCH_PER_TICK", 2, raising=False
+        )
+        fake = _StealsS2DuringS1Dispatch(path)
+        monkeypatch.setattr(advance_module, "dispatch_story", fake)
+
+        _run_tick_holding_lock()
+
+        assert fake.calls == ["s1"], (
+            "s2 must never be dispatched this tick - its lease was already "
+            "claimed by another owner during s1's release window"
+        )
+        final_s2 = _read_stories(path)["s2"]
+        assert final_s2["dispatch_lease_owner_pid"] == 424242, (
+            "the tick must not have stomped the other owner's live lease "
+            "with its own stale-in-memory-copy claim"
+        )
 
 
 # ---------------------------------------------------------------------------

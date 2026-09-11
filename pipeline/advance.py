@@ -438,26 +438,28 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     continue
             # LOCKSTARVE-B3: claim the cross-tick/cross-process dispatch
             # lease (LOCKSTARVE-B2) before releasing the plan lock around
-            # dispatch_story below. A failed claim means another tick or
-            # process is already mid-dispatch on this story - skip it
-            # entirely this tick: leave its status untouched, count no
-            # dispatch attempt, and consume neither a gated slot nor a cap
-            # slot (this check runs after every gate above has already
-            # passed, so skipping here never falls through to gated.append).
-            if not claim_dispatch_lease(story):
+            # dispatch_story below. The check-then-set must run against a
+            # FRESH on-disk read, not the top-of-tick in-memory `story` - an
+            # earlier iteration of this same loop already released and
+            # re-acquired the lock once, so another owner may have claimed
+            # this story's lease or advanced its status during that window.
+            # Claiming against the stale in-memory copy would both miss a
+            # live lease already on disk and clobber it with our own.
+            m = json.loads(manifest_path.read_text())
+            fresh_story = m["stories"].get(key)
+            if fresh_story is None:
+                # A re-ingest during an earlier release window can drop this
+                # story entirely - skip it rather than KeyError the tick.
+                continue
+            if fresh_story["status"] not in ("todo", "interrupted", "changes_requested"):
+                # Another process already advanced this story during a
+                # release window; re-dispatching it would be the same
+                # double-dispatch by a different route.
+                continue
+            if not claim_dispatch_lease(fresh_story):
                 continue
             # Persist the claim BEFORE releasing the lock - an unpersisted
-            # lease protects nothing. Re-read fresh rather than writing back
-            # the top-of-tick in-memory manifest, which may already be stale
-            # (e.g. relative to an interrupt_story call earlier this tick, or
-            # a prior loop iteration's own released-lock window).
-            m = json.loads(manifest_path.read_text())
-            m["stories"][key]["dispatch_lease_expires_at"] = story[
-                "dispatch_lease_expires_at"
-            ]
-            m["stories"][key]["dispatch_lease_owner_pid"] = story[
-                "dispatch_lease_owner_pid"
-            ]
+            # lease protects nothing.
             _atomic_write_json(manifest_path, m)
             if capped and on_device:
                 # Only a dispatch that actually launches on-device consumes

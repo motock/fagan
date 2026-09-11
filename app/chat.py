@@ -516,7 +516,19 @@ class ChatService:
         self._resolved_model = resolution.model
         return driver, resolution.model
 
-    def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:
+    def stream_turn(self, message, *, plan_name=None, history=None, workspace=None):
+        """Yield one chat turn loop's progress as event dicts.
+
+        Rename-and-delegate shape (SSE-02): this generator owns the loop logic
+        that ``execute_turn`` used to run inline, and yields exactly five
+        event types -- ``turn`` (one per loop iteration, yielded after the
+        model call that iteration spends), ``tool_call`` (before each tool
+        executes), ``tool_result`` (after each tool returns), ``reply`` (once,
+        for the final conversational reply) and ``result`` (LAST, exactly
+        once, on EVERY exit path; its ``data`` is byte-for-byte the dict
+        ``execute_turn`` returns). Calling this method performs no work at
+        all -- the driver is resolved and first called on the first ``next()``.
+        """
         driver, model_tag = self._resolve_driver()
         current_prompt = _build_chat_prompt(message, history)
         tool_calls_made: list[dict] = []
@@ -529,6 +541,7 @@ class ChatService:
             if workspace:
                 system_prompt += f"\nThe active workspace is {workspace}. Use this absolute path as repo_root when authoring a plan."
             response = driver.complete(prompt=current_prompt, system=system_prompt, model=model_tag, cwd=tempfile.gettempdir())
+            yield {"type": "turn", "data": {"n": turns}}
             parsed = _parse_tool_calls(response)
             if not parsed:
                 if _looks_like_unparsed_tool_call(response):
@@ -557,16 +570,35 @@ class ChatService:
                         '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
                     )
                     continue
-                return {"reply": response, "tool_calls": tool_calls_made, "turns": turns}
+                yield {"type": "reply", "data": {"text": response}}
+                yield {"type": "result", "data": {"reply": response, "tool_calls": tool_calls_made, "turns": turns}}
+                return
             for call in parsed:
+                yield {"type": "tool_call", "data": {"name": call["name"], "args": call["args"]}}
                 result = _execute_tool(call["name"], call["args"], self._http_client, self._api_base_url)
+                yield {"type": "tool_result", "data": {"name": call["name"], "args": call["args"], "result": result}}
                 tool_calls_made.append({"name": call["name"], "args": call["args"], "result": result})
             result_blocks = []
             for call in tool_calls_made:
                 block = f"[TOOL_RESULT name={call['name']}]" + json.dumps(call['result']) + "[/TOOL_RESULT]"
                 result_blocks.append(block)
             current_prompt = "\n".join(result_blocks)
-        return {"reply": response + "\n\n(turn cap reached)", "tool_calls": tool_calls_made, "turns": turns}
+        yield {"type": "result", "data": {"reply": response + "\n\n(turn cap reached)", "tool_calls": tool_calls_made, "turns": turns}}
+        return
+
+    def execute_turn(self, message, *, plan_name=None, history=None, workspace=None) -> dict:
+        """Run one chat turn loop to completion and return its final result.
+
+        Thin drain over :meth:`stream_turn` (SSE-02): the loop logic lives in
+        the generator; this method consumes its events and returns the final
+        ``result`` event's ``data`` -- byte-for-byte the dict this method
+        returned before the refactor. Signature and return value unchanged.
+        """
+        result = None
+        for event in self.stream_turn(message, plan_name=plan_name, history=history, workspace=workspace):
+            if event.get("type") == "result":
+                result = event["data"]
+        return result
 
 # ---------------------------------------------------------------------------
 # FastAPI router for chat endpoint

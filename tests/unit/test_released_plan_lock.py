@@ -110,7 +110,10 @@ def _run_timeout_scenario(monkeypatch, tmp_path, plan, env_value):
     thread joined under a deadline so a broken implementation FAILS the
     test instead of hanging the suite.
     """
-    monkeypatch.setenv(REACQUIRE_TIMEOUT_ENV, env_value)
+    if env_value is None:
+        monkeypatch.delenv(REACQUIRE_TIMEOUT_ENV, raising=False)
+    else:
+        monkeypatch.setenv(REACQUIRE_TIMEOUT_ENV, env_value)
     # Reload so an implementation that resolves the timeout at import time
     # also honours the env value; a call-time implementation reads it
     # directly. Reload resets module globals, so re-patch PLAN_DIR.

@@ -99,9 +99,27 @@ def _commit_wip(worktree: str, story_key: str, step: str,
         check=False, cwd=worktree, capture_output=True, text=True,
     )
     output = commit.stdout + commit.stderr
-    nothing_to_commit = "nothing to commit" in output or "nothing added to commit" in output
+    # git has THREE distinct benign "nothing to do" messages, all on stdout:
+    #   "nothing to commit, working tree clean"        - no changes at all
+    #   "nothing added to commit but untracked files"  - only untracked files
+    #   "no changes added to commit"                   - tracked files modified
+    #                                                     but nothing staged
+    # The third is one _commit_wip creates for itself: it stages everything
+    # and then unstages agent.log, so a run whose only change was agent.log
+    # lands here. Treating it as an error made a step-capped agent that wrote
+    # nothing but log output crash instead of checkpointing.
+    nothing_to_commit = (
+        "nothing to commit" in output
+        or "nothing added to commit" in output
+        or "no changes added to commit" in output
+    )
     if commit.returncode != 0 and not nothing_to_commit:
-        raise RuntimeError(f"git commit failed: {commit.stderr}")
+        # git writes most of its diagnostics to stdout, so an stderr-only
+        # message is frequently empty and tells the operator nothing.
+        detail = (commit.stderr or "").strip() or (commit.stdout or "").strip()
+        raise RuntimeError(
+            f"git commit failed (exit {commit.returncode}): {detail}"
+        )
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
         capture_output=True, text=True,

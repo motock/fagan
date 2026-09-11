@@ -37,6 +37,12 @@ from pathlib import Path
 
 import pytest
 
+# pipeline.server must be imported before pipeline.ci: build_detect imports
+# server at module scope, and importing ci first leaves server's
+# `from .ci import _PATCHABLE_STORY_FIELDS` re-import facing a partially
+# initialized module (the same reason the existing ci test modules fail when
+# run standalone without this order).
+import pipeline.server  # noqa: F401  (import-order side effect only)
 from pipeline import ci, preflight
 
 GATE_VAR = "PIPELINE_MERGE_CI_GATE"

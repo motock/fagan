@@ -141,6 +141,7 @@ def test_second_marker_write_with_rc_zero_is_idempotent(
 
 def test_oracle_red_writes_no_marker(oracle, oracle_cwd, monkeypatch,
                                      marker_spy):
+    _require_write_done_marker(oracle)
     monkeypatch.setattr(oracle, "oracle_result",
                         lambda: (False, "acceptance failed"))
     monkeypatch.setattr(oracle, "REWORK_FULL_SUITE", False)

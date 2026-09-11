@@ -67,7 +67,6 @@ INDEX_HTML_SHA256 = "cfbfe3486128520a6d942f4938d697f34ecc910360fdf58cda344bb5f46
 # immediately before </head> (the server str.replace()s it at request time).
 # index.html is legitimately no longer byte-identical to this story's
 # pre-implementation baseline.
-# pre-implementation baseline.
 
 # sha256 of the style.css regions this story must not touch: everything
 # before the "Comms view styles" comment, the "Toast stack styles" section

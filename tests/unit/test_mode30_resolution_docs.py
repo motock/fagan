@@ -262,7 +262,6 @@ class TestMaturityOtherChecklistItemsUntouched:
 
     UNCHECKED_MUST_STAY_UNCHECKED: ClassVar[list[str]] = [
         "Bound the failure-mode discovery rate",
-        "Get CI to an enforced green baseline",
     ]
 
     CHECKED_MUST_STAY_CHECKED: ClassVar[list[str]] = [

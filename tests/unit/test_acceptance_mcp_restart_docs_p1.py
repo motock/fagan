@@ -303,7 +303,7 @@ class TestOtherChecklistItemsUntouched:
     item's state, including its immediate neighbors in section A3."""
 
     UNCHECKED_MUST_STAY_UNCHECKED: ClassVar[list[str]] = [
-        "Get CI to an enforced green baseline",
+        "Bound the failure-mode discovery rate",
     ]
 
     CHECKED_MUST_STAY_CHECKED: ClassVar[list[str]] = [

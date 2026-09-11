@@ -596,3 +596,46 @@ def test_git_commit_count_call_is_bounded_by_explicit_timeout():
         "found in pipeline/story_status.py or pipeline/checkpoint.py — "
         "bound the branch_commit_count git call with an explicit timeout "
         "(fail open on timeout)")
+
+
+# --------------------------------------------------------------------------
+# regression: consumed done-marker (review blocking finding, LOCKSTARVE-D2)
+# --------------------------------------------------------------------------
+def test_agent_done_marker_true_when_only_consumed_marker_present(tmp_path):
+    """Regression: a FINISHED run whose .agent_done was already consumed
+    must still yield agent_done_marker True.
+
+    pipeline.watchers.scan_done_markers renames .agent_done to
+    .agent_done.consumed immediately after publishing the done event, so in
+    production the watchdog almost always observes ONLY the consumed name —
+    the fresh `.agent_done` state is transient. pipeline.wedge_io already
+    defines the correct invariant for this exact question: finished iff
+    `.agent_done` OR `.agent_done.consumed` exists. _agent_done_marker must
+    mirror it; otherwise the journal records agent_done_marker: False for a
+    run that actually finished — systematically wrong, and worse than
+    omitting the field.
+    """
+    # Local import: this case targets pipeline.checkpoint's evidence helpers
+    # directly and must not depend on the rebound story_status machinery.
+    from pipeline.checkpoint import _agent_done_marker, _watchdog_evidence
+
+    worktree = tmp_path / "wt"
+    # pid=0 is never signalled: only the pure evidence helpers run here (no
+    # _terminate_and_checkpoint), so no live sleeper pid is needed.
+    story = _make_story(worktree, 0, log_text="step 2 finished\n")
+    # The exact on-disk state scan_done_markers leaves behind after
+    # consuming: .agent_done gone, .agent_done.consumed present.
+    (worktree / ".agent_done.consumed").write_text("", encoding="utf-8")
+    assert not (worktree / ".agent_done").exists(), (
+        "fixture error: this case must contain ONLY the consumed marker")
+
+    assert _agent_done_marker(worktree) is True, (
+        "a worktree whose .agent_done was consumed (renamed to "
+        ".agent_done.consumed by scan_done_markers) is a finished run; "
+        "_agent_done_marker must return True for it, matching wedge_io's "
+        ".agent_done OR .agent_done.consumed invariant")
+
+    evidence = _watchdog_evidence(story, STORY_KEY)
+    assert evidence.get("agent_done_marker") is True, (
+        "the watchdog evidence must record agent_done_marker True for a "
+        f"finished run whose marker was consumed; got {evidence!r}")

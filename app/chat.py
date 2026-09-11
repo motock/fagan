@@ -46,6 +46,13 @@ _SYSTEM_PROMPT_PREFIX = (
 )
 _FINAL_SENTENCE = "Call tools to gather information, then provide a natural-language reply."
 
+_DEFERRED_NUDGE_CAP = 2
+_DEFERRED_NUDGE_PHRASES = (
+    "let me check", "let me look", "let me find", "i'll check", "i will check",
+    "i'll look", "i will look", "checking now", "one moment", "hold on",
+    "let me pull", "let me fetch",
+)
+
 
 
 def _resolve_chat_api_base_url(request: Request | None = None) -> str | None:
@@ -351,6 +358,12 @@ def _looks_like_unparsed_tool_call(response: str) -> bool:
     return _parse_tool_calls(response) == []
 
 
+def _looks_like_deferred_action(response: str) -> bool:
+    """True only when the reply promises to act instead of answering."""
+    text = response.strip().lower()
+    return text.startswith(_DEFERRED_NUDGE_PHRASES)
+
+
 
 def _signature_mismatch_error(
     name: str, execute, args: dict, http_client, api_base_url: str
@@ -508,6 +521,7 @@ class ChatService:
         current_prompt = _build_chat_prompt(message, history)
         tool_calls_made: list[dict] = []
         turns = 0
+        deferred_nudges = 0
         while turns < self._max_turns:
             turns += 1
             # cwd=tempfile.gettempdir() keeps this repo's own CLAUDE.md from auto-discovering and silently overriding chat.py's own SYSTEM_PROMPT and tool-confirmation policy, without the --bare flag's side effect of disabling OAuth/keychain auth (see ClaudeCliDriver.complete's --bare handling)
@@ -533,6 +547,13 @@ class ChatService:
                         "Re-emit the tool call using exactly this tag/JSON "
                         "shape, with valid JSON (no trailing commas, a string "
                         '"name" and a dict "args"):\n'
+                        '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
+                    )
+                    continue
+                if _looks_like_deferred_action(response) and deferred_nudges < _DEFERRED_NUDGE_CAP:
+                    deferred_nudges += 1
+                    current_prompt = (
+                        "Stop narrating - emit the tool call now, in exactly this shape: "
                         '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
                     )
                     continue

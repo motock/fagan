@@ -303,7 +303,8 @@ def suite_reject_cap_reached() -> bool:
 
 
 def finish_if_green(step: int, messages: list | None = None) -> bool:
-    """If the oracle passes, auto-commit and return True to terminate the loop.
+    """If the oracle passes, auto-commit and end the run: the caller
+    terminates the loop.
 
     On a CI-fail-rework round (REWORK_FULL_SUITE), oracle-green is necessary
     but no longer sufficient: the full worktree suite must ALSO be green before
@@ -347,6 +348,7 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
     if worktree_dirty():
         auto_commit("feat: implement task (acceptance oracle green)")
     print(f"[step {step}] ORACLE GREEN — acceptance tests pass; committed & done.", flush=True)
+    write_done_marker(0)
     return True
 
 
@@ -923,12 +925,20 @@ def _main_impl() -> int:
 _DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}
 
 
-def main() -> int:
-    """Run the agent loop, then drop a completion marker for the orchestrator.
+def write_done_marker(rc: int) -> None:
+    """Write the .agent_done completion marker for the orchestrator.
 
     Written last, so its existence means the agent has genuinely finished. A
-    marker failure never changes the run's exit code."""
-    rc = _main_impl()
+    marker failure never changes the run's exit code. Idempotent-safe: main()
+    calls this again on the way out, and a non-zero rc must never downgrade an
+    already-written done (rc 0) marker."""
+    try:
+        existing_path = CWD / ".agent_done"
+        existing = json.loads(existing_path.read_text(encoding="utf-8"))
+        if isinstance(existing, dict) and existing.get("exit_code") == 0 and rc != 0:
+            return  # keep the proof of completion; a deliberate skip is not a failure
+    except (OSError, ValueError):  # no readable done marker: fall through and write
+        pass
     try:
         marker = {
             "reason": _DONE_REASONS.get(rc, "error"),
@@ -940,6 +950,15 @@ def main() -> int:
         os.replace(tmp, CWD / ".agent_done")
     except Exception as e:  # noqa: BLE001 - a marker failure must never mask the run's exit code
         print(f"[warn] .agent_done marker not written: {e}", flush=True)
+
+
+def main() -> int:
+    """Run the agent loop, then drop a completion marker for the orchestrator.
+
+    Written last, so its existence means the agent has genuinely finished. A
+    marker failure never changes the run's exit code."""
+    rc = _main_impl()
+    write_done_marker(rc)
     return rc
 
 

@@ -290,6 +290,33 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
             ),
         })
 
+    # -- check c2: merge CI gate ---------------------------------------------
+    # Read the env var at call time (never at import time), like the
+    # dispatch-backend check above: an operator can disable or re-enable the
+    # gate between preflight runs, and an import-time read would report a
+    # stale state. Warn, never fail: disabling the gate is a legitimate
+    # operator choice during a genuine CI outage, and preflight failing hard
+    # would block work during exactly the outage the escape hatch exists
+    # for. It must be impossible to MISS, not impossible to DO.
+    if os.environ.get("PIPELINE_MERGE_CI_GATE", "1").strip() == "0":
+        results.append({
+            "name": "merge CI gate",
+            "status": "warn",
+            "message": (
+                "PIPELINE_MERGE_CI_GATE=0: the merge gate will NOT consult "
+                "CI, so merges can land on red. Unset PIPELINE_MERGE_CI_GATE "
+                "to restore the gate. This is usually a temporary workaround "
+                "(e.g. a CI outage) and should be removed once CI is green "
+                "again."
+            ),
+        })
+    else:
+        results.append({
+            "name": "merge CI gate",
+            "status": "ok",
+            "message": "merge gate requires green CI before merging",
+        })
+
     # -- check d: model registry --------------------------------------------
     try:
         if registry_loader is not None:

@@ -127,10 +127,13 @@ def test_run_preflight_returns_four_well_formed_checks_all_ok(tmp_path):
     )
     assert isinstance(results, list)
     # One dict per check. Cumulative list: the four briefed checks plus the
+    assert isinstance(results, list)
+    # One dict per check. Cumulative list: the four briefed checks plus the
     # SCHEDULER_CONFIG startup check (see
     # tests/unit/test_preflight_scheduler_config.py, which locates its entry
-    # by name and never pins the total).
-    assert len(results) == 5
+    # by name and never pins the total), plus the merge-CI-gate visibility
+    # check (CIGATEVISIBLE-1).
+    assert len(results) == 6
     for check in results:
         assert set(check) == {"name", "status", "message"}
         assert check["status"] in {"ok", "warn", "fail"}
@@ -142,7 +145,7 @@ def test_run_preflight_returns_four_well_formed_checks_all_ok(tmp_path):
     assert any("dispatch" in n.lower() for n in names)
     assert any("registry" in n.lower() for n in names)
     summary = preflight.summarize(results)
-    assert "5 ok" in summary
+    assert "6 ok" in summary
     assert "0 warn" in summary
     assert "0 fail" in summary
 

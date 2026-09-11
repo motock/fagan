@@ -23,6 +23,7 @@ import fcntl
 import json
 import os
 import threading
+import time
 from contextlib import contextmanager
 
 from .parsers import _atomic_write_json
@@ -123,21 +124,20 @@ def _reap_zombie_in_progress_stories() -> int:
                 # pid is alive — leave the story alone.
                 continue
             except ProcessLookupError:
-                pass
+                # Zombie: agent exited but no one updated the manifest. Reap
+                # so the slot frees up and the story becomes dispatchable on
+                # the next tick. Setting status back to todo is the correct
+                # recovery — the work is unfinished and needs another agent
+                # pass; we don't have signal that it's the model's fault
+                # vs a harness crash, so don't penalize it with 'failed'.
+                story["status"] = "todo"
+                story.pop("pid", None)
+                changed = True
+                reaped += 1
             except PermissionError:
                 # Process exists but we can't signal it (owned by another
                 # user). Trust that it's alive and don't reap.
                 continue
-            # Zombie: agent exited but no one updated the manifest. Reap
-            # so the slot frees up and the story becomes dispatchable on
-            # the next tick. Setting status back to todo is the correct
-            # recovery — the work is unfinished and needs another agent
-            # pass; we don't have signal that it was the model's fault
-            # vs a harness crash, so don't penalize it with 'failed'.
-            story["status"] = "todo"
-            story.pop("pid", None)
-            changed = True
-            reaped += 1
         if changed:
             _atomic_write_json(manifest_path, manifest)
     return reaped
@@ -189,11 +189,13 @@ def _plan_lock(plan_name: str):
             acquired = False
         if acquired:
             held.add(plan_name)
+            _held_plan_lock_fds()[plan_name] = fd
         try:
             yield acquired
         finally:
             if acquired:
                 held.discard(plan_name)
+                _held_plan_lock_fds().pop(plan_name, None)
                 fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
@@ -212,6 +214,141 @@ def _held_plan_locks() -> set[str]:
         held = set()
         _plan_lock_state.held = held
     return held
+
+
+def _held_plan_lock_fds() -> dict[str, int]:
+    """Per-thread map of plan name -> the fd whose open-file-description
+    carries this thread's flock, parallel to _held_plan_locks().
+
+    _released_plan_lock needs the actual fd to drop and re-take the REAL
+    flock (LOCK_UN / LOCK_EX on the same open-file-description): discarding
+    only the name would leave the flock held, and opening a fresh fd here
+    would target a different description, so the release would be invisible
+    to other threads and processes. The fd stays owned by the _plan_lock
+    call that opened it — it is recorded here at acquire and removed at that
+    call's release, and _plan_lock's own finally still closes it exactly
+    once, so a release/re-acquire cycle leaks no descriptor.
+    """
+    fds = getattr(_plan_lock_state, "fds", None)
+    if fds is None:
+        fds = {}
+        _plan_lock_state.fds = fds
+    return fds
+
+
+class PlanLockReacquireTimeout(RuntimeError):
+    """Raised when a _released_plan_lock exit cannot re-acquire the plan
+    flock within PIPELINE_PLAN_LOCK_REACQUIRE_TIMEOUT_SECONDS.
+
+    Deliberately a hard failure rather than a silent continue: the caller is
+    in the middle of an advance_pipeline tick and every subsequent manifest
+    mutation it makes would race whichever other thread/process took the
+    flock during the released window. Failing open here would corrupt the
+    plan; raising lets the tick abort with a clear cause instead.
+    """
+
+
+def _plan_reacquire_timeout() -> float:
+    """Bounded blocking re-acquire timeout, in seconds.
+
+    Read at call time (never at import) from
+    PIPELINE_PLAN_LOCK_REACQUIRE_TIMEOUT_SECONDS; default 300. A missing or
+    malformed value degrades to the default instead of raising — a broken
+    env var must not take down the tick, and float() (not int()) so a
+    fractional value like "0.2" is honoured rather than degrading to the
+    long default.
+    """
+    raw = os.environ.get("PIPELINE_PLAN_LOCK_REACQUIRE_TIMEOUT_SECONDS")
+    if raw is None:
+        return 300.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 300.0
+
+
+@contextmanager
+def _released_plan_lock(plan_name: str):
+    """Temporarily release this thread's plan flock, then re-acquire it.
+
+    advance_pipeline holds the per-plan flock for its whole tick, including
+    multi-minute synchronous model calls. This primitive lets a caller drop
+    that lock around such a phase so another thread or process (a second MCP
+    server, an operator's approve_merge) can take it, then take it back
+    before the tick continues.
+
+    Semantics:
+      - If this thread does not currently hold the plan (per
+        _held_plan_locks), this is a silent no-op: the body runs, nothing is
+        opened, flocked, or recorded, and exit does nothing. Releasing a
+        lock you do not hold must never be an error and must never mint a
+        phantom held-set entry.
+      - Otherwise the real flock is released (LOCK_UN on the same fd
+        _plan_lock is holding — another thread AND another process can
+        acquire it while the body runs) and the plan is removed from the
+        held set for the duration of the body.
+      - On exit the flock is re-acquired on the same fd, BLOCKING, bounded
+        by _plan_reacquire_timeout(). On timeout PlanLockReacquireTimeout is
+        raised and the held-set entry stays absent — the thread must not
+        claim a lock it does not own, and must not continue without it.
+      - A successful re-acquire restores the held-set entry so later nested
+        _plan_lock calls in the same tick still see the plan as held.
+      - The re-acquire lives in a finally, so an exception raised by the
+        body still re-acquires the lock before propagating.
+
+    No new fd is opened here: the release and the re-acquire both act on the
+    fd recorded by the enclosing _plan_lock, which closes it in its own
+    finally — so a release/re-acquire cycle leaks no descriptor and the
+    outer exit still releases the flock for real.
+    """
+    held = _held_plan_locks()
+    if plan_name not in held:
+        # Not ours to release: silent no-op, and the finally below must do
+        # nothing (fd is None) — re-acquiring anyway would flock a lock this
+        # thread never held and insert a phantom held-set entry that no
+        # _plan_lock finally would ever pop.
+        yield
+        return
+    fd = _held_plan_lock_fds().pop(plan_name, None)
+    if fd is None:
+        # Defensive: the name is held but no fd is recorded (should not
+        # happen — _plan_lock records both together). Treat as no-op rather
+        # than guessing an fd.
+        yield
+        return
+    # Pop the held-set entry BEFORE dropping the flock: the held set must
+    # never claim a lock this thread has already released (fail-open).
+    held.discard(plan_name)
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    try:
+        yield
+    finally:
+        # Bounded blocking re-acquire on the SAME fd: the open-file
+        # description is ours, so this can never conflict with our own
+        # lock — no self-deadlock. monotonic(), not time(): a wall-clock
+        # deadline breaks if the system clock steps backwards mid-wait.
+        deadline = time.monotonic() + _plan_reacquire_timeout()
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except (BlockingIOError, OSError):
+                if time.monotonic() >= deadline:
+                    # Leave the held-set entry ABSENT on timeout: the
+                    # thread does not own the flock, and restoring the name
+                    # would make the next nested _plan_lock short-circuit
+                    # to True while someone else owns the real lock.
+                    raise PlanLockReacquireTimeout(
+                        f"timed out re-acquiring the plan flock for "
+                        f"'{plan_name}' after releasing it for "
+                        f"_released_plan_lock "
+                        f"({_plan_reacquire_timeout():g}s)"
+                    ) from None
+                time.sleep(0.05)
+        # Success: restore the held-set entry so nested _plan_lock calls in
+        # the same tick still see the plan as held (and skip re-flocking).
+        held.add(plan_name)
+        _held_plan_lock_fds()[plan_name] = fd
 
 
 @contextmanager
@@ -281,11 +418,15 @@ def _is_heavy(cmd: list[str]) -> bool:
 
 __all__ = [
     "HEAVY_EXECUTABLES",
+    "PlanLockReacquireTimeout",
     "_count_in_progress_agents",
     "_heavy_lock",
+    "_held_plan_lock_fds",
     "_held_plan_locks",
     "_is_heavy",
     "_plan_lock",
     "_plan_lock_state",
+    "_plan_reacquire_timeout",
     "_reap_zombie_in_progress_stories",
+    "_released_plan_lock",
 ]

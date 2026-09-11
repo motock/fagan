@@ -206,12 +206,11 @@ def test_dashboard_imports_collect_backend_status_from_pipeline_usage():
     """The aggregation must come from pipeline.usage (USE-01), imported at
     module level alongside the existing pipeline imports — not redefined and
     not imported twice."""
-    src = (pytest.importorskip("app.dashboard") and "") or ""
-    src = open(d.__file__).read()
+    src = Path(d.__file__).read_text()
     imports = re.findall(
         r"^from pipeline\.usage import collect_backend_status\b.*$",
         src,
-        re.M,
+        re.MULTILINE,
     )
     assert len(imports) == 1, (
         "app/dashboard.py must import collect_backend_status from pipeline.usage "

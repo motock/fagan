@@ -16,7 +16,12 @@ fake that fails ``git`` is not a realistic checkout.
 import json
 
 from pipeline import server as p
-from tests.unit._pipeline_mcp_server_test_helpers import _read_manifest
+from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
+    _read_manifest,
+    agents_dir,
+    plan_dir,
+    worktree_root,
+)
 
 
 class _FailResult:

@@ -215,7 +215,8 @@ def test_lease_expiring_at_exactly_now_is_not_live():
     story = {EXPIRES_KEY: boundary.isoformat()}
 
     assert dl.lease_is_live(story, now=boundary) is False
-    # One microsecond... one second before it IS live.
+    # One second before the boundary the lease IS still live (the
+    # boundary itself is not — asserted above).
     assert dl.lease_is_live(story, now=boundary - timedelta(seconds=1)) is True
     # And the just-expired lease may be re-claimed at the exact boundary.
     assert dl.claim_dispatch_lease(story, now=boundary) is True

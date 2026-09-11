@@ -15,6 +15,9 @@ The lease is the cross-tick / cross-process guard: a story carries
 
 and a second claimer must see the live lease and back off. This module
 provides ONLY the primitive; B3 wires it into ``advance_pipeline``.
+Scope: the check-then-set below is only cross-process safe when the
+caller holds ``_plan_lock`` across the whole check-then-set and persists
+the manifest before releasing it — B3 must wire callers that way.
 
 Fail secure, in both directions:
 
@@ -32,7 +35,32 @@ import os
 from datetime import datetime, timedelta, timezone
 
 _DEFAULT_TTL_S = 1800
+# Sane upper cap on any resolved TTL: 30 days. Comfortably below
+# ``timedelta`` overflow (``timedelta.max`` is ~2.5e11 seconds), so no
+# ``timedelta(seconds=ttl)`` built from a validated TTL can overflow.
+_MAX_TTL_S = 2_592_000
 _TTL_ENV_VAR = "PIPELINE_DISPATCH_LEASE_TTL_SECONDS"
+
+
+def _validated_ttl_s(ttl, *, from_env: bool) -> int:
+    """The single validation point for a resolved TTL, applied BEFORE any
+    ``timedelta(seconds=...)`` arithmetic.
+
+    A usable TTL satisfies ``0 < ttl <= _MAX_TTL_S``. Outside that range:
+
+    - ``from_env=True`` (value resolved from the environment): degrade to
+      ``_DEFAULT_TTL_S`` — a malformed env value must never raise;
+    - ``from_env=False`` (explicit ``ttl_s=`` argument): raise
+      ``ValueError`` — fail secure, before any state mutation. A caller
+      asking for a nonsense TTL must not get a silently useless lease.
+    """
+    if 0 < ttl <= _MAX_TTL_S:
+        return ttl
+    if from_env:
+        return _DEFAULT_TTL_S
+    raise ValueError(
+        f"ttl_s must satisfy 0 < ttl_s <= {_MAX_TTL_S}, got {ttl!r}"
+    )
 
 
 def claim_dispatch_lease(
@@ -49,20 +77,33 @@ def claim_dispatch_lease(
     UTC, ``now + ttl``) and ``dispatch_lease_owner_pid`` (``os.getpid()``).
 
     ``ttl_s`` defaults from ``PIPELINE_DISPATCH_LEASE_TTL_SECONDS``
-    (default 1800); a malformed value degrades to the default, never
-    raising. The env var is read at call time, never cached at import.
+    (default 1800); the env var is read at call time, never cached at
+    import. The resolved TTL is validated in one place before any expiry
+    arithmetic: an unparseable, non-positive (``<= 0``), or over-cap
+    (``> _MAX_TTL_S``) env value degrades to the default and never
+    raises. An explicit ``ttl_s`` outside ``(0, _MAX_TTL_S]`` raises
+    ``ValueError`` before the story is touched (fail secure);
+    ``ttl_s=None`` keeps meaning "resolve from env/default".
+
+    Scope: this check-then-set is only cross-process safe when the caller
+    holds ``_plan_lock`` across the whole check-then-set and persists the
+    manifest before releasing it (B3 must wire callers that way).
+
+    The injectable ``now`` must be timezone-aware; a naive value raises
+    ``TypeError`` today, which is acceptable for a test-only injectable.
     """
     if now is None:
         now = datetime.now(timezone.utc)
 
     if ttl_s is not None:
-        ttl = ttl_s
+        ttl = _validated_ttl_s(ttl_s, from_env=False)
     else:
         raw = os.environ.get(_TTL_ENV_VAR)
         try:
-            ttl = int(raw)
+            resolved = int(raw)
         except (TypeError, ValueError):
-            ttl = _DEFAULT_TTL_S
+            resolved = _DEFAULT_TTL_S
+        ttl = _validated_ttl_s(resolved, from_env=True)
 
     # Guard first, mutate last: a rejected claim must leave both lease
     # fields byte-identical (no refresh, no owner change, no partial

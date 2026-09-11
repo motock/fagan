@@ -37,8 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import ci
-from pipeline import preflight
+from pipeline import ci, preflight
 
 GATE_VAR = "PIPELINE_MERGE_CI_GATE"
 CHECK_NAME = "merge CI gate"

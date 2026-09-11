@@ -523,17 +523,21 @@ stories (TDD-split stays strictly read-only). Tests in
       the removal report, closing the gap the old unscoped
       `confirm_removals=true` escape hatch left. See memory
       `project_dispatch_failure_modes` Modes 54/55 for full detail.
-- [ ] **Get CI to an enforced green baseline and tag a real release.** 953
-      commits (2026-09-08), no real release tags (only a `w1c02-backup`
-      checkpoint tag) — adoption starts with "what version." **Still blocked
-      on the GitHub Actions billing cap, and it is not durably fixed even
-      when it looks fixed**: plan `ci-green-after-billing-reset` (3 stories,
-      2026-09-02) responded to what looked like a billing reset, but the
-      identical "recent account payments have failed" annotation recurred
-      2026-09-03 and again 2026-09-05 on every job (see
-      `project_gha_billing_block_ci_gate` memory) — a manual account-level
-      fix by the account owner is the only real resolution. Manual local
-      suite + `gh pr merge` remains the operating mode until then.
+- [x] **Get CI to an enforced green baseline and tag a real release.** - DONE
+      2026-09-11. The GitHub Actions billing cap that blocked this is
+      RESOLVED: CI runs and goes green on `master` and on story branches as
+      of 2026-09-11. `v0.1.0` is tagged and pushed (annotated "v0.1.0 -
+      first public release", pointing at commit `81fc3a7`), with
+      `CHANGELOG.md` landed alongside (#681). Three same-day cleanup plans
+      got there: `ci-green`; `ci-unmasked-failures` (#676/#677, two
+      macOS-only failures that only surfaced once real CI came back); and
+      `ci-gate-visible` (#680, so a disabled `PIPELINE_MERGE_CI_GATE` can no
+      longer report "pass" and silently outlive its cause). The manual
+      local-suite + `gh pr merge` operating mode is RETIRED;
+      `approve_merge` / `gh pr checks` is the gate again. Residual:
+      `PIPELINE_MERGE_CI_GATE=0` is still stale in the scheduler launchd
+      plist and `~/.claude.json`, currently overridden to `1` by the repo's
+      `.pipeline.env`.
 
 ### A4. Make it usable by someone who isn't the author
 
@@ -553,14 +557,12 @@ stories (TDD-split stays strictly read-only). Tests in
       `scripts/smoke_getting_started.py` (A4-07) runs one story to merge on
       the claude backend against a scratch `PLAN_DIR`; README gained a
       getting-started walkthrough subsection (A4-08).
-- [ ] **Re-enable the macOS CI leg before the repo goes public.** Commit
-      7958a23 disabled the macOS runner "until repo is public" (repo is
-      still private), and `test_a_job_that_runs_pytest_also_runs_on_macos`
-      is currently `@pytest.mark.skip` for the same period (PR #355). Before
-      switching the repo to public: re-enable the macOS matrix leg in
-      `.github/workflows/ci.yml` AND remove the skip so macOS-only
-      dependencies (the original `plutil` motivation) are caught before a
-      PR opens again. This is a release gate, not optional polish.
+- [x] **Re-enable the macOS CI leg before the repo goes public.** - DONE
+      2026-09-11 via plan `macos-ci-reenable`, PR #674. The macOS matrix leg
+      is back in `.github/workflows/ci.yml` AND the `@pytest.mark.skip` is
+      gone from `test_a_job_that_runs_pytest_also_runs_on_macos`. It paid
+      for itself immediately: #676 and #677 were macOS-only failures
+      invisible to single-platform local runs.
 
 ---
 
@@ -760,10 +762,18 @@ stories (TDD-split stays strictly read-only). Tests in
 
 ### B6. Ecosystem & community
 
-- [ ] **Tag releases + changelog.** Conventional Commits already enables this
-      (`release-please` / `cz`).
-- [ ] **Contributor docs + the ADR pattern** VNX uses (19 ADRs). Plan docs are
-      rich but internal; ADRs make decisions navigable to outsiders.
+- [x] **Tag releases + changelog.** - DONE 2026-09-11 via plan
+      `release-docs`. `v0.1.0` tagged and pushed; `CHANGELOG.md` (#681)
+      carries the 0.1.0 entry in Keep a Changelog format. Automated tooling
+      (`release-please` / `cz`) remains optional — the practice is started,
+      not automated.
+- [x] **Contributor docs + the ADR pattern** - DONE 2026-09-11, same plan,
+      PR #682. `CONTRIBUTING.md` plus `docs/adr/` with an index
+      (`README.md`), a `template.md`, and the first four decision records:
+      0001 review-is-the-primary-quality-gate, 0002
+      shipped-model-registry-is-provider-neutral, 0003
+      dispatch-backend-resolves-from-environment, 0004
+      safety-gates-default-on-and-fail-closed.
 - [ ] **A public demo / writeup of the MCP-native inversion** (Claude Code
       driving its own pipeline) — the angle most likely to draw interest, and
       nobody else leads with it.
@@ -841,12 +851,11 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > conflict" section for the historical rationale on why B1/B5 were
 > sequenced after the service seam.
 >
-> **What's left as of 2026-09-08:** W4 (multi-tenant — closes B3), B5's
-> remaining SWE-bench integration bullet and MCP-registry listing, B6
-> (ecosystem/releases), the two still-open A3/A4 items (enforced-green CI +
-> a real release tag — blocked on the recurring GHA billing cap; the macOS
-> CI leg re-enable before the repo goes public), and the worktree
-> write/apply half of chat-driven repair (gated — see above). B2 (model
+> **What's left as of 2026-09-11:** W4 (multi-tenant — closes B3), B5's
+> remaining SWE-bench integration bullet and MCP-registry listing, B6's
+> public demo/writeup, A3's reframed failure-mode-discovery-rate item, and
+> the worktree write/apply half of chat-driven repair (gated on a security
+> review — see above). B2 (model
 > breadth) closed 2026-09-08; see the B2 section.
 
 Land what's half-done before building new; then extract the service seam

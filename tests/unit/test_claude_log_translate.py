@@ -512,13 +512,19 @@ def test_module_defines_exactly_the_two_public_functions_and_no_class():
 
 
 def test_story_is_additive_no_existing_module_wires_the_translator():
+    """No module other than the sanctioned wiring site may reference the
+    translator. LOG-03 shipped it standalone; LOG-05 later wired it into
+    ClaudeCliDriver.dispatch (app/backend_claude.py), which is the one
+    allowed caller — every other module under pipeline/, app/, and
+    scripts/ must still stay free of it."""
     root = Path(__file__).resolve().parents[2]
     module_itself = root / "pipeline" / "claude_log_translate.py"
+    allowed_wiring = {root / "app" / "backend_claude.py"}
     offenders = []
     for dir_name in ("pipeline", "app", "scripts"):
         for path in sorted((root / dir_name).rglob("*.py")):
-            if path == module_itself:
-                continue  # the module may name itself; no one else may wire it
+            if path == module_itself or path in allowed_wiring:
+                continue  # the module may name itself; only dispatch may wire it
             if "claude_log_translate" in path.read_text(encoding="utf-8"):
                 offenders.append(str(path.relative_to(root)))
     assert offenders == []

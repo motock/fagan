@@ -53,6 +53,11 @@ addopts = "--ignore=tests/benchmark --ignore=tests/experiments -n auto"
 # client pytest fixture from tests/unit/_dashboard_helpers.py and uses it as
 # a test-function parameter.
 "tests/unit/test_scheduler_dashboard_fingerprint_wiring.py" = ["F811"]
+# Same fixture-sharing pattern as above: test_backend.py was split into
+# test_backend_*.py files that import the _clean_transport_env pytest
+# fixture from tests/unit/_backend_helpers.py and use it as a test-function
+# parameter.
+"tests/unit/test_backend_*.py" = ["F811"]
 # Same fixture-sharing pattern as above: test_pipeline_mcp_server.py was
 # split into test_pipeline_mcp_server_*.py files that import the
 # agents_dir/plan_dir/worktree_root/usage_state_path/_plane_disabled pytest

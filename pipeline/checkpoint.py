@@ -71,13 +71,21 @@ def _branch_commit_count(worktree: Any) -> int | None:
 
 
 def _agent_done_marker(worktree: Any) -> bool | None:
-    """Whether <worktree>/.agent_done exists. None only when the worktree
-    itself is missing (or the probe fails) — a present worktree without the
-    marker is a meaningful False, not a failed lookup."""
+    """Whether the agent's done marker exists: <worktree>/.agent_done OR
+    <worktree>/.agent_done.consumed. scan_done_markers renames .agent_done
+    to .agent_done.consumed right after publishing the done event, so a
+    finished run usually presents only the consumed name — either name is
+    evidence of a finished run (mirrors wedge_io's two-marker check). None
+    only when the worktree itself is missing (or the probe fails) — a
+    present worktree without either marker is a meaningful False, not a
+    failed lookup."""
     try:
         if not worktree or not os.path.isdir(str(worktree)):
             return None
-        return os.path.exists(os.path.join(str(worktree), ".agent_done"))
+        return (
+            os.path.exists(os.path.join(str(worktree), ".agent_done"))
+            or os.path.exists(os.path.join(str(worktree), ".agent_done.consumed"))
+        )
     except Exception:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
         return None
 

@@ -427,12 +427,29 @@ class TestSpawnLocal:
         )
 
     def test_spawn_local_signature_unchanged(self):
+        # LOG-04 deliberately extended the AGENTLOGTS-1 signature with the
+        # keyword-only line_filter seam plus the internal _fd_redirect
+        # routing switch (which keeps spawn_harness's default local path on
+        # the byte-identical fd-redirect spawn). The original five
+        # parameters keep their order, kinds, and defaults; the new
+        # keyword-only parameters are pinned by
+        # tests/unit/test_execution_line_filter.py.
         sig = inspect.signature(execution.spawn_local)
-        assert list(sig.parameters) == ["cmd", "cwd", "log_path", "append", "env"]
+        assert list(sig.parameters) == [
+            "cmd",
+            "cwd",
+            "log_path",
+            "append",
+            "env",
+            "line_filter",
+            "_fd_redirect",
+        ]
         assert sig.parameters["cmd"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-        for name in ("cwd", "log_path", "append", "env"):
+        for name in ("cwd", "log_path", "append", "env", "line_filter", "_fd_redirect"):
             assert sig.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
         assert sig.parameters["env"].default is None
+        assert sig.parameters["line_filter"].default is None
+        assert sig.parameters["_fd_redirect"].default is False
         assert _annotation_name(sig.return_annotation) == "AgentHandle"
 
 
@@ -615,13 +632,25 @@ class TestModuleContract:
         assert _annotation_name(resolve_sig.return_annotation) == "str"
 
         local_sig = inspect.signature(execution.spawn_local)
-        assert list(local_sig.parameters) == ["cmd", "cwd", "log_path", "append", "env"]
+        assert list(local_sig.parameters) == [
+            "cmd",
+            "cwd",
+            "log_path",
+            "append",
+            "env",
+            "line_filter",
+            "_fd_redirect",
+        ]
         for name in ("cwd", "log_path", "append"):
             param = local_sig.parameters[name]
             assert param.kind is inspect.Parameter.KEYWORD_ONLY
             assert param.default is inspect.Parameter.empty
         assert local_sig.parameters["env"].kind is inspect.Parameter.KEYWORD_ONLY
         assert local_sig.parameters["env"].default is None
+        assert local_sig.parameters["line_filter"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert local_sig.parameters["line_filter"].default is None
+        assert local_sig.parameters["_fd_redirect"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert local_sig.parameters["_fd_redirect"].default is False
         assert _annotation_name(local_sig.return_annotation) == "AgentHandle"
 
         harness_sig = inspect.signature(execution.spawn_harness)
@@ -632,6 +661,7 @@ class TestModuleContract:
             "append",
             "env",
             "role",
+            "line_filter",
         ]
         assert harness_sig.parameters["env"].default is None
         assert harness_sig.parameters["role"].kind is inspect.Parameter.KEYWORD_ONLY

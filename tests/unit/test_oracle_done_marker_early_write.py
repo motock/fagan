@@ -170,6 +170,7 @@ def test_full_suite_red_writes_no_marker(oracle, oracle_cwd, monkeypatch,
 
 def test_suite_reject_cap_writes_no_marker(oracle, oracle_cwd, monkeypatch,
                                            marker_spy):
+    _require_write_done_marker(oracle)
     monkeypatch.setattr(oracle, "oracle_result", lambda: (True, "oracle ok"))
     monkeypatch.setattr(oracle, "REWORK_FULL_SUITE", True)
     monkeypatch.setattr(oracle, "REWORK_SUITE_REJECT_CAP", 1)

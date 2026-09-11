@@ -350,3 +350,32 @@ __all__ = [
     "_LOCAL_SKIP_PERSONAS",
     "_RISK_ORDER",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Reload-stable int constants (LOCKSTARVE-A3 follow-up).
+#
+# Tests reload this module (importlib.reload(pipeline.config)) to re-read the
+# env-var knobs. Reload re-executes the module body, so every int constant is
+# re-minted as a NEW object even when its value is unchanged. Any module that
+# did ``from pipeline.config import NAME`` at import time keeps the OLD object,
+# which breaks ``is``-identity single-source-of-truth checks (e.g.
+# test_dashboard_imports_wedge_names: ``assert 1800 is 1800`` — ints above 256
+# are not interned, so two equal literals are distinct objects).
+#
+# importlib.reload reuses the module's __dict__, so a snapshot stashed under a
+# name this body never assigns SURVIVES the reload. The block below therefore
+# restores the PREVIOUS object for any int constant whose value is unchanged,
+# keeping every existing from-importer sharing one object, while a constant
+# whose value DID change (env override between reloads) keeps the new object.
+_PRE_RELOAD_SNAPSHOT = globals().get("_PRE_RELOAD_SNAPSHOT") or {}
+if _PRE_RELOAD_SNAPSHOT:
+    for _name, _obj in _PRE_RELOAD_SNAPSHOT.items():
+        _new = globals().get(_name, _obj)
+        if isinstance(_obj, int) and not isinstance(_obj, bool) and _obj == _new:
+            globals()[_name] = _obj
+_PRE_RELOAD_SNAPSHOT = {
+    _k: _v
+    for _k, _v in globals().items()
+    if isinstance(_v, int) and not isinstance(_v, bool) and not _k.startswith("__")
+}

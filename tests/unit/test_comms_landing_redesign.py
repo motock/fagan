@@ -21,7 +21,6 @@ STATIC = REPO_ROOT / "static"
 INDEX_HTML = STATIC / "index.html"
 STYLE_CSS = STATIC / "style.css"
 APP_JS = STATIC / "app.js"
-COMMS_JS = STATIC / "app" / "comms.js"
 MAIN_JS = STATIC / "app" / "main.js"
 
 # Hashes captured from the pre-implementation state of this branch (commit
@@ -29,38 +28,6 @@ MAIN_JS = STATIC / "app" / "main.js"
 # it is markup/CSS only, so any drift here means a JS file was touched.
 _UNCHANGED_JS_SHA256 = {
     APP_JS: "52e12daba11b07f777764a6b6e3623c7bfd91ec9a0bf10251d903d2319772baa",
-    # Re-pinned for the "repair Comms chat panel layout, auto-scroll, reset,
-    # export" fix (#478, commit 7f18a2a): appendCommsMessage now renders a
-    # role/timestamp "who" line into the (already-styled) .bubble element,
-    # plus new resetCommsThread()/exportCommsThread() + wiring. (The hash
-    # #478 itself re-pinned here was stale - computed before that commit's
-    # own final edits to comms.js - so this corrects it to the actual
-    # committed file contents.) See test_dashboard_comms_css.py's
-    # COMMS_JS_SHA256 comment for the same pin.
-    # Re-pinned again for the "reset must also clear commsHistory" fix
-    # (resetCommsThread() left commsHistory populated after clearing the
-    # DOM thread, so a 'reset' conversation silently kept sending old turns
-    # to the backend): commsHistory = [] added to resetCommsThread, and
-    # resetCommsThread added to the module's export list so it's reachable
-    # by the regression test that covers this.
-    # Re-pinned again for the comms TRACE-toggle story
-    # (comms-trace-toggle-01, 2026-08-29): the toggle adds a module-level
-    # showTrace block and header-button wiring to comms.js. Both blockers the
-    # rework round introduced (deleted commsHistory declaration, deleted
-    # reset/export wiring) were restored before this pin was taken; the final
-    # pin adds the bare-shim classList guard in applyTraceVisibility. See
-    # test_dashboard_comms_css.py's COMMS_JS_SHA256 comment for the same pin.
-    # Re-pinned for PR #541 ("send selected workspace in chat POST body",
-    # merged 2026-09-02): that story legitimately extended the chat POST
-    # body with the selected workspace id, so the pre-#541 pin no longer
-    # matched the committed file. This story never touched comms.js.
-    # Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that
-    # story's whole job was to make every dashboard fetch carry the
-    # X-Pipeline-Api-Key header, so the /api/chat raw fetch in
-    # sendCommsMessage() now builds its headers with the shared secret
-    # (Content-Type preserved). comms.js is legitimately no longer
-    # byte-identical to this story's pre-implementation baseline.
-    COMMS_JS: "6c22e7c021af19244095178172e9dbe344b489545e0fea4f86537e0fc5529cb2",
     # MAIN_JS re-pinned: sibling story #465 ("Wire dynamic chat-model
     # subtitle...") legitimately added the updateCommsSubtitle() call to
     # main.js after this story's own pre-implementation baseline was
@@ -460,14 +427,6 @@ def test_app_js_untouched():
     assert _sha256(APP_JS) == _UNCHANGED_JS_SHA256[APP_JS], (
         "static/app.js must be byte-identical to before this story "
         "(markup/CSS only)"
-    )
-
-
-def test_comms_js_untouched():
-    assert COMMS_JS.exists(), "static/app/comms.js must exist"
-    assert _sha256(COMMS_JS) == _UNCHANGED_JS_SHA256[COMMS_JS], (
-        "static/app/comms.js must be byte-identical to before this story "
-        "(markup/CSS only - chip wiring is a dependent follow-up story)"
     )
 
 

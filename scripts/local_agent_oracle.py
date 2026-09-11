@@ -925,6 +925,16 @@ def _main_impl() -> int:
 _DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}
 
 
+def main() -> int:
+    """Run the agent loop, then drop a completion marker for the orchestrator.
+
+    Written last, so its existence means the agent has genuinely finished. A
+    marker failure never changes the run's exit code."""
+    rc = _main_impl()
+    write_done_marker(rc)
+    return rc
+
+
 def write_done_marker(rc: int) -> None:
     """Write the .agent_done completion marker for the orchestrator.
 
@@ -950,16 +960,6 @@ def write_done_marker(rc: int) -> None:
         os.replace(tmp, CWD / ".agent_done")
     except Exception as e:  # noqa: BLE001 - a marker failure must never mask the run's exit code
         print(f"[warn] .agent_done marker not written: {e}", flush=True)
-
-
-def main() -> int:
-    """Run the agent loop, then drop a completion marker for the orchestrator.
-
-    Written last, so its existence means the agent has genuinely finished. A
-    marker failure never changes the run's exit code."""
-    rc = _main_impl()
-    write_done_marker(rc)
-    return rc
 
 
 if __name__ == "__main__":

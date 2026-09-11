@@ -28,6 +28,18 @@ from contextlib import contextmanager
 
 from .parsers import _atomic_write_json
 
+# Reload-stability guard: modules import _ServerRef BY VALUE at import time
+# (pipeline/wedge_io.py: ``from .concurrency import _ServerRef``), and
+# importlib.reload(pipeline.concurrency) re-executes the class statement
+# below, which would mint a NEW class object and break the identity
+# wedge_io._ServerRef is concurrency._ServerRef that
+# tests/unit/test_wedge_scan.py pins. The reload tests in
+# tests/unit/test_released_plan_lock.py reload this module for env
+# isolation, so capture the pre-reload class here and restore it after the
+# class body re-executes (reload() does not clear the module dict, so the
+# name is still bound to the original object at this point).
+_pre_reload_server_ref = globals().get("_ServerRef")
+
 
 class _ServerRef:
     """Delegates to the *current* ``pipeline.server`` binding for a name.
@@ -55,6 +67,12 @@ class _ServerRef:
     def __truediv__(self, other):
         return self._value() / other
 
+
+if _pre_reload_server_ref is not None:
+    # Restore the original class object so by-value importers keep their
+    # identity across reloads (see the comment above the capture).
+    _ServerRef = _pre_reload_server_ref
+del _pre_reload_server_ref
 
 PLAN_DIR = _ServerRef("PLAN_DIR")
 

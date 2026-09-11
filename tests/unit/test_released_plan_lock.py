@@ -375,7 +375,7 @@ def test_released_lock_is_visible_to_another_process(tmp_path):
         """
     )
 
-    def probe():
+    def probe_lock():
         proc = subprocess.run(
             [sys.executable, "-c", probe, str(lock_path)],
             capture_output=True,
@@ -386,9 +386,9 @@ def test_released_lock_is_visible_to_another_process(tmp_path):
 
     with concurrency._plan_lock(plan) as ok:
         assert ok is True
-        assert probe() == 3, "outer _plan_lock must hold the flock for real"
+        assert probe_lock() == 3, "outer _plan_lock must hold the flock for real"
         with concurrency._released_plan_lock(plan):
-            assert probe() == 0, (
+            assert probe_lock() == 0, (
                 "another PROCESS must be able to acquire while the window is open"
             )
-        assert probe() == 3, "after exit the flock must be held again"
+        assert probe_lock() == 3, "after exit the flock must be held again"

@@ -54,6 +54,29 @@ USAGE_BLIND_LOG_INTERVAL = int(os.environ.get("USAGE_BLIND_LOG_INTERVAL", "60"))
 # <=0 disables the cap (dispatch every ready story each tick).
 MAX_CONCURRENT_AGENTS = int(os.environ.get("PIPELINE_MAX_CONCURRENT_AGENTS", "3"))
 
+# Cap on how many stories ONE plan may dispatch in a single tick, regardless
+# of backend. The MAX_CONCURRENT_AGENTS cap above only bounds ON-DEVICE
+# concurrency: a cloud-backed dispatch bypasses it entirely, so a tick can
+# otherwise launch every ready :cloud story back-to-back. Each dispatch pays
+# a synchronous test-author + planner call while the tick holds the plan's
+# _plan_lock, so an unbounded run holds that lock for minutes and refuses
+# external approve_merge calls with "plan busy (scheduler tick in progress)".
+# This is an additional, independent bound layered on top of the device-slot
+# math: a story deferred by it keeps its current dispatch-eligible status
+# (todo/interrupted) and the next tick picks it up. <=0 disables the cap
+# (dispatch every ready story each tick). A malformed value degrades to the
+# default instead of raising: a bad operator override must not take a tick
+# down.
+def _int_env(name: str, default: int) -> int:
+    """Read an int env var; a malformed value degrades to the default."""
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+PIPELINE_MAX_DISPATCH_PER_TICK = _int_env("PIPELINE_MAX_DISPATCH_PER_TICK", 1)
+
 # Error budget for the merge step. _merge_pr shells out to `gh`/`git push`,
 # any of which can fail transiently (network, a momentary GitHub 5xx). Rather
 # than crash the tick or burn the story on the first hiccup, a failed merge
@@ -298,6 +321,7 @@ __all__ = [
     "MERGE_MAX_ATTEMPTS",
     "PIPELINE_AUTONOMY",
     "PIPELINE_LOCAL_MAX_RISK",
+    "PIPELINE_MAX_DISPATCH_PER_TICK",
     "PIPELINE_REVIEWER_AUTO_FIX",
     "PIPELINE_RISK_THRESHOLD",
     "PLANE_MAX_ATTEMPTS",
@@ -326,3 +350,32 @@ __all__ = [
     "_LOCAL_SKIP_PERSONAS",
     "_RISK_ORDER",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Reload-stable int constants (LOCKSTARVE-A3 follow-up).
+#
+# Tests reload this module (importlib.reload(pipeline.config)) to re-read the
+# env-var knobs. Reload re-executes the module body, so every int constant is
+# re-minted as a NEW object even when its value is unchanged. Any module that
+# did ``from pipeline.config import NAME`` at import time keeps the OLD object,
+# which breaks ``is``-identity single-source-of-truth checks (e.g.
+# test_dashboard_imports_wedge_names: ``assert 1800 is 1800`` — ints above 256
+# are not interned, so two equal literals are distinct objects).
+#
+# importlib.reload reuses the module's __dict__, so a snapshot stashed under a
+# name this body never assigns SURVIVES the reload. The block below therefore
+# restores the PREVIOUS object for any int constant whose value is unchanged,
+# keeping every existing from-importer sharing one object, while a constant
+# whose value DID change (env override between reloads) keeps the new object.
+_PRE_RELOAD_SNAPSHOT = globals().get("_PRE_RELOAD_SNAPSHOT") or {}
+if _PRE_RELOAD_SNAPSHOT:
+    for _name, _obj in _PRE_RELOAD_SNAPSHOT.items():
+        _new = globals().get(_name, _obj)
+        if isinstance(_obj, int) and not isinstance(_obj, bool) and _obj == _new:
+            globals()[_name] = _obj
+_PRE_RELOAD_SNAPSHOT = {
+    _k: _v
+    for _k, _v in globals().items()
+    if isinstance(_v, int) and not isinstance(_v, bool) and not _k.startswith("__")
+}

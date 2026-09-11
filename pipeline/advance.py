@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .wedge_io import run_wedge_scan
 
 
@@ -84,6 +85,13 @@ class _ServerRef:
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands.
 DISPATCH_MAX_ATTEMPTS = _ServerRef("DISPATCH_MAX_ATTEMPTS")
 MAX_CONCURRENT_AGENTS = _ServerRef("MAX_CONCURRENT_AGENTS")
+# LOCKSTARVE-A3: read straight from pipeline.config rather than via _ServerRef.
+# _ServerRef delegates to pipeline.server, whose explicit `from .config import
+# (...)` list cannot be extended by this story (exactly two production files),
+# so a _ServerRef binding would AttributeError at tick time. A module-level
+# assignment still lands for the tests' _set_cap, which monkeypatches this
+# module attribute directly.
+PIPELINE_MAX_DISPATCH_PER_TICK = _CFG_MAX_DISPATCH_PER_TICK
 MERGE_MAX_ATTEMPTS = _ServerRef("MERGE_MAX_ATTEMPTS")
 PIPELINE_AUTONOMY = _ServerRef("PIPELINE_AUTONOMY")
 _atomic_write_json = _ServerRef("_atomic_write_json")
@@ -390,7 +398,18 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # Independent of the cap: a slot-exempt story still runs this gate,
         # and gated stories are recorded exactly as before.
         gated = []
+        dispatched_this_tick = 0
         for key in ready:
+            if (
+                PIPELINE_MAX_DISPATCH_PER_TICK > 0
+                and dispatched_this_tick >= PIPELINE_MAX_DISPATCH_PER_TICK
+            ):
+                # Per-tick dispatch cap (LOCKSTARVE-A3): this plan has already
+                # launched its budget for this tick. Leave the remaining
+                # stories in their current dispatch-eligible status (todo /
+                # interrupted) so the NEXT tick picks them up; they are not
+                # gated, parked or failed and consume no dispatch attempt.
+                break
             story = stories[key]
             on_device = _story_dispatch_is_on_device(story)
             if capped and on_device and free_device_slots <= 0:
@@ -430,6 +449,17 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     # handling below (unchanged) still triggers exactly as
                     # it did when dispatch_story used to raise directly.
                     raise RuntimeError(result.get("error", "dispatch failed"))
+                # Only a dispatch that actually launched consumes this tick's
+                # cap budget. Every real dispatch_story result is a dict
+                # ({"ok": True, ...} on a launch, {"ok": False, ...} raised as
+                # RuntimeError above, {"ok": True, "skipped": ...} on store-lock
+                # contention — that last shape did NOT launch an agent but is
+                # still counted against the cap, since the tick paid the call),
+                # so in production this counts exactly the dispatches that did
+                # not return ok: False. A non-dict return (only possible from a
+                # stub) is not counted.
+                if isinstance(result, dict):
+                    dispatched_this_tick += 1
                 if not (isinstance(result, dict) and result.get("skipped")):
                     summary["dispatched"].append(key)
                 else:

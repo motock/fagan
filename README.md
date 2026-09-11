@@ -2,7 +2,28 @@
 
 [![CI](https://github.com/motock/claude-pipeline-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/motock/claude-pipeline-mcp/actions/workflows/ci.yml)
 
-This is a quickstart guide for the Autonomous SDLC Agent Pipeline, describing the system components and how they interact. For detailed reference material, see [REFERENCE.md](./REFERENCE.md).
+**Spend tokens on judgment, not typing.**
+
+Frontier models cost money per token and are excellent at judgment. Local models
+run free and are adequate at typing. This pipeline splits software engineering
+along exactly that line: a frontier model decomposes the work, plans it, reviews
+the diff, and adjudicates anything risky — while a local model writes the
+implementation at no marginal cost.
+
+What makes the cheap half trustworthy is inspection. In Michael Fagan's [1976 IBM
+study](https://www.semanticscholar.org/paper/Design-and-Code-Inspections-to-Reduce-Errors-in-Fagan/fe02f66911c6331a81d01f9cf4fdce05b6b2aca3),
+formal inspection found 82% of the defects in the released product — 38 per KLOC,
+against 8 per KLOC for unit testing. Quality lives in the gate, not in the author.
+So this project spends its budget on gates: TDD enforced before implementation, an
+independent review pass, acceptance-oracle grading, a risk-tiered overlord that
+stops for a human on anything irreversible, and a merge gate that re-runs the suite
+against the rebased branch before anything lands.
+
+The goal is narrow and specific: enterprise-grade engineering discipline —
+decomposition, TDD, code review, dependency-ordered delivery — on a $20/month
+budget.
+
+For detailed reference material, see [REFERENCE.md](./REFERENCE.md).
 
 **Before you start:** read [Reliability & limitations](#reliability--limitations)
 below. This is an autonomous coding pipeline with real, documented failure
@@ -28,10 +49,13 @@ Windows is untested.
 ## Quickstart
 
 This gets the MCP server registered and a first plan running end-to-end.
-Dispatch/review default to the `claude` backend, which needs no local model —
-it shells out to the Claude Code CLI. The shipped registry deliberately ships
-no role routing, so provider selection is a setup step, not a default: see
-**Provider selection & authorization** below.
+To keep a first run simple, dispatch/review default to the `claude` backend,
+which needs no local model — it shells out to the Claude Code CLI. That
+default is the *starting* configuration, not the intended one: the cost split
+described above only happens once you route the implementation role to a
+local model. The shipped registry deliberately ships no role routing, so
+provider selection is a setup step, not a default: see **Provider selection &
+authorization** below.
 
 ```bash
 # 1. Clone and install the Python environment

@@ -274,21 +274,21 @@ TOOLS: dict[str, dict] = {
         ),
     },
     "read_file": {
-        "description": "Read a file from the active workspace by relative path.",
+        "description": "Read a file by relative path.",
         "params": {"path": "str"},
         "execute": lambda http_client, api_base_url, path, **kwargs: (
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/file"), params={"path": path}).json()
         ),
     },
     "list_directory": {
-        "description": "List the immediate contents of a directory in the active workspace by relative path (non-recursive).",
+        "description": "List the immediate contents of a directory by relative path (non-recursive).",
         "params": {"path": "str"},
         "execute": lambda http_client, api_base_url, path='', **kwargs: (
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/files"), params={"path": path}).json()
         ),
     },
     "search_code": {
-        "description": "Search the active workspace for a text pattern (grep-style) and return matching lines with file and line number.",
+        "description": "Search for a text pattern (grep-style) and return matching lines with file and line number.",
         "params": {"pattern": "str"},
         "execute": lambda http_client, api_base_url, pattern, **kwargs: (
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspace/search"), params={"pattern": pattern}).json()

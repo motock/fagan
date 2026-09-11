@@ -148,7 +148,9 @@ def _run_timeout_scenario(monkeypatch, tmp_path, plan, env_value):
                 outcome["held_after_reacquire"] = plan in concurrency._held_plan_locks()
         except Exception as exc:  # noqa: BLE001 - classified by the main thread
             outcome["exc"] = exc
+            outcome["held_after_exc"] = plan in concurrency._held_plan_locks()
         finally:
+            outcome["done"] = True
             release_contender.set()
             done.set()
 

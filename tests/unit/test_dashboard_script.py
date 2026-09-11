@@ -76,7 +76,20 @@ def _authed_request(url: str) -> urllib.request.Request:
     return urllib.request.Request(url, headers={_API_KEY_HEADER: get_or_create_api_key()})
 
 
-def _wait_healthy(port: int, timeout_s: float = 15.0) -> bool:
+def _wait_healthy(port: int, timeout_s: float = 60.0) -> bool:
+    """Poll /api/health on `port` until it answers 200 (or budget expires).
+
+    The budget must absorb uvicorn's cold start under a saturated machine:
+    the subprocess pays the full app.dashboard import plus the startup
+    preflight before it binds the socket, and the full suite runs under
+    pytest-xdist (-n auto), so every core can already be busy when this
+    test's own subprocess starts. 15s was enough on an idle laptop but is
+    not enough under full-suite load (observed: the server bound its port
+    and served 200s only after the poller's budget had expired). 60s is
+    still far below the 60s subprocess timeout in _run_script, and a healthy
+    instance answers in well under a second, so the extra budget only ever
+    costs time on genuinely broken starts.
+    """
     deadline = time.monotonic() + timeout_s
     url = f"http://127.0.0.1:{port}/api/health"
     while time.monotonic() < deadline:

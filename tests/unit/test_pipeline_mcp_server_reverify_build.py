@@ -1043,6 +1043,33 @@ def test_advance_pipeline_local_failure_terminal_under_local_mode(
     assert "S1" in result.get("failed", [])
 
 
+class _FakeDispatchBackend:
+    """Stand-in for ``app.backend`` as advance.py sees it via its _ServerRef
+    (mirrors test_advance_cloud_slot_exempt.py's fake of the same shape).
+
+    advance_pipeline's per-story in-progress interruption gate (and its
+    matching per-story poll gate) calls
+    ``backend.get_backend(...).resource_status(model_tag=...)`` directly for
+    any on-device (non-":cloud") model tag - a SEPARATE check from
+    ``p._role_resource_ok``'s blanket per-role gate. Left unmocked, that call
+    resolves the real OllamaDriver and makes a live HTTP request to whatever
+    Ollama endpoint the host happens to have configured, so a test exercising
+    unrelated logic (here, the fallback-retry decision) silently depended on
+    the ambient host's Ollama reachability: it passed on a dev machine with
+    Ollama running and failed in CI (no Ollama installed) with the in-progress
+    story pre-empted by an "interrupted" status before check_story_status's
+    fallback logic ever ran. Every driver lookup here resolves to a driver
+    that reports resource-available, so the gate never fires and the test
+    exercises only the logic it names.
+    """
+
+    def get_backend(self, role, name=None):
+        return self
+
+    def resource_status(self, model_tag=None):
+        return {"ok": True, "reason": ""}
+
+
 def test_advance_pipeline_retries_on_local_fallback_model(
     plan_dir, worktree_root, agents_dir, monkeypatch,
 ):
@@ -1095,6 +1122,10 @@ def test_advance_pipeline_retries_on_local_fallback_model(
         return _FailResult()
     monkeypatch.setattr(p.subprocess, "run", _fake_subprocess)
     monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+    # See _FakeDispatchBackend's docstring: the per-story interruption gate
+    # bypasses _role_resource_ok entirely and must be mocked separately, or
+    # this test's outcome depends on the host's real Ollama reachability.
+    monkeypatch.setattr(p, "backend", _FakeDispatchBackend())
 
     result = p.advance_pipeline("escfallback")
 
@@ -1108,6 +1139,67 @@ def test_advance_pipeline_retries_on_local_fallback_model(
     assert "S1" not in result.get("failed", [])
     notif = (plan_dir / "escfallback.notifications.log").read_text()
     assert "retrying on fallback model glm-5.2:cloud" in notif
+
+
+def test_advance_pipeline_local_resource_gate_preempts_fallback_retry(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Pins the interaction that made test_advance_pipeline_retries_on_local_
+    fallback_model flaky (host-dependent): advance_pipeline's per-story
+    in-progress interruption gate calls
+    backend.get_backend(...).resource_status(model_tag=...) directly for an
+    on-device model tag, entirely independent of p._role_resource_ok's
+    blanket gate. When that resource check reports not-ok (e.g. no reachable
+    Ollama endpoint, as in CI), the in-progress story is interrupted - and
+    left dispatch-eligible for a later tick - BEFORE check_story_status's
+    fallback-retry logic ever runs, regardless of any pending
+    local_model_fallback opt-in. Uses a deterministic fake (not a real
+    network call) so this is pinned identically on every host/platform."""
+    worktree_path = worktree_root / "S1"
+    worktree_path.mkdir()
+    (worktree_path / "agent.log").write_text("some output\n")
+    (plan_dir / "escfallback3.manifest.json").write_text(json.dumps({
+        "epics": {}, "local_model_fallback": "glm-5.2:cloud",
+        "stories": {
+            "S1": {"summary": "Thing", "agent_instructions": "Build.",
+                   "status": "in_progress", "pid": 9008,
+                   "worktree": str(worktree_path),
+                   "log": str(worktree_path / "agent.log"),
+                   "backend": "local", "dispatched_model": "gpt-oss:20b",
+                   "dependencies": []},
+        },
+    }))
+
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "local")
+    monkeypatch.setattr(p.os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+    monkeypatch.setattr(p, "_role_resource_ok", lambda role, plan_role_config=None: (True, ""))
+
+    class _GitOk:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    # interrupt_story's checkpoint path runs real git commands (add/commit) -
+    # fake them to succeed, mirroring the sibling fallback tests' git fake.
+    monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: _GitOk())
+
+    class _FakeUnreachableBackend:
+        def get_backend(self, role, name=None):
+            return self
+
+        def resource_status(self, model_tag=None):
+            return {"ok": False, "reason": "Ollama endpoint unreachable"}
+
+    monkeypatch.setattr(p, "backend", _FakeUnreachableBackend())
+
+    result = p.advance_pipeline("escfallback3")
+
+    story = _read_manifest(plan_dir, "escfallback3")["stories"]["S1"]
+    assert story["status"] == "interrupted"
+    assert "S1" in result.get("interrupted", [])
+    # Never silently dropped into the fallback-retry path while resources
+    # are unavailable - it stays on the model it was dispatched with.
+    assert "tried_fallback_model" not in story
 
 
 def test_advance_pipeline_fallback_model_failure_is_terminal(

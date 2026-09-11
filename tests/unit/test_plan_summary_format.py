@@ -42,9 +42,8 @@ import time
 from typing import Any
 
 import pipeline.plan_summary as plan_summary_module
-from pipeline.plan_summary import format_plan_summary
-
 import pipeline.story_metrics as story_metrics_module
+from pipeline.plan_summary import format_plan_summary
 from pipeline.story_metrics import compute_plan_rollup, compute_story_metrics
 
 PLAN_NAME = "widget-refresh"

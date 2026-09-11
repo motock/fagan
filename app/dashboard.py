@@ -52,6 +52,7 @@ from pipeline import config_provenance, guard_liveness, preflight, story_metrics
 from pipeline.config import WEDGE_STALE_ACTIVITY_SECONDS
 from pipeline.live_ref import LiveRef
 from pipeline.server import PipelineService
+from pipeline.usage import collect_backend_status
 from pipeline.wedge import collect_story_wedge_signals, wedge_verdict
 
 PLAN_DIR = LiveRef("PLAN_DIR")
@@ -284,10 +285,14 @@ def usage() -> dict[str, Any]:
     blind (probe stale past the staleness window, so it's failing OPEN and
     spend is unguarded). The UI alerts on gate_blind so a silent CLI-output
     change doesn't leave the cost gate quietly disabled."""
+    try:
+        backends = collect_backend_status()
+    except Exception:  # noqa: BLE001 (deliberate: diagnostic banner degrades, never 500s)
+        backends = []
     if not USAGE_STATE_PATH.exists():
-        return {"available": False}
+        return {"available": False, "backends": backends}
     state = json.loads(USAGE_STATE_PATH.read_text())
-    return {"available": True, **state}
+    return {"available": True, **state, "backends": backends}
 
 
 @app.get("/api/plans")

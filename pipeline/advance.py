@@ -307,6 +307,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     # _default_branch read the plain REPO_ROOT global, so this plan's repo
     # must be active for the duration of every action below.
     with _scoped_repo_root(plan_name):
+        _adjudicate_merges(plan_name, summary)
         # Per-story dispatch gate. The dispatch backend is resolved per-story
         # (dispatch_story's own resolution, shared via _resolve_dispatch_backend),
         # so the gate must be per-story too: a :cloud-tagged model (served via
@@ -630,8 +631,6 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     plan_name, f"Review backend gated ({review_reason}): deferring review."
                 )
                 summary["notify"].append("review_paused")
-
-        _adjudicate_merges(plan_name, summary)
 
     return {"ok": True, **summary}
 

@@ -1033,6 +1033,24 @@ def main() -> int:
     Written last, so its existence means the agent has genuinely finished. A
     marker failure never changes the run's exit code."""
     rc = _main_impl()
+    write_done_marker(rc)
+    return rc
+
+
+def write_done_marker(rc: int) -> None:
+    """Write the .agent_done completion marker for the orchestrator.
+
+    Written last, so its existence means the agent has genuinely finished. A
+    marker failure never changes the run's exit code. Idempotent-safe: main()
+    calls this again on the way out, and a non-zero rc must never downgrade an
+    already-written done (rc 0) marker."""
+    try:
+        existing_path = CWD / ".agent_done"
+        existing = json.loads(existing_path.read_text(encoding="utf-8"))
+        if isinstance(existing, dict) and existing.get("exit_code") == 0 and rc != 0:
+            return  # keep the proof of completion; a deliberate skip is not a failure
+    except (OSError, ValueError):  # no readable done marker: fall through and write
+        pass
     try:
         marker = {
             "reason": _DONE_REASONS.get(rc, "error"),
@@ -1044,7 +1062,6 @@ def main() -> int:
         os.replace(tmp, CWD / ".agent_done")
     except Exception as e:  # noqa: BLE001 - a marker failure must never mask the run's exit code
         print(f"[warn] .agent_done marker not written: {e}", flush=True)
-    return rc
 
 
 if __name__ == "__main__":

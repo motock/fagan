@@ -233,6 +233,38 @@ def _probe_acquire_and_mutate(plan_name, manifest_path, mutate_fn, timeout=3.0):
     return result["mutated"]
 
 
+class _LockStealingDispatch:
+    """Fake dispatch_story that, while the plan lock is released around it,
+    has a SECOND THREAD genuinely steal the real flock and hold it past the
+    reacquire timeout - simulating another tick/process winning the plan
+    lock during the release window. Used to force
+    ``_released_plan_lock``'s exit to raise ``PlanLockReacquireTimeout``."""
+
+    def __init__(self, plan_name):
+        self.plan_name = plan_name
+        self._stole = threading.Event()
+        self._release = threading.Event()
+        self._thread = None
+
+    def _hold_lock(self):
+        with concurrency._plan_lock(self.plan_name) as acquired:
+            if acquired:
+                self._stole.set()
+            self._release.wait(5.0)
+
+    def __call__(self, plan_name, key):
+        self._thread = threading.Thread(target=self._hold_lock, daemon=True)
+        self._thread.start()
+        got = self._stole.wait(3.0)
+        assert got, "test setup: stealer thread never acquired the plan lock"
+        return {"ok": True}
+
+    def release(self):
+        self._release.set()
+        if self._thread is not None:
+            self._thread.join(5.0)
+
+
 class _ConcurrentMutationDispatch:
     """Fake dispatch_story for the stale-reference regression guard: while
     this call is "in flight", a second thread tries to genuinely acquire
@@ -411,3 +443,47 @@ class TestDispatchLeaseGuards:
         assert final["dispatch_attempts"] == 1
         assert "dispatch_lease_expires_at" not in final
         assert "dispatch_lease_owner_pid" not in final
+
+
+# ---------------------------------------------------------------------------
+# Regression guard: a failed re-acquire must abort the tick, not be treated
+# as an ordinary dispatch failure.
+
+
+class TestPlanLockReacquireTimeoutAbortsTheTick:
+    def test_reacquire_timeout_propagates_and_is_not_counted_as_dispatch_attempt(
+        self, monkeypatch, tmp_path
+    ):
+        """If another thread/process wins the real flock during the release
+        window and still holds it once dispatch_story returns,
+        ``_released_plan_lock``'s exit raises ``PlanLockReacquireTimeout``.
+        That must propagate out of the tick uncaught by the broad
+        ``except Exception`` dispatch-failure handler below it - a caught
+        timeout would keep mutating the manifest with no flock held (the
+        exact hazard the lease's check-then-set safety depends on the lock
+        for), and would misattribute a possibly-already-launched dispatch as
+        a counted failure."""
+        path = _write_manifest(tmp_path, {"s1": _story()})
+        _seed_common(monkeypatch, path)
+        # Bound the blocking re-acquire tightly so the test doesn't wait 300s.
+        monkeypatch.setattr(concurrency, "_plan_reacquire_timeout", lambda: 0.2)
+        fake = _LockStealingDispatch(_PLAN)
+        monkeypatch.setattr(advance_module, "dispatch_story", fake)
+
+        try:
+            with pytest.raises(concurrency.PlanLockReacquireTimeout):
+                _run_tick_holding_lock()
+        finally:
+            fake.release()
+
+        final = _read_stories(path)["s1"]
+        # The broad except Exception handler (which would bump
+        # dispatch_attempts, clear the lease, and possibly flip status to
+        # "failed") must never have run.
+        assert final["status"] == "todo"
+        assert final["dispatch_attempts"] == 0
+        # The lease claimed under step 2 (persisted before the lock was
+        # released) is still on disk - proof the abort happened before
+        # reaching the generic failure handler's lease-clearing code, not
+        # after it silently succeeded.
+        assert final.get("dispatch_lease_owner_pid") is not None

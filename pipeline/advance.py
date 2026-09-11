@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .concurrency import _released_plan_lock
+from .concurrency import PlanLockReacquireTimeout, _released_plan_lock
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch_lease import claim_dispatch_lease
 from .wedge_io import run_wedge_scan
@@ -490,6 +490,19 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     summary["dispatched"].append(key)
                 else:
                     summary.setdefault("skipped", []).append(key)
+            except PlanLockReacquireTimeout:
+                # The plan flock could not be re-acquired after the released
+                # window: this thread no longer holds it, so any further
+                # manifest mutation this tick makes would race whichever
+                # other thread/process took it over. Re-raise rather than
+                # letting the broad handler below treat this as an ordinary
+                # dispatch failure - that would bump dispatch_attempts and
+                # keep writing the manifest with no lock held, and (if the
+                # timeout fires after dispatch_story already launched the
+                # agent) misattribute a healthy in-progress story as a
+                # failed dispatch. Let the tick abort with this cause
+                # instead; the next tick starts clean.
+                raise
             except Exception as e:  # noqa: BLE001 (git fetch/worktree/backend launch failure)
                 # Re-read: dispatch_story only writes the manifest on a
                 # successful launch, so on a raise the on-disk status is

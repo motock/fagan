@@ -3,6 +3,9 @@
 __pycache__/
 .pytest_cache/
 *.log
+# Per-line timestamp sidecars written next to every dispatch/review log by
+# pipeline/execution.py's spawn_local. "*.log" above does NOT match these.
+*.log.ts
 *.pyc
 node_modules
 

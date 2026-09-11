@@ -158,11 +158,21 @@ def _hermetic_ollama_seams_default(request, monkeypatch):
         )
         monkeypatch.setattr(backend, "_ollama_loaded_models", lambda ep: set())
         monkeypatch.setattr(backend, "_ollama_serving_parallelism", lambda: None)
-        monkeypatch.setattr(
-            backend.OllamaDriver,
-            "resource_status",
-            lambda self, model_tag=None: {"ok": True, "reason": ""},
-        )
+        # collect_backend_status (pipeline/usage.py) probes
+        # OllamaDriver.resource_status(), which reaches a live HTTP endpoint
+        # via self.provider.reachable(self.endpoint). Stub it ONLY for the
+        # module that exercises that new path: class-level stubbing here
+        # broke the real fail-closed resource_status assertions in
+        # test_resource_status_hosted_provider.py and the gate assertions in
+        # test_pipeline_mcp_server_fresh_rework.py (verified by A/B run).
+        # A test needing the real seam overrides it with its own
+        # monkeypatch.setattr afterward, as this fixture's docstring says.
+        if module == "test_usage_backend_status":
+            monkeypatch.setattr(
+                backend.OllamaDriver,
+                "resource_status",
+                lambda self, model_tag=None: {"ok": True, "reason": ""},
+            )
     monkeypatch.setattr(p, "diagnose_failure", lambda *a, **k: None)
 
 

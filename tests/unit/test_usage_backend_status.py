@@ -172,8 +172,8 @@ def test_tripped_gate_is_reported_not_hidden(monkeypatch):
 
 
 def test_single_provider_probed_exactly_once(monkeypatch):
-    _install(monkeypatch, {role: ("fake", "m") for role in PIPELINE_ROLES})
-    _, drivers, _, _ = _install(monkeypatch, {role: ("fake", "m") for role in PIPELINE_ROLES})
+    mapping = {role: ("fake", "m") for role in PIPELINE_ROLES}
+    _, drivers, _, _ = _install(monkeypatch, mapping)
     pipeline_usage.collect_backend_status()
     assert sum(driver.calls for driver in drivers.values()) == 1
 
@@ -183,7 +183,6 @@ def test_two_distinct_providers_probed_exactly_twice(monkeypatch):
         role: ("alpha" if role in ("overlord", "planner") else "beta", "m")
         for role in PIPELINE_ROLES
     }
-    _install(monkeypatch, mapping)
     _, drivers, _, _ = _install(monkeypatch, mapping)
     pipeline_usage.collect_backend_status()
     assert sum(driver.calls for driver in drivers.values()) == 2

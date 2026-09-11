@@ -243,25 +243,25 @@ def test_stale_activity_terminates_with_stale_watchdog_summary(
     assert 7150 <= reported_elapsed <= 7400, reported_elapsed
 
 
-def test_stale_activity_terminates_even_within_wall_clock_ceiling(
+def test_stale_log_from_a_previous_attempt_does_not_kill_a_fresh_dispatch(
         watchdog_env, tmp_path):
-    """Rule 1 has no elapsed gate: stale activity terminates even when
-    elapsed is well under the wall-clock ceiling."""
+    """Rule 1 is floored by elapsed: a redispatch into a reused worktree
+    inherits the previous attempt's stale agent.log mtime, and must NOT be
+    killed 'for inactivity' before it has had a chance to write.
+
+    Corrected 2026-09-11: this test previously asserted the opposite ("Rule
+    1 has no elapsed gate"), which was the defect - it pinned a watchdog
+    that killed a 60-second-old dispatch because of a 4000-second-old log
+    left by an earlier attempt. Observed live on LOCKSTARVE-B3, killed
+    106ms after launch with "no activity for 4851s ... elapsed 0s"."""
     story = _make_story(tmp_path, dispatched_seconds_ago=60,
                         log_age_seconds=4000)
     _write_manifest(watchdog_env.plan_dir, watchdog_env.plan_name, story)
 
     result = story_status.check_story_status(watchdog_env.plan_name, STORY_KEY)
 
-    assert result == {
-        "status": "interrupted",
-        "pid": os.getpid(),
-        "watchdog_killed": True,
-    }
-    assert len(watchdog_env.terminate_calls) == 1
-    call = watchdog_env.terminate_calls[0]
-    assert call["step"] == "dispatch_watchdog_timeout"
-    assert re.search(STALE_SUMMARY_RE, call["summary"] or ""), call["summary"]
+    assert result == {"status": "running", "pid": os.getpid()}
+    assert watchdog_env.terminate_calls == []
 
 
 def test_activity_just_over_stale_threshold_terminates_as_stale(

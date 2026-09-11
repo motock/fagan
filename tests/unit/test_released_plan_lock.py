@@ -302,6 +302,34 @@ def test_malformed_timeout_env_degrades_to_default(monkeypatch, tmp_path):
     importlib.reload(concurrency)
 
 
+def test_default_timeout_is_long_when_env_unset(monkeypatch, tmp_path):
+    """With the env unset the re-acquire uses the long 300s default.
+
+    The literal 300 cannot be asserted in reasonable test time; what is
+    mechanically checkable is that an unset env means the re-acquire stays
+    BLOCKING well past any short window - it neither fails open nor
+    times out quickly.
+    """
+    plan = "relock-default"
+    contender_acquired, release_contender, done, outcome, worker = _run_timeout_scenario(
+        monkeypatch, tmp_path, plan, None
+    )
+    assert contender_acquired.wait(10), "contender must acquire inside the window"
+    assert not done.wait(0.3), (
+        "re-acquire settled within 0.3s with the env unset: the default must "
+        "be a long blocking timeout, not a fast fail"
+    )
+    release_contender.set()
+    worker.join(10)
+    assert not worker.is_alive(), "worker still blocked after the contender released"
+    assert outcome.get("done") is True
+    assert outcome.get("exc") is None, f"unexpected error: {outcome.get('exc')!r}"
+    assert outcome.get("held_after_reacquire") is True
+    assert outcome.get("contender_acquired") is True
+    monkeypatch.delenv(REACQUIRE_TIMEOUT_ENV, raising=False)
+    importlib.reload(concurrency)
+
+
 def test_nested_released_lock_inner_is_noop():
     """Case 7: an inner _released_plan_lock for the same plan is a no-op."""
     plan = "relock-nested"

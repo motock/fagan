@@ -43,6 +43,28 @@ from app.chat import TOOLS, _execute_tool
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_imported_tools_registry_is_still_the_live_module_object():
+    """Canary for module-reload pollution.
+
+    This file does `from app.chat import TOOLS` at import time. If any other
+    test reloads app.chat, that rebinds the module's TOOLS to a new dict and
+    the name held here goes stale - monkeypatch.setitem then writes into a
+    dict _execute_tool no longer reads, and every tool looks unknown. Fails
+    loudly and specifically instead of as seven confusing 'unknown tool'
+    errors (see CHATRELOAD-1, caught by the macOS CI leg 2026-09-11).
+
+    Note: this canary only fires when the polluting app.chat reload runs
+    earlier on the same xdist worker; it cannot detect pollution in other
+    workers or a reload that happens after it.
+    """
+    import importlib
+
+    assert TOOLS is importlib.import_module("app.chat").TOOLS, (
+        "app.chat.TOOLS is no longer the object this module imported - "
+        "something reloaded app.chat; see this test's docstring"
+    )
+
+
 class _NoHttpClient:
     """Fails loudly if a malformed call ever reaches the network."""
 

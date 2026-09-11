@@ -8,6 +8,7 @@ directly.
 
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -41,6 +42,8 @@ from .config_provenance import (
 )
 from .persistence import _plan_role_config
 from .persona import _persona_default_model
+
+logger = logging.getLogger(__name__)
 
 # ---------- CI env-var gates ----------
 PIPELINE_MERGE_CI_GATE = os.environ.get("PIPELINE_MERGE_CI_GATE", "1") != "0"
@@ -127,6 +130,10 @@ def _ci_status(
         ``{"state": <state>, "error": <message>}``
     """
     if not PIPELINE_MERGE_CI_GATE:
+        logger.warning(
+            "CI merge gate is DISABLED (PIPELINE_MERGE_CI_GATE); merge is "
+            "proceeding without checking CI"
+        )
         return {"state": "pass", "error": "CI gate disabled"}
 
     deadline = time.monotonic() + (
@@ -252,6 +259,10 @@ def _ci_status_once(branch: str, *, sha: str) -> dict[str, str]:
     ``{"state": "pending"}`` here.
     """
     if not PIPELINE_MERGE_CI_GATE:
+        logger.warning(
+            "CI merge gate is DISABLED (PIPELINE_MERGE_CI_GATE); merge is "
+            "proceeding without checking CI"
+        )
         return {"state": "pass", "error": "CI gate disabled"}
 
     try:

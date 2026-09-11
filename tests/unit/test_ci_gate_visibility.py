@@ -295,6 +295,7 @@ def test_gate_default_unchanged_env_unset_means_enabled():
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "True"

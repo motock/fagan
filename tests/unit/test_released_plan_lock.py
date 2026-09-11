@@ -269,6 +269,13 @@ def test_reacquire_timeout_raises_named_exception(monkeypatch, tmp_path):
         f"expected PlanLockReacquireTimeout, got {exc!r}"
     )
     assert plan in str(exc), f"exception message must name the plan, got: {exc}"
+    assert outcome.get("held_after_exc") is False, (
+        "after a timed-out re-acquire the thread must not claim to hold the lock"
+    )
+    # leave the module pristine: undo the env patch and reload so later
+    # tests do not inherit a cached short timeout
+    monkeypatch.delenv(REACQUIRE_TIMEOUT_ENV, raising=False)
+    importlib.reload(concurrency)
 
 
 def test_malformed_timeout_env_degrades_to_default(monkeypatch, tmp_path):

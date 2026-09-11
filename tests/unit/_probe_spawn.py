@@ -8,9 +8,9 @@ import sys
 from pipeline import server as p
 from pipeline import story_status as ss
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
-    agents_dir,
-    plan_dir,
-    worktree_root,
+    agents_dir as _agents_dir,
+    plan_dir as _plan_dir,
+    worktree_root as _worktree_root,
 )
 
 

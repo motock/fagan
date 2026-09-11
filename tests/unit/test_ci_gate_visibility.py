@@ -289,12 +289,24 @@ def test_gate_default_unchanged_env_unset_means_enabled():
         if not key.startswith(("PIPELINE_", "LOCAL_AGENT_"))
     }
     env["PIPELINE_SKIP_ENV_FILE"] = "1"
-    env["PYTHONPATH"] = str(REPO_ROOT)
+    # Give the child exactly the import surface this process has: repo root
+    # first (so `pipeline` resolves), then every existing sys.path entry —
+    # on some hosts the third-party site-packages dir (e.g. `mcp`, which
+    # pipeline.server imports) is not on a bare child's default path.
+    entries, seen = [], set()
+    for candidate in [str(REPO_ROOT), *sys.path]:
+        if candidate and Path(candidate).exists() and candidate not in seen:
+            seen.add(candidate)
+            entries.append(candidate)
+    env["PYTHONPATH"] = os.pathsep.join(entries)
+    # pipeline.server must be imported before pipeline.ci (build_detect
+    # imports server at module scope; ci-first is a circular import).
     proc = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import pipeline.ci; print(pipeline.ci.PIPELINE_MERGE_CI_GATE)",
+            "import pipeline.server, pipeline.ci; "
+            "print(pipeline.ci.PIPELINE_MERGE_CI_GATE)",
         ],
         cwd=str(REPO_ROOT),
         env=env,

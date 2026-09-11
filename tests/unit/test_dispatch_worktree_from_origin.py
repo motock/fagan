@@ -75,6 +75,35 @@ class _FakeProc:
         self.pid = pid
 
 
+class _FakeDispatchBackend:
+    """Stand-in for ``app.backend`` as advance.py sees it via its _ServerRef
+    (same shape as test_pipeline_mcp_server_reverify_build.py's and
+    test_advance_cloud_slot_exempt.py's fake of the same name).
+
+    advance_pipeline's per-story dispatch gate calls
+    ``backend.get_backend("dispatch", name=...).resource_status(...)`` for
+    every ready story before dispatching it. Left unmocked, that call
+    resolves the real driver and consults ambient host state (Claude's
+    usage poller, Ollama's live reachability probe), so a test exercising
+    unrelated logic (here, a real git fetch failure reaching the tick's
+    attempt-counting/notify path) silently depended on the host's backend
+    reachability: when the ambient probe reported not-ok the story was
+    parked in the gate's `gated` set and dispatch_story was never called,
+    leaving it `todo` with no `dispatch_attempts` key. Every driver lookup
+    here resolves to a driver that reports resource-available, so the gate
+    never fires and the test exercises only the logic it names. Patched
+    over ``pipeline.server``'s `backend` binding (advance.py reads it
+    through a _ServerRef), which does NOT touch pipeline/dispatch.py's own
+    ``from app import backend`` - so dispatch_story's real git/Popen path
+    is unaffected."""
+
+    def get_backend(self, role, name=None):
+        return self
+
+    def resource_status(self, model_tag=None):
+        return {"ok": True, "reason": ""}
+
+
 def _write_manifest(plan_dir, plan_name, stories, repo_root=None):
     manifest = {"epics": {}, "stories": stories}
     if repo_root is not None:
@@ -405,6 +434,12 @@ def test_advance_pipeline_real_git_fetch_failure_counts_attempt_and_notifies(
     notes: list[str] = []
     monkeypatch.setattr(p, "_notify_user",
         lambda plan, msg, **kwargs: notes.append(msg))
+    # See _FakeDispatchBackend's docstring: advance_pipeline's per-story
+    # dispatch gate must be mocked separately, or this test's outcome
+    # depends on the host's real backend reachability (the gate parks the
+    # story in `gated` and dispatch_story is never called, so the fetch
+    # failure this test exists to exercise never even happens).
+    monkeypatch.setattr(p, "backend", _FakeDispatchBackend())
 
     result = p.advance_pipeline("realfail")
 
@@ -420,6 +455,72 @@ def test_advance_pipeline_real_git_fetch_failure_counts_attempt_and_notifies(
     assert any("git setup failed" in m for m in notes), notes
     assert "S1" in result["notify"]
     assert not (worktree_root / "S1").exists()
+
+
+def test_advance_pipeline_resource_gate_not_ok_parks_story_without_dispatching(
+    plan_dir, worktree_root, agents_dir, monkeypatch,
+):
+    """Pins the per-story dispatch-gate interaction itself - the behaviour
+    the hermeticity fix to
+    test_advance_pipeline_real_git_fetch_failure_counts_attempt_and_notifies
+    was accidentally exercising: when a ready story's own backend
+    resource_status reports NOT-ok, advance_pipeline appends the story to
+    its internal `gated` set and never calls dispatch_story for it. The
+    story stays `todo` with no attempt counter, dispatch-eligible for a
+    later tick. Mirrors PR #679's
+    test_advance_pipeline_local_resource_gate_preempts_fallback_retry
+    precedent (interruption gate there, dispatch gate here) and uses a
+    deterministic fake, not a real network probe, so it pins identically on
+    every host/platform."""
+    _write_manifest(plan_dir, "gated1", {
+        "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
+               "status": "todo", "dependencies": []},
+    })
+
+    class _ClosedGateBackend:
+        def __init__(self):
+            self.get_backend_calls = []
+            self.status_calls = []
+
+        def get_backend(self, role, name=None):
+            self.get_backend_calls.append((role, name))
+            return self
+
+        def resource_status(self, model_tag=None):
+            self.status_calls.append(model_tag)
+            return {"ok": False, "reason": "gate closed for maintenance"}
+
+    closed = _ClosedGateBackend()
+    monkeypatch.setattr(p, "backend", closed)
+    monkeypatch.setattr(p, "_role_resource_ok",
+                        lambda role, plan_role_config=None: (True, ""))
+
+    dispatch_calls = []
+
+    def _must_not_reach_launch(plan_name, key):
+        dispatch_calls.append(key)
+        return {"ok": True}
+
+    monkeypatch.setattr(p, "dispatch_story", _must_not_reach_launch)
+
+    result = p.advance_pipeline("gated1")
+
+    story = json.loads(
+        (plan_dir / "gated1.manifest.json").read_text())["stories"]["S1"]
+    assert story["status"] == "todo"
+    assert "dispatch_attempts" not in story
+    assert "worktree" not in story
+    assert dispatch_calls == []
+    assert "S1" not in result["dispatched"]
+    assert "S1" not in result["failed"]
+    assert "S1" not in result["notify"]
+    # The gate was consulted for THIS story's resolved backend: the story
+    # carries no explicit backend/model, so _resolve_dispatch_backend falls
+    # through to the env default ("claude" with PIPELINE_BACKEND_DISPATCH
+    # unset), and a claude-routed story is gated on resource_status() with
+    # no model_tag.
+    assert closed.get_backend_calls == [("dispatch", "claude")]
+    assert closed.status_calls == [None]
 
 
 # ---------- Outer try/except backstop in PipelineService.dispatch_story ----------

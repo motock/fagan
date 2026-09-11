@@ -231,9 +231,8 @@ def test_body_exception_propagates_and_lock_is_reacquired():
     plan = "relock-exc"
     with concurrency._plan_lock(plan) as ok:
         assert ok is True
-        with pytest.raises(ValueError, match="boom"):
-            with concurrency._released_plan_lock(plan):
-                raise ValueError("boom")
+        with pytest.raises(ValueError, match="boom"), concurrency._released_plan_lock(plan):
+            raise ValueError("boom")
         # the re-acquire lives in a finally: it must have run before the
         # exception finished propagating out of the released block
         assert plan in concurrency._held_plan_locks(), (

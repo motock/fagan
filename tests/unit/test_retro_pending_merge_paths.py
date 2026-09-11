@@ -109,7 +109,10 @@ def test_advance_pipeline_locked_impl_calls_maybe_record_retro():
 
     # Mirror of the merge.py structural pin above: the advance-scheduler merge
     # branch must also feed the backlog after marking a story done. A full
-    # tick run needs the plan lock + a merged PR, so the call site inside
-    # _advance_pipeline_locked_impl is pinned via source inspection.
-    src = inspect.getsource(pipeline.advance._advance_pipeline_locked_impl)
+    # tick run needs the plan lock + a merged PR, so the call site is pinned
+    # via source inspection. LOCKSTARVE-A1 extracted the merge-adjudication
+    # block (including this call) out of _advance_pipeline_locked_impl into
+    # the module-level _adjudicate_merges helper it now calls, so the pin
+    # follows the call site to its new home.
+    src = inspect.getsource(pipeline.advance._adjudicate_merges)
     assert "_maybe_record_retro(plan_name, manifest)" in src

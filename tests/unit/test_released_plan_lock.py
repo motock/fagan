@@ -143,7 +143,7 @@ def _run_timeout_scenario(monkeypatch, tmp_path, plan, env_value):
                 # contender still holds the flock.
                 outcome["reacquired_without_raise"] = True
                 outcome["held_after_reacquire"] = plan in concurrency._held_plan_locks()
-        except BaseException as exc:  # classified by the main thread below
+        except Exception as exc:  # noqa: BLE001 - classified by the main thread
             outcome["exc"] = exc
         finally:
             release_contender.set()

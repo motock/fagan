@@ -22,19 +22,19 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
+          - macos-latest
         python-version: ["3.12", "3.13", "3.14"]
-        # macOS was previously in the matrix to catch macOS-only fixture
-        # dependencies (e.g. `plutil`) that pass every local/ubuntu gate
-        # and fail only after the PR is open (observed live 2026-07-30).
-        # However, macOS runners cost ~10x as much as ubuntu for private
-        # repos, so the macOS leg is disabled until the repo is public.
-        # Re-add `macos-latest` to `os` (restricted to one Python version
-        # via the exclude below) once the billing multiplier lifts:
-        #   exclude:
-        #     - os: macos-latest
-        #       python-version: "3.12"
-        #     - os: macos-latest
-        #       python-version: "3.13"
+        # macOS catches macOS-only fixture dependencies (e.g. `plutil`) that
+        # pass every local and ubuntu gate and fail only after the PR is open
+        # (observed live 2026-07-30). Dispatch, the check_story_status done-bar
+        # and the merge-gate reverify all run on macOS, so this leg is the only
+        # pre-PR signal for that class of break. Restricted to ONE Python
+        # version: the point is platform coverage, not another version sweep.
+        exclude:
+          - os: macos-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.13"
     env:
       # Point AGENTS_DIR at the repo's checked-in personas (agents/*.md) so
       # tests that load a persona (e.g. code-reviewer) resolve without a

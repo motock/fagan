@@ -7,8 +7,6 @@ every local gate and fails only after the PR is open (observed via `plutil`).
 import re
 from pathlib import Path
 
-import pytest
-
 _WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 
 # Parsed as text on purpose: PyYAML is not a dependency of this repo, and an
@@ -48,21 +46,6 @@ def test_the_workflow_defines_jobs():
     assert _job_blocks(), "could not parse any job block out of ci.yml"
 
 
-# The macOS CI leg is intentionally disabled while the repo is private
-# (commit 7958a23, "ci: disable macOS runner leg until repo is public").
-# This oracle is suspended for the same period: it would otherwise fail the
-# suite on every PR, masking real regressions. Re-arm it — re-enable the
-# macOS runner leg in .github/workflows/ci.yml AND remove this skip — the
-# moment the repo goes public, so macOS-only dependencies are caught before
-# a PR opens again (the original motivation, observed via `plutil`).
-_MACOS_LEG_DISABLED_WHILE_PRIVATE = (
-    "macOS CI leg intentionally disabled while the repo is private "
-    "(commit 7958a23, 'until repo is public'); re-enable the macOS runner "
-    "leg in ci.yml and remove this skip when the repo goes public"
-)
-
-
-@pytest.mark.skip(reason=_MACOS_LEG_DISABLED_WHILE_PRIVATE)
 def test_a_job_that_runs_pytest_also_runs_on_macos():
     offenders = {
         name: _labels(block)

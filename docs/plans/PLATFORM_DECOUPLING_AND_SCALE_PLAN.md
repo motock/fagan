@@ -1,12 +1,21 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **In execution (last updated 2026-09-07).** W3a, W1a, W1b, W1c, W2,
+> Status: **In execution (last updated 2026-09-11).** W3a, W1a, W1b, W1c, W2,
 > W3b, `server-app-file-split`, `workspace-selection`, `local-agent-file-split`,
 > `b5-export-the-moat`, `w4-logging-correlation`, `a3-maturity-metrics`,
 > `a4-non-author-usability`, `b1-sandbox-and-harness-seam`,
 > `b1-remote-execution`, and `workspace-picker-wiring` are all done and merged.
 > `comms-ui-design-alignment` (Comms nav/hero/toast polish) also landed
-> on top of the split modules. Only **W4 (multi-tenant/enterprise)** remains
+> on top of the split modules. `config-unification` (merged 2026-09-10;
+> 17 stories; PRs #643-#661) completed the W3 configuration surface:
+> `.pipeline.env` is now the single shared operator env file read by both
+> the dashboard and the scheduler, the scheduler health file publishes a
+> config fingerprint with `/api/health` reporting the canonical plan dir
+> and flagging any scheduler/dashboard mismatch, the dashboard shows a
+> config-mismatch banner plus a preflight divergence check, and
+> `scripts/standalone-setup.sh` provisions and verifies a dashboard-only
+> instance. The W3 config surface finally has ONE source of truth rather
+> than four drifting ones. Only **W4 (multi-tenant/enterprise)** remains
 > undone in this document's scope — see the updated "Suggested sequencing"
 > section below for the full 2026-09-07 status of every workstream.
 > **`workspace-selection` (13 stories, PRs #475, #476, #482, #485-#491, #494,

@@ -703,12 +703,35 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # is on Claude and Claude is gated.
         if review_ok:
             stories = json.loads(manifest_path.read_text())["stories"]
-            for key, story in stories.items():
-                if story["status"] == "tests_passed":
+            # LOCKSTARVE-B4: release the plan lock around review_story, the
+            # same synchronous model-call-heavy pattern LOCKSTARVE-B3 applied
+            # to dispatch_story. No dispatch lease is needed here -
+            # review_story (pipeline/review_orchestrator.py) re-reads the
+            # manifest itself and is a documented no-op skip for any story
+            # not in "tests_passed", so a second tick/process entering it
+            # concurrently cannot double-review or corrupt the manifest.
+            #
+            # But the per-iteration STATUS CHECK must still come from a
+            # FRESH on-disk read, never the snapshot taken before the loop -
+            # an earlier iteration's own released-lock window can let
+            # another actor already review and advance a later story in
+            # this same snapshot. Checking the stale in-memory status would
+            # call review_story on it again anyway: review_story's own guard
+            # makes that safe from a data-corruption standpoint, but it
+            # still emits a spurious "review skipped" notification and a
+            # misleading summary["advanced"] entry claiming this tick
+            # advanced a story it did not touch. Only the set of keys to
+            # consider is safe to snapshot; the status of each must be
+            # re-read per iteration.
+            for key in list(stories.keys()):
+                fresh_story = json.loads(manifest_path.read_text())["stories"].get(key)
+                if fresh_story is None or fresh_story["status"] != "tests_passed":
+                    continue
+                with _released_plan_lock(plan_name):
                     rv = review_story(plan_name, key)
-                    summary["advanced"].append({key: rv["status"]})
-                    if rv.get("deferred") == "rate_limited":
-                        summary["review_deferred"].append(key)
+                summary["advanced"].append({key: rv["status"]})
+                if rv.get("deferred") == "rate_limited":
+                    summary["review_deferred"].append(key)
         else:
             # Only surface the review gate when there is tests_passed work
             # waiting to be reviewed this tick; otherwise the notification is

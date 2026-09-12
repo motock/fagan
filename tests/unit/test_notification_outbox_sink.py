@@ -36,11 +36,11 @@ import logging
 from pathlib import Path
 
 import pytest
-from pipeline.notification_outbox import outbox_sink
 
 from pipeline import event_wiring, notification_outbox, paths, persistence
 from pipeline.event_wiring import build_bus, get_bus
 from pipeline.events import make_event
+from pipeline.notification_outbox import outbox_sink
 from pipeline.notification_sinks import file_log_sink
 
 OUTBOX_ENABLED_ENV = "PIPELINE_NOTIFY_OUTBOX_ENABLED"

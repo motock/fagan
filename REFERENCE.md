@@ -431,16 +431,19 @@ Each record has the following keys:
   these structured `event` names, drawn from a fixed vocabulary so the
   notifications JSONL sidecar can drive cost‑per‑merged‑story metrics:
   `dispatch_failed`, `escalated`, `model_fallback`, `agent_gave_up`,
-  `tests_failed`, `merge_ci_rework`, `merge_gate_failed`, `merge_gate_retry`,
-  `merge_failed`, `merge_retry`, and `story_merged` (emitted on the
+  `tests_failed`, `story_parked`, `merge_ci_rework`, `merge_gate_failed`,
+  `merge_gate_retry`, `merge_failed`, `merge_retry`, and `story_merged` (emitted on the
   successful‑merge path only, immediately after the story is marked done).
-  Two notifications are intentionally excluded from this vocabulary: the
+  One notification is intentionally excluded from this vocabulary: the
   dispatch‑retry notice (`"<key> dispatch attempt n/max failed …; will
-  retry."`) and the parked notice (`"<key> parked: <reason>"`) — both are
-  transient scheduling/adjudication states rather than terminal story
-  outcomes, so counting them would inflate cost‑per‑merged‑story numerators
-  without a corresponding merge.  Records whose message matches no vocabulary
-  entry simply omit the `event` key (backward compatible).
+  retry."`), a transient scheduling state rather than a terminal story
+  outcome.  The parked notice (`"<key> parked: <reason>"`) carries
+  `story_parked` so operators can allowlist the park alert for e-mail:
+  `notification_outbox` selects records for e-mail using only
+  `payload["event"]`, so an unstamped park notice is unreachable by e-mail.
+  `story_metrics` ignores event names outside its known sets, so
+  cost‑per‑merged‑story is unaffected.  Records whose message matches no
+  vocabulary entry simply omit the `event` key (backward compatible).
 - `dedup_key`: value captured at write time; it is **not** used to suppress a
   write.  Only the current file plus the `PIPELINE_NOTIFICATIONS_KEEP` most
   recent generations remain on disk — older generations are deleted at

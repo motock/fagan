@@ -594,6 +594,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} parked: review inconclusive after "
                     f"{inconclusive} attempts - needs human review.",
+                    event="story_parked",
                     **_cid_kwargs,
                 )
         else:
@@ -635,6 +636,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} parked: review inconclusive after "
                     f"{inconclusive} attempts - needs human review.",
+                    event="story_parked",
                     **_cid_kwargs,
                 )
         else:
@@ -903,6 +905,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} parked: reviewer still requesting changes "
                     f"after {attempts} cycles - needs human review.",
+                    event="story_parked",
                     **_rework_kwargs,
                 )
         else:

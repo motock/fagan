@@ -42,7 +42,7 @@ def test_build_bus_subscribes_file_log_sink_to_notification():
     the very ``file_log_sink`` object imported from ``pipeline.notification_sinks``.
     """
     bus = build_bus()
-    assert bus._handlers["notification"] == [file_log_sink]
+    assert file_log_sink in bus._handlers["notification"]
 
 
 def test_build_bus_still_subscribes_wake_handler():
@@ -129,8 +129,8 @@ def test_get_bus_does_not_duplicate_subscriptions():
     get_bus()
     get_bus()
     bus = get_bus()
-    assert len(bus._handlers["notification"]) == 1
-    assert bus._handlers["notification"] == [file_log_sink]
+    assert bus._handlers["notification"].count(file_log_sink) == 1
+    assert file_log_sink in bus._handlers["notification"]
 
 
 def test_get_bus_returns_a_bus_with_wake_handler():

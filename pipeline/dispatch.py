@@ -541,6 +541,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             plan_role_config=_plan_role_config(plan_name),
         ):
             test_author_marker.write_text("ok\n")
+            story["tdd_split"] = True
 
         # GUIDED_DECOMPOSITION_PLAN.md: a "tech lead" checklist is always on
         # for the weak local executor (the on/off toggle was removed; the

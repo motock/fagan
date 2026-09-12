@@ -709,7 +709,11 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # review_story (pipeline/review_orchestrator.py) re-reads the
             # manifest itself and is a documented no-op skip for any story
             # not in "tests_passed", so a second tick/process entering it
-            # concurrently cannot double-review or corrupt the manifest.
+            # concurrently cannot corrupt the manifest, and cannot
+            # sequentially double-review a story already advanced past
+            # tests_passed. It does not rule out two calls racing the
+            # SAME simultaneous check-pass window - review_story's own
+            # guard bounds that outcome, not this loop.
             #
             # But the per-iteration STATUS CHECK must still come from a
             # FRESH on-disk read, never the snapshot taken before the loop -
@@ -729,6 +733,13 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     continue
                 with _released_plan_lock(plan_name):
                     rv = review_story(plan_name, key)
+                if rv.get("ok") is False:
+                    # A concurrent re-ingest can drop this story entirely
+                    # during the released window above, between our fresh
+                    # read and review_story's own internal re-read - review_story
+                    # then returns {"ok": False, "error": ...} with no "status"
+                    # key. Skip rather than KeyError the whole tick.
+                    continue
                 summary["advanced"].append({key: rv["status"]})
                 if rv.get("deferred") == "rate_limited":
                     summary["review_deferred"].append(key)

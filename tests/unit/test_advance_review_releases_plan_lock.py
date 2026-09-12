@@ -419,6 +419,30 @@ class TestReviewLockReleaseGuards:
         assert concurrency._held_plan_locks() == set()
 
 
+    def test_review_story_no_such_story_return_shape_does_not_keyerror(
+        self, monkeypatch, tmp_path
+    ):
+        """review_story's real "no such story" return
+        (pipeline/review_orchestrator.py:266) is {"ok": False, "error": ...}
+        with no "status" key - reachable if a concurrent re-ingest drops the
+        story between this loop's fresh read and review_story's own internal
+        re-read, both of which happen inside the released-lock window. The
+        loop must skip rather than KeyError on rv["status"] and abort the
+        whole tick."""
+        path = _write_manifest(tmp_path, {"s1": _story()})
+        _seed_common(monkeypatch, path)
+
+        def _no_such_story(plan_name, key):
+            return {"ok": False, "error": f"No such story {key}"}
+
+        monkeypatch.setattr(advance_module, "review_story", _no_such_story)
+
+        result = _run_tick_holding_lock()
+
+        assert result["advanced"] == []
+        assert concurrency._held_plan_locks() == set()
+
+
 class TestStaleStatusGuardOnReReview:
     def test_stale_status_snapshot_does_not_cause_a_double_review(
         self, monkeypatch, tmp_path

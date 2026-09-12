@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
+import ssl
 from email.message import EmailMessage
 
 log = logging.getLogger(__name__)
@@ -90,7 +91,14 @@ def send_notification_email(record: dict) -> bool:
         return False
 
     subject = f"[pipeline] plan complete: {record.get('plan')}"
-    body = record.get("message", "")
+    # The spooled record is the bus-level event (the pipeline.events.make_event
+    # shape that notification_outbox.py persists verbatim via dict(event)), so
+    # the message lives at record["payload"]["message"].  The top-level
+    # "message" fallback keeps legacy flat {"plan", "message"} records working;
+    # ``or {}`` (rather than record.get("payload", {})) also guards a spooled
+    # "payload": null.
+    payload = record.get("payload") or {}
+    body = payload.get("message", "") or record.get("message", "")
     message = EmailMessage()
     message["From"] = from_addr
     message["To"] = to_addr
@@ -104,7 +112,13 @@ def send_notification_email(record: dict) -> bool:
     # exception TYPE is logged, never its message or traceback.
     try:
         with smtplib.SMTP(host, port, timeout=timeout) as smtp:
-            smtp.starttls()
+            # Certificate verification is mandatory: a bare starttls() makes
+            # smtplib supply the unverified stdlib context (CERT_NONE, no
+            # hostname check), and the password crosses this channel on the
+            # very next line.  With a verifying context an active MITM's
+            # certificate fails verification and the send fails closed before
+            # the credential is transmitted.
+            smtp.starttls(context=ssl.create_default_context())
             smtp.login(user, password)
             smtp.send_message(message)
     except Exception as exc:  # noqa: BLE001 - never raise out of a sender

@@ -341,7 +341,7 @@ notifications to a per-plan `<plan>.outbox.jsonl` spool file in `PLAN_DIR`
 `PIPELINE_NOTIFY_OUTBOX_ENABLED=1` to opt in. An event allowlist decides
 which notifications are spooled at write time:
 `PIPELINE_NOTIFY_OUTBOX_EVENTS` is a comma-separated list of structured
-event names (default `plan_completed`); a notification whose event is not in
+event names (default `plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up`); a notification whose event is not in
 the allowlist — a `story_done` notice, say — is never spooled and therefore
 never e-mailed.
 
@@ -365,7 +365,7 @@ disabled by default):
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `PIPELINE_NOTIFY_OUTBOX_ENABLED` | `false` | Enables the per-plan `<plan>.outbox.jsonl` spool; only the exact string `1` turns it on |
-| `PIPELINE_NOTIFY_OUTBOX_EVENTS` | `plan_completed` | Comma-separated event allowlist applied when spooling |
+| `PIPELINE_NOTIFY_OUTBOX_EVENTS` | `plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up` | Comma-separated event allowlist applied when spooling |
 | `PIPELINE_NOTIFY_EMAIL_HOST` | unset (empty) | SMTP relay host, e.g. `smtp.example.com`; required for a send |
 | `PIPELINE_NOTIFY_EMAIL_PORT` | `587` | SMTP relay port (submission) |
 | `PIPELINE_NOTIFY_EMAIL_ENABLED` | `0` | Master gate for the e-mail send; must be set to exactly `1` — any other value (`true`, `yes`, `0`, unset) silently skips the send and leaves records retained in the outbox |
@@ -455,7 +455,7 @@ event on that bus; sinks subscribe to it.  Two sinks are built in:
 `pipeline.notification_sinks.file_log_sink`, which reproduces the legacy log
 behaviour, and `pipeline.notification_outbox.outbox_sink`, which spools
 selected notifications (`payload["event"]` in an allowlist, default
-`plan_completed`) to a per‑plan `<plan>.outbox.jsonl` file. The outbox sink is
+`plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up`) to a per‑plan `<plan>.outbox.jsonl` file. The outbox sink is
 disabled by default (`PIPELINE_NOTIFY_OUTBOX_ENABLED=1` to opt in).
 
 When writing a new sink, three rules must be obeyed:

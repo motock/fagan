@@ -38,16 +38,33 @@ OUTBOX_VARS = (
     "PIPELINE_NOTIFY_OUTBOX_EVENTS",
 )
 EMAIL_VARS = (
+    "PIPELINE_NOTIFY_EMAIL_ENABLED",
     "PIPELINE_NOTIFY_EMAIL_HOST",
     "PIPELINE_NOTIFY_EMAIL_PORT",
-    "PIPELINE_NOTIFY_EMAIL_USERNAME",
+    "PIPELINE_NOTIFY_EMAIL_USER",
     "PIPELINE_NOTIFY_EMAIL_PASSWORD",
     "PIPELINE_NOTIFY_EMAIL_FROM",
     "PIPELINE_NOTIFY_EMAIL_TO",
-    "PIPELINE_NOTIFY_EMAIL_SUBJECT",
-    "PIPELINE_NOTIFY_EMAIL_USE_TLS",
+    "PIPELINE_NOTIFY_EMAIL_TIMEOUT",
 )
 ALL_NOTIFY_VARS = OUTBOX_VARS + EMAIL_VARS
+
+# Reviewer-mandated docs-vs-code consistency guard: the e-mail var names the
+# docs may document are exactly the ones pipeline/notification_email.py
+# actually reads from os.environ at call sites (comments and docstrings do
+# not count).  If the code grows or drops a knob, this fails CI until the
+# docs and this list are updated together.
+_EMAIL_MODULE = REPO_ROOT / "pipeline" / "notification_email.py"
+_CODE_EMAIL_VARS = set(
+    re.findall(
+        r"os\.environ\.get\(\s*\"(PIPELINE_NOTIFY_EMAIL_[A-Z_]+)\"",
+        _EMAIL_MODULE.read_text(),
+    )
+)
+assert _CODE_EMAIL_VARS == set(EMAIL_VARS), (
+    "EMAIL_VARS drifted from pipeline/notification_email.py: the module "
+    f"reads {sorted(_CODE_EMAIL_VARS)} but the test pins {sorted(EMAIL_VARS)}"
+)
 
 PASSWORD_VAR = "PIPELINE_NOTIFY_EMAIL_PASSWORD"
 HOST_VAR = "PIPELINE_NOTIFY_EMAIL_HOST"

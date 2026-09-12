@@ -147,6 +147,10 @@ class TestBareBasenameIsNotTreatedAsALeak:
         monkeypatch.setattr(mod, "REPO_ROOT", WORK_ROOT)
         mod._assert_no_leak("ok", extra_secrets=["zzz"])
 
+    def test_extra_secrets_absent_from_text_do_not_raise(self, monkeypatch):
+        monkeypatch.setattr(mod, "REPO_ROOT", WORK_ROOT)
+        mod._assert_no_leak("nothing here", extra_secrets=["zzz", "qqq"])
+
 
 # ---------------------------------------------------------------------------
 # 3-6. NEGATIVE: real leaks must STILL raise AssertionError
@@ -206,10 +210,6 @@ class TestRealLeaksStillRaise:
         monkeypatch.setattr(mod, "REPO_ROOT", WORK_ROOT)
         with pytest.raises(AssertionError):
             mod._assert_no_leak("Traceback has zzz", extra_secrets=["zzz"])
-
-    def test_extra_secret_not_in_text_does_not_raise(self, monkeypatch):
-        monkeypatch.setattr(mod, "REPO_ROOT", WORK_ROOT)
-        mod._assert_no_leak("nothing here", extra_secrets=["zzz", "qqq"])
 
 
 # ---------------------------------------------------------------------------

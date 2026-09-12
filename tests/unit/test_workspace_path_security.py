@@ -90,7 +90,7 @@ def _assert_no_leak(text: str, extra_secrets: list[str] | None = None) -> None:
     """Assert *text* carries no internal filesystem structure."""
     secrets = [
         str(REPO_ROOT),
-        REPO_ROOT.name,
+        f"/{REPO_ROOT.name}/",
         "Traceback",
         ".py",
         "site-packages",

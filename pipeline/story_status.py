@@ -888,6 +888,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     plan_name,
                     f"{story_key} parked: no new commit after {attempts} rework "
                     f"redispatches - needs human review.",
+                    event="story_parked",
                 )
                 return {
                     "status": "parked",

@@ -319,6 +319,73 @@ the cost gate.
 
 ---
 
+## Notifications: plan_completed and the outbound e-mail channel
+
+Two externally visible behaviours sit on top of the notification bus
+described above: a plan-completion notice and an opt-in outbound e-mail
+channel.
+
+**`plan_completed` notification.** When every story in a plan reaches `done`,
+the pipeline emits one `plan_completed` notification whose message is the
+plan summary (`pipeline/plan_completion.py`, called from the scheduler tick
+after a story transition). It fires exactly once per plan: the once-only
+guard is the `<plan>.plan_completed` marker file in `PLAN_DIR`
+(`~/.claude/plans` by default). The marker is written only after the
+notification has been emitted, so a failed emission is retried by a later
+tick instead of being lost; once the marker exists the plan stays all-done
+but no second notification is ever emitted.
+
+**Outbox sink.** `pipeline.notification_outbox.outbox_sink` spools selected
+notifications to a per-plan `<plan>.outbox.jsonl` spool file in `PLAN_DIR`
+(one JSON line per queued record). The sink is disabled by default; set
+`PIPELINE_NOTIFY_OUTBOX_ENABLED=1` to opt in. An event allowlist decides
+which notifications are spooled at write time:
+`PIPELINE_NOTIFY_OUTBOX_EVENTS` is a comma-separated list of structured
+event names (default `plan_completed`); a notification whose event is not in
+the allowlist — a `story_done` notice, say — is never spooled and therefore
+never e-mailed.
+
+**Delivery happens in the scheduler tick's drain phase, not inline in the
+notification path.** Each scheduler tick runs a drain phase
+(`pipeline.notification_outbox.drain_outbox`, wired from
+`pipeline.scheduler_daemon.run_once`) that reads every plan's outbox file and
+hands each queued record to
+`pipeline.notification_email.send_notification_email`, an SMTP sender. This
+is sink rule 2 ("No inline network I/O"): posting to an external service
+inside the notification path would block the sequential pipeline tick, so
+the spooling sink performs no network I/O at all and only the scheduler's
+drain pays that cost, on its own schedule. A record the sender accepts is
+removed from the spool; a record it rejects — or that makes the sender raise
+— is retained verbatim for the next drain, so a transient SMTP outage delays
+delivery instead of losing the notification.
+
+**Configuration** (all opt-in; the outbox spool and the e-mail send are
+disabled by default):
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `PIPELINE_NOTIFY_OUTBOX_ENABLED` | `false` | Enables the per-plan `<plan>.outbox.jsonl` spool; only the exact string `1` turns it on |
+| `PIPELINE_NOTIFY_OUTBOX_EVENTS` | `plan_completed` | Comma-separated event allowlist applied when spooling |
+| `PIPELINE_NOTIFY_EMAIL_HOST` | unset (empty) | SMTP relay host, e.g. `smtp.example.com`; required for a send |
+| `PIPELINE_NOTIFY_EMAIL_PORT` | `587` | SMTP relay port (submission) |
+| `PIPELINE_NOTIFY_EMAIL_ENABLED` | `0` | Master gate for the e-mail send; must be set to exactly `1` — any other value (`true`, `yes`, `0`, unset) silently skips the send and leaves records retained in the outbox |
+| `PIPELINE_NOTIFY_EMAIL_USER` | unset (empty) | SMTP account name, e.g. `you@example.com` |
+| `PIPELINE_NOTIFY_EMAIL_PASSWORD` | unset (empty) | SMTP credential — use a provider app-password, never a primary account password |
+| `PIPELINE_NOTIFY_EMAIL_FROM` | unset (empty) | Envelope From address; falls back to the username |
+| `PIPELINE_NOTIFY_EMAIL_TO` | unset (empty) | Recipient of the plan-completion e-mail |
+| `PIPELINE_NOTIFY_EMAIL_TIMEOUT` | `20` | SMTP socket timeout in seconds; must be numeric or the send fails closed |
+
+The subject line is fixed by the pipeline — `[pipeline] plan complete:
+<plan>` (`pipeline/notification_email.py:102`) — and STARTTLS with mandatory
+certificate verification is always on (`pipeline/notification_email.py:139`
+–141); there is no subject or TLS toggle to configure.
+
+A failed send never drops the record: the drain rewrites the spool atomically
+and keeps every record the sender did not accept, so delivery is
+at-least-once. The e-mail sender fails closed on partial configuration
+(missing host, recipient, or sender) and logs the missing variable names,
+never their values.
+
 ## Notification records
 
 The pipeline writes two notification artifacts per plan: a legacy free‑text log

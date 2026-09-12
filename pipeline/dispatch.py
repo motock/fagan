@@ -273,6 +273,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                                     f"story {story_key} parked: rebase conflict "
                                     f"against origin/{_default_branch()} - "
                                     f"{result['error']}",
+                                    event="story_parked",
                                 )
                                 logging.getLogger("pipeline").warning(
                                     "story %s parked: rebase conflict against "

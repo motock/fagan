@@ -395,6 +395,25 @@ at-least-once. The e-mail sender fails closed on partial configuration
 (missing host, recipient, or sender) and logs the missing variable names,
 never their values.
 
+### Which events are e-mailed by default
+
+The default allowlist is
+`plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up` —
+a comma-separated list with no spaces, so an operator can add or remove
+events by editing `PIPELINE_NOTIFY_OUTBOX_EVENTS`. It contains only the
+events that mean a human is needed:
+
+- `plan_completed` — every story in the plan is done.
+- `story_parked` — a story parked and needs a human.
+- `dispatch_failed` / `tests_failed` / `agent_gave_up` — a story failed.
+
+Healthy-progress events such as `story_merged` are deliberately NOT in the
+default: they are routine and would only add noise. Because the allowlist is
+comma-separated, an operator who wants merge notices by e-mail can add
+`story_merged` to the value; an operator who does not want parked-story
+mail can remove `story_parked`. A notification emitted without a structured
+`event` at all is never spooled, whatever its message says.
+
 ## Notification records
 
 The pipeline writes two notification artifacts per plan: a legacy free‑text log

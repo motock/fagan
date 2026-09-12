@@ -735,6 +735,15 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     manifest["stories"][story_key].pop("parked_reason", None)
     _store.save_manifest(plan_name, manifest)  # noqa: F821
 
+    from .plan_completion import notify_if_plan_completed
+
+    try:
+        notify_if_plan_completed(plan_name, manifest)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "notify_if_plan_completed failed for %s", plan_name
+        )
+
     # Check if all stories are now done
     all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
     if all_done:

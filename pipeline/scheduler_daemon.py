@@ -507,14 +507,15 @@ class SchedulerDaemon:
         # in its own try/except so a drain failure can never kill the loop or
         # perturb the scanned/reconciled accounting above. The imports are
         # function-local so importing this module does not pull in smtplib.
+        # ALL_PLANS drains every outbox file in PLAN_DIR in one call, including
+        # a plan whose manifest was since removed — a per-manifest glob would
+        # silently orphan that plan's queued notifications forever.
         try:
             from pipeline.notification_email import send_notification_email
-            from pipeline.notification_outbox import drain_outbox
+            from pipeline.notification_outbox import ALL_PLANS, drain_outbox
 
-            for manifest_path in sorted(PLAN_DIR.glob("*.manifest.json")):
-                plan_name = manifest_path.name.removesuffix(".manifest.json")
-                drain_outbox(plan_name, send_notification_email)
-        except Exception:  # pragma: no cover - exercised via tests
+            drain_outbox(ALL_PLANS, send_notification_email)
+        except Exception:
             logger.exception("notification outbox drain failed during tick")
 
         # LOCKSTARVE-C2: a tick in which no phase abandoned a worker means

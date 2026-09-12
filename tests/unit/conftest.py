@@ -81,10 +81,19 @@ def _isolate_plan_dir(tmp_path_factory, monkeypatch):
     define their own `plan_dir` fixture that does `(tmp_path /
     "plans").mkdir()`, and pre-creating that same path here would collide
     with it (FileExistsError).
+
+    Also patches pipeline.scheduler_daemon.PLAN_DIR and
+    pipeline.notification_outbox.PLAN_DIR, each its own module-level binding
+    imported from pipeline.paths at load time (PLANNOTIFY-06's drain phase
+    reads scheduler_daemon's copy directly and drain_outbox reads its own) -
+    without this, any pre-existing test calling run_once() drains the
+    operator's real ~/.claude/plans outbox files on every run.
     """
-    from pipeline import persistence
+    from pipeline import notification_outbox, persistence, scheduler_daemon
     default_plan_dir = tmp_path_factory.mktemp("default_plan_dir")
     monkeypatch.setattr(persistence, "PLAN_DIR", default_plan_dir)
+    monkeypatch.setattr(scheduler_daemon, "PLAN_DIR", default_plan_dir)
+    monkeypatch.setattr(notification_outbox, "PLAN_DIR", default_plan_dir)
 
 
 @pytest.fixture

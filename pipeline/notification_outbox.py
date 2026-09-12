@@ -6,9 +6,12 @@ The outbox is a plain JSONL sidecar inside :data:`pipeline.persistence.PLAN_DIR`
 
 * ``<plan>.outbox.jsonl`` – one JSON line per spooled notification.
 
-The sink performs NO network I/O.  A later story (PLANNOTIFY-05) drains the
-outbox and sends the queued records; this module only queues them, so a
-notification can never block the sequential pipeline tick on a network call.
+The sink itself performs NO network I/O.  :func:`drain_outbox` (below) reads
+the queued records and hands each to an injected ``sender`` — in production
+``pipeline.notification_email.send_notification_email`` (PLANNOTIFY-05) — so
+spooling can never block the sequential pipeline tick on a network call; only
+the scheduler's own drain phase (PLANNOTIFY-06) pays that cost, on its own
+schedule.
 
 Two distinct concepts are called *event* here, mirroring
 :mod:`pipeline.notification_sinks`:
@@ -110,7 +113,7 @@ def outbox_sink(event: dict[str, Any]) -> None:
             # Not allowlisted (or no structured event name): silently skip.
             return
 
-        path = PLAN_DIR / f"{plan}.outbox.jsonl"
+        path = PLAN_DIR / f"{plan}{OUTBOX_SUFFIX}"
         persistence._rotate_if_needed(
             path,
             persistence.NOTIFICATIONS_MAX_BYTES,
@@ -178,6 +181,21 @@ def _drain_one_outbox(path: Path, sender) -> int:
             else:
                 retained_lines.append(raw_line)
 
+        # Re-read immediately before the replace: the outbox is append-only
+        # (only outbox_sink ever appends), so our original snapshot is always
+        # a prefix of the current file. A record the sink spooled WHILE this
+        # drain was busy sending (e.g. a slow SMTP loop racing a freshly
+        # abandoned worker's completion notice) lives past that prefix and
+        # would otherwise be silently discarded by the replace below. Merge
+        # it in unprocessed — it is picked up, parsed, and sent on the next
+        # drain — so "never a lost notification" holds under concurrency too.
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                current_lines = fh.read().splitlines()
+        except OSError:
+            current_lines = raw_lines
+        appended_since_snapshot = current_lines[len(raw_lines):]
+
         # The file existed, so always rewrite it — even when nothing is
         # retained, which leaves it empty (the pinned choice; the file is
         # never removed).
@@ -188,7 +206,7 @@ def _drain_one_outbox(path: Path, sender) -> int:
             )
             tmp_path = Path(tmp_name)
             with os.fdopen(fd, "w", encoding="utf-8") as tmp_fh:
-                for retained in retained_lines:
+                for retained in retained_lines + appended_since_snapshot:
                     tmp_fh.write(retained + "\n")
             # Never delete or truncate the original before the replace: a
             # failed replace must leave every record in place.

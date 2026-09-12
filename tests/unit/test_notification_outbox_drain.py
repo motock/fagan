@@ -1,11 +1,10 @@
 """Tests for the outbox drain step (``pipeline.notification_outbox.drain_outbox``)
 and its wiring into the scheduler tick (``pipeline.scheduler_daemon.run_once``).
 
-Written FIRST (TDD) for the drain story.  ``drain_outbox`` does not exist yet,
-so every drain test below fails with ``AttributeError`` and the two wiring
-tests fail at the ``monkeypatch.setattr`` of the not-yet-existing
-``drain_outbox`` attribute -- that is the intended RED state for this
-dispatch.
+Written FIRST (TDD) for the drain story: authored while ``drain_outbox`` did
+not exist yet, so every test below started RED (``AttributeError``, or the
+wiring tests' ``monkeypatch.setattr`` failing against the not-yet-existing
+attribute) before the implementation and scheduler wiring landed.
 
 Contract under test (see REFERENCE.md sink rule 2 -- network I/O stays out of
 the notification path):

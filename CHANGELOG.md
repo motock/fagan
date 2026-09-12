@@ -67,6 +67,11 @@ in practice.
   killed at elapsed 0s (#711), and records the last agent.log line and the
   branch commit count when it kills a dispatch (#702).
 
+**Done-bar**
+
+- The done-bar no longer narrows to a story's own new test file (cf48767),
+  guarded by `tests/unit/test_done_bar_not_narrowed.py`.
+
 ## [0.1.0] - 2026-09-11
 
 First public release.

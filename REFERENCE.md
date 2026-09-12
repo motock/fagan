@@ -375,9 +375,12 @@ Each record has the following keys:
 
 The notification system uses a single event bus returned by
 `pipeline.event_wiring.get_bus()`.  `_notify_user` publishes a `notification`
-event on that bus; sinks subscribe to it.  The only built‑in sink is
+event on that bus; sinks subscribe to it.  Two sinks are built in:
 `pipeline.notification_sinks.file_log_sink`, which reproduces the legacy log
-behaviour.
+behaviour, and `pipeline.notification_outbox.outbox_sink`, which spools
+selected notifications (`payload["event"]` in an allowlist, default
+`plan_completed`) to a per‑plan `<plan>.outbox.jsonl` file. The outbox sink is
+disabled by default (`PIPELINE_NOTIFY_OUTBOX_ENABLED=1` to opt in).
 
 When writing a new sink, three rules must be obeyed:
 
@@ -396,8 +399,16 @@ The dashboard API (`GET /api/plans/{plan}`) now returns two fields:
 - `notifications`: the legacy free‑text log strings (kept for backward
   compatibility).
 
-No outbound sinks (Slack, webhook, email) are implemented; notifications are
-only written locally and consumed by the dashboard.
+One outbound sink exists: email. Each scheduler tick runs a drain phase
+(`pipeline.notification_outbox.drain_outbox`, wired from
+`pipeline.scheduler_daemon.run_once`) that reads every plan's outbox file and
+hands each queued record to
+`pipeline.notification_email.send_notification_email` (an SMTP sender gated
+by its own credential/config env vars). A record the sender accepts is
+removed; a record it rejects or that raises is retained for the next tick's
+drain, so a transient SMTP outage never loses a notification. The drain runs
+in its own try/except inside the tick and never propagates a failure. No
+Slack or generic webhook sink is implemented yet.
 
 
 ### Runtime preflight

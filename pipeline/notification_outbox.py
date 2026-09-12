@@ -6,9 +6,12 @@ The outbox is a plain JSONL sidecar inside :data:`pipeline.persistence.PLAN_DIR`
 
 * ``<plan>.outbox.jsonl`` – one JSON line per spooled notification.
 
-The sink performs NO network I/O.  A later story (PLANNOTIFY-05) drains the
-outbox and sends the queued records; this module only queues them, so a
-notification can never block the sequential pipeline tick on a network call.
+The sink itself performs NO network I/O.  :func:`drain_outbox` (below) reads
+the queued records and hands each to an injected ``sender`` — in production
+``pipeline.notification_email.send_notification_email`` (PLANNOTIFY-05) — so
+spooling can never block the sequential pipeline tick on a network call; only
+the scheduler's own drain phase (PLANNOTIFY-06) pays that cost, on its own
+schedule.
 
 Two distinct concepts are called *event* here, mirroring
 :mod:`pipeline.notification_sinks`:
@@ -42,6 +45,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from . import paths, persistence
@@ -56,6 +61,16 @@ PLAN_DIR = paths.PLAN_DIR
 OUTBOX_ENABLED_ENV = "PIPELINE_NOTIFY_OUTBOX_ENABLED"
 OUTBOX_EVENTS_ENV = "PIPELINE_NOTIFY_OUTBOX_EVENTS"
 DEFAULT_OUTBOX_EVENTS = "plan_completed"
+
+# Suffix shared by the sink (which writes it) and the drain (which reads it) —
+# one constant so the two can never drift apart.
+OUTBOX_SUFFIX = ".outbox.jsonl"
+
+# Wildcard plan name for :func:`drain_outbox`: drain EVERY plan's outbox file
+# in one call.  The scheduler tick is plan-agnostic (its scan and reconcile
+# phases cover all plans at once), so its drain phase passes this instead of a
+# single plan name.
+ALL_PLANS = "*"
 
 
 def outbox_sink(event: dict[str, Any]) -> None:
@@ -98,7 +113,7 @@ def outbox_sink(event: dict[str, Any]) -> None:
             # Not allowlisted (or no structured event name): silently skip.
             return
 
-        path = PLAN_DIR / f"{plan}.outbox.jsonl"
+        path = PLAN_DIR / f"{plan}{OUTBOX_SUFFIX}"
         persistence._rotate_if_needed(
             path,
             persistence.NOTIFICATIONS_MAX_BYTES,
@@ -112,3 +127,138 @@ def outbox_sink(event: dict[str, Any]) -> None:
             "Failed to spool notification to outbox for event %s", event
         )
         return
+
+
+def _drain_one_outbox(path: Path, sender) -> int:
+    """Drain the single outbox file ``path``; return the sent-record count.
+
+    Records the ``sender`` accepted (returned ``True``) are removed; records
+    it rejected (``False``) or that made it RAISE are retained verbatim for
+    the next drain.  The rewrite is atomic — a temp file in the same
+    directory, then :func:`os.replace` over the original — so a crash
+    mid-rewrite leaves the original intact: at-least-once delivery, never a
+    lost notification.  Never raises.
+    """
+    sent = 0
+    try:
+        if not path.exists():
+            # A read must not create state: no outbox file means nothing was
+            # ever spooled for this plan, so return 0 without creating one.
+            return 0
+
+        with open(path, "r", encoding="utf-8") as fh:
+            raw_lines = fh.read().splitlines()
+
+        # Retained lines keep their ORIGINAL raw text (never a re-serialized
+        # dict) so a drain that rejects everything leaves the file
+        # byte-for-byte unchanged.
+        retained_lines: list[str] = []
+        for raw_line in raw_lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                # One corrupt line must not block the rest of the file — and
+                # it is dropped from the rewrite entirely, so it can neither
+                # be sent nor re-WARN on every future drain.
+                logger.warning(
+                    "Skipping malformed outbox line in %s (not valid JSON)",
+                    path.name,
+                )
+                continue
+            try:
+                accepted = sender(record)
+            except Exception:  # a raising sender is treated exactly like a False
+                logger.exception(
+                    "Outbox sender raised for a spooled record; retaining it"
+                )
+                retained_lines.append(raw_line)
+                continue
+            if accepted:
+                sent += 1
+            else:
+                retained_lines.append(raw_line)
+
+        # Re-read immediately before the replace: the outbox is append-only
+        # (only outbox_sink ever appends), so our original snapshot is always
+        # a prefix of the current file. A record the sink spooled WHILE this
+        # drain was busy sending (e.g. a slow SMTP loop racing a freshly
+        # abandoned worker's completion notice) lives past that prefix and
+        # would otherwise be silently discarded by the replace below. Merge
+        # it in unprocessed — it is picked up, parsed, and sent on the next
+        # drain — so "never a lost notification" holds under concurrency too.
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                current_lines = fh.read().splitlines()
+        except OSError:
+            current_lines = raw_lines
+        appended_since_snapshot = current_lines[len(raw_lines):]
+
+        # The file existed, so always rewrite it — even when nothing is
+        # retained, which leaves it empty (the pinned choice; the file is
+        # never removed).
+        tmp_path: Path | None = None
+        try:
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+            )
+            tmp_path = Path(tmp_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp_fh:
+                for retained in retained_lines + appended_since_snapshot:
+                    tmp_fh.write(retained + "\n")
+            # Never delete or truncate the original before the replace: a
+            # failed replace must leave every record in place.
+            os.replace(tmp_path, path)
+            tmp_path = None  # replaced; nothing left to clean up
+        except Exception:  # keep going, never raise
+            logger.exception(
+                "Failed to rewrite outbox %s atomically; retaining records",
+                path.name,
+            )
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:  # pragma: no cover - best-effort cleanup
+                    pass
+        return sent
+    except Exception:  # the drain never raises into the tick
+        logger.exception("Failed to drain notification outbox %s", path.name)
+        return sent
+
+
+def drain_outbox(plan_name: str, sender) -> int:
+    """Drain spooled outbox records for ``plan_name`` through ``sender``.
+
+    ``sender`` is an explicit argument (in production
+    ``pipeline.notification_email.send_notification_email``), never imported
+    here, so callers — and tests — can inject any callable that takes one
+    record dict and returns a bool.
+
+    Parameters
+    ----------
+    plan_name:
+        The plan whose ``<plan>.outbox.jsonl`` file should be drained, or
+        :data:`ALL_PLANS` (``"*"``) to drain every plan's outbox file in one
+        call — the shape the scheduler tick uses, since a tick is
+        plan-agnostic.
+    sender:
+        Callable taking one parsed record dict and returning ``True`` when the
+        record was delivered (remove it) or ``False`` when it was not (retain
+        it for the next drain).  A sender that RAISES is treated exactly like
+        a ``False`` return.
+
+    Returns
+    -------
+    int
+        The count of records the sender accepted.  Never raises: a missing
+        file, a malformed line, a raising sender, or a failed rewrite is
+        logged and the drain moves on.
+    """
+    if plan_name == ALL_PLANS:
+        total = 0
+        for outbox_path in sorted(PLAN_DIR.glob(f"*{OUTBOX_SUFFIX}")):
+            total += _drain_one_outbox(outbox_path, sender)
+        return total
+    return _drain_one_outbox(PLAN_DIR / f"{plan_name}{OUTBOX_SUFFIX}", sender)

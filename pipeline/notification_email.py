@@ -47,6 +47,16 @@ SUBJECT_LABELS = {
     "agent_gave_up": "story failed",
 }
 
+# Only these events name a single story; "plan_completed" is plan-level, so a
+# story key must never be appended to its subject even when the record carries
+# one (the plan-completion record is emitted with the last story's key set).
+STORY_LEVEL_EVENTS = frozenset({
+    "story_parked",
+    "dispatch_failed",
+    "tests_failed",
+    "agent_gave_up",
+})
+
 # Defaults are documented here for the provenance catalog only; every knob is
 # re-read from os.environ on each call so runtime changes take effect.
 _DEFAULTS = {
@@ -132,7 +142,7 @@ def send_notification_email(record: dict) -> bool:
             subject = f"[pipeline] plan complete: {record.get('plan')}"
         else:
             story_key = record.get("story_key") or payload.get("story_key")
-            if story_key:
+            if story_key and event in STORY_LEVEL_EVENTS:
                 subject = f"[pipeline] {label}: {record.get('plan')}/{story_key}"
             else:
                 subject = f"[pipeline] {label}: {record.get('plan')}"

@@ -28,8 +28,11 @@ Selection rules:
   variable ``PIPELINE_NOTIFY_OUTBOX_ENABLED`` is exactly ``"1"`` (the strings
   ``"0"``, ``"true"``, ``"01"`` … all leave it disabled).
 * Event allowlist.  ``PIPELINE_NOTIFY_OUTBOX_EVENTS`` is a comma-separated
-  list of structured event names (default ``"plan_completed"``); only
-  notifications whose ``payload["event"]`` is in that set are spooled.
+  list of structured event names (default
+  ``"plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up"``,
+  i.e. the completion notice plus the parked/failed story events that need a
+  human); only notifications whose ``payload["event"]`` is in that set are
+  spooled.
 * Retention is delegated to :func:`pipeline.persistence._rotate_if_needed`
   with :data:`pipeline.persistence.NOTIFICATIONS_MAX_BYTES` and
   :data:`pipeline.persistence.NOTIFICATIONS_KEEP_N` — the same policy as
@@ -60,7 +63,7 @@ PLAN_DIR = paths.PLAN_DIR
 
 OUTBOX_ENABLED_ENV = "PIPELINE_NOTIFY_OUTBOX_ENABLED"
 OUTBOX_EVENTS_ENV = "PIPELINE_NOTIFY_OUTBOX_EVENTS"
-DEFAULT_OUTBOX_EVENTS = "plan_completed"
+DEFAULT_OUTBOX_EVENTS = "plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up"
 
 # Suffix shared by the sink (which writes it) and the drain (which reads it) —
 # one constant so the two can never drift apart.

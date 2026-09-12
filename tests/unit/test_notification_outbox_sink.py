@@ -280,7 +280,8 @@ def test_disabled_when_env_is_not_exactly_one(outbox_env, monkeypatch):
 def test_enabled_but_event_not_in_default_allowlist(outbox_env, monkeypatch):
     """Enabled, but ``payload['event']`` not allowlisted -> nothing written.
 
-    The default allowlist is ``plan_completed``; e.g. every dispatch-retry
+    The default allowlist is ``plan_completed`` plus the parked/failed story
+    events; e.g. every dispatch-retry
     notice must NOT be queued for delivery.
     """
     monkeypatch.setenv(OUTBOX_ENABLED_ENV, "1")

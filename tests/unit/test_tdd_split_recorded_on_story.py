@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from app import backend
 from pipeline import persistence as ppers
 from pipeline import persona as pper
 from pipeline import server as p
@@ -89,10 +90,24 @@ def _write_manifest(plan_path, plan_name, stories):
     )
 
 
+class _FakeProc:
+    def __init__(self, pid):
+        self.pid = pid
+
+
 def _stub_dispatch_externals(monkeypatch):
     """Stub the external boundaries dispatch_story touches so it can run to
-    completion without git/gh/Plane/subprocess."""
+    completion without git/gh/Plane/subprocess (mirrors
+    tests/unit/_always_on_planner_helpers._stub_dispatch_externals)."""
     monkeypatch.setattr(p.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(
+        backend.subprocess, "Popen", lambda cmd, env=None, **kw: _FakeProc(9500)
+    )
+    monkeypatch.setattr(
+        pt, "plane_request",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
+    )
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
 
 
 def _manifest(plan_path, plan_name):
@@ -136,7 +151,7 @@ def test_phase_success_records_tdd_split_true_on_manifest_story(
     # The marker proves the success branch actually ran.
     assert (worktree_root / "S1" / MARKER).exists()
     story = _story(plan_dir, "tddrec")
-    assert story["tdd_split"] is True
+    assert story.get("tdd_split") is True
 
 
 def test_recorded_tdd_split_tightens_acceptance_tamper_gate(
@@ -154,7 +169,7 @@ def test_recorded_tdd_split_tightens_acceptance_tamper_gate(
     assert p.dispatch_story("tddgate", "S1")["ok"] is True
 
     story = _story(plan_dir, "tddgate")
-    assert story["tdd_split"] is True
+    assert story.get("tdd_split") is True
 
     original = "def test_oracle():\n    assert True\n"
     worktree = worktree_root / "S1"
@@ -290,11 +305,14 @@ def test_dispatch_source_sets_tdd_split_true_in_phase_success_branch():
     `test_author_marker.write_text(...)` marker write -- i.e. inside the
     phase's success branch, not somewhere else in the function."""
     src = (ROOT / "pipeline" / "dispatch.py").read_text()
-    match = re.search(r'story\["tdd_split"\]\s*=\s*True', src)
+    match = re.search(r'\w+\["tdd_split"\]\s*=\s*True', src)
     assert match is not None, "dispatch.py never sets story['tdd_split'] = True"
     window = src[max(0, match.start() - 800): match.end() + 800]
     assert "_run_test_author_phase(" in window
     assert "test_author_marker.write_text(" in window
+    # No new write path: the field rides the surrounding bookkeeping's
+    # manifest write, it is not persisted directly here.
+    assert "_atomic_write_json" not in window
 
 
 def test_ingest_still_declares_tdd_split_default_false():

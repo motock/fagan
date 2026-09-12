@@ -30,6 +30,7 @@ import email.message
 import inspect
 import logging
 import smtplib
+import ssl
 from typing import ClassVar
 
 import pytest
@@ -581,3 +582,113 @@ def test_catalog_notify_group_appended_after_existing_tail():
 def test_password_var_is_masked_as_secret_by_provenance():
     assert config_provenance._is_secret(PASSWORD) is True
     assert config_provenance._is_secret(HOST) is False
+
+
+# ---------------------------------------------------------------------------
+# Regression tests added from code review (REQUEST_CHANGES)
+#
+# Both tests build the record the way the outbox spool ACTUALLY persists it:
+# pipeline/notification_outbox.py writes ``record = dict(event)`` where
+# ``event`` is pipeline.events.make_event's bus-level shape
+# ``{"type", "plan", "story_key", "payload": {...}, "ts"}``.  The
+# pre-existing tests above only exercise legacy flat ``{"plan", "message"}``
+# records, which is why neither blocking finding was caught in CI.
+# No existing test was modified or removed to add these.
+# ---------------------------------------------------------------------------
+
+
+def test_sender_reads_message_from_spooled_bus_event_payload(monkeypatch):
+    """Blocking 1: the body must come from ``record["payload"]["message"]``.
+
+    The spooled outbox record is the bus-level event (``dict(event)`` of
+    make_event's shape), so the message a real send must carry lives at
+    ``record["payload"]["message"]`` -- NOT at ``record["message"]``.  A
+    sender that reads the top-level key sends every real spooled record with
+    an EMPTY body while the subject (which reads the top-level ``plan``)
+    still renders correctly, which is exactly why this survived eyeball
+    review of the flat-record tests.
+    """
+    _set_env(monkeypatch)
+    fake_cls = _install_fake(monkeypatch)
+
+    # Exactly the shape notification_outbox.py spools (make_event via
+    # ``record = dict(event)``); the payload fields must round-trip because
+    # "the later out-of-band send needs them".
+    spooled_record = {
+        "type": "notification.email",
+        "plan": "pro",
+        "story_key": "STORY-7",
+        "payload": {
+            "to": "ops@example.com",
+            "message": "Plan pro: 12/15 stories complete",
+        },
+        "ts": "2025-06-01T12:00:00Z",
+    }
+
+    result = send_notification_email(spooled_record)
+
+    assert result is True
+    message = _sent_message(fake_cls.instances[-1])
+    # The subject reads the bus-event's top-level "plan" and already worked;
+    # the BODY is the regression under test.
+    assert message["Subject"] == "[pipeline] plan complete: pro"
+    assert (
+        _body_of(message).strip() == "Plan pro: 12/15 stories complete"
+    ), "body must be the spooled record's payload message, not the empty top-level fallback of a bus-event record"
+
+
+class _StarttlsRecordingSMTP(FakeSMTP):
+    """``FakeSMTP`` plus recording of ``starttls`` arguments.
+
+    The shared ``FakeSMTP`` above is frozen (every pre-existing test depends
+    on it verbatim) and discards ``starttls`` arguments, so this LOCAL
+    subclass records them under a NEW attribute rather than editing the
+    shared fake in any way.
+    """
+
+    def starttls(self, *args, **kwargs):
+        if not hasattr(self, "starttls_args_record"):
+            self.starttls_args_record = []
+        self.starttls_args_record.append((args, kwargs))
+        super().starttls(*args, **kwargs)
+
+
+def test_starttls_is_called_with_a_verifying_ssl_context(monkeypatch):
+    """Blocking 2: ``starttls()`` must pass a certificate-verifying context.
+
+    A bare ``smtp.starttls()`` makes smtplib supply
+    ``ssl._create_stdlib_context()`` (CERT_NONE, check_hostname=False), so
+    the credential handed to the very next ``login()`` crosses an
+    unauthenticated TLS channel.  The sender must pass
+    ``context=ssl.create_default_context()`` (CERT_REQUIRED + hostname
+    check) so an active MITM's certificate fails verification and the send
+    fails closed BEFORE the password is transmitted.
+    """
+    _set_env(monkeypatch)
+    FakeSMTP.instances.clear()
+    monkeypatch.setattr(smtplib, "SMTP", _StarttlsRecordingSMTP)
+    # Tolerate an implementation that does ``from smtplib import SMTP``.
+    monkeypatch.setattr(
+        notification_email, "SMTP", _StarttlsRecordingSMTP, raising=False
+    )
+
+    assert send_notification_email(_record()) is True
+
+    fake = FakeSMTP.instances[-1]
+    assert fake.starttls_calls == 1
+    recorded = getattr(fake, "starttls_args_record", [])
+    assert recorded, "starttls was never called"
+    args, kwargs = recorded[0]
+    # Accept the context positionally or by keyword; only its VERIFICATION
+    # properties are the contract, not the call syntax.
+    context = kwargs.get("context") if kwargs else None
+    if context is None and args:
+        context = args[0]
+    assert isinstance(context, ssl.SSLContext), (
+        "smtp.starttls() must be called with an ssl.SSLContext (e.g. "
+        "context=ssl.create_default_context()); a bare starttls() lets "
+        "smtplib use the unverified stdlib context (CERT_NONE, no hostname "
+        "check)"
+    )
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True

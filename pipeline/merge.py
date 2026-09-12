@@ -10,6 +10,7 @@ single source of truth that monkeypatches land on.
 """
 
 import fcntl
+import logging
 import os
 import subprocess
 from contextlib import contextmanager
@@ -344,6 +345,15 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         story.pop("parked_reason", None)
         story.pop("ci_rerun_attempted", None)
         _atomic_write_json(manifest_path, manifest)
+
+        from .plan_completion import notify_if_plan_completed
+
+        try:
+            notify_if_plan_completed(plan_name, manifest)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "notify_if_plan_completed failed for %s", plan_name
+            )
         _maybe_record_retro(plan_name, manifest)
     _mark_plane_done(story_key, plan_name)
     if mcp_touched:

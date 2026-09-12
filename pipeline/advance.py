@@ -1015,6 +1015,15 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # matter which path marked the last story done (dedup inside
         # _record_retro_pending makes repeat calls across ticks safe).
         _maybe_record_retro(plan_name, manifest)
+
+        from .plan_completion import notify_if_plan_completed
+
+        try:
+            notify_if_plan_completed(plan_name, manifest)
+        except Exception:
+            logging.getLogger("pipeline").exception(
+                "notify_if_plan_completed failed for %s", plan_name
+            )
         if mcp_touched:
             _notify_user(plan_name, _mcp_restart_notice(mcp_touched))
             summary["notify"].append(key)

@@ -1,0 +1,115 @@
+"""SMTP sender for spooled plan-completion notifications (PLANNOTIFY-05).
+
+``send_notification_email`` sends ONE spooled outbox record as an email over
+SMTP.  It is the first code in this repo that ships content off the machine and
+it handles a credential, so it is built fail-closed:
+
+* Disabled by default (``PIPELINE_NOTIFY_EMAIL_ENABLED`` must be exactly ``1``);
+  no socket is ever opened while disabled.
+* Partial configuration (missing host, recipient, or sender) is an ERROR and a
+  ``False`` return -- never a send attempt.
+* The configured password never reaches a log record, an exception message that
+  escapes, or a return value.  Failures are logged as the exception TYPE only.
+* Message payloads (body, subject, recipients) are never logged at INFO or
+  below; only the outcome is.
+* The function never raises: any failure returns ``False``.
+
+All configuration is read from ``os.environ`` at CALL time (never at import
+time) so callers and tests can change the environment between calls.  Only the
+standard library is used.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import smtplib
+from email.message import EmailMessage
+
+log = logging.getLogger(__name__)
+
+# Defaults are documented here for the provenance catalog only; every knob is
+# re-read from os.environ on each call so runtime changes take effect.
+_DEFAULTS = {
+    "PIPELINE_NOTIFY_EMAIL_ENABLED": "0",
+    "PIPELINE_NOTIFY_EMAIL_HOST": "",
+    "PIPELINE_NOTIFY_EMAIL_PORT": "587",
+    "PIPELINE_NOTIFY_EMAIL_USER": "",
+    "PIPELINE_NOTIFY_EMAIL_PASSWORD": "",
+    "PIPELINE_NOTIFY_EMAIL_FROM": "",
+    "PIPELINE_NOTIFY_EMAIL_TO": "",
+    "PIPELINE_NOTIFY_EMAIL_TIMEOUT": "20",
+}
+
+
+def send_notification_email(record: dict) -> bool:
+    """Send one spooled outbox ``record`` as an email over SMTP.
+
+    Returns ``True`` on a successful send and ``False`` on any failure.
+    Never raises.
+    """
+    # Enabled gate first: unset, "0", or anything other than exactly "1"
+    # means no-op, with zero construction and zero network activity.
+    if os.environ.get("PIPELINE_NOTIFY_EMAIL_ENABLED", "0") != "1":
+        return False
+
+    host = os.environ.get("PIPELINE_NOTIFY_EMAIL_HOST", "")
+    to_addr = os.environ.get("PIPELINE_NOTIFY_EMAIL_TO", "")
+    user = os.environ.get("PIPELINE_NOTIFY_EMAIL_USER", "")
+    password = os.environ.get("PIPELINE_NOTIFY_EMAIL_PASSWORD", "")
+    from_addr = os.environ.get("PIPELINE_NOTIFY_EMAIL_FROM", "") or user
+
+    # Guarded numeric parsing: a malformed knob fails closed instead of
+    # letting smtplib/socket raise from a bad value.
+    try:
+        port = int(os.environ.get("PIPELINE_NOTIFY_EMAIL_PORT", "587"))
+        timeout = float(os.environ.get("PIPELINE_NOTIFY_EMAIL_TIMEOUT", "20"))
+    except (TypeError, ValueError):
+        log.error(
+            "notification email not sent: PIPELINE_NOTIFY_EMAIL_PORT and "
+            "PIPELINE_NOTIFY_EMAIL_TIMEOUT must be numeric"
+        )
+        return False
+
+    # Fail closed on partial configuration -- never attempt a send with a
+    # partial config.  Log the missing variable NAMES, never their values.
+    missing = [
+        name
+        for name, value in (
+            ("PIPELINE_NOTIFY_EMAIL_HOST", host),
+            ("PIPELINE_NOTIFY_EMAIL_TO", to_addr),
+            ("PIPELINE_NOTIFY_EMAIL_FROM/USER", from_addr),
+        )
+        if not value
+    ]
+    if missing:
+        log.error(
+            "notification email not sent: missing required configuration: %s",
+            ", ".join(missing),
+        )
+        return False
+
+    subject = f"[pipeline] plan complete: {record.get('plan')}"
+    body = record.get("message", "")
+    message = EmailMessage()
+    message["From"] = from_addr
+    message["To"] = to_addr
+    message["Subject"] = subject
+    message.set_content(body)
+
+    # One try block covers construction through send so the connection is
+    # closed on every path (the context manager runs __exit__ even when the
+    # constructor, starttls, login, or send_message raises) and no exception
+    # object -- whose text may embed the password -- ever escapes.  Only the
+    # exception TYPE is logged, never its message or traceback.
+    try:
+        with smtplib.SMTP(host, port, timeout=timeout) as smtp:
+            smtp.starttls()
+            smtp.login(user, password)
+            smtp.send_message(message)
+    except Exception as exc:  # noqa: BLE001 - never raise out of a sender
+        log.error("notification email send failed: %s", type(exc).__name__)
+        return False
+
+    log.info("notification email sent")
+    return True

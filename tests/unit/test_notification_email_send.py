@@ -33,9 +33,9 @@ import smtplib
 from typing import ClassVar
 
 import pytest
-from pipeline.notification_email import send_notification_email
 
 from pipeline import config_provenance, notification_email
+from pipeline.notification_email import send_notification_email
 
 ENABLED = "PIPELINE_NOTIFY_EMAIL_ENABLED"
 HOST = "PIPELINE_NOTIFY_EMAIL_HOST"
@@ -90,6 +90,9 @@ def _set_env(monkeypatch, **overrides):
 
 def _install_fake(monkeypatch):
     """Point ``smtplib.SMTP`` (the external boundary) at the recording fake."""
+    # Per-test isolation: drop recordings left by a previous test in this
+    # worker (the class-level list would otherwise leak across tests).
+    FakeSMTP.instances.clear()
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
     # Tolerate an implementation that does ``from smtplib import SMTP``.
     monkeypatch.setattr(notification_email, "SMTP", FakeSMTP, raising=False)
@@ -153,6 +156,14 @@ class FakeSMTP:
         else:
             timeout = None
         return host, port, timeout
+
+    def ctor_port(self):
+        """The port exactly as the constructor received it."""
+        return self.ctor_values()[1]
+
+    def ctor_timeout(self):
+        """The timeout exactly as the constructor received it."""
+        return self.ctor_values()[2]
 
     @property
     def closed(self):

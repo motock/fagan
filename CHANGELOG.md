@@ -136,4 +136,5 @@ and `retros/` for the incident record these came from:
 - A green test suite is not proof of a correct or complete change.
 - A story marked `done` is not proof its title's full scope shipped.
 
+[0.2.0]: https://github.com/motock/fagan/releases/tag/v0.2.0
 [0.1.0]: https://github.com/motock/fagan/releases/tag/v0.1.0

@@ -39,9 +39,9 @@ Coverage:
 * the existing never-break contract -- a ``_notify_user`` that raises still
   does not break the enclosing function.
 
-The implementation does not exist yet, so this file is expected to be RED
-(failing assertions) until it lands.  No real backend, git repo or network is
-ever contacted.
+The implementation landed in this same branch (pipeline/advance.py stamps
+event="story_parked" on the park notification), so this file is GREEN.  No
+real backend, git repo or network is ever contacted.
 """
 
 # ruff: noqa: I001, F811

@@ -31,6 +31,32 @@ from email.message import EmailMessage
 
 log = logging.getLogger(__name__)
 
+# Subject labels for the structured event carried at
+# record["payload"]["event"] (NOTIFYLC-1).  The subject is DERIVED from the
+# record, never configured: there is deliberately no subject knob.  An event
+# missing from this map (including a missing/None event) falls back to the
+# legacy "plan complete" subject so records spooled before the event= stamp
+# still render identically.  "story_parked" is forward-looking: no production
+# caller emits event="story_parked" yet -- the park notification in
+# pipeline/advance.py calls _notify_user without event=.
+SUBJECT_LABELS = {
+    "plan_completed": "plan complete",
+    "story_parked": "story parked",
+    "dispatch_failed": "story failed",
+    "tests_failed": "story failed",
+    "agent_gave_up": "story failed",
+}
+
+# Only these events name a single story; "plan_completed" is plan-level, so a
+# story key must never be appended to its subject even when the record carries
+# one (the plan-completion record is emitted with the last story's key set).
+STORY_LEVEL_EVENTS = frozenset({
+    "story_parked",
+    "dispatch_failed",
+    "tests_failed",
+    "agent_gave_up",
+})
+
 # Defaults are documented here for the provenance catalog only; every knob is
 # re-read from os.environ on each call so runtime changes take effect.
 _DEFAULTS = {
@@ -99,7 +125,6 @@ def send_notification_email(record: dict) -> bool:
     # here (before any connection is opened) keeps the documented "never
     # raises" contract true for the drain loop that calls this per record.
     try:
-        subject = f"[pipeline] plan complete: {record.get('plan')}"
         # The spooled record is the bus-level event (the
         # pipeline.events.make_event shape that notification_outbox.py
         # persists verbatim via dict(event)), so the message lives at
@@ -108,6 +133,19 @@ def send_notification_email(record: dict) -> bool:
         # (rather than record.get("payload", {})) also guards a spooled
         # "payload": null.
         payload = record.get("payload") or {}
+        event = payload.get("event")
+        label = SUBJECT_LABELS.get(event)
+        if label is None:
+            # Legacy fallback: records spooled before the event= stamp carry
+            # no event at all, so a missing/None/unrecognized event must
+            # still render the original "plan complete" subject.
+            subject = f"[pipeline] plan complete: {record.get('plan')}"
+        else:
+            story_key = record.get("story_key") or payload.get("story_key")
+            if story_key and event in STORY_LEVEL_EVENTS:
+                subject = f"[pipeline] {label}: {record.get('plan')}/{story_key}"
+            else:
+                subject = f"[pipeline] {label}: {record.get('plan')}"
         body = payload.get("message", "") or record.get("message", "")
         message = EmailMessage()
         message["From"] = from_addr

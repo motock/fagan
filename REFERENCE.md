@@ -341,7 +341,7 @@ notifications to a per-plan `<plan>.outbox.jsonl` spool file in `PLAN_DIR`
 `PIPELINE_NOTIFY_OUTBOX_ENABLED=1` to opt in. An event allowlist decides
 which notifications are spooled at write time:
 `PIPELINE_NOTIFY_OUTBOX_EVENTS` is a comma-separated list of structured
-event names (default `plan_completed`); a notification whose event is not in
+event names (default `plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up`); a notification whose event is not in
 the allowlist — a `story_done` notice, say — is never spooled and therefore
 never e-mailed.
 
@@ -365,7 +365,7 @@ disabled by default):
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `PIPELINE_NOTIFY_OUTBOX_ENABLED` | `false` | Enables the per-plan `<plan>.outbox.jsonl` spool; only the exact string `1` turns it on |
-| `PIPELINE_NOTIFY_OUTBOX_EVENTS` | `plan_completed` | Comma-separated event allowlist applied when spooling |
+| `PIPELINE_NOTIFY_OUTBOX_EVENTS` | `plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up` | Comma-separated event allowlist applied when spooling |
 | `PIPELINE_NOTIFY_EMAIL_HOST` | unset (empty) | SMTP relay host, e.g. `smtp.example.com`; required for a send |
 | `PIPELINE_NOTIFY_EMAIL_PORT` | `587` | SMTP relay port (submission) |
 | `PIPELINE_NOTIFY_EMAIL_ENABLED` | `0` | Master gate for the e-mail send; must be set to exactly `1` — any other value (`true`, `yes`, `0`, unset) silently skips the send and leaves records retained in the outbox |
@@ -375,10 +375,19 @@ disabled by default):
 | `PIPELINE_NOTIFY_EMAIL_TO` | unset (empty) | Recipient of the plan-completion e-mail |
 | `PIPELINE_NOTIFY_EMAIL_TIMEOUT` | `20` | SMTP socket timeout in seconds; must be numeric or the send fails closed |
 
-The subject line is fixed by the pipeline — `[pipeline] plan complete:
-<plan>` (`pipeline/notification_email.py:102`) — and STARTTLS with mandatory
-certificate verification is always on (`pipeline/notification_email.py:139`
-–141); there is no subject or TLS toggle to configure.
+The subject line is derived from the record's structured event —
+`record["payload"]["event"]` (`pipeline/notification_email.py:136`). A
+`plan_completed` event renders `[pipeline] plan complete: <plan>`; a
+`story_parked` event renders `[pipeline] story parked: <plan>/<story_key>`;
+and a `dispatch_failed`, `tests_failed`, or `agent_gave_up` event renders
+`[pipeline] story failed: <plan>/<story_key>`. The story key is read from the
+record's top-level `story_key`, falling back to `payload.story_key`; when
+neither is present the `/<story_key>` suffix is omitted. A missing, `None`, or
+unrecognized event keeps the legacy `[pipeline] plan complete: <plan>` subject,
+so records spooled before the event stamp still render identically. STARTTLS
+with mandatory certificate verification is always on
+(`pipeline/notification_email.py:176`–177); there is no subject or TLS toggle
+to configure.
 
 A failed send never drops the record: the drain rewrites the spool atomically
 and keeps every record the sender did not accept, so delivery is
@@ -446,7 +455,7 @@ event on that bus; sinks subscribe to it.  Two sinks are built in:
 `pipeline.notification_sinks.file_log_sink`, which reproduces the legacy log
 behaviour, and `pipeline.notification_outbox.outbox_sink`, which spools
 selected notifications (`payload["event"]` in an allowlist, default
-`plan_completed`) to a per‑plan `<plan>.outbox.jsonl` file. The outbox sink is
+`plan_completed,story_parked,dispatch_failed,tests_failed,agent_gave_up`) to a per‑plan `<plan>.outbox.jsonl` file. The outbox sink is
 disabled by default (`PIPELINE_NOTIFY_OUTBOX_ENABLED=1` to opt in).
 
 When writing a new sink, three rules must be obeyed:

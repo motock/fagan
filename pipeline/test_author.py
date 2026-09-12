@@ -173,8 +173,8 @@ def _test_author_prompt(agent_instructions: str) -> str:
     spec verbatim; production stories vary, so the scope suffix below is
     task-agnostic)."""
     return (
-        f"{WORKTREE_SCOPE_RULE}\n\n"
         f"{agent_instructions}\n\n"
+        f"{WORKTREE_SCOPE_RULE}\n\n"
         "--- Test-authoring scope for THIS dispatch ---\n"
         "Write ONLY the test file(s) required to verify the task above - do "
         "NOT create or edit the implementation file(s) it describes; a "

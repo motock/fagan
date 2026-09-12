@@ -167,3 +167,11 @@ if a precise date is needed when writing one of these up.
 - fallback-retry-final — completed 2026-09-11, 1 stories
 - ci-gate-visible — completed 2026-09-11, 1 stories
 - release-docs — completed 2026-09-11, 2 stories
+- plan-docs-refresh — completed 2026-09-11, 2 stories
+- chat-logs-usage — completed 2026-09-11, 13 stories
+- watchdog-stale-activity-floor — completed 2026-09-11, 1 stories
+- scheduler-lock-starvation — completed 2026-09-12, 13 stories
+- plan-completion-email — completed 2026-09-12, 7 stories
+- notify-lifecycle-email — completed 2026-09-12, 8 stories
+- pipeline-dispatch-hardening — completed 2026-09-12, 2 stories
+- release-0.2.0 — completed 2026-09-12, 3 stories

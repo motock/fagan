@@ -779,6 +779,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             _notify_user(
                 plan_name,
                 f"{key} parked: {decision['reason']}",
+                event="story_parked",
                 **(
                     {"correlation_id": story["correlation_id"]}
                     if story.get("correlation_id")

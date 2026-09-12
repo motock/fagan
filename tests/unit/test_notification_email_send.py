@@ -692,3 +692,78 @@ def test_starttls_is_called_with_a_verifying_ssl_context(monkeypatch):
     )
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname is True
+
+# ---------------------------------------------------------------------------
+# Regression tests: the "never raises" contract must hold for a MALFORMED
+# RECORD, not only for a failing SMTP boundary.
+#
+# Every pre-existing never-raises test above drives a failure INSIDE the SMTP
+# block (constructor OSError, login error, send_message error, non-numeric
+# port/timeout).  None feeds a malformed record, so a record that breaks
+# EmailMessage construction -- which happens BEFORE that block -- propagates
+# out of the sender.  PLANNOTIFY-06 drains these records from a JSONL file in
+# the scheduler tick, where a truncated or hand-edited line is exactly this
+# shape, so one bad record must not escape as an exception.
+#
+# No existing test was modified or removed to add these.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        # A CR/LF in the plan name reaches the Subject header, and the email
+        # policy rejects linefeeds in header values with ValueError.
+        ("newline in plan", {"plan": "PLAN-42\nBcc: elsewhere@example.test"}),
+        ("carriage return in plan", {"plan": "PLAN-42\rX-Injected: 1"}),
+        # set_content() raises KeyError for a non-string body: it dispatches
+        # on the payload's type name.
+        ("dict body", {"plan": "PLAN-42", "payload": {"message": {"a": 1}}}),
+        ("int body", {"plan": "PLAN-42", "payload": {"message": 123}}),
+        # ``record["payload"]`` is assumed to be a mapping; a scalar makes the
+        # .get() lookup raise AttributeError.
+        ("payload is a string", {"plan": "PLAN-42", "payload": "not-a-mapping"}),
+        ("payload is a list", {"plan": "PLAN-42", "payload": [1, 2]}),
+    ],
+)
+def test_malformed_record_returns_false_without_raising(
+    monkeypatch, label, record
+):
+    """A malformed record must fail closed, never propagate an exception."""
+    _set_env(monkeypatch)
+    fake_cls = _install_fake(monkeypatch)
+
+    result = send_notification_email(record)
+
+    assert result is False, f"{label}: must return False, not send"
+    assert fake_cls.instances == [], (
+        f"{label}: no SMTP connection may be opened for a record that cannot "
+        "be rendered into a message"
+    )
+
+
+def test_malformed_record_logs_error_without_leaking_password(
+    monkeypatch, caplog
+):
+    """The malformed-record path logs an ERROR and never echoes the secret.
+
+    The password is in the environment on this path too, so the same
+    redaction rule as the send-failure path applies: log the outcome, never
+    the credential and never the offending payload.
+    """
+    _set_env(monkeypatch)
+    _install_fake(monkeypatch)
+    secret = BASE_ENV[PASSWORD]
+
+    with caplog.at_level(logging.DEBUG):
+        result = send_notification_email(
+            {"plan": "PLAN-42", "payload": {"message": {"body": secret}}}
+        )
+
+    assert result is False
+    assert any(
+        record.levelno >= logging.ERROR for record in caplog.records
+    ), "a record that cannot be rendered must be reported at ERROR"
+    for record in caplog.records:
+        assert secret not in record.getMessage()
+        assert secret not in str(record.exc_info or "")

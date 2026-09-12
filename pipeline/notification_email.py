@@ -12,7 +12,9 @@ it handles a credential, so it is built fail-closed:
   escapes, or a return value.  Failures are logged as the exception TYPE only.
 * Message payloads (body, subject, recipients) are never logged at INFO or
   below; only the outcome is.
-* The function never raises: any failure returns ``False``.
+* The function never raises: any failure returns ``False``.  This holds
+  for a malformed record too -- the outbox drain re-reads records from
+  a JSONL file, so an unrenderable record fails closed like any other.
 
 All configuration is read from ``os.environ`` at CALL time (never at import
 time) so callers and tests can change the environment between calls.  Only the
@@ -90,20 +92,36 @@ def send_notification_email(record: dict) -> bool:
         )
         return False
 
-    subject = f"[pipeline] plan complete: {record.get('plan')}"
-    # The spooled record is the bus-level event (the pipeline.events.make_event
-    # shape that notification_outbox.py persists verbatim via dict(event)), so
-    # the message lives at record["payload"]["message"].  The top-level
-    # "message" fallback keeps legacy flat {"plan", "message"} records working;
-    # ``or {}`` (rather than record.get("payload", {})) also guards a spooled
-    # "payload": null.
-    payload = record.get("payload") or {}
-    body = payload.get("message", "") or record.get("message", "")
-    message = EmailMessage()
-    message["From"] = from_addr
-    message["To"] = to_addr
-    message["Subject"] = subject
-    message.set_content(body)
+    # Rendering the record is inside a try because the record is untrusted
+    # input: it is re-read from the outbox JSONL file by the drain, so a
+    # truncated or hand-edited line can carry a non-string body or a CR/LF in
+    # the plan name -- both of which make EmailMessage raise.  Failing closed
+    # here (before any connection is opened) keeps the documented "never
+    # raises" contract true for the drain loop that calls this per record.
+    try:
+        subject = f"[pipeline] plan complete: {record.get('plan')}"
+        # The spooled record is the bus-level event (the
+        # pipeline.events.make_event shape that notification_outbox.py
+        # persists verbatim via dict(event)), so the message lives at
+        # record["payload"]["message"].  The top-level "message" fallback
+        # keeps legacy flat {"plan", "message"} records working; ``or {}``
+        # (rather than record.get("payload", {})) also guards a spooled
+        # "payload": null.
+        payload = record.get("payload") or {}
+        body = payload.get("message", "") or record.get("message", "")
+        message = EmailMessage()
+        message["From"] = from_addr
+        message["To"] = to_addr
+        message["Subject"] = subject
+        message.set_content(body)
+    except Exception as exc:  # noqa: BLE001 - never raise out of a sender
+        # Exception TYPE only: the record's own content is a payload and the
+        # environment holds the credential, so neither may reach the log.
+        log.error(
+            "notification email not sent: malformed record (%s)",
+            type(exc).__name__,
+        )
+        return False
 
     # One try block covers construction through send so the connection is
     # closed on every path (the context manager runs __exit__ even when the

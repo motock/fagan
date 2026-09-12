@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .event_guards import check_precondition
 from .events import EventBus, InProcessEventBus
+from .notification_outbox import outbox_sink
 from .notification_sinks import file_log_sink
 from .paths import PLAN_DIR
 
@@ -58,6 +59,7 @@ def build_bus() -> EventBus:
     bus = InProcessEventBus()
     bus.subscribe("agent_done", wake_handler)
     bus.subscribe("notification", file_log_sink)
+    bus.subscribe("notification", outbox_sink)
     return bus
 
 # Process‑level singleton for the event bus.

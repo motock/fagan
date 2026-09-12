@@ -442,6 +442,67 @@ class TestReviewLockReleaseGuards:
         assert result["advanced"] == []
         assert concurrency._held_plan_locks() == set()
 
+    def test_review_story_locked_skip_during_released_window_does_not_crash_tick(
+        self, monkeypatch, tmp_path
+    ):
+        """review_story's own _store.transaction (pipeline/service.py) wraps
+        the whole call in a non-blocking concurrency._plan_lock acquire, and
+        returns {"ok": True, "skipped": "locked", "reason": ...} - also with
+        no "status" key - when it cannot take the plan lock. Releasing this
+        loop's own hold around review_story (this story's change) is exactly
+        what makes that contention reachable: a genuine second holder of the
+        real flock during the released window.
+
+        This double models the real call path instead of bypassing it: while
+        the loop's lock is released, a competitor thread genuinely acquires
+        concurrency._plan_lock, and the double then attempts the SAME real
+        lock itself and observes it cannot get it (bridging _plan_lock's
+        0.05s in-process contention grace with two Events, not a sleep)."""
+        path = _write_manifest(tmp_path, {"s1": _story()})
+        _seed_common(monkeypatch, path)
+
+        holding_event = threading.Event()
+        release_event = threading.Event()
+
+        def _competitor_hold():
+            with concurrency._plan_lock(_PLAN) as acquired:
+                assert acquired, "test setup: competitor failed to acquire the plan lock"
+                holding_event.set()
+                release_event.wait(timeout=5.0)
+
+        acquired_during_call = {}
+
+        def _locked_skip(plan_name, key):
+            competitor = threading.Thread(target=_competitor_hold, daemon=True)
+            competitor.start()
+            assert holding_event.wait(timeout=5.0), (
+                "test setup: competitor thread never acquired the plan lock"
+            )
+            with concurrency._plan_lock(plan_name) as acquired:
+                acquired_during_call[key] = acquired
+            release_event.set()
+            competitor.join(timeout=5.0)
+            assert not competitor.is_alive(), "test setup: competitor thread did not exit"
+            return {
+                "ok": True,
+                "skipped": "locked",
+                "reason": "another dispatch/ingest/interrupt/review is in progress for this plan",
+            }
+
+        monkeypatch.setattr(advance_module, "review_story", _locked_skip)
+
+        result = _run_tick_holding_lock()
+
+        assert acquired_during_call["s1"] is False, (
+            "test setup: the double must genuinely fail to acquire the real "
+            "plan lock while the competitor holds it - otherwise this test "
+            "does not exercise the hazard"
+        )
+        assert result["ok"] is True
+        assert result["skipped"] == ["s1"]
+        assert result["advanced"] == []
+        assert _read_stories(path)["s1"]["status"] == "tests_passed"
+
 
 class TestStaleStatusGuardOnReReview:
     def test_stale_status_snapshot_does_not_cause_a_double_review(

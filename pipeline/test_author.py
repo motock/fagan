@@ -24,6 +24,7 @@ from pathlib import Path
 
 from app import backend, role_registry
 
+from .config import WORKTREE_SCOPE_RULE
 from .git_ops import _worktree_has_non_wip_commits
 from .persistence import _notify_user
 
@@ -173,6 +174,7 @@ def _test_author_prompt(agent_instructions: str) -> str:
     task-agnostic)."""
     return (
         f"{agent_instructions}\n\n"
+        f"{WORKTREE_SCOPE_RULE}\n\n"
         "--- Test-authoring scope for THIS dispatch ---\n"
         "Write ONLY the test file(s) required to verify the task above - do "
         "NOT create or edit the implementation file(s) it describes; a "
@@ -254,6 +256,7 @@ def _rework_test_author_prompt(
         else ""
     )
     return (
+        f"{WORKTREE_SCOPE_RULE}\n\n"
         "The code reviewer REQUESTED CHANGES on this branch. Your ONLY "
         "job on this dispatch is to write the NEW regression test(s) "
         "that reproduce the bug(s) described below - never the fix "

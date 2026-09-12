@@ -8,6 +8,24 @@ in pipeline_paths; PLANE_* live in pipeline_ticketing with the provider code.
 
 import os
 
+# HARDEN-1: every dispatched agent's prompt must carry this rule. A
+# plan-authored brief once carried an absolute path to the shared primary
+# checkout and the agent ran every command there, landing commits straight on
+# master. The harness already passes cwd=worktree; the gap was that no prompt
+# said the working directory is authoritative. Keep this a plain str constant
+# here (config.py imports only `os`, so there is no cycle risk) and reference
+# it from BOTH prompt sites: pipeline/test_author.py and pipeline/dispatch.py.
+WORKTREE_SCOPE_RULE = (
+    "WORKING DIRECTORY IS AUTHORITATIVE: your current working directory IS "
+    "the repository for this task - a dedicated git worktree checked out on "
+    "this story's own branch. Never `cd` to an absolute path and never pass "
+    "an absolute path to a file tool; use paths relative to your working "
+    "directory. A shared primary checkout of this same repo exists elsewhere "
+    "on this machine, checked out on master: writing there bypasses this "
+    "branch, the review gate and CI, so every command and file edit must "
+    "happen inside your current working directory."
+)
+
 # Autonomy: dry-run (plan/log only) | gated (act up to threshold) | full.
 PIPELINE_AUTONOMY = os.environ.get("PIPELINE_AUTONOMY", "gated").lower()
 # Highest story risk the overlord may act on unattended.

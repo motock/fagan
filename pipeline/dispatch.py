@@ -10,6 +10,7 @@ from typing import Any
 
 from app import backend
 
+from .config import WORKTREE_SCOPE_RULE
 from .service import _ServerRef
 
 # Server-sourced members the moved functions reference as free variables. Each
@@ -375,6 +376,13 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             resume_journal=journal or None,
             review_feedback=None if resume_via_transcript else review_feedback,
         )
+        # HARDEN-1: the executor must be told its cwd is authoritative on
+        # EVERY dispatch - fresh or resumed - before any plan-authored brief
+        # (agent_instructions) it may contain. A brief once carried an
+        # absolute path to the shared primary checkout and the agent ran
+        # every command there, landing commits straight on master. Prepend
+        # unconditionally so the rule survives an empty brief too.
+        spec["prompt"] = f"{WORKTREE_SCOPE_RULE}\n\n{spec['prompt']}"
         worktree_path.mkdir(parents=True, exist_ok=True)
         log_path = worktree_path / "agent.log"
 

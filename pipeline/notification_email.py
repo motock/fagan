@@ -36,7 +36,9 @@ log = logging.getLogger(__name__)
 # record, never configured: there is deliberately no subject knob.  An event
 # missing from this map (including a missing/None event) falls back to the
 # legacy "plan complete" subject so records spooled before the event= stamp
-# still render identically.
+# still render identically.  "story_parked" is forward-looking: no production
+# caller emits event="story_parked" yet -- the park notification in
+# pipeline/advance.py calls _notify_user without event=.
 SUBJECT_LABELS = {
     "plan_completed": "plan complete",
     "story_parked": "story parked",

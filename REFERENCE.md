@@ -375,10 +375,19 @@ disabled by default):
 | `PIPELINE_NOTIFY_EMAIL_TO` | unset (empty) | Recipient of the plan-completion e-mail |
 | `PIPELINE_NOTIFY_EMAIL_TIMEOUT` | `20` | SMTP socket timeout in seconds; must be numeric or the send fails closed |
 
-The subject line is fixed by the pipeline — `[pipeline] plan complete:
-<plan>` (`pipeline/notification_email.py:102`) — and STARTTLS with mandatory
-certificate verification is always on (`pipeline/notification_email.py:139`
-–141); there is no subject or TLS toggle to configure.
+The subject line is derived from the record's structured event —
+`record["payload"]["event"]` (`pipeline/notification_email.py:125`). A
+`plan_completed` event renders `[pipeline] plan complete: <plan>`; a
+`story_parked` event renders `[pipeline] story parked: <plan>/<story_key>`;
+and a `dispatch_failed`, `tests_failed`, or `agent_gave_up` event renders
+`[pipeline] story failed: <plan>/<story_key>`. The story key is read from the
+record's top-level `story_key`, falling back to `payload.story_key`; when
+neither is present the `/<story_key>` suffix is omitted. A missing, `None`, or
+unrecognized event keeps the legacy `[pipeline] plan complete: <plan>` subject,
+so records spooled before the event stamp still render identically. STARTTLS
+with mandatory certificate verification is always on
+(`pipeline/notification_email.py:139`–141); there is no subject or TLS toggle
+to configure.
 
 A failed send never drops the record: the drain rewrites the spool atomically
 and keeps every record the sender did not accept, so delivery is

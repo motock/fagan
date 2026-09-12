@@ -354,6 +354,20 @@ def test_merge_gate_retry_notification_is_not_stamped(plan_dir, monkeypatch, not
     assert notify_calls[0]["kwargs"].get("event") == "merge_gate_retry"
 
 
+def test_merge_gate_failed_notification_is_not_stamped(plan_dir, monkeypatch, notify_calls):
+    """The terminal merge-gate-failure notification must not carry ``story_parked``."""
+    _stub_merge_boundaries(monkeypatch, rebase=("rebase exploded", ""))
+    _write_manifest(plan_dir, PLAN, {KEY: _pr_open_story(merge_attempts=2)})
+
+    adv._adjudicate_merges(PLAN, _summary())
+
+    assert notify_calls, "the terminal-failure path should still notify"
+    assert all(
+        call["kwargs"].get("event") != "story_parked" for call in notify_calls
+    ), f"a non-park notification was stamped story_parked: {notify_calls!r}"
+    assert notify_calls[0]["kwargs"].get("event") == "merge_gate_failed"
+
+
 def test_non_pr_open_story_is_never_notified(plan_dir, monkeypatch, notify_calls):
     """A story that is not pr_open is skipped entirely (no notification at all)."""
     _write_manifest(plan_dir, PLAN, {KEY: _pr_open_story(status="tests_passed")})

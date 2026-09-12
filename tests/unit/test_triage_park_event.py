@@ -208,6 +208,34 @@ def test_deferred_action_direct_notification_is_not_stamped(notify_calls):
     assert "too big for one implementer" in other["args"][1]
 
 
+def test_dry_run_notification_is_not_stamped(notify_calls, monkeypatch):
+    """The dry-run notification in ``_apply_ruling_for_mode`` stays unstamped.
+
+    ``_apply_ruling_for_mode`` sends a "triage dry-run" notification and does
+    NOT park the story, so it must not carry ``event="story_parked"``.
+    """
+    import pipeline.server as server_mod
+
+    monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "dry-run")
+    story = {"status": "failed"}
+    ruling = {"action": "escalate_model", "rationale": "needs a bigger model"}
+
+    result = triage._apply_ruling_for_mode(
+        "plan-x", "story-1", story, ruling, {"stories": {}}, None
+    )
+
+    assert result == "dry-run"
+    assert story.get("status") == "failed", "dry-run must not park the story"
+    assert len(notify_calls) == 1
+    call = notify_calls[0]
+    assert "dry-run" in call["args"][1]
+    assert call["kwargs"].get("event") != "story_parked"
+    assert "event" not in call["kwargs"], (
+        "only the park notification may be stamped with event=; "
+        f"the dry-run notification got {call['kwargs']!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Behaviour preservation
 # ---------------------------------------------------------------------------

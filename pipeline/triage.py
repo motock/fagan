@@ -66,7 +66,11 @@ def _park(plan_name, story_key, story, reason) -> str:
     story["status"] = "parked"
     story["parked_reason"] = reason
     try:
-        _notify_user(plan_name, f"{story_key} triage: {reason}")
+        _notify_user(
+            plan_name,
+            f"{story_key} triage: {reason}",
+            event="story_parked",
+        )
     except Exception:  # pragma: no cover – notification failures are ignored
         pass
     return "park_for_human"

@@ -602,3 +602,31 @@ def test_provider_config_section_body_not_truncated():
         "example registry JSON block - a new '## ' heading was likely "
         "inserted inside it"
     )
+
+
+def test_email_env_var_table_rows_are_not_duplicated():
+    """Reviewer round-2 regression guard: the e-mail env-var table in
+    REFERENCE.md must list each PIPELINE_NOTIFY_EMAIL_* variable exactly
+    once. A previous rework inserted the ENABLED/USER rows after the
+    pre-existing HOST/PORT rows instead of replacing them, leaving
+    byte-identical duplicate rows. Every markdown table row (a line starting
+    with the '|' row marker) must contribute unique variable names."""
+    text = (REPO_ROOT / "REFERENCE.md").read_text()
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not line.startswith("|"):
+            continue
+        names = re.findall(r"PIPELINE_NOTIFY_EMAIL_[A-Z0-9_]+", line)
+        assert len(names) == len(set(names)), (
+            f"REFERENCE.md:{lineno} duplicates an e-mail env var in one "
+            f"table row: {names}"
+        )
+    all_row_names = [
+        name
+        for line in text.splitlines()
+        if line.startswith("|")
+        for name in re.findall(r"PIPELINE_NOTIFY_EMAIL_[A-Z0-9_]+", line)
+    ]
+    assert len(all_row_names) == len(set(all_row_names)), (
+        "the REFERENCE.md e-mail env-var table lists a variable more than "
+        f"once across rows: {sorted(all_row_names)}"
+    )

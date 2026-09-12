@@ -369,8 +369,6 @@ disabled by default):
 | `PIPELINE_NOTIFY_EMAIL_HOST` | unset (empty) | SMTP relay host, e.g. `smtp.example.com`; required for a send |
 | `PIPELINE_NOTIFY_EMAIL_PORT` | `587` | SMTP relay port (submission) |
 | `PIPELINE_NOTIFY_EMAIL_ENABLED` | `0` | Master gate for the e-mail send; must be set to exactly `1` — any other value (`true`, `yes`, `0`, unset) silently skips the send and leaves records retained in the outbox |
-| `PIPELINE_NOTIFY_EMAIL_HOST` | unset (empty) | SMTP relay host, e.g. `smtp.example.com`; required for a send |
-| `PIPELINE_NOTIFY_EMAIL_PORT` | `587` | SMTP relay port (submission) |
 | `PIPELINE_NOTIFY_EMAIL_USER` | unset (empty) | SMTP account name, e.g. `you@example.com` |
 | `PIPELINE_NOTIFY_EMAIL_PASSWORD` | unset (empty) | SMTP credential — use a provider app-password, never a primary account password |
 | `PIPELINE_NOTIFY_EMAIL_FROM` | unset (empty) | Envelope From address; falls back to the username |
@@ -378,7 +376,7 @@ disabled by default):
 | `PIPELINE_NOTIFY_EMAIL_TIMEOUT` | `20` | SMTP socket timeout in seconds; must be numeric or the send fails closed |
 
 The subject line is fixed by the pipeline — `[pipeline] plan complete:
-<plan>` (`pipeline/notification_email.py:103`) — and STARTTLS with mandatory
+<plan>` (`pipeline/notification_email.py:102`) — and STARTTLS with mandatory
 certificate verification is always on (`pipeline/notification_email.py:139`
 –141); there is no subject or TLS toggle to configure.
 

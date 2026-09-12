@@ -250,6 +250,16 @@ ENV_VAR_CATALOG: tuple[EnvVarSpec, ...] = (
     EnvVarSpec("AGENTS_DIR", "~/.claude/agents"),
     EnvVarSpec("OVERLORD_POLICY", "~/.claude/overlord-policy.md"),
     EnvVarSpec("USAGE_STATE_PATH", "~/.claude/usage_state.json"),
+    # Notification email sender (outbox drain); PASSWORD-suffixed names are
+    # masked by _is_secret. See pipeline/notification_email.py.
+    EnvVarSpec("PIPELINE_NOTIFY_EMAIL_ENABLED", "0"),
+    EnvVarSpec("PIPELINE_NOTIFY_EMAIL_HOST", ""),
+    EnvVarSpec("PIPELINE_NOTIFY_EMAIL_PORT", "587"),
+    EnvVarSpec("PIPELINE_NOTIFY_EMAIL_USER", ""),
+    EnvVarSpec("PIPELINE_NOTIFY_EMAIL_PASSWORD", ""),
+    EnvVarSpec("PIPELINE_NOTIFY_EMAIL_FROM", ""),
+    EnvVarSpec("PIPELINE_NOTIFY_EMAIL_TO", ""),
+    EnvVarSpec("PIPELINE_NOTIFY_EMAIL_TIMEOUT", "20"),
 )
 
 def _is_secret(name: str) -> bool:

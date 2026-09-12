@@ -380,6 +380,8 @@ log as an audit record.
 
 See [`REFERENCE.md`](REFERENCE.md) for the full MCP tools reference, the plan/story JSON schema, per-role provider/model configuration, guided decomposition and TDD-split details, every `PIPELINE_*`/`LOCAL_AGENT_*` environment variable, the end-to-end workflow, safety controls, the usage gate, and development/testing instructions.
 
+For how a release is cut, see [`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## Prerequisites
 
 - **Python 3.10+** and the project venv.

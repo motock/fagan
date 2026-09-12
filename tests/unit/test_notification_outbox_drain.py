@@ -257,6 +257,33 @@ def test_drain_removes_only_records_the_sender_accepted(plan_dir):
 
 
 # ---------------------------------------------------------------------------
+# drain_outbox -- ALL_PLANS wildcard
+# ---------------------------------------------------------------------------
+
+def test_all_plans_drains_every_outbox_including_one_with_no_manifest(plan_dir):
+    """ALL_PLANS drains every ``*.outbox.jsonl`` in PLAN_DIR in one call,
+    including a plan whose manifest was since removed -- a per-manifest glob
+    would silently orphan that plan's queued notifications forever."""
+    with_manifest = _outbox_path(plan_dir, "p1")
+    orphaned = _outbox_path(plan_dir, "p2")
+    (Path(plan_dir) / "p1.manifest.json").write_text("{}", encoding="utf-8")
+    # p2 has no manifest.json -- simulates a plan removed after its
+    # notification was already spooled.
+    _spool(with_manifest, [_record(1)])
+    _spool(orphaned, [_record(2)])
+    sender = Sender()
+
+    result = notification_outbox.drain_outbox(
+        notification_outbox.ALL_PLANS, sender
+    )
+
+    assert result == 2
+    assert sender.calls == [_record(1), _record(2)]
+    assert with_manifest.read_text(encoding="utf-8").strip() == ""
+    assert orphaned.read_text(encoding="utf-8").strip() == ""
+
+
+# ---------------------------------------------------------------------------
 # drain_outbox -- negative / boundary cases
 # ---------------------------------------------------------------------------
 
@@ -427,7 +454,11 @@ def test_run_once_calls_the_drain(plan_dir, monkeypatch):
     assert scan_fn.calls == 1  # the existing scan phase still ran
     assert len(calls) >= 1, "run_once must call the drain every tick"
     for plan_name, sender in calls:
-        assert isinstance(plan_name, str)
+        assert plan_name == notification_outbox.ALL_PLANS, (
+            "run_once must drain via the ALL_PLANS wildcard, not a "
+            "per-manifest plan name, or a removed plan's outbox is "
+            "silently orphaned"
+        )
         assert callable(sender)
     assert result == {"scanned": True, "reconciled": False}
 

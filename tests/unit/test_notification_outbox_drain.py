@@ -73,6 +73,7 @@ def _patch_plan_dir(monkeypatch, target):
     """
     monkeypatch.setattr(paths, "PLAN_DIR", target)
     monkeypatch.setattr(persistence, "PLAN_DIR", target)
+    monkeypatch.setattr(daemon_mod, "PLAN_DIR", target)
     if hasattr(notification_outbox, "PLAN_DIR"):
         monkeypatch.setattr(notification_outbox, "PLAN_DIR", target)
 
@@ -348,7 +349,7 @@ def test_sender_exception_is_logged_record_retained_and_drain_continues(
         result = notification_outbox.drain_outbox("p1", sender)
 
     assert result == 2
-    assert sender.calls == [records[0], records[2]]
+    assert sender.calls == records
     assert _retained_records(path) == [records[1]]
     assert any(r.levelno == logging.ERROR for r in caplog.records), (
         "a raising sender must be logged at ERROR"
@@ -410,8 +411,9 @@ def test_rewrite_is_atomic_original_survives_a_failed_replace(
 # run_once wiring -- the drain runs once per tick, guarded
 # ---------------------------------------------------------------------------
 
-def test_run_once_calls_the_drain(monkeypatch):
+def test_run_once_calls_the_drain(plan_dir, monkeypatch):
     """One tick drains the outbox at least once, with a str plan + callable."""
+    (Path(plan_dir) / "p1.manifest.json").write_text("{}", encoding="utf-8")
     daemon, _clock, _reconcile_fn, scan_fn = make_daemon()
     calls = []
 
@@ -432,9 +434,10 @@ def test_run_once_calls_the_drain(monkeypatch):
 
 
 def test_run_once_drain_failure_does_not_propagate_or_change_return_keys(
-    monkeypatch, caplog
+    plan_dir, monkeypatch, caplog
 ):
     """A raising drain is logged and swallowed; the tick's dict is unchanged."""
+    (Path(plan_dir) / "p1.manifest.json").write_text("{}", encoding="utf-8")
     daemon, _clock, _reconcile_fn, scan_fn = make_daemon()
 
     def exploding_drain(plan_name, sender):

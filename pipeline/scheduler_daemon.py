@@ -503,6 +503,20 @@ class SchedulerDaemon:
                 self._last_reconcile_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
                 self._last_reconcile = now
 
+        # Drain phase (PLANNOTIFY-06): its own phase after scan and reconcile,
+        # in its own try/except so a drain failure can never kill the loop or
+        # perturb the scanned/reconciled accounting above. The imports are
+        # function-local so importing this module does not pull in smtplib.
+        try:
+            from pipeline.notification_email import send_notification_email
+            from pipeline.notification_outbox import drain_outbox
+
+            for manifest_path in sorted(PLAN_DIR.glob("*.manifest.json")):
+                plan_name = manifest_path.name.removesuffix(".manifest.json")
+                drain_outbox(plan_name, send_notification_email)
+        except Exception:  # pragma: no cover - exercised via tests
+            logger.exception("notification outbox drain failed during tick")
+
         # LOCKSTARVE-C2: a tick in which no phase abandoned a worker means
         # every phase completed normally, so the consecutive-abandonment
         # streak ends. The reset happens BEFORE the threshold check (and

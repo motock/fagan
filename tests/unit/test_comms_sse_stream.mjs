@@ -811,6 +811,252 @@ await run("preserved internals: reset/export helpers, trace toggle, chip wiring 
   }
 });
 
+// ---------- markdown reply rendering (CHANGE 1) ----------
+//
+// The reply text in renderFinal must go through the render/markdown.js
+// renderer instead of escapeHtml. This single change covers BOTH the
+// streaming path and the blocking-completion path, because both build
+// bubbleHtml in renderFinal.
+
+const MARKDOWN_REPLY = "## Heading\n- item one\n- item two";
+const markdownResultFrame = (reply) =>
+  `event: result\ndata: ${JSON.stringify({ reply, tool_calls: [] })}\n\n`;
+
+await run("a markdown reply renders as HTML (h2 + ul/li) on the streaming path", async () => {
+  const mod = await loadCommsModule();
+  commsDoc.__reset();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = async () => sseResponse([markdownResultFrame(MARKDOWN_REPLY)]);
+  await mod.sendCommsMessage("markdown probe");
+  const html = htmlOf(thread);
+  assertTrue(html.includes("<h2>"), "the reply heading must render as <h2>");
+  assertTrue(html.includes("<ul><li>"), "the reply list must render as <ul><li>");
+  assertTrue(html.includes("item one"), "the first list item text must survive rendering");
+  assertTrue(html.includes("item two"), "the second list item text must survive rendering");
+  assertTrue(!html.includes("## Heading"), "the raw markdown heading marker must not leak through");
+});
+
+await run("a markdown reply renders as HTML on the blocking-completion path too", async () => {
+  const mod = await loadCommsModule();
+  commsDoc.__reset();
+  const thread = commsDoc.getElementById("comms-thread");
+  const calls = [];
+  currentFetch = async (url, opts) => {
+    calls.push({ url, opts });
+    if (calls.length === 1) return { ok: true, status: 200, body: undefined };
+    return jsonResponse(200, { reply: MARKDOWN_REPLY, tool_calls: [] });
+  };
+  await mod.sendCommsMessage("blocking markdown probe");
+  assertTrue(calls.length >= 2, "the blocking fallback must have been used");
+  const html = htmlOf(thread);
+  assertTrue(html.includes("<h2>"), "the blocking reply heading must render as <h2>");
+  assertTrue(html.includes("<ul><li>"), "the blocking reply list must render as <ul><li>");
+});
+
+await run("a plain reply is rendered through the markdown renderer (paragraph wrap)", async () => {
+  const mod = await loadCommsModule();
+  commsDoc.__reset();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = async () => sseResponse([markdownResultFrame("Tower online.")]);
+  await mod.sendCommsMessage("plain probe");
+  const html = htmlOf(thread);
+  assertTrue(html.includes("<p>"), "a plain reply must render as a markdown paragraph");
+  assertTrue(html.includes("Tower online."), "the plain reply text must still be present");
+});
+
+// ---------- transcript export preserves raw markdown (CHANGE 2) ----------
+//
+// exportCommsThread is not exported; it is wired to the #comms-export click
+// listener at module top level. Capture that handler before the fresh import
+// runs its wiring, then invoke it directly.
+
+async function loadCommsModuleCapturingExport() {
+  commsDoc.__reset();
+  const exportBtn = commsDoc.getElementById("comms-export");
+  let handler = null;
+  exportBtn.addEventListener = (type, fn) => {
+    if (type === "click") handler = fn;
+  };
+  const mod = await loadCommsModule();
+  return { mod, exportThread: handler };
+}
+
+// Run exportCommsThread with URL.createObjectURL stubbed to capture the Blob
+// and the anchor click/removal neutralised, then return the markdown text.
+async function captureExportedMarkdown(exportThread) {
+  assertTrue(
+    typeof exportThread === "function",
+    "exportCommsThread must be wired to the #comms-export click listener",
+  );
+  const origCreate = URL.createObjectURL;
+  const origRevoke = URL.revokeObjectURL;
+  const origRemoveChild = commsDoc.body.removeChild;
+  let captured = null;
+  URL.createObjectURL = (blob) => {
+    captured = blob;
+    return "blob:test-transcript";
+  };
+  URL.revokeObjectURL = () => {};
+  commsDoc.body.removeChild = () => {};
+  try {
+    exportThread();
+  } finally {
+    URL.createObjectURL = origCreate;
+    URL.revokeObjectURL = origRevoke;
+    commsDoc.body.removeChild = origRemoveChild;
+  }
+  assertTrue(
+    captured && typeof captured.text === "function",
+    "a Blob must have been created for the transcript",
+  );
+  return await captured.text();
+}
+
+// Give a thread node a stable .bubble child whose textContent we control, so
+// the fallback path (no matching history entry) is observable.
+function setBubbleText(node, text) {
+  const bubble = makeElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = text;
+  node.querySelector = (sel) => (sel === ".bubble" ? bubble : null);
+}
+
+// The harness's querySelectorAll always returns []; point it at the real
+// appended .msg children so the DOM walk in _commsTranscriptMarkdown works.
+function exposeThreadMessages(thread) {
+  thread.querySelectorAll = (sel) => (sel === ".msg" ? thread.children : []);
+}
+
+await run("exportCommsThread preserves raw markdown from commsHistory (not flattened textContent)", async () => {
+  const { mod, exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = async () => sseResponse([markdownResultFrame(MARKDOWN_REPLY)]);
+  await mod.sendCommsMessage("status check");
+  exposeThreadMessages(thread);
+  // Flattened textContent on every bubble: if the implementation still reads
+  // textContent, the raw markdown assertions below fail.
+  for (const node of thread.children) setBubbleText(node, "Heading\nitem one\nitem two");
+  const markdown = await captureExportedMarkdown(exportThread);
+  assertTrue(markdown.includes("# Tower transcript"), "the transcript header must be preserved");
+  assertTrue(markdown.includes("**Ground:**"), "the Ground label must be preserved");
+  assertTrue(markdown.includes("**Tower:**"), "the Tower label must be preserved");
+  assertTrue(markdown.includes("## Heading"), "the raw markdown heading must survive export");
+  assertTrue(markdown.includes("- item one"), "the raw markdown list item must survive export");
+  assertTrue(markdown.includes("status check"), "the raw user turn must survive export");
+});
+
+await run("exportCommsThread falls back to bubble.textContent for bubbles with no history entry", async () => {
+  const { exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  const node = makeElement("div");
+  node.className = "msg tower";
+  setBubbleText(node, "tool output only");
+  thread.children.push(node);
+  exposeThreadMessages(thread);
+  const markdown = await captureExportedMarkdown(exportThread);
+  assertTrue(
+    markdown.includes("tool output only"),
+    "a bubble with no matching history entry must fall back to bubble.textContent",
+  );
+  assertTrue(markdown.includes("**Tower:**"), "the Tower label must still be emitted for the fallback bubble");
+});
+
+await run("exportCommsThread consumes commsHistory entries in order per role", async () => {
+  const { mod, exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  const replies = ["## First\n- alpha", "## Second\n- beta"];
+  let turn = 0;
+  currentFetch = async () => sseResponse([markdownResultFrame(replies[turn++])]);
+  await mod.sendCommsMessage("first question");
+  await mod.sendCommsMessage("second question");
+  exposeThreadMessages(thread);
+  for (const node of thread.children) setBubbleText(node, "FLATTENED");
+  const markdown = await captureExportedMarkdown(exportThread);
+  const firstIdx = markdown.indexOf("## First");
+  const secondIdx = markdown.indexOf("## Second");
+  assertTrue(firstIdx !== -1, "the first turn's raw markdown must be exported");
+  assertTrue(secondIdx !== -1, "the second turn's raw markdown must be exported");
+  assertTrue(firstIdx < secondIdx, "history entries must be consumed in order per role");
+  assertTrue(markdown.includes("first question"), "the first user turn must be exported");
+  assertTrue(markdown.includes("second question"), "the second user turn must be exported");
+  assertTrue(!markdown.includes("FLATTENED"), "flattened textContent must not be used when history has entries");
+});
+
+await run("exportCommsThread mixes history-sourced and fallback bubbles", async () => {
+  const { mod, exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = async () => sseResponse([markdownResultFrame("## Answer\n- yes")]);
+  await mod.sendCommsMessage("question");
+  // A denied/error bubble that commsHistory does not record.
+  const denied = makeElement("div");
+  denied.className = "msg tower denied";
+  setBubbleText(denied, "denied: no permission");
+  thread.children.push(denied);
+  exposeThreadMessages(thread);
+  for (const node of thread.children) {
+    if (node !== denied) setBubbleText(node, "FLATTENED");
+  }
+  const markdown = await captureExportedMarkdown(exportThread);
+  assertTrue(markdown.includes("## Answer"), "the history-sourced reply must keep raw markdown");
+  assertTrue(
+    markdown.includes("denied: no permission"),
+    "the unrecorded bubble must fall back to bubble.textContent",
+  );
+});
+
+// ---------- source-level requirements (membership only) ----------
+
+function extractFunctionBody(src, name) {
+  const start = src.indexOf(`function ${name}`);
+  if (start === -1) return null;
+  const braceStart = src.indexOf("{", start);
+  if (braceStart === -1) return null;
+  let depth = 0;
+  for (let i = braceStart; i < src.length; i++) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return src.slice(braceStart + 1, i);
+    }
+  }
+  return null;
+}
+
+await run("comms.js imports renderMarkdown and renderFinal uses it for the reply", async () => {
+  const src = readFileSync(COMMS_JS_URL, "utf8");
+  assertTrue(
+    /import\s*\{[^}]*\brenderMarkdown\b[^}]*\}\s*from\s*["'][^"']*render\/markdown\.js["']/.test(src),
+    "comms.js must import renderMarkdown from the render/markdown.js module",
+  );
+  assertTrue(
+    src.includes("renderMarkdown(reply)"),
+    "renderFinal must build the reply with renderMarkdown(reply)",
+  );
+  assertTrue(!src.includes("escapeHtml(reply)"), "the old escapeHtml(reply) reply builder must be gone");
+});
+
+await run("comms.js keeps escapeHtml for the catch bubble, live status and tool trace", async () => {
+  const src = readFileSync(COMMS_JS_URL, "utf8");
+  assertTrue(
+    /escapeHtml\(\s*["']Couldn't reach the tower - try again\.["']\s*\)/.test(src),
+    "the catch/error bubble must stay on escapeHtml",
+  );
+  const live = extractFunctionBody(src, "_commsLiveStatusHtml");
+  assertTrue(live !== null && live.includes("escapeHtml"), "_commsLiveStatusHtml must stay on escapeHtml");
+  const trace = extractFunctionBody(src, "renderToolTraceHtml");
+  assertTrue(trace !== null && trace.includes("escapeHtml"), "renderToolTraceHtml must stay on escapeHtml");
+});
+
+await run("_commsTranscriptMarkdown sources bubble text from commsHistory with a textContent fallback", async () => {
+  const src = readFileSync(COMMS_JS_URL, "utf8");
+  const body = extractFunctionBody(src, "_commsTranscriptMarkdown");
+  assertTrue(body !== null, "_commsTranscriptMarkdown must still exist");
+  assertTrue(body.includes("commsHistory"), "the transcript must resolve bubble text from commsHistory");
+  assertTrue(body.includes("textContent"), "the transcript must keep the bubble.textContent fallback");
+  assertTrue(body.includes("# Tower transcript"), "the transcript header must be preserved");
+  assertTrue(body.includes("**${label}:**"), "the Ground/Tower label layout must be preserved");
+});
+
 // ---------- summary ----------
 
 const failed = results.filter((r) => !r.ok);

@@ -165,6 +165,108 @@ def _execute_split_story(plan_name, story_key, story, ruling, manifest, manifest
     return "split_story"
 
 
+# The exact fail-closed park reason for an uncorroborated mark_done ruling.
+_MARK_DONE_UNCORROBORATED_REASON = (
+    "mark_done ruled but live evidence does not corroborate"
+)
+# The PASS sentinel returned by _current_suite_state (compared by equality,
+# never by truthiness - the FAIL/empty shapes are also truthy strings).
+_SUITE_PASSES_SENTINEL = (
+    "CURRENT STATE: full test suite PASSES at the worktree's current HEAD."
+)
+
+
+def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+    """Execute a ``mark_done`` ruling by correcting the story record.
+
+    Fail-closed corroboration comes FIRST, before any mutation: an
+    uncorroborated ``mark_done`` is the dangerous direction, so the executor
+    acts only on corroborated LIVE evidence - never on the overlord's word
+    alone and never on ``parked_reason`` text. The live predicates mirror the
+    facts :func:`_current_git_state` surfaces:
+
+      1. the story's branch has NEW COMMITS vs the base branch, via
+         :func:`pipeline.git_ops._worktree_has_new_commits` with the base
+         resolved the way its existing callers do (lazy
+         :func:`pipeline.server._default_branch` import);
+      2. the story carries a ``pr_url`` (a merged PR);
+      3. :func:`_current_suite_state` reports the suite PASSES at HEAD
+         (equality against the PASS sentinel, not truthiness).
+
+    Uncorroborated -> the story is parked loudly with
+    ``_MARK_DONE_UNCORROBORATED_REASON`` (status ``parked`` + notify) and
+    ``triage_deferred_action`` is left untouched, so a re-dispatch takes the
+    same fail-closed path instead of silently skipping.
+
+    Corroborated -> ``story['status'] = 'done'``, ``triage_deferred_action``
+    is cleared, and an OPSA-3 execution record is appended capturing
+    ``prior_status``/``prior_parked_reason`` BEFORE the mutation.
+
+    The manifest file is NOT written here: :func:`run_triage_sweep` persists
+    the mutated manifest after the tick.
+    """
+    action = ruling.get("action", "mark_done")
+    rationale = ruling.get("rationale", "")[:300]
+
+    # (a) Corroborate FIRST - no story mutation before this point.
+    worktree = story.get("worktree")
+    has_new_commits = False
+    suite_green = False
+    if isinstance(worktree, str) and worktree:
+        base = ""
+        try:
+            # Lazy import: pipeline.server imports this module at module
+            # level, so a module-level import here would be circular. This is
+            # how the existing callers resolve the base branch.
+            from .server import _default_branch
+
+            base = _default_branch()
+        except Exception:  # noqa: BLE001 - unresolved base fails closed
+            base = ""
+        if base:
+            try:
+                has_new_commits = bool(
+                    _worktree_has_new_commits(
+                        Path(worktree),
+                        str(story.get("story_key") or story.get("key") or ""),
+                        base,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - probe failure fails closed
+                has_new_commits = False
+        try:
+            suite_green = _current_suite_state(worktree) == _SUITE_PASSES_SENTINEL
+        except Exception:  # noqa: BLE001 - probe failure fails closed
+            suite_green = False
+    has_merged_pr = bool(story.get("pr_url"))
+    corroborated = has_new_commits or has_merged_pr or suite_green
+
+    # (b) Not corroborated -> park loudly; the record stays as-is.
+    if not corroborated:
+        result = _park(plan_name, story_key, story, _MARK_DONE_UNCORROBORATED_REASON)
+        try:
+            _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
+        except Exception:  # pragma: no cover – notification failures are ignored
+            pass
+        return result
+
+    # (c) Corroborated -> correct the record, capturing prior state first.
+    prior_status = story.get("status")
+    prior_parked_reason = story.get("parked_reason")
+    story["status"] = "done"
+    story.pop("triage_deferred_action", None)
+    _record_execution(
+        plan_name,
+        story_key,
+        action,
+        "done",
+        "full",
+        prior_status,
+        prior_parked_reason,
+    )
+    return "mark_done"
+
+
 def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
     """Execute a ruling in this slice.
 
@@ -176,6 +278,10 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
     rationale = ruling.get("rationale", "")[:300]
     if action == "split_story":
         return _execute_split_story(
+            plan_name, story_key, story, ruling, manifest, manifest_path
+        )
+    if action == "mark_done":
+        return _execute_mark_done(
             plan_name, story_key, story, ruling, manifest, manifest_path
         )
     if action in DEFERRED_ACTIONS:

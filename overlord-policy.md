@@ -105,6 +105,7 @@ All four ACTION values are defined:
 - `split_story` – the scope is wrong for any implementer at this tier; the story needs to be broken up.
 - `repo_issue` – the failure is environmental, not the story's fault (a red lint baseline, a red suite at a clean baseline, a born‑broken acceptance oracle, CI unavailable). The overlord NEVER edits the repo; a detected repo issue becomes a normal pipeline story that goes through TDD, review and CI like anything else.
 - `park_for_human` – genuinely ambiguous; hold it.
+- `mark_done` – correct the story record to `done` only when live git/suite evidence corroborates it (new commits vs base, a merged `pr_url`, or the suite passing at HEAD); never on `parked_reason` text. An uncorroborated `mark_done` fails closed: the story stays parked and a human is notified.
 
 The overlord should choose the honest action even when the pipeline cannot execute it yet: `repo_issue` alone is still recorded and then parked for a human, while `split_story` executes by creating two child stories in the manifest, and a ruling that misrepresents the situation to fit what is implemented is worse than an honest one that parks;
 
@@ -144,7 +145,7 @@ TIER: routine | notify-async | park-and-ping
 RISK: low | medium | high
 RATIONALE: <2-4 sentences: why this, what was rejected, what was protected>
 NOTIFY_USER: yes | no
-ACTION: escalate_model | split_story | repo_issue | park_for_human
+ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done
 SPLIT: <child A> || <child B>
 ```
 ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human.

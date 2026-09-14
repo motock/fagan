@@ -206,9 +206,6 @@ def test_deferred_action_direct_notification_is_not_stamped(notify_calls):
     # The direct notification's message text is untouched.
     assert "split_story" in other["args"][1]
     assert "too big for one implementer" in other["args"][1]
-    # The direct notification's message text is untouched.
-    assert "split_story" in other["args"][1]
-    assert "too big for one implementer" in other["args"][1]
 
 
 def test_dry_run_notification_is_not_stamped(notify_calls, monkeypatch):

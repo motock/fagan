@@ -384,7 +384,7 @@ test("unordered list supports one level of nesting", () => {
 });
 
 test("ordered list supports one level of nesting", () => {
-  const html = render("1. parent\n   1. child");
+  const html = render("1. parent\n  1. child");
   assertEqual((html.match(/<ol\b/g) || []).length, 2, "expected a nested <ol>");
   assertIncludes(html, "parent", "parent text");
   assertIncludes(html, "child", "child text");

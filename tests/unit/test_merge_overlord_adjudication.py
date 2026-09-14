@@ -15,9 +15,25 @@ The overlord invocation is stubbed at the true boundary
 (``pipeline.overlord._invoke_overlord``) because ``pipeline/merge.py`` resolves
 it lazily inside the function body; the autonomy knobs are patched on
 ``pipeline.server`` for the same reason.
+
+The plan name reaches the gate through the production context
+(``pipeline.merge.merge_adjudication_plan``), which
+``pipeline/advance.py::_adjudicate_merges`` binds around each gate call. The
+stories here carry no ``plan`` key - production manifests never do - so the
+``story.get("plan")`` compat fallback is never what these tests exercise, and
+the end-to-end test at the bottom of this file fails if that context binding
+is removed from ``advance.py``.
 """
 
+# ruff: noqa: I001
+# Import order below is deliberate, not disorganized: ``pipeline.server``
+# transitively imports advance/ci/merge at module load, so importing it before
+# ``pipeline.advance`` keeps that submodule import resolving against an
+# already-initialized module (the same ordering test_advance_park_event.py
+# documents). isort's alphabetical sort would put ``pipeline.advance`` first
+# and reintroduce the circular import this ordering avoids.
 import copy
+import json
 import re
 from pathlib import Path
 
@@ -27,6 +43,10 @@ from pipeline import merge as merge_mod
 from pipeline import overlord as overlord_mod
 from pipeline import persistence as persistence_mod
 from pipeline import server as server_mod
+
+# The module that owns the production context binding guarded by the
+# end-to-end test below.
+from pipeline import advance as advance_mod
 
 HOLD_REASON = "high risk held for human review"
 POLICY_PATH = Path(__file__).resolve().parents[2] / "overlord-policy.md"
@@ -38,7 +58,12 @@ PARK_REPLY = "RULING: park\nRATIONALE: security review is too thin to merge unat
 def _story(**overrides):
     story = {
         "key": "OPSA-9-STORY",
-        "plan": "PLAN-1",
+        # NOTE: deliberately NO "plan" key. Production manifests never carry
+        # one, so injecting it here would make every test exercise the
+        # ``story.get("plan")`` compat fallback in
+        # ``_adjudicate_high_risk_merge`` instead of the production
+        # ``merge_adjudication_plan`` context - which is exactly the gap that
+        # let the wrong-decisions-file bug ship unguarded.
         "plan_name": "PLAN-1",
         "status": "pr_open",
         "parked_reason": None,
@@ -83,7 +108,12 @@ class _Harness:
         )
 
     def decide(self, story):
-        return merge_mod._merge_decision(story)
+        # Bind the production adjudication context exactly as
+        # ``advance._adjudicate_merges`` does around its gate call. The story
+        # carries no ``plan`` key, so without this binding the gate would fall
+        # back to the plan-less default decisions log.
+        with merge_mod.merge_adjudication_plan("PLAN-1"):
+            return merge_mod._merge_decision(story)
 
     @property
     def prompt(self):
@@ -341,3 +371,159 @@ def test_policy_ladder_text_still_credits_full_with_overlord_adjudication():
     assert "overlord adjudication of" in flat
     assert "risk: high" in flat
     assert "held in dry-run and gated" in flat
+
+
+# --------------------------------------------------------------------------
+# WHICH FILE the ruling lands in: the plan's own decisions log, never the
+# plan-less default. These tests run the REAL persistence writer against a
+# tmp PLAN_DIR (no ``_append_decision`` stub), because asserting the return
+# value or the stubbed plan_name alone cannot catch the wrong-file bug.
+# --------------------------------------------------------------------------
+
+PLAN = "PLAN-1"
+E2E_KEY = "OPSA-9-E2E"
+
+
+def _plan_decisions(plan_dir, plan_name):
+    """The records in ``plan_name``'s own decisions log (``[]`` if absent)."""
+    path = plan_dir / f"{plan_name}.decisions.json"
+    return json.loads(path.read_text()) if path.exists() else []
+
+
+def _default_decisions(plan_dir):
+    """The plan-less default log the pre-fix code wrote to."""
+    return _plan_decisions(plan_dir, "")
+
+
+def _e2e_story(**overrides):
+    """A production-shaped pr_open story: NO ``plan`` key, as manifests have."""
+    story = {
+        "key": E2E_KEY,
+        "status": "pr_open",
+        "parked_reason": None,
+        "review_verdict": "APPROVE",
+        "security_review_verdict": "APPROVE",
+        "risk": "high",
+        "summary": "Rewrite the auth token cache",
+        "pr_checks": {"ci": "pass", "lint": "pass"},
+        "worktree": "",
+        "dependencies": [],
+    }
+    story.update(overrides)
+    return story
+
+
+def _summary():
+    """A summary dict carrying every key ``_adjudicate_merges`` appends to."""
+    return {"parked": [], "notify": [], "failed": [], "merged": [], "ci_pending": []}
+
+
+def test_full_park_ruling_lands_in_the_plans_own_decisions_log(plan_dir, monkeypatch):
+    """The ruling is written to PLAN-1's log, not the plan-less default log.
+
+    ``_append_decision`` is deliberately NOT stubbed: the real writer runs
+    against a tmp PLAN_DIR, so this asserts *which file* the record lands in.
+    """
+    monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "full", raising=False)
+    monkeypatch.setattr(server_mod, "PIPELINE_RISK_THRESHOLD", "low", raising=False)
+    monkeypatch.setattr(
+        overlord_mod,
+        "_invoke_overlord",
+        lambda prompt, plan_role_config=None: PARK_REPLY,
+    )
+
+    with merge_mod.merge_adjudication_plan(PLAN):
+        decision = merge_mod._merge_decision(_story())
+
+    assert decision == {"action": "park", "reason": HOLD_REASON}
+    records = _plan_decisions(plan_dir, PLAN)
+    assert len(records) == 1, "the ruling must be recorded in PLAN-1's own log"
+    assert records[0]["decided_by"] == "overlord"
+    assert records[0]["ruling"] == "park"
+    assert records[0]["story_key"] == "OPSA-9-STORY"
+    assert _default_decisions(plan_dir) == [], (
+        "the ruling must NOT land in the plan-less default decisions log"
+    )
+
+
+def test_adjudicate_merges_records_the_ruling_in_the_plans_own_decisions_log(
+    plan_dir, monkeypatch
+):
+    """End-to-end guard for ``advance._adjudicate_merges``'s context binding.
+
+    Drives the REAL ``advance._adjudicate_merges`` with a story carrying no
+    ``plan`` key (the production manifest shape). The ruling must land in
+    PLAN-1's own decisions log. If the ``with merge_adjudication_plan(plan_name)``
+    wrapper around the gate call is removed, the gate falls back to the
+    plan-less default log and this test fails - which is the only test in this
+    file that exercises that wrapper at all.
+    """
+    monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "full", raising=False)
+    monkeypatch.setattr(server_mod, "PIPELINE_RISK_THRESHOLD", "low", raising=False)
+    monkeypatch.setattr(
+        overlord_mod,
+        "_invoke_overlord",
+        lambda prompt, plan_role_config=None: PARK_REPLY,
+    )
+    monkeypatch.setattr(advance_mod, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(
+        advance_mod,
+        "_atomic_write_json",
+        lambda path, data: Path(path).write_text(json.dumps(data, indent=2)),
+    )
+    (plan_dir / f"{PLAN}.manifest.json").write_text(
+        json.dumps({"epics": {}, "stories": {E2E_KEY: _e2e_story()}}, indent=2)
+    )
+
+    summary = _summary()
+    advance_mod._adjudicate_merges(PLAN, summary)
+
+    assert summary["parked"] == [E2E_KEY]
+    records = _plan_decisions(plan_dir, PLAN)
+    assert len(records) == 1, (
+        "advance._adjudicate_merges must record the ruling in PLAN-1's own "
+        "decisions log"
+    )
+    assert records[0]["decided_by"] == "overlord"
+    assert records[0]["ruling"] == "park"
+    assert records[0]["story_key"] == E2E_KEY
+    assert _default_decisions(plan_dir) == [], (
+        "the ruling must NOT land in the plan-less default decisions log"
+    )
+
+
+def test_merge_adjudication_plan_context_is_reset_between_calls(plan_dir, monkeypatch):
+    """The contextvar must be reset on exit, not left bound to the last plan.
+
+    Three calls in sequence: PLAN-1, then PLAN-2, then no context at all. Each
+    ruling must land in its own log. A leaked binding (a bare ``.set()`` with
+    no ``reset(token)``) would send call 2 into PLAN-1 and call 3 into PLAN-2.
+    """
+    monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "full", raising=False)
+    monkeypatch.setattr(server_mod, "PIPELINE_RISK_THRESHOLD", "low", raising=False)
+    monkeypatch.setattr(
+        overlord_mod,
+        "_invoke_overlord",
+        lambda prompt, plan_role_config=None: PARK_REPLY,
+    )
+
+    assert merge_mod._adjudication_plan_name.get() is None
+
+    with merge_mod.merge_adjudication_plan("PLAN-1"):
+        merge_mod._merge_decision(_story(key="A"))
+    assert merge_mod._adjudication_plan_name.get() is None, (
+        "merge_adjudication_plan must reset the contextvar on exit"
+    )
+
+    with merge_mod.merge_adjudication_plan("PLAN-2"):
+        merge_mod._merge_decision(_story(key="B"))
+    assert merge_mod._adjudication_plan_name.get() is None, (
+        "merge_adjudication_plan must reset the contextvar on exit"
+    )
+
+    # No context bound and no "plan" key on the story: the plan-less default.
+    merge_mod._merge_decision(_story(key="C"))
+
+    assert [r["story_key"] for r in _plan_decisions(plan_dir, "PLAN-1")] == ["A"]
+    assert [r["story_key"] for r in _plan_decisions(plan_dir, "PLAN-2")] == ["B"]
+    assert [r["story_key"] for r in _default_decisions(plan_dir)] == ["C"]

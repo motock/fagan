@@ -26,6 +26,8 @@ from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalat
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
 from .git_ops import _worktree_has_new_commits
+
+SIBLING_NOTE = "this is one half of a split; the sibling story owns the other half"
 TRIAGE_MAX_PER_TICK = 1
 
 # E6/E7: repo_issue alone remains deferred until implemented; split_story is
@@ -275,8 +277,12 @@ def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manife
         return "dry-run"
     # Any other mode – execute the ruling
     result = execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
+    extra = {}
+    children = story.pop("_split_children", None)
+    if children:
+        extra["children"] = children
     _record_execution(plan_name, story_key, action, result, PIPELINE_AUTONOMY,
-                      prior_status, prior_parked_reason)
+                      prior_status, prior_parked_reason, **extra)
     return result
 
 

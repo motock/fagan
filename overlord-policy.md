@@ -112,6 +112,28 @@ The phrase `fail closed` means that an absent, unparseable, or unrecognized ACTI
 
 Triage never overrides the park‑and‑ping tier: a story held for `risk: high` stays held regardless of the ruling.
 
+### Parked-story resolution
+
+Foundation rules: never act on `parked_reason` text — re-derive live evidence
+(git state, suite state, PR state) before ruling. Historical park resolutions
+added human authority, not judgment: the overlord holds resolution authority,
+and every executed action is reviewable post-hoc via the decisions log.
+
+| Live evidence signal | Ruling |
+| --- | --- |
+| stale bookkeeping — live state contradicts the recorded reason (suite green at HEAD, branch has new commits vs base, PR merged) | `mark_done` |
+| rework exhaustion with mechanical leftovers | `escalate_model` |
+| repeated step-caps on oversized scope | `split_story` |
+| acceptance fixture demonstrably broken at a clean baseline | `patch_acceptance` |
+| `risk: high` merge hold | held in dry-run and gated; the overlord adjudicates it in full |
+| abandoned or superseded scope | stays parked BY RULING, with recorded reasoning |
+
+Autonomy ladder: `dry-run` = notify only; `gated` = execute reversible
+manifest-only actions (`mark_done`, `split_story`, `patch_acceptance`) with
+`risk: high` merges still held; `full` = gated plus overlord adjudication of
+`risk: high` merges. Some stories park permanently BY RULING (abandoned or
+superseded scope) — a correct outcome with recorded reasoning, not a failure.
+
 ## Output contract
 
 The overlord returns:

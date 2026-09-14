@@ -8,10 +8,13 @@
 //   - Every literal piece of input text is HTML-escaped before emission.
 //   - Emitted tags are limited to:
 //     p h1-h4 ul ol li pre code table thead tbody tr th td blockquote
-//     strong em a br
+//     strong em a
 //   - Bare semantic elements only: NO class/style/event-handler attributes.
 //   - Links: only http:, https: and mailto: URLs get an href, always with
 //     rel="noopener noreferrer". Anything else renders as inert escaped text.
+//   - Literal U+E000/U+E001 characters in inline text are stripped before
+//     rendering: they are this module's internal placeholder alphabet and
+//     must never reach the output or be mistaken for a placeholder.
 
 // Full escape for text that lands in element content or an attribute value.
 // Order matters: & first so the entities themselves are not double-escaped.
@@ -57,15 +60,26 @@ function buildAnchor(label, url, rawMatch) {
 // Inline pass: code spans first (protected), then links, then bold/italic.
 // Everything structural is stashed as pre-escaped HTML behind a placeholder;
 // the residual plain text is escaped exactly once at the end.
+//
+// Placeholders NEST: the bold/italic passes stash their whole <strong>/<em>
+// fragment, which can already contain the placeholder a code span or link
+// stashed earlier, so the restore at the bottom must re-scan until no
+// placeholder remains. A single replace() pass never re-reads the text it
+// just inserted and would leak the inner placeholder verbatim.
 function renderInline(raw) {
-  const tokens = [];
+  const tokens = []; // per-call stash: index == placeholder id. NEVER module-level.
   const stash = (html) => {
     tokens.push(html);
     return `\uE000${tokens.length - 1}\uE001`;
   };
 
+  // 0. Strip literal U+E000/U+E001 from the input. They are this function's
+  //    private placeholder alphabet; a literal copy in the source text would
+  //    otherwise be parsed as a placeholder and silently swallowed.
+  let text = String(raw).replace(/[\uE000\uE001]/g, "");
+
   // 1. Inline code spans first so their content is never formatted.
-  let text = String(raw).replace(/`([^`]+)`/g, (_, code) =>
+  text = text.replace(/`([^`]+)`/g, (_, code) =>
     stash(`<code>${escapeCode(code)}</code>`),
   );
 
@@ -88,11 +102,23 @@ function renderInline(raw) {
     stash(`<em>${escapeHtml(body)}</em>`),
   );
 
-  // 4. Whatever remains is plain text: escape it, then restore stashed HTML.
-  return escapeHtml(text).replace(/\uE000(\d+)\uE001/g, (_, index) => {
-    const token = tokens[Number(index)];
-    return token === undefined ? "" : token;
-  });
+  // 4. Whatever remains is plain text: escape it, then restore the stashed
+  //    HTML. The restore is ITERATIVE and bounded: each pass resolves one
+  //    level of placeholder nesting, `pass <= tokens.length` covers the
+  //    deepest possible nesting, and the no-progress guard guarantees
+  //    termination even if a token re-contained its own placeholder.
+  const PLACEHOLDER = /\uE000(\d+)\uE001/; // non-global: safe with .test()
+  let out = escapeHtml(text);
+  for (let pass = 0; pass <= tokens.length; pass++) {
+    if (!PLACEHOLDER.test(out)) break;
+    const next = out.replace(/\uE000(\d+)\uE001/g, (_, index) => {
+      const token = tokens[Number(index)];
+      return token === undefined ? "" : token;
+    });
+    if (next === out) break; // no progress -> stop
+    out = next;
+  }
+  return out;
 }
 
 // A GitHub-style separator row: dashes with optional colons and pipes.

@@ -104,7 +104,23 @@ def test_output_contract_requires_two_child_summaries():
 
 
 def test_action_contract_line_is_byte_identical():
-    assert "\n" + _ACTION_CONTRACT_LINE + "\n" in _policy_text()
+    """The base ACTION contract must survive verbatim as the line's prefix.
+
+    Later sibling stories (mark_done, patch_acceptance) append further actions
+    to the same line, so this guards the base contract instead of pinning the
+    line's total contents (which would block every sibling extension).
+    """
+    line = next(
+        (
+            ln.strip()
+            for ln in _policy_text().splitlines()
+            if ln.strip().startswith("ACTION:")
+        ),
+        "",
+    )
+    assert line.startswith(_ACTION_CONTRACT_LINE), (
+        "the ACTION contract line must still begin with the base contract"
+    )
 
 
 def test_failure_triage_section_is_not_reworded_by_this_story():

@@ -31,7 +31,7 @@ def _extract_json_block(text: str) -> str:
     m = re.search(r"```(?:json)?\s*\n?(.*?)```", stripped, re.DOTALL)
     return m.group(1).strip() if m else stripped
 
-TRIAGE_ACTIONS = frozenset({"escalate_model", "split_story", "repo_issue", "park_for_human"})
+TRIAGE_ACTIONS = frozenset({"escalate_model", "split_story", "repo_issue", "park_for_human", "mark_done"})
 # Default action when parsing fails: park_for_human
 DEFAULT_TRIAGE_ACTION = "park_for_human"
 

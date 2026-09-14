@@ -11,6 +11,7 @@ entrypoint must import it lazily, inside a function.
 """
 import datetime as _dt
 import fcntl
+import importlib
 import json
 import logging
 import math
@@ -90,6 +91,43 @@ def _scan_join_timeout_seconds() -> float:
 # watchdog bounds that blast radius to one skipped reconcile tick.
 _RECONCILE_JOIN_TIMEOUT_ENV = "PIPELINE_RECONCILE_JOIN_TIMEOUT_SECONDS"
 _DEFAULT_RECONCILE_JOIN_TIMEOUT_S = 900.0
+
+
+def _apply_scheduler_role_call_clamp() -> float:
+    """Bound the scheduler process's per-call model budget (story SRR-1).
+
+    ``resolve_role_call_timeout()`` is read per call (never cached at import),
+    and the scheduler process is exactly the process whose per-tick stacking
+    must be bounded: one ``advance_all_plans`` tick stacks several in-process
+    model calls (review-loop turns, security review, overlord
+    adjudications), while interactive MCP-server processes keep the 600s
+    default. Sizing arithmetic: with the 180s clamp, 3-4 stacked calls worst
+    case (~540-720s) plus bounded suite runs stay inside the 900s reconcile
+    join deadline, so the watchdog returns to being a backstop rather than
+    the primary bound.
+
+    When the operator's PIPELINE_ROLE_CALL_TIMEOUT_SECONDS already resolves
+    to a smaller-or-equal value it is left untouched; otherwise
+    ``os.environ`` is rewritten to the clamped value so every later
+    ``resolve_role_call_timeout()`` call in this process sees it. Fail-closed
+    semantics are unchanged: a clamped-out call raises exactly the
+    RuntimeError ``complete()`` raises today, and callers already route that
+    to park/defer.
+    """
+    # Call-time module fetch instead of an import statement: this module's
+    # static import graph must stay stdlib+pipeline
+    # (test_scheduler_daemon_imports_remain_stdlib_or_pipeline), and both
+    # resolvers are read per call, so resolving app.inference_providers here
+    # keeps both properties. sys.modules returns the same module object, so
+    # monkeypatched resolver attributes on it stay visible call to call.
+    providers = importlib.import_module("app.inference_providers")
+    operator = providers.resolve_role_call_timeout()
+    clamped = min(operator, providers.resolve_scheduler_role_call_timeout())
+    if clamped < operator:
+        # os.environ values must be strings; the resolver re-reads this on
+        # every subsequent model call in this process.
+        os.environ["PIPELINE_ROLE_CALL_TIMEOUT_SECONDS"] = str(clamped)
+    return clamped
 
 
 def _reconcile_join_timeout_seconds() -> float:
@@ -633,6 +671,13 @@ def run_daemon() -> int:
 
     def scan_fn():
         scan_all_plans(bus)
+
+    # Clamp the scheduler process's per-call model budget BEFORE the lazy
+    # import below: once advance_all_plans is in scope the first tick's
+    # stacked model calls can run, and the clamp must already be in effect
+    # (fail-closed semantics unchanged - a clamped-out call raises exactly
+    # the RuntimeError complete() raises today).
+    _apply_scheduler_role_call_clamp()
 
     # Lazy import: pipeline.server imports from this module at import time,
     # so importing it here at module level would be circular.

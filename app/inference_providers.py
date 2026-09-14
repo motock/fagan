@@ -59,6 +59,37 @@ def resolve_role_call_timeout() -> float:
     return value
 
 
+# Scheduler-process clamp (story SRR-1, 2026-09-14 incident): one
+# advance_all_plans tick stacks several in-process model calls (review-loop
+# turns, security review, overlord adjudications), so the scheduler process
+# needs a smaller per-call budget than interactive MCP-server processes.
+# Resolved from its own env var at call time, with the same parsing
+# discipline as resolve_role_call_timeout() - never None, zero, or inf.
+SCHEDULER_ROLE_CALL_TIMEOUT_ENV = "PIPELINE_SCHEDULER_ROLE_CALL_TIMEOUT_SECONDS"
+_SCHEDULER_ROLE_CALL_TIMEOUT_DEFAULT_S = 180.0
+
+
+def resolve_scheduler_role_call_timeout() -> float:
+    """Resolve the scheduler-process per-call model budget in seconds.
+
+    Read at call time from PIPELINE_SCHEDULER_ROLE_CALL_TIMEOUT_SECONDS
+    (float seconds; fractional values like "90.5" are valid). Falls back to
+    the hardcoded 180 default when the variable is unset, blank, unparseable,
+    non-positive, or non-finite - the resolver never returns None, zero, or
+    inf, so every caller that passes its result to httpx gets a bounded read.
+    """
+    raw = os.environ.get(SCHEDULER_ROLE_CALL_TIMEOUT_ENV)
+    if raw is None or not raw.strip():
+        return _SCHEDULER_ROLE_CALL_TIMEOUT_DEFAULT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return _SCHEDULER_ROLE_CALL_TIMEOUT_DEFAULT_S
+    if not math.isfinite(value) or value <= 0:
+        return _SCHEDULER_ROLE_CALL_TIMEOUT_DEFAULT_S
+    return value
+
+
 class RateLimitedError(RuntimeError):
     """Raised by a local inference provider when the chat endpoint returns
     429. Distinct from the generic RuntimeError that wraps other httpx

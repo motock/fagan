@@ -61,6 +61,7 @@ from .build_detect import (  # noqa: F401
     _is_pytest_cmd,
     _isolation_only_acceptance_warning,
     _last_done_summary,
+    _lint_acceptance_fixtures,
     _module_level_function_names,
     _platform_locked_fixture_warning,
     _provision_worktree_venv,

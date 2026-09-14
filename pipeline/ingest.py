@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .build_detect import _lint_acceptance_fixtures
 from .service import _ServerRef
 
 # Server-sourced names the function body references as free variables. Each
@@ -86,6 +87,16 @@ def _ingest_plan_impl(
                         f"{sorted(_VALID_STORY_BACKENDS)}"
                     ),
                 }
+            # OPSA-8: lint the .py acceptance fixture sources upfront, before
+            # any Plane side effect. A lint-violating fixture is a read-only
+            # oracle the dispatched agent can never fix (PR #235), so it must
+            # not reach dispatch - and it must not leave orphaned epics or
+            # stories behind when the ingest is rejected. Gating on "finding"
+            # only, never on "skipped": a broken or absent lint tool can never
+            # block a known-good plan.
+            kind, lint_msg = _lint_acceptance_fixtures(story, repo_root)
+            if kind == "finding":
+                return {"ok": False, "error": lint_msg}
 
     manifest_path = _store.manifest_path(plan_name)
 

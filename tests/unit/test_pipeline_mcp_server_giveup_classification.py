@@ -144,8 +144,14 @@ def test_ingest_plan_round_trips_acceptance_field(
         "epics": [{"summary": "Epic", "stories": [
             {"key": "S1", "summary": "Do thing",
              "agent_instructions": "Build.",
+             # OPSA-8: the ingest gate lints .py fixture sources with ruff's
+             # defaults, so this placeholder must be lint-clean (an unused
+             # `import pytest` would be rejected as F401 before the manifest
+             # is ever written). The assertion below round-trips what the plan
+             # declared, verbatim.
              "acceptance": [
-                 {"path": "tests/test_x.py", "source": "import pytest\n"},
+                 {"path": "tests/test_x.py",
+                  "source": "def test_x():\n    assert True\n"},
              ]},
         ]}],
         "repo_root": str(tmp_path),
@@ -156,7 +162,8 @@ def test_ingest_plan_round_trips_acceptance_field(
     manifest = json.loads((plan_dir / "p.manifest.json").read_text())
     story = manifest["stories"]["S1"]
     assert story["acceptance"] == [
-        {"path": "tests/test_x.py", "source": "import pytest\n"},
+        {"path": "tests/test_x.py",
+         "source": "def test_x():\n    assert True\n"},
     ]
 
 

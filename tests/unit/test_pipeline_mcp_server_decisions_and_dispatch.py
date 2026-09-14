@@ -206,7 +206,16 @@ def test_ingest_plan_warns_on_isolation_only_acceptance_fixture(plan_dir, monkey
                 agent_instructions="Update the call site to pass content.",
                 acceptance=[{
                     "path": "tests/test_nudge.py",
-                    "source": "def test_x():\n    assert _no_tool_nudge(0)\n",
+                    # OPSA-8: the ingest gate lints .py fixture sources with
+                    # ruff's defaults, so this placeholder must be lint-clean.
+                    # Defining the helper keeps the fixture isolation-only (no
+                    # integration markers) while satisfying F821.
+                    "source": (
+                        "def _no_tool_nudge(value):\n"
+                        "    return 'Call a tool now.'\n\n\n"
+                        "def test_x():\n"
+                        "    assert _no_tool_nudge(0)\n"
+                    ),
                 }],
             )],
         }]
@@ -230,7 +239,17 @@ def test_ingest_plan_no_warning_when_fixture_exercises_integration(plan_dir, mon
                 agent_instructions="Update the call site to pass content.",
                 acceptance=[{
                     "path": "tests/test_nudge.py",
-                    "source": "def test_x(monkeypatch):\n    rc = main()\n    assert rc == 0\n",
+                    # OPSA-8: the ingest gate lints .py fixture sources with
+                    # ruff's defaults. `main(` is an integration marker for
+                    # _isolation_only_acceptance_warning, so the source keeps
+                    # it while defining the name to satisfy F821.
+                    "source": (
+                        "def main():\n"
+                        "    return 0\n\n\n"
+                        "def test_x(monkeypatch):\n"
+                        "    rc = main()\n"
+                        "    assert rc == 0\n"
+                    ),
                 }],
             )],
         }]

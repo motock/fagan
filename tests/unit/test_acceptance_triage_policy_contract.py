@@ -10,9 +10,9 @@ from pathlib import Path
 
 _POLICY = Path(__file__).resolve().parents[2] / "overlord-policy.md"
 
-_CONTRACT_LINE = "ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done"
+_CONTRACT_LINE = "ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done | patch_acceptance"
 
-_ACTIONS = ("escalate_model", "split_story", "repo_issue", "park_for_human", "mark_done")
+_ACTIONS = ("escalate_model", "split_story", "repo_issue", "park_for_human", "mark_done", "patch_acceptance")
 
 
 def _policy_text() -> str:

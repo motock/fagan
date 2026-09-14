@@ -188,6 +188,12 @@ def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
 
     Returns ``{"ruling": ..., "rationale": ...}`` or ``None`` when the reply
     does not carry a parseable RULING line (callers fail closed to the hold).
+
+    Behavior note: field extraction now goes through ``parsers._parse_ruling``,
+    whose field-name regex is case-sensitive (no ``re.IGNORECASE``), so a
+    lowercase ``ruling:`` line no longer parses and fails closed to the hold.
+    This is a deliberate degradation to the canonical overlord output parser's
+    contract, not a regression to re-fix here.
     """
     from .parsers import _parse_ruling
 

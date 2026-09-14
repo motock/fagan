@@ -148,6 +148,7 @@ _reverify_build = _ServerRef("_reverify_build")
 _role_resource_ok = _ServerRef("_role_resource_ok")
 _scoped_repo_root = _ServerRef("_scoped_repo_root")
 _store = _ServerRef("_store")
+merge_adjudication_plan = _ServerRef("merge_adjudication_plan")
 backend = _ServerRef("backend")
 check_story_status = _ServerRef("check_story_status")
 dispatch_story = _ServerRef("dispatch_story")
@@ -772,7 +773,14 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
     for key, story in stories.items():
         if story["status"] != "pr_open":
             continue
-        decision = _merge_decision(story)
+        # Thread the real plan name into the merge gate without changing the
+        # call arity: several long-standing tests (and the dry-run preview
+        # below) call/patch ``_merge_decision`` with a one-argument callable,
+        # so a second positional argument would break them. The explicit
+        # ``plan_name`` parameter stays for direct callers; production flows
+        # the name through this context, which ``_adjudicate_merges`` owns.
+        with merge_adjudication_plan(plan_name):
+            decision = _merge_decision(story)
         if decision["action"] != "merge":
             story["status"] = "parked"
             story["parked_reason"] = decision["reason"]

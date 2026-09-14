@@ -193,6 +193,7 @@ from .merge import (  # noqa: F401
     _rebase_and_push_for_merge,
     _set_plan_paused,
     _try_acquire_git_lock,
+    merge_adjudication_plan,
 )
 
 # Pre-dispatch acceptance-oracle validation (a broken oracle costs an

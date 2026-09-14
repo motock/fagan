@@ -12,9 +12,9 @@ single source of truth that monkeypatches land on.
 import fcntl
 import logging
 import os
-import re
 import subprocess
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -154,8 +154,32 @@ def _try_acquire_git_lock(repo_root: Path):
         os.close(fd)
 
 
+# The plan name for merge-gate adjudications, bound by _adjudicate_merges
+# around each gate call. Production flows the real plan name through this
+# context because the gate's one-argument call shape (and several long-lived
+# one-argument test doubles) cannot take a second positional argument.
+_adjudication_plan_name: ContextVar[str | None] = ContextVar(
+    "merge_adjudication_plan_name", default=None
+)
+
+
+@contextmanager
+def merge_adjudication_plan(plan_name: str | None):
+    """Bind the plan name the merge gate adjudicates for (see above)."""
+    token = _adjudication_plan_name.set(plan_name)
+    try:
+        yield
+    finally:
+        _adjudication_plan_name.reset(token)
+
+
 def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
     """Parse the overlord's merge ruling from its reply.
+
+    Field extraction is delegated to ``parsers._parse_ruling`` (the one
+    parser for the overlord output contract); this layer adds the stricter
+    merge-gate validation on top: the RULING line must be exactly
+    ``proceed`` or ``park``.
 
     Expected format (one line each, order-insensitive)::
 
@@ -165,17 +189,18 @@ def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
     Returns ``{"ruling": ..., "rationale": ...}`` or ``None`` when the reply
     does not carry a parseable RULING line (callers fail closed to the hold).
     """
-    match = re.search(r"^\s*RULING:\s*(proceed|park)\s*$", raw or "", re.MULTILINE | re.IGNORECASE)
-    if match is None:
+    from .parsers import _parse_ruling
+
+    fields = _parse_ruling(raw or "")
+    ruling = (fields.get("ruling") or "").strip().lower()
+    if ruling not in ("proceed", "park"):
         return None
-    rationale_match = re.search(r"^\s*RATIONALE:\s*(.+)$", raw or "", re.MULTILINE | re.IGNORECASE)
-    return {
-        "ruling": match.group(1).lower(),
-        "rationale": (rationale_match.group(1).strip() if rationale_match else ""),
-    }
+    return {"ruling": ruling, "rationale": fields.get("rationale") or ""}
 
 
-def _adjudicate_high_risk_merge(story: dict[str, Any]) -> dict[str, str]:
+def _adjudicate_high_risk_merge(
+    story: dict[str, Any], plan_name: str | None = None
+) -> dict[str, str]:
     """Ask the overlord to rule on a high-risk merge (full autonomy only).
 
     Sends the merge context - PR checks state, review verdict,
@@ -188,8 +213,13 @@ def _adjudicate_high_risk_merge(story: dict[str, Any]) -> dict[str, str]:
     from .overlord import _invoke_overlord
     from .persistence import _append_decision, _plan_role_config
 
+    if plan_name is None:
+        # Compat shim for direct callers; production always supplies the
+        # real name - via the explicit parameter or the adjudication
+        # context bound by advance._adjudicate_merges.
+        plan_name = _adjudication_plan_name.get() or story.get("plan") or ""
+
     hold = {"action": "park", "reason": "high risk held for human review"}
-    plan_name = story.get("plan") or ""
     # Prior state captured before any mutation: the caller parks/merges only
     # after this returns, so the story dict still holds its pre-gate state.
     prior_status = story.get("status")
@@ -254,13 +284,22 @@ def _adjudicate_high_risk_merge(story: dict[str, Any]) -> dict[str, str]:
     return hold
 
 
-def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
-    """Pure decision: may a reviewed (pr_open) story merge unattended?
+def _merge_decision(
+    story: dict[str, Any], plan_name: str | None = None
+) -> dict[str, str]:
+    """Decide what the merge gate does with a reviewed (pr_open) story.
+
+    Not pure: in full autonomy the high-risk hold becomes an overlord
+    adjudication, which invokes the overlord and appends the ruling to the
+    plan's decisions log.
 
     Honors PIPELINE_AUTONOMY and PIPELINE_RISK_THRESHOLD. In dry-run and
     gated a high-risk story is always parked for human review; in full
     autonomy the hold becomes an overlord adjudication whose ruling is
     recorded in the decisions log and followed (fail closed to the hold).
+    ``plan_name`` is the plan the story belongs to; production callers
+    (``_adjudicate_merges``) always pass it so the ruling is recorded in the
+    plan's own decisions log and the plan's role_config override applies.
     """
     from .server import _RISK_ORDER, PIPELINE_AUTONOMY, PIPELINE_RISK_THRESHOLD
 
@@ -274,7 +313,7 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
     )
     if risk_rank >= _RISK_ORDER["high"]:
         if PIPELINE_AUTONOMY == "full":
-            return _adjudicate_high_risk_merge(story)
+            return _adjudicate_high_risk_merge(story, plan_name)
         return {"action": "park", "reason": "high risk held for human review"}
     if PIPELINE_AUTONOMY == "full":
         return {"action": "merge", "reason": "autonomy=full"}

@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .fixture_lint import FixtureLintError, lint_acceptance_source
 from .service import _ServerRef
 
 # Server-sourced names the function body references as free variables. Each
@@ -40,6 +41,42 @@ _scaffolding_provider_mismatch_warning = _ServerRef(
     "_scaffolding_provider_mismatch_warning"
 )
 role_registry = _ServerRef("role_registry")
+
+
+def _lint_story_acceptance_sources(
+    story_key: str, story: dict[str, Any], repo_root: Path
+) -> str | None:
+    """Lint the .py acceptance fixture sources of one story at ingest time.
+
+    Returns an error string naming the story key, the offending entry path
+    and the exact violations (or the reason ruff could not run), or None
+    when every entry is clean or not a .py source. Fail closed: a fixture
+    that cannot be linted rejects the ingest rather than passing silently —
+    a lint-violating fixture is a read-only oracle the dispatched agent can
+    never fix (PR #235), so it must not reach dispatch.
+    """
+    for entry in story.get("acceptance") or []:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path") or ""
+        source = entry.get("source")
+        if not path.endswith(".py") or not isinstance(source, str):
+            continue
+        try:
+            violations = lint_acceptance_source(source, repo_root)
+        except FixtureLintError as exc:
+            return (
+                f"{story_key}: acceptance fixture {path!r} could not be "
+                f"linted ({exc}); refusing to ingest a fixture the gate "
+                "cannot check (fail closed)"
+            )
+        if violations:
+            detail = "; ".join(violations)
+            return (
+                f"{story_key}: acceptance fixture {path!r} fails ruff "
+                f"lint: {detail}"
+            )
+    return None
 
 
 def _ingest_plan_impl(
@@ -119,6 +156,19 @@ def _ingest_plan_impl(
                 manifest["epics"][epic["summary"]] = epic_id
 
             for story in epic.get("stories", []):
+                # OPSA-8: lint the .py acceptance fixture sources before the
+                # story reaches the manifest. A lint-violating fixture is a
+                # read-only oracle the dispatched agent can never fix (PR
+                # #235), and a fixture ruff cannot check at all must reject
+                # too (fail closed) — a gate that fails open is advisory.
+                lint_error = _lint_story_acceptance_sources(
+                    story.get("key") or story["summary"],
+                    story,
+                    Path(repo_root),
+                )
+                if lint_error is not None:
+                    return {"ok": False, "error": lint_error}
+
                 issue_id = provider.create_story(
                     story["summary"],
                     story.get("description", ""),

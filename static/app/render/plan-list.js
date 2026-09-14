@@ -1,6 +1,7 @@
 import { state } from "../state.js";
 import { postJson } from "../api.js";
 import { escapeHtml } from "./board.js";
+import { setOnWorkspaceSelected } from "../workspace.js";
 
 // plan-list.js cannot statically `import ... from "../../app.js"`: app.js's
 // dynamic-import test harness cache-busts its own URL with a `?t=` query
@@ -16,6 +17,13 @@ function initPlanList({ selectPlan, selectComms, selectOverview, refresh }) {
   _selectComms = selectComms;
   _selectOverview = selectOverview;
   _refresh = refresh;
+  // Repo-scoped plan visibility (030576c6): workspace.js fires this hook
+  // after a successful selectWorkspace, so the plan list re-scopes to the
+  // newly active repository even though main.js (byte-frozen by
+  // test_comms_landing_redesign.py) cannot call refresh() from its own
+  // workspace handlers. main.js passes its own refresh through this
+  // UNCHANGED initPlanList call.
+  setOnWorkspaceSelected(() => _refresh());
 }
 
 // Keyed-diff state for renderPlanList: maps each plan name to its live
@@ -31,6 +39,55 @@ let planListRowsByName = null;
 // state.js's resetState().
 function resetPlanListState() {
   planListRowsByName = null;
+}
+
+// True when the plan list is scoped to the active repository — i.e. when
+// refresh() actually sends the `repo` query param: the "Show plans from all
+// repositories" opt-out is off AND a non-empty workspace path is selected.
+// A missing/empty workspace means no repo param was sent (all-plans
+// fallback), so the list is not repo-scoped and gets the global empty state.
+function _repoScopeActive() {
+  return !state.showAllRepos &&
+    typeof state.selectedWorkspace === "string" &&
+    !!state.selectedWorkspace;
+}
+
+// Build the repo-scoped empty-state element ("no plans in this repository").
+// Plain textContent, no innerHTML, so it renders identically under real
+// browsers and the test DOM stubs.
+function _buildScopedEmptyStateEl() {
+  const div = document.createElement("div");
+  div.className = "plan-list-empty";
+  div.textContent = `No plans in this repository yet (${state.selectedWorkspace})`;
+  return div;
+}
+
+// Append the scoped empty state to the sidebar, keeping it above the pinned
+// footer (same placement rule as _insertPlanRow).
+function _appendScopedEmptyState(nav) {
+  const el = _buildScopedEmptyStateEl();
+  const footer = nav.querySelector(".plan-list-footer");
+  if (footer && typeof nav.insertBefore === "function") {
+    nav.insertBefore(el, footer);
+  } else {
+    nav.appendChild(el);
+  }
+}
+
+// Keep exactly one scoped empty-state element in sync with the current
+// filter state: present when a repo filter is active and the list is empty,
+// gone as soon as plans return or the opt-out (all repositories) is on.
+// Uses querySelectorAll (not querySelector): the lightweight test DOM stubs
+// return a throwaway element from querySelector when nothing matches, so a
+// null-check there would never fire.
+function _syncScopedEmptyState(nav, plans) {
+  const existing = nav.querySelectorAll(".plan-list-empty")[0] || null;
+  const want = plans.length === 0 && _repoScopeActive();
+  if (want && !existing) {
+    _appendScopedEmptyState(nav);
+  } else if (!want && existing) {
+    existing.remove();
+  }
 }
 
 // Plans come back from /api/plans already sorted newest-first by the
@@ -101,6 +158,30 @@ function _renderPlanListFull(plans) {
   labelText.textContent = "Show dismissed plans";
   label.appendChild(labelText);
   toggle.appendChild(label);
+
+  // "Show plans from all repositories" opt-out, beside the dismissed-plans
+  // toggle in the same footer. Built with the same direct-DOM construction
+  // (see the comment above): a bare self-closing <input> doesn't parse under
+  // the test DOM stubs, so checkbox + label are assembled via
+  // createElement/appendChild, never innerHTML. Default unchecked — the
+  // default view is scoped to the active repository.
+  const allReposLabel = document.createElement("label");
+  allReposLabel.className = "show-all-repos-toggle";
+  const allReposCheckbox = document.createElement("input");
+  allReposCheckbox.type = "checkbox";
+  allReposCheckbox.checked = !!state.showAllRepos;
+  allReposCheckbox.addEventListener("change", (event) => {
+    // Order is load-bearing: flip the flag FIRST, then refetch — _refresh()
+    // composes the plan-list URL from state, so a stale flag would make the
+    // refetch carry the previous scope.
+    state.showAllRepos = event.target.checked;
+    _refresh();
+  });
+  allReposLabel.appendChild(allReposCheckbox);
+  const allReposText = document.createElement("span");
+  allReposText.textContent = "Show plans from all repositories";
+  allReposLabel.appendChild(allReposText);
+  toggle.appendChild(allReposLabel);
   nav.appendChild(toggle);
 }
 
@@ -200,6 +281,10 @@ function renderPlanList(plans) {
     // Per-plan rows + the "Show dismissed plans" footer land AFTER the
     // pinned items because _renderPlanListFull no longer clears the nav.
     _renderPlanListFull(plans);
+    // Repo-scoped empty state (first render): when the repo filter is active
+    // and this repository has no plans, say so instead of showing a blank
+    // sidebar. The all-repositories view keeps its global empty state.
+    _syncScopedEmptyState(nav, plans);
     planListRowsByName = new Map();
     // Query all .plan-item rows and keep only the per-plan ones (the pinned
     // Comms/Overview items also carry .plan-item but have no data-plan-name).
@@ -259,6 +344,11 @@ function renderPlanList(plans) {
       planListRowsByName.delete(name);
     }
   }
+
+  // Repo-scoped empty state (keyed-diff path): same rule as the full-rebuild
+  // path — show it when a repo filter is active and the list is empty, clear
+  // it once plans return (or when the all-repositories opt-out is on).
+  _syncScopedEmptyState(nav, plans);
 }
 
 // Archive/unarchive is fire-and-forget from the UI's perspective: on

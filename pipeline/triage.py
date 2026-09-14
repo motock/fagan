@@ -123,6 +123,40 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
     return _park(plan_name, story_key, story, reason)
     return _park(plan_name, story_key, story, reason)
 
+def _record_execution(plan_name, story_key, action, result, mode,
+                      prior_status, prior_parked_reason, **extra) -> None:
+    """Append an execution-outcome record to the plan's decisions log.
+
+    The record captures what the triage executor did (or would do, in
+    ``dry-run`` mode) together with the prior story state it acted on, so every
+    autonomous action is explainable and undoable post-hoc.  Later sibling
+    stories pass extra fields (e.g. ``children``, acceptance digests) via
+    ``extra``; they are merged over the base record.
+
+    The append is wrapped in try/except: an audit write failure must never
+    raise out of the executor path.  The warning names only the story key.
+    """
+    record = {
+        "story_key": story_key,
+        "question": "failure triage execution",
+        "action": action,
+        "result": result,
+        "mode": mode,
+        "children": [],
+        "prior_status": prior_status,
+        "prior_parked_reason": prior_parked_reason,
+        "decided_by": "overlord-triage",
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+    }
+    record.update(extra)
+    try:
+        _append_decision(plan_name, record)
+    except Exception:  # noqa: BLE001 - audit write must never break execution
+        logging.getLogger("pipeline").warning(
+            "failed to append triage execution record for %s", story_key
+        )
+
+
 def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
     """Dispatch a ruling based on the current autonomy mode.
 
@@ -130,18 +164,30 @@ def _apply_ruling_for_mode(plan_name, story_key, story, ruling, manifest, manife
       notification is sent with the recommended action and rationale.
     * ``gated`` or ``full`` – the executor is enabled and the ruling is
       executed via :func:`execute_ruling`.
+
+    In both modes an execution-outcome record is appended to the plan's
+    decisions log (see :func:`_record_execution`) with the prior story state
+    snapshotted before any mutation.
     """
     # Lazy import to avoid circular dependency
     from .server import PIPELINE_AUTONOMY
 
+    # Snapshot the prior state BEFORE any executor mutates the story dict.
+    prior_status = story.get("status")
+    prior_parked_reason = story.get("parked_reason")
+    action = ruling.get("action", "unknown")
     if PIPELINE_AUTONOMY == "dry-run":
         # Notify but do not act
-        action = ruling.get("action", "unknown")
         rationale = ruling.get("rationale", "")
         _notify_user(plan_name, f"{story_key} triage dry-run: {action} – {rationale}")
+        _record_execution(plan_name, story_key, action, "dry-run", "dry-run",
+                          prior_status, prior_parked_reason)
         return "dry-run"
     # Any other mode – execute the ruling
-    return execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
+    result = execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
+    _record_execution(plan_name, story_key, action, result, PIPELINE_AUTONOMY,
+                      prior_status, prior_parked_reason)
+    return result
 
 
 # expose subprocess.run for monkeypatching

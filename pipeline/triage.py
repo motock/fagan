@@ -278,10 +278,9 @@ _FIXTURE_END_MARKER = "===FIXTURE-END==="
 
 def _story_checkout(story: dict) -> Path:
     """Resolve the checkout a story's acceptance fixtures are graded against."""
-    worktree = story.get("worktree")
-    if isinstance(worktree, str) and worktree.strip():
-        return Path(worktree)
-    return Path.cwd()
+    # Same idiom as the other call sites (e.g. run_triage_sweep): an absent or
+    # blank worktree resolves to the repo root, never silently to cwd.
+    return Path(story.get("worktree") or ".")
 
 
 def _parse_fixture_rewrite(reply):

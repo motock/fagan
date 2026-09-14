@@ -175,3 +175,8 @@ if a precise date is needed when writing one of these up.
 - notify-lifecycle-email — completed 2026-09-12, 8 stories
 - pipeline-dispatch-hardening — completed 2026-09-12, 2 stories
 - release-0.2.0 — completed 2026-09-12, 3 stories
+- repo-scoped-plan-visibility — completed 2026-09-14, 2 stories
+- dashboard-chat-markdown — completed 2026-09-14, 3 stories
+- scheduler-reconcile-resilience — completed 2026-09-14, 2 stories
+- srr2-flaky-reconcile-test — completed 2026-09-14, 1 stories
+- overlord-parked-story-autonomy — completed 2026-09-14, 9 stories

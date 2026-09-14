@@ -1125,7 +1125,7 @@ function assertEntryOrder(markdown, expected, label) {
 await run("export keeps the failed turn's user text after a failed turn is followed by a successful one", async () => {
   const { mod, exportThread } = await loadCommsModuleCapturingExport();
   const thread = commsDoc.getElementById("comms-thread");
-  currentFetch = failedTurnFetch();
+  currentFetch = failedTurnFetch;
   await mod.sendCommsMessage(HELLO_TURN);
   currentFetch = okTurnFetch(SUNNY_REPLY);
   await mod.sendCommsMessage(WEATHER_TURN);
@@ -1156,7 +1156,7 @@ await run("export keeps the failed turn's user text after a failed turn is follo
 await run("export shows the tower-denied catch bubble, not the successful reply, after a failed turn", async () => {
   const { mod, exportThread } = await loadCommsModuleCapturingExport();
   const thread = commsDoc.getElementById("comms-thread");
-  currentFetch = failedTurnFetch();
+  currentFetch = failedTurnFetch;
   await mod.sendCommsMessage(HELLO_TURN);
   currentFetch = okTurnFetch(SUNNY_REPLY);
   await mod.sendCommsMessage(WEATHER_TURN);
@@ -1187,7 +1187,7 @@ await run("export shows the tower-denied catch bubble, not the successful reply,
 await run("export keeps raw markdown for the recorded turns after a failed turn (no flattened fallback)", async () => {
   const { mod, exportThread } = await loadCommsModuleCapturingExport();
   const thread = commsDoc.getElementById("comms-thread");
-  currentFetch = failedTurnFetch();
+  currentFetch = failedTurnFetch;
   await mod.sendCommsMessage(HELLO_TURN);
   currentFetch = okTurnFetch(SUNNY_REPLY);
   await mod.sendCommsMessage(WEATHER_TURN);
@@ -1219,7 +1219,7 @@ await run("export keeps raw markdown for the recorded turns after a failed turn 
 await run("a second export in the same run still aligns every bubble after a failed turn", async () => {
   const { mod, exportThread } = await loadCommsModuleCapturingExport();
   const thread = commsDoc.getElementById("comms-thread");
-  currentFetch = failedTurnFetch();
+  currentFetch = failedTurnFetch;
   await mod.sendCommsMessage(HELLO_TURN);
   currentFetch = okTurnFetch(SUNNY_REPLY);
   await mod.sendCommsMessage(WEATHER_TURN);
@@ -1279,8 +1279,12 @@ await run("a non-string history entry is consumed (not sticky) so later bubbles 
     "the second turn's entries must be exported in order",
   );
   assertTrue(
-    !markdown.includes("FLATTENED"),
-    "a non-string history entry must be consumed so later bubbles of that role do not all fall back",
+    markdown.includes("- beta"),
+    "a non-string history entry must be consumed so the next assistant bubble keeps its raw markdown",
+  );
+  assertTrue(
+    !markdown.includes("**Tower:** Second"),
+    "the later assistant bubble must not fall back to flattened textContent (sticky cursor)",
   );
 });
 

@@ -28,10 +28,11 @@ from .repo_health import format_findings, classify_repo_health
 from .git_ops import _worktree_has_new_commits
 TRIAGE_MAX_PER_TICK = 1
 
-# E6/E7: split_story and repo_issue actions are deferred until implemented.
-# Refer to docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md for implementation details.
+# E6/E7: repo_issue alone remains deferred until implemented; split_story is
+# implemented by _execute_split_story (see
+# docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md for implementation details).
 # Exported via __all__; handled in execute_ruling.
-DEFERRED_ACTIONS = frozenset({"split_story", "repo_issue"})
+DEFERRED_ACTIONS = frozenset({"repo_issue"})
 # ---------------------------------------------------------------------------
 # Triage executor helpers
 # ---------------------------------------------------------------------------
@@ -77,6 +78,91 @@ def _park(plan_name, story_key, story, reason) -> str:
     return "park_for_human"
 
 
+def _execute_split_story(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
+    """Execute a ``split_story`` ruling by creating two child stories.
+
+    Guards, in order:
+
+    1. ``ruling['split']`` must carry exactly two non-empty summaries, else the
+       story is parked loudly for a human (invalid SPLIT payload).
+    2. :func:`plan_triage_budget_exhausted` – the plan's triage-created-story
+       budget is spent, so nothing is created and the story is parked loudly.
+
+    On success two children ``{story_key}-split-1`` / ``{story_key}-split-2``
+    are appended to ``manifest['stories']``: each carries the payload summary,
+    the parent's ``agent_instructions`` extended with a
+    ``=== SPLIT FROM PRIOR STORY ===`` block (the ruling's rationale plus the
+    sibling note), ``persona``/``risk``/``backend`` copied from the parent when
+    present, and status ``todo``.  The parent's ``acceptance`` fixtures cannot
+    be mechanically halved, so the children carry no ``acceptance`` field –
+    agent-authored tests carry the bar.  The children are independent (no
+    dependency between them).  The parent is parked with a provenance reason
+    naming the children and ``manifest['triage_created_stories']`` is
+    incremented by 2.
+
+    The manifest file is NOT written here: :func:`run_triage_sweep` persists
+    the mutated manifest after the tick.
+    """
+    action = ruling.get("action", "split_story")
+    rationale = ruling.get("rationale", "")[:300]
+
+    # Guard 1: the SPLIT payload must be exactly two non-empty summaries.
+    split = ruling.get("split")
+    summaries = [s for s in split if isinstance(s, str) and s.strip()] if isinstance(split, list) else []
+    if len(summaries) != 2 or len(split if isinstance(split, list) else []) != 2:
+        story["triage_deferred_action"] = action
+        reason = "split_story ruled but SPLIT payload invalid; parked for a human"
+        result = _park(plan_name, story_key, story, reason)
+        try:
+            _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
+        except Exception:
+            pass
+        return result
+
+    # Guard 2: the plan's triage-created-story budget.
+    if plan_triage_budget_exhausted(manifest):
+        story["triage_deferred_action"] = action
+        reason = "plan triage budget exhausted"
+        result = _park(plan_name, story_key, story, reason)
+        try:
+            _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
+        except Exception:
+            pass
+        return result
+
+    child1_key = f"{story_key}-split-1"
+    child2_key = f"{story_key}-split-2"
+    split_block = (
+        "\n\n=== SPLIT FROM PRIOR STORY ===\n"
+        f"rationale: {rationale}\n"
+        f"{SIBLING_NOTE}\n"
+    )
+    parent_instructions = story.get("agent_instructions") or ""
+
+    for child_key, child_summary in ((child1_key, summaries[0]), (child2_key, summaries[1])):
+        child = {
+            "key": child_key,
+            "summary": child_summary,
+            "status": "todo",
+            "agent_instructions": parent_instructions + split_block,
+        }
+        for field in ("persona", "risk", "backend"):
+            if field in story:
+                child[field] = story[field]
+        manifest["stories"][child_key] = child
+
+    story["status"] = "parked"
+    story["parked_reason"] = f"split into {child1_key}, {child2_key} by triage"
+    _park(plan_name, story_key, story, story["parked_reason"])
+
+    manifest["triage_created_stories"] = _coerce_int(
+        manifest.get("triage_created_stories", 0)
+    ) + 2
+
+    story["_split_children"] = [child1_key, child2_key]
+    return "split_story"
+
+
 def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
     """Execute a ruling in this slice.
 
@@ -86,6 +172,10 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
     """
     action = ruling.get("action", "unknown")
     rationale = ruling.get("rationale", "")[:300]
+    if action == "split_story":
+        return _execute_split_story(
+            plan_name, story_key, story, ruling, manifest, manifest_path
+        )
     if action in DEFERRED_ACTIONS:
         story["triage_deferred_action"] = action
         reason = f"triage ruled {action}, which is not implemented yet; parked for a human"

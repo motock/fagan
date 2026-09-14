@@ -113,21 +113,33 @@ function appendCommsMessage(role, html) {
     thread.style.display = 'flex';
   }
   _scrollCommsToBottom();
+  return el;
 }
 
 const _commsHistoryCursor = { user: 0, assistant: 0 };
 
-function _commsHistoryTextFor(role, fallbackText) {
+// True for bubbles that commsHistory never recorded (the catch-path user
+// bubble and the 'tower denied' bubble): the transcript must read their
+// textContent WITHOUT advancing the per-role cursor, because no history
+// entry corresponds to them.
+function _commsBubbleHasNoHistory(node) {
+  return !!(node && node.dataset && node.dataset.noHistory);
+}
+
+function _commsHistoryTextFor(role, fallbackText, node) {
+  if (_commsBubbleHasNoHistory(node)) return fallbackText;
   const entries = Array.isArray(commsHistory) ? commsHistory : [];
   let seen = 0;
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     if (!entry || entry.role !== role) continue;
     if (seen === _commsHistoryCursor[role]) {
-      if (typeof entry.content === 'string') {
-        _commsHistoryCursor[role] += 1;
-        return entry.content;
-      }
+      // Consume the matched entry even when its content is not a string, so
+      // the cursor never sticks on it and every later bubble of this role
+      // stays aligned with its own entry.
+      _commsHistoryCursor[role] += 1;
+      if (typeof entry.content === 'string') return entry.content;
+      if (entry.content !== null && entry.content !== undefined) return String(entry.content);
       return fallbackText;
     }
     seen += 1;
@@ -144,7 +156,8 @@ function _commsTranscriptMarkdown() {
     thread.querySelectorAll('.msg').forEach((node) => {
       const label = node.className.indexOf('user') !== -1 ? 'Ground' : 'Tower';
       const bubble = typeof node.querySelector === 'function' ? node.querySelector('.bubble') : null;
-      const text = _commsHistoryTextFor(label === 'Ground' ? 'user' : 'assistant', (bubble ? bubble.textContent : node.textContent || '').trim());
+      const fallback = (bubble ? bubble.textContent : node.textContent || '').trim();
+      const text = _commsHistoryTextFor(label === 'Ground' ? 'user' : 'assistant', fallback, node);
       lines.push(`**${label}:** ${text}`, '');
     });
   }
@@ -327,7 +340,12 @@ async function streamCommsMessage(message, onEvent) {
 async function sendCommsMessage(text) {
   const trimmed = text.trim();
   if (!trimmed) return;
-  appendCommsMessage('user', escapeHtml(trimmed));
+  const userEl = appendCommsMessage('user', escapeHtml(trimmed));
+  // The user bubble is appended BEFORE the fetch; if the fetch fails, this
+  // turn is never pushed to commsHistory, so mark it as having no history
+  // counterpart (the transcript reads its textContent without advancing the
+  // per-role cursor). Cleared below once the turn is successfully recorded.
+  if (userEl && userEl.dataset) userEl.dataset.noHistory = '1';
   const sendBtn = document.getElementById('comms-send');
   const onAir = document.getElementById('on-air');
   sendBtn.disabled = true;
@@ -416,17 +434,27 @@ async function sendCommsMessage(text) {
     }
     commsHistory.push({ role: 'user', content: trimmed });
     commsHistory.push({ role: 'assistant', content: data.reply });
+    // The turn is recorded now, so the user bubble appended before the fetch
+    // has a history counterpart again.
+    if (userEl && userEl.dataset) delete userEl.dataset.noHistory;
   } catch (e) {
     const catchHtml = escapeHtml("Couldn't reach the tower - try again.");
+    let deniedEl = null;
     if (pending && pending.el) {
-      pending.el.className = 'msg tower denied';
-      pending.el.innerHTML = _commsMessageInnerHtml('tower denied', catchHtml);
+      deniedEl = pending.el;
+      deniedEl.className = 'msg tower denied';
+      deniedEl.innerHTML = _commsMessageInnerHtml('tower denied', catchHtml);
       const thread = document.getElementById('comms-thread');
-      if (thread && typeof thread.appendChild === 'function') thread.appendChild(pending.el);
+      if (thread && typeof thread.appendChild === 'function') thread.appendChild(deniedEl);
       _scrollCommsToBottom();
     } else {
-      appendCommsMessage('tower denied', catchHtml);
+      deniedEl = appendCommsMessage('tower denied', catchHtml);
     }
+    // Neither this bubble nor the user bubble appended before the fetch is
+    // recorded in commsHistory, so mark both: the transcript reads their
+    // textContent without advancing the per-role cursor.
+    if (deniedEl && deniedEl.dataset) deniedEl.dataset.noHistory = '1';
+    if (userEl && userEl.dataset) userEl.dataset.noHistory = '1';
   } finally {
     sendBtn.disabled = false;
     onAir.classList.remove('live');

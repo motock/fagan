@@ -575,7 +575,20 @@ class SchedulerDaemon:
             self._last_scan_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
 
         now = self._clock()
-        if now - self._last_reconcile >= self._interval_s:
+        # Boundary tolerance: ``now - self._last_reconcile`` is a difference
+        # of two large monotonic readings, and float rounding of
+        # ``(t0 + interval) - t0`` can land epsilon BELOW ``interval`` even
+        # when a full interval has elapsed (catastrophic cancellation on a
+        # large t0 — observed on CI: a 60s advance measured as
+        # 59.99999999999909, which silently skipped the reconcile phase). A
+        # full-interval advance must never be skipped to rounding, so
+        # compare against ``interval_s - epsilon``: the epsilon is ~1e-9,
+        # far below any real interval, so a genuinely-shorter elapsed (59s
+        # against a 60s interval) still skips and only the exact-boundary
+        # rounding artefact is absorbed.
+        if now - self._last_reconcile >= self._interval_s - max(
+            1e-9, abs(self._interval_s) * 1e-12
+        ):
             # Capture the deadline once: the timeout branch below must log
             # the deadline that was actually enforced, not re-read mutable
             # env state a second time.

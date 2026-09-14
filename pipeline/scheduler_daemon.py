@@ -647,10 +647,21 @@ class SchedulerDaemon:
         ]
         grace_s = _abandon_worker_grace_seconds()
         now = self._clock()
+        # Boundary tolerance: ``now - ts`` is a difference of two large
+        # monotonic readings, and float rounding of ``(t0 + grace) - t0`` can
+        # land epsilon ABOVE ``grace`` even when the elapsed time is exactly
+        # the grace window (catastrophic cancellation on a large t0 — observed
+        # on CI: elapsed 0.20000000018626451 against a 0.2s grace). A worker
+        # exactly at the grace is NOT past it, so compare against
+        # ``grace_s + epsilon``: the epsilon is ~1e-9, nine orders of
+        # magnitude below the 300s default, so a genuinely-stuck worker
+        # (elapsed 301s against a 300s grace) still exits and only the
+        # exact-boundary rounding artefact is absorbed.
+        grace_boundary = grace_s + max(1e-9, abs(grace_s) * 1e-12)
         leaked = [
             (worker, now - ts)
             for worker, ts in self._abandoned_workers
-            if now - ts > grace_s
+            if now - ts > grace_boundary
         ]
         if leaked:
             names = ", ".join(

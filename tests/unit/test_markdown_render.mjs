@@ -583,6 +583,130 @@ test("output is deterministic and carries no global state between calls", () => 
 });
 
 // ---------------------------------------------------------------------------
+// REGRESSION: inline code / links nested inside **bold** or *italic*.
+//
+// renderInline() stashes each structural fragment behind a U+E000<index>U+E001
+// placeholder. The bold/italic passes stash a fragment that ALREADY contains an
+// inner placeholder (the code span or link), so a single-pass restore leaves the
+// inner placeholder in the output verbatim: the nested link/code is silently
+// dropped and raw private-use characters leak into the emitted HTML. The restore
+// must re-scan until no placeholder remains.
+//
+// The href assertions tolerate an optional trailing slash because `new URL`
+// normalizes "https://x.com" to "https://x.com/" — the same tolerance the
+// pre-existing link tests use.
+// ---------------------------------------------------------------------------
+
+const PLACEHOLDER_LEAK = /[\uE000\uE001]/;
+
+function assertNoPlaceholderLeak(html, label) {
+  assertNotMatch(
+    html,
+    PLACEHOLDER_LEAK,
+    `${label}: output must not contain raw U+E000/U+E001 placeholder characters`,
+  );
+}
+
+test("link nested inside **bold** is rendered, not dropped", () => {
+  const html = render("**bold with [a link](https://x.com) inside**");
+  assertMatch(
+    html,
+    /^<p><strong>bold with <a href="https:\/\/x\.com\/?" rel="noopener noreferrer">a link<\/a> inside<\/strong><\/p>$/,
+    "nested link inside bold",
+  );
+  assertNoPlaceholderLeak(html, "nested link inside bold");
+});
+
+test("code span nested inside **bold** is rendered, not dropped", () => {
+  const html = render("**bold with `code` inside**");
+  assertEqual(
+    html,
+    "<p><strong>bold with <code>code</code> inside</strong></p>",
+    "nested code inside bold",
+  );
+  assertNoPlaceholderLeak(html, "nested code inside bold");
+});
+
+test("link nested inside *italic* is rendered, not dropped", () => {
+  const html = render("*italic with [a link](https://x.com) inside*");
+  assertMatch(
+    html,
+    /^<p><em>italic with <a href="https:\/\/x\.com\/?" rel="noopener noreferrer">a link<\/a> inside<\/em><\/p>$/,
+    "nested link inside italic",
+  );
+  assertNoPlaceholderLeak(html, "nested link inside italic");
+});
+
+test("code span nested inside _italic_ is rendered, not dropped", () => {
+  const html = render("_italic with `code` inside_");
+  assertEqual(
+    html,
+    "<p><em>italic with <code>code</code> inside</em></p>",
+    "nested code inside underscore italic",
+  );
+  assertNoPlaceholderLeak(html, "nested code inside underscore italic");
+});
+
+test("realistic chat message with a link nested inside bold renders fully", () => {
+  const html = render("Great **work on [the PR](https://github.com/x/y/pull/1) today**");
+  assertMatch(
+    html,
+    /^<p>Great <strong>work on <a href="https:\/\/github\.com\/x\/y\/pull\/1" rel="noopener noreferrer">the PR<\/a> today<\/strong><\/p>$/,
+    "nested link inside bold in a sentence",
+  );
+  assertNoPlaceholderLeak(html, "nested link inside bold in a sentence");
+});
+
+test("mixed nested inline content leaks no placeholder characters", () => {
+  const html = render(
+    "**bold with [a link](https://x.com) and `code` inside** and *italic with `code` inside*",
+  );
+  assertNoPlaceholderLeak(html, "mixed nested inline");
+  assertIncludes(html, "<strong>", "bold rendered");
+  assertIncludes(html, "<em>", "italic rendered");
+  assertIncludes(html, "<code>code</code>", "nested code rendered");
+  assertIncludes(html, 'rel="noopener noreferrer"', "nested link rendered");
+  assertSafeOutput(html, "mixed nested inline");
+});
+
+// The stash must stay a per-call local: a later call must not see an earlier
+// call's tokens (or a hoisted counter). Exercised through the public entry
+// point, which is the module's only export.
+test("consecutive calls with nested inline content do not share stash state", () => {
+  const a = render("**bold with [a link](https://x.com) inside**");
+  assertMatch(
+    a,
+    /^<p><strong>bold with <a href="https:\/\/x\.com\/?" rel="noopener noreferrer">a link<\/a> inside<\/strong><\/p>$/,
+    "call A (nested link in bold)",
+  );
+  const b = render("**bold with `code` inside**");
+  assertEqual(
+    b,
+    "<p><strong>bold with <code>code</code> inside</strong></p>",
+    "call B (nested code in bold) immediately after call A",
+  );
+  const c = render("plain **bold** text");
+  assertEqual(c, "<p>plain <strong>bold</strong> text</p>", "call C (plain bold) after A and B");
+  assertNoPlaceholderLeak(a + b + c, "consecutive nested calls");
+});
+
+// Literal U+E000/U+E001 in the INPUT must never be mistaken for a placeholder
+// (which silently swallows it). Whatever the chosen spelling (strip, or escape
+// to &#xE000;/&#xE001;), no raw private-use character may reach the output and
+// the surrounding text must survive.
+test("literal U+E000/U+E001 in input never leaks and never swallows text", () => {
+  const bare = render("\uE0000\uE001");
+  assertNoPlaceholderLeak(bare, "literal placeholder characters");
+  assertIncludes(bare, "0", "text between the private-use characters survives");
+
+  const wrapped = render("before \uE0000\uE001 after");
+  assertNoPlaceholderLeak(wrapped, "literal placeholder characters in a sentence");
+  assertIncludes(wrapped, "before", "text before survives");
+  assertIncludes(wrapped, "after", "text after survives");
+  assertIncludes(wrapped, "0", "text between the private-use characters survives");
+});
+
+// ---------------------------------------------------------------------------
 // Summary.
 // ---------------------------------------------------------------------------
 console.log("");

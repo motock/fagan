@@ -488,6 +488,21 @@ def test_timeout_tick_exposes_last_reconcile_timeout_ts_additively(monkeypatch):
         # (per-tick-timeout gate, not an is-not-None gate) and the counter
         # must survive.
         release.set()
+        # SRR-2 gated the streak reset on no abandoned worker still being
+        # alive, so let the tick-1 abandoned reconcile worker actually die
+        # before the clean tick: a not-yet-dead worker keeps the ledger
+        # non-empty, the streak armed, and consecutive_abandonments in
+        # health() - racing the exact key-set pin below. The ledger keeps
+        # dead workers until the next tick prunes them, but is_alive()
+        # flips on thread exit without needing a tick, so polling is safe.
+        deadline = time.monotonic() + 10.0
+        while any(
+            worker.is_alive() for worker, _ts in f.daemon._abandoned_workers
+        ):
+            assert time.monotonic() < deadline, (
+                "the abandoned reconcile worker never died after release"
+            )
+            time.sleep(0.01)
         second, _ = run_once_bounded(f.daemon)
         assert second["reconciled"] is True
         # Imported here (not at module top) so this test fails on its own

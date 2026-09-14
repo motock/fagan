@@ -1,6 +1,7 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
 import { fetchJson } from "./api.js";
+import { renderMarkdown } from "./render/markdown.js";
 let commsHistory = [];
 let showTrace = readStoredShowTrace();
 
@@ -114,14 +115,36 @@ function appendCommsMessage(role, html) {
   _scrollCommsToBottom();
 }
 
+const _commsHistoryCursor = { user: 0, assistant: 0 };
+
+function _commsHistoryTextFor(role, fallbackText) {
+  const entries = Array.isArray(commsHistory) ? commsHistory : [];
+  let seen = 0;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry || entry.role !== role) continue;
+    if (seen === _commsHistoryCursor[role]) {
+      if (typeof entry.content === 'string') {
+        _commsHistoryCursor[role] += 1;
+        return entry.content;
+      }
+      return fallbackText;
+    }
+    seen += 1;
+  }
+  return fallbackText;
+}
+
 function _commsTranscriptMarkdown() {
+  _commsHistoryCursor.user = 0;
+  _commsHistoryCursor.assistant = 0;
   const thread = document.getElementById('comms-thread');
   const lines = ['# Tower transcript', ''];
   if (thread && typeof thread.querySelectorAll === 'function') {
     thread.querySelectorAll('.msg').forEach((node) => {
       const label = node.className.indexOf('user') !== -1 ? 'Ground' : 'Tower';
       const bubble = typeof node.querySelector === 'function' ? node.querySelector('.bubble') : null;
-      const text = (bubble ? bubble.textContent : node.textContent || '').trim();
+      const text = _commsHistoryTextFor(label === 'Ground' ? 'user' : 'assistant', (bubble ? bubble.textContent : node.textContent || '').trim());
       lines.push(`**${label}:** ${text}`, '');
     });
   }
@@ -336,7 +359,7 @@ async function sendCommsMessage(text) {
   const renderFinal = (reply, toolCalls) => {
     const hasError = Array.isArray(toolCalls) && toolCalls.some(c => c.result && c.result.error);
     const role = hasError ? 'tower denied' : 'tower';
-    const bubbleHtml = escapeHtml(reply) + renderToolTraceHtml(toolCalls);
+    const bubbleHtml = renderMarkdown(reply) + renderToolTraceHtml(toolCalls);
     if (pending && pending.el) {
       pending.el.className = `msg ${role}`;
       pending.el.innerHTML = _commsMessageInnerHtml(role, bubbleHtml);

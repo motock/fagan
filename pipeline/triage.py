@@ -25,6 +25,7 @@ from .rebrief import collect_failure_evidence
 from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
+from .git_ops import _worktree_has_new_commits
 TRIAGE_MAX_PER_TICK = 1
 
 # E6/E7: split_story and repo_issue actions are deferred until implemented.
@@ -192,6 +193,7 @@ def plan_triage_budget_exhausted(manifest: dict) -> bool:
 __all__ = [
     "_auto_triage_enabled",
     "_current_suite_state",
+    "_current_git_state",
     "TRIAGE_MAX_ATTEMPTS",
     "TRIAGE_MAX_CREATED_STORIES",
     "TRIAGE_MAX_PER_TICK",
@@ -365,6 +367,68 @@ def _current_suite_state(worktree: str) -> str:
     except Exception:  # noqa: BLE001
         return ""
 
+def _current_git_state(worktree: str, story: dict) -> str:
+    """Return a live ``GIT STATE:`` section for the story's worktree.
+
+    Mirrors :func:`_current_suite_state`'s fail-open shape: an empty or
+    non-string ``worktree`` returns ``""`` immediately (no subprocess is
+    spawned), and ANY exception — from the HEAD probe, the base-branch
+    resolver or the new-commits helper — returns ``""``. The function never
+    raises.
+
+    It reports three facts the overlord must never have to guess from stale
+    ``parked_reason`` text (21 of 34 historical parked stories were parked on
+    a now-stale "no new commits vs master" reason that live git state
+    contradicted):
+
+      (1) the worktree's current HEAD sha;
+      (2) whether the story's branch has NEW COMMITS vs the base branch,
+          reusing :func:`pipeline.git_ops._worktree_has_new_commits` and
+          resolving the base branch the way its existing callers do, via
+          :func:`pipeline.server._default_branch`. If the base branch cannot
+          be resolved, that fact is reported rather than guessing a name;
+      (3) the story's ``pr_url``, when present.
+    """
+    if not isinstance(worktree, str) or not worktree:
+        return ""
+    try:
+        r = globals()["subprocess.run"](
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        head_sha = (r.stdout or "").strip()
+        lines = [f"GIT STATE: HEAD {head_sha}" if head_sha else "GIT STATE: HEAD unknown"]
+        base = ""
+        try:
+            # Lazy import: pipeline.server imports this module at module
+            # level, so a module-level import here would be circular.
+            from .server import _default_branch
+
+            base = _default_branch()
+        except Exception:  # noqa: BLE001
+            base = ""
+        if base:
+            has_new = _worktree_has_new_commits(
+                Path(worktree), str(story.get("story_key") or story.get("key") or ""), base,
+            )
+            lines.append(
+                f"BRANCH HAS NEW COMMITS vs {base}: yes"
+                if has_new
+                else f"BRANCH HAS NO NEW COMMITS vs {base} (0 new commits beyond base)"
+            )
+        else:
+            lines.append("base branch unresolved; new-commits check skipped")
+        pr_url = story.get("pr_url")
+        if pr_url:
+            lines.append(f"PR: {pr_url}")
+        return "\n".join(lines)
+    except Exception:  # noqa: BLE001
+        return ""
+
 # ---------------------------------------------------------------------------
 # Main triage evidence collection
 # ---------------------------------------------------------------------------
@@ -399,6 +463,16 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
         current_state_section = _current_suite_state(worktree)
     except Exception:  # noqa: BLE001
         current_state_section = ""
+    # Section (b3) – live git state: HEAD sha, new-commits-vs-base and the
+    # story's pr_url. 21 of 34 historical parked stories were parked on a
+    # now-stale "no new commits vs master" reason that live git state
+    # contradicted, so the overlord gets the live facts alongside the
+    # (possibly stale) parked_reason text.
+    git_state_section = ""
+    try:
+        git_state_section = _current_git_state(worktree, story)
+    except Exception:  # noqa: BLE001
+        git_state_section = ""
     # Section (c) – repo‑health findings
     findings_section = ""
     if findings:
@@ -410,6 +484,8 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
     fixed_parts = [triage_question, "STORY STATE:\n" + story_state]
     if current_state_section:
         fixed_parts.append(current_state_section)
+    if git_state_section:
+        fixed_parts.append(git_state_section)
     if findings_section:
         fixed_parts.append(findings_section)
     fixed_text = "\n".join(fixed_parts)

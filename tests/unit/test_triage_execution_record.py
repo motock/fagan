@@ -366,6 +366,44 @@ def test_append_failure_does_not_propagate_from_the_dry_run_branch(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# DO-NOT-TOUCH regression guards
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_actions_still_contains_the_deferred_actions():
+    """``DEFERRED_ACTIONS`` must not be narrowed by this story.
+
+    Membership (not equality) so a later sibling story may still add to it.
+    """
+    assert "split_story" in triage.DEFERRED_ACTIONS
+    assert "repo_issue" in triage.DEFERRED_ACTIONS
+
+
+def test_execute_ruling_dispatch_is_unchanged_for_deferred_actions(monkeypatch):
+    story = {"status": "in_progress"}
+
+    result = triage.execute_ruling(
+        PLAN, STORY_KEY, story, {"action": "split_story", "rationale": "too big"}, {}, None
+    )
+
+    assert result == "park_for_human"
+    assert story["status"] == "parked"
+    assert story["triage_deferred_action"] == "split_story"
+
+
+def test_execute_ruling_dispatch_is_unchanged_for_unhandled_actions(monkeypatch):
+    story = {"status": "in_progress"}
+
+    result = triage.execute_ruling(
+        PLAN, STORY_KEY, story, {"action": "frobnicate", "rationale": "?"}, {}, None
+    )
+
+    assert result == "park_for_human"
+    assert story["status"] == "parked"
+    assert "frobnicate" in story["parked_reason"]
+
+
+# ---------------------------------------------------------------------------
 # Optional shared helper (shape note for sibling stories 5/6/7)
 # ---------------------------------------------------------------------------
 

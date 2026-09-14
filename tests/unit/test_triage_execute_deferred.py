@@ -169,12 +169,12 @@ class TestDeferredActionsConstant:
     def test_deferred_actions_is_frozenset(self):
         assert isinstance(triage_mod.DEFERRED_ACTIONS, frozenset)
 
-    def test_deferred_actions_contains_split_and_repo(self):
-        assert "split_story" in triage_mod.DEFERRED_ACTIONS
+    def test_deferred_actions_excludes_split_and_contains_repo(self):
+        assert "split_story" not in triage_mod.DEFERRED_ACTIONS
         assert "repo_issue" in triage_mod.DEFERRED_ACTIONS
 
-    def test_deferred_actions_contains_only_split_and_repo(self):
-        assert triage_mod.DEFERRED_ACTIONS == frozenset({"split_story", "repo_issue"})
+    def test_deferred_actions_contains_only_repo_issue(self):
+        assert triage_mod.DEFERRED_ACTIONS == frozenset({"repo_issue"})
 
     def test_deferred_actions_in_all(self):
         assert "DEFERRED_ACTIONS" in pipeline.triage.__all__
@@ -196,45 +196,60 @@ class TestDeferredActionsConstant:
 # ---------------------------------------------------------------------------
 
 class TestSplitStoryBranch:
-    def test_split_story_parks_and_marks_deferred(
+    """split_story is no longer deferred: it executes by creating two child
+    stories and parking the parent with provenance (see
+    tests/unit/test_triage_split_story_executor.py for the full contract)."""
+
+    def test_split_story_creates_children_and_parks_parent(
         self, base_story, split_ruling, manifest, manifest_path, patched
     ):
+        split_ruling["split"] = ["first half", "second half"]
+
         result = pipeline.triage.execute_ruling(
             "cap1", "S1", base_story, split_ruling, manifest, manifest_path
         )
 
-        assert result == "park_for_human"
+        assert isinstance(result, str)
         assert base_story["status"] == "parked"
-        assert base_story["triage_deferred_action"] == "split_story"
+        assert base_story["parked_reason"] == "split into S1-split-1, S1-split-2 by triage"
+        assert set(manifest["stories"]) == {"S1-split-1", "S1-split-2"}
+        assert manifest["triage_created_stories"] == 2
 
-    def test_split_story_notifies_with_key_and_action(
+    def test_split_story_notifies_with_key_and_provenance(
         self, base_story, split_ruling, manifest, manifest_path, patched
     ):
+        split_ruling["split"] = ["first half", "second half"]
+
         pipeline.triage.execute_ruling(
             "cap1", "S1", base_story, split_ruling, manifest, manifest_path
         )
 
-        # At least one notification message contains both the story key and
-        # the action name.
+        # Parking the parent is loud: at least one notification names the
+        # story key and the provenance reason.
         assert len(patched["notify_calls"]) >= 1
         msgs = [c["message"] for c in patched["notify_calls"]]
-        assert any("S1" in m and "split_story" in m for m in msgs)
+        assert any("S1" in m and "split into" in m for m in msgs)
 
-    def test_split_story_parked_reason_names_action_not_implemented(
+    def test_split_story_parked_reason_names_the_children(
         self, base_story, split_ruling, manifest, manifest_path, patched
     ):
+        split_ruling["split"] = ["first half", "second half"]
+
         pipeline.triage.execute_ruling(
             "cap1", "S1", base_story, split_ruling, manifest, manifest_path
         )
 
         reason = base_story["parked_reason"]
-        assert "split_story" in reason
-        assert "not implemented" in reason.lower()
-        assert "human" in reason.lower()
+        assert "split into" in reason
+        assert "S1-split-1" in reason
+        assert "S1-split-2" in reason
+        assert "by triage" in reason
 
     def test_split_story_does_not_escalate(
         self, base_story, split_ruling, manifest, manifest_path, patched
     ):
+        split_ruling["split"] = ["first half", "second half"]
+
         pipeline.triage.execute_ruling(
             "cap1", "S1", base_story, split_ruling, manifest, manifest_path
         )

@@ -371,11 +371,12 @@ def test_append_failure_does_not_propagate_from_the_dry_run_branch(monkeypatch):
 
 
 def test_deferred_actions_still_contains_the_deferred_actions():
-    """``DEFERRED_ACTIONS`` must not be narrowed by this story.
+    """``DEFERRED_ACTIONS`` still contains every action that remains deferred.
 
     Membership (not equality) so a later sibling story may still add to it.
+    OPSA-5 executed ``split_story`` (it now creates child stories instead of
+    parking for a human), so only ``repo_issue`` remains deferred.
     """
-    assert "split_story" in triage.DEFERRED_ACTIONS
     assert "repo_issue" in triage.DEFERRED_ACTIONS
 
 

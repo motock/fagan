@@ -297,9 +297,29 @@ def usage() -> dict[str, Any]:
     return {"available": True, **state, "backends": backends}
 
 
+def _normalize_repo_path(value: str) -> str:
+    """Shared repo-path normalization for the ``repo`` filter.
+
+    Applied identically to the query param and to each candidate plan's
+    ``repo_root`` so ``~``-prefixed and trailing-slash variants still match.
+    """
+    return os.path.realpath(os.path.expanduser(value))
+
+
 @app.get("/api/plans")
-def list_plans(include_archived: bool = False) -> dict[str, Any]:
+def list_plans(include_archived: bool = False, repo: str | None = None) -> dict[str, Any]:
+    """List plan summaries, newest first.
+
+    ``repo`` is an optional filter: absent, empty (``repo=``), or ``all``
+    returns ALL plans exactly as before. Any other value returns only plans
+    whose manifest ``repo_root`` matches, after applying ``os.path.expanduser``
+    + ``os.path.realpath`` normalization to BOTH the param and each candidate
+    (so ``~/repo`` and trailing-slash variants still match). A ``repo`` value
+    matching no plans yields HTTP 200 with an empty ``plans`` list. Composes
+    with ``include_archived`` (AND).
+    """
     archived_plans = _read_archived_plans()
+    filter_repo = _normalize_repo_path(repo) if repo and repo != "all" else None
     plans = []
     for name in _store.list_manifests():
         manifest = _service.get_manifest_or_none(name)
@@ -307,6 +327,10 @@ def list_plans(include_archived: bool = False) -> dict[str, Any]:
             continue
         if not include_archived and name in archived_plans:
             continue
+        if filter_repo:
+            candidate_root = (manifest or {}).get("repo_root")
+            if not candidate_root or _normalize_repo_path(candidate_root) != filter_repo:
+                continue
         plans.append(_plan_summary(name, manifest, archived_plans, include_notification_summary=True))
     # Newest-first: most-recently-touched plan surfaces at the top of the
     # sidebar regardless of name, so active work is never buried below

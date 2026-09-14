@@ -41,5 +41,5 @@ model_registry.local.json
 # notes into this shared path and committed it, causing spurious merge-gate
 # rebase conflicts between unrelated concurrent stories.
 .agent_plan.md
-.agent_scratchpad.md
+.agent_scratchpad*.md
 .agent_transcript.json

@@ -176,17 +176,12 @@ def test_park_via_exhausted_escalation_ladder_is_stamped(notify_calls, monkeypat
 def test_deferred_action_direct_notification_is_not_stamped(notify_calls):
     """The extra, non-park notification in ``execute_ruling`` stays unstamped.
 
-    A ``split_story`` ruling that cannot execute (invalid SPLIT payload)
-    parks the story via ``_park`` *and* then sends a second, direct
-    notification carrying the ruling rationale.  Only the park notification
-    may carry ``event="story_parked"``.
+    A deferred action (``split_story``) parks the story via ``_park`` *and*
+    then sends a second, direct notification carrying the ruling rationale.
+    Only the park notification may carry ``event="story_parked"``.
     """
     story = {"status": "failed"}
-    ruling = {
-        "action": "split_story",
-        "rationale": "too big for one implementer",
-        "split": ["only one summary"],
-    }
+    ruling = {"action": "split_story", "rationale": "too big for one implementer"}
 
     result = triage.execute_ruling(
         "plan-x", "story-1", story, ruling, {"stories": {}}, None
@@ -195,18 +190,22 @@ def test_deferred_action_direct_notification_is_not_stamped(notify_calls):
     assert result == "park_for_human"
     assert len(notify_calls) == 2, f"expected two notifications, got {notify_calls!r}"
 
-    park_calls = [c for c in notify_calls if c["kwargs"].get("event") == "story_parked"]
-    other_calls = [c for c in notify_calls if c["kwargs"].get("event") != "story_parked"]
+    park_calls = [c for c in notify_calls if "not implemented yet" in c["args"][1]]
+    other_calls = [c for c in notify_calls if "not implemented yet" not in c["args"][1]]
 
     assert len(park_calls) == 1
-    assert "parked for a human" in park_calls[0]["args"][1]
+    assert park_calls[0]["kwargs"].get("event") == "story_parked"
 
     assert len(other_calls) == 1
     other = other_calls[0]
+    assert other["kwargs"].get("event") != "story_parked"
     assert "event" not in other["kwargs"], (
         "only the park notification may be stamped with event=; "
         f"the direct notification got {other['kwargs']!r}"
     )
+    # The direct notification's message text is untouched.
+    assert "split_story" in other["args"][1]
+    assert "too big for one implementer" in other["args"][1]
     # The direct notification's message text is untouched.
     assert "split_story" in other["args"][1]
     assert "too big for one implementer" in other["args"][1]

@@ -14,6 +14,8 @@ import logging
 import os
 import subprocess
 from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -152,11 +154,158 @@ def _try_acquire_git_lock(repo_root: Path):
         os.close(fd)
 
 
-def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
-    """Pure decision: may a reviewed (pr_open) story merge unattended?
+# The plan name for merge-gate adjudications, bound by _adjudicate_merges
+# around each gate call. Production flows the real plan name through this
+# context because the gate's one-argument call shape (and several long-lived
+# one-argument test doubles) cannot take a second positional argument.
+_adjudication_plan_name: ContextVar[str | None] = ContextVar(
+    "merge_adjudication_plan_name", default=None
+)
 
-    Honors PIPELINE_AUTONOMY and PIPELINE_RISK_THRESHOLD. high-risk work is
-    always parked for human review regardless of autonomy level.
+
+@contextmanager
+def merge_adjudication_plan(plan_name: str | None):
+    """Bind the plan name the merge gate adjudicates for (see above)."""
+    token = _adjudication_plan_name.set(plan_name)
+    try:
+        yield
+    finally:
+        _adjudication_plan_name.reset(token)
+
+
+def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
+    """Parse the overlord's merge ruling from its reply.
+
+    Field extraction is delegated to ``parsers._parse_ruling`` (the one
+    parser for the overlord output contract); this layer adds the stricter
+    merge-gate validation on top: the RULING line must be exactly
+    ``proceed`` or ``park``.
+
+    Expected format (one line each, order-insensitive)::
+
+        RULING: proceed|park
+        RATIONALE: <one line>
+
+    Returns ``{"ruling": ..., "rationale": ...}`` or ``None`` when the reply
+    does not carry a parseable RULING line (callers fail closed to the hold).
+
+    Behavior note: field extraction now goes through ``parsers._parse_ruling``,
+    whose field-name regex is case-sensitive (no ``re.IGNORECASE``), so a
+    lowercase ``ruling:`` line no longer parses and fails closed to the hold.
+    This is a deliberate degradation to the canonical overlord output parser's
+    contract, not a regression to re-fix here.
+    """
+    from .parsers import _parse_ruling
+
+    fields = _parse_ruling(raw or "")
+    ruling = (fields.get("ruling") or "").strip().lower()
+    if ruling not in ("proceed", "park"):
+        return None
+    return {"ruling": ruling, "rationale": fields.get("rationale") or ""}
+
+
+def _adjudicate_high_risk_merge(
+    story: dict[str, Any], plan_name: str | None = None
+) -> dict[str, str]:
+    """Ask the overlord to rule on a high-risk merge (full autonomy only).
+
+    Sends the merge context - PR checks state, review verdict,
+    security-review verdict, risk and story summary - with an instruction to
+    rule ``proceed`` or ``park`` with a rationale. The ruling is recorded in
+    the decisions log (``decided_by: 'overlord'``) with the story's prior
+    state captured before any mutation. Fail closed: an overlord failure or
+    an unparseable reply parks with the standing high-risk hold reason.
+    """
+    from .overlord import _invoke_overlord
+    from .persistence import _append_decision, _plan_role_config
+
+    if plan_name is None:
+        # Compat shim for direct callers; production always supplies the
+        # real name - via the explicit parameter or the adjudication
+        # context bound by advance._adjudicate_merges.
+        plan_name = _adjudication_plan_name.get() or story.get("plan") or ""
+
+    hold = {"action": "park", "reason": "high risk held for human review"}
+    # Prior state captured before any mutation: the caller parks/merges only
+    # after this returns, so the story dict still holds its pre-gate state.
+    prior_status = story.get("status")
+    prior_parked_reason = story.get("parked_reason")
+
+    prompt = (
+        "MERGE ADJUDICATION: this story's merge gate is high-risk and the "
+        "pipeline is running in full autonomy, so you rule where a human "
+        "otherwise would. Rule 'proceed' to let the merge go ahead or 'park' "
+        "to hold it for human review, with a rationale.\n"
+        f"STORY: {story.get('key') or '?'}\n"
+        f"SUMMARY: {story.get('summary') or '(none)'}\n"
+        f"RISK: {story.get('risk') or 'unknown'}\n"
+        f"REVIEW VERDICT: {story.get('review_verdict') or '(none)'}\n"
+        f"SECURITY-REVIEW VERDICT: "
+        f"{story.get('security_review_verdict') or '(none)'}\n"
+        f"PR CHECKS: {story.get('pr_checks') or '(none)'}\n"
+        "Respond in this exact format:\n"
+        "RULING: proceed|park\n"
+        "RATIONALE: <one line>\n"
+    )
+    try:
+        raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
+        parsed = _parse_merge_ruling(raw or "")
+    except Exception as exc:  # noqa: BLE001 - overlord failure fails closed
+        parsed = None
+        logging.getLogger("pipeline").warning(
+            "overlord merge adjudication failed for %s: %s",
+            story.get("key"),
+            type(exc).__name__,
+        )
+    if parsed is None:
+        record = {
+            "story_key": story.get("key"),
+            "question": "high-risk merge adjudication",
+            "ruling": "",
+            "rationale": "unparseable overlord reply; failed closed to the hold",
+            "prior_status": prior_status,
+            "prior_parked_reason": prior_parked_reason,
+            "decided_by": "overlord",
+            "decided_at": datetime.now(timezone.utc).isoformat(),
+        }
+    else:
+        record = {
+            "story_key": story.get("key"),
+            "question": "high-risk merge adjudication",
+            "ruling": parsed["ruling"],
+            "rationale": parsed["rationale"],
+            "prior_status": prior_status,
+            "prior_parked_reason": prior_parked_reason,
+            "decided_by": "overlord",
+            "decided_at": datetime.now(timezone.utc).isoformat(),
+        }
+    try:
+        _append_decision(plan_name, record)
+    except Exception:  # noqa: BLE001 - audit write must never break the gate
+        logging.getLogger("pipeline").warning(
+            "failed to append merge adjudication record for %s", story.get("key")
+        )
+    if parsed is not None and parsed["ruling"] == "proceed":
+        return {"action": "merge", "reason": "overlord ruled proceed"}
+    return hold
+
+
+def _merge_decision(
+    story: dict[str, Any], plan_name: str | None = None
+) -> dict[str, str]:
+    """Decide what the merge gate does with a reviewed (pr_open) story.
+
+    Not pure: in full autonomy the high-risk hold becomes an overlord
+    adjudication, which invokes the overlord and appends the ruling to the
+    plan's decisions log.
+
+    Honors PIPELINE_AUTONOMY and PIPELINE_RISK_THRESHOLD. In dry-run and
+    gated a high-risk story is always parked for human review; in full
+    autonomy the hold becomes an overlord adjudication whose ruling is
+    recorded in the decisions log and followed (fail closed to the hold).
+    ``plan_name`` is the plan the story belongs to; production callers
+    (``_adjudicate_merges``) always pass it so the ruling is recorded in the
+    plan's own decisions log and the plan's role_config override applies.
     """
     from .server import _RISK_ORDER, PIPELINE_AUTONOMY, PIPELINE_RISK_THRESHOLD
 
@@ -169,6 +318,8 @@ def _merge_decision(story: dict[str, Any]) -> dict[str, str]:
         (story.get("risk") or "low").lower(), _RISK_ORDER["high"]
     )
     if risk_rank >= _RISK_ORDER["high"]:
+        if PIPELINE_AUTONOMY == "full":
+            return _adjudicate_high_risk_merge(story, plan_name)
         return {"action": "park", "reason": "high risk held for human review"}
     if PIPELINE_AUTONOMY == "full":
         return {"action": "merge", "reason": "autonomy=full"}

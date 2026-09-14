@@ -1,0 +1,529 @@
+"""OPSA-9: high-risk merge holds are adjudicated by the overlord in full autonomy.
+
+Pre-OPSA-9, ``_merge_decision`` parked every story whose risk ranked >= high
+with reason ``high risk held for human review`` regardless of autonomy. In
+``PIPELINE_AUTONOMY == 'full'`` that hold now becomes an overlord adjudication:
+the overlord is asked to rule ``proceed`` or ``park`` with a rationale in the
+parseable format ``RULING: <proceed|park>`` / ``RATIONALE: <one line>``, the
+ruling is recorded in the decisions log, and the merge gate follows it.
+Unparseable or absent overlord output fails closed to the original hold.
+
+Dry-run and gated behaviour is byte-identical to pre-OPSA-9: same park action,
+same reason string, and the overlord is never invoked.
+
+The overlord invocation is stubbed at the true boundary
+(``pipeline.overlord._invoke_overlord``) because ``pipeline/merge.py`` resolves
+it lazily inside the function body; the autonomy knobs are patched on
+``pipeline.server`` for the same reason.
+
+The plan name reaches the gate through the production context
+(``pipeline.merge.merge_adjudication_plan``), which
+``pipeline/advance.py::_adjudicate_merges`` binds around each gate call. The
+stories here carry no ``plan`` key - production manifests never do - so the
+``story.get("plan")`` compat fallback is never what these tests exercise, and
+the end-to-end test at the bottom of this file fails if that context binding
+is removed from ``advance.py``.
+"""
+
+# ruff: noqa: I001
+# Import order below is deliberate, not disorganized: ``pipeline.server``
+# transitively imports advance/ci/merge at module load, so importing it before
+# ``pipeline.advance`` keeps that submodule import resolving against an
+# already-initialized module (the same ordering test_advance_park_event.py
+# documents). isort's alphabetical sort would put ``pipeline.advance`` first
+# and reintroduce the circular import this ordering avoids.
+import copy
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from pipeline import merge as merge_mod
+from pipeline import overlord as overlord_mod
+from pipeline import persistence as persistence_mod
+from pipeline import server as server_mod
+
+# The module that owns the production context binding guarded by the
+# end-to-end test below.
+from pipeline import advance as advance_mod
+
+HOLD_REASON = "high risk held for human review"
+POLICY_PATH = Path(__file__).resolve().parents[2] / "overlord-policy.md"
+
+PROCEED_REPLY = "RULING: proceed\nRATIONALE: checks are green and the change is contained"
+PARK_REPLY = "RULING: park\nRATIONALE: security review is too thin to merge unattended"
+
+
+def _story(**overrides):
+    story = {
+        "key": "OPSA-9-STORY",
+        # NOTE: deliberately NO "plan" key. Production manifests never carry
+        # one, so injecting it here would make every test exercise the
+        # ``story.get("plan")`` compat fallback in
+        # ``_adjudicate_high_risk_merge`` instead of the production
+        # ``merge_adjudication_plan`` context - which is exactly the gap that
+        # let the wrong-decisions-file bug ship unguarded.
+        "plan_name": "PLAN-1",
+        "status": "pr_open",
+        "parked_reason": None,
+        "review_verdict": "APPROVE",
+        "security_review_verdict": "APPROVE",
+        "risk": "high",
+        "summary": "Rewrite the auth token cache",
+        "pr_checks": {"ci": "pass", "lint": "pass"},
+    }
+    story.update(overrides)
+    return story
+
+
+class _Harness:
+    """Patches the server autonomy knobs and the overlord/decisions boundary."""
+
+    def __init__(self, monkeypatch, autonomy, ruling=None, threshold="low", exc=None):
+        self.invocations = []
+        self.decisions = []
+        self.role_config = {"role": "overlord", "model": "opus"}
+        self.ruling = ruling
+        self.exc = exc
+        monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", autonomy, raising=False)
+        monkeypatch.setattr(server_mod, "PIPELINE_RISK_THRESHOLD", threshold, raising=False)
+
+        def fake_invoke(prompt, plan_role_config=None):
+            self.invocations.append(
+                {"prompt": prompt, "plan_role_config": plan_role_config}
+            )
+            if self.exc is not None:
+                raise self.exc
+            return self.ruling
+
+        monkeypatch.setattr(overlord_mod, "_invoke_overlord", fake_invoke)
+        monkeypatch.setattr(
+            persistence_mod, "_plan_role_config", lambda plan_name: self.role_config
+        )
+        monkeypatch.setattr(
+            persistence_mod,
+            "_append_decision",
+            lambda plan_name, record: self.decisions.append((plan_name, record)),
+        )
+
+    def decide(self, story):
+        # Bind the production adjudication context exactly as
+        # ``advance._adjudicate_merges`` does around its gate call. The story
+        # carries no ``plan`` key, so without this binding the gate would fall
+        # back to the plan-less default decisions log.
+        with merge_mod.merge_adjudication_plan("PLAN-1"):
+            return merge_mod._merge_decision(story)
+
+    @property
+    def prompt(self):
+        assert self.invocations, "the overlord was never invoked"
+        return self.invocations[0]["prompt"]
+
+
+# --------------------------------------------------------------------------
+# full autonomy: the hold becomes an overlord adjudication
+# --------------------------------------------------------------------------
+
+
+def test_full_proceed_ruling_merges(monkeypatch):
+    h = _Harness(monkeypatch, "full", ruling=PROCEED_REPLY)
+    decision = h.decide(_story())
+    assert decision["action"] == "merge"
+    assert decision["reason"] != HOLD_REASON
+    assert len(h.invocations) == 1
+
+
+def test_full_park_ruling_holds_with_todays_reason(monkeypatch):
+    h = _Harness(monkeypatch, "full", ruling=PARK_REPLY)
+    assert h.decide(_story()) == {"action": "park", "reason": HOLD_REASON}
+    assert len(h.invocations) == 1
+
+
+def test_full_park_ruling_is_recorded(monkeypatch):
+    h = _Harness(monkeypatch, "full", ruling=PARK_REPLY)
+    h.decide(_story())
+    assert len(h.decisions) == 1
+    plan_name, record = h.decisions[0]
+    assert plan_name == "PLAN-1"
+    assert record["decided_by"] == "overlord"
+    assert record["ruling"] == "park"
+    assert "security review is too thin" in record["rationale"]
+    assert record["story_key"] == "OPSA-9-STORY"
+
+
+def test_full_proceed_ruling_is_recorded_with_prior_state(monkeypatch):
+    h = _Harness(monkeypatch, "full", ruling=PROCEED_REPLY)
+    h.decide(_story(status="pr_open", parked_reason=None))
+    assert len(h.decisions) == 1
+    plan_name, record = h.decisions[0]
+    assert plan_name == "PLAN-1"
+    assert record["decided_by"] == "overlord"
+    assert record["ruling"] == "proceed"
+    assert "checks are green" in record["rationale"]
+    assert record["prior_status"] == "pr_open"
+    assert record["prior_parked_reason"] is None
+
+
+def test_full_records_prior_state_before_any_mutation(monkeypatch):
+    h = _Harness(monkeypatch, "full", ruling=PARK_REPLY)
+    story = _story(status="parked", parked_reason="awaiting security review")
+    snapshot = copy.deepcopy(story)
+    h.decide(story)
+    assert story == snapshot, "the merge decision must not mutate the story"
+    _, record = h.decisions[0]
+    assert record["prior_status"] == "parked"
+    assert record["prior_parked_reason"] == "awaiting security review"
+
+
+def test_full_invocation_carries_merge_context_and_instruction(monkeypatch):
+    h = _Harness(monkeypatch, "full", ruling=PROCEED_REPLY)
+    story = _story(
+        summary="Rewrite the auth token cache",
+        risk="high",
+        review_verdict="APPROVE",
+        security_review_verdict="APPROVE_WITH_NOTES",
+        pr_checks={"ci": "pass", "lint": "fail"},
+    )
+    h.decide(story)
+    prompt = h.prompt
+    assert "Rewrite the auth token cache" in prompt
+    assert "APPROVE_WITH_NOTES" in prompt
+    assert "APPROVE" in prompt
+    assert "high" in prompt
+    assert "ci" in prompt and "pass" in prompt
+    assert re.search(r"proceed", prompt, re.IGNORECASE)
+    assert re.search(r"park", prompt, re.IGNORECASE)
+    assert re.search(r"rationale", prompt, re.IGNORECASE)
+    assert re.search(r"RULING", prompt, re.IGNORECASE)
+
+
+def test_full_invocation_uses_the_plans_role_config(monkeypatch):
+    h = _Harness(monkeypatch, "full", ruling=PROCEED_REPLY)
+    h.decide(_story())
+    assert h.invocations[0]["plan_role_config"] == h.role_config
+
+
+def test_full_ruling_parses_with_surrounding_prose(monkeypatch):
+    h = _Harness(
+        monkeypatch,
+        "full",
+        ruling="Sure, here is my ruling.\nRULING: proceed\nRATIONALE: contained change\nHope that helps.",
+    )
+    assert h.decide(_story())["action"] == "merge"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        None,
+        "",
+        "I would probably merge this one, but it is your call.",
+        "RULING: maybe\nRATIONALE: unsure",
+        "RATIONALE: no ruling line at all",
+    ],
+)
+def test_full_unparseable_reply_fails_closed(monkeypatch, reply):
+    h = _Harness(monkeypatch, "full", ruling=reply)
+    assert h.decide(_story()) == {"action": "park", "reason": HOLD_REASON}
+    assert len(h.invocations) == 1
+    assert len(h.decisions) == 1
+    _, record = h.decisions[0]
+    assert record["decided_by"] == "overlord"
+    assert record.get("ruling") != "proceed"
+    assert record["prior_status"] == "pr_open"
+
+
+def test_full_overlord_failure_fails_closed(monkeypatch):
+    h = _Harness(monkeypatch, "full", exc=RuntimeError("overlord unavailable"))
+    assert h.decide(_story()) == {"action": "park", "reason": HOLD_REASON}
+    assert len(h.invocations) == 1
+
+
+def test_full_low_risk_merges_without_adjudication(monkeypatch):
+    h = _Harness(monkeypatch, "full", ruling=PROCEED_REPLY)
+    assert h.decide(_story(risk="low")) == {"action": "merge", "reason": "autonomy=full"}
+    assert h.invocations == []
+    assert h.decisions == []
+
+
+# --------------------------------------------------------------------------
+# dry-run and gated: byte-identical to pre-OPSA-9, no overlord invocation
+# --------------------------------------------------------------------------
+
+
+def test_gated_high_risk_hold_is_byte_identical(monkeypatch):
+    h = _Harness(monkeypatch, "gated", ruling=PROCEED_REPLY)
+    assert h.decide(_story()) == {"action": "park", "reason": HOLD_REASON}
+    assert h.invocations == []
+    assert h.decisions == []
+
+
+def test_dry_run_high_risk_hold_is_byte_identical(monkeypatch):
+    h = _Harness(monkeypatch, "dry-run", ruling=PROCEED_REPLY)
+    assert h.decide(_story()) == {"action": "park", "reason": "dry-run"}
+    assert h.invocations == []
+    assert h.decisions == []
+
+
+def test_gated_high_risk_holds_even_when_threshold_is_high(monkeypatch):
+    h = _Harness(monkeypatch, "gated", threshold="high", ruling=PROCEED_REPLY)
+    assert h.decide(_story(risk="high")) == {"action": "park", "reason": HOLD_REASON}
+    assert h.invocations == []
+
+
+@pytest.mark.parametrize("autonomy", ["dry-run", "gated", "full"])
+def test_unapproved_story_parks_before_any_adjudication(monkeypatch, autonomy):
+    h = _Harness(monkeypatch, autonomy, ruling=PROCEED_REPLY)
+    assert h.decide(_story(review_verdict="REQUEST_CHANGES")) == {
+        "action": "park",
+        "reason": "not approved",
+    }
+    assert h.invocations == []
+
+
+# --------------------------------------------------------------------------
+# preserved PIPELINE_RISK_THRESHOLD logic and risk-rank boundaries
+# --------------------------------------------------------------------------
+
+
+def test_gated_low_risk_merges_at_threshold(monkeypatch):
+    h = _Harness(monkeypatch, "gated", threshold="medium")
+    assert h.decide(_story(risk="low")) == {
+        "action": "merge",
+        "reason": "risk <= threshold medium",
+    }
+    assert h.invocations == []
+
+
+def test_gated_risk_above_threshold_parks(monkeypatch):
+    h = _Harness(monkeypatch, "gated", threshold="low")
+    assert h.decide(_story(risk="medium")) == {
+        "action": "park",
+        "reason": "risk above threshold low",
+    }
+    assert h.invocations == []
+
+
+def test_unknown_risk_rank_is_treated_as_high(monkeypatch):
+    h = _Harness(monkeypatch, "gated", ruling=PROCEED_REPLY)
+    assert h.decide(_story(risk="banana")) == {"action": "park", "reason": HOLD_REASON}
+    assert h.invocations == []
+
+
+def test_missing_risk_defaults_to_low(monkeypatch):
+    h = _Harness(monkeypatch, "gated", threshold="low")
+    story = _story()
+    del story["risk"]
+    assert h.decide(story) == {"action": "merge", "reason": "risk <= threshold low"}
+
+
+def test_autonomy_is_read_lazily_from_server(monkeypatch):
+    assert not hasattr(merge_mod, "PIPELINE_AUTONOMY"), (
+        "PIPELINE_AUTONOMY must be read lazily from pipeline.server, not bound "
+        "at import time"
+    )
+    h = _Harness(monkeypatch, "gated", ruling=PROCEED_REPLY)
+    assert h.decide(_story()) == {"action": "park", "reason": HOLD_REASON}
+    monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "full")
+    assert h.decide(_story())["action"] == "merge"
+
+
+# --------------------------------------------------------------------------
+# overlord-policy.md: the park-and-ping tier is now mode-conditional
+# --------------------------------------------------------------------------
+
+
+def _policy_flat():
+    text = POLICY_PATH.read_text(encoding="utf-8")
+    text = text.replace("\u2011", "-").replace("\u2010", "-")
+    return re.sub(r"\s+", " ", text)
+
+
+def test_policy_hold_is_scoped_to_dry_run_and_gated():
+    flat = _policy_flat()
+    assert re.search(
+        r"dry-run.{0,200}?gated.{0,200}?risk: high", flat, re.IGNORECASE | re.DOTALL
+    ), (
+        "policy must state that in dry-run and gated a risk: high hold stands"
+    )
+    old = "triage never overrides the park-and-ping tier"
+    idx = flat.lower().find(old)
+    if idx != -1:
+        window = flat[max(0, idx - 200) : idx + 400]
+        assert "dry-run" in window and "gated" in window, (
+            "the park-and-ping hold sentence must be scoped to dry-run and gated"
+        )
+
+
+def test_policy_states_full_adjudicates_and_records_the_ruling():
+    flat = _policy_flat()
+    assert re.search(
+        r"full.{0,300}?adjudicat.{0,300}?record", flat, re.IGNORECASE | re.DOTALL
+    ), (
+        "policy must state that in full the overlord adjudicates the high-risk "
+        "merge and records the ruling"
+    )
+
+
+def test_policy_ladder_text_still_credits_full_with_overlord_adjudication():
+    flat = _policy_flat()
+    assert "overlord adjudication of" in flat
+    assert "risk: high" in flat
+    assert "held in dry-run and gated" in flat
+
+
+# --------------------------------------------------------------------------
+# WHICH FILE the ruling lands in: the plan's own decisions log, never the
+# plan-less default. These tests run the REAL persistence writer against a
+# tmp PLAN_DIR (no ``_append_decision`` stub), because asserting the return
+# value or the stubbed plan_name alone cannot catch the wrong-file bug.
+# --------------------------------------------------------------------------
+
+PLAN = "PLAN-1"
+E2E_KEY = "OPSA-9-E2E"
+
+
+def _plan_decisions(plan_dir, plan_name):
+    """The records in ``plan_name``'s own decisions log (``[]`` if absent)."""
+    path = plan_dir / f"{plan_name}.decisions.json"
+    return json.loads(path.read_text()) if path.exists() else []
+
+
+def _default_decisions(plan_dir):
+    """The plan-less default log the pre-fix code wrote to."""
+    return _plan_decisions(plan_dir, "")
+
+
+def _e2e_story(**overrides):
+    """A production-shaped pr_open story: NO ``plan`` key, as manifests have."""
+    story = {
+        "key": E2E_KEY,
+        "status": "pr_open",
+        "parked_reason": None,
+        "review_verdict": "APPROVE",
+        "security_review_verdict": "APPROVE",
+        "risk": "high",
+        "summary": "Rewrite the auth token cache",
+        "pr_checks": {"ci": "pass", "lint": "pass"},
+        "worktree": "",
+        "dependencies": [],
+    }
+    story.update(overrides)
+    return story
+
+
+def _summary():
+    """A summary dict carrying every key ``_adjudicate_merges`` appends to."""
+    return {"parked": [], "notify": [], "failed": [], "merged": [], "ci_pending": []}
+
+
+def test_full_park_ruling_lands_in_the_plans_own_decisions_log(plan_dir, monkeypatch):
+    """The ruling is written to PLAN-1's log, not the plan-less default log.
+
+    ``_append_decision`` is deliberately NOT stubbed: the real writer runs
+    against a tmp PLAN_DIR, so this asserts *which file* the record lands in.
+    """
+    monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "full", raising=False)
+    monkeypatch.setattr(server_mod, "PIPELINE_RISK_THRESHOLD", "low", raising=False)
+    monkeypatch.setattr(
+        overlord_mod,
+        "_invoke_overlord",
+        lambda prompt, plan_role_config=None: PARK_REPLY,
+    )
+
+    with merge_mod.merge_adjudication_plan(PLAN):
+        decision = merge_mod._merge_decision(_story())
+
+    assert decision == {"action": "park", "reason": HOLD_REASON}
+    records = _plan_decisions(plan_dir, PLAN)
+    assert len(records) == 1, "the ruling must be recorded in PLAN-1's own log"
+    assert records[0]["decided_by"] == "overlord"
+    assert records[0]["ruling"] == "park"
+    assert records[0]["story_key"] == "OPSA-9-STORY"
+    assert _default_decisions(plan_dir) == [], (
+        "the ruling must NOT land in the plan-less default decisions log"
+    )
+
+
+def test_adjudicate_merges_records_the_ruling_in_the_plans_own_decisions_log(
+    plan_dir, monkeypatch
+):
+    """End-to-end guard for ``advance._adjudicate_merges``'s context binding.
+
+    Drives the REAL ``advance._adjudicate_merges`` with a story carrying no
+    ``plan`` key (the production manifest shape). The ruling must land in
+    PLAN-1's own decisions log. If the ``with merge_adjudication_plan(plan_name)``
+    wrapper around the gate call is removed, the gate falls back to the
+    plan-less default log and this test fails - which is the only test in this
+    file that exercises that wrapper at all.
+    """
+    monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "full", raising=False)
+    monkeypatch.setattr(server_mod, "PIPELINE_RISK_THRESHOLD", "low", raising=False)
+    monkeypatch.setattr(
+        overlord_mod,
+        "_invoke_overlord",
+        lambda prompt, plan_role_config=None: PARK_REPLY,
+    )
+    monkeypatch.setattr(advance_mod, "_notify_user", lambda *a, **k: None)
+    monkeypatch.setattr(
+        advance_mod,
+        "_atomic_write_json",
+        lambda path, data: Path(path).write_text(json.dumps(data, indent=2)),
+    )
+    (plan_dir / f"{PLAN}.manifest.json").write_text(
+        json.dumps({"epics": {}, "stories": {E2E_KEY: _e2e_story()}}, indent=2)
+    )
+
+    summary = _summary()
+    advance_mod._adjudicate_merges(PLAN, summary)
+
+    assert summary["parked"] == [E2E_KEY]
+    records = _plan_decisions(plan_dir, PLAN)
+    assert len(records) == 1, (
+        "advance._adjudicate_merges must record the ruling in PLAN-1's own "
+        "decisions log"
+    )
+    assert records[0]["decided_by"] == "overlord"
+    assert records[0]["ruling"] == "park"
+    assert records[0]["story_key"] == E2E_KEY
+    assert _default_decisions(plan_dir) == [], (
+        "the ruling must NOT land in the plan-less default decisions log"
+    )
+
+
+def test_merge_adjudication_plan_context_is_reset_between_calls(plan_dir, monkeypatch):
+    """The contextvar must be reset on exit, not left bound to the last plan.
+
+    Three calls in sequence: PLAN-1, then PLAN-2, then no context at all. Each
+    ruling must land in its own log. A leaked binding (a bare ``.set()`` with
+    no ``reset(token)``) would send call 2 into PLAN-1 and call 3 into PLAN-2.
+    """
+    monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "full", raising=False)
+    monkeypatch.setattr(server_mod, "PIPELINE_RISK_THRESHOLD", "low", raising=False)
+    monkeypatch.setattr(
+        overlord_mod,
+        "_invoke_overlord",
+        lambda prompt, plan_role_config=None: PARK_REPLY,
+    )
+
+    assert merge_mod._adjudication_plan_name.get() is None
+
+    with merge_mod.merge_adjudication_plan("PLAN-1"):
+        merge_mod._merge_decision(_story(key="A"))
+    assert merge_mod._adjudication_plan_name.get() is None, (
+        "merge_adjudication_plan must reset the contextvar on exit"
+    )
+
+    with merge_mod.merge_adjudication_plan("PLAN-2"):
+        merge_mod._merge_decision(_story(key="B"))
+    assert merge_mod._adjudication_plan_name.get() is None, (
+        "merge_adjudication_plan must reset the contextvar on exit"
+    )
+
+    # No context bound and no "plan" key on the story: the plan-less default.
+    merge_mod._merge_decision(_story(key="C"))
+
+    assert [r["story_key"] for r in _plan_decisions(plan_dir, "PLAN-1")] == ["A"]
+    assert [r["story_key"] for r in _plan_decisions(plan_dir, "PLAN-2")] == ["B"]
+    assert [r["story_key"] for r in _default_decisions(plan_dir)] == ["C"]

@@ -112,7 +112,7 @@ The overlord should choose the honest action even when the pipeline cannot execu
 
 The phrase `fail closed` means that an absent, unparseable, or unrecognized ACTION value fails closed to `park_for_human`;
 
-Triage never overrides the park‑and‑ping tier: a story held for `risk: high` stays held regardless of the ruling.
+In `dry-run` and `gated`, triage never overrides the park‑and‑ping tier: a story held for `risk: high` stays held regardless of the ruling. In `full` the overlord adjudicates the high-risk merge gate — it is asked to rule `proceed` or `park` with a rationale, the ruling is recorded in the decisions log, and an absent or unparseable reply fails closed to the hold.
 
 ### Parked-story resolution
 

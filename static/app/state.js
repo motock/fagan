@@ -35,6 +35,10 @@ window.state = {
   refreshIndicatorTimer: null,
   filters: defaultFilters(),
   showArchived: false,
+  // Repo-scoped plan visibility: false = show only the active repository's
+  // plans (repo param sent); true = the "Show plans from all repositories"
+  // opt-out (no repo param sent).
+  showAllRepos: false,
   commsActive: true,
   configActive: false,
   workspaceActive: false,
@@ -55,6 +59,7 @@ function resetState() {
   state.refreshIndicatorTimer = null;
   state.filters = defaultFilters();
   state.showArchived = false;
+  state.showAllRepos = false;
   state.commsActive = true;
   state.configActive = false;
   state.workspaceActive = false;

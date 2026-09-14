@@ -4,6 +4,22 @@
 // Exported functions: fetchWorkspaces, selectWorkspace, renderWorkspaceList.
 
 import { escapeHtml } from "./render/board.js";
+import { state } from "./state.js";
+
+// Repo-scoped plan visibility (030576c6): after a successful select the plan
+// list must re-scope to the newly active repository. main.js is byte-frozen
+// by tests/unit/test_comms_landing_redesign.py, so the refetch hook is
+// registered here instead of being called from main.js's handlers. The hook
+// is set by render/plan-list.js's initPlanList (main.js passes its own
+// refresh through that UNCHANGED call), and it must be invoked AFTER
+// state.selectedWorkspace is assigned so the refetch reads the new path.
+let _onWorkspaceSelected = null;
+function setOnWorkspaceSelected(fn) {
+  _onWorkspaceSelected = typeof fn === "function" ? fn : null;
+}
+async function notifyWorkspaceSelected() {
+  if (_onWorkspaceSelected) await _onWorkspaceSelected();
+}
 
 // Fetch the list of workspaces from the backend.
 // Returns the array of workspaces on success, or [] on any error.
@@ -24,6 +40,10 @@ async function fetchWorkspaces() {
 
 // Select a workspace by POSTing to /api/workspace.
 // Returns the parsed JSON on success, or an object { error: "..." } on failure.
+// On success the selected path is recorded on the shared state singleton and
+// the registered onWorkspaceSelected hook fires (plan-list.js registers a
+// refetch there), so the plan list re-scopes to the newly active repository.
+// Assignment happens BEFORE the hook so the refetch reads the new path.
 async function selectWorkspace(path, create) {
   try {
     const res = await fetch("/api/workspace", {
@@ -37,7 +57,12 @@ async function selectWorkspace(path, create) {
       body: JSON.stringify({ path, create }),
     });
     if (res.ok) {
-      return await res.json();
+      const body = await res.json();
+      if (!body || !body.error) {
+        state.selectedWorkspace = path;
+        await notifyWorkspaceSelected();
+      }
+      return body;
     }
     try {
       const errBody = await res.json();
@@ -161,4 +186,5 @@ export {
   renderWorkspaceList,
   fetchActiveWorkspace,
   renderWorkspacePicker,
+  setOnWorkspaceSelected,
 };

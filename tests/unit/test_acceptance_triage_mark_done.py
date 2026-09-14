@@ -378,28 +378,49 @@ def test_suite_probe_exception_fails_closed_to_park(harness, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_execution_record_captures_prior_state_before_mutation(harness):
+def test_execution_record_captures_prior_state_before_mutation(harness, monkeypatch):
     harness.state["new_commits"] = True
     story = _story(harness, parked_reason="no new commits vs master")
 
-    _run(harness, story)
+    # The execution record is written by the production entry point
+    # _apply_ruling_for_mode - which snapshots the priors BEFORE the mutation
+    # and records with the real autonomy mode - not by the private executor
+    # (recording in both places wrote two records per ruling).
+    monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "gated", raising=False)
+    triage._apply_ruling_for_mode(
+        "plan-a",
+        story["key"],
+        story,
+        {"action": "mark_done", "rationale": "stale bookkeeping"},
+        {"stories": {story["key"]: story}},
+        Path("/tmp/plan-a.manifest.json"),
+    )
 
     assert len(harness.calls["decisions"]) == 1
     record = harness.calls["decisions"][0]
     assert record["story_key"] == "OPSA-6"
     assert record["action"] == "mark_done"
+    assert record["mode"] == "gated"
     assert record["prior_status"] == "parked"
     assert record["prior_parked_reason"] == "no new commits vs master"
     # The snapshot is the state BEFORE the mutation.
     assert story["status"] == "done"
 
 
-def test_execution_record_is_written_for_the_pr_url_path(harness):
+def test_execution_record_is_written_for_the_pr_url_path(harness, monkeypatch):
     harness.state["new_commits"] = False
     harness.state["suite"] = ""
     story = _story(harness, pr_url="https://github.com/o/r/pull/9")
 
-    _run(harness, story)
+    monkeypatch.setattr(server, "PIPELINE_AUTONOMY", "gated", raising=False)
+    triage._apply_ruling_for_mode(
+        "plan-a",
+        story["key"],
+        story,
+        {"action": "mark_done", "rationale": "stale bookkeeping"},
+        {"stories": {story["key"]: story}},
+        Path("/tmp/plan-a.manifest.json"),
+    )
 
     assert len(harness.calls["decisions"]) == 1
     assert harness.calls["decisions"][0]["prior_status"] == "parked"

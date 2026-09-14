@@ -106,6 +106,7 @@ All four ACTION values are defined:
 - `repo_issue` – the failure is environmental, not the story's fault (a red lint baseline, a red suite at a clean baseline, a born‑broken acceptance oracle, CI unavailable). The overlord NEVER edits the repo; a detected repo issue becomes a normal pipeline story that goes through TDD, review and CI like anything else.
 - `park_for_human` – genuinely ambiguous; hold it.
 - `mark_done` – correct the story record to `done` only when live git/suite evidence corroborates it (new commits vs base, a merged `pr_url`, or the suite passing at HEAD); never on `parked_reason` text. An uncorroborated `mark_done` fails closed: the story stays parked and a human is notified.
+- `patch_acceptance` – the story's acceptance fixture is demonstrably broken at a clean baseline (a born-broken oracle: it cannot pass no matter what an implementer writes), so the fixture itself is the defect. The overlord returns a corrected fixture source between `===FIXTURE-START===` and `===FIXTURE-END===` markers plus a one-line `DIAGNOSIS:`. The executor validates BEFORE writing: the rewrite must pass the ingest lint/collection helper AND must still FAIL at a clean baseline (a rewrite that passes with no implementation is isolation-only and is rejected). Any failure to parse, lint, or stay born-broken parks the story loudly with the manifest's acceptance source untouched; on success the manifest is rewritten, the previous digests are snapshotted into the decisions log, and the story returns to `todo` for a fresh dispatch.
 
 The overlord should choose the honest action even when the pipeline cannot execute it yet: `repo_issue` alone is still recorded and then parked for a human, while `split_story` executes by creating two child stories in the manifest, and a ruling that misrepresents the situation to fit what is implemented is worse than an honest one that parks;
 
@@ -135,6 +136,24 @@ manifest-only actions (`mark_done`, `split_story`, `patch_acceptance`) with
 `risk: high` merges. Some stories park permanently BY RULING (abandoned or
 superseded scope) — a correct outcome with recorded reasoning, not a failure.
 
+### patch_acceptance output format
+
+When `ACTION` is `patch_acceptance`, the overlord's response must carry, in
+addition to the standard RULING/TIER/RISK/RATIONALE lines:
+
+```
+DIAGNOSIS: <one line naming the defect that makes the fixture born-broken>
+===FIXTURE-START===
+<the complete corrected fixture source, verbatim Python>
+===FIXTURE-END===
+```
+
+Both markers are required exactly once, the `DIAGNOSIS:` line is required, and
+the captured source is everything between the marker lines (the marker lines
+themselves are stripped). A response missing either marker, the `DIAGNOSIS:`
+line, or with an empty fixture body is unparseable and fails closed to
+`park_for_human`.
+
 ## Output contract
 
 The overlord returns:
@@ -145,7 +164,7 @@ TIER: routine | notify-async | park-and-ping
 RISK: low | medium | high
 RATIONALE: <2-4 sentences: why this, what was rejected, what was protected>
 NOTIFY_USER: yes | no
-ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done
+ACTION: escalate_model | split_story | repo_issue | park_for_human | mark_done | patch_acceptance
 SPLIT: <child A> || <child B>
 ```
 ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human.

@@ -1057,6 +1057,233 @@ await run("_commsTranscriptMarkdown sources bubble text from commsHistory with a
   assertTrue(body.includes("**${label}:**"), "the Ground/Tower label layout must be preserved");
 });
 
+// ---------- regression: failed turn then successful turn (positional alignment) ----------
+//
+// The catch path appends a user bubble (before the try) and a 'tower denied'
+// bubble, but commsHistory is only pushed after a SUCCESSFUL fetch. So a
+// failed turn leaves DOM bubbles that commsHistory never records. The export
+// must not align DOM bubbles to history entries positionally with a per-role
+// cursor: after a failed turn, that cursor is off by one for every later
+// bubble of the role and then runs off the end, so the failed turn's user text
+// is replaced by the next turn's text, the denied bubble shows the successful
+// reply, and the later turns fall back to flattened textContent.
+//
+// These tests drive the bug through the public API (sendCommsMessage +
+// exportCommsThread) exactly as the reviewer described it, and assert the
+// SECOND export in the same run too, because the fix must leave persistent
+// state on the DOM elements (a marker that survives repeated exports).
+
+const HELLO_TURN = "**Hello** there";
+const WEATHER_TURN = "What's the **weather**?";
+const SUNNY_REPLY = "It's **sunny**, 72°F";
+const THANKS_TURN = "Thanks!";
+const WELCOME_REPLY = "You're welcome!";
+
+// The catch path renders the tower-denied bubble via escapeHtml, so its
+// flattened textContent is the escaped catch message.
+const CATCH_TEXT = "Couldn't reach the tower - try again.";
+
+// Turn 1 fails: the user bubble + the tower-denied catch bubble are appended
+// to the DOM but NOT pushed to commsHistory.
+const failedTurnFetch = async () => {
+  throw new TypeError("Failed to fetch");
+};
+
+// Turn 2+ succeed: user bubble + assistant bubble appended, both pushed.
+const okTurnFetch = (reply) => async () =>
+  sseResponse([markdownResultFrame(reply)]);
+
+// The harness's .msg elements carry their rendered HTML in innerHTML (their
+// own textContent stays empty), so give each bubble an explicit flattened
+// textContent — what a real DOM would report — keyed off the bubble's role.
+// Raw markdown and its flattened form differ, which is what makes a
+// history-sourced read distinguishable from a textContent fallback.
+function flattenBubbles(thread, { user, assistant, denied }) {
+  let u = 0;
+  let a = 0;
+  for (const node of thread.children) {
+    const cls = String(node.className || "");
+    if (cls.indexOf("denied") !== -1) setBubbleText(node, denied);
+    else if (cls.indexOf("user") !== -1) setBubbleText(node, user[u++] || "");
+    else setBubbleText(node, assistant[a++] || "");
+  }
+}
+
+function assertEntryOrder(markdown, expected, label) {
+  let cursor = -1;
+  for (const needle of expected) {
+    const idx = markdown.indexOf(needle);
+    assertTrue(idx !== -1, `${label}: expected the transcript to contain ${JSON.stringify(needle)}`);
+    assertTrue(
+      idx > cursor,
+      `${label}: ${JSON.stringify(needle)} must appear in order (at ${idx}, after ${cursor})`,
+    );
+    cursor = idx;
+  }
+}
+
+await run("export keeps the failed turn's user text after a failed turn is followed by a successful one", async () => {
+  const { mod, exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = failedTurnFetch();
+  await mod.sendCommsMessage(HELLO_TURN);
+  currentFetch = okTurnFetch(SUNNY_REPLY);
+  await mod.sendCommsMessage(WEATHER_TURN);
+  exposeThreadMessages(thread);
+  flattenBubbles(thread, {
+    user: ["Hello there", "What's the weather?"],
+    assistant: ["It's sunny, 72\u00b0F"],
+    denied: CATCH_TEXT,
+  });
+  const markdown = await captureExportedMarkdown(exportThread);
+  // The failed turn's user bubble was never recorded, so it must fall back to
+  // its own flattened textContent — not consume the next turn's history entry.
+  assertTrue(
+    markdown.includes("Hello there"),
+    "the failed turn's user bubble must be exported from its own textContent",
+  );
+  assertTrue(
+    markdown.indexOf("Hello there") < markdown.indexOf("What's the **weather**?"),
+    "the failed turn's user bubble must not consume the successful turn's history entry",
+  );
+  assertEntryOrder(
+    markdown,
+    ["Hello there", "What's the **weather**?"],
+    "failed-turn-then-successful-turn",
+  );
+});
+
+await run("export shows the tower-denied catch bubble, not the successful reply, after a failed turn", async () => {
+  const { mod, exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = failedTurnFetch();
+  await mod.sendCommsMessage(HELLO_TURN);
+  currentFetch = okTurnFetch(SUNNY_REPLY);
+  await mod.sendCommsMessage(WEATHER_TURN);
+  exposeThreadMessages(thread);
+  flattenBubbles(thread, {
+    user: ["Hello there", "What's the weather?"],
+    assistant: ["It's sunny, 72\u00b0F"],
+    denied: CATCH_TEXT,
+  });
+  const markdown = await captureExportedMarkdown(exportThread);
+  assertTrue(
+    markdown.includes(CATCH_TEXT),
+    "the unrecorded tower-denied bubble must be exported from its own textContent",
+  );
+  const deniedIdx = markdown.indexOf(CATCH_TEXT);
+  const sunnyIdx = markdown.indexOf("It's **sunny**");
+  assertTrue(
+    sunnyIdx !== -1 && deniedIdx < sunnyIdx,
+    "the denied bubble must not consume the successful turn's assistant history entry",
+  );
+  assertEntryOrder(
+    markdown,
+    [CATCH_TEXT, "It's **sunny**"],
+    "denied-bubble-then-successful-reply",
+  );
+});
+
+await run("export keeps raw markdown for the recorded turns after a failed turn (no flattened fallback)", async () => {
+  const { mod, exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = failedTurnFetch();
+  await mod.sendCommsMessage(HELLO_TURN);
+  currentFetch = okTurnFetch(SUNNY_REPLY);
+  await mod.sendCommsMessage(WEATHER_TURN);
+  exposeThreadMessages(thread);
+  flattenBubbles(thread, {
+    user: ["Hello there", "What's the weather?"],
+    assistant: ["It's sunny, 72\u00b0F"],
+    denied: CATCH_TEXT,
+  });
+  const markdown = await captureExportedMarkdown(exportThread);
+  assertTrue(
+    markdown.includes(WEATHER_TURN),
+    "the successful turn's user entry must keep its raw markdown from commsHistory",
+  );
+  assertTrue(
+    markdown.includes(SUNNY_REPLY),
+    "the successful turn's assistant entry must keep its raw markdown from commsHistory",
+  );
+  assertTrue(
+    !markdown.includes("What's the weather?"),
+    "the recorded user turn must not fall back to flattened textContent",
+  );
+  assertTrue(
+    !markdown.includes("It's sunny, 72°F"),
+    "the recorded assistant turn must not fall back to flattened textContent",
+  );
+});
+
+await run("a second export in the same run still aligns every bubble after a failed turn", async () => {
+  const { mod, exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = failedTurnFetch();
+  await mod.sendCommsMessage(HELLO_TURN);
+  currentFetch = okTurnFetch(SUNNY_REPLY);
+  await mod.sendCommsMessage(WEATHER_TURN);
+  currentFetch = okTurnFetch(WELCOME_REPLY);
+  await mod.sendCommsMessage(THANKS_TURN);
+  exposeThreadMessages(thread);
+  flattenBubbles(thread, {
+    user: ["Hello there", "What's the weather?", "Thanks!"],
+    assistant: ["It's sunny, 72\u00b0F", "You're welcome!"],
+    denied: CATCH_TEXT,
+  });
+  const first = await captureExportedMarkdown(exportThread);
+  const second = await captureExportedMarkdown(exportThread);
+  const expected = [
+    "Hello there",
+    CATCH_TEXT,
+    WEATHER_TURN,
+    SUNNY_REPLY,
+    THANKS_TURN,
+    WELCOME_REPLY,
+  ];
+  assertEntryOrder(first, expected, "first export");
+  assertEntryOrder(second, expected, "second export");
+  assertTrue(
+    second.indexOf("Hello there") < second.indexOf(WEATHER_TURN),
+    "the second export must still keep the unrecorded user bubble on its own textContent",
+  );
+});
+
+await run("a non-string history entry is consumed (not sticky) so later bubbles of that role still align", async () => {
+  const { mod, exportThread } = await loadCommsModuleCapturingExport();
+  const thread = commsDoc.getElementById("comms-thread");
+  // Turn 1 resolves with a non-string reply: the push at the end of the try
+  // records { role: 'assistant', content: 42 }, which is not a string.
+  currentFetch = async () => sseResponse([markdownResultFrame(42)]);
+  await mod.sendCommsMessage("first question");
+  currentFetch = okTurnFetch("## Second\n- beta");
+  await mod.sendCommsMessage("second question");
+  exposeThreadMessages(thread);
+  flattenBubbles(thread, {
+    user: ["first question", "second question"],
+    assistant: ["42", "Second"],
+    denied: CATCH_TEXT,
+  });
+  const markdown = await captureExportedMarkdown(exportThread);
+  assertTrue(
+    markdown.includes("second question"),
+    "the second user turn must still be exported",
+  );
+  const secondIdx = markdown.indexOf("## Second");
+  assertTrue(
+    secondIdx !== -1,
+    "the second assistant turn must keep its raw markdown from commsHistory",
+  );
+  assertTrue(
+    markdown.indexOf("second question") < secondIdx,
+    "the second turn's entries must be exported in order",
+  );
+  assertTrue(
+    !markdown.includes("FLATTENED"),
+    "a non-string history entry must be consumed so later bubbles of that role do not all fall back",
+  );
+});
+
 // ---------- summary ----------
 
 const failed = results.filter((r) => !r.ok);

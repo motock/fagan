@@ -46,9 +46,26 @@ def _normalize_action(raw) -> str:
 
 
 def _parse_ruling(text: str) -> dict[str, Any]:
-    """Parse the overlord's output contract into a structured ruling."""
+    """Parse the overlord's output contract into a structured ruling.
+
+    Also parses the optional ``SPLIT: <child A> || <child B>`` payload lines
+    into the ``split`` key. Every line starting with ``SPLIT:`` is split on
+    ``||``, each side stripped, and a line only contributes its two child
+    summaries when both sides are non-empty; absent or malformed payloads
+    yield ``split: []``. The parser is deliberately not the fail-closed gate:
+    an empty payload never alters the parsed ACTION (the executor fails
+    closed on it, not here).
+    """
     fields: dict[str, str] = {}
+    split_children: list[str] = []
     for line in text.splitlines():
+        m = re.match(r"\s*SPLIT\s*:\s*(.*)", line)
+        if m:
+            sides = [side.strip() for side in m.group(1).split("||")]
+            sides = [side for side in sides if side]
+            if len(sides) == 2:
+                split_children.extend(sides)
+            continue
         m = re.match(r"\s*(RULING|TIER|RISK|RATIONALE|NOTIFY_USER|ACTION)\s*:\s*(.*)", line)
         if m:
             fields[m.group(1)] = m.group(2).strip()
@@ -59,6 +76,7 @@ def _parse_ruling(text: str) -> dict[str, Any]:
         "rationale": fields.get("RATIONALE", ""),
         "action": _normalize_action(fields.get("ACTION", "")),
         "notify_user": fields.get("NOTIFY_USER", "no").lower() in ("yes", "true"),
+        "split": split_children,
     }
 
 

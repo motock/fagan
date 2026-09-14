@@ -145,7 +145,10 @@ RISK: low | medium | high
 RATIONALE: <2-4 sentences: why this, what was rejected, what was protected>
 NOTIFY_USER: yes | no
 ACTION: escalate_model | split_story | repo_issue | park_for_human
+SPLIT: <child A> || <child B>
 ```
 ACTION is only meaningful for a failure-triage question and may be omitted for an ordinary blocked‑decision ruling, where it defaults to park_for_human.
+
+`SPLIT` is emitted only when `ACTION` is `split_story`: exactly two child summaries separated by ` || `. When `ACTION` is not `split_story`, omit the `SPLIT` line entirely.
 
 `NOTIFY_USER` is `yes` for `notify-async` and `park-and-ping`, `no` for routine.

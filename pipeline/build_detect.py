@@ -503,7 +503,15 @@ def _lint_acceptance_fixtures(
         with tempfile.TemporaryDirectory() as tmp_dir:
             _materialize_acceptance_fixtures(story, Path(tmp_dir))
             result = subprocess.run(
-                [ruff_path, "check", "--no-cache", str(tmp_dir)],
+                # ruff's DEFAULT rule set, so F401 (unused import - the PR #235
+                # failure class), F841 and E9 all fire. F821 (undefined name)
+                # is the one exception: acceptance fixtures are fragments that
+                # legitimately reference the unit under test, which does not
+                # exist until the story is implemented, so an undefined name in
+                # the source text is not proof of a broken fixture - the same
+                # reasoning the sibling pytest dry-run validator applies when a
+                # fixture imports repo code that does not exist yet.
+                [ruff_path, "check", "--no-cache", "--ignore", "F821", str(tmp_dir)],
                 check=False,
                 capture_output=True,
                 text=True,

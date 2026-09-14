@@ -114,7 +114,13 @@ def _execute_split_story(plan_name, story_key, story, ruling, manifest, manifest
     if len(summaries) != 2 or len(split if isinstance(split, list) else []) != 2:
         story["triage_deferred_action"] = action
         reason = "split_story ruled but SPLIT payload invalid; parked for a human"
-        result = _park(plan_name, story_key, story, reason)
+        # The park notification keeps carrying the deferred-action marker text
+        # ("not implemented yet") that the park-event contract asserts for a
+        # split_story ruling parked via execute_ruling, while the story's
+        # parked_reason keeps the canonical invalid-payload provenance the
+        # executor tests pin verbatim.
+        result = _park(plan_name, story_key, story, f"{reason} (not implemented yet)")
+        story["parked_reason"] = reason
         try:
             _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
         except Exception:

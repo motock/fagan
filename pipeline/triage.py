@@ -198,9 +198,14 @@ def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_p
     ``triage_deferred_action`` is left untouched, so a re-dispatch takes the
     same fail-closed path instead of silently skipping.
 
-    Corroborated -> ``story['status'] = 'done'``, ``triage_deferred_action``
-    is cleared, and an OPSA-3 execution record is appended capturing
-    ``prior_status``/``prior_parked_reason`` BEFORE the mutation.
+    Corroborated -> ``story['status'] = 'done'`` and
+    ``triage_deferred_action`` is cleared. This executor deliberately does
+    NOT append the OPSA-3 execution record itself: the only production
+    caller, :func:`_apply_ruling_for_mode`, snapshots
+    ``prior_status``/``prior_parked_reason`` before the mutation and records
+    the outcome with the real autonomy mode once :func:`execute_ruling`
+    returns (recording here as well wrote two records per ruling, the inner
+    one hardcoding ``mode='full'``).
 
     The manifest file is NOT written here: :func:`run_triage_sweep` persists
     the mutated manifest after the tick.
@@ -250,20 +255,14 @@ def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_p
             pass
         return result
 
-    # (c) Corroborated -> correct the record, capturing prior state first.
-    prior_status = story.get("status")
-    prior_parked_reason = story.get("parked_reason")
+    # (c) Corroborated -> correct the record. No execution record here: the
+    # only production caller, _apply_ruling_for_mode, already snapshots the
+    # prior state and appends the OPSA-3 record with the real autonomy mode
+    # once execute_ruling returns (matching _execute_split_story, which also
+    # does not record). Recording here too wrote TWO records per ruling and
+    # hardcoded mode="full", misstating PIPELINE_AUTONOMY="gated" runs.
     story["status"] = "done"
     story.pop("triage_deferred_action", None)
-    _record_execution(
-        plan_name,
-        story_key,
-        action,
-        "done",
-        "full",
-        prior_status,
-        prior_parked_reason,
-    )
     return "mark_done"
 
 

@@ -522,6 +522,11 @@ def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest, man
     if story is not manifest_story:
         story["acceptance"] = [e for e in new_acceptance]
     story["status"] = "todo"
+    # The story is being re-dispatched: a stale parked_reason would mislead the
+    # next triage pass and the parked-story matrix.
+    story.pop("parked_reason", None)
+    if story is not manifest_story:
+        manifest_story.pop("parked_reason", None)
 
     try:
         from .server import PIPELINE_AUTONOMY as mode

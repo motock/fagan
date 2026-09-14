@@ -331,8 +331,8 @@ def _acceptance_with_source(acceptance, source) -> list:
                 entry["source"] = source
                 replaced = True
         rewritten.append(entry)
-    if not replaced and rewritten and isinstance(rewritten[-1], dict):
-        rewritten[-1]["source"] = source
+    # No entry carries a source: leave the result unsourced rather than
+    # fabricating one on the last entry.
     return rewritten
 
 

@@ -792,6 +792,12 @@ def run_triage_sweep(plan_name: str) -> dict:
             actions[key] = ruling["action"]
             changed = True
         if changed:
+            # Strip the internal patch_acceptance sentinel from every story
+            # before the manifest is persisted: it is bookkeeping for
+            # _apply_ruling_for_mode, never serialized plan state.
+            for s in manifest.get("stories", {}).values():
+                if isinstance(s, dict):
+                    s.pop("_patch_acceptance_recorded", None)
             _atomic_write_json(manifest_path, manifest)
         return {"ok": True, "triaged": triaged_keys, "actions": actions}
     except Exception as exc:

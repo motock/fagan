@@ -106,7 +106,7 @@ All four ACTION values are defined:
 - `repo_issue` – the failure is environmental, not the story's fault (a red lint baseline, a red suite at a clean baseline, a born‑broken acceptance oracle, CI unavailable). The overlord NEVER edits the repo; a detected repo issue becomes a normal pipeline story that goes through TDD, review and CI like anything else.
 - `park_for_human` – genuinely ambiguous; hold it.
 
-The overlord should choose the honest action even when the pipeline cannot execute it yet: `split_story` and `repo_issue` are currently recorded and then parked for a human, and a ruling that misrepresents the situation to fit what is implemented is worse than an honest one that parks;
+The overlord should choose the honest action even when the pipeline cannot execute it yet: `repo_issue` alone is still recorded and then parked for a human, while `split_story` executes by creating two child stories in the manifest, and a ruling that misrepresents the situation to fit what is implemented is worse than an honest one that parks;
 
 The phrase `fail closed` means that an absent, unparseable, or unrecognized ACTION value fails closed to `park_for_human`;
 

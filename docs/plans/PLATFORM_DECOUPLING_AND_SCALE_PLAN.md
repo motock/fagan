@@ -1,6 +1,6 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **In execution (last updated 2026-09-11).** W3a, W1a, W1b, W1c, W2,
+> Status: **In execution (last updated 2026-09-14).** W3a, W1a, W1b, W1c, W2,
 > W3b, `server-app-file-split`, `workspace-selection`, `local-agent-file-split`,
 > `b5-export-the-moat`, `w4-logging-correlation`, `a3-maturity-metrics`,
 > `a4-non-author-usability`, `b1-sandbox-and-harness-seam`,
@@ -17,7 +17,29 @@
 > instance. The W3 config surface finally has ONE source of truth rather
 > than four drifting ones. Only **W4 (multi-tenant/enterprise)** remains
 > undone in this document's scope — see the updated "Suggested sequencing"
-> section below for the full 2026-09-07 status of every workstream.
+> section below for the full status of every workstream.
+>
+> **Landed 2026-09-11 through 2026-09-14, adjacent to this doc's scope:**
+> `chat-logs-usage` (13 stories, 2026-09-11) added streaming chat over SSE
+> (`POST /api/chat/stream` — W2's conversational surface, see the W2
+> section), per-backend usage reporting rendered in the dashboard usage
+> banner, and a canonical agent.log line grammar with a Claude stream-json
+> translator; `scheduler-lock-starvation` (13 stories, 2026-09-12) added
+> the dispatch-lease module and released the plan lock around
+> dispatch/review in the tick (see scaling concerns #2/#3 below);
+> `notify-lifecycle-email` (8 stories, 2026-09-12) added plan-completion
+> detection, a per-plan outbox, and SMTP delivery; `release-0.2.0` tagged
+> `v0.2.0` with `docs/RELEASING.md`; `scheduler-reconcile-resilience`
+> (2 stories, 2026-09-14) bounded the reconcile join with a per-call model
+> budget and an aliveness-driven abandon-restart escape hatch;
+> `repo-scoped-plan-visibility` (2 stories, 2026-09-14) exposed `repo_root`
+> on plan summaries and added the dashboard repo filter — the first step on
+> the maturity plan's B3 multi-repo bullet; `dashboard-chat-markdown`
+> (3 stories, 2026-09-14) rendered chat content as markdown in the Comms
+> panel; and `overlord-parked-story-autonomy` (9 stories, PRs #736-#747)
+> extended the overlord policy with a parked-story decision matrix and the
+> autonomy-mode ladder (see the maturity plan's B5 section — its exported
+> spec is now behind the live `overlord-policy.md`).
 > **`workspace-selection` (13 stories, PRs #475, #476, #482, #485-#491, #494,
 > #496, #497 — plus the `workspace-security-followups` plan, WS-SEC-01/02,
 > PRs #489/#492) DONE 2026-08-29:** the last piece of the chat entry point's
@@ -247,7 +269,12 @@ applied deliberately rather than discovered per-test.
 > directory-list / code-search endpoints + matching chat tools, behind
 > shared-secret API auth) shipped 2026-09-08 via plan
 > `CHAT_CODEBASE_PARITY_PLAN` (9 stories, PRs #601/#603/#604/#606-#611);
-> the write/apply half remains gated — see Open questions.
+> the write/apply half remains gated — see Open questions. **Since then:**
+> `chat-logs-usage` (13 stories, 2026-09-11) added streaming chat over SSE
+> (`POST /api/chat/stream` backed by `stream_turn`, the dashboard Comms
+> panel consuming the stream for incremental tool activity) and
+> `dashboard-chat-markdown` (3 stories, 2026-09-14) renders chat content as
+> markdown in the panel — both extend this workstream's landed surface.
 
 The UI chatbot is **a client of W1's API**, and its own agent loop. It is not a
 new orchestrator, and it must not grow its own copy of the state machine.
@@ -451,12 +478,32 @@ plans in sorted order, and one slow plan delays every plan behind it. Latency
 floor is 60s + the serial tick. It scales to maybe tens of plans; it does not
 scale to hundreds, and there is no safe way to run a second scheduler.
 
+**Hardened (not scaled) 2026-09-12/14:** `scheduler-lock-starvation` and
+`scheduler-reconcile-resilience` made the *single* scheduler much harder to
+wedge — merge adjudication moved to the start of the tick, the plan lock is
+released around dispatch/review (guarded by the dispatch lease), the
+reconcile join now has a bounded per-call model budget and a join watchdog,
+per-plan dispatch per tick is capped, and repeated abandoned workers trigger
+a launchd-restart escape hatch. All of this hardens the one-host topology;
+none of it changes the "no safe second scheduler" property, which remains
+W4's leader-election problem.
+
 ### 3. Slot accounting is O(plans) per check, and pid-based
 
 Every dispatch decision globs and JSON-parses every manifest in `PLAN_DIR`.
 Fine at ~20 plans, wasteful at ~500, and correctness — not just cost — breaks the
 moment a worker is on another host, because `os.kill(pid, 0)` is host-local.
 Leases with heartbeats replace both properties.
+
+**Building block landed 2026-09-12:** `pipeline/dispatch_lease.py`
+(`scheduler-lock-starvation` LOCKSTARVE-B2) is a real lease with a TTL
+(`PIPELINE_DISPATCH_LEASE_TTL_SECONDS`, default 1800) and fail-secure
+re-claim semantics — created to stop a released plan lock from
+double-dispatching one story, not for cross-host liveness (the lease lives
+in the same per-plan JSON as everything else). It is the first lease-shaped
+mechanism in the codebase and the natural seed for W4's
+lease-with-heartbeat worker accounting; the host-local pid check it
+coexists with is unchanged.
 
 ### 4. Read-modify-write on shared JSON
 
@@ -633,7 +680,9 @@ The dependency order is fairly rigid:
    only where there's a real second deployment to validate against. Building it
    speculatively against an imagined tenant is exactly the over-engineering the
    project's own standards warn about. **The only workstream this document
-   still tracks as undone, as of 2026-09-07.**
+   still tracks as undone, as of 2026-09-14** (the dispatch-lease building
+   block noted under scaling concern #3 is the one piece of W4-shaped
+   machinery that has since landed, for single-host reasons).
 
 Steps 1–8b are worth doing even if enterprise never happens: they're what make
 the system usable without a Claude Code session open, which is the stated goal.
@@ -748,7 +797,8 @@ maturity doc deliberately records as bare TODOs ("no design detail yet").
   original sequencing note — ship the Comms UI first, then scope direct-repair
   as its own follow-on workstream — is overtaken by events: the Comms UI and
   the read half have both landed; only the gated write/apply workstream
-  remains.)
+  remains.) **The security-engineer review that gates it was kicked off
+  2026-09-14; its threat model is the input to any implementation plan.**
 - ~~**Single binary or split services?**~~ **RESOLVED for local 2026-08-15**
   — W1c decided to extend the existing `app/dashboard.py` FastAPI app rather
   than stand up a second service (simplest for a single local-install process;

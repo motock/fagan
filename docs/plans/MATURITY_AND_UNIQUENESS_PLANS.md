@@ -534,10 +534,11 @@ stories (TDD-split stays strictly read-only). Tests in
       `ci-gate-visible` (#680, so a disabled `PIPELINE_MERGE_CI_GATE` can no
       longer report "pass" and silently outlive its cause). The manual
       local-suite + `gh pr merge` operating mode is RETIRED;
-      `approve_merge` / `gh pr checks` is the gate again. Residual:
-      `PIPELINE_MERGE_CI_GATE=0` is still stale in the scheduler launchd
-      plist and `~/.claude.json`, currently overridden to `1` by the repo's
-      `.pipeline.env`.
+      `approve_merge` / `gh pr checks` is the gate again. **Residual
+      cleaned 2026-09-14:** the stale `PIPELINE_MERGE_CI_GATE=0` was removed
+      from the scheduler launchd plist and `~/.claude.json`; the repo's
+      `.pipeline.env` (`=1`) is now the sole remaining source, so the gate
+      no longer depends on an override to be correct.
 
 ### A4. Make it usable by someone who isn't the author
 
@@ -671,9 +672,16 @@ stories (TDD-split stays strictly read-only). Tests in
 > changes nothing until the inference tier is separated (see B1's remote
 > execution backend).
 
-- [ ] **Multi-repo fleet as a first-class concept.** `advance_all_plans`
+- [~] **Multi-repo fleet as a first-class concept.** `advance_all_plans`
       exists but is plan-per-repo glued. A fleet manager with per-repo
       backends, quotas, and isolation is the scale story.
+      **First real step landed 2026-09-14, plan `repo-scoped-plan-visibility`
+      (2 stories, PRs #732/#733):** plan summaries now expose `repo_root`,
+      the plans API supports a repo filter, and the dashboard plan list
+      filters to the active repository with an all-repos toggle. That is
+      per-repo *visibility*, not yet a fleet — per-repo backends, quotas,
+      and isolation remain open (and are W4 territory in
+      `PLATFORM_DECOUPLING_AND_SCALE_PLAN.md`).
 - [ ] **RBAC / multi-user.** Overlord park-and-ping is the kernel of an
       authorization model; extend it to actual users/roles for shared
       deployments.
@@ -745,7 +753,19 @@ stories (TDD-split stays strictly read-only). Tests in
       plan `b5-export-the-moat` (3 stories, B5-01, PR #517).**
       `docs/specs/OVERLORD_POLICY_SPEC.md` is a harness-agnostic standalone
       spec of the 3-tier risk + audit decision policy, no longer locked
-      inside internal docs.
+      inside internal docs. **Update 2026-09-14 — the live policy has since
+      outgrown the exported spec.** Plan `overlord-parked-story-autonomy`
+      (9 stories, PRs #736-#747) extended the *live* policy
+      (`overlord-policy.md` at the repo root) with a parked-story decision
+      matrix, an autonomy-mode ladder in which `PIPELINE_AUTONOMY=full`
+      includes high-risk merge adjudication, executable `split_story`/
+      `patch_acceptance`/`mark_done` rulings, and park-for-human replaced by
+      delegate-then-review-post-hoc (the overlord resolves parked stories
+      from live evidence; humans audit the decision log afterwards).
+      `OVERLORD_POLICY_SPEC.md` itself was not touched by that plan —
+      refreshing the exported spec to match is a small open follow-up, and
+      the delta is now the most interesting part of the story (a pipeline
+      that resolves its own stuck stories and invites post-hoc audit).
 - [x] **Publish the acceptance-oracle grading pattern — DONE, same plan
       (B5-02, PR #519).** `docs/specs/ACCEPTANCE_ORACLE_PATTERN.md` documents
       the FM-A insight (grade on fixtures, not the model's own tests; scope
@@ -758,7 +778,9 @@ stories (TDD-split stays strictly read-only). Tests in
       `pipeline/companion_server.py` ships a companion MCP server exposing
       *only* the overlord + acceptance-oracle tools for piecemeal adoption —
       that half is done. Listing it on the MCP registry itself has not
-      happened.
+      happened. **Unblocked in practice as of 2026-09-14: the repo is now
+      public**, so the registry listing is now a small standalone task
+      rather than something gated on a launch decision.
 
 ### B6. Ecosystem & community
 
@@ -766,7 +788,11 @@ stories (TDD-split stays strictly read-only). Tests in
       `release-docs`. `v0.1.0` tagged and pushed; `CHANGELOG.md` (#681)
       carries the 0.1.0 entry in Keep a Changelog format. Automated tooling
       (`release-please` / `cz`) remains optional — the practice is started,
-      not automated.
+      not automated. **Second release followed 2026-09-12:** `v0.2.0` is
+      tagged and pushed, with the 0.2.0 entry written by plan
+      `release-0.2.0` (3 stories, PRs #728-#730) and the release procedure
+      documented in `docs/RELEASING.md` — the next release is a documented,
+      repeatable process rather than git archaeology.
 - [x] **Contributor docs + the ADR pattern** - DONE 2026-09-11, same plan,
       PR #682. `CONTRIBUTING.md` plus `docs/adr/` with an index
       (`README.md`), a `template.md`, and the first four decision records:
@@ -776,7 +802,11 @@ stories (TDD-split stays strictly read-only). Tests in
       safety-gates-default-on-and-fail-closed.
 - [ ] **A public demo / writeup of the MCP-native inversion** (Claude Code
       driving its own pipeline) — the angle most likely to draw interest, and
-      nobody else leads with it.
+      nobody else leads with it. **The repo is public as of 2026-09-14, so
+      this is unblocked.** The 2026-09-12→14 work strengthens the material:
+      the overlord now resolves its own parked stories in full-autonomy mode
+      with a post-hoc-audit decision log (`overlord-parked-story-autonomy`),
+      which is a sharper story than the 2026-09-11 snapshot of this doc had.
 
 ---
 
@@ -851,15 +881,24 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > conflict" section for the historical rationale on why B1/B5 were
 > sequenced after the service seam.
 >
-> **What's left as of 2026-09-11:** W4 (multi-tenant — closes B3), B5's
-> remaining SWE-bench integration bullet and MCP-registry listing, B6's
-> public demo/writeup, A3's reframed failure-mode-discovery-rate item, and
-> the worktree write/apply half of chat-driven repair (gated on a security
-> review — see above). B2 (model
-> breadth) closed 2026-09-08; see the B2 section.
+> **What's left as of 2026-09-14:** W4 (multi-tenant — closes B3; deferred
+> until a real second deployment exists), B5's remaining SWE-bench
+> integration bullet and MCP-registry listing, B6's public demo/writeup,
+> A3's reframed failure-mode-discovery-rate item, the worktree write/apply
+> half of chat-driven repair (security-engineer review kicked off
+> 2026-09-14), and a small follow-up surfaced by this refresh: the exported
+> `OVERLORD_POLICY_SPEC.md` lags the live `overlord-policy.md` (see B5).
+> Since the 2026-09-11 snapshot, `v0.2.0` shipped (streaming chat,
+> per-backend usage reporting, plan-completion e-mail, canonical agent.log
+> grammar), `overlord-parked-story-autonomy` landed (9 stories),
+> `scheduler-lock-starvation` + `scheduler-reconcile-resilience` hardened
+> the scheduler and added the dispatch-lease building block,
+> `repo-scoped-plan-visibility` opened the B3 bullet, and the repo went
+> public — all recorded in their sections above.
 
 Land what's half-done before building new; then extract the service seam
 that everything else — sandboxing included — is cheaper to build behind.
-As of 2026-09-07 that sequence has run its course: A1/A2 are long closed
-and A3/A4/B1/B4/B5 are now closed or landed-with-caveats; what remains
-(W4/B2/B3/B6) is genuinely new scope, not "land what's half-done."
+As of 2026-09-14 that sequence has run its course: A1/A2 are long closed
+and A3/A4/B1/B2/B4 are now closed or landed-with-caveats; what remains
+(W4/B3, plus B5/B6 adoption items) is genuinely new scope, not "land
+what's half-done."

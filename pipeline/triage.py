@@ -193,7 +193,6 @@ def plan_triage_budget_exhausted(manifest: dict) -> bool:
 __all__ = [
     "_auto_triage_enabled",
     "_current_suite_state",
-    "_current_git_state",
     "TRIAGE_MAX_ATTEMPTS",
     "TRIAGE_MAX_CREATED_STORIES",
     "TRIAGE_MAX_PER_TICK",

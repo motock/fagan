@@ -569,9 +569,14 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
             plan_name, story_key, story, ruling, manifest, manifest_path
         )
     if action == "patch_acceptance":
-        return _execute_patch_acceptance(
+        result = _execute_patch_acceptance(
             plan_name, story_key, story, ruling, manifest, manifest_path
         )
+        # The sentinel is internal bookkeeping for _apply_ruling_for_mode; it
+        # must never leak onto the story/manifest when execute_ruling is called
+        # directly (e.g. from a non-triage caller).
+        story.pop("_patch_acceptance_recorded", None)
+        return result
     if action in DEFERRED_ACTIONS:
         story["triage_deferred_action"] = action
         reason = f"triage ruled {action}, which is not implemented yet; parked for a human"

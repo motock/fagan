@@ -241,6 +241,8 @@ def _plan_summary(
         "aggregate": _aggregate_stories(stories),
         "updated_at": updated_at,
         "archived": plan_name in (archived_plans or set()),
+        # Plan-level repository path from the manifest; null when absent.
+        "repo_root": (manifest or {}).get("repo_root"),
         **({"latest_notification": latest_notification} if include_notification_summary else {}),
     }
 

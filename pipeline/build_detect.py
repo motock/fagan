@@ -468,10 +468,11 @@ def _lint_acceptance_fixtures(
     (ruff F401), and 4 of 7 CI lint failures traced back to it, burning a
     full local rework cycle that could never converge.
 
-    Note: this function is groundwork only - as of this change it has no
-    production caller. Wiring it into the ingest-time per-story loop (and
-    re-exporting it alongside its siblings) is left to a follow-up story so
-    that this one stays scoped to a single production file.
+    Wired into production: ``pipeline.ingest._ingest_plan_impl`` calls this for
+    every story while validating a plan, before any Plane side effect, and
+    ``pipeline.server`` re-exports it alongside its build_detect siblings. A
+    story whose ``.py`` acceptance fixture produces a finding is rejected at
+    ingest time.
 
     Returns exactly one of three kinds - callers (including a later opt-in
     blocking mode) must only ever gate on ``"finding"``, never on
@@ -504,14 +505,12 @@ def _lint_acceptance_fixtures(
             _materialize_acceptance_fixtures(story, Path(tmp_dir))
             result = subprocess.run(
                 # ruff's DEFAULT rule set, so F401 (unused import - the PR #235
-                # failure class), F841 and E9 all fire. F821 (undefined name)
-                # is the one exception: acceptance fixtures are fragments that
-                # legitimately reference the unit under test, which does not
-                # exist until the story is implemented, so an undefined name in
-                # the source text is not proof of a broken fixture - the same
-                # reasoning the sibling pytest dry-run validator applies when a
-                # fixture imports repo code that does not exist yet.
-                [ruff_path, "check", "--no-cache", "--ignore", "F821", str(tmp_dir)],
+                # failure class), F841, E9 and F821 (undefined name) all fire.
+                # No rule is excluded: an undefined name in a fixture is a
+                # plan-author mistake the gate exists to catch, and silently
+                # ignoring a rule re-opens the exact failure class this gate
+                # was built to prevent.
+                [ruff_path, "check", "--no-cache", str(tmp_dir)],
                 check=False,
                 capture_output=True,
                 text=True,

@@ -29,15 +29,15 @@ This module pins the contract the reviewer required on this branch
 The sibling ``test_acceptance_fixture_lint.py`` covers the helper itself; this
 module covers the ingest wiring.
 
-FLAGGED FOR THE TEST OWNER (not edited here): once the helper is wired,
+RESOLVED (was flagged for the test owner): the helper is wired, and
 ``tests/unit/test_pipeline_mcp_server_decisions_and_dispatch.py::test_ingest_plan_warns_on_isolation_only_acceptance_fixture``
-breaks. It embeds the acceptance source ``def test_x():\\n    assert
-_no_tool_nudge(0)\\n`` (path ``tests/test_nudge.py``) and asserts
-``result["ok"] is True``; ruff's DEFAULT rule set includes F821 (undefined
-name), so the wired gate reports a finding and ingest rejects. That fixture
-source needs to become lint-clean (e.g. define ``_no_tool_nudge`` in the
-source) while staying isolation-only - i.e. free of the integration markers
-``_isolation_only_acceptance_warning`` looks for.
+stays green. Its acceptance source ``def test_x():\\n    assert
+_no_tool_nudge(0)\\n`` (path ``tests/test_nudge.py``) used to trip ruff's
+F821 (undefined name) once the gate ran ruff's DEFAULT rule set, so the
+fixture source now defines ``_no_tool_nudge`` itself - lint-clean while
+staying isolation-only (free of the integration markers
+``_isolation_only_acceptance_warning`` looks for). The gate no longer
+excludes any rule: there is no ``--ignore F821`` in the lint invocation.
 """
 
 from __future__ import annotations

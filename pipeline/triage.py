@@ -375,9 +375,6 @@ def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest, man
     action = ruling.get("action", "patch_acceptance")
     rationale = ruling.get("rationale", "")[:300]
 
-    # The executor owns the record for this action (park or success).
-    story["_patch_acceptance_recorded"] = True
-
     acceptance = story.get("acceptance")
     if not acceptance:
         return _park(
@@ -540,6 +537,11 @@ def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest, man
         prior_acceptance_digests=prior_digests,
         diagnosis=diagnosis,
     )
+    # The executor owns the record on the SUCCESS path only: set the sentinel
+    # here (after the record is actually written) so _apply_ruling_for_mode
+    # does not append a second one. Park outcomes leave the sentinel unset, so
+    # _apply_ruling_for_mode records them itself.
+    story["_patch_acceptance_recorded"] = True
     return "patch_acceptance"
 
 

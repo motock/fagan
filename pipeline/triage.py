@@ -366,11 +366,13 @@ def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest, man
          undoable), rewrites the story's acceptance entries, sets ``status``
          back to ``todo`` for a fresh dispatch, and records the execution.
 
-    The executor writes its own OPSA-3 record on every exit path because it
-    alone knows the prior acceptance digests; :func:`_apply_ruling_for_mode`
-    pops the ``_patch_acceptance_recorded`` sentinel so the ruling is never
-    recorded twice. The manifest file is NOT written here:
-    :func:`run_triage_sweep` persists the mutated manifest after the tick.
+    The executor writes its own OPSA-3 record on the SUCCESS path only, because
+    it alone knows the prior acceptance digests; every fail-closed park outcome
+    is recorded by :func:`_apply_ruling_for_mode`, which pops the
+    ``_patch_acceptance_recorded`` sentinel (set here only after the success
+    record is written) so the ruling is never recorded twice. The manifest file
+    is NOT written here: :func:`run_triage_sweep` persists the mutated manifest
+    after the tick.
     """
     action = ruling.get("action", "patch_acceptance")
     rationale = ruling.get("rationale", "")[:300]

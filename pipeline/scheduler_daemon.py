@@ -212,6 +212,59 @@ def _abandon_restart_threshold() -> int:
     return value
 
 
+# Abandoned-worker grace window (story SRR-2): an abandoned watchdog worker
+# that is STILL ALIVE this long after its abandonment is a blocked call that
+# has not returned, so the plan ``_plan_lock`` it holds is leaked on a horizon
+# the daemon cannot influence — process death is the only release. With the
+# SRR-1 clamp no model call should outlive ~180s, so a worker still alive 300s
+# past its abandonment is genuinely stuck, not merely slow.
+_ABANDON_WORKER_GRACE_ENV = "PIPELINE_ABANDON_WORKER_GRACE_SECONDS"
+_DEFAULT_ABANDON_WORKER_GRACE_S = 300.0
+
+
+def _abandon_worker_grace_seconds() -> float:
+    """Read the abandoned-worker grace window from the environment, per call.
+
+    Mirrors :func:`_reconcile_join_timeout_seconds` exactly: malformed,
+    non-positive, and non-finite values degrade to the default (300s) with a
+    warning instead of crashing the loop. The specific failure modes this
+    guards against: accepting ``0``/negative would make ``elapsed > grace``
+    true on the very first alive worker (an instant restart); accepting
+    ``nan`` or ``inf`` would make every comparison False and silently disable
+    the leak detector forever.
+    """
+    raw = os.environ.get(_ABANDON_WORKER_GRACE_ENV)
+    if raw is None:
+        return _DEFAULT_ABANDON_WORKER_GRACE_S
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s must be a number, got %r; using default %gs",
+            _ABANDON_WORKER_GRACE_ENV,
+            raw,
+            _DEFAULT_ABANDON_WORKER_GRACE_S,
+        )
+        return _DEFAULT_ABANDON_WORKER_GRACE_S
+    if not math.isfinite(value):
+        logger.warning(
+            "%s must be finite, got %r; using default %gs",
+            _ABANDON_WORKER_GRACE_ENV,
+            raw,
+            _DEFAULT_ABANDON_WORKER_GRACE_S,
+        )
+        return _DEFAULT_ABANDON_WORKER_GRACE_S
+    if value <= 0:
+        logger.warning(
+            "%s must be positive, got %r; using default %gs",
+            _ABANDON_WORKER_GRACE_ENV,
+            raw,
+            _DEFAULT_ABANDON_WORKER_GRACE_S,
+        )
+        return _DEFAULT_ABANDON_WORKER_GRACE_S
+    return value
+
+
 class SchedulerDaemon:
     """Drives the event-driven pipeline's scan + reconcile cadence.
 
@@ -273,6 +326,15 @@ class SchedulerDaemon:
         # (the gated ``scan_timed_out`` pattern) so a clean tick's key set
         # stays byte-for-byte unchanged.
         self._consecutive_abandons = 0
+        # Abandoned-worker ledger (story SRR-2): every watchdog worker that
+        # was abandoned, as ``(thread, monotonic timestamp)`` pairs stamped at
+        # the abandonment. A worker still alive long after its abandonment is
+        # a blocked call that has not returned — the plan ``_plan_lock`` it
+        # holds is leaked on a horizon the daemon cannot influence, and
+        # process death is the only release. ``run_once`` prunes dead workers
+        # each tick and raises SystemExit(1) once a survivor outlives the
+        # grace window (``_abandon_worker_grace_seconds``).
+        self._abandoned_workers = []
 
     def start(self) -> None:
         """Perform an immediate reconcile sweep on startup.
@@ -318,6 +380,16 @@ class SchedulerDaemon:
             # like ``scan_timed_out``: present only once it is non-zero so
             # the clean-tick key set stays byte-for-byte unchanged.
             snapshot["consecutive_abandonments"] = self._consecutive_abandons
+        abandoned_workers_alive = sum(
+            1 for worker, _ts in self._abandoned_workers if worker.is_alive()
+        )
+        if abandoned_workers_alive:
+            # Abandoned-worker leak detector (story SRR-2), gated exactly
+            # like ``scan_timed_out``: present only while the count is
+            # non-zero so the clean-tick key set stays byte-for-byte
+            # unchanged. Read-only: health() never prunes the ledger, so a
+            # health poll cannot change the streak gate on the next tick.
+            snapshot["abandoned_workers_alive"] = abandoned_workers_alive
         return snapshot
 
     def config_fingerprint(self) -> dict:
@@ -421,7 +493,12 @@ class SchedulerDaemon:
         # through here, so this single increment point covers scan and
         # reconcile; a watched fn that RAISES is a failed call, not an
         # abandonment, and leaves the streak untouched.
+        # SRR-2: also record the abandoned worker itself, stamped with the
+        # daemon's monotonic clock, so ``run_once`` can tell a worker that
+        # died (its blocked call returned) from one that is STILL ALIVE — a
+        # leaked plan ``_plan_lock`` that only process death releases.
         self._consecutive_abandons += 1
+        self._abandoned_workers.append((worker, self._clock()))
         return False, elapsed
 
     def _scan_with_watchdog(self, scan_fn):
@@ -498,7 +575,20 @@ class SchedulerDaemon:
             self._last_scan_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
 
         now = self._clock()
-        if now - self._last_reconcile >= self._interval_s:
+        # Boundary tolerance: ``now - self._last_reconcile`` is a difference
+        # of two large monotonic readings, and float rounding of
+        # ``(t0 + interval) - t0`` can land epsilon BELOW ``interval`` even
+        # when a full interval has elapsed (catastrophic cancellation on a
+        # large t0 — observed on CI: a 60s advance measured as
+        # 59.99999999999909, which silently skipped the reconcile phase). A
+        # full-interval advance must never be skipped to rounding, so
+        # compare against ``interval_s - epsilon``: the epsilon is ~1e-9,
+        # far below any real interval, so a genuinely-shorter elapsed (59s
+        # against a 60s interval) still skips and only the exact-boundary
+        # rounding artefact is absorbed.
+        if now - self._last_reconcile >= self._interval_s - max(
+            1e-9, abs(self._interval_s) * 1e-12
+        ):
             # Capture the deadline once: the timeout branch below must log
             # the deadline that was actually enforced, not re-read mutable
             # env state a second time.
@@ -556,6 +646,71 @@ class SchedulerDaemon:
         except Exception:
             logger.exception("notification outbox drain failed during tick")
 
+        # SRR-2: the abandoned-worker ledger is the streak's missing half.
+        # Prune workers whose blocked call has returned (dead = the lock it
+        # held was released by normal completion), then treat a survivor that
+        # has outlived the grace window as a leaked plan ``_plan_lock``: the
+        # daemon cannot influence its release, so process death must. This
+        # runs BEFORE the streak-reset/threshold block so the grace exit wins
+        # over the threshold exit and the reset below sees the pruned ledger.
+        self._abandoned_workers = [
+            (worker, ts)
+            for worker, ts in self._abandoned_workers
+            if worker.is_alive()
+        ]
+        grace_s = _abandon_worker_grace_seconds()
+        now = self._clock()
+        # Boundary tolerance: ``now - ts`` is a difference of two large
+        # monotonic readings, and float rounding of ``(t0 + grace) - t0`` can
+        # land epsilon ABOVE ``grace`` even when the elapsed time is exactly
+        # the grace window (catastrophic cancellation on a large t0 — observed
+        # on CI: elapsed 0.20000000018626451 against a 0.2s grace). A worker
+        # exactly at the grace is NOT past it, so compare against
+        # ``grace_s + epsilon``: the epsilon is ~1e-9, nine orders of
+        # magnitude below the 300s default, so a genuinely-stuck worker
+        # (elapsed 301s against a 300s grace) still exits and only the
+        # exact-boundary rounding artefact is absorbed.
+        grace_boundary = grace_s + max(1e-9, abs(grace_s) * 1e-12)
+        leaked = [
+            (worker, now - ts)
+            for worker, ts in self._abandoned_workers
+            if now - ts > grace_boundary
+        ]
+        if leaked:
+            names = ", ".join(
+                f"{worker.name!r} (alive {elapsed:.0f}s past its abandonment)"
+                for worker, elapsed in leaked
+            )
+            self._last_error = (
+                f"abandoned watchdog worker(s) {names} still alive past the "
+                f"{grace_s:.0f}s grace window: the plan _plan_lock held by "
+                "the wedged call is leaked and process death is the only "
+                "thing that releases the flock — exiting so launchd "
+                "restarts the daemon"
+            )
+            logger.error("%s", self._last_error)
+            # Same pre-exit ordering as the abandon-restart hatch below:
+            # write the health file FIRST so the final state (including the
+            # ``abandoned_workers_alive`` count) is observable on disk, THEN
+            # raise SystemExit.
+            if self._health_path is not None:
+                try:
+                    self.write_health(self._health_path)
+                except Exception:  # pragma: no cover - unlikely but safe
+                    logger.exception("write_health failed")
+            raise SystemExit(1)
+        for worker, ts in self._abandoned_workers:
+            logger.warning(
+                "abandoned watchdog worker %r still alive %ds after its "
+                "abandonment; waiting out the %.0fs grace window before "
+                "treating its plan _plan_lock as leaked (%.0fs of grace "
+                "remaining)",
+                worker.name,
+                now - ts,
+                grace_s,
+                grace_s - (now - ts),
+            )
+
         # LOCKSTARVE-C2: a tick in which no phase abandoned a worker means
         # every phase completed normally, so the consecutive-abandonment
         # streak ends. The reset happens BEFORE the threshold check (and
@@ -563,7 +718,14 @@ class SchedulerDaemon:
         # threshold is re-read from the env per call, and checking it first
         # could exit on a healthy tick after an operator lowered the
         # threshold under an existing streak.
-        if self._consecutive_abandons == streak_at_start:
+        # SRR-2: the reset's premise — "every phase completed normally" — is
+        # FALSE while an abandoned worker is still alive: its leaked plan
+        # ``_plan_lock`` persists and the hatch must stay armed, so the reset
+        # fires only when the pruned ledger is empty. With an empty ledger
+        # this is byte-identical to the pre-SRR-2 behaviour.
+        if not self._abandoned_workers and (
+            self._consecutive_abandons == streak_at_start
+        ):
             self._consecutive_abandons = 0
 
         if self._health_path is not None:

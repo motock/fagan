@@ -43,6 +43,7 @@ import json
 import logging
 import pathlib
 import threading
+import time
 
 import pytest
 
@@ -217,6 +218,24 @@ def patch_join_timeouts(monkeypatch):
     monkeypatch.setattr(
         mod, "_reconcile_join_timeout_seconds", lambda: JOIN_TIMEOUT_S
     )
+
+
+def _wait_for_new_threads_to_die(baseline, timeout=5.0):
+    """Wait until every thread created since ``baseline`` has exited.
+
+    SRR-2 gates the consecutive-abandonment streak reset on no abandoned
+    worker still being alive, so a test that wants today's reset must model
+    "the abandoned worker died" rather than merely releasing its blocked call.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not [
+            t
+            for t in threading.enumerate()
+            if t not in baseline and t.is_alive()
+        ]:
+            return
+        time.sleep(0.01)
 
 
 def _module_source() -> str:
@@ -395,8 +414,17 @@ def test_completed_phase_resets_consecutive_streak(monkeypatch):
     )
     try:
         # Ticks 1-2: consecutive abandonments -> streak 2.
+        baseline = set(threading.enumerate())
         run_once_expect_normal(daemon)
         run_once_expect_normal(daemon)
+        # SRR-2: the streak reset is gated on no abandoned worker still being
+        # alive, so model "the abandoned worker died" before the completing
+        # tick: release the wedged calls, wait for the worker threads to
+        # actually exit, then re-arm the event so the later wedged ticks still
+        # block.
+        release.set()
+        _wait_for_new_threads_to_die(baseline)
+        release.clear()
         # Tick 3: scan completes -> the streak resets to 0.
         assert daemon.run_once() == {"scanned": True, "reconciled": False}
         # Ticks 4-5: two more abandonments -> streak 2, still below 3. With a

@@ -377,3 +377,83 @@ def test_run_suite_runs_from_the_suite_directory(tmp_path):
     assert result.returncode == 0, (
         f"suite did not run from its own directory: {result.stderr}"
     )
+
+
+# --------------------------------------------------------------------------
+# the gate helpers this module grades
+#
+# The read-only oracle tests/acceptance_node_suite_gating.py imports these
+# three names from this module, so they are the deliverable. They live after
+# the tests on purpose: the tests above resolve them through globals() at
+# call time, so this file still collects (and reports a precise failure)
+# while they are absent.
+# --------------------------------------------------------------------------
+
+# Suites red today for reasons outside this story's scope. Keys are
+# repo-relative POSIX paths; values are one-line reasons naming the ACTUAL
+# failure observed in the run this map was derived from. The ratchet test
+# above fails the moment one of these starts passing, so this list cannot
+# rot into a permanent excuse.
+_KNOWN_BROKEN: dict[str, str] = {
+    "tests/test_app_hash.mjs": (
+        "jsdom is undeclared and uninstalled: "
+        "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'jsdom'"
+    ),
+    "tests/test_app_backend_escalated.mjs": (
+        "jsdom is undeclared and uninstalled: "
+        "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'jsdom'"
+    ),
+    "tests/test_app_overview.js": (
+        "stale hand-rolled DOM stub: document.body.classList.toggle is not a function"
+    ),
+    "tests/test_app_search.js": (
+        "stale hand-rolled DOM stub: document.body.classList.toggle is not a function"
+    ),
+    "tests/test_app_js_smoke.js": (
+        "stale hand-rolled DOM stub: document.body.classList.toggle is not a function"
+    ),
+}
+
+
+def _discover_suites(repo_root):
+    """Every runnable Node suite under ``repo_root``/tests, sorted.
+
+    Glob-based, never an explicit file list, so a newly added suite is
+    picked up automatically. Any path with a ``_``-prefixed component is
+    dropped: that covers ``tests/_app_js_loader.mjs`` (a shared helper, not
+    a suite) and the whole duplicate repo trees the benchmark rig leaves
+    under ``tests/benchmark/_runs/...`` -- the same rule pytest's addopts
+    apply with ``--ignore=tests/benchmark --ignore=tests/experiments``.
+
+    The filter runs on the path RELATIVE to ``repo_root``: an absolute-path
+    check would see a ``_``-prefixed worktree directory and silently drop
+    every suite, turning this gate into a vacuous green.
+    """
+    root = Path(repo_root).resolve()
+    found = set(root.glob("tests/**/test_*.mjs")) | set(
+        root.glob("tests/**/test_*.js")
+    )
+    return sorted(
+        path
+        for path in found
+        if not any(part.startswith("_") for part in path.relative_to(root).parts)
+    )
+
+
+def _run_suite(path):
+    """Run one Node suite from its own directory and capture everything.
+
+    ``check=False`` so a red suite yields a ``CompletedProcess`` with the
+    captured output intact instead of raising; ``cwd=path.parent`` because
+    each suite resolves its imports relative to its own directory -- and
+    because ``os.chdir`` would poison the whole pytest process for every
+    test that runs after this one.
+    """
+    path = Path(path)
+    return subprocess.run(
+        ["node", path.name],
+        cwd=path.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )

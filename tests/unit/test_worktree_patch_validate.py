@@ -230,6 +230,22 @@ def test_parse_strips_b_prefix_and_keeps_dev_null():
     assert _get(parsed, "added_lines") == 3
 
 
+def test_parse_deletion_only_file_is_not_a_new_side_path():
+    """``+++ /dev/null`` is a deletion-only file: no new-side path."""
+    diff = (
+        "--- a/src/app.py\n"
+        "+++ /dev/null\n"
+        "@@ -1,2 +0,0 @@\n"
+        "-x = 1\n"
+        "-y = 2\n"
+    )
+    parsed = parse_unified_diff(diff)
+
+    assert list(_get(parsed, "paths")) == []
+    assert _get(parsed, "added_lines") == 0
+    assert _get(next(iter(_get(parsed, "hunks"))), "deletions") == 2
+
+
 def test_parse_ignores_no_newline_marker():
     diff = (
         "--- a/src/app.py\n"
@@ -451,6 +467,34 @@ def test_validate_does_not_apply_the_deny_list_at_propose(worktree: Path):
     result = validate_for_propose(diff, str(worktree))
 
     assert result["paths"] == [".git/hooks/pre-commit"]
+
+
+def test_validate_does_not_call_the_strict_write_resolver(worktree: Path, monkeypatch):
+    """Propose uses the READ half only; the write resolver must not be called."""
+    from pipeline import worktree_patch
+
+    def _boom(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("resolve_write_target must not be called at propose")
+
+    monkeypatch.setattr(worktree_patch, "resolve_write_target", _boom)
+
+    result = validate_for_propose(VALID_MULTI_HUNK_DIFF, str(worktree))
+
+    assert result["paths"] == ["src/app.py", "docs/readme.md"]
+
+
+def test_validate_does_not_call_the_deny_list_predicate(worktree: Path, monkeypatch):
+    """The deny list is apply-side only; propose must not consult it."""
+    from pipeline import worktree_patch
+
+    def _boom(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("is_denied_relative_path must not be called at propose")
+
+    monkeypatch.setattr(worktree_patch, "is_denied_relative_path", _boom)
+
+    result = validate_for_propose(VALID_MULTI_HUNK_DIFF, str(worktree))
+
+    assert result["added_lines"] == 4
 
 
 # --------------------------------------------------------------------------

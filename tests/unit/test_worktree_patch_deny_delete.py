@@ -225,10 +225,16 @@ def test_deletion_only_diff_targeting_denied_file_is_refused_403(
 def test_deletion_only_refusal_leaves_state_correct_for_a_followup_edit(
     plan_dir, repo, manifest
 ):
-    """The worked example: Call 1 refuses, so Call 2's edit applies cleanly.
+    """The worked example: Call 1 refuses, so the worktree state stays correct.
 
-    Buggy: Call 1 deletes ``CLAUDE.md`` and returns 200, so Call 2's
-    ``git apply --check`` fails against the missing file.
+    Buggy: Call 1 deletes ``CLAUDE.md`` and returns 200, so the follow-up
+    call runs against a worktree whose ``CLAUDE.md`` is gone.
+
+    Call 2 targets ``CLAUDE.md`` too, and ``CLAUDE.md`` is deny-listed for
+    ANY touch (pinned by ``test_deny_list_refused_403_and_target_byte_identical``),
+    so the correct outcome for Call 2 is the 403 deny refusal -- NOT a 409
+    "patch does not apply (context drift)", which is what a missing file
+    would produce.  The file must still be byte-identical after both calls.
     """
     denied = repo / "CLAUDE.md"
     before = denied.read_bytes()
@@ -248,8 +254,13 @@ def test_deletion_only_refusal_leaves_state_correct_for_a_followup_edit(
         PLAN_NAME, STORY_KEY, edit_rec["patch_id"], edit_rec["confirmation_token"]
     )
 
-    assert second["ok"] is True, second
-    assert denied.read_text() == "changed\n"
+    # CLAUDE.md is deny-listed, so the follow-up edit is refused on the deny
+    # list -- and refused because of the DENY LIST (403), not because Call 1
+    # corrupted the worktree state (that would be the 409 context-drift
+    # refusal a deleted file produces).
+    _assert_refusal(second, status_code=403)
+    assert second["error"] == "patch target refused", second
+    assert denied.read_bytes() == before, "Call 1's refusal did not preserve CLAUDE.md"
 
 
 # --------------------------------------------------------------------------

@@ -584,6 +584,15 @@ test("comms.js looks up the three new element ids", () => {
   }
 });
 
+test("comms.js calls all three ingest helpers", () => {
+  for (const fn of ["normalizePlanName", "ingestPlan", "renderIngestStatusHtml"]) {
+    assertTrue(
+      new RegExp(`${fn}\\s*\\(`).test(commsSrc),
+      `comms.js calls ${fn}(...)`,
+    );
+  }
+});
+
 test("submitIngestPlan is declared as an async function", () => {
   assertTrue(
     /async\s+function\s+submitIngestPlan\s*\(/.test(commsSrc),

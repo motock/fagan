@@ -255,10 +255,17 @@ The adoptable specs this server exports live in `docs/specs/`:
 
 ### Running standalone (dashboard + scheduler, no MCP server)
 
-The dashboard exposes the same operations as the MCP tools — save/ingest a
-plan, decompose a goal, dispatch a story, advance, review, approve merge — so
-the pipeline can run without registering an MCP server at all: drive it from
-the dashboard UI and let the scheduler advance ready stories on its own. The
+The dashboard exposes the same operations as the MCP tools — save/ingest a plan,
+decompose a goal, dispatch a story, advance, review, approve merge — so the
+pipeline can run without registering an MCP server at all. That parity lives at
+the HTTP API, not in the UI: the dashboard UI directly surfaces chat (including
+drafting a plan), browsing plans, stories, journals and logs, the workspace
+picker, the worktree-patch review/apply flow, role configuration, and ingesting a
+saved plan. Dispatch, advance, review and approve-merge have UI-less API routes
+(`/api/plans/{plan_name}/stories/{story_key}/dispatch` and friends) available for
+scripting, and for the standalone flow the scheduler is the intended driver:
+draft and ingest a plan from the dashboard, then let the scheduler dispatch,
+advance, review and merge ready stories on its own. The
 supported path is one command:
 
 ```bash

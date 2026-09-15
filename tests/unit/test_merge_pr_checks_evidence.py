@@ -33,9 +33,10 @@ The contract these tests pin down:
   so the populated ``pr_checks`` lands in the manifest with no extra write.
 
 ``pipeline/merge.py`` resolves ``_ci_status_once`` lazily inside the function
-body (the same pattern it already uses for ``.server``/``.persistence``/``.pr``),
-so the stub is installed on the SOURCE module attribute
-(``pipeline.ci._ci_status_once``) rather than on a ``pipeline.merge`` name.
+body through the module-documented monkeypatch seam (``from .server import
+...`` - the same seam the sibling ``_merge_gate_ci_status`` uses), so the stub
+is installed on the re-exported binding on ``pipeline.server``
+(``pipeline.server._ci_status_once``) rather than on a ``pipeline.merge`` name.
 """
 
 # ruff: noqa: I001
@@ -55,7 +56,6 @@ from pipeline import merge as merge_mod
 from pipeline import overlord as overlord_mod
 from pipeline import persistence as persistence_mod
 from pipeline import server as server_mod
-from pipeline import ci as ci_mod
 from pipeline import pr as pr_mod
 
 # The module that owns the manifest persistence guarded by the end-to-end test
@@ -105,11 +105,11 @@ def _story(**overrides):
 class _Harness:
     """Patches the autonomy knobs, the overlord boundary and the CI gather.
 
-    ``_ci_status_once`` is stubbed on every module that could hold the lazy
-    import's source binding (``pipeline.ci`` is the real source; ``pipeline.server``
-    re-exports it; ``pipeline.merge`` is covered in case the import is not lazy).
-    The blocking ``_ci_status`` is poisoned on the same modules so any use of it
-    fails loudly instead of sleeping.
+    ``_ci_status_once`` is stubbed on ``pipeline.server`` only: that is the
+    module-documented monkeypatch seam merge.py resolves the lazy import
+    through (the same seam the sibling ``_merge_gate_ci_status`` uses). The
+    blocking ``_ci_status`` is poisoned the same way so any use of it fails
+    loudly instead of sleeping.
     """
 
     def __init__(
@@ -165,9 +165,8 @@ class _Harness:
             self.blocking_calls.append((args, kwargs))
             return _boom_blocking(*args, **kwargs)
 
-        for mod in (ci_mod, server_mod, merge_mod):
-            monkeypatch.setattr(mod, "_ci_status_once", fake_once, raising=False)
-            monkeypatch.setattr(mod, "_ci_status", fake_blocking, raising=False)
+        monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
+        monkeypatch.setattr(server_mod, "_ci_status", fake_blocking, raising=False)
 
         def fake_resolve(worktree, story_key):
             self.branch_calls.append((worktree, story_key))
@@ -329,27 +328,31 @@ def test_gather_failure_still_records_the_ruling(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_no_worktree_gathers_with_empty_branch(monkeypatch):
+def test_no_worktree_gathers_with_convention_branch(monkeypatch):
     h = _Harness(monkeypatch, ruling=PROCEED_REPLY, gather=PASS_STATE)
     story = _story(worktree="")
 
     h.decide(story)
 
     assert len(h.gather_calls) == 1
-    assert h.gather_calls[0]["branch"] == ""
+    assert h.gather_calls[0]["branch"] == "agent/mergepark-1-story", (
+        "with no worktree to probe the poll must degrade to the convention "
+        "branch - polling an empty branch would resolve the CURRENT "
+        "checkout's PR and import an unrelated CI verdict"
+    )
     assert h.gather_calls[0]["sha"] == "", "the query must be branch-scoped"
     assert h.branch_calls == [], "no worktree means no branch probe"
     assert story["pr_checks"] == PASS_STATE
 
 
-def test_missing_worktree_key_gathers_with_empty_branch(monkeypatch):
+def test_missing_worktree_key_gathers_with_convention_branch(monkeypatch):
     h = _Harness(monkeypatch, ruling=PROCEED_REPLY, gather=PASS_STATE)
     story = _story()
     del story["worktree"]
 
     h.decide(story)
 
-    assert h.gather_calls[0]["branch"] == ""
+    assert h.gather_calls[0]["branch"] == "agent/mergepark-1-story"
     assert h.gather_calls[0]["sha"] == ""
     assert story["pr_checks"] == PASS_STATE
 
@@ -372,7 +375,9 @@ def test_existing_worktree_branch_is_resolved(monkeypatch, tmp_path):
     assert h.gather_calls[0]["sha"] == ""
 
 
-def test_nonexistent_worktree_dir_degrades_to_empty_branch(monkeypatch, tmp_path):
+def test_nonexistent_worktree_dir_degrades_to_convention_branch(
+    monkeypatch, tmp_path
+):
     h = _Harness(monkeypatch, ruling=PROCEED_REPLY, gather=PASS_STATE)
     story = _story(worktree=str(tmp_path / "does-not-exist"))
 
@@ -381,7 +386,10 @@ def test_nonexistent_worktree_dir_degrades_to_empty_branch(monkeypatch, tmp_path
     assert h.branch_calls == [], (
         "a missing worktree dir must not pay a subprocess to resolve a branch"
     )
-    assert h.gather_calls[0]["branch"] == ""
+    assert h.gather_calls[0]["branch"] == "agent/mergepark-1-story", (
+        "a missing worktree dir must degrade to the convention branch, never "
+        "to an empty branch (which would poll the current checkout's PR)"
+    )
     assert story["pr_checks"] == PASS_STATE
 
 
@@ -418,12 +426,13 @@ def test_ci_status_once_is_imported_lazily(monkeypatch):
     )
 
 
-def test_gather_resolves_ci_status_once_from_pipeline_ci(monkeypatch):
-    """The single-poll helper must come from ``pipeline.ci`` at call time.
+def test_gather_resolves_ci_status_once_from_pipeline_server(monkeypatch):
+    """The single-poll helper must come from ``pipeline.server`` at call time.
 
-    Only ``pipeline.ci._ci_status_once`` is stubbed here (``pipeline.server``
+    Only ``pipeline.server._ci_status_once`` is stubbed here (``pipeline.ci``
     and ``pipeline.merge`` are left alone), so this fails if the gather binds
-    the helper from anywhere else.
+    the helper from anywhere else - the module-documented seam is the
+    re-exported binding on ``pipeline.server``.
     """
     monkeypatch.setattr(server_mod, "PIPELINE_AUTONOMY", "full", raising=False)
     monkeypatch.setattr(server_mod, "PIPELINE_RISK_THRESHOLD", "low", raising=False)
@@ -444,8 +453,8 @@ def test_gather_resolves_ci_status_once_from_pipeline_ci(monkeypatch):
         calls.append({"branch": branch, "sha": sha})
         return dict(PASS_STATE)
 
-    monkeypatch.setattr(ci_mod, "_ci_status_once", fake_once)
-    monkeypatch.setattr(ci_mod, "_ci_status", _boom_blocking)
+    monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
+    monkeypatch.setattr(server_mod, "_ci_status", _boom_blocking, raising=False)
     story = _story()
 
     with merge_mod.merge_adjudication_plan("PLAN-1"):
@@ -453,7 +462,7 @@ def test_gather_resolves_ci_status_once_from_pipeline_ci(monkeypatch):
 
     assert decision["action"] == "merge"
     assert len(calls) == 1, (
-        "the gather must resolve _ci_status_once from pipeline.ci"
+        "the gather must resolve _ci_status_once from pipeline.server"
     )
     assert story["pr_checks"] == PASS_STATE
 
@@ -547,12 +556,12 @@ def test_gathered_pr_checks_land_in_the_persisted_manifest(plan_dir, monkeypatch
         return PARK_REPLY
 
     monkeypatch.setattr(overlord_mod, "_invoke_overlord", fake_invoke)
-    for mod in (ci_mod, server_mod, merge_mod):
-        monkeypatch.setattr(
-            mod, "_ci_status_once", lambda branch, *, sha: dict(PASS_STATE),
-            raising=False,
-        )
-        monkeypatch.setattr(mod, "_ci_status", _boom_blocking, raising=False)
+
+    def fake_once(branch, *, sha):
+        return dict(PASS_STATE)
+
+    monkeypatch.setattr(server_mod, "_ci_status_once", fake_once, raising=False)
+    monkeypatch.setattr(server_mod, "_ci_status", _boom_blocking, raising=False)
     (plan_dir / f"{PLAN}.manifest.json").write_text(
         json.dumps({"epics": {}, "stories": {E2E_KEY: _e2e_story()}}, indent=2)
     )

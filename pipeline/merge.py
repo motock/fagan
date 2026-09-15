@@ -207,20 +207,27 @@ def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
 def _populate_pr_checks_once(story):
     """Best-effort single-poll CI evidence for the overlord prompt.
 
-    Never raises and never blocks: uses the non-polling _ci_status_once.
+    Mutates the caller's ``story`` dict in place (the manifest write in
+    ``advance._adjudicate_merges`` carries the populated evidence) and never
+    raises. Uses the NON-polling ``_ci_status_once`` - one query, returns
+    immediately - so the scheduler's plan-locked tick is never sleep-polling;
+    a hung ``gh`` subprocess is the same pre-existing exposure the sibling
+    ``_merge_gate_ci_status`` has.
     """
     if story.get("pr_checks"):
         return
     try:
-        from .ci import _ci_status_once
-        from .pr import _resolve_story_branch
+        # The module-documented monkeypatch seam: pipeline.server re-exports
+        # the binding, so stubs land here exactly as they do for the sibling
+        # _merge_gate_ci_status. Never the blocking _ci_status poller.
+        from .pr import _convention_branch, _resolve_story_branch
+        from .server import _ci_status_once
 
-        branch = ""
+        key = story.get("key") or story.get("story_key")
+        branch = _convention_branch(key)
         worktree = story.get("worktree")
         if worktree and Path(worktree).is_dir():
-            branch = _resolve_story_branch(
-                worktree, story.get("key") or story.get("story_key")
-            )
+            branch = _resolve_story_branch(worktree, key)
         checks = _ci_status_once(branch, sha="")
         if checks is not None:
             story["pr_checks"] = checks

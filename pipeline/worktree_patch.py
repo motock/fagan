@@ -517,6 +517,8 @@ def validate_for_propose(diff_text: str, worktree_root: str) -> dict:
                 "both deletes and adds; anchor the edit with context lines"
             )
 
+    return {"paths": list(parsed.paths), "added_lines": parsed.added_lines}
+
 
 # ---------------------------------------------------------------------------
 # Patch record store (WAP-6)

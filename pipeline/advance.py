@@ -380,7 +380,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 status = backend.get_backend("dispatch", name=story_backend).resource_status(
                     model_tag=tag
                 )
-                if not status.get("ok", True):
+                if not status.get("ok", True) and "insufficient free memory" not in (
+                    status.get("reason") or ""
+                ):
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
             else:
@@ -609,7 +611,8 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     continue
             else:
                 # On-device with an explicit model tag: polled only when its own
-                # floor holds (otherwise it was interrupted this tick).
+                # floor holds. Memory pressure alone no longer interrupts it, so do
+                # not infer interruption from a low floor here.
                 if not backend.get_backend("dispatch", name=story_backend).resource_status(
                     model_tag=tag
                 ).get("ok", True):

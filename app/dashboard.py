@@ -15,7 +15,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -774,7 +774,10 @@ def get_workspace_route():
 
 
 @app.post('/api/workspace')
-def set_workspace_route(request: WorkspaceRequest, x_pipeline_origin: str | None = Header(default=None, alias="X-Pipeline-Origin")):
+def set_workspace_route(
+    request: WorkspaceRequest,
+    x_pipeline_origin: Annotated[str | None, Header(alias="X-Pipeline-Origin")] = None,
+):
     refuse_chat_origin(x_pipeline_origin)
     result = _service.resolve_workspace(request.path, create=request.create)
     if not result.get('ok'):

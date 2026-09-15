@@ -643,6 +643,28 @@ _TOKEN_SECRET = secrets.token_urlsafe(32)
 _PATCH_STORE: dict[str, dict] = {}
 
 
+def derive_confirmation_token(patch_id: str, diff_hash: str) -> str:
+    """Derive the confirmation token for a patch record (public API).
+
+    The token is an HMAC-SHA256 over ``f"{patch_id}:{diff_hash}"`` keyed
+    with the process secret, so it is bound to THIS record and cannot be
+    replayed for another patch id or another diff.  This is the single
+    derivation point: ``create_patch_record`` mints with it, ``apply_patch``
+    verifies with it, and the dashboard's GET review route re-derives with
+    it, so the three can never drift apart.
+    """
+    return hmac.new(
+        _TOKEN_SECRET.encode("utf-8"),
+        f"{patch_id}:{diff_hash}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def confirmation_token_for(record: dict) -> str:
+    """Return the confirmation token for a stored patch *record*."""
+    return derive_confirmation_token(record["patch_id"], record["diff_hash"])
+
+
 def create_patch_record(
     plan_name: str,
     story_key: str,
@@ -666,11 +688,7 @@ def create_patch_record(
     """
     patch_id = "wp-" + secrets.token_urlsafe(12)
     diff_hash = hashlib.sha256(diff_text.encode("utf-8")).hexdigest()
-    confirmation_token = hmac.new(
-        _TOKEN_SECRET.encode("utf-8"),
-        f"{patch_id}:{diff_hash}".encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    confirmation_token = derive_confirmation_token(patch_id, diff_hash)
 
     now = datetime.now(timezone.utc)
     record = {
@@ -863,11 +881,7 @@ def apply_patch(
         record = get_patch_record(patch_id)
         if record is None:
             return {"ok": False, "error": "unknown patch", "status_code": 404}
-        expected = hmac.new(
-            _TOKEN_SECRET.encode("utf-8"),
-            f"{patch_id}:{record['diff_hash']}".encode(),
-            hashlib.sha256,
-        ).hexdigest()
+        expected = derive_confirmation_token(patch_id, record["diff_hash"])
         if not hmac.compare_digest(str(confirmation_token), expected):
             return {
                 "ok": False,

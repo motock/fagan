@@ -83,3 +83,17 @@ class ProposePatchRequest(BaseModel):
     plan_name: str
     story_key: str
     unified_diff: str
+
+
+class ApplyPatchRequest(BaseModel):
+    """Body for ``POST /api/worktree/patch/{patch_id}/apply`` (WAP-10).
+
+    The apply route re-accepts NOTHING but the human confirmation token:
+    the diff that gets applied is always the server-stored record for the
+    patch id in the URL, never anything the caller sends.  A forged
+    ``unified_diff`` (or any other extra key) in the body is therefore
+    inert -- pydantic ignores unknown fields and the model has no diff
+    field to smuggle one into.
+    """
+
+    confirmation_token: str

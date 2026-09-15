@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -1197,6 +1197,106 @@ def propose_worktree_patch_route(
         )
 
     return record
+
+
+# ---------------------------------------------------------------------------
+# WAP-10: the patch REVIEW (GET) and APPLY (POST) dashboard routes.
+#
+# Both routes are UI-ONLY: the gate is ``require_ui_origin`` (the WAP-2
+# helper), so ``chat``, an absent header and any unknown value are all
+# refused with the generic 403 "origin not permitted".  The chat model may
+# PROPOSE (WAP-9); only the ui-origin-authenticated human may review the
+# stored record and APPLY it.
+#
+# The apply route re-accepts NOTHING but the confirmation token: the diff
+# that gets applied is always the server-stored record for the patch id in
+# the URL, never anything the caller sends.
+# ---------------------------------------------------------------------------
+from app.auth import require_ui_origin
+from app.dashboard_models import ApplyPatchRequest
+
+
+@app.get("/api/worktree/patch/{patch_id}")
+def get_worktree_patch_route(
+    patch_id: str,
+    response: Response,
+    x_pipeline_origin: str | None = Header(default=None, alias="X-Pipeline-Origin"),
+):
+    """Hand the trusted UI the full stored record for human review.
+
+    Includes ``diff_text`` and the ``confirmation_token``: the UI is the
+    trusted, ui-origin-authenticated human, and the token is bound to
+    ``patch_id`` + ``diff_hash`` so it cannot be replayed against a
+    different patch.  Read-only: no TTL refresh, no status flip, no store
+    mutation -- a second GET returns the same token and a later apply with
+    it still succeeds.  The token is re-derived through worktree_patch's
+    public helper -- the same derivation the mint and the apply verify
+    use -- so the three can never drift apart.  The response carries
+    ``Cache-Control: no-store``: the body holds a live credential and must
+    never sit in a shared cache.
+    """
+    require_ui_origin(x_pipeline_origin)
+    response.headers["Cache-Control"] = "no-store"
+
+    record = worktree_patch.get_patch_record(patch_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="no such patch")
+
+    return {
+        "ok": True,
+        "patch_id": record["patch_id"],
+        "plan_name": record["plan_name"],
+        "story_key": record["story_key"],
+        "paths": record["paths"],
+        "added_lines": record["added_lines"],
+        "diff_text": record["diff_text"],
+        "status": record["status"],
+        "created_at": record["created_at"],
+        "expires_at": record["expires_at"],
+        "confirmation_token": worktree_patch.confirmation_token_for(record),
+    }
+
+
+@app.post("/api/worktree/patch/{patch_id}/apply")
+def apply_worktree_patch_route(
+    patch_id: str,
+    request: ApplyPatchRequest,
+    x_pipeline_origin: str | None = Header(default=None, alias="X-Pipeline-Origin"),
+):
+    """Apply the SERVER-STORED record for *patch_id*, gated on the token.
+
+    The route passes ONLY ``(plan_name, story_key, patch_id,
+    confirmation_token)`` to the engine -- the diff applied is always the
+    server-stored record, never anything from the request body.  A forged
+    ``unified_diff`` alongside the token is inert (pydantic ignores the
+    unknown key and the model has no diff field).
+    """
+    require_ui_origin(x_pipeline_origin)
+
+    record = worktree_patch.get_patch_record(patch_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="no such patch")
+
+    result = worktree_patch.apply_patch(
+        record["plan_name"],
+        record["story_key"],
+        patch_id,
+        request.confirmation_token,
+    )
+    if not result["ok"]:
+        raise HTTPException(status_code=result["status_code"], detail=result["error"])
+    return result
+
+
+# Python 3.14 + ``from __future__ import annotations`` (module top) leaves
+# ``inspect.signature`` holding the annotation as a raw STRING, and the
+# committed route-registration test pins the body model to the real class
+# (``annotation is dashboard_models.ApplyPatchRequest``).  Re-bind the
+# resolved classes into the endpoints' ``__annotations__`` so the signature
+# carries the actual pydantic model objects.
+get_worktree_patch_route.__annotations__["x_pipeline_origin"] = str | None
+apply_worktree_patch_route.__annotations__["request"] = ApplyPatchRequest
+apply_worktree_patch_route.__annotations__["x_pipeline_origin"] = str | None
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

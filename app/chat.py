@@ -47,6 +47,7 @@ _SYSTEM_PROMPT_PREFIX = (
     "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. When calling save_plan, pass the decompose result plan JSON verbatim as plan_json (a JSON string) - do not rewrite, summarize, or re-derive it; keep its epics/stories fields exactly as decompose returned them. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
     "You can surface decisions the overlord has ruled on by calling list_decisions. If the user wants to override or supplement a ruling, record their answer via answer_decision. Human answers are appended to the same decision log as overlord rulings, preserving the audit trail. "
     "This session deliberately has no native Claude Code tools and no MCP servers connected - that isolation is by design, for least-privilege - so do not conclude from it that the [TOOL_CALL] instruction is non-functional or unwired: the surrounding chat harness parses [TOOL_CALL] blocks out of your response text and executes them on your behalf, making that protocol the real and only mechanism available in this session, which you must always use to call a tool rather than describing an intended action or answering directly without calling one. "
+    "When you call a tool, the JSON goes immediately after the opener and the opener takes no attributes: [TOOL_CALL]{\"name\": \"list_plans\", \"args\": {}}[/TOOL_CALL]. [TOOL_CALL name=list_plans] is NOT a valid call and will not be executed - only the [TOOL_RESULT name=...] tag carries a name attribute. "
 )
 _FINAL_SENTENCE = "Call tools to gather information, then provide a natural-language reply."
 
@@ -55,6 +56,7 @@ _DEFERRED_NUDGE_PHRASES = (
     "let me check", "let me look", "let me find", "i'll check", "i will check",
     "i'll look", "i will look", "checking now", "one moment", "hold on",
     "let me pull", "let me fetch",
+    "i'll re-run", "i will re-run", "i'll rerun", "re-running",
 )
 
 
@@ -357,15 +359,17 @@ def _parse_tool_calls(text: str) -> list[dict]:
 def _looks_like_unparsed_tool_call(response: str) -> bool:
     """Return True when *response* is a stalled tool call, not a reply.
 
-    True iff the literal ``[TOOL_CALL]`` marker appears in *response* AND
-    ``_parse_tool_calls(response)`` yields nothing (malformed JSON, missing
-    closer, missing/mistyped keys, prose inside the tags).  False whenever the
-    marker is absent entirely -- a genuine conversational reply must keep
-    taking the existing fast path and end the turn immediately -- and also
-    when the marker is present but at least one call parses (the normal tool
-    path runs instead of a nudge).  Pure: no instance state, no caching.
+    True iff a TOOL_CALL-family opener (canonical or attribute-style) appears
+    in *response* AND ``_parse_tool_calls(response)`` yields nothing (malformed
+    JSON, missing closer, missing/mistyped keys, prose inside the tags, or an
+    attribute-style ``[TOOL_CALL name=...]`` opener that the parser cannot
+    read).  False whenever no such opener is present entirely -- a genuine
+    conversational reply must keep taking the existing fast path and end the
+    turn immediately -- and also when an opener is present but at least one
+    call parses (the normal tool path runs instead of a nudge).  Pure: no
+    instance state, no caching.
     """
-    if "[TOOL_CALL]" not in response:
+    if not re.search(r"\[TOOL_CALL\b", response):
         return False
     return _parse_tool_calls(response) == []
 

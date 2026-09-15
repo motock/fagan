@@ -41,9 +41,11 @@ import dataclasses
 import hashlib
 import hmac
 import importlib
+import json
 import os
 import re
 import secrets
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
@@ -103,6 +105,7 @@ def is_denied_relative_path(relative_path: str) -> bool:
 __all__ = [
     "PatchFormatError",
     "PatchSecurityError",
+    "apply_patch",
     "create_patch_record",
     "get_patch_record",
     "is_denied_relative_path",
@@ -634,3 +637,141 @@ def get_patch_record(patch_id: str) -> dict | None:
         return None
 
     return record
+
+
+# ---------------------------------------------------------------------------
+# WAP-7: the apply engine
+# ---------------------------------------------------------------------------
+
+
+def _run_git_apply(worktree: Path, diff_text: str, check_only: bool) -> subprocess.CompletedProcess:
+    """Run ``git apply`` (optionally ``--check``) inside *worktree*.
+
+    The argv is a LIST (never ``shell=True``), the diff is fed on stdin, and
+    no ``--3way``/fuzzy matching is used: a patch either applies cleanly
+    against the worktree's current content or it is refused.
+    """
+    argv = ["git", "apply", "--check", "-"] if check_only else ["git", "apply", "-"]
+    return subprocess.run(
+        argv,
+        input=diff_text.encode("utf-8"),
+        cwd=worktree,
+        capture_output=True,
+        check=False,
+    )
+
+
+def apply_patch(
+    plan_name: str, story_key: str, patch_id: str, confirmation_token: str
+) -> dict:
+    """Apply a human-confirmed patch record to its story worktree.
+
+    Single orchestrating entry point of the APPLY half of the patch
+    pipeline.  Every refusal returns ``{"ok": False, "error": <short
+    reason>, "status_code": <int>}`` and never touches the worktree;
+    success returns ``{"ok": True, "patch_id": ..., "applied": <paths>}``.
+
+    Gates, in order (earlier refusals win, so ordering is part of the
+    contract):
+
+    1. plan lock -- the WHOLE body runs inside the ``with`` block, so the
+       60s scheduler tick can never redispatch mid-apply;
+    2. manifest read (lazy ``from .server import PLAN_DIR`` inside the
+       function, mirroring ``pipeline/checkpoint.py``, so a test that
+       patches ``pipeline.server.PLAN_DIR`` is honoured);
+    3. stuck-only gate (``in_progress`` / ``running`` are refused);
+    4. patch record + HMAC confirmation token + single-use status;
+    5. worktree must be a directory;
+    6. every new-side hunk path through the strict write resolver (deny
+       list, symlink refusal, escape refusal -- all fail closed) BEFORE
+       any write;
+    7. ``git apply --check`` (argv list only, no shell, no ``--3way``);
+    8. ``git apply``;
+    9. on success ONLY: flip the record to ``applied`` and stamp
+       ``applied_at``.  A failed apply leaves the record pending
+       (retryable); a successful apply is single-use forever.
+    """
+    concurrency = importlib.import_module("pipeline.concurrency")
+
+    with concurrency._plan_lock(plan_name) as acquired:
+        if not acquired:
+            return {"ok": False, "error": "plan busy", "status_code": 409}
+
+        # 2. Manifest read: lazy import so a patched pipeline.server.PLAN_DIR
+        #    is honoured (the pipeline.checkpoint pattern).
+        server = importlib.import_module("pipeline.server")
+        manifest_path = server.PLAN_DIR / f"{plan_name}.manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"ok": False, "error": "unknown plan or story", "status_code": 404}
+        stories = manifest.get("stories") if isinstance(manifest, dict) else None
+        if not isinstance(stories, dict) or story_key not in stories:
+            return {"ok": False, "error": "unknown plan or story", "status_code": 404}
+        story = stories[story_key]
+        if not isinstance(story, dict):
+            return {"ok": False, "error": "unknown plan or story", "status_code": 404}
+
+        # 3. Stuck-only gate: direct repair targets stuck stories.
+        if story.get("status") in {"in_progress", "running"}:
+            return {"ok": False, "error": "story is active", "status_code": 409}
+
+        # 4. Record + token + single-use.
+        record = get_patch_record(patch_id)
+        if record is None:
+            return {"ok": False, "error": "unknown patch", "status_code": 404}
+        expected = hmac.new(
+            _TOKEN_SECRET.encode("utf-8"),
+            f"{patch_id}:{record['diff_hash']}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(str(confirmation_token), expected):
+            return {
+                "ok": False,
+                "error": "invalid confirmation token",
+                "status_code": 403,
+            }
+        if record.get("status") != "pending":
+            return {"ok": False, "error": "patch already applied", "status_code": 409}
+
+        # 5. The worktree must exist as a directory.
+        worktree = Path(story["worktree"])
+        if not worktree.is_dir():
+            return {"ok": False, "error": "worktree is not a directory", "status_code": 409}
+
+        # 6. Resolve EVERY new-side hunk path BEFORE any write.  The deny
+        #    list runs here, after parse and before git apply, on every
+        #    path: one denied hunk refuses the whole patch.
+        workspace = importlib.import_module("pipeline.workspace")
+        try:
+            parsed = parse_unified_diff(record["diff_text"])
+            resolved_paths: list[str] = []
+            for path in parsed.paths:
+                if path == "/dev/null":
+                    continue
+                resolve_write_target(str(worktree), path)
+                resolved_paths.append(path)
+        except (PatchSecurityError, workspace.WorkspaceSecurityError):
+            return {"ok": False, "error": "patch target refused", "status_code": 403}
+        except PatchFormatError:
+            return {"ok": False, "error": "malformed diff", "status_code": 400}
+
+        # 7. git apply --check: the worktree is untouched on failure.
+        check = _run_git_apply(worktree, record["diff_text"], check_only=True)
+        if check.returncode != 0:
+            return {
+                "ok": False,
+                "error": "patch does not apply (context drift)",
+                "status_code": 409,
+                "detail": (check.stderr or b"").decode("utf-8", "replace")[:400],
+            }
+
+        # 8. git apply.
+        apply = _run_git_apply(worktree, record["diff_text"], check_only=False)
+        if apply.returncode != 0:
+            return {"ok": False, "error": "apply failed", "status_code": 409}
+
+        # 9. Success ONLY: flip the record (single-use forever).
+        record["status"] = "applied"
+        record["applied_at"] = datetime.now(timezone.utc).isoformat()
+        return {"ok": True, "patch_id": patch_id, "applied": resolved_paths}

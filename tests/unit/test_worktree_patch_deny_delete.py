@@ -126,12 +126,29 @@ def _assert_refusal(result, *, status_code: int | None = None):
 # --------------------------------------------------------------------------
 
 
+def _patch_store() -> dict:
+    """The module-level patch-record store dict.
+
+    The brief names it ``_PATCH_STORE``; the fallback discovery keeps this
+    file working if a later refactor renames the private attribute.
+    """
+    from pipeline import worktree_patch
+
+    store = getattr(worktree_patch, "_PATCH_STORE", None)
+    if isinstance(store, dict):
+        return store
+    for name, value in vars(worktree_patch).items():
+        if name.startswith("__") or not isinstance(value, dict):
+            continue
+        if any(isinstance(v, dict) and "patch_id" in v for v in value.values()):
+            return value
+    raise AssertionError("pipeline.worktree_patch exposes no patch-record store")
+
+
 @pytest.fixture(autouse=True)
 def _isolate_patch_store():
     """Snapshot/restore the in-process patch store around every test."""
-    from pipeline import worktree_patch
-
-    store = worktree_patch._PATCH_STORE
+    store = _patch_store()
     snapshot = dict(store)
     yield
     store.clear()

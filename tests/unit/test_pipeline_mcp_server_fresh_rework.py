@@ -90,8 +90,8 @@ def test_advance_pipeline_does_not_interrupt_cloud_in_progress_on_memory_pressur
     plan_dir, agents_dir, monkeypatch, tmp_path,
 ):
     """A :cloud in-progress story must NOT be interrupted by the local memory
-    gate, while an on-device in-progress story IS interrupted (existing
-    behavior preserved)."""
+    gate, while an on-device in-progress story is NOT interrupted when
+    its gate failure reason is memory pressure."""
     _write_manifest(plan_dir, "cloudint", {
         "A1": {"summary": "cloud running", "status": "in_progress", "pid": 111,
                "worktree": str(tmp_path / "wta"), "dependencies": [],
@@ -118,10 +118,10 @@ def test_advance_pipeline_does_not_interrupt_cloud_in_progress_on_memory_pressur
 
     assert result["ok"] is True
     assert "A1" not in result["interrupted"], "cloud in-progress must not be interrupted"
-    assert "B1" in result["interrupted"], "on-device in-progress must be interrupted"
+    assert "B1" not in result["interrupted"], "on-device in-progress must NOT be interrupted on memory pressure"
     stories = _read_manifest(plan_dir, "cloudint")["stories"]
     assert stories["A1"]["status"] == "in_progress"
-    assert stories["B1"]["status"] == "interrupted"
+    assert stories["B1"]["status"] == "in_progress"
 
 
 def test_advance_pipeline_polls_cloud_in_progress_under_downed_blanket_gate(
@@ -131,8 +131,8 @@ def test_advance_pipeline_polls_cloud_in_progress_under_downed_blanket_gate(
     gate is down for memory pressure. Dispatch and interruption are per-story, so
     a :cloud story can be dispatched (and left running) while the blanket local
     gate is down; if polling were still blanket-gated it would stall in_progress
-    forever. A sibling on-device story whose own floor is not met is interrupted
-    and NOT polled."""
+    forever. A sibling on-device story whose own floor is not met is NOT interrupted
+    (its gate failure is memory pressure) but is still skipped by the poll gate."""
     _write_manifest(plan_dir, "cloudpoll", {
         "A1": {"summary": "cloud running", "status": "in_progress", "pid": 111,
                "worktree": str(tmp_path / "wta"), "dependencies": [],
@@ -153,7 +153,8 @@ def test_advance_pipeline_polls_cloud_in_progress_under_downed_blanket_gate(
         p, "check_story_status",
         lambda plan, key: polled.append(key) or {"status": "running"},
     )
-    # B1's own floor not met -> interrupted (and skipped by the poll gate).
+    # B1's own floor not met -> NOT interrupted (memory pressure), but still
+    # skipped by the poll gate.
     monkeypatch.setattr(backend.OllamaDriver, "_free_memory_mb", lambda self: 500)
     monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")
     monkeypatch.setattr(backend.httpx, "get", lambda url, timeout: _FakeResponse({}))
@@ -171,7 +172,7 @@ def test_advance_pipeline_polls_cloud_in_progress_under_downed_blanket_gate(
     assert "A1" in polled, f"cloud in-progress must be polled with blanket gate down: {result}"
     assert "B1" not in polled, "on-device in-progress whose floor is not met must not be polled"
     assert "A1" not in result["interrupted"], "cloud in-progress must not be interrupted"
-    assert "B1" in result["interrupted"], "on-device in-progress whose floor is not met must be interrupted"
+    assert "B1" not in result["interrupted"], "on-device in-progress whose floor is not met must NOT be interrupted on memory pressure"
 
 
 def test_advance_pipeline_still_gates_cloud_story_when_unreachable(

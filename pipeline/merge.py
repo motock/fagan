@@ -162,6 +162,16 @@ _adjudication_plan_name: ContextVar[str | None] = ContextVar(
     "merge_adjudication_plan_name", default=None
 )
 
+# The story key the merge-gate adjudication is attributed to, bound by
+# advance._adjudicate_merges / _readjudicate_parked_merge_hold around each gate
+# call. Same mechanism and same reason as the plan name above: a story's
+# identity is its dict key in manifest["stories"], nothing stamps it onto the
+# story dict, and the gate's one-argument call shape cannot take a second
+# positional argument.
+_adjudication_story_key: ContextVar[str | None] = ContextVar(
+    "merge_adjudication_story_key", default=None
+)
+
 
 @contextmanager
 def merge_adjudication_plan(plan_name: str | None):
@@ -171,6 +181,16 @@ def merge_adjudication_plan(plan_name: str | None):
         yield
     finally:
         _adjudication_plan_name.reset(token)
+
+
+@contextmanager
+def merge_adjudication_story(story_key: str | None):
+    """Bind the story key the merge gate adjudicates for (see above)."""
+    token = _adjudication_story_key.set(story_key)
+    try:
+        yield
+    finally:
+        _adjudication_story_key.reset(token)
 
 
 def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
@@ -321,6 +341,16 @@ def _adjudicate_high_risk_merge(
     # after this returns, so the story dict still holds its pre-gate state.
     prior_status = story.get("status")
     prior_parked_reason = story.get("parked_reason")
+    # The story key this ruling is attributed to. Compat shim mirroring the
+    # plan_name one above: production binds it via the adjudication context
+    # (advance._adjudicate_merges / _readjudicate_parked_merge_hold), and the
+    # chain ends at None - never a "?" sentinel - so an unbound legacy caller
+    # keeps the pre-existing behaviour exactly.
+    story_key = (
+        _adjudication_story_key.get()
+        or story.get("key")
+        or story.get("story_key")
+    )
 
     prompt = (
         "MERGE ADJUDICATION: this story's merge gate is high-risk and the "
@@ -345,12 +375,12 @@ def _adjudicate_high_risk_merge(
         parsed = None
         logging.getLogger("pipeline").warning(
             "overlord merge adjudication failed for %s: %s",
-            story.get("key"),
+            story_key,
             type(exc).__name__,
         )
     if parsed is None:
         record = {
-            "story_key": story.get("key"),
+            "story_key": story_key,
             "question": "high-risk merge adjudication",
             "ruling": "",
             "rationale": "unparseable overlord reply; failed closed to the hold",
@@ -361,7 +391,7 @@ def _adjudicate_high_risk_merge(
         }
     else:
         record = {
-            "story_key": story.get("key"),
+            "story_key": story_key,
             "question": "high-risk merge adjudication",
             "ruling": parsed["ruling"],
             "rationale": parsed["rationale"],
@@ -374,7 +404,7 @@ def _adjudicate_high_risk_merge(
         _append_decision(plan_name, record)
     except Exception:  # noqa: BLE001 - audit write must never break the gate
         logging.getLogger("pipeline").warning(
-            "failed to append merge adjudication record for %s", story.get("key")
+            "failed to append merge adjudication record for %s", story_key
         )
     if parsed is not None and parsed["ruling"] == "proceed":
         return {"action": "merge", "reason": "overlord ruled proceed"}

@@ -20,10 +20,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import merge as _merge_mod
 from .concurrency import PlanLockReacquireTimeout, _released_plan_lock
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch_lease import claim_dispatch_lease
 from .wedge_io import run_wedge_scan
+
+# MERGEATTR-1: ``_merge_mod``'s story-key adjudication context is bound around
+# each merge-gate call so the high-risk adjudication record names the story it
+# ruled on. Taken straight from pipeline.merge rather than via _ServerRef:
+# pipeline.server's explicit `from .merge import (...)` re-export list cannot be
+# extended by this two-file change, so a _ServerRef binding would AttributeError
+# at tick time - the same reasoning the LOCKSTARVE-A3 note below records for
+# PIPELINE_MAX_DISPATCH_PER_TICK. The context manager is pure ContextVar state
+# owned by pipeline.merge (no server global is involved), so the direct module
+# reference is the correct seam.
 
 
 class _ServerRef:
@@ -848,7 +859,7 @@ def _readjudicate_parked_merge_hold(
         "%s merge-park evidence changed; re-adjudicating the hold", key
     )
     story["pr_checks"] = current
-    with merge_adjudication_plan(plan_name):
+    with merge_adjudication_plan(plan_name), _merge_mod.merge_adjudication_story(key):
         decision = _merge_decision(story)
     if decision["action"] == "merge":
         story.pop("merge_park_evidence", None)
@@ -891,7 +902,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # ``plan_name`` parameter stays for direct callers; production flows
         # the name through this context, which ``_adjudicate_merges`` owns.
         if decision is None:
-            with merge_adjudication_plan(plan_name):
+            with merge_adjudication_plan(plan_name), _merge_mod.merge_adjudication_story(
+                key
+            ):
                 decision = _merge_decision(story)
         if decision["action"] != "merge":
             story["status"] = "parked"

@@ -409,15 +409,17 @@ await run("non-2xx reply resolves without throwing", async () => {
 });
 
 await run("comms.js chat body sends workspace: state.selectedWorkspace", async () => {
-  const src = readFileSync(new URL("../static/app/comms.js", import.meta.url), "utf8");
-  assertTrue(
-    /plan_name:\s*state\.selectedPlan,\s*message:\s*trimmed/.test(src),
-    "pre-existing plan_name/message body fields must remain",
-  );
-  assertTrue(
-    /workspace:\s*state\.selectedWorkspace/.test(src),
-    "comms.js should send workspace: state.selectedWorkspace in the chat POST body",
-  );
+  const mod = await loadCommsModule();
+  const stateMod = await loadStateModule();
+  stateMod.state.selectedPlan = "plan-ws-body";
+  stateMod.state.selectedWorkspace = "/tmp/ws-body";
+  captureFetch(200, { reply: "roger", tool_calls: [] });
+  await mod.sendCommsMessage("workspace body probe");
+  assertTrue(lastRequest !== null, "fetch was not called");
+  const body = lastRequest.body;
+  assertEqual(body.plan_name, stateMod.state.selectedPlan, "plan_name in chat body");
+  assertEqual(body.message, "workspace body probe", "message in chat body");
+  assertEqual(body.workspace, stateMod.state.selectedWorkspace, "workspace in chat body");
 });
 
 // ---------- summary ----------

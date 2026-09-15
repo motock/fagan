@@ -380,7 +380,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 status = backend.get_backend("dispatch", name=story_backend).resource_status(
                     model_tag=tag
                 )
-                if not status.get("ok", True):
+                if not status.get("ok", True) and "insufficient free memory" not in (
+                    status.get("reason") or ""
+                ):
                     interrupt_story(plan_name, key)
                     summary["interrupted"].append(key)
             else:

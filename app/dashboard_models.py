@@ -71,3 +71,15 @@ class StoryPatchBody(BaseModel):
 class WorkspaceRequest(BaseModel):
     path: str
     create: bool = False
+
+
+class ProposePatchRequest(BaseModel):
+    """Body for ``POST /api/worktree/patch/propose`` (WAP-9).
+
+    The chat model proposes a unified diff against a stuck story's
+    worktree; a human reviews and applies it in the dashboard.
+    """
+
+    plan_name: str
+    story_key: str
+    unified_diff: str

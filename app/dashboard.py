@@ -1086,5 +1086,86 @@ def dashboard_index() -> HTMLResponse:
     return HTMLResponse(content=html_text.replace("<!--PIPELINE_API_KEY-->", script))
 
 
+# ---------------------------------------------------------------------------
+# WAP-9: propose a unified diff against a stuck story's worktree
+# ---------------------------------------------------------------------------
+# Appended at the end of dashboard.py (the story caps this file as
+# append-only).  It must stay ABOVE the catch-all StaticFiles mount below,
+# which would otherwise shadow it, and BELOW dashboard_index so the
+# append-only placement test (new route after the last pre-existing route)
+# still holds.  The imports sit here rather than at the top of the file for
+# the same append-only reason; FastAPI binds the request-model annotation
+# when the decorator runs, so they are in scope in time.
+from app.auth import ORIGIN_CHAT, ORIGIN_UI
+from app.dashboard_models import ProposePatchRequest
+from pipeline import worktree_patch
+from pipeline.workspace import WorkspaceSecurityError
+
+
+@app.post("/api/worktree/patch/propose")
+def propose_worktree_patch_route(
+    request: ProposePatchRequest,
+    x_pipeline_origin: str | None = Header(default=None, alias="X-Pipeline-Origin"),
+) -> dict[str, Any]:
+    """Record a model-proposed patch for human review; never applies it.
+
+    Chat-reachable BY DESIGN: proposing is how the model hands its work to
+    a human, so the origin gate is an allow-list (chat | ui) rather than
+    the chat-refusing gate the write routes use.  The deny list is
+    APPLY-side only: a patch touching ``.git`` is accepted here so the
+    human can inspect what the model tried, and refused later at apply.
+    """
+    if x_pipeline_origin not in (ORIGIN_CHAT, ORIGIN_UI):
+        raise HTTPException(status_code=403, detail="origin not permitted")
+
+    manifest = _service.get_manifest_or_none(request.plan_name)
+    if manifest is None:
+        raise HTTPException(
+            status_code=404, detail=f"No manifest for plan '{request.plan_name}'"
+        )
+    story = manifest.get("stories", {}).get(request.story_key)
+    if not isinstance(story, dict):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No story '{request.story_key}' in plan '{request.plan_name}'",
+        )
+
+    # Stuck-only: a story still owned by a running agent cannot take a
+    # proposed patch (the agent would clobber it).
+    if story.get("status") in {"in_progress", "running"}:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Story '{request.story_key}' is not stuck "
+                f"(status '{story.get('status')}'); patches can only be "
+                "proposed for stuck stories"
+            ),
+        )
+
+    worktree_root = str(story.get("worktree", ""))
+    if not worktree_root or not os.path.isdir(worktree_root):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Story '{request.story_key}' has no usable worktree to patch",
+        )
+
+    try:
+        validated = worktree_patch.validate_for_propose(
+            request.unified_diff, worktree_root
+        )
+    except worktree_patch.PatchFormatError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except WorkspaceSecurityError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return worktree_patch.create_patch_record(
+        request.plan_name,
+        request.story_key,
+        request.unified_diff,
+        validated["paths"],
+        validated["added_lines"],
+    )
+
+
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # End of file

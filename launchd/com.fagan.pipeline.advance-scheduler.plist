@@ -60,7 +60,7 @@
 		<string>/nonexistent-repo-root-set-per-plan-only</string>
 	</dict>
 	<key>Label</key>
-	<string>com.claude.pipeline.advance-scheduler</string>
+	<string>com.fagan.pipeline.advance-scheduler</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv/bin/python3</string>

@@ -106,13 +106,13 @@ def test_install_sh_was_not_modified_by_this_change():
 
 def test_all_three_templates_exist():
     for kind in _KINDS:
-        path = _LAUNCHD / f"com.claude.pipeline.{kind}.plist.template"
+        path = _LAUNCHD / f"com.fagan.pipeline.{kind}.plist.template"
         assert path.is_file(), f"missing template {path}"
 
 
 def test_no_template_contains_real_machine_home_path():
     for kind in _KINDS:
-        path = _LAUNCHD / f"com.claude.pipeline.{kind}.plist.template"
+        path = _LAUNCHD / f"com.fagan.pipeline.{kind}.plist.template"
         text = path.read_text()
         assert _REAL_HOME_PATH_FRAGMENT not in text, (
             f"{path.name} still hardcodes {_REAL_HOME_PATH_FRAGMENT}"
@@ -121,7 +121,7 @@ def test_no_template_contains_real_machine_home_path():
 
 def test_advance_scheduler_and_mlx_supervisor_templates_use_tabs():
     for kind in ("advance-scheduler", "mlx-supervisor"):
-        path = _LAUNCHD / f"com.claude.pipeline.{kind}.plist.template"
+        path = _LAUNCHD / f"com.fagan.pipeline.{kind}.plist.template"
         text = path.read_text()
         assert "\n\t<key>" in text, (
             f"{path.name} must preserve the committed file's tab indentation"
@@ -129,7 +129,7 @@ def test_advance_scheduler_and_mlx_supervisor_templates_use_tabs():
 
 
 def test_usage_poller_template_uses_four_space_indentation():
-    path = _LAUNCHD / "com.claude.pipeline.usage-poller.plist.template"
+    path = _LAUNCHD / "com.fagan.pipeline.usage-poller.plist.template"
     text = path.read_text()
     assert "\n    <key>" in text, (
         f"{path.name} must preserve the committed file's 4-space indentation"
@@ -137,7 +137,7 @@ def test_usage_poller_template_uses_four_space_indentation():
 
 
 def test_mlx_supervisor_template_preserves_explanatory_comment_verbatim():
-    path = _LAUNCHD / "com.claude.pipeline.mlx-supervisor.plist.template"
+    path = _LAUNCHD / "com.fagan.pipeline.mlx-supervisor.plist.template"
     text = path.read_text()
     assert "uv venv --python 3.14 .venv-mlx" in text, (
         "the explanatory XML comment (including its literal `--python`) "
@@ -150,7 +150,7 @@ def test_advance_scheduler_template_keeps_placeholder_repo_root_env_literal():
     # REPO_ROOT in EnvironmentVariables is a deliberate placeholder value in
     # the committed plist, NOT a per-machine path — it must NOT be
     # parameterized to {{REPO_ROOT}}.
-    path = _LAUNCHD / "com.claude.pipeline.advance-scheduler.plist.template"
+    path = _LAUNCHD / "com.fagan.pipeline.advance-scheduler.plist.template"
     text = path.read_text()
     assert "/nonexistent-repo-root-set-per-plan-only" in text, (
         "advance-scheduler template must keep the deliberate REPO_ROOT "
@@ -163,7 +163,7 @@ def test_templates_use_only_the_three_documented_placeholder_tokens():
     token_pattern = re.compile(r"\{\{([A-Z_]+)\}\}")
     allowed = {"REPO_ROOT", "HOME", "MLX_MODEL_PATH"}
     for kind in _KINDS:
-        path = _LAUNCHD / f"com.claude.pipeline.{kind}.plist.template"
+        path = _LAUNCHD / f"com.fagan.pipeline.{kind}.plist.template"
         found = set(token_pattern.findall(path.read_text()))
         assert found <= allowed, (
             f"{path.name} uses undocumented placeholder token(s): {found - allowed}"
@@ -172,11 +172,11 @@ def test_templates_use_only_the_three_documented_placeholder_tokens():
 
 def test_only_mlx_supervisor_template_uses_mlx_model_path_token():
     for kind in ("advance-scheduler", "usage-poller"):
-        path = _LAUNCHD / f"com.claude.pipeline.{kind}.plist.template"
+        path = _LAUNCHD / f"com.fagan.pipeline.{kind}.plist.template"
         assert "{{MLX_MODEL_PATH}}" not in path.read_text(), (
             f"{path.name} must not reference {{{{MLX_MODEL_PATH}}}}"
         )
-    mlx_path = _LAUNCHD / "com.claude.pipeline.mlx-supervisor.plist.template"
+    mlx_path = _LAUNCHD / "com.fagan.pipeline.mlx-supervisor.plist.template"
     assert "{{MLX_MODEL_PATH}}" in mlx_path.read_text()
 
 
@@ -194,9 +194,9 @@ def test_generator_writes_exactly_the_three_expected_output_filenames(
     )
     produced = {p.name for p in out_dir.glob("*.plist")}
     assert produced == {
-        "com.claude.pipeline.advance-scheduler.plist",
-        "com.claude.pipeline.usage-poller.plist",
-        "com.claude.pipeline.mlx-supervisor.plist",
+        "com.fagan.pipeline.advance-scheduler.plist",
+        "com.fagan.pipeline.usage-poller.plist",
+        "com.fagan.pipeline.mlx-supervisor.plist",
     }
     # The .template suffix must be dropped, not carried through.
     assert not list(out_dir.glob("*.template"))
@@ -212,7 +212,7 @@ def test_mlx_supervisor_full_substitution(fake_repo_and_out, fake_home_env):
          "--mlx-model-path", "/fake/model/cache"],
         env=env,
     )
-    mlx = _plutil_load(out_dir / "com.claude.pipeline.mlx-supervisor.plist")
+    mlx = _plutil_load(out_dir / "com.fagan.pipeline.mlx-supervisor.plist")
     assert mlx["WorkingDirectory"] == str(fake_repo)
     assert mlx["ProgramArguments"] == [
         str(fake_repo / ".venv-mlx" / "bin" / "python3"),
@@ -227,7 +227,7 @@ def test_mlx_supervisor_full_substitution(fake_repo_and_out, fake_home_env):
     assert str(fake_home) in mlx["EnvironmentVariables"]["PATH"]
     assert _REAL_HOME_PATH_FRAGMENT not in mlx["EnvironmentVariables"]["PATH"]
     # Fields untouched by any placeholder must survive unchanged.
-    assert mlx["Label"] == "com.claude.pipeline.mlx-supervisor"
+    assert mlx["Label"] == "com.fagan.pipeline.mlx-supervisor"
     assert mlx["EnvironmentVariables"]["MLX_SERVER_PORT"] == "8080"
     assert mlx["StartInterval"] == 120
     assert mlx["AbandonProcessGroup"] is True
@@ -241,14 +241,14 @@ def test_usage_poller_full_substitution(fake_repo_and_out, fake_home_env):
          "--mlx-model-path", "/fake/model/cache"],
         env=env,
     )
-    poller = _plutil_load(out_dir / "com.claude.pipeline.usage-poller.plist")
+    poller = _plutil_load(out_dir / "com.fagan.pipeline.usage-poller.plist")
     assert poller["WorkingDirectory"] == str(fake_repo)
     assert poller["ProgramArguments"][0] == str(fake_repo / ".venv" / "bin" / "python3")
     assert poller["StandardOutPath"] == str(fake_repo / "usage-poller.log")
     assert poller["StandardErrorPath"] == str(fake_repo / "usage-poller.err.log")
     assert str(fake_home) in poller["EnvironmentVariables"]["PATH"]
     assert _REAL_HOME_PATH_FRAGMENT not in poller["EnvironmentVariables"]["PATH"]
-    assert poller["Label"] == "com.claude.pipeline.usage-poller"
+    assert poller["Label"] == "com.fagan.pipeline.usage-poller"
     assert poller["StartInterval"] == 60
 
 
@@ -260,7 +260,7 @@ def test_advance_scheduler_full_substitution(fake_repo_and_out, fake_home_env):
          "--mlx-model-path", "/fake/model/cache"],
         env=env,
     )
-    scheduler = _plutil_load(out_dir / "com.claude.pipeline.advance-scheduler.plist")
+    scheduler = _plutil_load(out_dir / "com.fagan.pipeline.advance-scheduler.plist")
     assert scheduler["WorkingDirectory"] == str(fake_repo)
     assert scheduler["ProgramArguments"][0] == str(fake_repo / ".venv" / "bin" / "python3")
     assert scheduler["StandardOutPath"] == str(fake_repo / "advance-scheduler.log")
@@ -273,7 +273,7 @@ def test_advance_scheduler_full_substitution(fake_repo_and_out, fake_home_env):
     assert env_vars["REPO_ROOT"] == "/nonexistent-repo-root-set-per-plan-only"
     # Untouched knobs must survive unchanged.
     assert env_vars["PIPELINE_LOCAL_MAX_STEPS"] == "60"
-    assert scheduler["Label"] == "com.claude.pipeline.advance-scheduler"
+    assert scheduler["Label"] == "com.fagan.pipeline.advance-scheduler"
 
 
 # ---------- CLI defaults ----------
@@ -292,9 +292,9 @@ def test_out_dir_defaults_to_repo_root_slash_launchd(fake_home_env):
             env=env,
         )
         default_out = fake_repo / "launchd"
-        assert (default_out / "com.claude.pipeline.advance-scheduler.plist").is_file()
-        assert (default_out / "com.claude.pipeline.usage-poller.plist").is_file()
-        assert (default_out / "com.claude.pipeline.mlx-supervisor.plist").is_file()
+        assert (default_out / "com.fagan.pipeline.advance-scheduler.plist").is_file()
+        assert (default_out / "com.fagan.pipeline.usage-poller.plist").is_file()
+        assert (default_out / "com.fagan.pipeline.mlx-supervisor.plist").is_file()
 
 
 def test_repo_root_defaults_to_generators_own_repo_root(tmp_path, fake_home_env):
@@ -309,7 +309,7 @@ def test_repo_root_defaults_to_generators_own_repo_root(tmp_path, fake_home_env)
         ["--out-dir", str(out_dir), "--mlx-model-path", "/fake/model/cache"],
         env=env,
     )
-    poller = _plutil_load(out_dir / "com.claude.pipeline.usage-poller.plist")
+    poller = _plutil_load(out_dir / "com.fagan.pipeline.usage-poller.plist")
     assert poller["WorkingDirectory"] == str(_REPO)
 
 
@@ -321,7 +321,7 @@ def test_mlx_model_path_defaults_to_env_var_when_flag_omitted(fake_repo_and_out,
         ["--repo-root", str(fake_repo), "--out-dir", str(out_dir)],
         env=env,
     )
-    mlx = _plutil_load(out_dir / "com.claude.pipeline.mlx-supervisor.plist")
+    mlx = _plutil_load(out_dir / "com.fagan.pipeline.mlx-supervisor.plist")
     assert mlx["EnvironmentVariables"]["MLX_SERVER_MODEL_PATH"] == "/env/supplied/model/cache"
 
 
@@ -334,7 +334,7 @@ def test_explicit_mlx_model_path_flag_overrides_env_var(fake_repo_and_out, fake_
          "--mlx-model-path", "/flag/supplied/model/cache"],
         env=env,
     )
-    mlx = _plutil_load(out_dir / "com.claude.pipeline.mlx-supervisor.plist")
+    mlx = _plutil_load(out_dir / "com.fagan.pipeline.mlx-supervisor.plist")
     assert mlx["EnvironmentVariables"]["MLX_SERVER_MODEL_PATH"] == "/flag/supplied/model/cache"
 
 
@@ -416,5 +416,5 @@ def test_nonexistent_repo_root_does_not_produce_a_silently_wrong_plist(
          "--mlx-model-path", "/fake/model/cache"],
         env=env,
     )
-    poller = _plutil_load(out_dir / "com.claude.pipeline.usage-poller.plist")
+    poller = _plutil_load(out_dir / "com.fagan.pipeline.usage-poller.plist")
     assert poller["WorkingDirectory"] == str(nonexistent_repo)

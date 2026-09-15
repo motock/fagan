@@ -66,7 +66,7 @@ def test_generator_script_exists_and_is_executable():
 
 def test_templates_exist_and_have_no_hardcoded_personal_path():
     for kind in _KINDS:
-        path = _LAUNCHD / f"com.claude.pipeline.{kind}.plist.template"
+        path = _LAUNCHD / f"com.fagan.pipeline.{kind}.plist.template"
         assert path.is_file(), f"missing template {path}"
         assert "/Users/jessecarroll" not in path.read_text(), (
             f"{path.name} still hardcodes a personal path"
@@ -90,18 +90,18 @@ def test_generator_substitutes_fake_repo_root_and_mlx_path(tmp_path, monkeypatch
         check=True, env=env,
     )
 
-    scheduler = _plutil_load(out_dir / "com.claude.pipeline.advance-scheduler.plist")
+    scheduler = _plutil_load(out_dir / "com.fagan.pipeline.advance-scheduler.plist")
     assert scheduler["WorkingDirectory"] == str(fake_repo)
     assert scheduler["ProgramArguments"][0] == str(fake_repo / ".venv" / "bin" / "python3")
     assert str(fake_repo) in scheduler["StandardOutPath"]
     assert str(fake_home) in scheduler["EnvironmentVariables"]["PATH"]
     assert "/Users/jessecarroll" not in scheduler["EnvironmentVariables"]["PATH"]
 
-    mlx = _plutil_load(out_dir / "com.claude.pipeline.mlx-supervisor.plist")
+    mlx = _plutil_load(out_dir / "com.fagan.pipeline.mlx-supervisor.plist")
     assert mlx["EnvironmentVariables"]["MLX_SERVER_MODEL_PATH"] == "/fake/model/cache"
     assert mlx["ProgramArguments"][0] == str(fake_repo / ".venv-mlx" / "bin" / "python3")
 
-    poller = _plutil_load(out_dir / "com.claude.pipeline.usage-poller.plist")
+    poller = _plutil_load(out_dir / "com.fagan.pipeline.usage-poller.plist")
     assert poller["WorkingDirectory"] == str(fake_repo)
 
 
@@ -140,13 +140,13 @@ def test_regenerating_against_the_real_repo_reproduces_committed_plists(tmp_path
     baked into the committed plists (derived from their PATH entry), not
     left as this machine's own - otherwise this test could never pass on
     any machine other than the one the plists were committed from."""
-    advance = _plutil_load(_LAUNCHD / "com.claude.pipeline.advance-scheduler.plist")
+    advance = _plutil_load(_LAUNCHD / "com.fagan.pipeline.advance-scheduler.plist")
     real_repo = Path(advance["WorkingDirectory"])
     committed_path = advance["EnvironmentVariables"]["PATH"]
     home_entry = next(p for p in committed_path.split(":") if p.endswith("/.local/bin"))
     committed_home = home_entry[: -len("/.local/bin")]
     current_mlx_path = _plutil_load(
-        _LAUNCHD / "com.claude.pipeline.mlx-supervisor.plist"
+        _LAUNCHD / "com.fagan.pipeline.mlx-supervisor.plist"
     )["EnvironmentVariables"]["MLX_SERVER_MODEL_PATH"]
 
     out_dir = tmp_path / "regen"
@@ -159,7 +159,7 @@ def test_regenerating_against_the_real_repo_reproduces_committed_plists(tmp_path
     )
 
     for kind in _KINDS:
-        name = f"com.claude.pipeline.{kind}.plist"
+        name = f"com.fagan.pipeline.{kind}.plist"
         regenerated = _plutil_load(out_dir / name)
         committed = _plutil_load(_LAUNCHD / name)
         assert regenerated == committed, (

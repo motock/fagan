@@ -59,8 +59,8 @@ TEMPLATE_DIR="${SCRIPT_DIR}/launchd"
 KINDS="advance-scheduler usage-poller mlx-supervisor"
 
 for kind in $KINDS; do
-    src="${TEMPLATE_DIR}/com.claude.pipeline.${kind}.plist.template"
-    dst="${OUT_DIR}/com.claude.pipeline.${kind}.plist"
+    src="${TEMPLATE_DIR}/com.fagan.pipeline.${kind}.plist.template"
+    dst="${OUT_DIR}/com.fagan.pipeline.${kind}.plist"
     sed -e "s|{{REPO_ROOT}}|${REPO_ROOT}|g" \
         -e "s|{{HOME}}|${HOME}|g" \
         ${MLX_MODEL_PATH:+-e "s|{{MLX_MODEL_PATH}}|${MLX_MODEL_PATH}|g"} \

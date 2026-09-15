@@ -2,6 +2,7 @@ import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
 import { fetchJson } from "./api.js";
 import { renderMarkdown } from "./render/markdown.js";
+import { ingestPlan, normalizePlanName, renderIngestStatusHtml } from './ingest.js';
 let commsHistory = [];
 let showTrace = readStoredShowTrace();
 
@@ -508,9 +509,45 @@ if (traceToggleButton) {
 const commsResetBtn = document.getElementById('comms-reset');
 if (commsResetBtn) commsResetBtn.addEventListener('click', resetCommsThread);
 const commsExportBtn = document.getElementById('comms-export');
+const ingestPlanNameInput = document.getElementById('ingest-plan-name');
+const ingestPlanSubmitButton = document.getElementById('ingest-plan-submit');
+const ingestPlanStatus = document.getElementById('ingest-plan-status');
 if (commsExportBtn) commsExportBtn.addEventListener('click', exportCommsThread);
 
 applyTraceVisibility();
+
+// Ingest a saved plan from the Comms panel (CIH-4). The plan name travels in
+// the URL via ingestPlan(); the status element is the only surface this
+// writes to, and every value derived from user input or the server goes
+// through renderIngestStatusHtml's escaping. Never throws: a failed request
+// leaves the Comms view usable.
+async function submitIngestPlan() {
+  const name = normalizePlanName(ingestPlanNameInput.value);
+  if (!name) {
+    ingestPlanStatus.textContent = 'enter a plan name';
+    return;
+  }
+  ingestPlanStatus.textContent = 'Ingesting…';
+  try {
+    const result = await ingestPlan(name);
+    ingestPlanStatus.innerHTML = renderIngestStatusHtml({ ok: true, planName: name, result });
+  } catch (err) {
+    ingestPlanStatus.innerHTML = renderIngestStatusHtml({
+      ok: false,
+      status: err && err.status,
+      detail: err && err.message,
+    });
+  }
+}
+
+if (ingestPlanSubmitButton) {
+  ingestPlanSubmitButton.addEventListener('click', submitIngestPlan);
+}
+if (ingestPlanNameInput) {
+  ingestPlanNameInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') submitIngestPlan();
+  });
+}
 
 async function updateCommsSubtitle() {
   const sub = document.getElementById('comms-sub');

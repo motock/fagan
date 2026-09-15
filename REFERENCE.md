@@ -1290,7 +1290,7 @@ the server (`advance-scheduler{,.err}.log`, `usage-poller{,.err}.log`).
 
   ```bash
   sudo cp launchd/pipeline-logs.newsyslog.conf \
-          /etc/newsyslog.d/com.claude.pipeline.conf
+          /etc/newsyslog.d/com.fagan.pipeline.conf
   sudo newsyslog -nv   # dry-run: verify the rule parses and see what it'd do
   ```
 

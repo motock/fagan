@@ -430,6 +430,8 @@ log as an audit record.
 
 See [`REFERENCE.md`](REFERENCE.md) for the full MCP tools reference, the plan/story JSON schema, per-role provider/model configuration, guided decomposition and TDD-split details, every `PIPELINE_*`/`LOCAL_AGENT_*` environment variable, the end-to-end workflow, safety controls, the usage gate, and development/testing instructions.
 
+For a worked end-to-end example of the pipeline developing this repository itself — the install command, the real pull requests it produced, and an honest account of what it can't do yet — see [`docs/DEMO.md`](docs/DEMO.md).
+
 For how a release is cut, see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Prerequisites
@@ -501,8 +503,11 @@ documented ways — read this before pointing it at anything you care about.
   not a benchmarked result yet.** The one full model-comparison run on
   record (`tests/benchmark/FINDINGS.md`) was contaminated mid-run by rate
   limits and credit exhaustion, so there is no clean apples-to-apples
-  success-rate/cost comparison across backends published yet. Read that file
-  for exactly what is and isn't known before citing a number from it.
+  success-rate/cost comparison across backends published yet. The cleanest
+  number there is narrow — `gpt-oss:20b` on-device, 2 T1 tasks, 2/2 success
+  with the independent oracle passing on the merged code, one trial each —
+  and is directional, not a quality comparison. Read that file for exactly
+  what is and isn't known before citing a number from it.
 - **A green test suite is not proof of a correct or complete change.** An
   executor (local or Claude) converges to the minimum diff that turns its own
   tests green, and can write a self-consistently wrong test that encodes the

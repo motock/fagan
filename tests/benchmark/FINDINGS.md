@@ -1,4 +1,14 @@
-# Benchmark Run Findings — 2026-06-30
+# Benchmark Run Findings
+
+> **Two runs are on record.** [Run 2](#run-2--2026-09-15-local-only-clean-local-dispatch--local-review)
+> (2026-09-15, at the end of this file) is the only clean, uncontaminated
+> number. Everything between here and it is Run 1, the 2026-06-30 full matrix,
+> which was contaminated mid-run by Claude credit exhaustion — read its tl;dr
+> before citing anything from it.
+
+---
+
+## Run 1 — 2026-06-30: full matrix (CONTAMINATED)
 
 Full matrix run: `tests/benchmark/_runs/full_20260630/`  
 Run time: 8017s (~2.25 hours). 45 cells: 5 tasks × 3 models × 3 trials.
@@ -11,7 +21,7 @@ devstral (15/15 uncontaminated) and minimax on the first two tasks (6/15).
 
 ---
 
-## Corrected scorecard (excluding rate-limited cells)
+### Corrected scorecard (excluding rate-limited cells)
 
 The printed scorecard is misleading. Here is the actual picture:
 
@@ -32,16 +42,16 @@ failed at dispatch with `"overageDisabledReason":"out_of_credits"`.
 
 ---
 
-## Per-model analysis
+### Per-model analysis
 
-### devstral — 0/15 success, 8/15 groundtruth-correct (DATA: CLEAN)
+#### devstral — 0/15 success, 8/15 groundtruth-correct (DATA: CLEAN)
 
 devstral is the only model with fully clean, interpretable data. It never reached the
 review stage, so the rate limit on the reviewer never affected it.
 
 **Two distinct failure patterns:**
 
-#### Pattern A — Wrong implementation (5 cells)
+##### Pattern A — Wrong implementation (5 cells)
 
 | Cell | Error |
 |------|-------|
@@ -58,7 +68,7 @@ entirely as "malformed". Same conceptual bug every time.
 interval_merge t1 nearly passed (only 1 gt failure: missing ValueError for reversed
 range). t0 and t2 were write-level failures.
 
-#### Pattern B — Correct implementation, blocked by own buggy test assertions (5 cells)
+##### Pattern B — Correct implementation, blocked by own buggy test assertions (5 cells)
 
 | Cell | gt result | Why pipeline failed |
 |------|-----------|---------------------|
@@ -85,7 +95,7 @@ point — groundtruth confirmed it.
 
 ---
 
-### minimax — 6/15 success, 14/15 groundtruth-correct (DATA: MIXED)
+#### minimax — 6/15 success, 14/15 groundtruth-correct (DATA: MIXED)
 
 **Clean cells (6/15): cron_field and interval_merge**
 
@@ -129,7 +139,7 @@ This is a genuine misreading of the spec — `cap < base` is the exclusive condi
 
 ---
 
-### sonnet — 2/15 success (DATA: ALMOST ALL INVALID)
+#### sonnet — 2/15 success (DATA: ALMOST ALL INVALID)
 
 Only 2 cells were real runs (no rate-limit hit at dispatch):
 - `cron_field__sonnet__t1`: **done, gt=True** (425s)
@@ -142,9 +152,9 @@ interval_merge/t0 and t1 also rate-limited at dispatch but ran longer before fai
 
 ---
 
-## Pipeline failure modes surfaced by this run
+### Pipeline failure modes surfaced by this run
 
-### Failure Mode A — Whole-suite pytest gate (devstral)
+#### Failure Mode A — Whole-suite pytest gate (devstral)
 
 `check_story_status` runs pytest over the entire worktree including model-authored
 test files. When the model writes a correct implementation but buggy test assertions,
@@ -160,7 +170,7 @@ worktree for the reviewer to read but should not be authoritative for the gate.
 
 ---
 
-### Failure Mode B — Reviewer rate-limit treated as UNKNOWN verdict (NEW)
+#### Failure Mode B — Reviewer rate-limit treated as UNKNOWN verdict (NEW)
 
 When the reviewer Claude process hits the usage rate limit, it returns a plain English
 rate-limit message. `_parse_verdict` (regex `r"VERDICT:\s*(APPROVE|REQUEST_CHANGES)"`)
@@ -182,7 +192,7 @@ review, not the story.
 
 ---
 
-### Failure Mode C — Shared Claude credits between dispatch and review (operational)
+#### Failure Mode C — Shared Claude credits between dispatch and review (operational)
 
 This run used a single Claude account for both sonnet dispatch calls and the reviewer.
 The sonnet dispatch cells ran first and consumed enough credits that the reviewer
@@ -197,7 +207,7 @@ the latter half of the task list.
 
 ---
 
-### Failure Mode D — Step cap too tight for devstral on complex tasks (operational)
+#### Failure Mode D — Step cap too tight for devstral on complex tasks (operational)
 
 `PIPELINE_LOCAL_MAX_STEPS=40` (set in `models.py`) is reached by devstral on
 lru_cache and retry_backoff before the implementation is complete. The step cap routes
@@ -214,7 +224,7 @@ could re-dispatch parked cells (resume them) up to a configurable limit.
 
 ---
 
-## Per-task difficulty ranking (from clean devstral data)
+### Per-task difficulty ranking (from clean devstral data)
 
 | Rank | Task | Why |
 |------|------|-----|
@@ -229,9 +239,9 @@ devstral's handling of cron/step-syntax parsing logic.
 
 ---
 
-## What to run next
+### What to run next
 
-### Priority 1 — Re-run with clean credits
+#### Priority 1 — Re-run with clean credits
 
 Run `--models devstral minimax sonnet` AFTER a fresh rate-limit window, using
 `--resume --workdir _runs/full_20260630` to skip the 6 clean minimax cells and only
@@ -248,7 +258,7 @@ python matrix.py --models minimax --workdir _runs/full_20260630_clean --trials 3
 python matrix.py --models sonnet --workdir _runs/full_20260630_clean --trials 3
 ```
 
-### Priority 2 — Fix #1 (whole-suite gate → oracle-gated)
+#### Priority 2 — Fix #1 (whole-suite gate → oracle-gated)
 
 Implement in `pipeline_mcp_server.py`: when a story's `acceptance` block is set,
 run only the acceptance fixture tests for the gate rather than the whole worktree
@@ -257,7 +267,7 @@ suite. This would unblock devstral's 8 correct-but-failed implementations.
 Story to file: "When story has acceptance fixtures, gate check_story_status on
 acceptance oracle only, not model-authored tests."
 
-### Priority 3 — Fix #2 (reviewer rate-limit → defer, not park)
+#### Priority 3 — Fix #2 (reviewer rate-limit → defer, not park)
 
 Implement in `_parse_verdict` or the reviewer wrapper: detect rate-limit responses
 (string match on "session limit" / "out_of_credits" / HTTP 429) and raise a retriable
@@ -269,7 +279,7 @@ rework budget."
 
 ---
 
-## Raw data pointers
+### Raw data pointers
 
 | Artifact | Path |
 |----------|------|
@@ -283,3 +293,92 @@ rework budget."
 
 The devstral groundtruth failure text is in `result.json["groundtruth_tail"]` for each
 cell — concrete pytest output showing exactly which tests fail and why.
+
+---
+
+## Run 2 — 2026-09-15: local-only, clean (local dispatch + local review)
+
+The first uncontaminated run on record. Deliberately narrow — **one genuinely
+on-device model, two T1 tasks, one trial each** — because the point was a
+number that is honest and reproducible, not one that is broad and
+uninterpretable.
+
+```bash
+PIPELINE_BACKEND_REVIEW=local \
+PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_OLLAMA=0 \
+PIPELINE_LOCAL_MIN_FREE_MEMORY_MB=0 \
+python matrix.py --models gptoss_temp03 --tasks token_bucket cron_field \
+  --trials 1 --workdir _runs/phase1_local --timeout 2400
+```
+
+`gptoss_temp03` is `gpt-oss:20b` via Ollama (temperature 0.3, num_ctx 32768),
+implementing **and** reviewing — both roles resolve to the same weights, so the
+review gate here is a self-review, not an independent one. Wall time 1072.9s.
+
+| Task | Outcome | Elapsed | Ticks |
+|------|---------|---------|-------|
+| token_bucket | `done`, merged, APPROVE, groundtruth **15 passed** | 460.1s | 9 |
+| cron_field | `done`, merged, APPROVE, groundtruth **16 passed** | 609.8s | 12 |
+
+| Model | Success | Merged | GT-pass | Merged-but-wrong | TDD-skip | Timeouts | Avg s | Avg ticks |
+|-------|---------|--------|---------|------------------|----------|----------|-------|-----------|
+| gptoss_temp03 | 2/2 (100%) | 2/2 | 2/2 | 0 | 0 | 0 | 535.0 | 10.5 |
+
+Both cells: `rework_attempts=0`, `timed_out=false`, `impl_changed=true`,
+`test_changed=true` — the agent touched both an implementation file and a test
+file in each cell, so neither success is a no-op diff.
+
+**The ground truth is real, not a default.** `groundtruth_passed=true` is
+graded by an independent oracle the implementing model never sees, run against
+the *merged* code on `master` (`groundtruth_where=master`) rather than against
+the agent's own tests. The oracle's own pytest output is preserved in each
+cell's `groundtruth_tail` — 15 and 16 passing tests respectively.
+
+### What this run does and does not show
+
+**Shows:** the whole path — plan → ingest → dispatch → implement → self-review
+→ merge → independent ground-truth grade — completes end to end on a 20B model
+running entirely on-device, with zero Claude usage and zero dollar cost, from a
+clean host state.
+
+**Does not show:** anything about relative model quality (one model), anything
+about harder work (T1 only — no T2/T3 here), or anything about the
+`$20/month` framing. Two cells at n=1 is directional, not statistically
+meaningful. The 2026-06-30 matrix above is still the only multi-model run, and
+it is contaminated.
+
+**The clean result was produced with a workaround that has since been fixed in
+code.** The 2048 MB default free-memory floor sits inside this host's normal
+idle band (~1.8–2.1 GB measured), so the dispatch gate flaps across its own
+threshold and interrupts in-flight local work — and because the story's own
+resident weights are much of what depresses the reading, the gate is partly
+tripped by the very work it kills. This run avoided that by setting
+`PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_OLLAMA=0`, the same value this repository's
+own scheduler plist already sets. The underlying defect — the local branch of
+`pipeline/advance.py`'s in-progress interruption gate interrupting on memory
+pressure while its claude-routed sibling branch explicitly refuses to — was
+fixed and merged the same day (PR #790, `07a4c1a`), with regression tests. So
+this cell was measured under the workaround, not under the fix. The floor's
+*default value* is still an open maintainer question, independent of that fix;
+see `.claude/rules/testing-config-gates.md` on why a withholding gate should be
+biased against blocking work already known to run.
+
+### Why the roster is one model
+
+The only locally-pulled weights on this host are `gpt-oss:20b` and
+`gpt-oss-20b-high` (13 GB each). The rest of the roster — `devstral:24b`,
+`qwen3-coder:30b`, `qwen36`, the MLX targets — is not installed here, and the
+`deepseek-*` / `glm-*` tags are `:cloud` and route off-device. Widening the
+roster would have meant either pulling more weights or quietly measuring the
+cloud, so the run stayed at the model actually present.
+
+### Raw data
+
+| Artifact | Path |
+|----------|------|
+| Cell results | `tests/benchmark/_runs/phase1_local/results.json` |
+| Printed scorecard | `tests/benchmark/_runs/phase1_local/scorecard.md` |
+| Per-cell oracle output | `result.json["groundtruth_tail"]` per cell |
+
+`_runs/` is gitignored (`tests/benchmark/.gitignore`), so these artifacts are
+local to the machine that ran them — re-run the command above to regenerate.

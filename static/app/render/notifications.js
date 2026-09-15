@@ -121,6 +121,15 @@ function renderNotifications(records) {
     if (r.ts) {
       parts.push(escapeHtml(r.ts));
     }
+    // WAP-14: a patch_proposed notification carries a patch_id, so it also
+    // renders a "Review patch" action. The control carries only the id — the
+    // diff/panel content always comes from the SERVER record fetched by
+    // main.js's openPatchReview (WAP-13 module), never from this row.
+    var payload = r && r.payload && typeof r.payload === "object" ? r.payload : null;
+    var patchId = payload && typeof payload.patch_id === "string" ? payload.patch_id.trim() : "";
+    if (payload && payload.kind === "patch_proposed" && patchId) {
+      parts.push('<button class="notif-review-patch" data-patch-id="' + escapeHtml(patchId) + '">Review patch</button>');
+    }
     parts.push('</div>');
     return parts.join(' ');
   }).join('');

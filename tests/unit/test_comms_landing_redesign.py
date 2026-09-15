@@ -69,7 +69,13 @@ _UNCHANGED_JS_SHA256 = {
     # divergence in the UI, so main.js gained the fetchHealth import plus a
     # self-contained checkConfigMismatch() helper (guarded, fail-soft) and
     # one boot-sequence call. No Comms-related code was touched.
-    MAIN_JS: "7532d6acb387650dcff7ea6be0c03944a1d09efad0900e23b3dd097d6d6a547f",
+    # Re-pinned for the patch review/apply UI wiring story (WAP-14): that
+    # story's whole job was to wire the WAP-13 patch module into the
+    # dashboard UI, so main.js gained the applyPatch/fetchPatchRecord/
+    # renderPatchRecord import from ./patch.js, the initPatchReview()/
+    # openPatchReview() panel wiring (server-record review + human Apply
+    # control) and their exports. No Comms-related code was touched.
+    MAIN_JS: "4f3dfec1b0c3451d820c46ecd3e210f4131ea79c4e359065e3f6df9d32c8f0e5",
 }
 
 EXPECTED_CHIP_MESSAGES = {

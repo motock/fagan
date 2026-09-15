@@ -59,7 +59,12 @@ INDEX_HTML = STATIC_DIR / "index.html"
 # <div id="config-mismatch-banner" class="config-mismatch-banner hidden"
 # role="alert"></div> immediately after the usage-banner div (the
 # usage-banner precedent). No Comms-related markup was touched.
-INDEX_HTML_SHA256 = "cfbfe3486128520a6d942f4938d697f34ecc910360fdf58cda344bb5f4669ed8"
+# Re-pinned for the patch review/apply UI wiring story (WAP-14): that story's
+# whole job was to wire the WAP-13 patch module into the dashboard UI, so
+# static/index.html gained one <script type="module" src="/app/patch.js">
+# tag immediately after the existing /app.js module script. No Comms-related
+# markup was touched.
+INDEX_HTML_SHA256 = "f94764055aef8b38c5931c8e44f76678848d2f16c7247ad12e8b2d220e0aff2b"
 # Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that story's
 # whole job was to inject the dashboard shared secret into the served HTML, so
 # static/index.html gained the <!--PIPELINE_API_KEY--> placeholder marker

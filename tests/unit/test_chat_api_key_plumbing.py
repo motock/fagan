@@ -11,7 +11,8 @@ mechanics that fixture does not:
 * The ``hasattr(self._http_client, 'headers')`` guard: duck-typed fakes
   without ``.headers`` (the shape every existing test_chat_*.py fake uses)
   must not raise, whether or not api_key is supplied.
-* api_key omitted / empty string => no header written (truthiness gate).
+* api_key omitted / empty string => no API-key header written (truthiness
+  gate); the chat-origin header is always written.
 * chat_endpoint declares the ``x-pipeline-api-key`` header parameter
   (fastapi.Header, alias, default None) and forwards it into ChatService.
 * The auth middleware itself is untouched (still importable/callable).
@@ -113,7 +114,7 @@ def test_init_with_empty_string_api_key_writes_no_header():
     fake = _FakeClientWithHeaders()
     svc = ChatService(driver=_StubDriver(), http_client=fake, api_key="")
     try:
-        assert fake.headers == {}
+        assert fake.headers == {"X-Pipeline-Origin": "chat"}
     finally:
         _close(svc)
 

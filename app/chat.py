@@ -571,7 +571,7 @@ class ChatService:
                     # exactly as it does for a normal tool-result turn -- no
                     # extra counter, no state beyond current_prompt (precedent:
                     # the review loop's nudge handling in app/backend_ollama.py).
-                    current_prompt = (
+                    current_prompt = current_prompt + "\nassistant: " + response + "\n" + (
                         "Your previous response contained a [TOOL_CALL] marker "
                         "but it could not be parsed as a tool call. Here is "
                         "exactly what you produced:\n"
@@ -584,7 +584,7 @@ class ChatService:
                     continue
                 if _looks_like_deferred_action(response) and deferred_nudges < _DEFERRED_NUDGE_CAP:
                     deferred_nudges += 1
-                    current_prompt = (
+                    current_prompt = current_prompt + "\nassistant: " + response + "\n" + (
                         "Stop narrating - emit the tool call now, in exactly this shape: "
                         '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
                     )
@@ -592,16 +592,21 @@ class ChatService:
                 yield {"type": "reply", "data": {"text": response}}
                 yield {"type": "result", "data": {"reply": response, "tool_calls": tool_calls_made, "turns": turns}}
                 return
+            # Append only THIS iteration's tool results: tool_calls_made is the
+            # turn-cumulative list, so slicing from the pre-iteration length
+            # keeps each result stated exactly once in the running transcript
+            # instead of re-stating every earlier block (quadratic growth).
+            iteration_start = len(tool_calls_made)
             for call in parsed:
                 yield {"type": "tool_call", "data": {"name": call["name"], "args": call["args"]}}
                 result = _execute_tool(call["name"], call["args"], self._http_client, self._api_base_url)
                 yield {"type": "tool_result", "data": {"name": call["name"], "args": call["args"], "result": result}}
                 tool_calls_made.append({"name": call["name"], "args": call["args"], "result": result})
             result_blocks = []
-            for call in tool_calls_made:
+            for call in tool_calls_made[iteration_start:]:
                 block = f"[TOOL_RESULT name={call['name']}]" + json.dumps(call['result']) + "[/TOOL_RESULT]"
                 result_blocks.append(block)
-            current_prompt = "\n".join(result_blocks)
+            current_prompt = current_prompt + "\nassistant: " + response + "\n" + "\n".join(result_blocks)
         yield {"type": "result", "data": {"reply": response + "\n\n(turn cap reached)", "tool_calls": tool_calls_made, "turns": turns}}
         return
 

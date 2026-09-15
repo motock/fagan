@@ -324,8 +324,8 @@ class TestPreservedLoopBehaviour:
         _drain(_service(driver).stream_turn("hi"))
 
         second_prompt = driver.calls[1]["prompt"]
-        assert second_prompt.startswith("[TOOL_RESULT name=list_plans]")
-        assert second_prompt.endswith("[/TOOL_RESULT]")
+        assert "[TOOL_RESULT name=list_plans]" in second_prompt
+        assert "[/TOOL_RESULT]" in second_prompt
         assert json.dumps(_EXECUTED_TOOL_RESULT) in second_prompt
 
     def test_stream_turn_resolves_the_driver_exactly_once(self) -> None:
@@ -522,3 +522,175 @@ class TestSourceShape:
         driver = _ScriptedDriver([_PLAIN_REPLY])
         for event in _service(driver).stream_turn("hi"):
             assert isinstance(event, dict)
+
+
+# --------------------------------------------------------------------------- #
+# Prompt transcript: the user's message must survive EVERY model call in a turn
+# --------------------------------------------------------------------------- #
+_QUESTION = "Is that correct?"
+_PRIOR_USER_TEXT = "how many plans are there?"
+_PRIOR_ASSISTANT_TEXT = "there are three plans in the active workspace"
+
+# The exact nudge texts stream_turn must keep byte-identical while switching
+# from REPLACING current_prompt to APPENDING to it. Built by concatenation (not
+# ``str.format``) because the texts themselves contain ``{...}`` JSON braces.
+_DEFERRED_NUDGE_TEXT = (
+    "Stop narrating - emit the tool call now, in exactly this shape: "
+    '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
+)
+
+
+def _unparsed_nudge_text(response: str) -> str:
+    return (
+        "Your previous response contained a [TOOL_CALL] marker "
+        "but it could not be parsed as a tool call. Here is "
+        "exactly what you produced:\n"
+        f"{response}\n"
+        "Re-emit the tool call using exactly this tag/JSON "
+        "shape, with valid JSON (no trailing commas, a string "
+        '"name" and a dict "args"):\n'
+        '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
+    )
+
+
+class TestPromptTranscriptSurvivesTheTurn:
+    """The user's message must reach EVERY model call in a turn.
+
+    ``stream_turn`` builds ``current_prompt`` once and then, on each tool-result
+    or nudge iteration, must APPEND the assistant turn and the new feedback to
+    that running transcript. Replacing it wholesale (the defect) drops the
+    user's message and every prior turn, so the model's second and later calls
+    receive no question at all. Assertions here are membership-only: the
+    transcript is cumulative, so later iterations legitimately contain more text
+    than earlier ones.
+    """
+
+    def test_user_message_survives_a_tool_round_trip(self) -> None:
+        history = [
+            {"role": "user", "content": _PRIOR_USER_TEXT},
+            {"role": "assistant", "content": _PRIOR_ASSISTANT_TEXT},
+        ]
+        driver = _ScriptedDriver([_tool_call(_TOOL_NAME, {}), "yes, that is correct."])
+        _drain(_service(driver).stream_turn(_QUESTION, history=history))
+
+        assert len(driver.calls) == 2
+        for call in driver.calls[1:]:
+            assert _QUESTION in call["prompt"], (
+                "the user's message must survive into every prompt from the "
+                "second model call onward"
+            )
+            assert _PRIOR_ASSISTANT_TEXT in call["prompt"], (
+                "the prior assistant turn must survive into every prompt from "
+                "the second model call onward"
+            )
+
+    def test_tool_result_still_reaches_the_next_prompt(self) -> None:
+        driver = _ScriptedDriver([_tool_call(_TOOL_NAME, {}), "done"])
+        _drain(_service(driver).stream_turn(_QUESTION))
+
+        second_prompt = driver.calls[1]["prompt"]
+        assert f"[TOOL_RESULT name={_TOOL_NAME}]" in second_prompt
+        assert "[/TOOL_RESULT]" in second_prompt
+        assert json.dumps(_EXECUTED_TOOL_RESULT) in second_prompt
+
+    def test_message_survives_the_unparsed_tool_call_nudge(self) -> None:
+        stalled = "[TOOL_CALL]{not json}[/TOOL_CALL]"
+        driver = _ScriptedDriver([stalled, "all done."])
+        _drain(_service(driver).stream_turn(_QUESTION))
+
+        nudge_prompt = driver.calls[1]["prompt"]
+        assert _QUESTION in nudge_prompt
+        assert _unparsed_nudge_text(stalled) in nudge_prompt
+
+    def test_message_survives_the_deferred_action_nudge(self) -> None:
+        narration = "Let me check that for you."
+        driver = _ScriptedDriver([narration, "all done."])
+        _drain(_service(driver).stream_turn(_QUESTION))
+
+        nudge_prompt = driver.calls[1]["prompt"]
+        assert _QUESTION in nudge_prompt
+        assert _DEFERRED_NUDGE_TEXT in nudge_prompt
+
+    @pytest.mark.parametrize("history", [None, []])
+    def test_no_history_first_prompt_is_exactly_the_message(
+        self, history: list[dict] | None
+    ) -> None:
+        driver = _ScriptedDriver(["ok"])
+        _drain(_service(driver).stream_turn(_QUESTION, history=history))
+
+        assert driver.calls[0]["prompt"] == _QUESTION
+
+    def test_question_survives_every_call_of_a_multi_round_turn(self) -> None:
+        driver = _ScriptedDriver(
+            [_tool_call(_TOOL_NAME, {}), _tool_call(_TOOL_NAME, {}), "final answer."]
+        )
+        _drain(_service(driver).stream_turn(_QUESTION))
+
+        assert len(driver.calls) == 3
+        assert _QUESTION in driver.calls[-1]["prompt"], (
+            "the question must survive into the FINAL model call, not just the second"
+        )
+
+    def test_unknown_tool_error_still_fed_back_with_the_question(self) -> None:
+        unknown = "no_such_tool"
+        driver = _ScriptedDriver([_tool_call(unknown, {}), "done"])
+        _drain(_service(driver).stream_turn(_QUESTION))
+
+        second_prompt = driver.calls[1]["prompt"]
+        assert f"unknown tool: {unknown}" in second_prompt
+        assert _QUESTION in second_prompt
+
+    def test_all_three_prompt_sites_append_the_assistant_turn(self) -> None:
+        import re
+
+        source = _module_source()
+        assert 'current_prompt = "\\n".join(result_blocks)' not in source, (
+            "the tool-result site must append to the running transcript, not "
+            "replace it with the bare tool-result blocks"
+        )
+        # Tolerant of line wrapping: the append expression must appear at all
+        # three sites (tool results, unparsed-tool-call nudge, deferred-action
+        # nudge), each keeping the exact '\\nassistant: ' separator.
+        appends = re.findall(
+            r'current_prompt\s*\+\s*"\\nassistant: "\s*\+\s*response', source
+        )
+        assert len(appends) >= 3, (
+            "all three prompt sites must append '\\nassistant: ' + response to "
+            f"the running transcript; found {len(appends)}"
+        )
+
+    def test_each_tool_result_is_appended_exactly_once_per_iteration(self) -> None:
+        """Two tool iterations must append each result exactly once.
+
+        The appended blocks must be built from the CURRENT iteration's calls,
+        not from the turn-cumulative ``tool_calls_made`` list. Re-appending the
+        whole cumulative list on every iteration re-states every earlier
+        ``[TOOL_RESULT ...]`` block, grows the prompt quadratically in the
+        number of tool iterations, and shows the model tool results it has
+        already seen (plausibly reading them as repeated executions).
+        """
+        driver = _ScriptedDriver(
+            [_tool_call(_TOOL_NAME, {}), _tool_call(_TOOL_NAME, {}), "final answer."]
+        )
+        _drain(_service(driver).stream_turn(_QUESTION))
+
+        assert len(driver.calls) == 3
+        marker = f"[TOOL_RESULT name={_TOOL_NAME}]"
+
+        # The prompt handed to the THIRD model call is the running transcript
+        # after two tool iterations: exactly two appends, one per iteration, so
+        # each result is stated exactly once -- 2 blocks, never 3.
+        third_prompt = driver.calls[2]["prompt"]
+        assert third_prompt.count(marker) == 2, (
+            "the third model call must see each tool result exactly once; the "
+            "turn-cumulative tool_calls_made list must not be re-appended in "
+            f"full on every iteration (found {third_prompt.count(marker)} blocks)"
+        )
+
+        # The segment appended for the SECOND iteration must carry only that
+        # iteration's result -- iteration 1's block must not be re-stated.
+        appended_for_second = third_prompt[len(driver.calls[1]["prompt"]):]
+        assert appended_for_second.count(marker) == 1, (
+            "each iteration must append only its own tool-result blocks; found "
+            f"{appended_for_second.count(marker)} in the second iteration's append"
+        )

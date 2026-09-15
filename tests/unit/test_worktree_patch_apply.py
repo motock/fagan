@@ -282,6 +282,11 @@ _BASELINE_PUBLIC_FUNCTIONS = {
     "validate_for_propose",
     "create_patch_record",
     "get_patch_record",
+    # WAP-10 review fix (reviewer-gated, overlord ruling Option A): the
+    # confirmation-token HMAC derivation is now a single public helper that
+    # create_patch_record, apply_patch and the dashboard GET route all share.
+    "derive_confirmation_token",
+    "confirmation_token_for",
 }
 
 

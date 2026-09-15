@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -1216,31 +1216,10 @@ from app.auth import require_ui_origin
 from app.dashboard_models import ApplyPatchRequest
 
 
-def _patch_confirmation_token(record: dict) -> str:
-    """Re-derive the record's confirmation token for the review payload.
-
-    The token is an HMAC-SHA256 over ``f"{patch_id}:{diff_hash}"`` keyed
-    with the process secret (see ``pipeline.worktree_patch``), so it is
-    bound to THIS record and cannot be replayed for another patch id or
-    another diff.  The store does not keep the token, so the GET route
-    recomputes it from the stored record's own fields.
-    """
-    import hashlib
-    import hmac
-
-    from pipeline import worktree_patch as _wp
-
-    expected = hmac.new(
-        _wp._TOKEN_SECRET.encode("utf-8"),
-        f"{record['patch_id']}:{record['diff_hash']}".encode(),
-        hashlib.sha256,
-    ).hexdigest()
-    return expected
-
-
 @app.get("/api/worktree/patch/{patch_id}")
 def get_worktree_patch_route(
     patch_id: str,
+    response: Response,
     x_pipeline_origin: str | None = Header(default=None, alias="X-Pipeline-Origin"),
 ):
     """Hand the trusted UI the full stored record for human review.
@@ -1250,9 +1229,14 @@ def get_worktree_patch_route(
     ``patch_id`` + ``diff_hash`` so it cannot be replayed against a
     different patch.  Read-only: no TTL refresh, no status flip, no store
     mutation -- a second GET returns the same token and a later apply with
-    it still succeeds.
+    it still succeeds.  The token is re-derived through worktree_patch's
+    public helper -- the same derivation the mint and the apply verify
+    use -- so the three can never drift apart.  The response carries
+    ``Cache-Control: no-store``: the body holds a live credential and must
+    never sit in a shared cache.
     """
     require_ui_origin(x_pipeline_origin)
+    response.headers["Cache-Control"] = "no-store"
 
     record = worktree_patch.get_patch_record(patch_id)
     if record is None:
@@ -1269,7 +1253,7 @@ def get_worktree_patch_route(
         "status": record["status"],
         "created_at": record["created_at"],
         "expires_at": record["expires_at"],
-        "confirmation_token": _patch_confirmation_token(record),
+        "confirmation_token": worktree_patch.confirmation_token_for(record),
     }
 
 

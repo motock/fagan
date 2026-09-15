@@ -8,9 +8,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-if False:  # pragma: no cover
-    from typing import TYPE_CHECKING as _TC  # noqa: F401
-
 
 class SavePlanRequest(BaseModel):
     plan_json: str

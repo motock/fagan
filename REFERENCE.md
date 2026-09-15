@@ -319,6 +319,26 @@ the cost gate.
 
 ---
 
+## Patch review & apply (WAP-9/WAP-10)
+
+The chat model may PROPOSE a unified diff against a stuck story's
+worktree; only the ui-origin-authenticated human may review and APPLY it.
+Both routes are UI-only except propose, which is chat-reachable by design
+(the chat tool `propose_patch` drives it); each is gated by
+`X-Pipeline-Origin`:
+
+| Route | Origin | Effect |
+|---|---|---|
+| `POST /api/worktree/patch/propose` | `chat` or `ui` | Validate + store the proposed diff server-side; mint a `wp-` patch id and an HMAC confirmation token bound to `patch_id` + `diff_hash`. The token is withheld from chat-origin callers (the human must supply it). |
+| `GET /api/worktree/patch/{patch_id}` | `ui` only | Return the full stored record for human review — `diff_text`, `paths`, `added_lines`, `status`, timestamps and the `confirmation_token` (re-derived via `worktree_patch.confirmation_token_for`). Read-only; responds `Cache-Control: no-store` because the body carries a live credential. Unknown/expired ids are `404 "no such patch"`. |
+| `POST /api/worktree/patch/{patch_id}/apply` | `ui` only | Apply the SERVER-STORED record. The body is `ApplyPatchRequest` — exactly one field, `confirmation_token: str` — so a forged `unified_diff` in the body is inert: the diff applied is always the stored record, never anything the caller sends. Engine refusals map to `HTTPException(result["status_code"], result["error"])` (wrong token `403`, active story `409`, already applied `409`); a failed apply leaves the record pending and retryable. |
+
+Neither new route is registered as a chat tool, and the `k-` API-key
+pass-through stays route-exact on `/api/chat/stream` — a `k-`-prefixed key
+on any of these routes is `401` like anywhere else.
+
+---
+
 ## Notifications: plan_completed and the outbound e-mail channel
 
 Two externally visible behaviours sit on top of the notification bus

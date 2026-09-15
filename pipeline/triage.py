@@ -879,6 +879,17 @@ def triage_candidates(stories: dict) -> list[str]:
     ``step_cap_streak`` counts as 0, and a story dict with no ``status`` key
     is treated as having no status (never raises).
 
+    A parked/failed story that carries a merge‑gate evidence snapshot
+    (``merge_park_evidence``, a dict containing ``"pr_checks"``) is NOT a
+    candidate: the merge gate owns that park, not triage. The exclusion is
+    keyed on the SNAPSHOT, never on ``parked_reason``: the snapshot is written
+    only by the merge gate and is the immutable record of an unrefreshed
+    merge‑gate ruling, whereas ``parked_reason`` is a mutable label that the
+    per‑tick cap path already overwrote on the damaged stories (so keying on
+    the label would leave them eligible). The streak rule below is unaffected:
+    it is checked after this branch, so a story with no snapshot is still
+    picked up by the streak rule.
+
     ``interrupted`` is deliberately NOT a trigger by itself: it is already in
     the scheduler's ready list (``("todo", "interrupted", "changes_requested")``)
     and auto‑resumes on the next tick, so triaging it would fire continuously
@@ -891,6 +902,10 @@ def triage_candidates(stories: dict) -> list[str]:
     for key, story in stories.items():
         status = story.get("status")
         if status in ("parked", "failed"):
+            evidence = story.get("merge_park_evidence")
+            if isinstance(evidence, dict) and "pr_checks" in evidence:
+                # merge‑gate‑owned park; the merge gate owns it, not triage
+                continue
             candidates.append(key)
             continue
         streak = story.get("step_cap_streak", 0)

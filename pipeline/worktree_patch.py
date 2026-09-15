@@ -687,6 +687,54 @@ def create_patch_record(
     }
     _PATCH_STORE[patch_id] = record
 
+    # Audit (WAP-8): journal + outbox notification, AFTER the record is
+    # stored.  The audit carries the path list and the diff HASH only --
+    # never diff_text or any hunk content (Secure by Design: no sensitive
+    # payload in logs or events).
+    # Journal: the appender pipeline/checkpoint.py uses
+    # (``from .persistence import _append_journal`` there).  Resolved via
+    # importlib like the other collaborators in this module so the
+    # stdlib-only import purity of pipeline/worktree_patch.py is kept and a
+    # patched ``persistence.PLAN_DIR`` is honoured at call time.
+    _append_journal = importlib.import_module(
+        "pipeline.persistence"
+    )._append_journal
+    _append_journal(
+        plan_name,
+        story_key,
+        {
+            "action": "patch_proposed",
+            "patch_id": patch_id,
+            "paths": list(paths),
+            "added_lines": added_lines,
+            "diff_hash": diff_hash,
+            "ts": now.isoformat(),
+        },
+    )
+    # Event: the exact publish pattern of pipeline/dispatch.py -- lazy
+    # ``from .event_wiring import get_bus`` then
+    # ``from .events import make_event`` -- resolved via importlib like the
+    # other collaborators in this module so the stdlib-only import purity of
+    # pipeline/worktree_patch.py is kept; a monkeypatched
+    # ``event_wiring.get_bus`` is honoured because the attribute is looked
+    # up on the module at call time.
+    event_wiring = importlib.import_module("pipeline.event_wiring")
+    events = importlib.import_module("pipeline.events")
+    event_wiring.get_bus().publish(
+        events.make_event(
+            "notification",
+            plan_name,
+            story_key=story_key,
+            payload={
+                "kind": "patch_proposed",
+                "patch_id": patch_id,
+                "paths": list(paths),
+                "diff_hash": diff_hash,
+            },
+            correlation_id=patch_id,
+        )
+    )
+
     return {
         "ok": True,
         "patch_id": patch_id,
@@ -888,4 +936,55 @@ def apply_patch(
         # 9. Success ONLY: flip the record (single-use forever).
         record["status"] = "applied"
         record["applied_at"] = datetime.now(timezone.utc).isoformat()
+
+        # Audit (WAP-8), success ONLY: journal + outbox notification.  A
+        # refused or failed apply returns above and emits nothing new.
+        # Same rule as the propose audit: path list + diff hash, never
+        # the diff body.
+        # Journal: the appender pipeline/checkpoint.py uses
+        # (``from .persistence import _append_journal`` there), resolved via
+        # importlib like the other collaborators in this module so the
+        # stdlib-only import purity of pipeline/worktree_patch.py is kept
+        # and a patched ``persistence.PLAN_DIR`` is honoured at call time.
+        _append_journal = importlib.import_module(
+            "pipeline.persistence"
+        )._append_journal
+        _append_journal(
+            plan_name,
+            story_key,
+            {
+                "action": "patch_applied",
+                "patch_id": patch_id,
+                "paths": list(resolved_paths),
+                "added_lines": record["added_lines"],
+                "diff_hash": record["diff_hash"],
+                "ts": record["applied_at"],
+                "applied_paths": list(resolved_paths),
+            },
+        )
+        # Event: the exact publish pattern of pipeline/dispatch.py -- lazy
+        # ``from .event_wiring import get_bus`` then
+        # ``from .events import make_event`` -- resolved via importlib like
+        # the other collaborators in this module so the stdlib-only import
+        # purity of pipeline/worktree_patch.py is kept; a monkeypatched
+        # ``event_wiring.get_bus`` is honoured because the attribute is
+        # looked up on the module at call time.
+        event_wiring = importlib.import_module("pipeline.event_wiring")
+        events = importlib.import_module("pipeline.events")
+        event_wiring.get_bus().publish(
+            events.make_event(
+                "notification",
+                plan_name,
+                story_key=story_key,
+                payload={
+                    "kind": "patch_applied",
+                    "patch_id": patch_id,
+                    "paths": list(resolved_paths),
+                    "diff_hash": record["diff_hash"],
+                    "applied_paths": list(resolved_paths),
+                },
+                correlation_id=patch_id,
+            )
+        )
+
         return {"ok": True, "patch_id": patch_id, "applied": resolved_paths}

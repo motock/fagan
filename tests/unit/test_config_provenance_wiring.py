@@ -263,7 +263,7 @@ class TestSchedulerPlistPath:
         monkeypatch.setattr(Path, "home", lambda: Path("/fakehome"))
         mod = _import_module()
         assert mod._scheduler_plist_path() == Path(
-            "/fakehome/Library/LaunchAgents/com.claude.pipeline.advance-scheduler.plist"
+            "/fakehome/Library/LaunchAgents/com.fagan.pipeline.advance-scheduler.plist"
         )
 
     def test_lazy_resolution_not_module_constant(self):

@@ -10,8 +10,8 @@
 # under exactly that kind of memory pressure.
 set -uo pipefail
 
-PLIST=~/Library/LaunchAgents/com.claude.pipeline.mlx-supervisor.plist
-if launchctl list 2>/dev/null | grep -q com.claude.pipeline.mlx-supervisor; then
+PLIST=~/Library/LaunchAgents/com.fagan.pipeline.mlx-supervisor.plist
+if launchctl list 2>/dev/null | grep -q com.fagan.pipeline.mlx-supervisor; then
     launchctl unload "$PLIST" 2>/dev/null
     echo "unloaded mlx-supervisor launchd job"
 fi

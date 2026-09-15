@@ -26,14 +26,25 @@ the WRITE half of the path-security pair whose read half is
 STRICTER than the read half: a symlink is refused even when every hop stays
 inside the worktree, because a write through an in-worktree symlink is
 still a write the patch author did not name.
+
+The patch RECORD STORE (WAP-6) is an IN-PROCESS dict: the dashboard is a
+single process, so the store is a single process's memory and nothing
+more. A restart drops pending patches, which is acceptable at a
+15-minute TTL -- the store fails closed (an unknown id and an expired id
+are indistinguishable, both "not available"), and pending patches are
+never persisted to disk in this story.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import hmac
 import importlib
 import os
 import re
+import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 
@@ -92,6 +103,8 @@ def is_denied_relative_path(relative_path: str) -> bool:
 __all__ = [
     "PatchFormatError",
     "PatchSecurityError",
+    "create_patch_record",
+    "get_patch_record",
     "is_denied_relative_path",
     "parse_unified_diff",
     "resolve_write_target",
@@ -505,3 +518,119 @@ def validate_for_propose(diff_text: str, worktree_root: str) -> dict:
             )
 
     return {"paths": list(parsed.paths), "added_lines": parsed.added_lines}
+
+
+# ---------------------------------------------------------------------------
+# Patch record store (WAP-6)
+# ---------------------------------------------------------------------------
+
+#: How long a pending patch record stays retrievable: 15 minutes.  After
+#: that the record is pruned on read and the patch id becomes "not
+#: available" -- the same verdict an unknown id gets, so expiry leaks no
+#: existence oracle.
+PATCH_TTL_SECONDS = 900
+
+#: Process secret for the confirmation tokens, minted ONCE at import.  The
+#: confirmation token is an HMAC over ``f"{patch_id}:{diff_hash}"`` keyed
+#: with this secret, so a token is bound to one specific record and cannot
+#: be replayed against a different patch id or a different diff.  This is a
+#: per-process secret: it is not shared across processes and not persisted,
+#: which is consistent with the in-process store below.
+_TOKEN_SECRET = secrets.token_urlsafe(32)
+
+#: The store itself: an in-process dict of ``{patch_id: record}``.  The
+#: dashboard is a single process, so this dict is the whole store; a
+#: restart drops pending patches (acceptable at a 15-minute TTL, fail
+#: closed) and nothing here is ever persisted to disk in this story.
+_PATCH_STORE: dict[str, dict] = {}
+
+
+def create_patch_record(
+    plan_name: str,
+    story_key: str,
+    diff_text: str,
+    paths: list[str],
+    added_lines: int,
+) -> dict:
+    """Record a proposed patch server-side and mint its confirmation token.
+
+    Stores a record under a freshly minted ``wp-``-prefixed patch id and
+    returns the envelope the dashboard needs to render the confirmation
+    step: the patch id, the touched paths, the added-line count, the
+    confirmation token, and the diff hash.  The token is an HMAC-SHA256
+    over ``f"{patch_id}:{diff_hash}"`` keyed with the process secret, so it
+    is bound to THIS record and cannot be replayed for another patch id or
+    another diff.  The status flip to ``"applied"`` and the token
+    comparison belong to the apply story (WAP-7), not here.
+
+    The ``paths`` list is copied, so the caller's list is never aliased
+    into the store.
+    """
+    patch_id = "wp-" + secrets.token_urlsafe(12)
+    diff_hash = hashlib.sha256(diff_text.encode("utf-8")).hexdigest()
+    confirmation_token = hmac.new(
+        _TOKEN_SECRET.encode("utf-8"),
+        f"{patch_id}:{diff_hash}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    now = datetime.now(timezone.utc)
+    record = {
+        "patch_id": patch_id,
+        "plan_name": plan_name,
+        "story_key": story_key,
+        "diff_text": diff_text,
+        "diff_hash": diff_hash,
+        "paths": list(paths),
+        "added_lines": added_lines,
+        "status": "pending",
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(seconds=PATCH_TTL_SECONDS)).isoformat(),
+    }
+    _PATCH_STORE[patch_id] = record
+
+    return {
+        "ok": True,
+        "patch_id": patch_id,
+        "paths": list(paths),
+        "added_lines": added_lines,
+        "confirmation_token": confirmation_token,
+        "diff_hash": diff_hash,
+    }
+
+
+def get_patch_record(patch_id: str) -> dict | None:
+    """Return the stored record for ``patch_id``, or ``None``.
+
+    An unknown id and an EXPIRED id are indistinguishable: both return
+    ``None`` (fail closed, no existence oracle beyond "not available").  An
+    expired record is pruned from the store on the read that discovers the
+    expiry; only that one key is removed.  The read has no other side
+    effects -- in particular it never refreshes ``expires_at`` (no sliding
+    TTL) and never flips ``status`` (that is WAP-7's job).
+
+    The returned object is the record that lives in the store, not a copy.
+    """
+    if not isinstance(patch_id, str):
+        return None
+    record = _PATCH_STORE.get(patch_id)
+    if record is None:
+        return None
+
+    expires_raw = record.get("expires_at")
+    if isinstance(expires_raw, str):
+        expires_at = datetime.fromisoformat(expires_raw)
+    elif isinstance(expires_raw, datetime):
+        expires_at = expires_raw
+    else:
+        # Malformed expiry: fail closed, treat the record as unavailable.
+        _PATCH_STORE.pop(patch_id, None)
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if datetime.now(timezone.utc) >= expires_at:
+        _PATCH_STORE.pop(patch_id, None)
+        return None
+
+    return record

@@ -1,5 +1,6 @@
 """Acceptance oracle: MATURITY_AND_UNIQUENESS_PLANS.md must reflect the
-2026-09-11 state.
+current refresh state (originally 2026-09-11, re-pinned for the 2026-09-14
+refresh).
 
 Four bullets that the doc still carries as unchecked actually landed:
 enforced-green CI + a real release tag (A3), the macOS CI leg re-enable
@@ -53,11 +54,16 @@ CLOSED = {
 
 STILL_OPEN = (
     "Bound the failure-mode discovery rate",
-    "Multi-repo fleet as a first-class concept.",
     "RBAC / multi-user.",
     "Concurrency & queueing beyond",
     "Standard benchmark integration",
     "A public demo / writeup of the MCP-native inversion",
+)
+
+# Bullets that are genuinely partially done (work landed, work remains) and
+# must stay marked in-progress rather than open or closed.
+PARTIAL = (
+    "Multi-repo fleet as a first-class concept.",
 )
 
 # --- anchors other test modules pin byte-identically -----------------------
@@ -109,13 +115,18 @@ class TestStaleClaimsAreGone:
 
     def test_rollup_is_restated_for_the_current_date(self):
         text = _text()
-        assert "**What's left as of 2026-09-11:**" in text, (
-            "the tail rollup must be restated as of 2026-09-11"
+        match = re.search(r"\*\*What's left as of (\d{4}-\d{2}-\d{2}):\*\*", text)
+        assert match and match.group(1) >= "2026-09-14", (
+            "the tail rollup must be restated as of the 2026-09-14 refresh "
+            "(a literal date pin would break on every future refresh; grade "
+            "recency, not the exact date)"
         )
 
     def test_rollup_no_longer_lists_the_billing_cap_as_a_blocker(self):
         text = _text()
-        rollup = text.split("**What's left as of 2026-09-11:**", 1)[1][:1200]
+        rollup_anchor = re.search(r"\*\*What's left as of \d{4}-\d{2}-\d{2}:\*\*", text)
+        assert rollup_anchor, "no current rollup anchor found"
+        rollup = text[rollup_anchor.end() : rollup_anchor.end() + 1200]
         assert "billing cap" not in rollup, (
             "the rollup still blames the GHA billing cap, which is resolved"
         )
@@ -130,11 +141,21 @@ class TestOpenItemsAreProtected:
                 f"bullet {anchor!r} is still open and must stay unchecked"
             )
 
-    def test_exactly_six_unchecked_bullets_remain(self):
+    def test_partial_bullets_remain_in_progress(self):
+        text = _text()
+        for anchor in PARTIAL:
+            block = _bullet_block(text, anchor)
+            assert block.startswith("- [~]"), (
+                f"bullet {anchor!r} is partially done and must stay marked "
+                "in-progress ([~]), neither open nor closed"
+            )
+
+    def test_exactly_five_unchecked_bullets_remain(self):
         text = _text()
         unchecked = re.findall(r"^- \[ \] ", text, re.MULTILINE)
-        assert len(unchecked) == 6, (
-            f"expected the 6 genuinely-open bullets, found {len(unchecked)}"
+        assert len(unchecked) == len(STILL_OPEN), (
+            f"expected the {len(STILL_OPEN)} genuinely-open bullets, found "
+            f"{len(unchecked)}"
         )
 
     def test_bullets_pinned_by_other_tests_are_untouched(self):

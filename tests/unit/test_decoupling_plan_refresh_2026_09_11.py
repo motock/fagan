@@ -46,10 +46,13 @@ SURVIVING_CLAIMS = (
 
 
 class TestStatusHeaderIsCurrent:
-    def test_status_header_is_dated_2026_09_11(self):
+    def test_status_header_is_current(self):
         header = _status_header(_text())
-        assert "last updated 2026-09-11" in header, (
-            "the status header must be re-dated to 2026-09-11"
+        match = re.search(r"last updated (\d{4}-\d{2}-\d{2})", header)
+        assert match and match.group(1) >= "2026-09-14", (
+            "the status header must carry a date current as of the 2026-09-14 "
+            "refresh (a literal date pin would break on every future refresh; "
+            "grade recency, not the exact date)"
         )
 
     def test_stale_2026_09_07_status_date_is_gone(self):

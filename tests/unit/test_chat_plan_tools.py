@@ -476,8 +476,8 @@ class TestSystemPromptUpdate:
 
     # The new plan-authoring paragraph must contain these phrases.
     DECOMPOSE_PHRASE = "call decompose with their goal"
-    SAVE_PHRASE = "save_plan then ingest_plan"
-    CONFIRM_PHRASE = "confirm with the user before calling ingest_plan"
+    SAVE_PHRASE = "call save_plan to stage the plan"
+    CONFIRM_PHRASE = "Do not call ingest_plan yourself"
     DISPATCH_PHRASE = "ingestion dispatches stories"
 
     def test_contains_plan_authoring_paragraph(self) -> None:

@@ -27,7 +27,7 @@ from __future__ import annotations
 import app.chat as chat_module
 
 # Fixed anchors that already exist and that later stories must not move.
-PLAN_AUTHORING_ANCHOR = "When satisfied, call save_plan then ingest_plan."
+PLAN_AUTHORING_ANCHOR = "When satisfied, call save_plan to stage the plan."
 TOOLS_SENTENCE_ANCHOR = "Available tools: "
 
 # The exact sentence this story appends to _SYSTEM_PROMPT_PREFIX (verbatim
@@ -170,7 +170,7 @@ class TestSystemPromptPassthroughGuidance:
     def test_existing_plan_authoring_sentences_survive(self):
         prefix = chat_module._SYSTEM_PROMPT_PREFIX
         assert "To help the user author a plan, call decompose with their goal" in prefix
-        assert "Always confirm with the user before calling ingest_plan" in prefix
+        assert "Do not call ingest_plan yourself" in prefix
 
     def test_system_prompt_still_ends_with_final_sentence(self):
         assert chat_module.SYSTEM_PROMPT.endswith(chat_module._FINAL_SENTENCE)

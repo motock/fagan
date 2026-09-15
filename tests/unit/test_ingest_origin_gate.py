@@ -320,10 +320,13 @@ def test_dashboard_module_imports_the_gate_helpers():
 # --------------------------------------------------------------------------
 
 
-def test_system_prompt_still_asks_the_model_to_confirm_before_ingesting():
-    """This story adds enforcement UNDER the prompt sentence, not instead."""
+def test_system_prompt_tells_the_model_chat_cannot_ingest():
+    """The prompt no longer merely layers a rule under the gate -- it now
+    agrees with it: the chat origin can never ingest, and the model is told
+    the exact 403 detail it would otherwise hit."""
     prompt = chat_module.SYSTEM_PROMPT
-    assert "Always confirm with the user before calling ingest_plan" in prompt
+    assert "Do not call ingest_plan yourself" in prompt
+    assert "origin not permitted" in prompt
 
 
 # --------------------------------------------------------------------------

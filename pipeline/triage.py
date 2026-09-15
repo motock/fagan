@@ -572,6 +572,25 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
         return _execute_patch_acceptance(
             plan_name, story_key, story, ruling, manifest, manifest_path
         )
+    if action == "park_for_human":
+        # A park_for_human ruling means "a human must look at this, keep it
+        # parked".  If the story already carries a reason, that reason is what
+        # the human needs to see -- overwriting it (as _park does) would
+        # destroy it, and pipeline/advance.py gates its merge-hold
+        # re-adjudication on the exact reason string.
+        existing = story.get("parked_reason")
+        if isinstance(existing, str) and existing:
+            story["status"] = "parked"
+            try:
+                _notify_user(
+                    plan_name,
+                    f"{story_key} triage: {existing}",
+                    event="story_parked",
+                )
+            except Exception:  # pragma: no cover – notification failures are ignored
+                pass
+            return "park_for_human"
+        return _park(plan_name, story_key, story, f"parked for human: {rationale}")
     if action in DEFERRED_ACTIONS:
         story["triage_deferred_action"] = action
         reason = f"triage ruled {action}, which is not implemented yet; parked for a human"
@@ -606,7 +625,6 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
         reason = f"escalate_model ruled but ladder exhausted: {rationale}"
         return _park(plan_name, story_key, story, reason)
     reason = f"unhandled ruling action '{action}': {rationale}"
-    return _park(plan_name, story_key, story, reason)
     return _park(plan_name, story_key, story, reason)
 
 def _record_execution(plan_name, story_key, action, result, mode,

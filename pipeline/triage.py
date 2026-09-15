@@ -970,6 +970,64 @@ def _current_suite_state(worktree: str) -> str:
         return ""
 
 def _current_git_state(worktree: str, story: dict) -> str:
+    """Return the live ``GIT STATE:`` section plus a ``CHANGED FILES`` list.
+
+    Fail-open, never raises: a falsy or non-string ``worktree`` returns ``""``
+    immediately, and if the underlying git-state probe fails as a whole the
+    result is ``""`` (silence), exactly as before this section existed.
+
+    The changed-files section is purely ADDITIVE. It names every path the
+    branch changed vs the base ref using git's own ``--name-status`` letters
+    (``A``/``M``/``D``/``R100``), so a reader can never mistake an ADDED file
+    for an edited pre-existing one -- the WAP-9 false accusation, where the
+    overlord read the old block and concluded the branch had "edited a
+    pre-existing test assertion" for a test that exists only in the branch's
+    own new file. The header is emitted even when the list is empty or
+    unavailable, so an absent section is never read as "no changes".
+
+    The list is bounded to 50 paths (plus an ``... and N more`` line) because
+    :func:`collect_triage_evidence` truncates the whole block at ``limit=8000``.
+    """
+    if not isinstance(worktree, str) or not worktree:
+        return ""
+    block = _current_git_state_impl(worktree, story)
+    if not block:
+        return ""
+    base = ""
+    try:
+        # Lazy import: pipeline.server imports this module at module level, so
+        # a module-level import here would be circular.
+        from .server import _default_branch
+
+        base = _default_branch()
+    except Exception:  # noqa: BLE001
+        base = ""
+    header = f"CHANGED FILES vs {base}:"
+    try:
+        if not base:
+            return block + "\n" + header + "\n(unavailable)"
+        r = globals()["subprocess.run"](
+            ["git", "diff", "--name-status", f"{base}...HEAD"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if r.returncode != 0:
+            return block + "\n" + header + "\n(unavailable)"
+        entries = [ln for ln in (r.stdout or "").splitlines() if ln.strip()]
+        if not entries:
+            return block + "\n" + header + "\n(none)"
+        section = [header, *entries[:50]]
+        if len(entries) > 50:
+            section.append(f"... and {len(entries) - 50} more")
+        return block + "\n" + "\n".join(section)
+    except Exception:  # noqa: BLE001
+        return block + "\n" + header + "\n(unavailable)"
+
+
+def _current_git_state_impl(worktree: str, story: dict) -> str:
     """Return a live ``GIT STATE:`` section for the story's worktree.
 
     Mirrors :func:`_current_suite_state`'s fail-open shape: an empty or

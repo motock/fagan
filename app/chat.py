@@ -126,6 +126,14 @@ TOOLS: dict[str, dict] = {
             http_client.get(_resolve_tool_url(http_client, api_base_url, "/api/workspaces")).json()
         ),
     },
+    "propose_patch": {
+        "description": "Propose a unified diff patch to a stuck story's worktree for human review and apply in the dashboard.",
+        "params": {"plan_name": "str", "story_key": "str", "unified_diff": "str"},
+        "execute": lambda http_client, api_base_url, plan_name, story_key, unified_diff, **kwargs: (
+            http_client.post(_resolve_tool_url(http_client, api_base_url, "/api/worktree/patch/propose"),
+                             json={"plan_name": plan_name, "story_key": story_key, "unified_diff": unified_diff}).json()
+        ),
+    },
     "get_plan": {
         "description": "Get full detail for one plan by name.",
         "params": {"plan_name": "str"},

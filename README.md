@@ -48,6 +48,31 @@ Windows is untested.
 
 ## Quickstart
 
+### One-line install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/motock/fagan/master/scripts/remote-install.sh | bash
+```
+
+This clones the repo to `~/.fagan` (override the location with
+`FAGAN_INSTALL_DIR`, and the source URL with `FAGAN_REPO_URL`) and runs
+`scripts/install.sh` inside it -- equivalent to the manual clone-and-run
+steps below, minus the typing. Re-running it later updates the existing
+checkout (`git pull --ff-only`) instead of re-cloning.
+
+Piping a remote script into `bash` means trusting whatever that URL serves
+at fetch time. If you'd rather read it first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/motock/fagan/master/scripts/remote-install.sh -o remote-install.sh
+less remote-install.sh   # or open it in an editor
+bash remote-install.sh
+```
+
+Either way, `cd` into the install directory it reports (`~/.fagan` by
+default) and continue from step 2 below. Prefer a manual clone? Use the
+steps below instead.
+
 This gets the MCP server registered and a first plan running end-to-end.
 A first run needs no local model at all: with nothing configured, dispatch
 and review fall back to the `claude` backend, which shells out to the Claude

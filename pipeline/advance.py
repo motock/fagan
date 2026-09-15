@@ -890,8 +890,9 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
         # so a second positional argument would break them. The explicit
         # ``plan_name`` parameter stays for direct callers; production flows
         # the name through this context, which ``_adjudicate_merges`` owns.
-        with merge_adjudication_plan(plan_name):
-            decision = _merge_decision(story)
+        if decision is None:
+            with merge_adjudication_plan(plan_name):
+                decision = _merge_decision(story)
         if decision["action"] != "merge":
             story["status"] = "parked"
             story["parked_reason"] = decision["reason"]

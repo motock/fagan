@@ -658,3 +658,39 @@ class TestPromptTranscriptSurvivesTheTurn:
             "all three prompt sites must append '\\nassistant: ' + response to "
             f"the running transcript; found {len(appends)}"
         )
+
+    def test_each_tool_result_is_appended_exactly_once_per_iteration(self) -> None:
+        """Two tool iterations must append each result exactly once.
+
+        The appended blocks must be built from the CURRENT iteration's calls,
+        not from the turn-cumulative ``tool_calls_made`` list. Re-appending the
+        whole cumulative list on every iteration re-states every earlier
+        ``[TOOL_RESULT ...]`` block, grows the prompt quadratically in the
+        number of tool iterations, and shows the model tool results it has
+        already seen (plausibly reading them as repeated executions).
+        """
+        driver = _ScriptedDriver(
+            [_tool_call(_TOOL_NAME, {}), _tool_call(_TOOL_NAME, {}), "final answer."]
+        )
+        _drain(_service(driver).stream_turn(_QUESTION))
+
+        assert len(driver.calls) == 3
+        marker = f"[TOOL_RESULT name={_TOOL_NAME}]"
+
+        # The prompt handed to the THIRD model call is the running transcript
+        # after two tool iterations: exactly two appends, one per iteration, so
+        # each result is stated exactly once -- 2 blocks, never 3.
+        third_prompt = driver.calls[2]["prompt"]
+        assert third_prompt.count(marker) == 2, (
+            "the third model call must see each tool result exactly once; the "
+            "turn-cumulative tool_calls_made list must not be re-appended in "
+            f"full on every iteration (found {third_prompt.count(marker)} blocks)"
+        )
+
+        # The segment appended for the SECOND iteration must carry only that
+        # iteration's result -- iteration 1's block must not be re-stated.
+        appended_for_second = third_prompt[len(driver.calls[1]["prompt"]):]
+        assert appended_for_second.count(marker) == 1, (
+            "each iteration must append only its own tool-result blocks; found "
+            f"{appended_for_second.count(marker)} in the second iteration's append"
+        )

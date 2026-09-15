@@ -213,9 +213,19 @@ def _populate_pr_checks_once(story):
     immediately - so the scheduler's plan-locked tick is never sleep-polling;
     a hung ``gh`` subprocess is the same pre-existing exposure the sibling
     ``_merge_gate_ci_status`` has.
+
+    A failure is never silent: it is logged as a WARNING naming the story key
+    and the exception type, and recorded as ``story["pr_checks_error"]`` so the
+    prompt can render an unreadable status distinctly from a genuinely empty
+    one. The key lives on the story, never inside ``merge_park_evidence``
+    (whose key set is pinned to exactly ``{"pr_checks"}``).
     """
     if story.get("pr_checks"):
         return
+    # Hoisted ABOVE the try: the first statement inside it is an import, so a
+    # key bound in there would be unbound exactly when the failure handler
+    # below needs it (NameError raised from inside the swallow path).
+    key = story.get("key") or story.get("story_key")
     try:
         # The module-documented monkeypatch seam: pipeline.server re-exports
         # the binding, so stubs land here exactly as they do for the sibling
@@ -223,7 +233,6 @@ def _populate_pr_checks_once(story):
         from .pr import _convention_branch, _resolve_story_branch
         from .server import _ci_status_once
 
-        key = story.get("key") or story.get("story_key")
         branch = _convention_branch(key)
         worktree = story.get("worktree")
         if worktree and Path(worktree).is_dir():
@@ -231,8 +240,41 @@ def _populate_pr_checks_once(story):
         checks = _ci_status_once(branch, sha="")
         if checks is not None:
             story["pr_checks"] = checks
-    except Exception:  # noqa: BLE001 - fail-safe: the gather must never propagate
+    except Exception as exc:  # noqa: BLE001 - fail-safe: the gather must never propagate
+        # An unreadable CI status is NOT evidence of absence: record it so the
+        # prompt renders "(unreadable - ...)" instead of collapsing it into the
+        # same "(none)" a genuinely empty result produces.
+        logging.getLogger("pipeline").warning(
+            "%s: CI evidence gather failed (%s); PR checks will be reported as "
+            "unreadable",
+            key,
+            type(exc).__name__,
+        )
+        story["pr_checks_error"] = f"{type(exc).__name__}: {exc}"[:200]
         return
+
+
+def _render_pr_checks_line(story: dict[str, Any]) -> str:
+    """Render the PR-checks evidence line for the overlord prompt.
+
+    Three distinct cases, deliberately not collapsed:
+
+    * a recorded gather failure -> ``PR CHECKS: (unreadable - <error>)``. An
+      unreadable status is NOT evidence of absence, so the word is never
+      ``none``.
+    * a gathered state -> the state verbatim (repr-style), including a
+      ``{"state": "none", ...}`` result whose ``error`` field stays visible so
+      the reader can tell a nonzero ``gh`` exit apart from a real empty result.
+    * neither -> ``PR CHECKS: (none)``: the story was never gathered because
+      the gate did not run.
+    """
+    error = story.get("pr_checks_error")
+    if error:
+        return f"PR CHECKS: (unreadable - {error})"
+    checks = story.get("pr_checks")
+    if checks:
+        return f"PR CHECKS: {checks}"
+    return "PR CHECKS: (none)"
 
 
 def _adjudicate_high_risk_merge(
@@ -274,7 +316,7 @@ def _adjudicate_high_risk_merge(
         f"REVIEW VERDICT: {story.get('review_verdict') or '(none)'}\n"
         f"SECURITY-REVIEW VERDICT: "
         f"{story.get('security_review_verdict') or '(none)'}\n"
-        f"PR CHECKS: {story.get('pr_checks') or '(none)'}\n"
+        f"{_render_pr_checks_line(story)}\n"
         "Respond in this exact format:\n"
         "RULING: proceed|park\n"
         "RATIONALE: <one line>\n"

@@ -288,7 +288,8 @@ def test_gather_failure_never_escapes_and_fails_closed(monkeypatch):
     assert not story.get("pr_checks"), (
         "a failed gather must leave pr_checks unset"
     )
-    assert "PR CHECKS: (none)" in h.prompt
+    assert "PR CHECKS: (unreadable" in h.prompt
+    assert "PR CHECKS: (none)" not in h.prompt
     assert len(h.invocations) == 1
 
 

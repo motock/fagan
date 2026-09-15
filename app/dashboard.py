@@ -15,14 +15,14 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import chat, role_registry
-from app.auth import get_or_create_api_key, require_api_key
+from app.auth import get_or_create_api_key, refuse_chat_origin, require_api_key
 from app.dashboard_helpers import (
     _LOG_TAIL_CAP,
     _LOG_TAIL_DEFAULT,
@@ -774,7 +774,11 @@ def get_workspace_route():
 
 
 @app.post('/api/workspace')
-def set_workspace_route(request: WorkspaceRequest):
+def set_workspace_route(
+    request: WorkspaceRequest,
+    x_pipeline_origin: Annotated[str | None, Header(alias="X-Pipeline-Origin")] = None,
+):
+    refuse_chat_origin(x_pipeline_origin)
     result = _service.resolve_workspace(request.path, create=request.create)
     if not result.get('ok'):
         raise HTTPException(status_code=400, detail=result.get('error', 'Unknown error'))

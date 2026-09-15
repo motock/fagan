@@ -780,9 +780,12 @@ def run_triage_sweep(plan_name: str) -> dict:
         capped = [(key, reason) for key, allowed, reason in evaluated if not allowed]
         for key, reason in capped:
             story = manifest["stories"][key]
-            if story.get("status") == "parked":
-                # Already parked: skip silently -- no re-park, no notification,
-                # no parked_reason clobber, no manifest write.
+            if story.get("status") == "parked" and str(TRIAGE_MAX_ATTEMPTS) in str(
+                story.get("parked_reason") or ""
+            ):
+                # Already parked AND the parked_reason already names the cap:
+                # skip silently -- no re-park, no notification, no parked_reason
+                # clobber, no manifest write.
                 skipped_cap.append(key)
                 continue
             _park(plan_name, key, story, reason)

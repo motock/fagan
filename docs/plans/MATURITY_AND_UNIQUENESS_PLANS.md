@@ -672,7 +672,7 @@ stories (TDD-split stays strictly read-only). Tests in
 > changes nothing until the inference tier is separated (see B1's remote
 > execution backend).
 
-- [~] **Multi-repo fleet as a first-class concept.** `advance_all_plans`
+- [ ] **Multi-repo fleet as a first-class concept.** `advance_all_plans`
       exists but is plan-per-repo glued. A fleet manager with per-repo
       backends, quotas, and isolation is the scale story.
       **First real step landed 2026-09-14, plan `repo-scoped-plan-visibility`
@@ -881,7 +881,7 @@ B4 → B6.~~ **Superseded 2026-08-06 — see resolution below.**
 > conflict" section for the historical rationale on why B1/B5 were
 > sequenced after the service seam.
 >
-> **What's left as of 2026-09-14:** W4 (multi-tenant — closes B3; deferred
+> **What's left as of 2026-09-11:** W4 (multi-tenant — closes B3; deferred
 > until a real second deployment exists), B5's remaining SWE-bench
 > integration bullet and MCP-registry listing, B6's public demo/writeup,
 > A3's reframed failure-mode-discovery-rate item, the worktree write/apply

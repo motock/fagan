@@ -1,6 +1,6 @@
 # Plan: Decouple the platform from Claude Code, and scale from single-host to multi-tenant
 
-> Status: **In execution (last updated 2026-09-14).** W3a, W1a, W1b, W1c, W2,
+> Status: **In execution (last updated 2026-09-11).** W3a, W1a, W1b, W1c, W2,
 > W3b, `server-app-file-split`, `workspace-selection`, `local-agent-file-split`,
 > `b5-export-the-moat`, `w4-logging-correlation`, `a3-maturity-metrics`,
 > `a4-non-author-usability`, `b1-sandbox-and-harness-seam`,

@@ -161,7 +161,7 @@ class TestPreservedContent:
 
     def test_plist_path_preserved(self):
         row = _pipeline_local_max_steps_row(_reference_text())
-        assert "launchd/com.claude.pipeline.advance-scheduler.plist" in row, (
+        assert "launchd/com.fagan.pipeline.advance-scheduler.plist" in row, (
             "row must preserve the plist path guidance"
         )
 

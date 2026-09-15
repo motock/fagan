@@ -1154,17 +1154,49 @@ def propose_worktree_patch_route(
             request.unified_diff, worktree_root
         )
     except worktree_patch.PatchFormatError as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
+        logger.warning("patch propose rejected (format): %s", exc)
+        raise HTTPException(
+            status_code=413, detail=str(exc).replace(worktree_root, "<worktree>")
+        ) from exc
     except WorkspaceSecurityError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Review round 2 (NIT): WorkspaceSecurityError messages can carry
+        # absolute worktree paths, so keep the full message server-side and
+        # hand the key holder a redacted detail instead.
+        logger.warning("patch propose rejected (safety): %s", exc)
+        raise HTTPException(
+            status_code=400, detail=str(exc).replace(worktree_root, "<worktree>")
+        ) from exc
 
-    return worktree_patch.create_patch_record(
+    record = worktree_patch.create_patch_record(
         request.plan_name,
         request.story_key,
         request.unified_diff,
         validated["paths"],
         validated["added_lines"],
     )
+
+    # Review round 2 (BLOCKING): the confirmation token is the credential the
+    # dashboard needs to render the human-confirmation step, so it may only be
+    # disclosed to ORIGIN_UI.  This route is chat-reachable BY DESIGN and
+    # app/chat.py returns the JSON straight to the model, so a chat-origin
+    # caller gets a token-free envelope: the record is still created (the
+    # human can retrieve it by patch id), but the constrained party never
+    # holds the credential that would let it satisfy the human-confirmation
+    # step itself once the apply route lands.  Possession of the token is
+    # never sufficient on its own: the apply route must also require
+    # ORIGIN_UI (WAP-7/WAP-10/WAP-11).
+    if x_pipeline_origin != ORIGIN_UI:
+        record.pop("confirmation_token", None)
+        logger.info(
+            "patch propose: confirmation token withheld from origin '%s' "
+            "(patch_id=%s, plan=%s, story=%s)",
+            x_pipeline_origin,
+            record.get("patch_id"),
+            request.plan_name,
+            request.story_key,
+        )
+
+    return record
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

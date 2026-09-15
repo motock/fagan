@@ -408,14 +408,22 @@ class TestHappyPath:
         assert isinstance(body["patch_id"], str) and body["patch_id"]
         assert body["paths"] == ["src/app.py"]
         assert body["added_lines"] == 1
-        assert isinstance(body["confirmation_token"], str) and body["confirmation_token"]
         assert isinstance(body["diff_hash"], str) and body["diff_hash"]
+        # Review round 2 (BLOCKING) supersedes this test's original token
+        # assertion: a chat-origin propose must NOT receive
+        # ``confirmation_token`` -- it is the human-confirmation credential
+        # and app/chat.py returns this JSON straight to the model.  The
+        # token-free chat envelope is pinned in depth by
+        # ``TestChatOriginNeverReceivesTheConfirmationToken`` below, and the
+        # ui-origin token by ``test_ui_origin_still_receives_the_real_
+        # confirmation_token``.  The record-storage assertions below are
+        # unchanged: the human can still retrieve the patch by id.
+        assert "confirmation_token" not in body
         assert set(body) >= {
             "ok",
             "patch_id",
             "paths",
             "added_lines",
-            "confirmation_token",
             "diff_hash",
         }
 

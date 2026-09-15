@@ -269,8 +269,17 @@ def _c_unquote(path: str) -> str | None:
     Returns the unquoted string, the input unchanged when it was never
     quoted, or ``None`` when the quoting is malformed (caller fails closed).
     """
-    if len(path) < 2 or not path.startswith('"') or not path.endswith('"'):
-        return path
+    if not path.startswith('"'):
+        return path  # never quoted: unchanged
+    # A leading quote makes this a QUOTED token, so it must be a CLEAN
+    # ``"..."``: no trailing garbage after the closing quote and no stray
+    # inner quote.  ``git apply`` parses the quoted name and IGNORES
+    # trailing garbage (``"b/CLAUDE.md"x`` and ``"b/CLAUDE.md" `` both write
+    # the unquoted ``CLAUDE.md``), so passing the raw token through would
+    # run the deny check on ``CLAUDE.md"x`` instead of ``CLAUDE.md`` --
+    # fail closed instead.
+    if len(path) < 2 or not path.endswith('"') or '"' in path[1:-1]:
+        return None
     body = path[1:-1]
     out: list[str] = []
     i = 0
@@ -768,9 +777,9 @@ def apply_patch(
     3. stuck-only gate (``in_progress`` / ``running`` are refused);
     4. patch record + HMAC confirmation token + single-use status;
     5. worktree must be a directory;
-    6. every new-side hunk path through the strict write resolver (deny
-       list, symlink refusal, escape refusal -- all fail closed) BEFORE
-       any write;
+    6. every new-side AND old-side hunk path through the strict write
+       resolver (deny list, symlink refusal, escape refusal -- all fail
+       closed) BEFORE any write;
     7. ``git apply --check`` (argv list only, no shell, no ``--3way``);
     8. ``git apply``;
     9. on success ONLY: flip the record to ``applied`` and stamp

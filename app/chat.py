@@ -18,6 +18,8 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.auth import ORIGIN_CHAT, ORIGIN_HEADER
+
 
 def _patch_story_execute(http_client, api_base_url, plan_name, story_key, fields, **kwargs):
     if "risk" in fields:
@@ -486,6 +488,13 @@ class ChatService:
             base_url=self._api_base_url,
             timeout=httpx.Timeout(600.0, connect=10.0),
         )
+        # Origin stamping is unconditional (WAP-1): every internal tool call
+        # rides this one client, so the pipeline API can always tell a
+        # model-driven call from a human/dashboard one. The hasattr guard is
+        # load-bearing: the duck-typed fakes in tests/unit/test_chat_*.py have
+        # no .headers and must not raise here.
+        if hasattr(self._http_client, "headers"):
+            self._http_client.headers[ORIGIN_HEADER] = ORIGIN_CHAT
         if api_key and hasattr(self._http_client, "headers"):
             self._http_client.headers["X-Pipeline-Api-Key"] = api_key
         raw_max = max_turns if max_turns is not None else int(os.environ.get("PIPELINE_CHAT_MAX_TURNS", "10"))

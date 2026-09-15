@@ -55,6 +55,14 @@ API_KEY_PATH = REPO_ROOT / ".dashboard_api_key"
 # the chat handler forwards into ChatService.
 PIPELINE_KEY_PREFIX = "k-"
 
+# Origin stamping (WAP-1): the chat service stamps ORIGIN_CHAT on its internal
+# HTTP client unconditionally — every internal tool call rides that one client,
+# so the pipeline API can always tell a model-driven call from a human one.
+# Dashboard-origin-gated routes read this header (later stories).
+ORIGIN_HEADER = "X-Pipeline-Origin"
+ORIGIN_CHAT = "chat"
+ORIGIN_UI = "ui"
+
 # The one route where the k- pass-through is accepted, matched as an exact
 # request path — the same request-URL matching app/dashboard.py's
 # middleware uses to scope the gate to "/api/". The chat stream endpoint is

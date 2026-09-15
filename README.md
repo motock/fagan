@@ -451,7 +451,7 @@ are a reference copy: they carry the maintainer's own absolute paths (a
 work unedited on another machine. On a fresh install, regenerate them yourself
 with `scripts/generate_launchd_plists.sh` (install.sh does not run this for
 you) — it fills the templates in `launchd/`
-(`launchd/com.claude.pipeline.*.plist.template`) from three flags:
+(`launchd/com.fagan.pipeline.*.plist.template`) from three flags:
 
 - `--repo-root` — the pipeline checkout the rendered files should point at
   (default: the repo that contains the script).

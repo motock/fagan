@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/motock/fagan/security/advisories/new
+    about: Please report suspected vulnerabilities privately, not as a public issue.
+  - name: Questions / discussion
+    url: https://github.com/motock/fagan/discussions
+    about: General questions and discussion that aren't a specific bug or feature request.

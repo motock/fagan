@@ -1,7 +1,8 @@
 # Plan retrospectives
 
-One line per retro, newest first. See `PLAN_RETROSPECTIVE_PROCESS_PLAN.md` at
-the repo root for the process this index is part of.
+One line per retro, newest first. See
+[`docs/plans/PLAN_RETROSPECTIVE_PROCESS_PLAN.md`](../docs/plans/PLAN_RETROSPECTIVE_PROCESS_PLAN.md)
+for the process this index is part of.
 
 | Date | Plan | Outcome | Retro |
 |---|---|---|---|

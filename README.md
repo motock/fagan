@@ -49,13 +49,13 @@ Windows is untested.
 ## Quickstart
 
 This gets the MCP server registered and a first plan running end-to-end.
-To keep a first run simple, dispatch/review default to the `claude` backend,
-which needs no local model — it shells out to the Claude Code CLI. That
-default is the *starting* configuration, not the intended one: the cost split
-described above only happens once you route the implementation role to a
-local model. The shipped registry deliberately ships no role routing, so
-provider selection is a setup step, not a default: see **Provider selection &
-authorization** below.
+A first run needs no local model at all: with nothing configured, dispatch
+and review fall back to the `claude` backend, which shells out to the Claude
+Code CLI. That fallback is the *starting* configuration, not the intended one
+— the cost split described above only happens once you deliberately route
+the implementation role to a local model, which is why the shipped registry
+ships no `roles` block of its own: see **Provider selection & authorization**
+below for how to make that choice when you're ready.
 
 ```bash
 # 1. Clone and install the Python environment
@@ -67,9 +67,11 @@ scripts/install.sh          # creates .venv, installs requirements.txt
 claude mcp add -s user pipeline "$(pwd)/.venv/bin/python3" "$(pwd)/app/pipeline_mcp_server.py"
 
 # 3. Copy the persona subagents and decision policy into place
+#    (cp -n skips any file you already have — e.g. a customized code-reviewer.md —
+#    instead of silently overwriting it; diff before removing -n if you do want the update)
 mkdir -p ~/.claude/agents
-cp agents/*.md ~/.claude/agents/
-cp overlord-policy.md ~/.claude/overlord-policy.md
+cp -n agents/*.md ~/.claude/agents/
+cp -n overlord-policy.md ~/.claude/overlord-policy.md
 
 # 4. Restart Claude Code (or start a new session) so it picks up the MCP server
 ```
@@ -198,10 +200,10 @@ For what can still go wrong, see
 ### Companion MCP server (overlord + acceptance-oracle only)
 
 Not ready to adopt the whole orchestrator? `pipeline/companion_server.py` is a
-second, smaller MCP server (`pipeline-companion`) exposing only the two
-adoptable ideas from Plan B5: `escalate_decision` (the overlord decision path)
-and the acceptance-oracle helpers `classify_oracle_outcome` /
-`acceptance_digests`. It imports the real `pipeline.overlord` and
+second, smaller MCP server (`pipeline-companion`) exposing two ideas that
+stand on their own without adopting the rest of the pipeline:
+`escalate_decision` (the overlord decision path) and the acceptance-oracle
+helpers `classify_oracle_outcome` / `acceptance_digests`. It imports the real `pipeline.overlord` and
 `pipeline.oracle_gate` modules rather than duplicating them, so it stays in
 sync with the main server. Add it alongside the main server as a second
 `mcpServers` entry:
@@ -280,9 +282,9 @@ and provider authorization for whichever backend is configured — see
 | Pipeline MCP server | `app/pipeline_mcp_server.py` (launch shim) → `pipeline/` package | All pipeline tools + orchestration; `pipeline/server.py` is the entry module, split across `pipeline/*.py` (dispatch, review, ci, advance, store, etc.) |
 | Backend seam | `app/backend.py` | Per-role driver routing (`claude` / `ollama` / `lmstudio` / `mlx` / `local`); single-shot, review, dispatch, resource gate |
 | Local agent loop | `scripts/local_agent.py` | Native-tool-calling write loop for local dispatch (subprocess) |
-| Monitoring dashboard | `app/dashboard.py`, `static/` | Read-only FastAPI status/lifecycle viewer |
+| Monitoring dashboard | `app/dashboard.py`, `static/` | FastAPI status/lifecycle viewer; in standalone mode (see "Running standalone" below) it also drives save/ingest/dispatch/review/merge directly |
 | Install / deps | `scripts/install.sh`, `requirements*.txt` | venv + dependency setup |
-| Tests | `tests/unit/` (5,600+ tests) | `pytest`, run via the venv |
+| Tests | `tests/unit/` (10,500+ tests) | `pytest`, run via the venv |
 | Plans / manifests / logs | `~/.claude/plans/` | Plan, manifest, decisions, notifications |
 | Worktrees | `~/.claude/worktrees/` | Isolated per-story branches |
 | Issue tracker | Plane (external, optional) | Mirror of story state; skipped entirely when unconfigured (manifest is the source of truth) |
@@ -292,30 +294,46 @@ and provider authorization for whichever backend is configured — see
 ## Architecture
 
 ```
-            ┌─────────────────────────────────────────────────┐
-            │ Orchestrator loop (cron / /loop skill)          │
-            │ advance_pipeline(plan) — one idempotent tick    │
-            └───────────────────────┬─────────────────────────┘
-     ready stories                   │  gates adjudicated by overlord
-     (deps satisfied)                │
-                                      ▼
- 
-   ┌───────────────┐ resolve backend + persona/model  ┌─────────────────────────────┐
-   │ Plan/Manifest │─────────────────────────────────►│ Dispatch:                   │
-   │ (JSON, Plane) │                                  │  • claude -p  OR  local loop│
-   └──────────┴────┘                                  │  • tech-lead planner →      │
-              │                                       │    .agent_plan.md (local)   │
-              │                                       │                             │
-              │                                       └──────────────┬──────────────┘
-              │                                                      │
-              │ audit → decisions log                                ▼
-              │                                       ┌─────────────────────────────┐
-              │                                       │ Headless story agent        │
-              │                                       │ in git worktree             │
-              │                                       └──────────────┬──────────────┘
-              │                       tests + acceptance oracle      │
-              │                   local fail → escape to Claude    │
-              │                                                      ▼
+ ┌───────────────────────────────────────────────────────────┐
+ │ Orchestrator loop (cron / /loop skill)                     │
+ │ advance_pipeline(plan) — one idempotent tick               │
+ └───────────────────────────┬───────────────────────────────┘
+                              │ ready stories (deps satisfied)
+                              ▼
+ ┌───────────────┐  resolve backend +    ┌───────────────────────────────┐
+ │ Plan/Manifest │  persona/model        │ Dispatch                      │
+ │ (JSON, Plane) │──────────────────────►│  claude -p  OR  local loop    │
+ └───────────────┘                       │  (tech-lead plans for local → │
+                                          │   .agent_plan.md)             │
+                                          └───────────────┬───────────────┘
+                                                           ▼
+                                          ┌───────────────────────────────┐
+                                          │ Headless story agent, TDD-    │
+                                          │ first, in an isolated git     │
+                                          │ worktree                      │
+                                          └───────────────┬───────────────┘
+                                    local fail → escalate  │ tests +
+                                    to claude (`auto`)     │ acceptance oracle
+                                                           ▼
+                                          ┌───────────────────────────────┐
+                                          │ code-reviewer: VERDICT,       │
+                                          │ opens a PR                    │
+                                          └───────────────┬───────────────┘
+                                                           ▼
+      low    → decide silently            ┌───────────────────────────────┐
+      medium → decide, notify the user    │ Overlord adjudicates risk     │──► decisions log
+      high   → park, wait for a human     │ (blocked decisions, merge,    │    (audit trail)
+                                           │  scope disputes)              │
+                                           └───────────────┬───────────────┘
+                                                            ▼ approved
+                                           ┌───────────────────────────────┐
+                                           │ Merge gate: rebase on master, │
+                                           │ force-push, poll CI, re-run   │
+                                           │ the suite on the rebased      │
+                                           │ branch                        │
+                                           └───────────────┬───────────────┘
+                                                            ▼
+                                                         master
 ```
 
 ## Personas (`~/.claude/agents/`)
@@ -384,14 +402,17 @@ For how a release is cut, see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Prerequisites
 
-- **Python 3.10+** and the project venv.
+- **Python 3.10+** and the project venv. CI tests 3.12–3.14 on Ubuntu and
+  macOS on every push; 3.10/3.11 aren't part of the CI matrix, so treat them
+  as likely-fine but unverified.
 - **git** on PATH.
 - **GitHub CLI** (`gh`).
 - **Claude Code CLI** (`claude`).
 
 ## Scheduler
 
-The **advance-scheduler** is now a long‑lived daemon rather than a 60s launchd tick. Launchd now only crash‑restarts the daemon via KeepAlive.
+The **advance-scheduler** runs as a long-lived daemon rather than a periodic
+launchd tick. launchd's role is limited to crash-restarting it via `KeepAlive`.
 
 ### Environment Variables
 - **PIPELINE_SCHEDULER_INTERVAL_S** – default reconcile sweep interval (default 60 seconds).
@@ -444,12 +465,19 @@ documented ways — read this before pointing it at anything you care about.
   trusting local dispatch on anything non-trivial. `PIPELINE_BACKEND_DISPATCH=auto`
   exists specifically to escalate a struggling local attempt to Claude rather
   than let it loop.
+- **The "$20/month" framing is the design goal the gates are built around,
+  not a benchmarked result yet.** The one full model-comparison run on
+  record (`tests/benchmark/FINDINGS.md`) was contaminated mid-run by rate
+  limits and credit exhaustion, so there is no clean apples-to-apples
+  success-rate/cost comparison across backends published yet. Read that file
+  for exactly what is and isn't known before citing a number from it.
 - **A green test suite is not proof of a correct or complete change.** An
   executor (local or Claude) converges to the minimum diff that turns its own
   tests green, and can write a self-consistently wrong test that encodes the
-  same bug as its implementation. See CLAUDE.md's ["Merge-gate and AI-review
-  lessons"](CLAUDE.md) section — every lesson there came from a real merged
-  regression, not a hypothetical.
+  same bug as its implementation. See `.claude/rules/code-review.md`'s
+  ["Merge-gate and AI-review lessons"](.claude/rules/code-review.md#merge-gate-and-ai-review-lessons-from-production-incidents)
+  section — every lesson there came from a real merged regression, not a
+  hypothetical.
 - **A story marked `done` is not proof its title's full scope shipped.** A
   "migrate everything" or "remove all X" story can pass review and merge
   having only done part of the job, because review grades the story's own

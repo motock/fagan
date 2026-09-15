@@ -7,7 +7,7 @@
 # output (logging, bare prints, tracebacks) since it rotates the files by path.
 #
 # Install (one-time, needs sudo):
-#   sudo cp launchd/pipeline-logs.newsyslog.conf /etc/newsyslog.d/com.claude.pipeline.conf
+#   sudo cp launchd/pipeline-logs.newsyslog.conf /etc/newsyslog.d/com.fagan.pipeline.conf
 # newsyslog runs ~hourly via /System/Library/LaunchDaemons/com.apple.newsyslog.plist;
 # force a pass with:  sudo newsyslog -nv   (dry-run)  /  sudo newsyslog -v
 #

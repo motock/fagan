@@ -570,7 +570,7 @@ def test_scheduler_plist_sets_pipeline_local_max_steps():
     regression that motivated this fix."""
     plist_path = (
         Path(__file__).resolve().parent.parent.parent / "launchd"
-        / "com.claude.pipeline.advance-scheduler.plist"
+        / "com.fagan.pipeline.advance-scheduler.plist"
     )
     with open(plist_path, "rb") as f:
         plist = plistlib.load(f)

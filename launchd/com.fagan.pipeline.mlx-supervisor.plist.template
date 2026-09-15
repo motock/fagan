@@ -12,30 +12,30 @@
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/opt/homebrew/bin:/Users/jessecarroll/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<string>/opt/homebrew/bin:{{HOME}}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<key>MLX_SERVER_MODEL_PATH</key>
-		<string>/Users/jessecarroll/.cache/qwen2.5_coder_14b_manual</string>
+		<string>{{MLX_MODEL_PATH}}</string>
 		<key>MLX_SERVER_PORT</key>
 		<string>8080</string>
 		<key>MLX_SERVER_PYTHON</key>
-		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv-mlx/bin/python3</string>
+		<string>{{REPO_ROOT}}/.venv-mlx/bin/python3</string>
 	</dict>
 	<key>Label</key>
-	<string>com.claude.pipeline.mlx-supervisor</string>
+	<string>com.fagan.pipeline.mlx-supervisor</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/.venv-mlx/bin/python3</string>
-		<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/scripts/mlx_server_supervisor.py</string>
+		<string>{{REPO_ROOT}}/.venv-mlx/bin/python3</string>
+		<string>{{REPO_ROOT}}/scripts/mlx_server_supervisor.py</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>StandardErrorPath</key>
-	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/mlx-supervisor.err.log</string>
+	<string>{{REPO_ROOT}}/mlx-supervisor.err.log</string>
 	<key>StandardOutPath</key>
-	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline/mlx-supervisor.log</string>
+	<string>{{REPO_ROOT}}/mlx-supervisor.log</string>
 	<key>StartInterval</key>
 	<integer>120</integer>
 	<key>WorkingDirectory</key>
-	<string>/Users/jessecarroll/.claude/mcp-servers/pipeline</string>
+	<string>{{REPO_ROOT}}</string>
 </dict>
 </plist>

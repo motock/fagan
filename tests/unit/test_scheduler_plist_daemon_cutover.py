@@ -20,9 +20,9 @@ import pytest
 
 LAUNCHD_DIR = Path(__file__).resolve().parents[2] / "launchd"
 
-ADVANCE_TEMPLATE = LAUNCHD_DIR / "com.claude.pipeline.advance-scheduler.plist.template"
-ADVANCE_PLIST = LAUNCHD_DIR / "com.claude.pipeline.advance-scheduler.plist"
-MLX_PLIST = LAUNCHD_DIR / "com.claude.pipeline.mlx-supervisor.plist"
+ADVANCE_TEMPLATE = LAUNCHD_DIR / "com.fagan.pipeline.advance-scheduler.plist.template"
+ADVANCE_PLIST = LAUNCHD_DIR / "com.fagan.pipeline.advance-scheduler.plist"
+MLX_PLIST = LAUNCHD_DIR / "com.fagan.pipeline.mlx-supervisor.plist"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 README = REPO_ROOT / "README.md"

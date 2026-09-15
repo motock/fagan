@@ -354,6 +354,7 @@ async function sendCommsMessage(text) {
   // event. Null when nothing streamed, in which case the reply is appended
   // exactly as the blocking path always did.
   let pending = null;
+  let finalEl = null;
   const lastThreadChild = () => {
     const thread = document.getElementById('comms-thread');
     if (!thread || !thread.children || thread.children.length === 0) return null;
@@ -378,14 +379,15 @@ async function sendCommsMessage(text) {
     const hasError = Array.isArray(toolCalls) && toolCalls.some(c => c.result && c.result.error);
     const role = hasError ? 'tower denied' : 'tower';
     const bubbleHtml = renderMarkdown(reply) + renderToolTraceHtml(toolCalls);
-    if (pending && pending.el) {
-      pending.el.className = `msg ${role}`;
-      pending.el.innerHTML = _commsMessageInnerHtml(role, bubbleHtml);
+    const target = (pending && pending.el) || finalEl;
+    if (target) {
+      target.className = `msg ${role}`;
+      target.innerHTML = _commsMessageInnerHtml(role, bubbleHtml);
       const thread = document.getElementById('comms-thread');
-      if (thread && typeof thread.appendChild === 'function') thread.appendChild(pending.el);
+      if (thread && typeof thread.appendChild === 'function') thread.appendChild(target);
       _scrollCommsToBottom();
     } else {
-      appendCommsMessage(role, bubbleHtml);
+      finalEl = appendCommsMessage(role, bubbleHtml);
     }
   };
   const onStreamEvent = (event) => {

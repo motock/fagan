@@ -592,13 +592,18 @@ class ChatService:
                 yield {"type": "reply", "data": {"text": response}}
                 yield {"type": "result", "data": {"reply": response, "tool_calls": tool_calls_made, "turns": turns}}
                 return
+            # Append only THIS iteration's tool results: tool_calls_made is the
+            # turn-cumulative list, so slicing from the pre-iteration length
+            # keeps each result stated exactly once in the running transcript
+            # instead of re-stating every earlier block (quadratic growth).
+            iteration_start = len(tool_calls_made)
             for call in parsed:
                 yield {"type": "tool_call", "data": {"name": call["name"], "args": call["args"]}}
                 result = _execute_tool(call["name"], call["args"], self._http_client, self._api_base_url)
                 yield {"type": "tool_result", "data": {"name": call["name"], "args": call["args"], "result": result}}
                 tool_calls_made.append({"name": call["name"], "args": call["args"], "result": result})
             result_blocks = []
-            for call in tool_calls_made:
+            for call in tool_calls_made[iteration_start:]:
                 block = f"[TOOL_RESULT name={call['name']}]" + json.dumps(call['result']) + "[/TOOL_RESULT]"
                 result_blocks.append(block)
             current_prompt = current_prompt + "\nassistant: " + response + "\n" + "\n".join(result_blocks)

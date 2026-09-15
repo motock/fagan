@@ -806,3 +806,107 @@ class TestChatTool:
     def test_tools_sentence_mentions_propose_patch(self):
         sentence = chat_module._available_tools_sentence()
         assert "propose_patch" in sentence
+
+
+# =========================================================================== #
+# REVIEW ROUND 2 (BLOCKING): the confirmation token must never reach chat
+# =========================================================================== #
+# ``propose_worktree_patch_route`` is chat-reachable BY DESIGN and
+# ``app/chat.py``'s ``propose_patch`` tool returns the route's ``.json()``
+# straight back to the model.  ``create_patch_record``'s envelope carries
+# ``confirmation_token`` -- the credential the dashboard needs to render the
+# human-confirmation step -- so returning that envelope verbatim hands the
+# constrained party the control's own credential.  A prompt-injected model
+# could then satisfy the human-confirmation step itself once the apply route
+# lands, defeating the human-in-the-loop control this story exists to build.
+#
+# Required behaviour pinned below: the token is minted/returned ONLY for
+# ``ORIGIN_UI``; a chat-origin propose returns a token-free envelope while
+# still creating the record, so the human can retrieve and confirm it.
+
+
+def _expected_confirmation_token(patch_id: str, diff_hash: str) -> str:
+    """The HMAC the store mints for *patch_id*/*diff_hash* (WAP-6 shape)."""
+    import hashlib
+    import hmac
+
+    return hmac.new(
+        worktree_patch._TOKEN_SECRET.encode("utf-8"),
+        f"{patch_id}:{diff_hash}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+class TestChatOriginNeverReceivesTheConfirmationToken:
+    def test_chat_origin_response_omits_the_confirmation_token_key(
+        self, client, manifest
+    ):
+        resp = _post(client, origin=ORIGIN_CHAT, key=get_or_create_api_key())
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "confirmation_token" not in body, (
+            "chat origin must not receive the human-confirmation credential"
+        )
+
+    def test_chat_origin_response_leaks_no_token_value_under_any_key(
+        self, client, manifest
+    ):
+        resp = _post(client, origin=ORIGIN_CHAT, key=get_or_create_api_key())
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        token = _expected_confirmation_token(body["patch_id"], body["diff_hash"])
+        assert token not in resp.text, (
+            "the confirmation token value must not appear anywhere in the "
+            "chat-origin response body"
+        )
+
+    def test_chat_origin_still_creates_the_record_for_the_human(
+        self, client, manifest
+    ):
+        resp = _post(client, origin=ORIGIN_CHAT, key=get_or_create_api_key())
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        record = worktree_patch.get_patch_record(body["patch_id"])
+        assert record is not None, "the record must still be created for the human"
+        assert record["diff_text"] == VALID_DIFF
+        assert record["status"] == "pending"
+        assert record["diff_hash"] == body["diff_hash"]
+
+    def test_chat_origin_envelope_keeps_the_review_fields(self, client, manifest):
+        resp = _post(client, origin=ORIGIN_CHAT, key=get_or_create_api_key())
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["paths"] == ["src/app.py"]
+        assert body["added_lines"] == 1
+        assert body["diff_hash"]
+
+    def test_ui_origin_still_receives_the_real_confirmation_token(
+        self, client, manifest
+    ):
+        resp = _post(client, origin=ORIGIN_UI, key=get_or_create_api_key())
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert "confirmation_token" in body, (
+            "the dashboard (ui origin) needs the token to render the "
+            "confirmation step"
+        )
+        assert body["confirmation_token"] == _expected_confirmation_token(
+            body["patch_id"], body["diff_hash"]
+        )
+
+    def test_chat_tool_path_returns_no_token_to_the_model(self, client, manifest):
+        # The real model-visible path: app/chat.py's propose_patch tool posts
+        # with the ORIGIN_CHAT stamp and returns ``.json()`` verbatim.
+        client.headers[ORIGIN_HEADER] = ORIGIN_CHAT
+        result = chat_module.TOOLS["propose_patch"]["execute"](
+            client,
+            "",
+            plan_name=PLAN_NAME,
+            story_key=STORY_KEY,
+            unified_diff=VALID_DIFF,
+        )
+        assert result["ok"] is True
+        assert "confirmation_token" not in result, (
+            "the model must not receive the confirmation token for its own patch"
+        )

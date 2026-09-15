@@ -245,15 +245,72 @@ _MAX_PROPOSE_ADDED_LINES = 400
 # context) is ignored.
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
+_SIMPLE_C_ESCAPES = {
+    "a": "\a",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    '"': '"',
+    "\\": "\\",
+}
+
+
+def _c_unquote(path: str) -> str | None:
+    """C-unquote a git-quoted diff path (``"b/CLAUDE.md"`` -> ``b/CLAUDE.md``).
+
+    ``git apply`` C-unquotes ``--- ``/``+++ `` headers before touching the
+    filesystem, so the deny check must run on the UNQUOTED spelling: a quoted
+    path whose final component is ``CLAUDE.md"`` otherwise slips past the
+    final-component deny rules while git writes the unquoted ``CLAUDE.md``.
+
+    Returns the unquoted string, the input unchanged when it was never
+    quoted, or ``None`` when the quoting is malformed (caller fails closed).
+    """
+    if len(path) < 2 or not path.startswith('"') or not path.endswith('"'):
+        return path
+    body = path[1:-1]
+    out: list[str] = []
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        i += 1
+        if i >= len(body):
+            return None  # dangling backslash: malformed quoting
+        esc = body[i]
+        if esc in _SIMPLE_C_ESCAPES:
+            out.append(_SIMPLE_C_ESCAPES[esc])
+            i += 1
+            continue
+        if esc in "01234567":
+            digits = esc
+            i += 1
+            while i < len(body) and len(digits) < 3 and body[i] in "01234567":
+                digits += body[i]
+                i += 1
+            out.append(chr(int(digits, 8) & 0xFF))
+            continue
+        return None  # unknown escape: unparseable, fail closed
+    return "".join(out)
+
 
 @dataclasses.dataclass(frozen=True)
 class ParsedHunk:
     """One ``@@`` hunk: its new-side file and its counted body lines.
 
     ``path`` is ``None`` for a deletion-only file (``+++ /dev/null``).
+    ``old_path`` is the OLD-side path with the leading ``a/`` stripped, or
+    ``None`` for a creation-only file (``--- /dev/null``).
     """
 
     path: str | None
+    old_path: str | None
     context_lines: int
     deletions: int
     additions: int
@@ -261,9 +318,17 @@ class ParsedHunk:
 
 @dataclasses.dataclass(frozen=True)
 class ParsedDiff:
-    """The propose-relevant summary of a unified diff."""
+    """The propose-relevant summary of a unified diff.
+
+    ``paths`` are the NEW-side paths (``/dev/null`` excluded); ``old_paths``
+    are the OLD-side paths (``/dev/null`` excluded, duplicates kept).  The
+    APPLY gate checks BOTH sides: a deletion-only block contributes no
+    new-side path, so its old-side path is the only one that names the file
+    ``git apply`` will delete.
+    """
 
     paths: list[str]
+    old_paths: list[str]
     added_lines: int
     hunks: list[ParsedHunk]
 
@@ -273,6 +338,7 @@ class _OpenHunk:
     """Mutable accumulator for the hunk currently being consumed."""
 
     path: str | None
+    old_path: str | None
     old_count: int
     new_count: int
     context: int = 0
@@ -289,6 +355,7 @@ class _OpenHunk:
     def to_parsed(self) -> ParsedHunk:
         return ParsedHunk(
             path=self.path,
+            old_path=self.old_path,
             context_lines=self.context,
             deletions=self.deletions,
             additions=self.additions,
@@ -356,6 +423,7 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
         lines.pop()  # artifact of the trailing newline, not a body line
 
     paths: list[str] = []
+    old_paths: list[str] = []
     hunks: list[ParsedHunk] = []
     added_lines = 0
 
@@ -363,6 +431,7 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
     file_open = False
     hunks_seen_for_file = False
     current_path: str | None = None
+    current_old_path: str | None = None
     open_hunk: _OpenHunk | None = None
 
     for line in lines:
@@ -381,6 +450,16 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
             pending_minus_header = True
             file_open = False
             hunks_seen_for_file = False
+            source = line[4:].split("\t", 1)[0]
+            unquoted_source = _c_unquote(source)
+            if unquoted_source is None:
+                raise PatchFormatError("malformed diff: unparseable quoted path")
+            source = unquoted_source
+            if source == "/dev/null":
+                current_old_path = None  # creation-only file: no old-side path
+            else:
+                current_old_path = source.removeprefix("a/")
+                old_paths.append(current_old_path)
             continue
 
         if line.startswith("+++ "):
@@ -392,6 +471,10 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
             file_open = True
             hunks_seen_for_file = False
             target = line[4:].split("\t", 1)[0]
+            unquoted = _c_unquote(target)
+            if unquoted is None:
+                raise PatchFormatError("malformed diff: unparseable quoted path")
+            target = unquoted
             if target == "/dev/null":
                 current_path = None  # deletion-only file: no new-side path
             else:
@@ -410,7 +493,10 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
             old_count = int(match.group(2)) if match.group(2) is not None else 1
             new_count = int(match.group(4)) if match.group(4) is not None else 1
             open_hunk = _OpenHunk(
-                path=current_path, old_count=old_count, new_count=new_count
+                path=current_path,
+                old_path=current_old_path,
+                old_count=old_count,
+                new_count=new_count,
             )
             hunks_seen_for_file = True
             if open_hunk.complete:  # degenerate -0,0 +0,0 hunk
@@ -431,7 +517,7 @@ def parse_unified_diff(diff_text: str) -> ParsedDiff:
             "malformed diff: hunk supplies fewer lines than its header declares"
         )
 
-    return ParsedDiff(paths=paths, added_lines=added_lines, hunks=hunks)
+    return ParsedDiff(paths=paths, old_paths=old_paths, added_lines=added_lines, hunks=hunks)
 
 
 def validate_for_propose(diff_text: str, worktree_root: str) -> dict:
@@ -735,13 +821,24 @@ def apply_patch(
             return {"ok": False, "error": "patch already applied", "status_code": 409}
 
         # 5. The worktree must exist as a directory.
-        worktree = Path(story["worktree"])
+        worktree_raw = story.get("worktree")
+        if not isinstance(worktree_raw, str) or not worktree_raw:
+            return {
+                "ok": False,
+                "error": "worktree is not a directory",
+                "status_code": 409,
+            }
+        worktree = Path(worktree_raw)
         if not worktree.is_dir():
             return {"ok": False, "error": "worktree is not a directory", "status_code": 409}
 
-        # 6. Resolve EVERY new-side hunk path BEFORE any write.  The deny
-        #    list runs here, after parse and before git apply, on every
-        #    path: one denied hunk refuses the whole patch.
+        # 6. Resolve EVERY hunk path -- NEW side AND OLD side -- BEFORE any
+        #    write.  The deny list runs here, after parse and before git
+        #    apply, on every path: one denied hunk refuses the whole patch.
+        #    The old side matters because a deletion-only block (``+++ 
+        #    /dev/null``) contributes NO new-side path, yet ``git apply`` will
+        #    still delete the old-side file: without this check a deletion
+        #    diff could remove a deny-listed file (e.g. ``CLAUDE.md``).
         workspace = importlib.import_module("pipeline.workspace")
         try:
             parsed = parse_unified_diff(record["diff_text"])
@@ -751,6 +848,14 @@ def apply_patch(
                     continue
                 resolve_write_target(str(worktree), path)
                 resolved_paths.append(path)
+            for old_path in parsed.old_paths:
+                if old_path == "/dev/null":
+                    continue
+                # Gate ONLY: the old side is checked against the deny list
+                # (a deletion-only block names its victim only here) but it
+                # is never reported as an applied path -- ``applied`` stays
+                # the new-side write set, as the WAP-7 contract pins it.
+                resolve_write_target(str(worktree), old_path)
         except (PatchSecurityError, workspace.WorkspaceSecurityError):
             return {"ok": False, "error": "patch target refused", "status_code": 403}
         except PatchFormatError:

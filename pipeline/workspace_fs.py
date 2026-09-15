@@ -80,6 +80,14 @@ def _reject_unsafe_relative(text: str) -> None:
         raise WorkspaceSecurityError(
             "relative path must not contain backslash separators"
         )
+    # A quote character can only appear in a path that skipped C-unquoting:
+    # git's quoted ``"b/x"`` spellings are unquoted before they reach this
+    # resolver, so a surviving ``"`` is a malformed token (e.g. the trailing
+    # garbage ``"b/CLAUDE.md"x`` bypass) -- fail closed.
+    if '"' in text:
+        raise WorkspaceSecurityError(
+            "relative path must not contain quote characters"
+        )
     # Absolute in EITHER spelling, whatever the host platform: PurePosixPath
     # catches "/etc/passwd", PureWindowsPath catches "C:/x" and UNC roots.
     if (

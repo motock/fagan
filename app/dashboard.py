@@ -977,7 +977,8 @@ def decompose_route(request: DecomposeRequest):
         raise HTTPException(status_code=400, detail=result.get("error", "Unknown error"))
     return result
 @app.post("/api/plans/{plan_name}/ingest")
-def ingest_plan(plan_name: str, request: IngestPlanRequest | None = None):
+def ingest_plan(plan_name: str, request: IngestPlanRequest | None = None, x_pipeline_origin: str | None = Header(default=None, alias="X-Pipeline-Origin")):
+    refuse_chat_origin(x_pipeline_origin)
     if request is None:
         result = _service.ingest_plan(plan_name)
     else:

@@ -22,7 +22,12 @@ Grading rules honored here (see story brief):
   * no live LLM calls - assertions run against the SYSTEM_PROMPT string
     directly, per this repo's chat test conventions;
   * this is a pure append: nothing existing is removed or reordered, so the
-    pre-existing substring contracts are re-asserted here unmodified.
+    pre-existing substring contracts are re-asserted here unmodified. The one
+    exception is the two plan-authoring sentences ("When satisfied, call
+    save_plan then ingest_plan." and "Always confirm with the user before
+    calling ingest_plan - ingestion dispatches stories."), which a later story
+    rewrote in place because the chat origin can never call ingest_plan; their
+    list positions below are unchanged, only their values.
 """
 
 from __future__ import annotations
@@ -196,8 +201,8 @@ class TestPureAppendContract:
             "All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it.",
             "To help the user author a plan, call decompose with their goal to get a first draft.",
             "Show the draft and ask if they want to iterate.",
-            "When satisfied, call save_plan then ingest_plan.",
-            "Always confirm with the user before calling ingest_plan - ingestion dispatches stories.",
+            "When satisfied, call save_plan to stage the plan.",
+            "Do not call ingest_plan yourself: ingestion dispatches stories, and the ingest endpoint refuses calls made from this chat session's origin - it answers 'origin not permitted', so an ingest call from here can only ever fail. Never tell the user a plan is ingested when it is not. When save_plan succeeds, tell the user the plan is staged and that the next step is to ingest it from the dashboard UI's ingest control, or from an operator's MCP session.",
             "You can surface decisions the overlord has ruled on by calling list_decisions.",
             "If the user wants to override or supplement a ruling, record their answer via answer_decision.",
             "Human answers are appended to the same decision log as overlord rulings, preserving the audit trail.",

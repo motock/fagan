@@ -56,6 +56,15 @@ async function checkConfigMismatch() {
   }
 }
 
+// WAP-14: the patch review/apply panel goes through the WAP-13 module so
+// every patch fetch/apply carries X-Pipeline-Origin: ui. No parallel fetch
+// path is built here — the "/api/worktree/patch" URLs live only in patch.js.
+import {
+  applyPatch,
+  fetchPatchRecord,
+  renderPatchRecord,
+} from "./patch.js";
+
 // plan-list.js/plan-detail.js/story-modal.js/notifications.js can't
 // statically import back from app.js (see their own comments on this)
 // without breaking under the test harness's cache-busted app.js URL, so this
@@ -70,6 +79,13 @@ initPlanList({ selectPlan, selectComms, selectOverview, refresh });
 initPlanDetail({ showStoryModal, renderNotifications, renderDecisions, setNotifSeverityFilter });
 initStoryModal({ backendErrorEl: _backendErrorEl, notifSeverityColor: NOTIF_SEVERITY_COLOR });
 initNotifications({ selectComms });
+// WAP-14: wire the patch review/apply panel with the real WAP-13 collaborators
+// (same injection pattern as initStoryModal / initNotifications). The panel
+// itself is mounted lazily by openPatchReview, so nothing DOM-dependent runs
+// at init time. _patchReview is declared here (before this call) because the
+// panel functions live further down the module.
+let _patchReview = null;
+initPatchReview({ applyPatch, fetchPatchRecord, renderPatchRecord });
 
 // Toast state
 let lastSeenNotificationByPlan = new Map();
@@ -287,6 +303,106 @@ document.getElementById("story-modal-body").addEventListener("click", handleCopy
 document.getElementById("story-modal").addEventListener("click", (e) => {
   // Click on the backdrop (outside the modal-content) closes the modal.
   if (e.target.id === "story-modal") hideStoryModal();
+});
+
+// === Patch review / apply panel (WAP-14) ==================================
+// A patch_proposed notification renders a "Review patch" control (see
+// notifications.js). Clicking it opens this panel, which shows the
+// SERVER-stored patch record — fetched through the WAP-13 module so the
+// request carries X-Pipeline-Origin: ui — and offers a human Apply control.
+// The diff shown is always the server record's; chat-reply text is never a
+// source, and the Apply control exists only inside this server-record flow.
+// (_patchReview is declared + initialized near the top of the module, before
+// the init-time initPatchReview call.)
+
+function initPatchReview({ applyPatch, fetchPatchRecord, renderPatchRecord }) {
+  _patchReview = { applyPatch, fetchPatchRecord, renderPatchRecord };
+}
+
+function patchPanelBody() {
+  let body = document.getElementById("patch-modal-body");
+  if (!body) {
+    body = document.createElement("div");
+    body.id = "patch-modal-body";
+    (document.body || document.documentElement).appendChild(body);
+  }
+  return body;
+}
+
+function escapePatchText(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Render the fetched server record plus the Apply control. The record is the
+// only input; the confirmation token is read from it at click time and is
+// never rendered.
+function renderPatchPanel(record) {
+  const render = _patchReview && _patchReview.renderPatchRecord;
+  const recordHtml = render ? render(record) : "";
+  return recordHtml
+    + '<button class="patch-apply">Apply patch</button>';
+}
+
+// openPatchReview(patchId): fetch the server record, render it, and wire the
+// Apply control. On fetch failure the panel shows the error inline and no
+// diff at all — a partial render would invite trusting an unverifiable diff.
+async function openPatchReview(patchId) {
+  if (!_patchReview) return;
+  const body = patchPanelBody();
+  let record;
+  try {
+    record = await _patchReview.fetchPatchRecord(patchId);
+  } catch (err) {
+    const detail = err && err.message ? err.message : String(err);
+    body.innerHTML =
+      '<div class="patch-error">Patch review unavailable: '
+      + escapePatchText(detail) + "</div>";
+    return;
+  }
+  body.innerHTML =
+    _patchReview.renderPatchRecord(record)
+    + '<button class="patch-apply">Apply patch</button>';
+  const applyBtn = body.querySelector(".patch-apply");
+  if (applyBtn) {
+    applyBtn.addEventListener("click", async () => {
+      try {
+        const result = await _patchReview.applyPatch(
+          patchId,
+          record.confirmation_token,
+        );
+        const applied = result && Array.isArray(result.applied) ? result.applied : [];
+        const appliedHtml = applied.length
+          ? '<ul class="patch-applied">'
+            + applied.map((p) => "<li>" + escapePatchText(p) + "</li>").join("")
+            + "</ul>"
+          : "";
+        body.innerHTML =
+          '<div class="patch-applied-note">Patch applied.</div>' + appliedHtml;
+      } catch (err) {
+        const detail = (err && (err.detail || err.message)) || String(err);
+        body.innerHTML =
+          '<div class="patch-error">Apply refused: '
+          + escapePatchText(detail) + "</div>";
+      }
+    });
+  }
+}
+
+// Delegated clicks: a Review patch control (rendered by notifications.js)
+// opens the panel. Delegation keeps working for rows appended after this
+// wiring ran (the notifications panel re-renders on every poll).
+document.addEventListener("click", (e) => {
+  const target = e.target;
+  if (!target || typeof target.closest !== "function") return;
+  const btn = target.closest(".notif-review-patch");
+  if (!btn) return;
+  const patchId = btn.getAttribute("data-patch-id");
+  if (patchId) openPatchReview(patchId);
 });
 
 // Pause / resume the polling loop around tab visibility. visibilitychange
@@ -828,5 +944,8 @@ export {
   filterStoryNotifications, renderStoryModalNotifications,
   showStoryModal, _renderStoryModalBody,
 } from "./render/story-modal.js";
+
+// WAP-14: patch review/apply panel wiring (implemented in this file).
+export { initPatchReview, openPatchReview };
 
 export { renderUsage } from "./usage.js";

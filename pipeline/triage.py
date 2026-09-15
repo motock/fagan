@@ -766,14 +766,32 @@ def run_triage_sweep(plan_name: str) -> dict:
             return {"ok": True, "triaged": []}
         triaged_keys = []
         actions = {}
+        skipped_cap = []
         changed = False
-        for key in candidates[:TRIAGE_MAX_PER_TICK]:
+        # Partition BEFORE the per-tick slice: triage_allowed is computed once
+        # per candidate, and capped candidates never consume the per-tick
+        # budget (a capped story ahead in sort order used to starve actionable
+        # candidates on every tick).
+        evaluated = []
+        for key in candidates:
+            allowed, reason = triage_allowed(manifest["stories"][key])
+            evaluated.append((key, allowed, reason))
+        actionable = [key for key, allowed, _ in evaluated if allowed]
+        capped = [(key, reason) for key, allowed, reason in evaluated if not allowed]
+        for key, reason in capped:
             story = manifest["stories"][key]
-            allowed, reason = triage_allowed(story)
-            if not allowed:
-                _park(plan_name, key, story, reason)
-                changed = True
+            if story.get("status") == "parked" and str(TRIAGE_MAX_ATTEMPTS) in str(
+                story.get("parked_reason") or ""
+            ):
+                # Already parked AND the parked_reason already names the cap:
+                # skip silently -- no re-park, no notification, no parked_reason
+                # clobber, no manifest write.
+                skipped_cap.append(key)
                 continue
+            _park(plan_name, key, story, reason)
+            changed = True
+        for key in actionable[:TRIAGE_MAX_PER_TICK]:
+            story = manifest["stories"][key]
             if plan_triage_budget_exhausted(manifest):
                 _park(plan_name, key, story, "plan triage budget exhausted")
                 changed = True
@@ -799,7 +817,12 @@ def run_triage_sweep(plan_name: str) -> dict:
                 if isinstance(s, dict):
                     s.pop("_patch_acceptance_recorded", None)
             _atomic_write_json(manifest_path, manifest)
-        return {"ok": True, "triaged": triaged_keys, "actions": actions}
+        return {
+            "ok": True,
+            "triaged": triaged_keys,
+            "actions": actions,
+            "skipped_cap": skipped_cap,
+        }
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__}
 

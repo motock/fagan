@@ -204,6 +204,30 @@ def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
     return {"ruling": ruling, "rationale": fields.get("rationale") or ""}
 
 
+def _populate_pr_checks_once(story):
+    """Best-effort single-poll CI evidence for the overlord prompt.
+
+    Never raises and never blocks: uses the non-polling _ci_status_once.
+    """
+    if story.get("pr_checks"):
+        return
+    try:
+        from .ci import _ci_status_once
+        from .pr import _resolve_story_branch
+
+        branch = ""
+        worktree = story.get("worktree")
+        if worktree and Path(worktree).is_dir():
+            branch = _resolve_story_branch(
+                worktree, story.get("key") or story.get("story_key")
+            )
+        checks = _ci_status_once(branch, sha="")
+        if checks is not None:
+            story["pr_checks"] = checks
+    except Exception:  # noqa: BLE001 - fail-safe: the gather must never propagate
+        return
+
+
 def _adjudicate_high_risk_merge(
     story: dict[str, Any], plan_name: str | None = None
 ) -> dict[str, str]:
@@ -216,6 +240,7 @@ def _adjudicate_high_risk_merge(
     state captured before any mutation. Fail closed: an overlord failure or
     an unparseable reply parks with the standing high-risk hold reason.
     """
+    _populate_pr_checks_once(story)
     from .overlord import _invoke_overlord
     from .persistence import _append_decision, _plan_role_config
 

@@ -1288,6 +1288,146 @@ await run("a non-string history entry is consumed (not sticky) so later bubbles 
   );
 });
 
+// ---------- single-reply idempotence (SSE-DUP-1) ----------
+//
+// The server's normal plain-reply path emits TWO frames for the same final
+// assistant message (app/chat.py:592-593):
+//     event: turn   {"n": 1}
+//     event: reply  {"text": <reply>}
+//     event: result {"reply": <reply>, "tool_calls": [], "turns": 1}
+// onStreamEvent treats `reply` and `result` identically, so renderFinal ran
+// twice for one turn. With no tool_call there is no `pending` bubble to
+// reuse, so each call appended its own `.msg tower` child -- two bubbles for
+// one reply. These cases count DOM children (never source text).
+
+const PLAIN_REPLY = "Tower online.";
+const FRAME_TURN = `event: turn\ndata: ${JSON.stringify({ n: 1 })}\n\n`;
+const FRAME_REPLY = `event: reply\ndata: ${JSON.stringify({ text: PLAIN_REPLY })}\n\n`;
+const FRAME_PLAIN_RESULT = `event: result\ndata: ${JSON.stringify({
+  reply: PLAIN_REPLY,
+  tool_calls: [],
+  turns: 1,
+})}\n\n`;
+
+// Thread children whose class carries the tower role (plain or denied).
+//
+// Deduped by node identity: the element stub's appendChild always PUSHES, so
+// an in-place update that re-appends the same bubble (the documented
+// renderPending/renderFinal behaviour, which is a no-op move in a real DOM)
+// would otherwise be counted once per re-append. Counting distinct child
+// nodes is what a real DOM would report.
+function towerBubbles(thread) {
+  const seen = new Set();
+  const out = [];
+  for (const c of thread.children) {
+    if (!String(c.className || "").includes("tower")) continue;
+    if (seen.has(c)) continue;
+    seen.add(c);
+    out.push(c);
+  }
+  return out;
+}
+
+function countOccurrences(haystack, needle) {
+  if (!needle) return 0;
+  let n = 0;
+  let i = haystack.indexOf(needle);
+  while (i !== -1) {
+    n += 1;
+    i = haystack.indexOf(needle, i + needle.length);
+  }
+  return n;
+}
+
+await run("a plain reply (turn + reply + result) renders exactly ONE tower bubble", async () => {
+  const mod = await loadCommsModule();
+  commsDoc.__reset();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = async () => sseResponse([FRAME_TURN, FRAME_REPLY, FRAME_PLAIN_RESULT]);
+  await mod.sendCommsMessage("status check");
+  const bubbles = towerBubbles(thread);
+  assertEqual(bubbles.length, 1, "the reply and result frames must share one tower bubble");
+  assertEqual(
+    countOccurrences(bubbles[0].innerHTML, PLAIN_REPLY),
+    1,
+    "the reply text must appear exactly once in the single tower bubble",
+  );
+});
+
+await run("a truncated stream (reply frame, no result frame) still renders exactly ONE tower bubble", async () => {
+  const mod = await loadCommsModule();
+  commsDoc.__reset();
+  const thread = commsDoc.getElementById("comms-thread");
+  const calls = [];
+  currentFetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes("/api/chat/stream")) return sseResponse([FRAME_TURN, FRAME_REPLY]);
+    return jsonResponse(200, { reply: PLAIN_REPLY, tool_calls: [] });
+  };
+  await mod.sendCommsMessage("truncated probe");
+  assertEqual(calls.length, 2, "a stream without a result frame must fall back to the blocking endpoint");
+  const bubbles = towerBubbles(thread);
+  assertEqual(bubbles.length, 1, "the reply frame and the fallback re-render must share one tower bubble");
+  assertEqual(
+    countOccurrences(bubbles[0].innerHTML, PLAIN_REPLY),
+    1,
+    "the reply text must appear exactly once after the fallback re-render",
+  );
+});
+
+await run("a stream that fails after the reply frame but before result still renders exactly ONE tower bubble", async () => {
+  const mod = await loadCommsModule();
+  commsDoc.__reset();
+  const thread = commsDoc.getElementById("comms-thread");
+  const calls = [];
+  currentFetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes("/api/chat/stream")) {
+      // Both frames are delivered, then the read throws: the catch swallows
+      // the stream error and the blocking POST re-renders through renderFinal.
+      return sseResponse([FRAME_TURN, FRAME_REPLY], { failAfter: 2 });
+    }
+    return jsonResponse(200, { reply: PLAIN_REPLY, tool_calls: [] });
+  };
+  await mod.sendCommsMessage("mid-stream probe");
+  assertEqual(calls.length, 2, "the failed stream must fall back to the blocking endpoint");
+  const bubbles = towerBubbles(thread);
+  assertEqual(bubbles.length, 1, "the streamed reply and the fallback re-render must share one tower bubble");
+  assertEqual(
+    countOccurrences(bubbles[0].innerHTML, PLAIN_REPLY),
+    1,
+    "the reply text must appear exactly once after the fallback re-render",
+  );
+});
+
+await run("two sequential turns render TWO tower bubbles (the guard is per-turn, not global)", async () => {
+  const mod = await loadCommsModule();
+  commsDoc.__reset();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = async () => sseResponse([FRAME_TURN, FRAME_REPLY, FRAME_PLAIN_RESULT]);
+  await mod.sendCommsMessage("first turn");
+  await mod.sendCommsMessage("second turn");
+  assertEqual(
+    towerBubbles(thread).length,
+    2,
+    "each turn must keep its own tower bubble; the reuse target must not leak across turns",
+  );
+});
+
+await run("a tool-call turn still renders exactly ONE tower bubble carrying the trace chip", async () => {
+  const mod = await loadCommsModule();
+  commsDoc.__reset();
+  const thread = commsDoc.getElementById("comms-thread");
+  currentFetch = async () => sseResponse([FRAME_TOOL_CALL, FRAME_TOOL_RESULT, FRAME_RESULT]);
+  await mod.sendCommsMessage("tool probe");
+  const bubbles = towerBubbles(thread);
+  assertEqual(bubbles.length, 1, "the tool trace and the final reply must share one tower bubble");
+  assertTrue(
+    bubbles[0].innerHTML.includes("trace-chip"),
+    "the single tower bubble must still carry the trace-chip markup",
+  );
+});
+
 // ---------- summary ----------
 
 const failed = results.filter((r) => !r.ok);

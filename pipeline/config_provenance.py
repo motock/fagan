@@ -80,7 +80,7 @@ def _scheduler_plist_path() -> Path:
     """Return the path to the launchd scheduler plist.
 
     If ``PIPELINE_SCHEDULER_PLIST_PATH`` is set, that value is used.  Otherwise
-    the default is ``~/Library/LaunchAgents/com.claude.pipeline.advance-scheduler.plist``.
+    the default is ``~/Library/LaunchAgents/com.fagan.pipeline.advance-scheduler.plist``.
     The resolution happens inside the function so callers can monkeypatch the
     environment after import.
     """
@@ -88,7 +88,7 @@ def _scheduler_plist_path() -> Path:
     if env_path:
         return Path(env_path).resolve()
     # Default path – use ``Path.home`` at call time to allow tests to monkeypatch it.
-    default = Path.home() / "Library" / "LaunchAgents" / "com.claude.pipeline.advance-scheduler.plist"
+    default = Path.home() / "Library" / "LaunchAgents" / "com.fagan.pipeline.advance-scheduler.plist"
     return default.resolve()
 
 

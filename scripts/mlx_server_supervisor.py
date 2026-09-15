@@ -4,7 +4,7 @@ Unlike Ollama (an always-on daemon that lazy-loads/swaps any requested tag)
 or LM Studio (its own app, JIT-loads on first request), mlx_lm.server has no
 daemon story at all - nothing in this codebase starts it, and nothing
 restarts it if it crashes. This script closes that gap: run it periodically
-(see launchd/com.claude.pipeline.mlx-supervisor.plist, mirroring the
+(see launchd/com.fagan.pipeline.mlx-supervisor.plist, mirroring the
 advance-scheduler pattern) to start the server if it isn't reachable.
 
 Config via env vars (no CLI flags, matching the advance-scheduler's plist

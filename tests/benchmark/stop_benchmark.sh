@@ -23,8 +23,8 @@ PATTERNS="matrix\.py|harness\.py|mlx_server_wrapper|mlx_lm\.server|llama-server"
 
 # Unload the mlx-supervisor watchdog first so it doesn't relaunch mlx-server
 # the instant we kill it.
-PLIST=~/Library/LaunchAgents/com.claude.pipeline.mlx-supervisor.plist
-if launchctl list 2>/dev/null | grep -q com.claude.pipeline.mlx-supervisor; then
+PLIST=~/Library/LaunchAgents/com.fagan.pipeline.mlx-supervisor.plist
+if launchctl list 2>/dev/null | grep -q com.fagan.pipeline.mlx-supervisor; then
     launchctl unload "$PLIST" 2>/dev/null
     echo "unloaded mlx-supervisor launchd watchdog"
 fi

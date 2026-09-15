@@ -173,7 +173,7 @@ def _reconcile_join_timeout_seconds() -> float:
 
 # Abandon-restart escape hatch (story LOCKSTARVE-C2): process death is the
 # only thing that releases a flock, and the launchd job
-# com.claude.pipeline.advance-scheduler has KeepAlive=true, so exiting IS the
+# com.fagan.pipeline.advance-scheduler has KeepAlive=true, so exiting IS the
 # recovery. After this many CONSECUTIVE watchdog-worker abandonments (scan or
 # reconcile) the daemon writes its health file, logs an ERROR naming a leaked
 # plan lock as the suspected cause, and raises SystemExit(1) so launchd

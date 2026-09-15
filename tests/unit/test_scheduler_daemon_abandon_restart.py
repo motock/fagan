@@ -8,7 +8,7 @@ C1 bounds the reconcile phase so the LOOP survives, but the leaked lock is
 still never released: after C1 every subsequent tick re-blocks on a lock no
 live thread owns, which is quieter and therefore harder to notice. Process
 death is the only thing that releases a flock, and the launchd job
-``com.claude.pipeline.advance-scheduler`` has ``KeepAlive=true``, so exiting
+``com.fagan.pipeline.advance-scheduler`` has ``KeepAlive=true``, so exiting
 IS the recovery.
 
 Contract pinned here:

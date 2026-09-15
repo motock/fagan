@@ -434,8 +434,22 @@ await test("ingestPlan rejects a non-JSON 500 body with an Error, not a SyntaxEr
   const err = await assertRejects(() => ingestPlan("anagram"), "500 response");
   assert(!(err instanceof SyntaxError), "a non-JSON body must not surface as a SyntaxError");
   assertEqual(err.status, 500, "error carries .status");
-  assertIncludes(err.message, "/api/plans/anagram/ingest", "message carries the url");
-  assertIncludes(err.message, "500", "message carries the status");
+  assertEqual(
+    err.message,
+    "/api/plans/anagram/ingest -> 500",
+    "without a JSON detail the message is exactly `<url> -> <status>`",
+  );
+});
+
+await test("ingestPlan falls back to `<url> -> <status>` when the JSON detail is not a string", async () => {
+  stubFetch(422, { detail: { nested: "not a string" } });
+  const err = await assertRejects(() => ingestPlan("anagram"), "422 response");
+  assertEqual(err.status, 422, "error carries .status");
+  assertEqual(
+    err.message,
+    "/api/plans/anagram/ingest -> 422",
+    "a non-string detail falls back to the url/status message",
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from __future__ import annotations
 import inspect
 import json
 import re
+from typing import get_args, get_type_hints
 
 import pytest
 from fastapi import HTTPException
@@ -353,7 +354,18 @@ def test_set_workspace_route_declares_the_origin_header_parameter():
 
     origin_param = params["x_pipeline_origin"]
     assert origin_param.default is None
-    assert getattr(origin_param.default, "alias", None) == ORIGIN_HEADER
+    # The alias lives in the Annotated Header metadata, not on the default:
+    # with the Annotated idiom the Python default is the plain None singleton,
+    # and CPython forbids attributes on NoneType, so asserting
+    # ``default.alias == ORIGIN_HEADER`` (the original line 356) is
+    # unsatisfiable by construction. Read the resolved annotation instead —
+    # this still fails if the alias is dropped (bare ``Header()``) or the
+    # parameter is reclassified as a query parameter (no Header metadata).
+    resolved = get_type_hints(dashboard_module.set_workspace_route, include_extras=True)
+    metadata = get_args(resolved["x_pipeline_origin"])[1:]
+    assert any(
+        getattr(m, "alias", None) == ORIGIN_HEADER for m in metadata
+    ), f"expected a Header(alias={ORIGIN_HEADER!r}) in the Annotated metadata, got {metadata!r}"
     annotation = str(origin_param.annotation)
     assert "str" in annotation
     assert "None" in annotation

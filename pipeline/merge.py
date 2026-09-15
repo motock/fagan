@@ -10,6 +10,7 @@ single source of truth that monkeypatches land on.
 """
 
 import fcntl
+import inspect
 import logging
 import os
 import subprocess
@@ -224,7 +225,7 @@ def _parse_merge_ruling(raw: str) -> dict[str, str] | None:
     return {"ruling": ruling, "rationale": fields.get("rationale") or ""}
 
 
-def _populate_pr_checks_once(story):
+def _populate_pr_checks_once(story, story_key: str | None = None):
     """Best-effort single-poll CI evidence for the overlord prompt.
 
     Mutates the caller's ``story`` dict in place (the manifest write in
@@ -254,7 +255,7 @@ def _populate_pr_checks_once(story):
     # Hoisted ABOVE the try: the first statement inside it is an import, so a
     # key bound in there would be unbound exactly when the failure handler
     # below needs it (NameError raised from inside the swallow path).
-    key = story.get("key") or story.get("story_key") or "?"
+    key = story_key or story.get("key") or story.get("story_key") or "?"
     try:
         # The module-documented monkeypatch seam: pipeline.server re-exports
         # the binding, so stubs land here exactly as they do for the sibling
@@ -314,6 +315,26 @@ def _render_pr_checks_line(story: dict[str, Any]) -> str:
     return "PR CHECKS: (none)"
 
 
+def _invoke_pr_checks_gather(gather, story, story_key):
+    """Invoke the CI-evidence gather with the story's real key.
+
+    The CI gather gained a ``story_key`` parameter so it probes the story's
+    real branch instead of a fabricated one. Long-lived test doubles still
+    patch that name with the pre-existing one-argument shape, so dispatch on
+    the target's arity rather than breaking them.
+    """
+    try:
+        accepts_key = len(inspect.signature(gather).parameters) >= 2
+    except (TypeError, ValueError):
+        # An uninspectable callable (e.g. a C builtin): assume the current
+        # two-argument shape, which is what production always is.
+        accepts_key = True
+    if accepts_key:
+        gather(story, story_key)
+    else:
+        gather(story)
+
+
 def _adjudicate_high_risk_merge(
     story: dict[str, Any], plan_name: str | None = None
 ) -> dict[str, str]:
@@ -326,7 +347,20 @@ def _adjudicate_high_risk_merge(
     state captured before any mutation. Fail closed: an overlord failure or
     an unparseable reply parks with the standing high-risk hold reason.
     """
-    _populate_pr_checks_once(story)
+    # The story key this ruling is attributed to, and the key the CI gather
+    # below probes the branch for. Resolved ONCE, here, so the audit record and
+    # the CI evidence can never name different stories. Compat shim mirroring
+    # the plan_name one above: production binds it via the adjudication context
+    # (advance._adjudicate_merges / _readjudicate_parked_merge_hold), and the
+    # chain ends at None - never a "?" sentinel - so an unbound legacy caller
+    # keeps the pre-existing behaviour exactly (the "?" degrade lives in the
+    # gather, the one place that needs a nameable branch).
+    story_key = (
+        _adjudication_story_key.get()
+        or story.get("key")
+        or story.get("story_key")
+    )
+    _invoke_pr_checks_gather(_populate_pr_checks_once, story, story_key)
     from .overlord import _invoke_overlord
     from .persistence import _append_decision, _plan_role_config
 
@@ -341,16 +375,6 @@ def _adjudicate_high_risk_merge(
     # after this returns, so the story dict still holds its pre-gate state.
     prior_status = story.get("status")
     prior_parked_reason = story.get("parked_reason")
-    # The story key this ruling is attributed to. Compat shim mirroring the
-    # plan_name one above: production binds it via the adjudication context
-    # (advance._adjudicate_merges / _readjudicate_parked_merge_hold), and the
-    # chain ends at None - never a "?" sentinel - so an unbound legacy caller
-    # keeps the pre-existing behaviour exactly.
-    story_key = (
-        _adjudication_story_key.get()
-        or story.get("key")
-        or story.get("story_key")
-    )
 
     prompt = (
         "MERGE ADJUDICATION: this story's merge gate is high-risk and the "

@@ -765,25 +765,143 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     return {"ok": True, **summary}
 
 
+_MERGE_HOLD_REASON = "high risk held for human review"
+
+
+def _readjudicate_parked_merge_hold(
+    plan_name: str, key: str, story: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Re-run the merge gate for a parked high-risk hold whose evidence changed.
+
+    MERGEPARK-2: a merge-gate park used to be terminal - the loop below
+    skipped every story whose status was not ``pr_open``, so a story parked
+    citing missing PR checks (WAP-1, parked 2026-09-15T01:26) was never
+    revisited after ``gh pr checks`` turned green minutes later. A park is
+    re-examined only when ALL of the following hold:
+
+    * the park is the merge gate's own high-risk hold (the exact reason
+      string - human parks, triage parks and any other reason are never
+      touched);
+    * the story is approved and carries a ``pr_url``;
+    * the park recorded the evidence the ruling was made on
+      (``merge_park_evidence`` - parks created before this feature, and
+      human/triage parks, have none);
+    * autonomy is ``full``: gated and dry-run never adjudicated in the first
+      place, so they must never re-adjudicate - checked BEFORE any gather.
+
+    The CURRENT single-poll CI state is gathered with the non-polling
+    ``_ci_status_once`` (never the blocking ``_ci_status`` poller), the branch
+    resolved exactly like the merge path below does. Only a DIFFERING state
+    re-invokes the gate, so the cost is one overlord call per evidence
+    TRANSITION, not per tick. A ``merge`` ruling clears the snapshot, flips
+    the story to ``pr_open`` and lets the caller fall through into the same
+    merge path a pr_open story takes; a ``park`` ruling leaves the story
+    parked and the caller's park branch refreshes the snapshot. A gather
+    failure leaves the old snapshot intact and the story parked - the tick
+    must survive it.
+
+    Returns the fresh gate decision, or ``None`` when there is nothing to
+    re-adjudicate.
+    """
+    if story["status"] != "parked":
+        return None
+    if story.get("parked_reason") != _MERGE_HOLD_REASON:
+        return None
+    if story.get("review_verdict") != "APPROVE":
+        return None
+    if not story.get("pr_url"):
+        return None
+    snapshot = story.get("merge_park_evidence")
+    if not isinstance(snapshot, dict):
+        return None
+    # Dereference once: PIPELINE_AUTONOMY is a _ServerRef proxy (see the
+    # dry-run preview above for why the raw proxy is not used in comparisons
+    # that outlive this expression).
+    if PIPELINE_AUTONOMY._value() != "full":
+        return None
+
+    from .ci import _ci_status_once
+    from .pr import _resolve_story_branch
+
+    worktree = story.get("worktree", "")
+    if worktree and Path(worktree).is_dir():
+        branch = _resolve_story_branch(worktree, key)
+    else:
+        # No worktree to probe: hand the gather no branch at all, exactly
+        # like the merge path - a locally computed convention branch is the
+        # exact mistake the round-2 review finding names.
+        branch = ""
+    try:
+        current = _ci_status_once(branch, sha="")
+    except Exception:  # noqa: BLE001 (fail-open by design; the tick must survive it)
+        logging.getLogger("pipeline").warning(
+            "%s merge-park re-adjudication: CI gather failed; keeping the "
+            "recorded evidence",
+            key,
+        )
+        return None
+    if current == snapshot.get("pr_checks"):
+        # Flap guard: an unchanged state never re-invokes the overlord.
+        return None
+
+    logging.getLogger("pipeline").info(
+        "%s merge-park evidence changed; re-adjudicating the hold", key
+    )
+    story["pr_checks"] = current
+    with merge_adjudication_plan(plan_name):
+        decision = _merge_decision(story)
+    if decision["action"] == "merge":
+        story.pop("merge_park_evidence", None)
+        # Flip FIRST, so a merge path that then blocks (pending CI, failed
+        # rebase) leaves the story in the ordinary pr_open state that path
+        # already knows how to retry.
+        story["status"] = "pr_open"
+    else:
+        # Stay parked: refresh the snapshot to the fresh value. This is the
+        # flap guard - the next tick compares equal and never re-invokes the
+        # gate, so the cost is one overlord call per evidence TRANSITION.
+        story["merge_park_evidence"] = {"pr_checks": story.get("pr_checks")}
+    return decision
+
+
 def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
     manifest_path = _store.manifest_path(plan_name)
     # 3. Adjudicate merges for reviewed PRs (no model usage; runs even paused).
     manifest = json.loads(manifest_path.read_text())
     stories = manifest["stories"]
     for key, story in stories.items():
-        if story["status"] != "pr_open":
+        # MERGEPARK-2: a parked high-risk merge hold is re-examined when the
+        # evidence the ruling cited changed. A fresh "merge" ruling flips the
+        # story to pr_open and falls through into the SAME merge path below;
+        # a fresh "park" ruling falls through to the park branch, which
+        # refreshes the snapshot. ``decision`` is None when the story was not
+        # re-adjudicated (or the gather failed), and the pr_open path then
+        # runs the gate itself as before.
+        decision = _readjudicate_parked_merge_hold(plan_name, key, story)
+        if decision is None and story["status"] != "pr_open":
             continue
+        # A fresh ruling is already in hand: a "merge" ruling left the story
+        # pr_open and falls into the SAME merge path below; a "park" ruling
+        # falls into the park branch below, which records the park and
+        # refreshes the snapshot. Either way the gate is not asked twice.
         # Thread the real plan name into the merge gate without changing the
         # call arity: several long-standing tests (and the dry-run preview
         # below) call/patch ``_merge_decision`` with a one-argument callable,
         # so a second positional argument would break them. The explicit
         # ``plan_name`` parameter stays for direct callers; production flows
         # the name through this context, which ``_adjudicate_merges`` owns.
-        with merge_adjudication_plan(plan_name):
-            decision = _merge_decision(story)
+        if decision is None:
+            with merge_adjudication_plan(plan_name):
+                decision = _merge_decision(story)
         if decision["action"] != "merge":
             story["status"] = "parked"
             story["parked_reason"] = decision["reason"]
+            # MERGEPARK-2: record the evidence this ruling was made on, so a
+            # later tick can tell whether the picture actually changed (e.g.
+            # checks pending at park time, green now) instead of the park
+            # being terminal. Written in every mode: a gated park is
+            # re-adjudicable too if autonomy is ever full again.
+            story["merge_park_evidence"] = {"pr_checks": story.get("pr_checks")}
             _notify_user(
                 plan_name,
                 f"{key} parked: {decision['reason']}",

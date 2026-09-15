@@ -44,7 +44,7 @@ _SYSTEM_PROMPT_PREFIX = (
     "When a tool returns a result, wrap it in [TOOL_RESULT name=...] and [/TOOL_RESULT] tags. "
     "If no tool calls are needed, simply answer in natural language. "
     "You can read plan and story status, journals, logs, and checklists. You can execute control actions (dispatch, interrupt, patch, review, advance, pause, resume, mark done). All actions go through the HTTP API and are subject to server-side gates - if a gate blocks an action, surface the rejection to the user; do NOT attempt to bypass it. "
-    "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan then ingest_plan. When calling save_plan, pass the decompose result plan JSON verbatim as plan_json (a JSON string) - do not rewrite, summarize, or re-derive it; keep its epics/stories fields exactly as decompose returned them. Always confirm with the user before calling ingest_plan - ingestion dispatches stories. "
+    "To help the user author a plan, call decompose with their goal to get a first draft. Show the draft and ask if they want to iterate. When satisfied, call save_plan to stage the plan. When calling save_plan, pass the decompose result plan JSON verbatim as plan_json (a JSON string) - do not rewrite, summarize, or re-derive it; keep its epics/stories fields exactly as decompose returned them. Do not call ingest_plan yourself: ingestion dispatches stories, and the ingest endpoint refuses calls made from this chat session's origin - it answers 'origin not permitted', so an ingest call from here can only ever fail. Never tell the user a plan is ingested when it is not. When save_plan succeeds, tell the user the plan is staged and that the next step is to ingest it from the dashboard UI's ingest control, or from an operator's MCP session. "
     "You can surface decisions the overlord has ruled on by calling list_decisions. If the user wants to override or supplement a ruling, record their answer via answer_decision. Human answers are appended to the same decision log as overlord rulings, preserving the audit trail. "
     "This session deliberately has no native Claude Code tools and no MCP servers connected - that isolation is by design, for least-privilege - so do not conclude from it that the [TOOL_CALL] instruction is non-functional or unwired: the surrounding chat harness parses [TOOL_CALL] blocks out of your response text and executes them on your behalf, making that protocol the real and only mechanism available in this session, which you must always use to call a tool rather than describing an intended action or answering directly without calling one. "
     "When you call a tool, the JSON goes immediately after the opener and the opener takes no attributes: [TOOL_CALL]{\"name\": \"list_plans\", \"args\": {}}[/TOOL_CALL]. [TOOL_CALL name=list_plans] is NOT a valid call and will not be executed - only the [TOOL_RESULT name=...] tag carries a name attribute. "
@@ -115,7 +115,7 @@ TOOLS: dict[str, dict] = {
         ),
     },
     "set_workspace": {
-        "description": "Set the current workspace.",
+        "description": "Set the current workspace. UI-ONLY: this endpoint refuses calls from a chat session's origin and answers 'origin not permitted'; only the dashboard UI or an operator's MCP session can switch it.",
         "params": {"path": "str", "create": "bool"},
         "execute": lambda http_client, api_base_url, path, create=False, **kwargs: (
             http_client.post(_resolve_tool_url(http_client, api_base_url, "/api/workspace"), json={"path": path, "create": create}).json()
@@ -188,7 +188,7 @@ TOOLS: dict[str, dict] = {
         ),
     },
     "ingest_plan": {
-        "description": "Ingest a plan's epics and stories.",
+        "description": "Ingest a plan's epics and stories. UI-ONLY: this endpoint refuses calls from a chat session's origin and answers 'origin not permitted'; only the dashboard UI or an operator's MCP session can ingest.",
         "params": {"plan_name": "str", "only_epics": "list[str] | None", "overwrite": "bool"},
         "execute": lambda http_client, api_base_url, plan_name, only_epics=None, overwrite=False, **kwargs: (
             http_client.post(_resolve_tool_url(http_client, api_base_url, f"/api/plans/{_seg(plan_name)}/ingest"),

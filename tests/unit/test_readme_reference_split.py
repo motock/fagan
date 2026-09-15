@@ -511,20 +511,6 @@ def test_moved_section_body_is_verbatim(title):
                 f"litellm among the accepted backend values."
             )
             reference_body = _without_litellm(reference_body)
-        if title == "Unattended operation & logs":
-            # The launchd label was renamed com.claude.pipeline.* ->
-            # com.fagan.pipeline.* (the plist/template files and generator
-            # script were renamed in e5e006b), and REFERENCE.md's newsyslog
-            # path was updated to match. The original README at 2cca309~1
-            # predates the rename, so compare with the old label normalized
-            # away — and separately require the new label to still be present,
-            # so the normalization can never mask a revert to the stale
-            # com.claude.pipeline label.
-            assert "com.fagan.pipeline" in reference_body, (
-                f"Section body for {title!r} in REFERENCE.md must use the "
-                f"renamed com.fagan.pipeline launchd label."
-            )
-            reference_body = reference_body.replace("com.fagan.pipeline", "com.claude.pipeline")
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
             f"identical to the original README.md section. The move was supposed "

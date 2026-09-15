@@ -496,7 +496,7 @@ class MockBackend:
         proc.wait()
         return AgentHandle(pid=proc.pid, model="mock")
 
-    def resource_status(self):
+    def resource_status(self, model_tag=None):
         return {"ok": True, "reason": ""}
 
 

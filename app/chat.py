@@ -571,7 +571,7 @@ class ChatService:
                     # exactly as it does for a normal tool-result turn -- no
                     # extra counter, no state beyond current_prompt (precedent:
                     # the review loop's nudge handling in app/backend_ollama.py).
-                    current_prompt = (
+                    current_prompt = current_prompt + "\nassistant: " + response + "\n" + (
                         "Your previous response contained a [TOOL_CALL] marker "
                         "but it could not be parsed as a tool call. Here is "
                         "exactly what you produced:\n"
@@ -584,7 +584,7 @@ class ChatService:
                     continue
                 if _looks_like_deferred_action(response) and deferred_nudges < _DEFERRED_NUDGE_CAP:
                     deferred_nudges += 1
-                    current_prompt = (
+                    current_prompt = current_prompt + "\nassistant: " + response + "\n" + (
                         "Stop narrating - emit the tool call now, in exactly this shape: "
                         '[TOOL_CALL]{"name": "<tool>", "args": {...}}[/TOOL_CALL]'
                     )
@@ -601,7 +601,7 @@ class ChatService:
             for call in tool_calls_made:
                 block = f"[TOOL_RESULT name={call['name']}]" + json.dumps(call['result']) + "[/TOOL_RESULT]"
                 result_blocks.append(block)
-            current_prompt = "\n".join(result_blocks)
+            current_prompt = current_prompt + "\nassistant: " + response + "\n" + "\n".join(result_blocks)
         yield {"type": "result", "data": {"reply": response + "\n\n(turn cap reached)", "tool_calls": tool_calls_made, "turns": turns}}
         return
 

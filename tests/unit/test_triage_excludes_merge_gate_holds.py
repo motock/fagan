@@ -19,12 +19,17 @@ over a dict of story dicts.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
-# triage is a circular import, so importing pipeline.triage standalone raises
-# ImportError; importing pipeline.server first breaks the cycle (same as
-# tests/unit/test_triage_cap_silent_skip.py).
-import pipeline.server
+# pipeline.triage -> build_detect -> server -> triage is a circular import, so
+# importing pipeline.triage standalone raises ImportError. Importing the server
+# module first breaks the cycle (same trick as
+# tests/unit/test_triage_cap_silent_skip.py); importlib keeps the side-effect
+# import explicit and lint-clean.
+importlib.import_module("pipeline.server")
+
 from pipeline import triage
 from pipeline.config import STEP_CAP_FALLBACK_THRESHOLD
 

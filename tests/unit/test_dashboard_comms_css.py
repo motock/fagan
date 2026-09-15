@@ -64,7 +64,12 @@ INDEX_HTML = STATIC_DIR / "index.html"
 # static/index.html gained one <script type="module" src="/app/patch.js">
 # tag immediately after the existing /app.js module script. No Comms-related
 # markup was touched.
-INDEX_HTML_SHA256 = "f94764055aef8b38c5931c8e44f76678848d2f16c7247ad12e8b2d220e0aff2b"
+# Re-pinned for the chat-ingest hand-off markup story (CIH-3): that story's
+# whole job was to add the Comms ingest panel markup, so static/index.html
+# gained the ingest panel (#ingest-plan-name / #ingest-plan-submit /
+# #ingest-plan-status) at the end of #comms-body, as siblings of the existing
+# .comms-input-row. No Comms chat markup was touched.
+INDEX_HTML_SHA256 = "f9536dcfff0b2ce439d7cd03b71ce045ac617cf3375b6e080bcbfc149044ba41"
 # Re-pinned for the API-key wiring story (c33ed4ce, 2026-09-08): that story's
 # whole job was to inject the dashboard shared secret into the served HTML, so
 # static/index.html gained the <!--PIPELINE_API_KEY--> placeholder marker

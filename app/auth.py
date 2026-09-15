@@ -162,3 +162,21 @@ def require_api_key(
             extra={"header_present": x_pipeline_api_key is not None},
         )
         raise HTTPException(status_code=401, detail="unauthorized")
+
+
+def refuse_chat_origin(x_pipeline_origin: str | None) -> None:
+    """Refuse requests that carry the chat model's client origin.
+
+    The enforced boundary is the chat model's client, which after WAP-1 always
+    carries X-Pipeline-Origin: chat. A human key-holder calling the API without
+    the header is the trusted single-operator surface, and existing dashboard
+    tests/UI send no origin header, so absent must remain allowed on legacy routes.
+    """
+    if x_pipeline_origin == ORIGIN_CHAT:
+        raise HTTPException(status_code=403, detail="origin not permitted")
+
+
+def require_ui_origin(x_pipeline_origin: str | None) -> None:
+    """Refuse anything that is not the UI origin (chat, absent, unknown all refused)."""
+    if x_pipeline_origin != ORIGIN_UI:
+        raise HTTPException(status_code=403, detail="origin not permitted")

@@ -108,6 +108,7 @@ class _Harness:
         ruling=None,
         gather=None,
         gather_exc=None,
+        gather_sequence=None,
         autonomy="full",
         threshold="low",
         break_first_import=False,
@@ -141,6 +142,13 @@ class _Harness:
 
         def fake_once(branch, *, sha):
             self.gather_calls.append({"branch": branch, "sha": sha})
+            if gather_sequence is not None:
+                # Per-call outcomes: an exception instance raises, anything
+                # else is the returned state (``None`` means "no state").
+                outcome = gather_sequence[len(self.gather_calls) - 1]
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return dict(outcome) if outcome is not None else None
             if gather_exc is not None:
                 raise gather_exc
             return dict(gather) if gather is not None else None
@@ -358,6 +366,86 @@ def test_no_gather_outside_full_autonomy_records_no_error(monkeypatch):
     assert h.decide(story) == {"action": "park", "reason": HOLD_REASON}
     assert h.gather_calls == []
     assert "pr_checks_error" not in story
+
+
+# --------------------------------------------------------------------------
+# recovery: a stale recorded failure must never outrank a fresh readable state
+# --------------------------------------------------------------------------
+
+
+def test_recovered_gather_clears_the_stale_error_and_renders_fresh_state(
+    monkeypatch,
+):
+    """The cross-tick recovery path: fail on call 1, succeed on call 2.
+
+    ``advance._readjudicate_parked_merge_hold`` gathers successfully on a later
+    tick, sets ``story["pr_checks"]`` and then calls ``_merge_decision``. The
+    story still carries the error recorded on the failed tick, so the render
+    must show the fresh state - a readable green status misreported as
+    ``(unreadable - ...)`` would keep a green story parked.
+    """
+    green = {"state": "success", "checks": [{"name": "ci", "conclusion": "SUCCESS"}]}
+    h = _Harness(
+        monkeypatch,
+        ruling=PARK_REPLY,
+        gather_sequence=[RuntimeError("gh: transient failure"), green],
+    )
+    story = _story()
+
+    # Call 1: the gather raises -> the failure is recorded, no state gathered.
+    h.decide(story)
+    assert story["pr_checks_error"].startswith("RuntimeError")
+    assert "pr_checks" not in story
+
+    # Call 2: the same story object, the gather now succeeds.
+    h.decide(story)
+
+    assert story["pr_checks"] == green
+    assert "pr_checks_error" not in story, (
+        "a fresh readable state must clear the stale recorded failure"
+    )
+    line = merge_mod._render_pr_checks_line(story)
+    assert "(unreadable" not in line
+    assert line == f"PR CHECKS: {green}"
+
+
+def test_recovered_gather_renders_fresh_state_when_pr_checks_already_set(
+    monkeypatch,
+):
+    """The early-return branch: ``pr_checks`` already set, stale error present.
+
+    This is the exact ``advance._readjudicate_parked_merge_hold`` shape - the
+    caller has already written the fresh state, so ``_populate_pr_checks_once``
+    early-returns and must still clear the stale error.
+    """
+    green = {"state": "success", "checks": [{"name": "ci", "conclusion": "SUCCESS"}]}
+    h = _Harness(monkeypatch, ruling=PARK_REPLY, gather=PASS_STATE)
+    story = _story(pr_checks=green, pr_checks_error="RuntimeError: gh: transient")
+
+    h.decide(story)
+
+    assert h.gather_calls == [], "an already-populated pr_checks is not re-gathered"
+    assert story["pr_checks"] == green
+    assert "pr_checks_error" not in story
+    line = h.pr_checks_line()
+    assert "(unreadable" not in line
+    assert line == f"PR CHECKS: {green}"
+
+
+def test_render_prefers_a_fresh_state_over_a_recorded_error():
+    """Defense-in-depth: a gathered state is always fresher than an error."""
+    green = {"state": "success", "error": ""}
+    story = {"pr_checks": green, "pr_checks_error": "RuntimeError: gh: transient"}
+
+    assert merge_mod._render_pr_checks_line(story) == f"PR CHECKS: {green}"
+
+
+def test_render_still_reports_unreadable_when_only_the_error_is_present():
+    story = {"pr_checks_error": "RuntimeError: gh: transient"}
+
+    assert merge_mod._render_pr_checks_line(story) == (
+        "PR CHECKS: (unreadable - RuntimeError: gh: transient)"
+    )
 
 
 # --------------------------------------------------------------------------

@@ -219,13 +219,22 @@ def _populate_pr_checks_once(story):
     prompt can render an unreadable status distinctly from a genuinely empty
     one. The key lives on the story, never inside ``merge_park_evidence``
     (whose key set is pinned to exactly ``{"pr_checks"}``).
+
+    The recorded error is CLEARED whenever a fresh readable state is available
+    - on the success path and on the early return - because the story dict is
+    persisted wholesale and survives across ticks: a stale error left behind
+    would outrank the recovered state and keep a green story parked.
     """
     if story.get("pr_checks"):
+        # Already gathered (e.g. advance._readjudicate_parked_merge_hold wrote
+        # the fresh state before calling the gate): drop any stale failure so
+        # the render cannot report a readable state as unreadable.
+        story.pop("pr_checks_error", None)
         return
     # Hoisted ABOVE the try: the first statement inside it is an import, so a
     # key bound in there would be unbound exactly when the failure handler
     # below needs it (NameError raised from inside the swallow path).
-    key = story.get("key") or story.get("story_key")
+    key = story.get("key") or story.get("story_key") or "?"
     try:
         # The module-documented monkeypatch seam: pipeline.server re-exports
         # the binding, so stubs land here exactly as they do for the sibling
@@ -240,6 +249,8 @@ def _populate_pr_checks_once(story):
         checks = _ci_status_once(branch, sha="")
         if checks is not None:
             story["pr_checks"] = checks
+            # A fresh readable state supersedes any earlier recorded failure.
+            story.pop("pr_checks_error", None)
     except Exception as exc:  # noqa: BLE001 - fail-safe: the gather must never propagate
         # An unreadable CI status is NOT evidence of absence: record it so the
         # prompt renders "(unreadable - ...)" instead of collapsing it into the
@@ -259,21 +270,27 @@ def _render_pr_checks_line(story: dict[str, Any]) -> str:
 
     Three distinct cases, deliberately not collapsed:
 
-    * a recorded gather failure -> ``PR CHECKS: (unreadable - <error>)``. An
-      unreadable status is NOT evidence of absence, so the word is never
-      ``none``.
     * a gathered state -> the state verbatim (repr-style), including a
       ``{"state": "none", ...}`` result whose ``error`` field stays visible so
       the reader can tell a nonzero ``gh`` exit apart from a real empty result.
+    * a recorded gather failure -> ``PR CHECKS: (unreadable - <error>)``. An
+      unreadable status is NOT evidence of absence, so the word is never
+      ``none``.
     * neither -> ``PR CHECKS: (none)``: the story was never gathered because
       the gate did not run.
+
+    When BOTH keys are present the gathered state wins: it is always fresher
+    than a recorded failure, which is the cross-tick state left behind by a
+    failed gather that a later tick recovered from. ``_populate_pr_checks_once``
+    clears the stale error in that case, and this precedence is the
+    defense-in-depth for any caller that renders without gathering first.
     """
-    error = story.get("pr_checks_error")
-    if error:
-        return f"PR CHECKS: (unreadable - {error})"
     checks = story.get("pr_checks")
     if checks:
         return f"PR CHECKS: {checks}"
+    error = story.get("pr_checks_error")
+    if error:
+        return f"PR CHECKS: (unreadable - {error})"
     return "PR CHECKS: (none)"
 
 

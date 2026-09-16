@@ -152,9 +152,12 @@ provider per role, checked in this order by `resolve_role`:
 
 1. **Plan role config** — a plan's per-role `provider`/`model` beats
    everything below.
-2. **`PIPELINE_BACKEND_<ROLE>` environment variables** — e.g.
-   `PIPELINE_BACKEND_DISPATCH=ollama` opts the dispatch role into Ollama.
-3. **A `roles` block in a registry file** — see below.
+2. **A `roles` block in a registry file** — the single source of truth for
+   role routing; see below.
+3. **`PIPELINE_BACKEND_<ROLE>` environment variables** — consulted only when
+   the registry has no entry for the role (the empty-state path, so a fresh
+   clone still boots); e.g. `PIPELINE_BACKEND_DISPATCH=ollama` opts the
+   dispatch role into Ollama.
 4. **The caller's own fallback** — for dispatch/review this is the `claude`
    backend.
 

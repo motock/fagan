@@ -10,7 +10,7 @@ from the story brief:
    os.environ['PLAN_DIR'] / ['WORKTREE_ROOT'] BEFORE any pipeline.* module is
    imported, with a fail-closed guard that aborts when the resolved
    ``pipeline.paths.PLAN_DIR`` lands outside the scratch root.
-2. ``_require_claude_backend()`` - resolution guard: pure when handed the env
+2. ``_announce_dispatch_backend()`` - resolution guard: pure when handed the env
    value as a string; 'claude' passes, every local-family value ('auto',
    'ollama', 'lmstudio', 'mlx', 'local'), empty strings and unknown values
    must exit 2 (never silently depend on a local backend).
@@ -44,11 +44,11 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "smoke_getting_started.py"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-REQUIRED_FUNCTIONS = ("_prepare_scratch_env", "_require_claude_backend")
+REQUIRED_FUNCTIONS = ("_prepare_scratch_env", "_announce_dispatch_backend")
 # run_smoke and main are the two halves of drive bullet #3; both are allowed.
 ALLOWED_FUNCTIONS = {
     "_prepare_scratch_env",
-    "_require_claude_backend",
+    "_announce_dispatch_backend",
     "run_smoke",
     "main",
 }
@@ -63,7 +63,7 @@ def _load_script():
         pytest.fail(
             f"scripts/smoke_getting_started.py not found at {SCRIPT_PATH}. "
             "Create it (stdlib + repo imports only, <=3 new functions: "
-            "_prepare_scratch_env, _require_claude_backend, run_smoke/main)."
+            "_prepare_scratch_env, _announce_dispatch_backend, run_smoke/main)."
         )
     mod_name = "smoke_getting_started_under_test"
     if mod_name in sys.modules:
@@ -297,12 +297,12 @@ def test_poll_interval_of_15s_is_evident_in_source():
 
 
 # --------------------------------------------------------------------------
-# _require_claude_backend - pure resolution guard
+# _announce_dispatch_backend - pure resolution guard
 # --------------------------------------------------------------------------
 def test_backend_guard_passes_for_claude_literal(capsys):
     mod = _load_script()
     try:
-        mod._require_claude_backend("claude")
+        mod._announce_dispatch_backend("claude")
     except SystemExit as exc:  # pragma: no cover - only on failure
         pytest.fail(f"'claude' must pass the guard, got SystemExit({exc.code!r})")
     assert "claude" in (capsys.readouterr().out + capsys.readouterr().err) or True
@@ -312,7 +312,7 @@ def test_backend_guard_passes_for_claude_literal(capsys):
 def test_backend_guard_normalizes_case_and_whitespace(value):
     mod = _load_script()
     try:
-        mod._require_claude_backend(value)
+        mod._announce_dispatch_backend(value)
     except SystemExit as exc:
         pytest.fail(
             f"{value!r} resolves to the claude backend (env chain does "
@@ -341,7 +341,7 @@ def test_backend_guard_accepts_every_declared_provider(value):
     """
     mod = _load_script()
     try:
-        mod._require_claude_backend(value)
+        mod._announce_dispatch_backend(value)
     except SystemExit as exc:
         pytest.fail(
             f"{value!r} is a declared provider and must pass the guard; "
@@ -358,7 +358,7 @@ def test_backend_guard_still_rejects_empty_and_unknown_values(value):
     """
     mod = _load_script()
     with pytest.raises(SystemExit) as excinfo:
-        mod._require_claude_backend(value)
+        mod._announce_dispatch_backend(value)
     assert excinfo.value.code == 2, (
         f"backend guard must exit with code 2 for {value!r}, got "
         f"{excinfo.value.code!r}"
@@ -368,7 +368,7 @@ def test_backend_guard_still_rejects_empty_and_unknown_values(value):
 def test_backend_guard_rejection_message_is_actionable(capsys):
     mod = _load_script()
     with pytest.raises(SystemExit):
-        mod._require_claude_backend("bogus")
+        mod._announce_dispatch_backend("bogus")
     code = getattr(capsys, "_temp", None)
     captured = capsys.readouterr()
     message = f"{code}\n{captured.out}\n{captured.err}"
@@ -386,7 +386,7 @@ def test_backend_guard_reads_env_with_claude_default(monkeypatch):
     mod = _load_script()
     monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
     try:
-        mod._require_claude_backend()
+        mod._announce_dispatch_backend()
     except SystemExit as exc:
         pytest.fail(
             "unset PIPELINE_BACKEND_DISPATCH must default to claude and pass; "
@@ -398,7 +398,7 @@ def test_backend_guard_reads_ollama_from_env(monkeypatch, capsys):
     mod = _load_script()
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "ollama")
     try:
-        mod._require_claude_backend()
+        mod._announce_dispatch_backend()
     except SystemExit as exc:
         pytest.fail(
             "PIPELINE_BACKEND_DISPATCH=ollama is a declared provider and must "

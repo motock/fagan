@@ -441,13 +441,13 @@ def resolve_role_provenance(
     if role in plan_role_config and isinstance(plan_role_config[role], dict) and "provider" in plan_role_config[role]:
         provider_value = plan_role_config[role]["provider"]
         provider_source = "plan_role_config"
-    elif f"PIPELINE_BACKEND_{role.upper()}" in environ:
-        provider_value = environ[f"PIPELINE_BACKEND_{role.upper()}"]
-        provider_source = f"env:PIPELINE_BACKEND_{role.upper()}"
     elif role in registry_roles and isinstance(registry_roles[role], dict):
         if "provider" in registry_roles[role]:
             provider_value = registry_roles[role]["provider"]
             provider_source = "model_registry.json"
+    elif f"PIPELINE_BACKEND_{role.upper()}" in environ:
+        provider_value = environ[f"PIPELINE_BACKEND_{role.upper()}"]
+        provider_source = f"env:PIPELINE_BACKEND_{role.upper()}"
     if not provider_value:
         provider_value = "claude"
         provider_source = "default"

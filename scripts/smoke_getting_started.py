@@ -409,14 +409,11 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
                             "repo root reading: 'Smoke line added by "
                             "scripts/smoke_getting_started.py.' Commit the "
                             "change with a short message. Do not modify any "
-                            "other file."
+                            "other file. Success criteria: README.md contains "
+                            "the smoke line; no other file changed."
                         ),
                         "persona": "software-engineer",
                         "risk": "low",
-                        "acceptance": [
-                            "README.md contains the smoke line",
-                            "no other file changed",
-                        ],
                         "dependencies": [],
                     }
                 ],

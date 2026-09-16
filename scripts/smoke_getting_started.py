@@ -98,7 +98,7 @@ class _DispatchResolutionError(Exception):
     """
 
 
-def _require_claude_backend(
+def _announce_dispatch_backend(
     value: str | None = None,
     *,
     resolver: Callable[[], tuple[str, str, str]] | None = None,
@@ -468,7 +468,7 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
     # 1. backend resolution guard FIRST (announces the resolved provider;
     # exits 2 only on an empty/unknown dispatch value). Nothing may be
     # created before it passes.
-    provider, model, _source = _require_claude_backend()
+    provider, model, _source = _announce_dispatch_backend()
 
     # 2. claude CLI presence - ONLY when the resolved provider is claude: a
     # local-backend operator does not need the claude CLI, and requiring it
@@ -666,7 +666,7 @@ def main(
         # source and exits 2 only on an empty/unknown dispatch value - even
         # on a machine without the claude CLI (a bare CI runner), a declared
         # non-claude provider must pass here, not exit 1 for the missing CLI.
-        provider, _model, _source = _require_claude_backend(resolver=resolver)
+        provider, _model, _source = _announce_dispatch_backend(resolver=resolver)
         if provider == "claude" and shutil.which("claude") is None:
             print(
                 "precondition FAIL: the resolved dispatch provider is claude "

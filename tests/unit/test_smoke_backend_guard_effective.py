@@ -76,7 +76,7 @@ def test_env_unset_registry_routes_dispatch_to_ollama_exits_2(guard, capsys):
         return ("ollama", "glm-5.3-flash:cloud", REGISTRY_SOURCE)
 
     with pytest.raises(SystemExit) as excinfo:
-        mod._require_claude_backend(resolver=_registry_routes_ollama)
+        mod._announce_dispatch_backend(resolver=_registry_routes_ollama)
     assert excinfo.value.code == 2, (
         "a registry-routed ollama dispatch backend must exit 2, got "
         f"{excinfo.value.code!r}"
@@ -111,7 +111,7 @@ def test_env_unset_nothing_configured_tells_operator_to_choose_provider(
         )
 
     with pytest.raises(SystemExit) as excinfo:
-        mod._require_claude_backend(resolver=_nothing_configured)
+        mod._announce_dispatch_backend(resolver=_nothing_configured)
     assert excinfo.value.code == 2
     captured = capsys.readouterr()
     text = captured.out + captured.err
@@ -167,7 +167,7 @@ def test_unknown_provider_exits_2_and_names_the_value(guard, capsys):
     mod = guard
     monkey_value = ("bogus-provider", "some-model", ENV_SOURCE)
     with pytest.raises(SystemExit) as excinfo:
-        mod._require_claude_backend(resolver=lambda: monkey_value)
+        mod._announce_dispatch_backend(resolver=lambda: monkey_value)
     assert excinfo.value.code == 2
     captured = capsys.readouterr()
     text = captured.out + captured.err
@@ -179,7 +179,7 @@ def test_unknown_provider_exits_2_and_names_the_value(guard, capsys):
 def test_local_family_provider_from_registry_exits_2(guard, capsys):
     mod = guard
     with pytest.raises(SystemExit) as excinfo:
-        mod._require_claude_backend(
+        mod._announce_dispatch_backend(
             resolver=lambda: ("lmstudio", "qwen3:8b", REGISTRY_SOURCE)
         )
     assert excinfo.value.code == 2
@@ -192,7 +192,7 @@ def test_empty_provider_exits_2(guard):
     """Fail closed: an empty resolved provider is never the claude backend."""
     mod = guard
     with pytest.raises(SystemExit) as excinfo:
-        mod._require_claude_backend(resolver=lambda: ("", "", ENV_SOURCE))
+        mod._announce_dispatch_backend(resolver=lambda: ("", "", ENV_SOURCE))
     assert excinfo.value.code == 2
 
 

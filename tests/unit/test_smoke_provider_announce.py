@@ -1,6 +1,6 @@
 """TDD: the smoke's dispatch guard must ANNOUNCE and PROCEED, not refuse.
 
-Story: ``scripts/smoke_getting_started.py::_require_claude_backend`` is the
+Story: ``scripts/smoke_getting_started.py::_announce_dispatch_backend`` is the
 last provider lock-in in the user-facing path. A dispatch backend that
 resolves to any DECLARED provider (claude, ollama, lmstudio, mlx, local,
 auto) must now PASS the guard after printing ONE prominent line naming the
@@ -101,7 +101,7 @@ def test_guard_announces_and_proceeds_for_ollama(monkeypatch, capsys):
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "ollama")
     monkeypatch.setenv("PIPELINE_DEFAULT_MODEL", "glm-5.3-flash:cloud")
 
-    mod._require_claude_backend()  # must NOT raise
+    mod._announce_dispatch_backend()  # must NOT raise
 
     captured = capsys.readouterr()
     text = captured.out + captured.err
@@ -116,7 +116,7 @@ def test_guard_announces_and_proceeds_for_ollama(monkeypatch, capsys):
 def test_guard_announces_the_resolver_triple(capsys):
     """The announce reuses the (provider, model, source) triple verbatim."""
     mod = _load_script()
-    mod._require_claude_backend(
+    mod._announce_dispatch_backend(
         resolver=lambda: ("lmstudio", "qwen3-coder", "custom resolver")
     )
     captured = capsys.readouterr()
@@ -132,7 +132,7 @@ def test_guard_accepts_every_declared_provider(provider, monkeypatch, capsys):
     mod = _load_script()
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", provider)
     try:
-        mod._require_claude_backend()
+        mod._announce_dispatch_backend()
     except SystemExit as exc:
         pytest.fail(
             f"{provider!r} is a DECLARED provider and must pass the guard; "
@@ -151,7 +151,7 @@ def test_guard_normalizes_case_and_whitespace_for_declared_providers(
     mod = _load_script()
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", value)
     try:
-        mod._require_claude_backend()
+        mod._announce_dispatch_backend()
     except SystemExit as exc:
         pytest.fail(
             f"{value!r} normalises to {provider!r} (.strip().lower()) and must "
@@ -167,7 +167,7 @@ def test_guard_defaults_to_claude_when_env_unset(monkeypatch, capsys):
     mod = _load_script()
     monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
     monkeypatch.setenv("PIPELINE_DEFAULT_MODEL", "sonnet")
-    mod._require_claude_backend()  # must NOT raise
+    mod._announce_dispatch_backend()  # must NOT raise
     captured = capsys.readouterr()
     text = captured.out + captured.err
     assert _line_naming(text, "claude", "sonnet", "PIPELINE_BACKEND_DISPATCH"), (
@@ -188,7 +188,7 @@ def test_guard_still_rejects_empty_and_unknown_values(value, capsys):
     """
     mod = _load_script()
     with pytest.raises(SystemExit) as excinfo:
-        mod._require_claude_backend(value)
+        mod._announce_dispatch_backend(value)
     assert excinfo.value.code == 2, (
         f"the guard must exit 2 for {value!r}, got {excinfo.value.code!r}"
     )

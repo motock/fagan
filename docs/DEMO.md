@@ -44,10 +44,27 @@ never writes into your real `~/.claude/plans`. The review → PR → merge gate 
 **not** exercised: the scratch repo's origin is a local bare repo, which `gh pr
 create` cannot target.
 
-Be aware of two things before you run it. It needs the `claude` CLI on `PATH`,
-and it **refuses to run on any local-family backend** (exit 2 by design) — so it
-validates a Claude-backed install, not a local-model one. And it spends real
-model usage: the full run dispatches an agent and a reviewer. The
+It runs on whatever dispatch provider you have configured and says so before
+it starts, so you always know which backend you just validated:
+
+```
+smoke: validating dispatch on ollama/glm-5.3-flash:cloud (source: env var PIPELINE_BACKEND_DISPATCH)
+...
+PASS: story S1 implemented, tests passed on provider ollama model glm-5.3-flash:cloud
+  final status: tests_passed
+```
+
+That transcript is from a real run on 2026-09-16, on a local-family backend at
+no API cost. Exit 2 now means your configured provider is empty or
+unrecognised — a configuration error — not that you picked a local model. The
+`claude` CLI is required only when the resolved provider is `claude`.
+
+Two honest caveats. It spends real model usage on whichever provider you
+configured: one implementing agent, and no reviewer, since the run stops before
+the review gate. And **PASS depends on the model you configured actually
+completing the story** — an exit 4 on a weak local model is that model's
+verdict, not evidence the pipeline is broken. That is the price of not pinning
+you to one vendor, and it is the right trade. The
 [docstring](../scripts/smoke_getting_started.py) lists every exit code and what
 each one means.
 
@@ -155,6 +172,21 @@ this is a research project and not a product:
 - **Local (non-Claude) dispatch is the weak point.** It handles small,
   mechanically-scoped stories well and degrades sharply on larger ones.
   [`retros/`](../retros/) is the incident record, not marketing.
+- **Nothing exercises the end-to-end path in CI, and it silently rotted.** The
+  getting-started smoke — the script whose entire job is answering *"does a
+  fresh install actually work?"* — was broken from the day it was added
+  (2026-09-02) until 2026-09-16, by four independent defects stacked so each
+  one masked the next: a crash at ingest on a malformed field, a scratch repo
+  with no `origin` for dispatch to fetch, a success bar that demanded a GitHub
+  PR the scratch repo could never produce, and a test-command detector that ran
+  `npm test` against a repo with no `package.json`. Its unit tests passed the
+  entire time, because they mock the pipeline. A live end-to-end test does
+  exist, but it is skipped unless `SMOKE_E2E=1`, and CI has no `claude` CLI — so
+  it had never run. All four are fixed
+  ([#791](https://github.com/motock/fagan/pull/791)–[#794](https://github.com/motock/fagan/pull/794),
+  [#802](https://github.com/motock/fagan/pull/802)), but the lesson outlives
+  them: a green suite is not evidence the thing works end to end. Only running
+  it end to end is.
 - **The local memory floor still wants an env var on this machine.** Dispatch
   to a local (non-`:cloud`) model is gated on free memory, and the 2048 MB
   default floor sits inside this host's normal idle band (~1.8–2.1 GB) — so an

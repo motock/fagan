@@ -481,8 +481,12 @@ def _lint_acceptance_fixtures(
 
       - ``("clean", None)``: no acceptance entries, no ``.py`` fixture path,
         or ruff ran and found nothing.
-      - ``("finding", message)``: ruff ran and found a violation; ``message``
+      - ``("finding", message)``: the story's ``acceptance`` value is
+        malformed - not a list, or containing a non-dict entry - or ruff ran
+        and found a violation; ``message``
+
         names the story summary, the declared fixture path(s), and the tail
+
         of ruff's output.
       - ``("skipped", message)``: ruff isn't on PATH, or anything else went
         wrong (timeout, exception) - validation could not run at all.
@@ -492,6 +496,25 @@ def _lint_acceptance_fixtures(
     way; it is passed through as ``cwd`` to the ruff subprocess when given.
     """
     acceptance = story.get("acceptance") or []
+    if not isinstance(acceptance, list):
+        return (
+            "finding",
+            (
+                f"story {story.get('summary')!r}: malformed acceptance: acceptance "
+                f"must be a list of {{'path': ..., 'source': ...}} dicts, got "
+                f"{type(acceptance).__name__} ({acceptance!r})"
+            ),
+        )
+    for _i, _entry in enumerate(acceptance):
+        if not isinstance(_entry, dict):
+            return (
+                "finding",
+                (
+                    f"story {story.get('summary')!r}: malformed acceptance: "
+                    f"acceptance[{_i}] must be a {{'path': ..., 'source': ...}} "
+                    f"dict, got {type(_entry).__name__} ({_entry!r})"
+                ),
+            )
     py_paths = [e.get("path") for e in acceptance if (e.get("path") or "").endswith(".py")]
     if not py_paths:
         return ("clean", None)

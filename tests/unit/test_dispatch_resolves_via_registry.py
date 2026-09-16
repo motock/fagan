@@ -43,6 +43,7 @@ real ``model_registry``.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -271,6 +272,9 @@ def test_advance_gate_resolves_same_target_as_dispatch(monkeypatch, tmp_path):
     _install_registry(monkeypatch, tmp_path, {"dispatch": dict(_REGISTRY_DISPATCH)})
     monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
 
+    # advance.py may either import the seam directly from pipeline.dispatch
+    # (keeping the change to the two in-scope files) or bind it with
+    # _ServerRef("_resolve_dispatch_target") if pipeline.server re-exports it.
     gate = getattr(advance, "_resolve_dispatch_target", None)
     assert gate is not None, (
         "pipeline/advance.py must resolve the per-story dispatch gate through the "
@@ -332,24 +336,97 @@ def test_resolve_dispatch_backend_contract_preserved(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+_DISPATCH_ENV_VAR = "PIPELINE_BACKEND_DISPATCH"
+
+
+def _docstring_ids(tree):
+    """id() of every Constant node that is a module/class/function docstring."""
+    ids = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            continue
+        body = getattr(node, "body", [])
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            ids.add(id(body[0].value))
+    return ids
+
+
+def _env_reads_of_dispatch_var(src):
+    """Line numbers where the module actually reads the dispatch env var.
+
+    AST-based, so an explanatory comment or docstring quoting the old
+    ``os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")`` line is not a
+    false positive - only a real read counts.
+    """
+    tree = ast.parse(src)
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "get"
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr == "environ"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == _DISPATCH_ENV_VAR
+            ):
+                hits.append(node.lineno)
+        elif isinstance(node, ast.Subscript):
+            value = node.value
+            if isinstance(value, ast.Attribute) and value.attr == "environ":
+                sl = node.slice
+                if isinstance(sl, ast.Constant) and sl.value == _DISPATCH_ENV_VAR:
+                    hits.append(node.lineno)
+    return hits
+
+
+def _dispatch_env_var_constants(src):
+    """Line numbers where the env var NAME is used as a string constant.
+
+    Excludes docstrings, so prose may still name the variable. A live
+    constant means the module is still selecting the provider from the env
+    itself (directly or via a module-level alias) instead of letting
+    ``resolve_role`` do it.
+    """
+    tree = ast.parse(src)
+    docstrings = _docstring_ids(tree)
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and node.value == _DISPATCH_ENV_VAR
+        and id(node) not in docstrings
+    ]
+
+
 @pytest.mark.parametrize("rel", ["pipeline/dispatch.py", "pipeline/advance.py"])
 def test_no_raw_env_read_for_dispatch_provider(rel):
     src = (_REPO_ROOT / rel).read_text()
 
-    offenders = [
-        (lineno, line.strip())
-        for lineno, line in enumerate(src.splitlines(), 1)
-        if "PIPELINE_BACKEND_DISPATCH" in line and "environ" in line
-    ]
-    assert not offenders, (
-        f"{rel} still reads the dispatch provider raw from the environment: "
-        f"{offenders} - provider selection must go through "
-        "role_registry.resolve_role('dispatch', ...)"
+    reads = _env_reads_of_dispatch_var(src)
+    assert not reads, (
+        f"{rel} still reads the dispatch provider raw from the environment at "
+        f"line(s) {reads} - provider selection must go through "
+        "role_registry.resolve_role('dispatch', ...). resolve_role already "
+        "applies the PIPELINE_BACKEND_DISPATCH priority itself, so the env is "
+        "still honoured without a raw read."
     )
 
-    assert 'os.environ.get("PIPELINE_BACKEND_DISPATCH"' not in src
-    assert "os.environ.get('PIPELINE_BACKEND_DISPATCH'" not in src
-    assert 'os.environ["PIPELINE_BACKEND_DISPATCH"]' not in src
+    constants = _dispatch_env_var_constants(src)
+    assert not constants, (
+        f"{rel} still names {_DISPATCH_ENV_VAR!r} as a live string constant at "
+        f"line(s) {constants} - aliasing the env var name does not make the read "
+        "go away; resolve_role must own provider selection"
+    )
 
 
 def test_dispatch_role_goes_through_resolve_role():

@@ -166,6 +166,49 @@ def _require_claude_backend(
         )
         raise SystemExit(2)
 
+    def _is_registry_dispatch_source(source: str) -> bool:
+        """True when *source* says the triple came from the registry.
+
+        model_registry.json's roles.dispatch entry is a legitimate
+        configuration surface for the dashboard display and decompose-time
+        sizing, but it is NOT what real dispatch resolves (see
+        _registry_routed_refusal), so a triple carrying that source must
+        not be trusted as the dispatch decision.
+        """
+        return "model_registry.json" in source and "roles.dispatch" in source
+
+    def _registry_routed_refusal(provider: str, model: str) -> None:
+        """Fail closed when the REGISTRY (not dispatch) routed the backend.
+
+        Real dispatch (pipeline/dispatch.py, pipeline/advance.py and
+        pipeline/preflight.py's check c) resolves PIPELINE_BACKEND_DISPATCH
+        directly and NEVER consults model_registry.json's roles.dispatch
+        entry. When the operator's registry routes dispatch at a non-claude
+        provider, the two signals disagree: the smoke would validate a
+        backend real dispatch will not invoke (or silently depend on a
+        local provider the env var never asked for). That disagreement is
+        a real configuration error, so the guard fails closed with exit 2
+        and tells the operator how to make the two signals agree.
+        """
+        print(
+            "smoke: refusing to run: model_registry.json's roles.dispatch "
+            f"entry routes dispatch to {provider}/{model}, but real "
+            "dispatch (pipeline/dispatch.py, pipeline/advance.py, "
+            "pipeline/preflight.py) resolves PIPELINE_BACKEND_DISPATCH "
+            "directly and never consults that entry - the smoke must not "
+            "validate a backend real dispatch will not use.",
+            file=sys.stderr,
+        )
+        print(
+            "Fix: make the two signals agree - set PIPELINE_BACKEND_DISPATCH"
+            "=claude (or another recognised provider: "
+            f"{', '.join(recognized)}), or update model_registry.json's "
+            "roles.dispatch entry to match the provider dispatch actually "
+            "uses.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
     if value is not None:
         raw = value
         normalized = raw.strip().lower()
@@ -275,6 +318,8 @@ def _require_claude_backend(
     normalized_provider = provider.strip().lower()
     if normalized_provider == "" or normalized_provider not in recognized:
         _reject(provider, normalized_provider, source)
+    if normalized_provider != "claude" and _is_registry_dispatch_source(source):
+        _registry_routed_refusal(normalized_provider, model)
 
     # ANNOUNCE and PROCEED: one prominent line naming the resolved provider,
     # the resolved model and the source of the choice (the triple real

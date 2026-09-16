@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app import backend
+from app import backend, role_registry
 
 from .config import WORKTREE_SCOPE_RULE
 from .service import _ServerRef
@@ -99,6 +99,110 @@ def _resolve_dispatch_backend(story: dict[str, Any], env_backend: str) -> str:
         dispatch_backend = "claude"
     return dispatch_backend
 
+
+
+def _dispatch_fallback_provider(plan_role_config: dict[str, Any] | None) -> str:
+    """Provider-only dispatch resolution for the fail-open path.
+
+    Keeps the exact pre-registry priority - plan role_config, then the
+    dispatch env var, then "claude" - without a raw env read here:
+    resolve_role applies the env var's own priority itself. Resolved against
+    an empty registry so a poisoned roles.dispatch entry never supplies the
+    provider, and with a sentinel model_fallback because resolve_role
+    raises when no model is configured anywhere and this path only needs
+    the provider (the sentinel model is discarded).
+    """
+    plan_provider = ((plan_role_config or {}).get("dispatch") or {}).get("provider")
+    return role_registry.resolve_role(
+        "dispatch",
+        plan_role_config=(
+            {"dispatch": {"provider": plan_provider}} if plan_provider else None
+        ),
+        registry={"providers": {}, "roles": {}},
+        model_fallback=lambda: "unpinned",
+    ).provider
+
+
+def _resolve_dispatch_target(
+    story: dict[str, Any], plan_role_config: dict[str, Any] | None = None
+) -> tuple[str, str | None]:
+    """Resolve the concrete (provider, model) a story's dispatch runs on.
+
+    REG-1: dispatch used to read PIPELINE_BACKEND_DISPATCH raw and never
+    resolved a MODEL at all, so the model fell all the way through to the
+    driver, which picks PIPELINE_LOCAL_MODEL_DEFAULT. On a host whose
+    model_registry pins roles.dispatch the registry entry was dead config:
+    get_effective_config reported the registry's model while every agent
+    booted on the driver's env default (measured 2026-09-16). The pair now
+    comes from role_registry.resolve_role("dispatch", ...) - the same
+    resolver planner, review, test_author, overlord, rebrief and usage
+    already use.
+
+    _resolve_dispatch_backend keeps its existing override contract on top of
+    the resolved provider, so every pre-registry override still wins exactly
+    as it does today: story["backend"] (how an escalation flip pins a
+    story), the security-persona and unwinnable-scope safety overrides, and
+    PIPELINE_BACKEND_DISPATCH=auto routing through _route_dispatch_backend
+    (resolve_role applies the env var's own priority - plan role_config ->
+    env -> registry -> "claude" - so the env is still honoured without a
+    raw read here).
+
+    Model priority: story["model"] (the most specific pin - an escalation
+    flip writes a concrete tag there) > the model resolve_role resolved
+    (plan role_config, then the registry) > None, which leaves the driver's
+    own env default in charge exactly as before REG-1. A model belonging to
+    a provider that did NOT win is never returned: a claude dispatch must
+    never be handed an ollama tag.
+
+    Fail-open contract: a fresh clone ships model_registry.json with no
+    roles.dispatch entry, so resolve_role raises RoleRegistryError (no model
+    configured anywhere). That must degrade to the pre-registry behaviour -
+    the env provider, then "claude", with no model - never crash dispatch.
+    The registry's own (poisoned) entry is not trusted for the provider
+    either: the provider is re-resolved against an empty registry, which
+    keeps the plan -> env -> "claude" priority without a raw env read.
+
+    Shared with the per-story dispatch gate in pipeline/advance.py so the
+    gate can never gate on one model while dispatch runs another.
+    """
+    try:
+        resolution = role_registry.resolve_role(
+            "dispatch", plan_role_config=plan_role_config
+        )
+    except role_registry.RoleRegistryError:
+        # Two distinct failure shapes:
+        # - A fresh clone (no roles.dispatch entry anywhere) hits this on
+        #   every dispatch; that is the pre-registry status quo, so it is
+        #   not worth a warning per story per tick.
+        # - A malformed roles.dispatch entry (e.g. an undeclared model name)
+        #   must stay loud: fail open, but surface why. load_registry itself
+        #   validates roles.* entries, so it raises for exactly this shape -
+        #   a load failure is then proof the entry exists and is poisoned.
+        try:
+            poisoned_entry = bool(
+                role_registry.load_registry().get("roles", {}).get("dispatch")
+            )
+        except role_registry.RoleRegistryError:
+            poisoned_entry = True
+        if poisoned_entry:
+            logging.getLogger("pipeline").warning(
+                "role_registry could not resolve the dispatch role; failing "
+                "open to the pre-registry behaviour (PIPELINE_BACKEND_DISPATCH, "
+                "then 'claude') with no model pin",
+                exc_info=True,
+            )
+        return (
+            _resolve_dispatch_backend(
+                story, _dispatch_fallback_provider(plan_role_config)
+            ),
+            None,
+        )
+
+    provider = _resolve_dispatch_backend(story, resolution.provider)
+    model = story.get("model")
+    if not model and provider == resolution.provider:
+        model = resolution.model
+    return provider, model or None
 
 
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
@@ -312,12 +416,14 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
 
         get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
-        # Resolve concrete backend name for this story (shared with the
-        # per-story dispatch gate in _advance_pipeline_locked).
-        env_backend = (
-            os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+        # Resolve concrete backend AND model for this story (shared with the
+        # per-story dispatch gate in _advance_pipeline_locked). REG-1: both
+        # now come from role_registry.resolve_role via
+        # _resolve_dispatch_target, so a registry-pinned roles.dispatch
+        # model actually runs instead of the driver's env default.
+        dispatch_backend, dispatch_model = _resolve_dispatch_target(
+            story, plan_role_config=_plan_role_config(plan_name)
         )
-        dispatch_backend = _resolve_dispatch_backend(story, env_backend)
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
 
@@ -376,6 +482,16 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             resume_journal=journal or None,
             review_feedback=None if resume_via_transcript else review_feedback,
         )
+        # REG-1: a story with no explicit model runs on the model the
+        # registry resolved for the dispatch role, not on the driver's env
+        # default. spec["model"] already carries story["model"]/persona
+        # precedence from _build_dispatch_command; only fill the gap when
+        # nothing more specific won, and only when the resolved model
+        # belongs to the backend that actually won (a claude dispatch is
+        # never handed an ollama tag - _resolve_dispatch_target already
+        # drops it, so dispatch_model is None there).
+        if not spec.get("model") and dispatch_model:
+            spec["model"] = dispatch_model
         # HARDEN-1: the executor must be told its cwd is authoritative on
         # EVERY dispatch - fresh or resumed - before any plan-authored brief
         # (agent_instructions) it may contain. A brief once carried an
@@ -398,7 +514,9 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             and MAX_CONCURRENT_AGENTS > 1
             and _count_in_progress_agents() > 0
         ):
-            target_model = spec.get("model") or story.get("model")
+            target_model = (
+                spec.get("model") or story.get("model") or dispatch_model
+            )
             if target_model:
                 # spec["model"]/story["model"] may be an unresolved tier
                 # name (e.g. "sonnet"), which never matches anything in

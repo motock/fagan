@@ -23,6 +23,7 @@ from typing import Any
 from . import merge as _merge_mod
 from .concurrency import PlanLockReacquireTimeout, _released_plan_lock
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
+from .dispatch import _resolve_dispatch_target
 from .dispatch_lease import claim_dispatch_lease
 from .wedge_io import run_wedge_scan
 
@@ -338,9 +339,13 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         # model keeps the floor exactly as before. Reachability still applies
         # to every backend (a cloud model proxied through an unreachable server
         # cannot dispatch).
-        env_backend = (
-            os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
-        )
+        # Per-story dispatch resolution (REG-1): the gate resolves each
+        # story's (provider, model) through the SAME
+        # _resolve_dispatch_target seam dispatch_story uses, so the gate can
+        # never gate on one model while dispatch runs another. The dispatch
+        # env var's own priority (plan role_config -> env -> registry ->
+        # "claude") is applied inside resolve_role, so the env is still
+        # honoured without a raw read here.
         # In-progress interruption is also per-story: only interrupt an
         # in-progress story whose OWN backend+model would be gated by the
         # LOCAL memory floor (local + non-:cloud). A :cloud or claude-routed
@@ -353,7 +358,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
         for key, story in stories.items():
             if story["status"] != "in_progress" or "pid" not in story:
                 continue
-            story_backend = _resolve_dispatch_backend(story, env_backend)
+            story_backend, _story_model = _resolve_dispatch_target(
+                story, plan_role_config=manifest.get("role_config")
+            )
             if story_backend == "claude":
                 # Claude-routed: interrupt only when the blanket gate is down
                 # for a non-memory reason (Claude usage exhausted, etc.).
@@ -432,7 +439,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 # On-device slots are exhausted: defer this story until a
                 # slot frees up. Cloud dispatches never reach this branch.
                 continue
-            story_backend = _resolve_dispatch_backend(story, env_backend)
+            story_backend, _story_model = _resolve_dispatch_target(
+                story, plan_role_config=manifest.get("role_config")
+            )
             if story_backend == "claude":
                 # Gate on Claude's usage resource_status, NOT local memory.
                 status = backend.get_backend("dispatch", name="claude").resource_status()
@@ -440,7 +449,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     gated.append(key)
                     continue
             else:
-                tag = story.get("model")
+                tag = story.get("model") or _story_model
                 if tag:
                     status = backend.get_backend("dispatch", name=story_backend).resource_status(
                         model_tag=tag
@@ -600,8 +609,10 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # the blanket gate read down (live incident: PUB-01 finished and
             # exited but was never re-polled, so its dead pid was never
             # graded).
-            story_backend = _resolve_dispatch_backend(story, env_backend)
-            tag = story.get("model") or story.get("dispatched_model")
+            story_backend, _story_model = _resolve_dispatch_target(
+                story, plan_role_config=manifest.get("role_config")
+            )
+            tag = story.get("model") or story.get("dispatched_model") or _story_model
             if story_backend != "claude" and tag and tag.endswith(":cloud"):
                 pass  # :cloud is never interrupted by the local memory gate
             elif story_backend == "claude" or not tag:

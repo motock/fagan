@@ -25,7 +25,9 @@ cd ~/.fagan
 .venv/bin/python scripts/smoke_getting_started.py --check-preconditions
 ```
 
-and, once that passes, run one story all the way to merge:
+and, once that passes, run one story through to `tests_passed` (the story is
+implemented and its tests pass — not merged; the PR/merge gate is not
+exercised):
 
 ```bash
 .venv/bin/python scripts/smoke_getting_started.py
@@ -36,9 +38,11 @@ Use `.venv/bin/python`, not a bare `python` — the installer puts the `mcp` and
 with `ModuleNotFoundError: No module named 'mcp'` unless you happen to have
 them installed globally.
 
-That drives the **real** pipeline — save plan → ingest → dispatch → test →
-review → merge — against a scratch repository and a scratch `PLAN_DIR`, so it
-never writes into your real `~/.claude/plans`.
+That drives the **real** pipeline — save plan → ingest → dispatch → test
+(`tests_passed`) — against a scratch repository and a scratch `PLAN_DIR`, so it
+never writes into your real `~/.claude/plans`. The review → PR → merge gate is
+**not** exercised: the scratch repo's origin is a local bare repo, which `gh pr
+create` cannot target.
 
 Be aware of two things before you run it. It needs the `claude` CLI on `PATH`,
 and it **refuses to run on any local-family backend** (exit 2 by design) — so it

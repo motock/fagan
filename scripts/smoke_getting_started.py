@@ -327,12 +327,15 @@ def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], target_repo).strip()
     origin = tmp_root / "origin.git"
     _git(["init", "--bare", str(origin)], tmp_root)
-    # The bare origin's HEAD symref must name the SAME branch: dispatch
-    # detects the default branch from ORIGIN'S HEAD SYMREF
-    # (pipeline/server.py::_default_branch), not from a hardcoded name.
-    # Order matters - init bare, then point its HEAD, then remote add, then
-    # push - so refs/heads/<branch> exists in the bare repo by the time
-    # anything reads its HEAD.
+    # The bare origin's HEAD symref is set to the SAME branch for
+    # consistency, but it is NOT what dispatch reads: pipeline/server.py::
+    # _default_branch reads refs/remotes/origin/HEAD in the target repo,
+    # which `git remote add` + `git push -u` never creates, so dispatch
+    # actually resolves the branch via _default_branch's FALLBACK
+    # (`git rev-parse --abbrev-ref HEAD` in the target repo) - the same
+    # branch we just read and pushed. Order matters - init bare, then point
+    # its HEAD, then remote add, then push - so refs/heads/<branch> exists
+    # in the bare repo by the time anything reads its HEAD.
     _git(["symbolic-ref", "HEAD", f"refs/heads/{branch}"], origin)
     _git(["remote", "add", "origin", str(origin)], target_repo)
     _git(["push", "-u", "origin", branch], target_repo)
@@ -375,7 +378,7 @@ def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
 
 
 def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
-    """Drive one story to merge inside the scratch layout; returns exit code."""
+    """Drive one story to `tests_passed` inside the scratch layout; returns exit code."""
     # 1. claude CLI presence FIRST - nothing may be created before it passes.
     if shutil.which("claude") is None:
         print("smoke: the `claude` CLI was not found on PATH.", file=sys.stderr)
@@ -538,8 +541,9 @@ def main(
     parser = argparse.ArgumentParser(
         prog="smoke_getting_started",
         description=(
-            "Scratch-PLAN_DIR getting-started smoke: run one story to merge "
-            "on the claude backend without touching ~/.claude/plans."
+            "Scratch-PLAN_DIR getting-started smoke: run one story to "
+            "tests_passed on the claude backend without touching "
+            "~/.claude/plans."
         ),
     )
     parser.add_argument(

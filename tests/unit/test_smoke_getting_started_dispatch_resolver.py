@@ -1,44 +1,39 @@
-"""Regression test for the reviewer's Blocking finding #1 on scripts/smoke_getting_started.py.
+"""Parity guard: the smoke's announced dispatch backend follows the registry.
 
-`_announce_dispatch_backend()` (no `value=` argument) is supposed to guard the
-same thing real dispatch actually decides. But real dispatch NEVER consults
-`app.role_registry.resolve_role("dispatch")` for provider selection -
-`pipeline/dispatch.py`, `pipeline/advance.py`, and `pipeline/preflight.py`
-all read the raw `PIPELINE_BACKEND_DISPATCH` env var directly
-(`.strip().lower()`, default `"claude"`) and never call `resolve_role`.
+Story SRR-1 (re-pin). This file used to pin the OPPOSITE premise: that
+``model_registry.json``'s ``roles.dispatch`` entry is advisory only and must
+NOT drive the smoke's announced backend, because real dispatch read
+``PIPELINE_BACKEND_DISPATCH`` raw and never consulted
+``app.role_registry.resolve_role``.
 
-The current implementation's `_default_dispatch_resolver` (nested inside
-`_announce_dispatch_backend`, scripts/smoke_getting_started.py:128-176) calls
-`resolve_role("dispatch", ...)`, whose precedence chain falls through to
-`model_registry.json`'s `roles.dispatch` entry when the env var is unset.
-That entry is a legitimate, real-world configuration for two OTHER,
-unrelated call sites (`pipeline/service.py`'s dashboard display and
-`pipeline/planner.py`'s decompose-time sizing guidance) - but it does not
-govern what backend a story actually dispatches on.
+That premise was inverted by the ``registry-single-source-of-truth`` plan
+(REG-1..REG-5). ``pipeline/dispatch.py``, ``pipeline/advance.py`` and
+``pipeline/preflight.py`` now all resolve the dispatch role through
+``app.role_registry.resolve_role``, and the registry OUTRANKS
+``PIPELINE_BACKEND_<ROLE>`` (plan/story overrides sit above both). The smoke
+was the last hand-rolled, env-only copy of that logic, so it announced a
+backend real dispatch would never use - and printed an "advisory" note
+reassuring the operator that the registry "only feeds the dashboard display
+and decompose-time sizing, never real dispatch". That reassurance is now
+false.
 
-Concrete failure (from the review): PIPELINE_BACKEND_DISPATCH unset,
-model_registry.json has roles.dispatch = "local" (legitimate for the
-dashboard/sizing use cases). A real dispatched story in this state resolves
-to "claude" (env unset -> "claude" default). The smoke guard, as written
-today, resolves to "local" via the registry fallback and refuses to run
-(exit 2) - a false negative that would block every legitimate use of
-roles.dispatch for its actual (reporting/sizing) purpose.
+So this file is re-pinned to the new truth, and kept as a PARITY guard rather
+than a tautology: the smoke's announced (provider, model) must equal
+``role_registry.resolve_role("dispatch")`` for the same synthetic inputs, and
+the advisory note must be gone.
 
-Per testing-config-gates.md, this stubs the registry SOURCE
-(`app.role_registry.load_registry`, the thing that reads
-model_registry.json) rather than asserting against whatever
-model_registry.json currently contains on disk, and lets the real
-`resolve_role` precedence logic run against that stub - so the test
-exercises production's actual resolution logic, not a hand-rolled
-replica of it.
-
-This test is expected to be RED against today's implementation (the guard
-raises SystemExit(2) when it should pass) until `_default_dispatch_resolver`
-is fixed to mirror pipeline/preflight.py's raw env-var-with-claude-default
-logic and stop consulting the registry.
+The registry SOURCE (``app.role_registry.load_registry``) is stubbed and
+``PIPELINE_MODEL_REGISTRY_PATH`` points at a temp file with the same contents,
+so the real ``resolve_role`` precedence logic runs against synthetic inputs -
+never against this machine's real ``model_registry.json``.
 """
 
+from __future__ import annotations
+
+import copy
 import importlib.util
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -65,46 +60,88 @@ def _load_script():
     return module
 
 
-def test_guard_ignores_registry_dispatch_entry_when_env_var_unset(monkeypatch, capsys):
-    """Worked example from the review: env unset, roles.dispatch="local".
-
-    Real dispatch (pipeline/dispatch.py, pipeline/advance.py,
-    pipeline/preflight.py) would resolve to "claude" in this exact state -
-    none of them ever consult app.role_registry.resolve_role. The guard
-    must agree and pass, not exit 2.
-    """
-    mod = _load_script()
-    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
+def _install(monkeypatch, tmp_path, registry: dict, environ: dict) -> None:
+    """Point the smoke's registry + env at SYNTHETIC inputs."""
+    for key in [k for k in os.environ if k.startswith("PIPELINE_")]:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in environ.items():
+        monkeypatch.setenv(key, value)
 
     from app import role_registry
 
-    # Stub the config SOURCE only (load_registry), not resolve_role itself -
-    # resolve_role's real precedence logic still runs against this stub.
     monkeypatch.setattr(
-        role_registry,
-        "load_registry",
-        lambda *a, **k: {"roles": {"dispatch": {"provider": "local"}}},
+        role_registry, "load_registry", lambda *a, **k: copy.deepcopy(registry)
     )
+    registry_file = tmp_path / "synthetic_model_registry.json"
+    registry_file.write_text(json.dumps(registry))
+    monkeypatch.setenv("PIPELINE_MODEL_REGISTRY_PATH", str(registry_file))
 
-    try:
-        mod._announce_dispatch_backend()
-    except SystemExit as exc:
-        pytest.fail(
-            "with PIPELINE_BACKEND_DISPATCH unset, the guard must resolve "
-            "the same way real dispatch does (raw env var, default "
-            "'claude') and IGNORE model_registry.json's roles.dispatch "
-            "entry - that entry only feeds the dashboard/sizing call "
-            "sites, never actual dispatch. Got SystemExit"
-            f"({exc.code!r}); stderr: {capsys.readouterr().err!r}"
-        )
+
+def test_registry_dispatch_entry_drives_the_announced_backend(
+    monkeypatch, capsys, tmp_path
+):
+    """The old worked example, inverted: env unset, roles.dispatch="local".
+
+    Real dispatch now resolves "local" here (the registry outranks the env
+    var), so the smoke must announce "local" - not "claude" - and must not
+    print the obsolete advisory note.
+    """
+    registry = {"roles": {"dispatch": {"provider": "local"}}}
+    _install(monkeypatch, tmp_path, registry, {})
+    mod = _load_script()
+
+    provider, _model, _source = mod._announce_dispatch_backend()
+
+    assert provider == "local", (
+        "with PIPELINE_BACKEND_DISPATCH unset and roles.dispatch pinned to "
+        "'local', the registry is the source of truth for dispatch, so the "
+        f"guard must announce 'local'; got {provider!r}"
+    )
 
     captured = capsys.readouterr()
     text = captured.out + captured.err
-    assert any(
-        "claude" in line and "PIPELINE_BACKEND_DISPATCH" in line
-        for line in text.splitlines()
-    ), (
-        "the guard must announce the resolved provider 'claude' (the raw "
-        "env-var default), not the registry's roles.dispatch entry; "
-        f"got: {text!r}"
+    assert "local" in text, (
+        f"the announce line must name the registry's provider; got {text!r}"
+    )
+    assert "advisory" not in text.lower(), (
+        "the obsolete advisory registry note must be gone - the registry IS "
+        f"the dispatch source now; got {text!r}"
+    )
+    assert "never real dispatch" not in text, (
+        f"the guard must not claim the registry never drives dispatch; got {text!r}"
+    )
+
+
+def test_announced_backend_equals_resolve_role_for_synthetic_inputs(
+    monkeypatch, capsys, tmp_path
+):
+    """PARITY: announced (provider, model) == resolve_role("dispatch")."""
+    registry = {
+        "providers": {
+            "ollama": {
+                "models": {"deepseek-v4.1-flash": {"tag": "deepseek-v4.1-flash:cloud"}}
+            }
+        },
+        "roles": {"dispatch": {"provider": "ollama", "model": "deepseek-v4.1-flash"}},
+    }
+    environ = {"PIPELINE_BACKEND_DISPATCH": "lmstudio"}
+    _install(monkeypatch, tmp_path, registry, environ)
+    mod = _load_script()
+
+    provider, model, _source = mod._announce_dispatch_backend()
+
+    from app import role_registry
+
+    expected = role_registry.resolve_role(
+        "dispatch", registry=registry, environ=environ
+    )
+    assert (provider, model) == (expected.provider, expected.model), (
+        "the smoke's announced backend must equal "
+        "role_registry.resolve_role('dispatch') for the same synthetic inputs; "
+        f"smoke={(provider, model)!r} "
+        f"resolve_role={(expected.provider, expected.model)!r}"
+    )
+    assert provider == "ollama", (
+        "the registry's roles.dispatch entry outranks "
+        f"PIPELINE_BACKEND_DISPATCH; got {provider!r}"
     )

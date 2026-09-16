@@ -215,7 +215,7 @@ review shell out to the Claude Code CLI and never touch ollama.
 6. **Watch it merge** — with `PIPELINE_AUTONOMY=gated` (the default), a
    risk-`low` story that passes review merges unattended. Start with
    `PIPELINE_AUTONOMY=dry-run` first, per the quickstart advice above.
-7. **Prefer the scripted path?** — `python scripts/smoke_getting_started.py`
+7. **Prefer the scripted path?** — `.venv/bin/python scripts/smoke_getting_started.py`
    runs the same flow end-to-end without the dashboard, in a scratch
    `PLAN_DIR` that never touches your real plans.
 

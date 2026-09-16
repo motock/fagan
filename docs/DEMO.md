@@ -21,14 +21,20 @@ fails closed — see its [source](../scripts/remote-install.sh)).
 Then check the prerequisites — this builds nothing and calls no model:
 
 ```bash
-python scripts/smoke_getting_started.py --check-preconditions
+cd ~/.fagan
+.venv/bin/python scripts/smoke_getting_started.py --check-preconditions
 ```
 
 and, once that passes, run one story all the way to merge:
 
 ```bash
-python scripts/smoke_getting_started.py
+.venv/bin/python scripts/smoke_getting_started.py
 ```
+
+Use `.venv/bin/python`, not a bare `python` — the installer puts the `mcp` and
+`httpx` dependencies in the virtualenv it creates, so a bare interpreter fails
+with `ModuleNotFoundError: No module named 'mcp'` unless you happen to have
+them installed globally.
 
 That drives the **real** pipeline — save plan → ingest → dispatch → test →
 review → merge — against a scratch repository and a scratch `PLAN_DIR`, so it

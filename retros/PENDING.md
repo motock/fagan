@@ -180,3 +180,4 @@ if a precise date is needed when writing one of these up.
 - scheduler-reconcile-resilience — completed 2026-09-14, 2 stories
 - srr2-flaky-reconcile-test — completed 2026-09-14, 1 stories
 - overlord-parked-story-autonomy — completed 2026-09-14, 9 stories
+- smoke-test-hermeticity-fix — completed 2026-09-16, 1 stories

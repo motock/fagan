@@ -1,10 +1,17 @@
-"""Scratch-PLAN_DIR getting-started smoke: run ONE story to merge on claude.
+"""Scratch-PLAN_DIR getting-started smoke: run ONE story to tests_passed.
 
 This is the operator-facing "does a fresh checkout actually work?" driver.
 It builds a throwaway scratch layout, saves + ingests a minimal 1-epic /
 1-story plan against a scratch target git repo, dispatches the story on the
-``claude`` backend, and polls until the story is merged - all without ever
+``claude`` backend, and polls until the story's tests pass - all without ever
 writing into the operator's real ~/.claude/plans.
+
+WHY THE SUCCESS BAR IS tests_passed, NOT A MERGED PR: the scratch repo's
+origin is a LOCAL BARE repo (created by _prepare_scratch_env), so
+``gh pr create`` cannot run against it - the pr_open and done statuses are
+unreachable by construction. This smoke validates save_plan -> ingest ->
+dispatch -> implement -> test gate. It does NOT validate the PR or merge
+gate.
 
 Scratch layout (everything under one tmp root):
 
@@ -23,7 +30,8 @@ cached module would make an env-only check lie) is inside the scratch root
 and aborts nonzero otherwise.
 
 Exit codes:
-    0  PASS - story merged (status "done"); story key + PR URL printed
+    0  PASS - story implemented and its tests passed (status "tests_passed");
+       story key + final status printed. It does NOT mean the story merged.
     1  the ``claude`` CLI is not on PATH (install hint printed)
     2  PIPELINE_BACKEND_DISPATCH resolves to a local-family/unknown backend.
        The guard mirrors the resolution real dispatch actually performs
@@ -297,6 +305,41 @@ def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
         text=True,
     )
 
+    # Real origin: pipeline/dispatch.py builds the agent worktree from
+    # origin/<default-branch> (`git fetch origin <branch>`, then
+    # `git worktree add -b <branch> <path> origin/<branch>`), so the scratch
+    # repo needs a remote it can actually fetch from. That origin is a local
+    # BARE repo under the scratch root - which is also why `gh pr create`
+    # cannot run against it and this smoke's success bar is tests_passed,
+    # not a merged PR (see the module docstring).
+    def _git(args: list[str], cwd: Path) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout
+
+    # Read the ACTUAL current branch: git's init.defaultBranch differs per
+    # machine, so it is never assumed to be master or main.
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], target_repo).strip()
+    origin = tmp_root / "origin.git"
+    _git(["init", "--bare", str(origin)], tmp_root)
+    # The bare origin's HEAD symref is set to the SAME branch for
+    # consistency, but it is NOT what dispatch reads: pipeline/server.py::
+    # _default_branch reads refs/remotes/origin/HEAD in the target repo,
+    # which `git remote add` + `git push -u` never creates, so dispatch
+    # actually resolves the branch via _default_branch's FALLBACK
+    # (`git rev-parse --abbrev-ref HEAD` in the target repo) - the same
+    # branch we just read and pushed. Order matters - init bare, then point
+    # its HEAD, then remote add, then push - so refs/heads/<branch> exists
+    # in the bare repo by the time anything reads its HEAD.
+    _git(["symbolic-ref", "HEAD", f"refs/heads/{branch}"], origin)
+    _git(["remote", "add", "origin", str(origin)], target_repo)
+    _git(["push", "-u", "origin", branch], target_repo)
+
     # CRITICAL ORDERING: these env writes must precede the pipeline import
     # below (pipeline/paths.py reads them at import time).
     os.environ["PLAN_DIR"] = str(plan_dir)
@@ -335,7 +378,7 @@ def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
 
 
 def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
-    """Drive one story to merge inside the scratch layout; returns exit code."""
+    """Drive one story to `tests_passed` inside the scratch layout; returns exit code."""
     # 1. claude CLI presence FIRST - nothing may be created before it passes.
     if shutil.which("claude") is None:
         print("smoke: the `claude` CLI was not found on PATH.", file=sys.stderr)
@@ -459,7 +502,6 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
 
     deadline = time.monotonic() + timeout_s  # computed ONCE; monotonic never
     last_status = "todo"  # steps backwards, so the deadline always holds
-    pr_url = None
     while True:
         try:
             pipeline_server.advance_pipeline(PLAN_NAME)
@@ -469,10 +511,9 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
             manifest = json.loads(manifest_path.read_text())
             story = manifest.get("stories", {}).get(story_key, {})
             last_status = story.get("status", last_status)
-            pr_url = story.get("pr_url") or pr_url
-        if last_status == "done":
-            print(f"PASS: story {story_key} merged (plan {PLAN_NAME!r})")
-            print(f"  PR URL: {pr_url or '(none recorded)'}")
+        if last_status == "tests_passed":
+            print(f"PASS: story {story_key} implemented, tests passed (plan {PLAN_NAME!r})")
+            print(f"  final status: {last_status}")
             print(f"  scratch plan dir: {plan_dir}")
             return 0
         if last_status in TERMINAL_FAILURE_STATUSES:
@@ -500,8 +541,9 @@ def main(
     parser = argparse.ArgumentParser(
         prog="smoke_getting_started",
         description=(
-            "Scratch-PLAN_DIR getting-started smoke: run one story to merge "
-            "on the claude backend without touching ~/.claude/plans."
+            "Scratch-PLAN_DIR getting-started smoke: run one story to "
+            "tests_passed on the claude backend without touching "
+            "~/.claude/plans."
         ),
     )
     parser.add_argument(

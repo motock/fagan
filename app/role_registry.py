@@ -12,9 +12,11 @@ resolve_role() only ever supplies a *default*. It never overrides a value
 a caller already resolved for a more specific reason (an escalation
 forcing Claude, an explicit name= override, a rework's pinned backend) —
 callers consult it only in their own "nothing more specific configured"
-fallback branch, and existing role-specific env vars keep the same
-priority they already have (checked by the caller, or passed in via
-model_fallback, before resolve_role's own registry step runs).
+fallback branch. Within resolve_role itself the provider chain is
+plan_role_config -> registry roles -> PIPELINE_BACKEND_<ROLE> ->
+default_provider: the env var is only the EMPTY-STATE fallback, consulted
+when the registry has no entry for the role (a fresh clone whose shipped
+model_registry.json ships no `roles` block still boots on the env var).
 """
 from __future__ import annotations
 

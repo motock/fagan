@@ -23,7 +23,7 @@ CRITICAL ORDERING: pipeline/paths.py reads PLAN_DIR/WORKTREE_ROOT from
 os.environ AT IMPORT TIME, so this script sets those env vars BEFORE the
 first pipeline.* import (all pipeline imports are lazy, inside functions,
 after the env writes). app.role_registry is imported the same way - lazily,
-inside the backend guard's advisory registry note, never at module scope.
+inside the dispatch resolver, never at module scope.
 A fail-closed guard then re-verifies the resolved
 ``pipeline.paths.PLAN_DIR`` module attribute (not the env var - a stale
 cached module would make an env-only check lie) is inside the scratch root
@@ -39,18 +39,18 @@ Exit codes:
        pinning a provider, and operators must not be surprised by it.
     1  the resolved provider is claude and the ``claude`` CLI is not on PATH
        (install hint printed). Only the claude provider needs the CLI.
-    2  the dispatch backend value is empty/whitespace-only, or names an
+    2  the resolved dispatch provider is empty/whitespace-only, or names an
        unknown (unrecognised) provider - a real configuration error, so the
        guard fails closed. The message names the offending value and lists
        the recognised providers (claude, ollama, lmstudio, mlx, local, auto).
        Every DECLARED provider passes after one prominent announce line
-       naming the resolved provider, model and source. The guard mirrors
-       the resolution real dispatch actually performs
+       naming the resolved provider, model and source. The guard mirrors the
+       resolution real dispatch actually performs
        (pipeline/dispatch.py, pipeline/advance.py, pipeline/preflight.py):
-       the raw env var, .strip().lower(), default "claude" - the registry's
-       roles.dispatch entry never gates dispatch (it only feeds the
-       dashboard display and decompose-time sizing), so it is reported
-       as an advisory note only, never as the dispatch decision.
+       app.role_registry.resolve_role("dispatch") is the source of truth for
+       the dispatch role and outranks the PIPELINE_BACKEND_<ROLE> env var,
+       which only fills the empty state; plan/story role_config overrides
+       rank above the registry.
     3  the bounded poll timed out (default 30 min, checked every 15 s)
     4  the story reached a terminal failure status (failed/parked)
     5  fail-closed abort: resolved pipeline paths landed outside the scratch
@@ -85,266 +85,6 @@ STORY_KEY = "S1"
 # time.monotonic(), so an NTP step-back can never stretch the budget).
 POLL_INTERVAL_S = 15  # poll every 15 seconds
 TERMINAL_FAILURE_STATUSES = ("failed", "parked")
-
-
-class _DispatchResolutionError(Exception):
-    """The advisory registry note could not be produced.
-
-    Raised by the guard's advisory registry note when app.role_registry
-    cannot be imported or rejects the registry contents. Purely diagnostic:
-    the note never gates the guard's pass/fail decision (exit codes come
-    from the env-var resolution alone), so any failure here is swallowed
-    after printing a one-line warning.
-    """
-
-
-def _announce_dispatch_backend(
-    value: str | None = None,
-    *,
-    resolver: Callable[[], tuple[str, str, str]] | None = None,
-) -> tuple[str, str, str]:
-    """Announce the resolved dispatch provider and proceed; fail closed on junk.
-
-    The smoke is provider-neutral: it decouples from any single provider, so
-    the operator chooses. The enemy is SILENCE, not the provider - so this
-    guard ANNOUNCES the resolved (provider, model, source) triple on one
-    prominent line and proceeds, for every DECLARED provider (claude,
-    ollama, lmstudio, mlx, local, auto). Exit 2 is reserved for a genuinely
-    unusable value: an empty/whitespace-only string, or an unrecognised
-    provider name - a real configuration error that must still fail closed.
-
-    Two modes:
-
-    *value* handed in as a string (pure, no I/O): the legacy env-value
-    check. Normalization mirrors the dispatch chain exactly
-    (``.strip().lower()`` - see pipeline/dispatch.py and pipeline/advance.py).
-    Empty/whitespace-only strings and unknown values exit 2 (naming the
-    offending value and listing the recognised providers); every declared
-    provider passes. This mode never mutates os.environ.
-
-    *value* left unset (what ``main()``/``run_smoke()`` use): the guard
-    resolves the backend the way real dispatch actually does - via
-    *resolver* (a callable returning ``(provider, model, source)``; the
-    default resolver mirrors pipeline/preflight.py's check c exactly: the
-    raw ``PIPELINE_BACKEND_DISPATCH`` env var, ``(raw or "claude")
-    .strip().lower() or "claude"``). Real dispatch NEVER consults
-    app.role_registry for provider selection - the registry's
-    roles.dispatch entry only feeds the dashboard display and decompose-time
-    sizing - so the registry is never part of the resolution; on a PASS it
-    is reported as a separate, clearly-labeled, best-effort ADVISORY note
-    (never gating, never affecting the exit code). Exit 2 when the resolved
-    provider is empty/whitespace-only or unrecognised; the printed message
-    names the offending value AND where the choice came from so the
-    operator can change it. The claude-CLI check is NOT part of this guard:
-    it lives with the callers and applies only when the resolved provider
-    is claude (a local-backend operator does not need the claude CLI).
-    This guard never mutates os.environ.
-
-    Returns the validated (provider, model, source) triple so callers can
-    name the validated backend in their own output.
-    """
-    recognized = ("claude", "ollama", "lmstudio", "mlx", "local", "auto")
-
-    def _reject(raw: str, provider: str, source: str) -> None:
-        """Fail closed on an unusable dispatch value: print + exit 2."""
-        if provider.strip() == "":
-            detail = "the resolved provider is empty"
-            if raw is not None and raw.strip() == "":
-                detail = "the value is empty or whitespace-only"
-        else:
-            detail = f"unrecognised provider {provider!r}"
-        message = (
-            f"smoke: unrecognised dispatch backend {raw!r} ({detail}); "
-            f"recognised providers: {', '.join(recognized)}"
-        )
-        print(message, file=sys.stderr)
-        print(
-            "Fix: set PIPELINE_BACKEND_DISPATCH to one of the recognised "
-            "providers above (e.g. PIPELINE_BACKEND_DISPATCH=claude), or "
-            "unset it to use the default.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-
-    def _is_registry_dispatch_source(source: str) -> bool:
-        """True when *source* says the triple came from the registry.
-
-        model_registry.json's roles.dispatch entry is a legitimate
-        configuration surface for the dashboard display and decompose-time
-        sizing, but it is NOT what real dispatch resolves (see
-        _registry_routed_refusal), so a triple carrying that source must
-        not be trusted as the dispatch decision.
-        """
-        return "model_registry.json" in source and "roles.dispatch" in source
-
-    def _registry_routed_refusal(provider: str, model: str) -> None:
-        """Fail closed when the REGISTRY (not dispatch) routed the backend.
-
-        Real dispatch (pipeline/dispatch.py, pipeline/advance.py and
-        pipeline/preflight.py's check c) resolves PIPELINE_BACKEND_DISPATCH
-        directly and NEVER consults model_registry.json's roles.dispatch
-        entry. When the operator's registry routes dispatch at a non-claude
-        provider, the two signals disagree: the smoke would validate a
-        backend real dispatch will not invoke (or silently depend on a
-        local provider the env var never asked for). That disagreement is
-        a real configuration error, so the guard fails closed with exit 2
-        and tells the operator how to make the two signals agree.
-        """
-        print(
-            "smoke: refusing to run: model_registry.json's roles.dispatch "
-            f"entry routes dispatch to {provider}/{model}, but real "
-            "dispatch (pipeline/dispatch.py, pipeline/advance.py, "
-            "pipeline/preflight.py) resolves PIPELINE_BACKEND_DISPATCH "
-            "directly and never consults that entry - the smoke must not "
-            "validate a backend real dispatch will not use.",
-            file=sys.stderr,
-        )
-        print(
-            "Fix: make the two signals agree - set PIPELINE_BACKEND_DISPATCH"
-            "=claude (or another recognised provider: "
-            f"{', '.join(recognized)}), or update model_registry.json's "
-            "roles.dispatch entry to match the provider dispatch actually "
-            "uses.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-
-    if value is not None:
-        raw = value
-        normalized = raw.strip().lower()
-        if normalized == "claude":
-            print("smoke: backend guard OK: PIPELINE_BACKEND_DISPATCH resolves to claude")
-            return normalized, "", "value argument"
-        if normalized == "" or normalized not in recognized:
-            _reject(raw, normalized, "value argument")
-        print(
-            f"smoke: validating dispatch on {normalized} (source: value argument)"
-        )
-        return normalized, "", "value argument"
-
-    def _default_dispatch_resolver() -> tuple[str, str, str]:
-        """Resolve the dispatch backend the way real dispatch actually does.
-
-        Mirrors pipeline/preflight.py's check c (and pipeline/dispatch.py /
-        pipeline/advance.py's env_backend read) EXACTLY: the raw
-        ``PIPELINE_BACKEND_DISPATCH`` env var, ``(raw or "claude")
-        .strip().lower() or "claude"``. Deliberately NO registry
-        consultation: app.role_registry.resolve_role("dispatch") is used in
-        production only for the dashboard display and decompose-time sizing,
-        never to pick the backend a story dispatches on - honoring the
-        registry here would make the smoke disagree with the system it
-        guards (e.g. refuse to run when roles.dispatch="local" is set for
-        those unrelated use cases while real dispatch correctly uses claude).
-
-        Returns (provider, model, source). The model is reported for operator
-        context only; it does not influence the pass/fail decision. It mirrors
-        the model each provider's dispatch chain actually uses: for claude,
-        PIPELINE_DEFAULT_MODEL, else "sonnet" (pipeline/config.py's
-        DEFAULT_MODEL); for every local-family provider (ollama, lmstudio,
-        mlx, local, auto), PIPELINE_LOCAL_MODEL_DEFAULT, else
-        PIPELINE_DEFAULT_MODEL, else the local backend's own default constant
-        (app.backend_ollama's _LOCAL_DEFAULT_MODEL, imported lazily - see the
-        module docstring's CRITICAL ORDERING rule).
-        """
-        raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
-        backend = (raw_backend or "claude").strip().lower() or "claude"
-        if backend == "claude":
-            model = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
-        else:
-            if str(REPO_ROOT) not in sys.path:
-                sys.path.insert(0, str(REPO_ROOT))
-            from app.backend_ollama import _LOCAL_DEFAULT_MODEL
-
-            model = os.environ.get(
-                "PIPELINE_LOCAL_MODEL_DEFAULT",
-                os.environ.get("PIPELINE_DEFAULT_MODEL", _LOCAL_DEFAULT_MODEL),
-            )
-        if os.environ.get("PIPELINE_BACKEND_DISPATCH") is None:
-            source = (
-                "defaults (PIPELINE_BACKEND_DISPATCH unset -> claude, "
-                "matching pipeline/dispatch.py)"
-            )
-        else:
-            source = "env var PIPELINE_BACKEND_DISPATCH"
-        return backend, model, source
-
-    def _advise_if_registry_differs(provider: str) -> None:
-        """Best-effort ADVISORY note about the registry's roles.dispatch entry.
-
-        The registry entry never gates dispatch (see
-        _default_dispatch_resolver), but if it names a DIFFERENT provider
-        than the one dispatch will actually use, the operator deserves a
-        one-line heads-up that the two signals have drifted apart - the
-        entry only feeds the dashboard display and decompose-time sizing.
-        Purely informational: swallows every failure (missing module,
-        malformed registry) after a one-line warning and NEVER exits
-        nonzero. CRITICAL ORDERING: app.role_registry is imported HERE,
-        not at module scope (see the module docstring).
-        """
-        if str(REPO_ROOT) not in sys.path:
-            sys.path.insert(0, str(REPO_ROOT))
-        try:
-            from app.role_registry import load_registry
-
-            role_cfg = load_registry().get("roles", {}).get("dispatch", {})
-            registry_provider = (role_cfg.get("provider") or "").strip().lower()
-            if not registry_provider or registry_provider == provider:
-                return
-            print(
-                f"smoke: note (advisory, does not affect this check): "
-                f"model_registry.json's roles.dispatch entry names provider "
-                f"{registry_provider!r}, but dispatch actually resolves via "
-                f"PIPELINE_BACKEND_DISPATCH to {provider!r} - the registry "
-                "entry only feeds the dashboard display and decompose-time "
-                "sizing, never real dispatch."
-            )
-        except Exception as exc:  # noqa: BLE001 - advisory only, never gating
-            print(
-                "smoke: note (advisory registry check skipped): "
-                f"{exc}",
-                file=sys.stderr,
-            )
-
-    try:
-        provider, model, source = (
-            resolver if resolver is not None else _default_dispatch_resolver
-        )()
-    except _DispatchResolutionError as exc:
-        print(
-            "smoke: refusing to run: the dispatch backend could not be "
-            f"resolved: {exc}",
-            file=sys.stderr,
-        )
-        print(
-            "Fix: choose a provider explicitly - set "
-            "PIPELINE_BACKEND_DISPATCH to one of the recognised providers "
-            f"({', '.join(recognized)}); e.g. PIPELINE_BACKEND_DISPATCH=claude.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2) from exc
-    except Exception as exc:  # a broken resolver must fail closed, not traceback
-        print(
-            "smoke: refusing to run: the dispatch backend could not be "
-            f"resolved: {exc!r}",
-            file=sys.stderr,
-        )
-        raise SystemExit(2) from exc
-
-    normalized_provider = provider.strip().lower()
-    if normalized_provider == "" or normalized_provider not in recognized:
-        _reject(provider, normalized_provider, source)
-    if normalized_provider != "claude" and _is_registry_dispatch_source(source):
-        _registry_routed_refusal(normalized_provider, model)
-
-    # ANNOUNCE and PROCEED: one prominent line naming the resolved provider,
-    # the resolved model and the source of the choice (the triple real
-    # dispatch resolves), then continue - the smoke is provider-neutral.
-    print(
-        f"smoke: validating dispatch on {normalized_provider}/{model} "
-        f"(source: {source})"
-    )
-    _advise_if_registry_differs(normalized_provider)
-    return normalized_provider, model, source
 
 
 def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
@@ -476,6 +216,233 @@ def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
         "WORKTREE_ROOT": worktree_root,
         "TARGET_REPO": target_repo,
     }
+
+
+def _announce_dispatch_backend(
+    value: str | None = None,
+    *,
+    resolver: Callable[[], tuple[str, str, str]] | None = None,
+) -> tuple[str, str, str]:
+    """Announce the resolved dispatch provider and proceed; fail closed on junk.
+
+    The smoke is provider-neutral: it decouples from any single provider, so
+    the operator chooses. The enemy is SILENCE, not the provider - so this
+    guard ANNOUNCES the resolved (provider, model, source) triple on one
+    prominent line and proceeds, for every DECLARED provider (claude,
+    ollama, lmstudio, mlx, local, auto). Exit 2 is reserved for a genuinely
+    unusable value: an empty/whitespace-only string, or an unrecognised
+    provider name - a real configuration error that must still fail closed.
+
+    Two modes:
+
+    *value* handed in as a string (pure, no I/O): the legacy env-value
+    check. Normalization mirrors the dispatch chain exactly
+    (``.strip().lower()`` - see pipeline/dispatch.py and pipeline/advance.py).
+    Empty/whitespace-only strings and unknown values exit 2 (naming the
+    offending value and listing the recognised providers); every declared
+    provider passes. This mode never mutates os.environ.
+
+    *value* left unset (what ``main()``/``run_smoke()`` use): the guard
+    resolves the backend the way real dispatch actually does - via
+    *resolver* (a callable returning ``(provider, model, source)``; the
+    default resolver mirrors pipeline/dispatch.py's
+    ``_resolve_dispatch_target`` and pipeline/preflight.py's check c:
+    ``app.role_registry.resolve_role("dispatch")`` decides, so the
+    registry's roles.dispatch entry is the source of truth for the dispatch
+    role and outranks the ``PIPELINE_BACKEND_<ROLE>`` env var, which only
+    fills the empty state; plan/story role_config overrides rank above the
+    registry, and an unusable registry entry fails open to the env var and
+    then "claude" exactly as pipeline/dispatch.py does). Exit 2 when the
+    resolved provider is empty/whitespace-only or unrecognised; the printed
+    message names the offending value AND where the choice came from so the
+    operator can change it. The claude-CLI check is NOT part of this guard:
+    it lives with the callers and applies only when the resolved provider
+    is claude (a local-backend operator does not need the claude CLI).
+    This guard never mutates os.environ.
+
+    Returns the validated (provider, model, source) triple so callers can
+    name the validated backend in their own output.
+    """
+    recognized = ("claude", "ollama", "lmstudio", "mlx", "local", "auto")
+
+    def _reject(raw: str, provider: str, source: str) -> None:
+        """Fail closed on an unusable dispatch value: print + exit 2."""
+        if provider.strip() == "":
+            detail = "the resolved provider is empty"
+            if raw is not None and raw.strip() == "":
+                detail = "the value is empty or whitespace-only"
+        else:
+            detail = f"unrecognised provider {provider!r}"
+        message = (
+            f"smoke: unrecognised dispatch backend {raw!r} ({detail}); "
+            f"recognised providers: {', '.join(recognized)}"
+        )
+        print(message, file=sys.stderr)
+        print(
+            "Fix: set PIPELINE_BACKEND_DISPATCH to one of the recognised "
+            "providers above (e.g. PIPELINE_BACKEND_DISPATCH=claude), or "
+            "unset it to use the default.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    if value is not None:
+        raw = value
+        normalized = raw.strip().lower()
+        if normalized == "claude":
+            print("smoke: backend guard OK: PIPELINE_BACKEND_DISPATCH resolves to claude")
+            return normalized, "", "value argument"
+        if normalized == "" or normalized not in recognized:
+            _reject(raw, normalized, "value argument")
+        print(
+            f"smoke: validating dispatch on {normalized} (source: value argument)"
+        )
+        return normalized, "", "value argument"
+
+    def _default_dispatch_resolver() -> tuple[str, str, str]:
+        """Resolve the dispatch backend the way real dispatch actually does.
+
+        Mirrors pipeline/dispatch.py's ``_resolve_dispatch_target`` (the
+        resolver pipeline/preflight.py's check c calls fresh): the dispatch
+        role is resolved through ``app.role_registry.resolve_role("dispatch")``
+        - the registry's roles.dispatch entry is the source of truth for the
+        dispatch role and outranks the ``PIPELINE_BACKEND_<ROLE>`` env var,
+        which only fills the empty state; plan/story role_config overrides
+        rank above the registry. The provenance label comes from
+        pipeline/config_provenance.resolve_role_provenance, so the reported
+        source names the layer that actually won (registry, env var, plan
+        role_config or default) instead of always naming the env var.
+
+        Fail-open contract (same as pipeline/dispatch.py): a fresh clone
+        ships model_registry.json with no roles.dispatch entry, and a
+        malformed entry raises too - both degrade to the pre-registry
+        behaviour, the ``PIPELINE_BACKEND_DISPATCH`` env var (normalized
+        ``(raw or "claude").strip().lower() or "claude"``) and then
+        "claude", never a crash. The registry is loaded fresh and the
+        resolution is computed fresh on every call: nothing is memoized,
+        nothing is written back to os.environ or the registry, so the
+        result is a pure function of (registry, environ).
+
+        Returns (provider, model, source). The model is reported for operator
+        context only; it does not influence the pass/fail decision. When the
+        registry/plan supply no model, the fallback mirrors the model each
+        provider's dispatch chain actually uses: for claude,
+        PIPELINE_DEFAULT_MODEL, else "sonnet" (pipeline/config.py's
+        DEFAULT_MODEL); for every local-family provider (ollama, lmstudio,
+        mlx, local, auto), PIPELINE_LOCAL_MODEL_DEFAULT, else
+        PIPELINE_DEFAULT_MODEL, else the local backend's own default constant
+        (app.backend_ollama's _LOCAL_DEFAULT_MODEL, imported lazily - see the
+        module docstring's CRITICAL ORDERING rule).
+        """
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from app.role_registry import RoleRegistryError, load_registry, resolve_role
+        from pipeline.config_provenance import resolve_role_provenance
+
+        def _model_fallback_for(provider: str) -> str:
+            if provider == "claude":
+                return os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
+            if str(REPO_ROOT) not in sys.path:
+                sys.path.insert(0, str(REPO_ROOT))
+            from app.backend_ollama import _LOCAL_DEFAULT_MODEL
+
+            return os.environ.get(
+                "PIPELINE_LOCAL_MODEL_DEFAULT",
+                os.environ.get("PIPELINE_DEFAULT_MODEL", _LOCAL_DEFAULT_MODEL),
+            )
+
+        def _env_or_default_source() -> str:
+            if os.environ.get("PIPELINE_BACKEND_DISPATCH") is None:
+                return (
+                    "defaults (PIPELINE_BACKEND_DISPATCH unset -> claude, "
+                    "matching pipeline/dispatch.py)"
+                )
+            return "env var PIPELINE_BACKEND_DISPATCH"
+
+        def _provenance_source(provider_source: str | None) -> str:
+            if provider_source == "model_registry.json":
+                return "model_registry.json (roles.dispatch)"
+            if provider_source == "env:PIPELINE_BACKEND_DISPATCH":
+                return "env var PIPELINE_BACKEND_DISPATCH"
+            if provider_source == "plan_role_config":
+                return "plan role_config"
+            return (
+                "defaults (PIPELINE_BACKEND_DISPATCH unset -> claude, "
+                "matching pipeline/dispatch.py)"
+            )
+
+        try:
+            registry = load_registry()
+        except RoleRegistryError:
+            registry = {}
+        try:
+            provenance = resolve_role_provenance(
+                "dispatch", registry=registry, environ=os.environ
+            )
+        except Exception:  # noqa: BLE001 - the label is diagnostic only
+            provenance = {}
+        known_provider = (provenance.get("provider") or "").strip().lower()
+
+        try:
+            resolution = resolve_role(
+                "dispatch",
+                registry=registry,
+                model_fallback=lambda: _model_fallback_for(known_provider),
+                environ=os.environ,
+            )
+        except RoleRegistryError as exc:
+            # Fail open exactly like pipeline/dispatch.py: a fresh clone
+            # (no roles.dispatch entry anywhere) or a poisoned entry (a
+            # model named but not declared under its provider) degrades to
+            # the pre-registry behaviour - the env var, then "claude" - with
+            # no registry model. Stay loud about the poisoned shape: a load
+            # failure is proof the entry exists and is unusable.
+            print(
+                "smoke: model_registry.json's roles.dispatch entry could not "
+                f"resolve the dispatch role ({exc}); falling back to "
+                "PIPELINE_BACKEND_DISPATCH, then claude.",
+                file=sys.stderr,
+            )
+            backend = os.environ.get("PIPELINE_BACKEND_DISPATCH") or "claude"
+            backend = backend.strip().lower() or "claude"
+            return backend, _model_fallback_for(backend), _env_or_default_source()
+
+        return (
+            resolution.provider,
+            resolution.model,
+            _provenance_source(provenance.get("provider_source")),
+        )
+
+    try:
+        provider, model, source = (
+            resolver if resolver is not None else _default_dispatch_resolver
+        )()
+    except Exception as exc:  # a broken resolver must fail closed, not traceback
+        print(
+            "smoke: refusing to run: the dispatch backend could not be "
+            f"resolved: {exc!r}",
+            file=sys.stderr,
+        )
+        print(
+            "Fix: choose a provider explicitly - set "
+            "PIPELINE_BACKEND_DISPATCH to one of the recognised providers "
+            f"({', '.join(recognized)}); e.g. PIPELINE_BACKEND_DISPATCH=claude.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+
+    normalized_provider = provider.strip().lower()
+    if normalized_provider == "" or normalized_provider not in recognized:
+        _reject(provider, normalized_provider, source)
+
+    # ANNOUNCE and PROCEED: one prominent line naming the resolved provider,
+    # the resolved model and the source of the choice (the triple real
+    # dispatch resolves), then continue - the smoke is provider-neutral.
+    print(
+        f"smoke: validating dispatch on {normalized_provider}/{model} "
+        f"(source: {source})"
+    )
+    return normalized_provider, model, source
 
 
 def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:

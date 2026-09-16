@@ -11,8 +11,10 @@ These tests pin the fixed contract:
 
 - the guard resolves the dispatch role through the same chain production
   uses (``app.role_registry.resolve_role``), not the raw env var;
-- exit codes are unchanged: 0 pass, 1 claude CLI missing, 2 the resolved
-  backend is local-family/unknown (or cannot be resolved at all);
+- exit codes: 0 pass, 1 claude CLI missing, 2 the resolved provider is
+  empty or unrecognised. A local-family provider resolved from the
+  registry is a legitimate backend (SRR-1: the registry outranks
+  PIPELINE_BACKEND_DISPATCH) and is announced, not refused;
 - the printed message names the resolved provider AND model AND where the
   choice came from (env var vs registry), so the operator can change it;
 - ``--check-preconditions`` still creates nothing on disk when the guard
@@ -65,22 +67,24 @@ def guard(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# effective resolution: env unset + registry routes dispatch away from claude
+# effective resolution: env unset + a registry-routed dispatch is announced
 # --------------------------------------------------------------------------
-def test_env_unset_registry_routes_dispatch_to_ollama_exits_2(guard, capsys):
-    """The headline bug: registry-routed local provider with the env var
-    unset must exit 2 (it used to print OK and exit 0)."""
+def test_env_unset_registry_routes_dispatch_to_ollama_is_announced(
+    guard, capsys
+):
+    """The headline bug, re-pinned by SRR-1: with the env var unset, a
+    registry-routed ollama dispatch backend IS the real backend (the
+    registry outranks PIPELINE_BACKEND_DISPATCH since REG-4), so the guard
+    announces it - naming provider, model and source - instead of
+    refusing it. (Before #803 it printed claude/OK; between #803 and
+    SRR-1 it exited 2; SRR-1 made the registry authoritative.)
+    """
     mod = guard
 
     def _registry_routes_ollama():
         return ("ollama", "glm-5.3-flash:cloud", REGISTRY_SOURCE)
 
-    with pytest.raises(SystemExit) as excinfo:
-        mod._announce_dispatch_backend(resolver=_registry_routes_ollama)
-    assert excinfo.value.code == 2, (
-        "a registry-routed ollama dispatch backend must exit 2, got "
-        f"{excinfo.value.code!r}"
-    )
+    mod._announce_dispatch_backend(resolver=_registry_routes_ollama)
     captured = capsys.readouterr()
     text = captured.out + captured.err
     assert "ollama" in text, f"message must name the provider; got: {text!r}"
@@ -89,9 +93,6 @@ def test_env_unset_registry_routes_dispatch_to_ollama_exits_2(guard, capsys):
     )
     assert "model_registry.json" in text, (
         f"message must say WHERE the choice came from; got: {text!r}"
-    )
-    assert "claude" in text.lower(), (
-        f"message must tell the operator how to fix it; got: {text!r}"
     )
 
 
@@ -176,13 +177,18 @@ def test_unknown_provider_exits_2_and_names_the_value(guard, capsys):
     )
 
 
-def test_local_family_provider_from_registry_exits_2(guard, capsys):
+def test_local_family_provider_from_registry_is_announced_not_refused(
+    guard, capsys
+):
+    """A local-family provider resolved from the registry is a legitimate
+    backend under the registry-authoritative contract (SRR-1/REG-4): the
+    guard announces it and returns instead of exiting 2. Only an empty or
+    unrecognised provider still exits 2.
+    """
     mod = guard
-    with pytest.raises(SystemExit) as excinfo:
-        mod._announce_dispatch_backend(
-            resolver=lambda: ("lmstudio", "qwen3:8b", REGISTRY_SOURCE)
-        )
-    assert excinfo.value.code == 2
+    mod._announce_dispatch_backend(
+        resolver=lambda: ("lmstudio", "qwen3:8b", REGISTRY_SOURCE)
+    )
     text = capsys.readouterr()
     text = text.out + text.err
     assert "lmstudio" in text and "model_registry.json" in text
@@ -220,7 +226,7 @@ def test_check_preconditions_creates_nothing_on_disk(
     with pytest.raises(SystemExit) as excinfo:
         mod.main(
             ["--check-preconditions"],
-            resolver=lambda: ("ollama", "glm-5.3-flash:cloud", REGISTRY_SOURCE),
+            resolver=lambda: ("bogus-provider", "some-model", REGISTRY_SOURCE),
         )
     assert excinfo.value.code == 2
     assert not mkdtemp_calls, (

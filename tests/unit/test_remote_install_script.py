@@ -462,3 +462,367 @@ def test_readme_manual_clone_steps_are_preserved() -> None:
         "the existing manual clone step was removed"
     )
     assert "scripts/install.sh" in text
+
+
+# --------------------------------------------------------------------------
+# 9. spec hardening: fail-fast, defaults, update semantics, safety
+# --------------------------------------------------------------------------
+
+
+def test_script_sets_fail_fast_shell_options(script_path: Path) -> None:
+    text = script_path.read_text(encoding="utf-8")
+    assert "set -euo pipefail" in text, (
+        "the script must start with `set -euo pipefail` so any failure aborts"
+    )
+
+
+def test_script_has_no_destructive_or_interactive_commands(script_path: Path) -> None:
+    text = script_path.read_text(encoding="utf-8")
+    for forbidden in ("reset --hard", "rm -rf", "push --force", "push -f", "read -p"):
+        assert forbidden not in text, (
+            f"the installer must never use {forbidden!r} (fail-securely requirement)"
+        )
+
+
+def test_script_has_no_telemetry_or_extra_network_calls(script_path: Path) -> None:
+    # Ignore comments: the header legitimately documents the `curl | bash` usage.
+    code_lines = [
+        line
+        for line in script_path.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    for forbidden in ("curl ", "wget ", "nc ", "telemetry", "analytics"):
+        assert forbidden not in code, (
+            f"the installer must have no behavior beyond git clone/pull and "
+            f"install.sh -- found {forbidden!r}"
+        )
+
+
+@requires_git
+def test_default_install_dir_is_home_dot_fagan(
+    script_path: Path, fixture_repo: Path, tmp_path: Path
+) -> None:
+    # FAGAN_INSTALL_DIR deliberately unset: the documented default must apply.
+    env = _base_env(tmp_path, FAGAN_REPO_URL=fixture_repo)
+
+    result = _run_script(script_path, env)
+
+    assert result.returncode == 0, result.stderr
+    default_dir = tmp_path / "home" / ".fagan"
+    assert (default_dir / ".git").is_dir(), "default install dir is not $HOME/.fagan"
+    assert (default_dir / ".install_ran").is_file()
+
+
+@pytest.fixture
+def arg_recording_repo(tmp_path: Path) -> Path:
+    """A fixture remote whose install.sh records the arguments it was handed."""
+    if GIT is None:
+        pytest.skip("git is not installed")
+    repo = tmp_path / "arg-repo"
+    repo.mkdir()
+    _git(["init", "-q"], cwd=repo)
+    scripts = repo / "scripts"
+    scripts.mkdir()
+    install = scripts / "install.sh"
+    install.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf "%s" "$*" > "$(dirname "$0")/../.install_args"\n',
+        encoding="utf-8",
+    )
+    install.chmod(0o755)
+    (repo / "README.md").write_text("# fixture repo\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=repo)
+    _git(
+        [
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test Fixture",
+            "commit",
+            "-q",
+            "-m",
+            "initial commit",
+        ],
+        cwd=repo,
+    )
+    return repo
+
+
+@requires_git
+def test_install_sh_is_run_with_no_flags(
+    script_path: Path, arg_recording_repo: Path, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "install"
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=arg_recording_repo, FAGAN_INSTALL_DIR=install_dir
+    )
+
+    result = _run_script(script_path, env)
+
+    assert result.returncode == 0, result.stderr
+    args_file = install_dir / ".install_args"
+    assert args_file.is_file(), "the cloned install.sh did not run"
+    assert args_file.read_text(encoding="utf-8") == "", (
+        "the end-user install path must run install.sh with no flags (never --dev)"
+    )
+
+
+@requires_git
+def test_rerun_fast_forwards_new_commits(
+    script_path: Path, fixture_repo: Path, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "install"
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=fixture_repo, FAGAN_INSTALL_DIR=install_dir
+    )
+    first = _run_script(script_path, env)
+    assert first.returncode == 0, first.stderr
+
+    (fixture_repo / "NEW_FILE.txt").write_text("new\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=fixture_repo)
+    _git(
+        [
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test Fixture",
+            "commit",
+            "-q",
+            "-m",
+            "new commit",
+        ],
+        cwd=fixture_repo,
+    )
+
+    second = _run_script(script_path, env)
+
+    assert second.returncode == 0, second.stderr
+    assert (install_dir / "NEW_FILE.txt").is_file(), (
+        "re-run must `git pull --ff-only` the existing checkout, not skip the update"
+    )
+
+
+@requires_git
+def test_non_fast_forward_pull_fails_and_is_not_swallowed(
+    script_path: Path, fixture_repo: Path, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "install"
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=fixture_repo, FAGAN_INSTALL_DIR=install_dir
+    )
+    first = _run_script(script_path, env)
+    assert first.returncode == 0, first.stderr
+
+    # Diverge locally ...
+    (install_dir / "README.md").write_text("local divergence\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=install_dir)
+    _git(
+        [
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test Fixture",
+            "commit",
+            "-q",
+            "-m",
+            "local divergence",
+        ],
+        cwd=install_dir,
+    )
+    # ... and remotely, on the same file.
+    (fixture_repo / "README.md").write_text("remote divergence\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=fixture_repo)
+    _git(
+        [
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test Fixture",
+            "commit",
+            "-q",
+            "-m",
+            "remote divergence",
+        ],
+        cwd=fixture_repo,
+    )
+
+    result = _run_script(script_path, env)
+
+    assert result.returncode != 0, (
+        "a non-fast-forward pull must fail the script rather than be swallowed:\n"
+        f"{result.stdout}"
+    )
+    assert result.stderr.strip(), "the failed pull must not be swallowed silently"
+
+
+@requires_git
+def test_failed_clone_leaves_no_partial_install_dir(
+    script_path: Path, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "install"
+    missing_remote = tmp_path / "does-not-exist.git"
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=missing_remote, FAGAN_INSTALL_DIR=install_dir
+    )
+
+    result = _run_script(script_path, env)
+
+    assert result.returncode != 0, "cloning a nonexistent remote must fail"
+    assert result.stderr.strip(), "a failed clone must report on stderr"
+    assert not install_dir.exists(), (
+        "a failed clone must not leave a half-cloned directory behind that a "
+        "re-run would misread as a non-git conflict"
+    )
+
+
+@requires_git
+def test_success_summary_names_install_dir_and_readme(
+    script_path: Path, fixture_repo: Path, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "install"
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=fixture_repo, FAGAN_INSTALL_DIR=install_dir
+    )
+
+    result = _run_script(script_path, env)
+
+    assert result.returncode == 0, result.stderr
+    assert str(install_dir) in result.stdout, (
+        "the success summary must name the resolved FAGAN_INSTALL_DIR"
+    )
+    summary = result.stdout.lower()
+    assert "readme.md" in summary, (
+        "the success summary must point the user at FAGAN_INSTALL_DIR/README.md "
+        "for next steps"
+    )
+    # ... and must NOT invent specific next-step commands (that is the README
+    # pointer story's job).
+    for invented in ("step 2", "register the mcp server"):
+        assert invented not in summary, (
+            f"the summary must not invent the specific next step {invented!r}; "
+            "point at README.md instead"
+        )
+
+
+@requires_git
+def test_runs_non_interactively_when_piped_into_bash(
+    script_path: Path, fixture_repo: Path, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "install"
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=fixture_repo, FAGAN_INSTALL_DIR=install_dir
+    )
+
+    # Exactly how `curl -fsSL <url> | bash` feeds the script: bytes on stdin.
+    result = subprocess.run(
+        [BASH],
+        input=script_path.read_text(encoding="utf-8"),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+        timeout=180,
+    )
+
+    assert result.returncode == 0, f"stderr:\n{result.stderr}\nstdout:\n{result.stdout}"
+    assert (install_dir / ".git").is_dir()
+    assert (install_dir / ".install_ran").is_file()
+
+
+@pytest.fixture
+def repo_without_install_sh(tmp_path: Path) -> Path:
+    """A fixture remote that has no scripts/install.sh at all."""
+    if GIT is None:
+        pytest.skip("git is not installed")
+    repo = tmp_path / "no-install-repo"
+    repo.mkdir()
+    _git(["init", "-q"], cwd=repo)
+    (repo / "README.md").write_text("# fixture repo\n", encoding="utf-8")
+    _git(["add", "-A"], cwd=repo)
+    _git(
+        [
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test Fixture",
+            "commit",
+            "-q",
+            "-m",
+            "initial commit",
+        ],
+        cwd=repo,
+    )
+    return repo
+
+
+@requires_git
+def test_repo_without_install_sh_fails_nonzero(
+    script_path: Path, repo_without_install_sh: Path, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "install"
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=repo_without_install_sh, FAGAN_INSTALL_DIR=install_dir
+    )
+
+    result = _run_script(script_path, env)
+
+    assert result.returncode != 0, (
+        "a checkout without scripts/install.sh must fail, not report success"
+    )
+    assert result.stderr.strip(), "the missing install.sh must be reported on stderr"
+
+
+@requires_git
+def test_non_git_conflict_exits_one_and_writes_only_to_stderr(
+    script_path: Path, fixture_repo: Path, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    (install_dir / "keepme.txt").write_text("precious\n", encoding="utf-8")
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=fixture_repo, FAGAN_INSTALL_DIR=install_dir
+    )
+
+    result = _run_script(script_path, env)
+
+    assert result.returncode == 1, f"expected exit 1, got {result.returncode}"
+    assert result.stderr.strip(), "the conflict must be reported on stderr"
+    assert "error" not in result.stdout.lower(), "errors belong on stderr, not stdout"
+    assert (install_dir / "keepme.txt").read_text(encoding="utf-8") == "precious\n"
+
+
+@requires_git
+def test_missing_git_exits_one_with_stderr_only(
+    script_path: Path, fixture_repo: Path, tmp_path: Path
+) -> None:
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+    install_dir = tmp_path / "install"
+    env = _base_env(
+        tmp_path, FAGAN_REPO_URL=fixture_repo, FAGAN_INSTALL_DIR=install_dir
+    )
+    env["PATH"] = str(empty_path)
+
+    result = _run_script(script_path, env)
+
+    assert result.returncode == 1, f"expected exit 1, got {result.returncode}"
+    assert result.stderr.strip(), "missing git must be reported on stderr"
+    assert "git" in result.stderr.lower()
+    assert "error" not in result.stdout.lower(), "errors belong on stderr, not stdout"
+    assert not install_dir.exists(), "must fail before attempting anything else"
+
+
+def test_shellcheck_is_clean_when_available(script_path: Path) -> None:
+    shellcheck = shutil.which("shellcheck")
+    if shellcheck is None:
+        pytest.skip("shellcheck is not installed in this environment")
+    result = subprocess.run(
+        [shellcheck, str(script_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

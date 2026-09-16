@@ -17,10 +17,10 @@
 #
 # Operator-local overrides (.dashboard.env, gitignored — see
 # .dashboard.env.example): sourced with allexport at start when present,
-# so e.g. PIPELINE_BACKEND_CHAT / PIPELINE_BACKEND_DECOMPOSE /
-# PIPELINE_LOCAL_MODEL_DEFAULT survive a restart from a bare shell.
+# so operator-set vars survive a restart from a bare shell.
 # Sourcing overwrites caller-exported env — the file is durable operator
-# intent.
+# intent.  Role routing now lives in model_registry.json; see
+# scripts/choose_providers.py.
 #
 # Artifacts in repo root:
 #   .dashboard.<port>.pid   pid of the running uvicorn process (master when
@@ -43,8 +43,7 @@ else PYBIN=""; fi
 
 # Operator-local config overrides (gitignored): the shared pipeline-env
 # helper sources .pipeline.env then .dashboard.env with allexport so every
-# var reaches the uvicorn process env — e.g. PIPELINE_BACKEND_CHAT /
-# PIPELINE_BACKEND_DECOMPOSE / PIPELINE_LOCAL_MODEL_DEFAULT.
+# var reaches the uvicorn process env.
 # Sourcing overwrites caller-exported vars, so the file is durable operator intent.
 . "$ROOT/scripts/pipeline-env.sh"
 

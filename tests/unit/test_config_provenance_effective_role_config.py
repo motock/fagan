@@ -573,7 +573,12 @@ class TestModelSourceProviderMismatchFallthrough:
         """NO REGRESSION (guards PR #255): a role with no model configured
         anywhere still returns its resolved provider and provider_source with
         model_source == 'unset' and a non-None error. Provider fields must NOT
-        be blanked."""
+        be blanked.
+
+        REG-4 note: with the registry pinning roles.dispatch.provider=ollama,
+        the registry (not the env var) is the layer that wins, so the error
+        path must keep the registry-derived provider and label it
+        model_registry.json with restart_required False."""
         mod = _import_module()
         reg = _registry_with_ollama_dispatch()
         environ = {"PIPELINE_BACKEND_DISPATCH": "local"}

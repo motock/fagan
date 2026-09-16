@@ -23,7 +23,7 @@ The story brief therefore requires:
 The plan dict lives INLINE inside ``run_smoke()``: the script's footprint
 guard (tests/unit/test_smoke_getting_started.py::
 test_at_most_the_three_allowed_top_level_functions) pins the script's
-top-level defs to {_prepare_scratch_env, _require_claude_backend, run_smoke,
+top-level defs to {_prepare_scratch_env, _announce_dispatch_backend, run_smoke,
 main}, so the plan builder cannot be a module-level def (or lambda). The
 ``_build_plan`` helper below extracts the inline ``plan = {...}`` literal
 from run_smoke's source (ast + literal_eval, with ``str(target_repo)`` and
@@ -64,7 +64,7 @@ def _load_script():
         pytest.fail(
             f"scripts/smoke_getting_started.py not found at {SCRIPT_PATH}. "
             "Create it (stdlib + repo imports only, <=3 new functions: "
-            "_prepare_scratch_env, _require_claude_backend, run_smoke/main)."
+            "_prepare_scratch_env, _announce_dispatch_backend, run_smoke/main)."
         )
     mod_name = "smoke_getting_started_under_test"
     if mod_name in sys.modules:
@@ -113,7 +113,7 @@ def _build_plan(repo_root: str = "/tmp/x") -> dict:
     The plan dict lives inline inside ``run_smoke()`` (the script's footprint
     guard, tests/unit/test_smoke_getting_started.py::
     test_at_most_the_three_allowed_top_level_functions, pins top-level defs
-    to {_prepare_scratch_env, _require_claude_backend, run_smoke, main}, so
+    to {_prepare_scratch_env, _announce_dispatch_backend, run_smoke, main}, so
     the builder cannot be a module-level def). This helper parses run_smoke's
     source, finds the ``plan = {...}`` assignment, substitutes ``target_repo``
     with *repo_root* (the same substitution run_smoke performs) and evaluates
@@ -161,7 +161,7 @@ def test_plan_is_built_inline_inside_run_smoke():
 
     tests/unit/test_smoke_getting_started.py::
     test_at_most_the_three_allowed_top_level_functions pins the script's
-    top-level defs to {_prepare_scratch_env, _require_claude_backend,
+    top-level defs to {_prepare_scratch_env, _announce_dispatch_backend,
     run_smoke, main}; the plan builder therefore lives inside run_smoke()
     as the ``plan = {...}`` literal (no module-level build_smoke_plan def,
     no module-level lambda).
@@ -170,7 +170,7 @@ def test_plan_is_built_inline_inside_run_smoke():
     assert getattr(module, "build_smoke_plan", None) is None, (
         "build_smoke_plan must NOT be a module-level def: the script's "
         "footprint guard pins top-level defs to {_prepare_scratch_env, "
-        "_require_claude_backend, run_smoke, main}"
+        "_announce_dispatch_backend, run_smoke, main}"
     )
     source = inspect.getsource(module.run_smoke)
     assert "plan = {" in source, (
@@ -333,7 +333,7 @@ def test_run_smoke_builds_the_plan_inline_without_acceptance():
     assert "plan = {" in source, (
         "run_smoke() must build the plan dict inline (the script's footprint "
         "guard pins top-level defs to {_prepare_scratch_env, "
-        "_require_claude_backend, run_smoke, main}, so no module-level "
+        "_announce_dispatch_backend, run_smoke, main}, so no module-level "
         "builder may exist)"
     )
     assert '"acceptance"' not in source, (

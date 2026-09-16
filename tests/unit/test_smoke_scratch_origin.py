@@ -32,7 +32,7 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "smoke_getting_started.py"
 # live INSIDE _prepare_scratch_env (a nested closure is fine).
 ALLOWED_FUNCTIONS = {
     "_prepare_scratch_env",
-    "_require_claude_backend",
+    "_announce_dispatch_backend",
     "run_smoke",
     "main",
 }

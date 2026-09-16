@@ -1,6 +1,6 @@
 """Regression test for the reviewer's Blocking finding #1 on scripts/smoke_getting_started.py.
 
-`_require_claude_backend()` (no `value=` argument) is supposed to guard the
+`_announce_dispatch_backend()` (no `value=` argument) is supposed to guard the
 same thing real dispatch actually decides. But real dispatch NEVER consults
 `app.role_registry.resolve_role("dispatch")` for provider selection -
 `pipeline/dispatch.py`, `pipeline/advance.py`, and `pipeline/preflight.py`
@@ -8,7 +8,7 @@ all read the raw `PIPELINE_BACKEND_DISPATCH` env var directly
 (`.strip().lower()`, default `"claude"`) and never call `resolve_role`.
 
 The current implementation's `_default_dispatch_resolver` (nested inside
-`_require_claude_backend`, scripts/smoke_getting_started.py:128-176) calls
+`_announce_dispatch_backend`, scripts/smoke_getting_started.py:128-176) calls
 `resolve_role("dispatch", ...)`, whose precedence chain falls through to
 `model_registry.json`'s `roles.dispatch` entry when the env var is unset.
 That entry is a legitimate, real-world configuration for two OTHER,
@@ -87,7 +87,7 @@ def test_guard_ignores_registry_dispatch_entry_when_env_var_unset(monkeypatch, c
     )
 
     try:
-        mod._require_claude_backend()
+        mod._announce_dispatch_backend()
     except SystemExit as exc:
         pytest.fail(
             "with PIPELINE_BACKEND_DISPATCH unset, the guard must resolve "

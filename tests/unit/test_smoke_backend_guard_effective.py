@@ -99,14 +99,23 @@ def test_env_unset_registry_routes_dispatch_to_ollama_is_announced(
 def test_env_unset_nothing_configured_tells_operator_to_choose_provider(
     guard, capsys
 ):
-    """Nothing configured anywhere must NOT silently pass as a claude
-    default: the guard's message must tell the operator to choose a
-    provider (and how), exiting 2.
+    """When the dispatch role cannot be resolved at all - the resolver
+    raising ``app.role_registry.RoleRegistryError``, the production error
+    for "no model configured (plan_role_config, registry, and the
+    caller's fallback are all empty)" - the guard must fail closed
+    (exit 2), never traceback, and its message must tell the operator to
+    choose a provider and name PIPELINE_BACKEND_DISPATCH as the concrete
+    knob. (The resolver's own empty-state fail-open - env var, then
+    claude, mirroring pipeline/dispatch.py - is pinned in
+    test_smoke_resolver_matches_dispatch.py; this pins the guard's
+    contract for a resolver that raises. Re-pinned by SRR-1 review: the
+    pre-registry _DispatchResolutionError no longer exists.)
     """
     mod = guard
+    from app.role_registry import RoleRegistryError
 
     def _nothing_configured():
-        raise mod._DispatchResolutionError(
+        raise RoleRegistryError(
             "role 'dispatch': no model configured (plan_role_config, "
             "registry, and the caller's fallback are all empty)"
         )
@@ -118,7 +127,7 @@ def test_env_unset_nothing_configured_tells_operator_to_choose_provider(
     text = captured.out + captured.err
     lowered = text.lower()
     assert "choose" in lowered and "provider" in lowered, (
-        "message must tell the operator to choose a provider; got: {text!r}"
+        f"message must tell the operator to choose a provider; got: {text!r}"
     )
     assert "PIPELINE_BACKEND_DISPATCH" in text, (
         f"message must name a concrete way to choose it; got: {text!r}"

@@ -328,15 +328,30 @@ def test_backend_guard_normalizes_case_and_whitespace(value):
         "lmstudio",
         "mlx",
         "local",
-        "",
-        "   ",
-        "bogus",
         "OLLAMA",
         " auto ",
     ],
 )
-def test_backend_guard_rejects_local_family_and_unknown_values(value):
-    """Every local-family value - and anything unrecognised - must exit 2.
+def test_backend_guard_accepts_every_declared_provider(value):
+    """Every DECLARED provider must now PASS the guard (no SystemExit).
+
+    The smoke no longer refuses a non-claude provider: it announces the
+    resolved provider/model/source and proceeds. Case/whitespace
+    normalisation (.strip().lower()) still applies.
+    """
+    mod = _load_script()
+    try:
+        mod._require_claude_backend(value)
+    except SystemExit as exc:
+        pytest.fail(
+            f"{value!r} is a declared provider and must pass the guard; "
+            f"got SystemExit({exc.code!r})"
+        )
+
+
+@pytest.mark.parametrize("value", ["", "   ", "bogus"])
+def test_backend_guard_still_rejects_empty_and_unknown_values(value):
+    """Empty/whitespace-only and unrecognised values must STILL exit 2.
 
     Fail closed: an empty or unknown PIPELINE_BACKEND_DISPATCH must never be
     silently treated as a working backend.
@@ -353,17 +368,18 @@ def test_backend_guard_rejects_local_family_and_unknown_values(value):
 def test_backend_guard_rejection_message_is_actionable(capsys):
     mod = _load_script()
     with pytest.raises(SystemExit):
-        mod._require_claude_backend("ollama")
+        mod._require_claude_backend("bogus")
     code = getattr(capsys, "_temp", None)
     captured = capsys.readouterr()
     message = f"{code}\n{captured.out}\n{captured.err}"
-    assert "ollama" in message, (
+    assert "bogus" in message, (
         f"rejection message must name the offending value; got: {message!r}"
     )
-    assert "claude" in message.lower(), (
-        "rejection message must tell the operator how to fix it "
-        f"(mention the claude backend); got: {message!r}"
-    )
+    for provider in ("claude", "ollama", "lmstudio", "mlx", "local", "auto"):
+        assert provider in message.lower(), (
+            "rejection message must list the recognised providers "
+            f"(missing {provider!r}); got: {message!r}"
+        )
 
 
 def test_backend_guard_reads_env_with_claude_default(monkeypatch):
@@ -378,12 +394,20 @@ def test_backend_guard_reads_env_with_claude_default(monkeypatch):
         )
 
 
-def test_backend_guard_reads_ollama_from_env(monkeypatch):
+def test_backend_guard_reads_ollama_from_env(monkeypatch, capsys):
     mod = _load_script()
     monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "ollama")
-    with pytest.raises(SystemExit) as excinfo:
+    try:
         mod._require_claude_backend()
-    assert excinfo.value.code == 2
+    except SystemExit as exc:
+        pytest.fail(
+            "PIPELINE_BACKEND_DISPATCH=ollama is a declared provider and must "
+            f"pass the guard; got SystemExit({exc.code!r})"
+        )
+    captured = capsys.readouterr()
+    assert "ollama" in (captured.out + captured.err).lower(), (
+        "the guard must announce the resolved provider 'ollama'"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -636,7 +660,7 @@ def test_help_exits_zero_and_advertises_precondition_mode():
     _precondition_flag_from_help()
 
 
-def test_precondition_mode_exits_2_on_local_backend_before_touching_plan_dir():
+def test_precondition_mode_exits_0_on_local_backend_before_touching_plan_dir():
     flag = _precondition_flag_from_help()
     plan_dir = REPO_ROOT / ".tmp-smoke-precondition-plan-guard"
     if plan_dir.exists():
@@ -649,15 +673,15 @@ def test_precondition_mode_exits_2_on_local_backend_before_touching_plan_dir():
         env=_subprocess_env({"PIPELINE_BACKEND_DISPATCH": "ollama"}),
         check=False,
     )
-    assert proc.returncode == 2, (
-        f"precondition mode must exit 2 under a local backend; got "
+    assert proc.returncode == 0, (
+        f"precondition mode must exit 0 under a declared local backend; got "
         f"{proc.returncode}\n{proc.stdout}\n{proc.stderr}"
     )
     assert "ollama" in (proc.stdout + proc.stderr).lower(), (
-        "exit-2 message must name the rejected backend"
+        "precondition mode must announce the resolved backend"
     )
     assert not plan_dir.exists(), (
-        "with PIPELINE_BACKEND_DISPATCH=ollama the script must exit 2 before "
+        "with PIPELINE_BACKEND_DISPATCH=ollama the script must exit before "
         "touching any plan dir"
     )
 

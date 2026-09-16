@@ -76,6 +76,7 @@ def _line_naming(text, *tokens):
 def _subprocess_env(extra=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith("PIPELINE_")}
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    env["PIPELINE_SKIP_ENV_FILE"] = "1"
     if extra:
         env.update(extra)
     return env

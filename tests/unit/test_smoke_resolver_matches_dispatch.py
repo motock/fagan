@@ -718,6 +718,7 @@ def test_fail_closed_scratch_guard_preserved():
 def _clean_env(extra: dict) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith("PIPELINE_")}
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    env["PIPELINE_SKIP_ENV_FILE"] = "1"
     env.update(extra)
     return env
 

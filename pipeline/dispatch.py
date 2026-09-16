@@ -106,21 +106,38 @@ def _dispatch_fallback_provider(plan_role_config: dict[str, Any] | None) -> str:
 
     Keeps the exact pre-registry priority - plan role_config, then the
     dispatch env var, then "claude" - without a raw env read here:
-    resolve_role applies the env var's own priority itself. Resolved against
-    an empty registry so a poisoned roles.dispatch entry never supplies the
-    provider, and with a sentinel model_fallback because resolve_role
-    raises when no model is configured anywhere and this path only needs
-    the provider (the sentinel model is discarded).
+    resolve_role applies the env var's own priority itself. The provider is
+    resolved against the REAL registry, so a provider-only roles.dispatch
+    entry (provider set, model absent) selects the registry provider instead
+    of falling through to "claude". The registry's MODEL pairing is never
+    trusted on this path - the sentinel model_fallback stands in for it and
+    is discarded - so a poisoned model can never crash dispatch. If the
+    registry entry is malformed (it names a model that is not declared
+    under its provider), resolve_role raises and this degrades to the
+    pre-registry resolution against an empty registry: plan role_config,
+    then the env var, then "claude".
     """
     plan_provider = ((plan_role_config or {}).get("dispatch") or {}).get("provider")
-    return role_registry.resolve_role(
-        "dispatch",
-        plan_role_config=(
-            {"dispatch": {"provider": plan_provider}} if plan_provider else None
-        ),
-        registry={"providers": {}, "roles": {}},
-        model_fallback=lambda: "unpinned",
-    ).provider
+    try:
+        return role_registry.resolve_role(
+            "dispatch",
+            plan_role_config=(
+                {"dispatch": {"provider": plan_provider}} if plan_provider else None
+            ),
+            model_fallback=lambda: "unpinned",
+        ).provider
+    except role_registry.RoleRegistryError:
+        # Malformed roles.dispatch entry: fall back to the pre-registry
+        # priority, resolved against an empty registry so the poisoned
+        # entry supplies nothing at all.
+        return role_registry.resolve_role(
+            "dispatch",
+            plan_role_config=(
+                {"dispatch": {"provider": plan_provider}} if plan_provider else None
+            ),
+            registry={"providers": {}, "roles": {}},
+            model_fallback=lambda: "unpinned",
+        ).provider
 
 
 def _resolve_dispatch_target(
@@ -150,17 +167,28 @@ def _resolve_dispatch_target(
     Model priority: story["model"] (the most specific pin - an escalation
     flip writes a concrete tag there) > the model resolve_role resolved
     (plan role_config, then the registry) > None, which leaves the driver's
-    own env default in charge exactly as before REG-1. A model belonging to
-    a provider that did NOT win is never returned: a claude dispatch must
-    never be handed an ollama tag.
+    own env default in charge exactly as before REG-1.
+
+    The registry's model pairing is only honoured when the registry's own
+    provider is the one that actually won (resolve_role already enforces
+    that pairing). story["model"] is returned UNCONDITIONALLY, though - it
+    is the most specific pin and is trusted as-is, so a story whose
+    story["model"] names a tag belonging to a provider that did NOT win
+    (e.g. {"persona": "security-engineer", "model": "glm-5.3-flash:cloud"}
+    resolving to a claude dispatch) returns ("claude",
+    "glm-5.3-flash:cloud"). Only the registry/plan-resolved model is
+    provider-checked: a claude dispatch is never handed an ollama tag that
+    came from the registry.
 
     Fail-open contract: a fresh clone ships model_registry.json with no
     roles.dispatch entry, so resolve_role raises RoleRegistryError (no model
     configured anywhere). That must degrade to the pre-registry behaviour -
     the env provider, then "claude", with no model - never crash dispatch.
-    The registry's own (poisoned) entry is not trusted for the provider
-    either: the provider is re-resolved against an empty registry, which
-    keeps the plan -> env -> "claude" priority without a raw env read.
+    The registry's MODEL pairing is not trusted on this path (the sentinel
+    model_fallback stands in for it and is discarded), but the registry's
+    PROVIDER still applies its normal priority, so a provider-only
+    roles.dispatch entry selects the registry provider rather than falling
+    through to "claude" - see _dispatch_fallback_provider.
 
     Shared with the per-story dispatch gate in pipeline/advance.py so the
     gate can never gate on one model while dispatch runs another.
@@ -490,7 +518,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # belongs to the backend that actually won (a claude dispatch is
         # never handed an ollama tag - _resolve_dispatch_target already
         # drops it, so dispatch_model is None there).
-        if not spec.get("model") and dispatch_model:
+        if not story.get("model") and dispatch_model:
             spec["model"] = dispatch_model
         # HARDEN-1: the executor must be told its cwd is authoritative on
         # EVERY dispatch - fresh or resumed - before any plan-authored brief
@@ -515,7 +543,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             and _count_in_progress_agents() > 0
         ):
             target_model = (
-                spec.get("model") or story.get("model") or dispatch_model
+                story.get("model") or dispatch_model or spec.get("model")
             )
             if target_model:
                 # spec["model"]/story["model"] may be an unresolved tier

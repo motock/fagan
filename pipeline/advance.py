@@ -154,6 +154,11 @@ _merge_gate_ci_status = _ServerRef("_merge_gate_ci_status")
 _merge_pr = _ServerRef("_merge_pr")
 _notify_user = _ServerRef("_notify_user")
 _rebase_and_push_for_merge = _ServerRef("_rebase_and_push_for_merge")
+# REG-1: the per-story dispatch gate resolves through _resolve_dispatch_target
+# (imported from pipeline.dispatch below), not through _resolve_dispatch_backend.
+# The name is still bound here because tests/unit/test_notification_event_names.py
+# monkeypatches advance._resolve_dispatch_backend; the gate no longer calls it, so
+# that stub is inert - its owner must update it (see the PR reply).
 _resolve_dispatch_backend = _ServerRef("_resolve_dispatch_backend")
 _reverify_acceptance = _ServerRef("_reverify_acceptance")
 _reverify_build = _ServerRef("_reverify_build")
@@ -332,7 +337,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
     with _scoped_repo_root(plan_name):
         _adjudicate_merges(plan_name, summary)
         # Per-story dispatch gate. The dispatch backend is resolved per-story
-        # (dispatch_story's own resolution, shared via _resolve_dispatch_backend),
+        # (dispatch_story's own resolution, shared via _resolve_dispatch_target),
         # so the gate must be per-story too: a :cloud-tagged model (served via
         # Ollama with zero local VRAM footprint) or a Claude-routed story must
         # never be blocked by the LOCAL free-memory floor, while an on-device
@@ -380,7 +385,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
             # `model` override still resolves to a concrete tag at dispatch
             # time, and that's the tag that determines its real footprint
             # (see _story_dispatch_is_on_device).
-            tag = story.get("model") or story.get("dispatched_model")
+            tag = story.get("model") or _story_model or story.get("dispatched_model")
             if tag and tag.endswith(":cloud"):
                 continue
             if tag:

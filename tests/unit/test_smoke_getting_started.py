@@ -706,8 +706,8 @@ def test_live_smoke_passes_and_leaves_real_plans_dir_untouched():
     assert "PASS" in (proc.stdout + proc.stderr).upper(), (
         f"PASS output must be printed; got:\n{proc.stdout}\n{proc.stderr}"
     )
-    assert "http" in (proc.stdout + proc.stderr).lower(), (
-        "PASS output must include the PR URL"
+    assert "tests_passed" in (proc.stdout + proc.stderr).lower(), (
+        "PASS output must name the final story status"
     )
     assert before == after, (
         "the operator's real ~/.claude/plans must be untouched by the smoke; "

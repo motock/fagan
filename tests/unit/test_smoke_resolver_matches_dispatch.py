@@ -722,6 +722,15 @@ def _clean_env(extra: dict) -> dict:
     return env
 
 
+def test_subprocess_env_opts_out_of_the_developer_env_file():
+    env = _clean_env({})
+    assert env.get("PIPELINE_SKIP_ENV_FILE") == "1", (
+        "the helper must force PIPELINE_SKIP_ENV_FILE=1 so the child never loads "
+        "the developer's real .pipeline.env - otherwise a locally configured "
+        "registry silently overrides whatever this test intended to isolate"
+    )
+
+
 def _run_cli(extra_env: dict):
     import subprocess
 

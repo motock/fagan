@@ -1,39 +1,48 @@
 #!/usr/bin/env bash
-# Fetches and installs Fagan by cloning the repo and running scripts/install.sh.
-# Usage: curl -fsSL <raw-url-to-this-file> | bash
-#        or: bash remote-install.sh [install.sh args, e.g. --dev]
+# One-line installer for Fagan.
+# Usage: curl -fsSL <raw-url> | bash
+#        or: bash remote-install.sh
 set -euo pipefail
 
-REPO_URL="${FAGAN_REPO_URL:-https://github.com/motock/fagan.git}"
-INSTALL_DIR="${FAGAN_INSTALL_DIR:-$HOME/.fagan}"
+# Default values, overridable via environment.
+FAGAN_INSTALL_DIR="${FAGAN_INSTALL_DIR:-$HOME/.fagan}"
+FAGAN_REPO_URL="${FAGAN_REPO_URL:-https://github.com/motock/fagan.git}"
 
+# Ensure git is available.
 if ! command -v git >/dev/null 2>&1; then
-  echo "ERROR: git not found. Install git and re-run." >&2
+  echo "remote-install: git not found" >&2
   exit 1
 fi
 
-if [ -d "$INSTALL_DIR" ]; then
-  if [ -d "$INSTALL_DIR/.git" ]; then
-    origin="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
-    if [ "$origin" != "$REPO_URL" ]; then
-      echo "ERROR: $INSTALL_DIR already exists as a git repo with a different origin ($origin != $REPO_URL). Refusing to touch it. Set FAGAN_INSTALL_DIR to a different path." >&2
-      exit 1
-    fi
-    echo "==> Updating existing install at $INSTALL_DIR"
-    git -C "$INSTALL_DIR" pull --ff-only
-  else
-    echo "ERROR: $INSTALL_DIR already exists and is not a git repository. Refusing to touch it. Set FAGAN_INSTALL_DIR to a different path." >&2
+# Decide action based on target directory.
+if [ ! -e "$FAGAN_INSTALL_DIR" ]; then
+  echo "==> Cloning $FAGAN_REPO_URL to $FAGAN_INSTALL_DIR"
+  git clone "$FAGAN_REPO_URL" "$FAGAN_INSTALL_DIR"
+elif [ -e "$FAGAN_INSTALL_DIR/.git" ]; then
+  origin=$(git -C "$FAGAN_INSTALL_DIR" remote get-url origin 2>/dev/null || true)
+  if [ "$origin" != "$FAGAN_REPO_URL" ]; then
+    echo "remote-install: $FAGAN_INSTALL_DIR already exists as a git repo with a different origin ($origin != $FAGAN_REPO_URL). Refusing to touch it. Set FAGAN_INSTALL_DIR to a different path." >&2
     exit 1
   fi
+  echo "==> Updating existing install at $FAGAN_INSTALL_DIR"
+  git -C "$FAGAN_INSTALL_DIR" pull --ff-only
 else
-  echo "==> Cloning $REPO_URL to $INSTALL_DIR"
-  git clone "$REPO_URL" "$INSTALL_DIR"
+  echo "remote-install: $FAGAN_INSTALL_DIR already exists and is not a git repository. Refusing to touch it. Set FAGAN_INSTALL_DIR to a different path." >&2
+  exit 1
 fi
 
-echo "==> Running install.sh"
-"$INSTALL_DIR/scripts/install.sh" "$@"
+# Verify install script exists.
+INSTALLER="$FAGAN_INSTALL_DIR/scripts/install.sh"
+if [ ! -f "$INSTALLER" ]; then
+  echo "remote-install: missing install script at $INSTALLER" >&2
+  exit 1
+fi
 
+# Run the install script.
+echo "==> Running install.sh"
+bash "$INSTALLER"
+
+# Success summary.
 echo
-echo "==> Installed to $INSTALL_DIR"
-echo "Next: cd \"$INSTALL_DIR\" and continue from the README Quickstart's"
-echo "step 2 (register the MCP server)."
+echo "==> Installed to $FAGAN_INSTALL_DIR"
+echo "See $FAGAN_INSTALL_DIR/README.md for next steps"

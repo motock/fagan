@@ -223,17 +223,30 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         })
 
     # -- check c: dispatch backend ------------------------------------------
-    # Read the env var at call time (never at import time) and normalize it.
-    # This deliberately mirrors real per-story dispatch execution and nothing
-    # else: pipeline/dispatch.py, advance.py, and escalation.py all resolve
-    # the backend as PIPELINE_BACKEND_DISPATCH (default "claude") and never
-    # consult model_registry.json's roles.dispatch key (the only registry
-    # path into real routing is the separate "auto" -> routing.dispatch
-    # lookup). Resolving via role_registry.resolve_role here would green-light
-    # a provider real dispatch will never invoke -- the same false-green
-    # defect class this check exists to prevent, just on another provider.
-    raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
-    backend = (raw_backend or "claude").strip().lower() or "claude"
+    # REG-3: resolve the backend the SAME way real per-story dispatch does --
+    # pipeline/dispatch.py's _resolve_dispatch_target, which since REG-1/REG-2
+    # resolves the dispatch role through app.role_registry.resolve_role
+    # (priority: plan role_config -> PIPELINE_BACKEND_DISPATCH -> registry
+    # roles.dispatch.provider -> "claude", with dispatch's own fail-open
+    # fallback when the registry cannot resolve the role). Reading the env
+    # var raw here -- the PP-02 review's resolution -- reported a backend
+    # real dispatch would never run on a registry-pinned host: the same
+    # false-green defect class this check exists to prevent, pointing the
+    # other way. The resolver is imported and called fresh at call time
+    # (never at import time, never cached, nothing written back to the env
+    # or the registry), so the two can never drift apart again.
+    try:
+        from pipeline.dispatch import _resolve_dispatch_target
+
+        backend = _resolve_dispatch_target({}, None)[0]
+    except Exception:  # noqa: BLE001 -- a diagnostic must never crash
+        # Only reachable when the shared resolver itself is unavailable
+        # (e.g. a broken app.role_registry import). Degrade to dispatch's
+        # own documented fail-open priority -- the env var, then "claude" --
+        # exactly what _dispatch_fallback_provider would resolve to.
+        raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
+        backend = (raw_backend or "claude").strip().lower() or "claude"
+    backend = (backend or "claude").strip().lower() or "claude"
 
     if backend == "claude":
         claude_path = which("claude")

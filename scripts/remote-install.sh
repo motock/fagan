@@ -10,7 +10,7 @@ FAGAN_REPO_URL="${FAGAN_REPO_URL:-https://github.com/motock/fagan.git}"
 
 # Ensure git is available.
 if ! command -v git >/dev/null 2>&1; then
-  echo "remote-install: git is required but was not found on PATH" >&2
+  echo "remote-install: git not found" >&2
   exit 1
 fi
 

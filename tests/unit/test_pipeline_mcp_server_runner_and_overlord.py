@@ -4,6 +4,7 @@ Split out of test_pipeline_mcp_server.py to keep it under the project's line-cou
 """
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -54,10 +55,15 @@ def test_detect_test_command_prefers_root_over_subdirectory(tmp_path):
     assert test_dir == tmp_path
 
 
-def test_detect_test_command_no_marker_anywhere_falls_back_to_npm_test(tmp_path):
+def test_detect_test_command_no_marker_anywhere_returns_portable_noop(tmp_path):
+    # GATE-1 (2026-09-16): a repo with no build marker anywhere has no test
+    # suite must not be handed an npm command that cannot work (npm ENOENT ->
+    # exit 254 marked correctly-completed work FAILED). The no-marker case is
+    # a portable, shell-free no-op that exits 0 while staying visible in the
+    # manifest's last_test_check.cmd.
     test_dir, cmd = p.detect_test_command(tmp_path)
     assert test_dir == tmp_path
-    assert cmd == ["npm", "test"]
+    assert cmd == [sys.executable, "-c", "pass"]
 
 
 def test_detect_test_command_pyproject_uses_venv_python_when_present(tmp_path):

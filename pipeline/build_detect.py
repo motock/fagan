@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import types
 from datetime import datetime, timezone
@@ -158,9 +159,12 @@ def detect_build_command(cwd: Path) -> tuple[Path, list[str]] | None:
     """Detect the build command and directory to run it in, mirroring
     detect_test_command's cwd-then-immediate-subdirectory search. Returns
     None if no recognized build marker declares a build step anywhere - a
-    repo without a build step must not be blocked by the build gate (unlike
-    detect_test_command, there is no reasonable universal fallback for
-    "build")."""
+    repo without a build step must not be blocked by the build gate. The two
+    detectors are now symmetric in philosophy: detect_test_command likewise
+    refuses to invent a command for a repo with no build system (it returns a
+    portable no-op instead), because there is no reasonable universal
+    fallback for "build" - and, as the 2026-09-16 npm-ENOENT failure showed,
+    none for "test" either."""
     cmd = _build_command_for(cwd)
     if cmd is not None:
         return cwd, cmd
@@ -177,6 +181,19 @@ def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
     Checks cwd first, then falls back to an immediate subdirectory (e.g.
     engine/) for projects where the buildable project does not live at the
     repo root.
+
+    If no recognized build marker exists in cwd or in any immediate
+    subdirectory, returns ``(cwd, [sys.executable, "-c", "pass"])`` - a
+    portable, shell-free no-op that exits 0. A repo with no build system has
+    no test suite to run, so the gate must not block it with a command that
+    cannot work: the previous JavaScript-ecosystem fallback exited 254 with
+    an ENOENT error on the README-only scratch repos that
+    scripts/smoke_getting_started.py creates, failing correctly-completed
+    work. This mirrors detect_build_command directly above, which returns
+    None for the same reason: there is no reasonable universal fallback for
+    a repo that has nothing to test. The no-op stays visible in the record
+    (callers persist it into the manifest's last_test_check.cmd), so an
+    operator can always see that a no-op ran rather than a real suite.
     """
     cmd = _test_command_for(cwd)
     if cmd is not None:
@@ -187,7 +204,7 @@ def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
         if cmd is not None:
             return child, _apply_pytest_collection_overrides(cmd)
 
-    return cwd, ["npm", "test"]  # fallback
+    return cwd, [sys.executable, "-c", "pass"]  # no-op: no build system detected
 
 
 def _ruff_config_present(cwd: Path) -> bool:

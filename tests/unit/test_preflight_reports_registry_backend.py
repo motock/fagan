@@ -283,12 +283,12 @@ def test_registry_pinned_ollama_with_cli_absent_is_never_green(
     assert OLLAMA in probed, probed
 
 
-def test_env_pinned_claude_checks_claude_not_the_registry_provider(
+def test_registry_pinned_ollama_checks_ollama_even_when_env_names_claude(
     tmp_path, monkeypatch
 ):
-    """The env var still outranks the registry, so the CLI that gets checked
-    is claude's: its absence fails closed naming claude, never the
-    registry's ollama."""
+    """Since REG-4 the registry outranks the env var, so the CLI that gets
+    checked is the registry's ollama: its absence fails closed naming
+    ollama, never the env-pinned claude (which will not run)."""
     _patch_registry(
         monkeypatch,
         _registry({"provider": OLLAMA, "model": "glm-5.3-flash:cloud"}),
@@ -300,10 +300,10 @@ def test_env_pinned_claude_checks_claude_not_the_registry_provider(
         preflight.run_preflight(plan_dir=tmp_path, which=which)
     )
 
-    assert check["status"] == "fail", check
-    assert CLAUDE in check["message"].lower(), check
-    assert CLAUDE in probed, probed
-    assert OLLAMA not in probed, probed
+    assert check["status"] == "warn", check
+    assert OLLAMA in check["message"].lower(), check
+    assert OLLAMA in probed, probed
+    assert CLAUDE not in probed, probed
 
 
 # --------------------------------------------------------------------------- #

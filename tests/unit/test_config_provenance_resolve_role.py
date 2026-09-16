@@ -88,9 +88,14 @@ class TestResolveRoleProvenancePositiveAgreement:
 
     def test_env_provider_precedence_marks_restart_required(self):
         """An env-var provider sets restart_required True (local walk), while
-        the provider/model values still come from resolve_role."""
+        the provider/model values still come from resolve_role. Since REG-4
+        the env var is the EMPTY-STATE fallback, so the registry here has no
+        'overlord' entry and the env var wins the provider."""
         mod = _import_module()
-        reg = _registry_with_claude_sonnet()
+        reg = _build_registry(
+            roles={},
+            providers={"openai": {"models": {"gpt4": {"tag": "gpt-4o"}}}},
+        )
         environ = {"PIPELINE_BACKEND_OVERLORD": "openai"}
         plan = {"overlord": {"model": "gpt4"}}
         result = mod.resolve_role_provenance(

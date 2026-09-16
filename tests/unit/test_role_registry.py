@@ -84,7 +84,7 @@ def test_resolve_role_provider_from_registry_when_env_and_plan_unset(monkeypatch
     assert resolution.model == "mlx-community/Qwen"
 
 
-def test_resolve_role_provider_env_var_beats_registry(monkeypatch):
+def test_resolve_role_registry_beats_env_var(monkeypatch):
     monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "ollama")
     registry = {
         "providers": {
@@ -94,12 +94,12 @@ def test_resolve_role_provider_env_var_beats_registry(monkeypatch):
         "roles": {"review": {"provider": "mlx", "model": "qwen"}},
     }
     resolution = rr.resolve_role("review", registry=registry, model_fallback="sonnet")
-    assert resolution.provider == "ollama"
-    # The registry's "qwen" pairing belongs to mlx, not the env-forced
-    # ollama provider, so it must NOT leak through as ollama's model -
-    # falls to model_fallback instead (this is the cross-provider
-    # contamination guard).
-    assert resolution.model == "sonnet"
+    # REG-4: the registry outranks the env var, so mlx wins and its own
+    # "qwen" pairing is honored (the registry's provider IS the winner).
+    # The cross-provider contamination guard lives on in the
+    # plan-role-config tests, where a DIFFERENT source wins the provider.
+    assert resolution.provider == "mlx"
+    assert resolution.model == "mlx-community/Qwen"
 
 
 def test_resolve_role_provider_plan_role_config_beats_env_and_registry(monkeypatch):
@@ -243,23 +243,22 @@ def test_resolve_role_environ_omitted_preserves_existing_behavior(monkeypatch):
     """Negative/backward-compat: when `environ` is omitted entirely, the
     function must fall back to the real os.environ exactly as before —
     zero call-site changes required anywhere. We exercise the env-var layer
-    via the real os.environ (monkeypatch.setenv) and confirm it still wins,
-    matching the pre-change behavior."""
+    via the real os.environ (monkeypatch.setenv). Since REG-4 the env var
+    is the EMPTY-STATE fallback, so the registry here has no entry for the
+    role and the env var wins — proving os.environ was still consulted."""
     monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "ollama")
     registry = {
         "providers": {
-            "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen"}}},
             "ollama": {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}}},
         },
-        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+        "roles": {},
     }
     # NOTE: environ is intentionally NOT passed here.
     resolution = rr.resolve_role(
         "review", registry=registry, model_fallback="sonnet",
     )
     assert resolution.provider == "ollama"
-    # cross-provider contamination guard: ollama won, so the mlx-paired
-    # "qwen" model must NOT leak through; falls to model_fallback.
+    # No registry entry -> no registry model to pair; model_fallback wins.
     assert resolution.model == "sonnet"
 
 
@@ -289,14 +288,15 @@ def test_resolve_role_environ_empty_dict_does_not_substitute_os_environ(monkeypa
 def test_resolve_role_environ_none_explicitly_uses_os_environ(monkeypatch):
     """Boundary complement: passing environ=None explicitly must behave
     identically to omitting it — i.e. read the real os.environ. This pins
-    the `if environ is None: environ = os.environ` line."""
+    the `if environ is None: environ = os.environ` line. Since REG-4 the
+    env var is the EMPTY-STATE fallback, so the registry here has no entry
+    for the role and the env var wins — proving os.environ was consulted."""
     monkeypatch.setenv("PIPELINE_BACKEND_REVIEW", "ollama")
     registry = {
         "providers": {
-            "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen"}}},
             "ollama": {"models": {"gpt-oss": {"tag": "gpt-oss:20b"}}},
         },
-        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+        "roles": {},
     }
     resolution = rr.resolve_role(
         "review", environ=None, registry=registry, model_fallback="sonnet",

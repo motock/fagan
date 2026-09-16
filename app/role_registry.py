@@ -12,9 +12,11 @@ resolve_role() only ever supplies a *default*. It never overrides a value
 a caller already resolved for a more specific reason (an escalation
 forcing Claude, an explicit name= override, a rework's pinned backend) —
 callers consult it only in their own "nothing more specific configured"
-fallback branch, and existing role-specific env vars keep the same
-priority they already have (checked by the caller, or passed in via
-model_fallback, before resolve_role's own registry step runs).
+fallback branch. Within resolve_role itself the provider chain is
+plan_role_config -> registry roles -> PIPELINE_BACKEND_<ROLE> ->
+default_provider: the env var is only the EMPTY-STATE fallback, consulted
+when the registry has no entry for the role (a fresh clone whose shipped
+model_registry.json ships no `roles` block still boots on the env var).
 """
 from __future__ import annotations
 
@@ -166,10 +168,11 @@ def resolve_role(
     """Resolve (provider, model) for `role`.
 
     Provider priority: plan_role_config[role]["provider"] ->
-    PIPELINE_BACKEND_<ROLE> env var (the same var/default get_backend()
-    itself applies) -> registry["roles"][role]["provider"] ->
-    default_provider ("claude", matching get_backend()'s own default,
-    unless a caller has its own bottom-of-chain default - e.g. the
+    registry["roles"][role]["provider"] -> PIPELINE_BACKEND_<ROLE> env var
+    (the same var/default get_backend() itself applies; the env var is only
+    the EMPTY-STATE fallback, consulted when the registry has no entry for
+    the role) -> default_provider ("claude", matching get_backend()'s own
+    default, unless a caller has its own bottom-of-chain default - e.g. the
     planner role mirroring whichever provider dispatch already picked).
 
     Model priority: plan_role_config[role]["model"] ->
@@ -181,8 +184,8 @@ def resolve_role(
     tag — so a typo is caught here, not deep inside a driver. The
     registry's (provider, model) pairing for a role is only used when the
     registry's own provider for that role is the one that actually won;
-    if a higher-priority source (plan/env) overrides the provider, the
-    registry's model pairing (which belongs to its own provider) is
+    if a higher-priority source (plan role_config) overrides the provider,
+    the registry's model pairing (which belongs to its own provider) is
     ignored in favor of model_fallback, rather than raising against a
     provider it was never paired with.
     """
@@ -194,8 +197,8 @@ def resolve_role(
 
     provider = (
         plan_cfg.get("provider")
-        or environ.get(f"PIPELINE_BACKEND_{role.upper()}")
         or reg_role_cfg.get("provider")
+        or environ.get(f"PIPELINE_BACKEND_{role.upper()}")
         or default_provider
     ).strip().lower()
 

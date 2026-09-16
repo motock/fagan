@@ -328,8 +328,10 @@ def test_model_registry_local_json_is_actually_gitignored():
 
 def test_resolve_role_provider_priority_order_documented_correctly():
     """The documented resolution order must match role_registry.resolve_role:
-    plan role_config -> PIPELINE_BACKEND_<ROLE> env -> registry `roles` ->
-    caller's fallback, in that order."""
+    plan role_config -> registry `roles` -> PIPELINE_BACKEND_<ROLE> env ->
+    caller's fallback, in that order. (REG-4: the registry is the single
+    source of truth for role routing; the env var is only the empty-state
+    fallback consulted when the registry has no entry for the role.)"""
     body = _h2_section_body(_reference_text(), "Per-role provider/model configuration")
     i_plan = body.find("role_config")
     i_env = body.find("PIPELINE_BACKEND_")
@@ -341,9 +343,9 @@ def test_resolve_role_provider_priority_order_documented_correctly():
         f"marker) to be present in the section body; got indices "
         f"plan={i_plan} env={i_env} registry={i_registry} fallback={i_fallback}"
     )
-    assert i_plan < i_env < i_registry < i_fallback, (
+    assert i_plan < i_registry < i_env < i_fallback, (
         "resolve_role's documented priority order must be plan role_config "
-        "-> PIPELINE_BACKEND_<ROLE> env -> registry roles -> fallback, in "
+        "-> registry roles -> PIPELINE_BACKEND_<ROLE> env -> fallback, in "
         f"that order; got indices plan={i_plan} env={i_env} "
         f"registry={i_registry} fallback={i_fallback}"
     )

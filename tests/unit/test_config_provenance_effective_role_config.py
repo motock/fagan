@@ -473,21 +473,27 @@ class TestModelSourceProviderMismatchFallthrough:
     """The model_source chain must fall through to model_fallback when the
     registry entry's provider does not match the winning provider."""
 
-    def test_registry_provider_mismatch_env_override_uses_caller_fallback(self):
-        """POSITIVE (the bug): registry role provider is 'ollama', env
-        overrides the provider to 'local', and model_fallback='sonnet'.
-        resolve_role falls through to the fallback model, so model_source
-        must be 'caller_fallback' (not 'unset')."""
+    def test_registry_provider_mismatch_plan_override_uses_caller_fallback(self):
+        """POSITIVE (the bug): registry role provider is 'ollama', the plan
+        role_config overrides the provider to 'local', and
+        model_fallback='sonnet'. resolve_role falls through to the fallback
+        model, so model_source must be 'caller_fallback' (not 'unset').
+
+        REG-4 note: this mismatch is now created by the plan role_config —
+        the one source that still outranks the registry — because the env
+        var no longer does (it is the empty-state fallback)."""
         mod = _import_module()
         reg = _registry_with_ollama_dispatch()
-        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+        plan = {"dispatch": {"provider": "local"}}
         result = mod.resolve_role_provenance(
-            "dispatch", registry=reg, model_fallback="sonnet", environ=environ
+            "dispatch", plan_role_config=plan, registry=reg,
+            model_fallback="sonnet", environ={},
         )
         assert result["model"] == "sonnet"
         assert result["model_source"] == "caller_fallback"
-        # The provider was overridden by env, so provider_source reflects that.
-        assert result["provider_source"] == "env:PIPELINE_BACKEND_DISPATCH"
+        # The provider was overridden by the plan, so provider_source
+        # reflects that.
+        assert result["provider_source"] == "plan_role_config"
         assert result["provider"] == "local"
         assert result["error"] is None
 
@@ -513,9 +519,10 @@ class TestModelSourceProviderMismatchFallthrough:
         registry entry's provider would mismatch). The plan model must be
         declared under the winning provider so resolve_role succeeds."""
         mod = _import_module()
-        # Registry role entry says ollama, but env overrides provider to
-        # 'local'; the plan model is declared under 'local' so resolve_role
-        # succeeds while the registry entry's provider mismatches.
+        # Plan role_config supplies BOTH provider and model: provider 'local'
+        # outranks the registry's ollama entry (REG-4 order), and the plan
+        # model is declared under 'local' so resolve_role succeeds while the
+        # registry entry's provider mismatches.
         reg = _build_registry(
             roles={"dispatch": {"provider": "ollama", "model": "gpt-oss-20b-high"}},
             providers={
@@ -531,14 +538,13 @@ class TestModelSourceProviderMismatchFallthrough:
                 },
             },
         )
-        plan = {"dispatch": {"model": "custom-plan-model"}}
-        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+        plan = {"dispatch": {"provider": "local", "model": "custom-plan-model"}}
         result = mod.resolve_role_provenance(
             "dispatch",
             plan_role_config=plan,
             registry=reg,
             model_fallback="sonnet",
-            environ=environ,
+            environ={},
         )
         assert result["model_source"] == "plan_role_config"
         assert result["model"] == "custom-plan-model:tag"
@@ -546,24 +552,33 @@ class TestModelSourceProviderMismatchFallthrough:
 
     def test_registry_provider_mismatch_and_no_fallback_is_unset(self):
         """BOUNDARY: registry provider mismatch AND model_fallback=None ->
-        model is None and model_source == 'unset'."""
+        model is None and model_source == 'unset'.
+
+        REG-4 note: the mismatch is created by the plan role_config (the
+        source that still outranks the registry), not the env var."""
         mod = _import_module()
         reg = _registry_with_ollama_dispatch()
-        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+        plan = {"dispatch": {"provider": "local"}}
         result = mod.resolve_role_provenance(
-            "dispatch", registry=reg, model_fallback=None, environ=environ
+            "dispatch", plan_role_config=plan, registry=reg,
+            model_fallback=None, environ={},
         )
         assert result["model"] is None
         assert result["model_source"] == "unset"
-        # Provider still resolved from env; not blanked.
+        # Provider still resolved from the plan; not blanked.
         assert result["provider"] == "local"
-        assert result["provider_source"] == "env:PIPELINE_BACKEND_DISPATCH"
+        assert result["provider_source"] == "plan_role_config"
 
     def test_no_model_configured_keeps_provider_and_sets_error(self, monkeypatch):
         """NO REGRESSION (guards PR #255): a role with no model configured
         anywhere still returns its resolved provider and provider_source with
         model_source == 'unset' and a non-None error. Provider fields must NOT
-        be blanked."""
+        be blanked.
+
+        REG-4 note: with the registry pinning roles.dispatch.provider=ollama,
+        the registry (not the env var) is the layer that wins, so the error
+        path must keep the registry-derived provider and label it
+        model_registry.json with restart_required False."""
         mod = _import_module()
         reg = _registry_with_ollama_dispatch()
         environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
@@ -583,16 +598,22 @@ class TestModelSourceProviderMismatchFallthrough:
         assert result["model"] is None
         # Provider fields must NOT be blanked in this error path.
         assert result["provider"] is not None
-        assert result["provider"] == "local"
+        # The registry pins roles.dispatch.provider=ollama, so the registry
+        # (not the env var) is the layer that won; the label must describe it.
+        assert result["provider"] == "ollama"
         assert result["provider_source"] is not None
-        assert result["provider_source"] == "env:PIPELINE_BACKEND_DISPATCH"
+        assert result["provider_source"] == "model_registry.json"
+        assert result["restart_required"] is False
 
     def test_model_fallback_callable_is_called_and_labelled_caller_fallback(self):
         """model_fallback passed as a zero-argument callable is still called
-        and still labelled 'caller_fallback' (even under provider mismatch)."""
+        and still labelled 'caller_fallback' (even under provider mismatch).
+
+        REG-4 note: the mismatch is created by the plan role_config (the
+        source that still outranks the registry), not the env var."""
         mod = _import_module()
         reg = _registry_with_ollama_dispatch()
-        environ = {"PIPELINE_BACKEND_DISPATCH": "local"}
+        plan = {"dispatch": {"provider": "local"}}
 
         called = {"n": 0}
 
@@ -601,7 +622,8 @@ class TestModelSourceProviderMismatchFallthrough:
             return "sonnet-via-callable"
 
         result = mod.resolve_role_provenance(
-            "dispatch", registry=reg, model_fallback=fallback, environ=environ
+            "dispatch", plan_role_config=plan, registry=reg,
+            model_fallback=fallback, environ={},
         )
         assert result["model"] == "sonnet-via-callable"
         assert result["model_source"] == "caller_fallback"

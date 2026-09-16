@@ -214,9 +214,11 @@ def _resolve_planner_backend(
     """Resolve (provider, model) for the planner role. Always-on; no mode.
 
     Provider priority: plan role_config.planner.provider ->
-    PIPELINE_BACKEND_PLANNER -> registry roles.planner.provider ->
+    registry roles.planner.provider -> PIPELINE_BACKEND_PLANNER ->
     default "ollama" (so a stock install resolves to ollama/glm-5.2:cloud
-    with no env vars set, via the registry pin from PR #151).
+    with no env vars set, via the registry pin from PR #151; the env var is
+    only the empty-state fallback, consulted when the registry has no
+    roles.planner entry).
     Model priority: plan role_config.planner.model -> registry
     roles.planner.model -> the concrete ollama/glm tag (model_fallback).
     PIPELINE_LOCAL_PLANNER_MODEL (mirroring review.py's

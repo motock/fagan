@@ -327,13 +327,14 @@ def test_resolve_role_docstring_no_longer_claims_env_outranks_registry():
 
 def test_registry_provider_wins_with_no_registry_model_uses_fallback():
     """Registry pins only a provider; the caller's model_fallback supplies the
-    model, resolved against the registry-won provider."""
+    model verbatim (model_fallback is a raw tag, never resolved through the
+    friendly-name map)."""
     reg = _registry(roles={"planner": {"provider": "ollama"}})
     res = resolve_role(
         "planner",
         registry=reg,
         environ={"PIPELINE_BACKEND_PLANNER": "claude"},
-        model_fallback=lambda: "llama3",
+        model_fallback=lambda: "llama3:8b",
     )
     assert res.provider == "ollama"
     assert res.model == "llama3:8b"

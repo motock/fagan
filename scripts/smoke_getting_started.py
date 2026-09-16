@@ -236,14 +236,28 @@ def _announce_dispatch_backend(
         guards (e.g. refuse to run when roles.dispatch="local" is set for
         those unrelated use cases while real dispatch correctly uses claude).
 
-        Returns (provider, model, source). The model is the dispatch
-        chain's own bottom default (PIPELINE_DEFAULT_MODEL, else "sonnet" -
-        pipeline/config.py's DEFAULT_MODEL), reported for operator context
-        only; it does not influence the pass/fail decision.
+        Returns (provider, model, source). The model is reported for operator
+        context only; it does not influence the pass/fail decision. It mirrors
+        the model each provider's dispatch chain actually uses: for claude,
+        PIPELINE_DEFAULT_MODEL, else "sonnet" (pipeline/config.py's
+        DEFAULT_MODEL); for every local-family provider (ollama, lmstudio,
+        mlx, local, auto), PIPELINE_LOCAL_MODEL_DEFAULT, else the local
+        backend's own default constant (app.backend_ollama's
+        _LOCAL_DEFAULT_MODEL, imported lazily - see the module docstring's
+        CRITICAL ORDERING rule).
         """
         raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
         backend = (raw_backend or "claude").strip().lower() or "claude"
-        model = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
+        if backend == "claude":
+            model = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
+        else:
+            if str(REPO_ROOT) not in sys.path:
+                sys.path.insert(0, str(REPO_ROOT))
+            from app.backend_ollama import _LOCAL_DEFAULT_MODEL
+
+            model = os.environ.get(
+                "PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL
+            )
         if os.environ.get("PIPELINE_BACKEND_DISPATCH") is None:
             source = (
                 "defaults (PIPELINE_BACKEND_DISPATCH unset -> claude, "

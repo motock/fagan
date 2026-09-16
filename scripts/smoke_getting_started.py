@@ -334,45 +334,6 @@ def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
     }
 
 
-def build_smoke_plan(repo_root: str) -> dict:
-    """Build the minimal 1-epic/1-story smoke plan for the scratch repo.
-
-    Extracted from run_smoke() so the plan's shape can be asserted without
-    running the whole pipeline. Per .claude/rules/pipeline-story-schema.md,
-    the acceptance field is an array of {path, source} file fixtures, not
-    criteria strings - the success criteria live in agent_instructions instead.
-    """
-    return {
-        "repo_root": str(repo_root),
-        "epics": [
-            {
-                "summary": "Smoke: append one line to the scratch README",
-                "stories": [
-                    {
-                        "key": STORY_KEY,
-                        "summary": "Append a smoke-test line to README.md",
-                        "description": (
-                            "Getting-started smoke story: append exactly one "
-                            "line to the scratch repo's README.md and commit it."
-                        ),
-                        "agent_instructions": (
-                            "Append exactly one new line to README.md in the "
-                            "repo root reading: 'Smoke line added by "
-                            "scripts/smoke_getting_started.py.' Commit the "
-                            "change with a short message. Do not modify any "
-                            "other file. Success criteria: README.md contains "
-                            "the smoke line; no other file changed."
-                        ),
-                        "persona": "software-engineer",
-                        "risk": "low",
-                        "dependencies": [],
-                    }
-                ],
-            }
-        ],
-    }
-
-
 def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
     """Drive one story to merge inside the scratch layout; returns exit code."""
     # 1. claude CLI presence FIRST - nothing may be created before it passes.
@@ -430,7 +391,35 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
 
     # 5. save a minimal 1-epic/1-story plan (trivial change: append one line
     # to the scratch repo's README).
-    plan = build_smoke_plan(str(target_repo))
+    plan = {
+        "repo_root": str(target_repo),
+        "epics": [
+            {
+                "summary": "Smoke: append one line to the scratch README",
+                "stories": [
+                    {
+                        "key": STORY_KEY,
+                        "summary": "Append a smoke-test line to README.md",
+                        "description": (
+                            "Getting-started smoke story: append exactly one "
+                            "line to the scratch repo's README.md and commit it."
+                        ),
+                        "agent_instructions": (
+                            "Append exactly one new line to README.md in the "
+                            "repo root reading: 'Smoke line added by "
+                            "scripts/smoke_getting_started.py.' Commit the "
+                            "change with a short message. Do not modify any "
+                            "other file. Success criteria: README.md contains "
+                            "the smoke line; no other file changed."
+                        ),
+                        "persona": "software-engineer",
+                        "risk": "low",
+                        "dependencies": [],
+                    }
+                ],
+            }
+        ],
+    }
     saved = pipeline_server.save_plan(PLAN_NAME, json.dumps(plan))
     if not saved.get("ok"):
         print(f"smoke: save_plan failed: {saved.get('error')}", file=sys.stderr)

@@ -97,3 +97,14 @@ def test_guard_ignores_registry_dispatch_entry_when_env_var_unset(monkeypatch, c
             "sites, never actual dispatch. Got SystemExit"
             f"({exc.code!r}); stderr: {capsys.readouterr().err!r}"
         )
+
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert any(
+        "claude" in line and "PIPELINE_BACKEND_DISPATCH" in line
+        for line in text.splitlines()
+    ), (
+        "the guard must announce the resolved provider 'claude' (the raw "
+        "env-var default), not the registry's roles.dispatch entry; "
+        f"got: {text!r}"
+    )

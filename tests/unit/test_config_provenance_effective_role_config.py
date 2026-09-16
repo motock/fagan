@@ -598,9 +598,12 @@ class TestModelSourceProviderMismatchFallthrough:
         assert result["model"] is None
         # Provider fields must NOT be blanked in this error path.
         assert result["provider"] is not None
-        assert result["provider"] == "local"
+        # The registry pins roles.dispatch.provider=ollama, so the registry
+        # (not the env var) is the layer that won; the label must describe it.
+        assert result["provider"] == "ollama"
         assert result["provider_source"] is not None
-        assert result["provider_source"] == "env:PIPELINE_BACKEND_DISPATCH"
+        assert result["provider_source"] == "model_registry.json"
+        assert result["restart_required"] is False
 
     def test_model_fallback_callable_is_called_and_labelled_caller_fallback(self):
         """model_fallback passed as a zero-argument callable is still called

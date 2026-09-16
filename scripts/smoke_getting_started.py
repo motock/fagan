@@ -241,10 +241,10 @@ def _announce_dispatch_backend(
         the model each provider's dispatch chain actually uses: for claude,
         PIPELINE_DEFAULT_MODEL, else "sonnet" (pipeline/config.py's
         DEFAULT_MODEL); for every local-family provider (ollama, lmstudio,
-        mlx, local, auto), PIPELINE_LOCAL_MODEL_DEFAULT, else the local
-        backend's own default constant (app.backend_ollama's
-        _LOCAL_DEFAULT_MODEL, imported lazily - see the module docstring's
-        CRITICAL ORDERING rule).
+        mlx, local, auto), PIPELINE_LOCAL_MODEL_DEFAULT, else
+        PIPELINE_DEFAULT_MODEL, else the local backend's own default constant
+        (app.backend_ollama's _LOCAL_DEFAULT_MODEL, imported lazily - see the
+        module docstring's CRITICAL ORDERING rule).
         """
         raw_backend = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude")
         backend = (raw_backend or "claude").strip().lower() or "claude"
@@ -256,7 +256,8 @@ def _announce_dispatch_backend(
             from app.backend_ollama import _LOCAL_DEFAULT_MODEL
 
             model = os.environ.get(
-                "PIPELINE_LOCAL_MODEL_DEFAULT", _LOCAL_DEFAULT_MODEL
+                "PIPELINE_LOCAL_MODEL_DEFAULT",
+                os.environ.get("PIPELINE_DEFAULT_MODEL", _LOCAL_DEFAULT_MODEL),
             )
         if os.environ.get("PIPELINE_BACKEND_DISPATCH") is None:
             source = (

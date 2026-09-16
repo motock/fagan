@@ -13,10 +13,13 @@ p.<name>; circular-avoidance). _atomic_write_json comes from pipeline_parsers,
 _notify_user from pipeline_persistence.
 """
 
+import logging
 import os
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from app import role_registry
 
 from .parsers import _atomic_write_json
 from .persistence import _notify_user
@@ -44,9 +47,32 @@ def _escalation_target() -> tuple[str, str | None]:
     not a registry friendly name - it is written straight to story["model"],
     mirroring how _escalate_to_local_fallback_model handles its fallback tag.
     """
-    backend = (os.environ.get("PIPELINE_ESCALATION_BACKEND") or "claude").strip().lower() or "claude"
-    model = (os.environ.get("PIPELINE_ESCALATION_MODEL") or "").strip() or None
-    return backend, model
+    # REG-2: the escalation-specific override still wins when set - this
+    # story only changes the BASE resolution underneath it. The base pair
+    # now comes from role_registry.resolve_role("dispatch", ...), the same
+    # resolver dispatch/advance use (REG-1), instead of the hardcoded
+    # ("claude", None). Fail open to that pre-registry default when the
+    # registry has no usable roles.dispatch entry (a fresh clone) or the
+    # entry is malformed - never crash escalation.
+    if os.environ.get("PIPELINE_ESCALATION_BACKEND") or os.environ.get(
+        "PIPELINE_ESCALATION_MODEL"
+    ):
+        backend = (
+            os.environ.get("PIPELINE_ESCALATION_BACKEND") or "claude"
+        ).strip().lower() or "claude"
+        model = (os.environ.get("PIPELINE_ESCALATION_MODEL") or "").strip() or None
+        return backend, model
+    try:
+        resolution = role_registry.resolve_role("dispatch")
+    except role_registry.RoleRegistryError:
+        logging.getLogger("pipeline").warning(
+            "role_registry could not resolve the dispatch role for "
+            "escalation; failing open to the pre-registry default "
+            "('claude', None)",
+            exc_info=True,
+        )
+        return "claude", None
+    return resolution.provider, resolution.model
 
 
 def _escalation_label() -> str:

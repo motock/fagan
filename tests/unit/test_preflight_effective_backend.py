@@ -1,20 +1,26 @@
 """Tests for pipeline.preflight check c: the dispatch backend check (PP-02).
 
-Contract (corrected after review): check c reports the backend that real
-per-story dispatch execution will actually run -- PIPELINE_BACKEND_DISPATCH
-(default "claude"), exactly as pipeline/dispatch.py:291-294 resolves it via
-_resolve_dispatch_backend. Real dispatch NEVER consults model_registry.json's
-roles.dispatch key (the only registry path into real routing is the separate
-"auto" -> routing.dispatch lookup), so this check must not either: resolving
-via role_registry.resolve_role would green-light a provider real dispatch
-will never invoke -- the same false-green defect class this check exists to
-prevent, just on another provider.
+Contract (re-pinned by REG-3): check c reports the backend that real
+per-story dispatch execution will actually run. Since REG-1/REG-2 that is
+`app.role_registry.resolve_role("dispatch", ...)` -- see
+pipeline/dispatch.py's `_resolve_dispatch_target` -- which consults
+model_registry.json's roles.dispatch entry when PIPELINE_BACKEND_DISPATCH is
+unset. This file previously asserted the opposite (that check c must read
+PIPELINE_BACKEND_DISPATCH raw and never consult the registry), because at the
+time real dispatch did exactly that; the prerequisite stories removed that
+divergence, so the premise is inverted here.
+
+The tests below therefore pin the env-var priority and the per-backend CLI
+status rules against a registry that has NO roles.dispatch entry -- the
+boundary where resolve_role falls through to its "claude" default, which is
+the pre-registry behaviour these tests describe. Registry-pinned resolution
+is covered by tests/unit/test_preflight_reports_registry_backend.py.
 
 Repo rule (`.claude/rules/testing-config-gates.md`): test the resolution
 logic, never today's configured values. Every test injects `which`, and the
-registry stub RAISES if consulted -- proving check c never touches the
-registry (including resolve_role's own registry=None -> load_registry()
-internal path) and never depends on the live model_registry.json.
+autouse fixture stubs `role_registry.load_registry` with a synthetic payload,
+so the live model_registry.json / PIPELINE_MODEL_REGISTRY_PATH is never
+consulted.
 """
 
 from __future__ import annotations
@@ -39,12 +45,22 @@ def _none_which(name):
     return
 
 
-def _registry_that_must_not_be_consulted():
-    raise AssertionError(
-        "check c consulted the model registry; real dispatch execution "
-        "(pipeline/dispatch.py) resolves PIPELINE_BACKEND_DISPATCH directly "
-        "and never reads roles.dispatch"
-    )
+def _registry_without_a_dispatch_entry():
+    """Synthetic registry: no roles.dispatch entry anywhere.
+
+    This is the boundary the tests below describe -- resolve_role falls
+    through to its default provider ("claude"), exactly the pre-registry
+    behaviour. It is deliberately NOT the live model_registry.json.
+    """
+    return {
+        "providers": {
+            "claude": {"models": {"sonnet": {"tag": "claude-sonnet-4"}}},
+            "ollama": {
+                "models": {"glm-5.3-flash:cloud": {"tag": "glm-5.3-flash:cloud"}}
+            },
+        },
+        "roles": {"overlord": {"provider": "claude", "model": "sonnet"}},
+    }
 
 
 def _find_dispatch(results):
@@ -60,21 +76,19 @@ def _find_dispatch(results):
 
 
 @pytest.fixture(autouse=True)
-def _forbid_registry_consultation(monkeypatch):
-    """Fail loudly if check c reads the registry through any path.
+def _stub_registry(monkeypatch):
+    """Give check c a deterministic registry with no roles.dispatch entry.
 
-    Covers both a direct `from app import role_registry` import and
-    resolve_role's own registry=None -> load_registry() internal fallback.
+    Check c resolves through role_registry.resolve_role, whose registry=None
+    path calls load_registry(); stubbing it keeps these tests off the live
+    model_registry.json (and off PIPELINE_MODEL_REGISTRY_PATH). With no
+    roles.dispatch entry, resolve_role falls through to its "claude" default
+    -- the pre-registry behaviour these tests describe.
     """
     from app import role_registry
 
     monkeypatch.setattr(
-        role_registry, "load_registry", _registry_that_must_not_be_consulted
-    )
-    monkeypatch.setattr(
-        role_registry,
-        "resolve_role",
-        _registry_that_must_not_be_consulted,
+        role_registry, "load_registry", _registry_without_a_dispatch_entry
     )
     yield
 
@@ -226,10 +240,16 @@ def test_unknown_backend_value_warns_naming_the_known_set(
 
 
 # --------------------------------------------------------------------------- #
-# The check must stay read-only w.r.t. the registry even if app.role_registry
-# itself is broken (no import at module top, no crash at call time).
+# Check c resolves through app.role_registry, so a broken registry import must
+# degrade gracefully: no crash at call time, and the check still reports.
 # --------------------------------------------------------------------------- #
-def test_check_c_never_imports_the_registry_module(tmp_path, monkeypatch):
+def test_check_c_survives_a_broken_registry_import(tmp_path, monkeypatch):
+    """REG-3 re-pin: check c now resolves through app.role_registry, so this
+    test no longer asserts that the module is never imported (it previously
+    did, because the check was env-var-only). What survives is the guarantee
+    that a broken registry import never crashes preflight: the check still
+    reports a status instead of raising.
+    """
     import app
 
     # Block the submodule in sys.modules AND drop the attribute the
@@ -240,6 +260,6 @@ def test_check_c_never_imports_the_registry_module(tmp_path, monkeypatch):
 
     results = preflight.run_preflight(plan_dir=tmp_path, which=_path_which)
     check = _find_dispatch(results)
-    # The env-var check does not care: it still reports the claude default.
-    assert check["status"] == "ok"
+    assert check["status"] in ("ok", "warn", "fail"), check
+    assert check["message"], check
     assert "claude" in check["message"].lower()

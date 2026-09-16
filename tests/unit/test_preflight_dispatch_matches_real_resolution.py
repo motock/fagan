@@ -1,30 +1,36 @@
-"""Regression test for PP-02 review Blocking Finding 1.
+"""Regression test for PP-02 review Blocking Finding 1 - re-pinned by REG-3.
 
-`_effective_dispatch_check` (pipeline/preflight.py) reports the dispatch
-role's resolution via `app.role_registry.resolve_role`, which falls through
-to model_registry.json's `roles.dispatch` entry when PIPELINE_BACKEND_
-DISPATCH is unset. But real per-story dispatch execution NEVER consults
-that registry key — every real call site (pipeline/dispatch.py:291-294,
-advance.py:311-312, escalation.py:272) resolves the backend by reading
-PIPELINE_BACKEND_DISPATCH directly, defaulting to "claude" when unset, and
-only consults the registry (a *different* key, routing.dispatch, via a
-*different* function, _route_dispatch_backend in pipeline/usage.py) when the
-env var is literally "auto".
+HISTORY - this file used to pin the OPPOSITE of what it now asserts.
+`_effective_dispatch_check` in pipeline/preflight.py originally reported the
+dispatch role's resolution via `app.role_registry.resolve_role`, which falls
+through to model_registry.json's `roles.dispatch` entry when
+PIPELINE_BACKEND_DISPATCH is unset. At the time, real per-story dispatch
+execution read PIPELINE_BACKEND_DISPATCH directly and NEVER consulted that
+registry key, so preflight green-lit a provider dispatch would never invoke.
+The PP-02 review resolved that divergence by changing the REPORTER to match
+the broken resolution: preflight read the env var raw, and this file pinned
+that - asserting that env unset + registry routing dispatch to ollama must
+still report "claude" and FAIL.
 
-So: env unset + registry routes dispatch to ollama + ollama CLI present +
-claude CLI absent must still report "claude" as the backend that will
-actually run, and it must FAIL (claude CLI missing) — never green-light
-ollama, which will never be dispatched to in this scenario.
+The two prerequisite stories (REG-1, REG-2) made that premise false: dispatch
+and escalation now resolve through `role_registry.resolve_role` and DO
+consult the registry (see pipeline/dispatch.py's `_resolve_dispatch_target`).
+The original instinct - report via resolve_role - was right; only the
+resolution underneath it was broken, and that is now fixed. So this file is
+re-pinned rather than deleted: the same scenario now reports OLLAMA (the
+backend that will actually run) and PASSES the CLI check.
 
-This test pins that exact false-green scenario from the review. It must
-fail on the current (pre-fix) code, which reports status "ok" naming
-"ollama" instead.
+It is still a parity guard, and a stronger one than before: the assertions
+below compare preflight's reported backend against pipeline/dispatch.py's OWN
+resolver for the same inputs instead of hardcoding a provider name, so
+preflight and real dispatch can never drift apart again without this file
+going red.
 """
 
 from __future__ import annotations
 
 from app import role_registry
-from pipeline import preflight
+from pipeline import dispatch, preflight
 
 
 def _registry_routing_dispatch_to_ollama():
@@ -55,12 +61,15 @@ def _find_dispatch(results):
     return matches[0]
 
 
-def test_env_unset_registry_routes_to_ollama_but_real_dispatch_uses_claude(
+def test_env_unset_registry_routes_to_ollama_reports_ollama_and_passes(
     tmp_path, monkeypatch
 ):
-    """The scenario from the review: registry says ollama, but claude is
-    what pipeline/dispatch.py will actually try to run (env unset -> default
-    "claude"). Preflight must fail naming claude, not pass naming ollama.
+    """The scenario from the review, re-pinned: env unset, registry routes
+    dispatch to ollama, ollama's CLI present, claude's CLI absent.
+
+    Preflight must report OLLAMA - the backend real dispatch will actually
+    run - and PASS the CLI check. It previously asserted "claude" and a FAIL,
+    because dispatch used to ignore the registry; that premise is gone.
     """
     monkeypatch.setattr(
         role_registry,
@@ -69,8 +78,11 @@ def test_env_unset_registry_routes_to_ollama_but_real_dispatch_uses_claude(
     )
     monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
 
+    probed = []
+
     def which(name):
         # ollama's CLI is present on this host; claude's is not.
+        probed.append(name)
         if name == "ollama":
             return "/fake/bin/ollama"
         return None
@@ -78,13 +90,26 @@ def test_env_unset_registry_routes_to_ollama_but_real_dispatch_uses_claude(
     results = preflight.run_preflight(plan_dir=tmp_path, which=which)
     check = _find_dispatch(results)
 
-    # Real dispatch execution (pipeline/dispatch.py:291-294) will resolve
-    # env_backend="claude" here (env unset -> default), and the claude CLI
-    # is missing, so this must be a fail naming claude -- never an "ok" for
-    # ollama, which real dispatch will never actually invoke.
-    assert check["status"] == "fail", (
-        "preflight reported a false green: it approved 'ollama' (from the "
-        "registry) while real dispatch execution will actually try 'claude' "
-        f"(env unset -> default) and find it missing. Got: {check!r}"
+    # Parity anchor: what does real dispatch resolve for this same config?
+    # (Sanity-check the scenario itself, so this test cannot go vacuous if
+    # dispatch's resolver ever changes shape.)
+    expected_provider, _expected_model = dispatch._resolve_dispatch_target({}, None)
+    assert expected_provider == "ollama", (
+        "scenario drift: pipeline/dispatch.py no longer resolves this config "
+        f"to ollama (got {expected_provider!r}); the review's scenario is no "
+        "longer the one being pinned"
     )
-    assert "claude" in check["message"].lower()
+
+    assert check["status"] == "ok", (
+        "preflight did not pass the CLI check for the backend real dispatch "
+        f"will run ({expected_provider!r}). Got: {check!r}"
+    )
+    assert expected_provider in check["message"].lower(), (
+        f"preflight reported {check['message']!r} but pipeline/dispatch.py "
+        f"resolves this story to {expected_provider!r}"
+    )
+    assert "ollama" in probed, probed
+    assert "claude" not in probed, (
+        "preflight probed claude's CLI, which real dispatch will never "
+        f"invoke here (probed {probed!r})"
+    )

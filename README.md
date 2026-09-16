@@ -158,6 +158,23 @@ provider per role, checked in this order by `resolve_role`:
 4. **The caller's own fallback** — for dispatch/review this is the `claude`
    backend.
 
+For an interactive alternative to editing registry JSON by hand, run the
+picker: `.venv/bin/python scripts/choose_providers.py`. It walks through all
+nine roles one at a time, showing each role's current provider/model and where
+that setting came from, and lets you switch it by typing an option number —
+each of the nine roles is configured independently, and every change is
+validated against the registry before it is written. It is safe to re-run any
+time: re-running just re-reads the current routing, and pressing Enter keeps a
+role's existing setting.
+
+1. **Plan role config** — a plan's per-role `provider`/`model` beats
+   everything below.
+2. **`PIPELINE_BACKEND_<ROLE>` environment variables** — e.g.
+   `PIPELINE_BACKEND_DISPATCH=ollama` opts the dispatch role into Ollama.
+3. **A `roles` block in a registry file** — see below.
+4. **The caller's own fallback** — for dispatch/review this is the `claude`
+   backend.
+
 The same two registry files work for both selection styles:
 
 - **`PIPELINE_MODEL_REGISTRY_PATH`** points the pipeline at any registry

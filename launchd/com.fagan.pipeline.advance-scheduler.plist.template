@@ -16,20 +16,12 @@
 		<string>full</string>
 		<key>PIPELINE_AUTO_ESCALATE</key>
 		<string>1</string>
-		<key>PIPELINE_BACKEND_DISPATCH</key>
-		<string>local</string>
-		<key>PIPELINE_BACKEND_PLANNER</key>
-		<string>ollama</string>
-		<key>PIPELINE_BACKEND_REVIEW</key>
-		<string>ollama</string>
 		<key>PIPELINE_DECOMPOSE_SCRATCHPAD</key>
 		<string>on</string>
 		<key>PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS</key>
 		<string>5400</string>
 		<key>PIPELINE_LOCAL_MAX_STEPS</key>
 		<string>60</string>
-		<key>PIPELINE_LOCAL_MODEL_DEFAULT</key>
-		<string>gpt-oss-20b-high:latest</string>
 		<key>PIPELINE_LOCAL_NUM_CTX</key>
 		<string>16384</string>
 		<key>PIPELINE_LOCAL_TEMPERATURE</key>
@@ -59,6 +51,7 @@
 		<key>REPO_ROOT</key>
 		<string>/nonexistent-repo-root-set-per-plan-only</string>
 	</dict>
+	<!-- routing now lives in model_registry.json; see scripts/choose_providers.py -->
 	<key>Label</key>
 	<string>com.fagan.pipeline.advance-scheduler</string>
 	<key>ProgramArguments</key>

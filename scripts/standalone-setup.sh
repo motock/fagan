@@ -196,6 +196,8 @@ cmd_up() {
   # or has no roles.dispatch.provider.  The operator's value is captured
   # once from the live shell environment (never from a previous run's
   # .pipeline.env), so run N's written value can never go sticky.
+  # Role routing now lives in model_registry.json alone; this script only
+  # mirrors roles.dispatch.provider.  See scripts/choose_providers.py.
   local _dispatch_operator="${PIPELINE_BACKEND_DISPATCH:-}"
   local _dispatch_provider=""
   if [ -z "$_dispatch_operator" ]; then

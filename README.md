@@ -200,11 +200,12 @@ a sign-in; purely on-device tags need nothing beyond the daemon running.
 
 ### Getting-started walkthrough
 
-No local model is required anywhere in this walkthrough: with
-`PIPELINE_BACKEND_DISPATCH=claude` (set it explicitly, or add a `roles` block
-to a local registry — the shipped registry routes nothing; see **Provider
-selection & authorization** above) dispatch and
-review shell out to the Claude Code CLI and never touch ollama.
+The walkthrough works with whatever dispatch provider you have configured —
+`PIPELINE_BACKEND_DISPATCH` (set it explicitly, or add a `roles` block to a
+local registry — the shipped registry routes nothing; see **Provider selection
+& authorization** above). With `claude` configured, dispatch and review shell
+out to the Claude Code CLI; with a local provider such as `ollama` configured,
+they run on that local model instead.
 
 1. **Install** — one command: `scripts/install.sh` (see the quickstart above
    for what it does and does not do).
@@ -226,7 +227,17 @@ review shell out to the Claude Code CLI and never touch ollama.
    `PIPELINE_AUTONOMY=dry-run` first, per the quickstart advice above.
 7. **Prefer the scripted path?** — `.venv/bin/python scripts/smoke_getting_started.py`
    runs the same flow end-to-end without the dashboard, in a scratch
-   `PLAN_DIR` that never touches your real plans.
+   `PLAN_DIR` that never touches your real plans. The smoke is
+   provider-neutral: it runs on your configured dispatch provider
+   (`PIPELINE_BACKEND_DISPATCH`, default `claude`) and announces the resolved
+   provider, model and source up front, so you always know which backend it
+   validated. Exit codes: `0` PASS (the story reached `tests_passed`), `1` the
+   resolved provider is `claude` and the `claude` CLI is missing, exit 2 means
+   the configured provider is empty or unrecognised — a configuration error,
+   not a refusal of a local provider — `3` the bounded poll timed out, `4` the
+   story failed. Honest caveat: PASS depends on the configured model actually
+   completing the story, so a failure on a weak local model reflects that
+   model, not a broken pipeline.
 
 For what can still go wrong, see
 [Reliability & limitations](#reliability--limitations).

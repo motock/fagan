@@ -32,9 +32,20 @@ and aborts nonzero otherwise.
 Exit codes:
     0  PASS - story implemented and its tests passed (status "tests_passed");
        story key + final status printed. It does NOT mean the story merged.
-    1  the ``claude`` CLI is not on PATH (install hint printed)
-    2  PIPELINE_BACKEND_DISPATCH resolves to a local-family/unknown backend.
-       The guard mirrors the resolution real dispatch actually performs
+       HONEST CAVEAT: PASS now depends on the CONFIGURED MODEL actually
+       completing the story. The smoke no longer pins a provider, so an
+       exit 4 on a weak local model means "the model you configured could
+       not do it", not "the pipeline is broken" - that is the cost of not
+       pinning a provider, and operators must not be surprised by it.
+    1  the resolved provider is claude and the ``claude`` CLI is not on PATH
+       (install hint printed). Only the claude provider needs the CLI.
+    2  the dispatch backend value is empty/whitespace-only, or names an
+       unknown (unrecognised) provider - a real configuration error, so the
+       guard fails closed. The message names the offending value and lists
+       the recognised providers (claude, ollama, lmstudio, mlx, local, auto).
+       Every DECLARED provider passes after one prominent announce line
+       naming the resolved provider, model and source. The guard mirrors
+       the resolution real dispatch actually performs
        (pipeline/dispatch.py, pipeline/advance.py, pipeline/preflight.py):
        the raw env var, .strip().lower(), default "claude" - the registry's
        roles.dispatch entry never gates dispatch (it only feeds the
@@ -48,8 +59,9 @@ Usage:
     python scripts/smoke_getting_started.py [--check-preconditions]
         [--timeout-s N] [--tmp-root DIR]
 
-``--check-preconditions`` runs only the two guards (claude CLI on PATH,
-claude backend resolved) and exits - it creates nothing.
+``--check-preconditions`` validates the dispatch backend (announcing the
+resolved provider/model/source) - plus the claude CLI when claude is the
+resolved provider - and exits; it creates nothing.
 """
 
 from __future__ import annotations
@@ -90,17 +102,25 @@ def _require_claude_backend(
     value: str | None = None,
     *,
     resolver: Callable[[], tuple[str, str, str]] | None = None,
-) -> None:
-    """Fail closed unless the dispatch backend resolves to ``claude``.
+) -> tuple[str, str, str]:
+    """Announce the resolved dispatch provider and proceed; fail closed on junk.
+
+    The smoke is provider-neutral: it decouples from any single provider, so
+    the operator chooses. The enemy is SILENCE, not the provider - so this
+    guard ANNOUNCES the resolved (provider, model, source) triple on one
+    prominent line and proceeds, for every DECLARED provider (claude,
+    ollama, lmstudio, mlx, local, auto). Exit 2 is reserved for a genuinely
+    unusable value: an empty/whitespace-only string, or an unrecognised
+    provider name - a real configuration error that must still fail closed.
 
     Two modes:
 
     *value* handed in as a string (pure, no I/O): the legacy env-value
     check. Normalization mirrors the dispatch chain exactly
     (``.strip().lower()`` - see pipeline/dispatch.py and pipeline/advance.py).
-    Every local-family value (auto/ollama/lmstudio/mlx/local), empty strings
-    and unknown values exit 2: the smoke must never silently depend on a
-    local backend. This mode never mutates os.environ.
+    Empty/whitespace-only strings and unknown values exit 2 (naming the
+    offending value and listing the recognised providers); every declared
+    provider passes. This mode never mutates os.environ.
 
     *value* left unset (what ``main()``/``run_smoke()`` use): the guard
     resolves the backend the way real dispatch actually does - via
@@ -113,29 +133,51 @@ def _require_claude_backend(
     sizing - so the registry is never part of the resolution; on a PASS it
     is reported as a separate, clearly-labeled, best-effort ADVISORY note
     (never gating, never affecting the exit code). Exit 2 when the resolved
-    provider is anything but ``claude`` (local family, unknown, empty); the
-    printed message names the resolved provider AND where the choice came
-    from so the operator can change it. This guard never mutates os.environ.
+    provider is empty/whitespace-only or unrecognised; the printed message
+    names the offending value AND where the choice came from so the
+    operator can change it. The claude-CLI check is NOT part of this guard:
+    it lives with the callers and applies only when the resolved provider
+    is claude (a local-backend operator does not need the claude CLI).
+    This guard never mutates os.environ.
+
+    Returns the validated (provider, model, source) triple so callers can
+    name the validated backend in their own output.
     """
+    recognized = ("claude", "ollama", "lmstudio", "mlx", "local", "auto")
+
+    def _reject(raw: str, provider: str, source: str) -> None:
+        """Fail closed on an unusable dispatch value: print + exit 2."""
+        if provider.strip() == "":
+            detail = "the resolved provider is empty"
+            if raw is not None and raw.strip() == "":
+                detail = "the value is empty or whitespace-only"
+        else:
+            detail = f"unrecognised provider {provider!r}"
+        message = (
+            f"smoke: unrecognised dispatch backend {raw!r} ({detail}); "
+            f"recognised providers: {', '.join(recognized)}"
+        )
+        print(message, file=sys.stderr)
+        print(
+            "Fix: set PIPELINE_BACKEND_DISPATCH to one of the recognised "
+            "providers above (e.g. PIPELINE_BACKEND_DISPATCH=claude), or "
+            "unset it to use the default.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
     if value is not None:
         raw = value
         normalized = raw.strip().lower()
         if normalized == "claude":
             print("smoke: backend guard OK: PIPELINE_BACKEND_DISPATCH resolves to claude")
-            return
+            return normalized, "", "value argument"
+        if normalized == "" or normalized not in recognized:
+            _reject(raw, normalized, "value argument")
         print(
-            f"smoke: refusing to run: PIPELINE_BACKEND_DISPATCH={raw!r} "
-            f"(normalized {normalized!r}) is not the claude backend.",
-            file=sys.stderr,
+            f"smoke: validating dispatch on {normalized} (source: value argument)"
         )
-        print(
-            "This smoke must never silently depend on a local backend "
-            "(ollama/lmstudio/mlx/local/auto) or an unknown value. Fix: unset "
-            "PIPELINE_BACKEND_DISPATCH or set PIPELINE_BACKEND_DISPATCH=claude, "
-            "and make sure the `claude` CLI is installed and on PATH.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+        return normalized, "", "value argument"
 
     def _default_dispatch_resolver() -> tuple[str, str, str]:
         """Resolve the dispatch backend the way real dispatch actually does.
@@ -217,33 +259,32 @@ def _require_claude_backend(
         )
         print(
             "Fix: choose a provider explicitly - set "
-            "PIPELINE_BACKEND_DISPATCH=claude (and make sure the `claude` CLI "
-            "is installed and on PATH).",
+            "PIPELINE_BACKEND_DISPATCH to one of the recognised providers "
+            f"({', '.join(recognized)}); e.g. PIPELINE_BACKEND_DISPATCH=claude.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
+    except Exception as exc:  # a broken resolver must fail closed, not traceback
+        print(
+            "smoke: refusing to run: the dispatch backend could not be "
+            f"resolved: {exc!r}",
             file=sys.stderr,
         )
         raise SystemExit(2) from exc
 
-    if provider.strip().lower() == "claude":
-        print(
-            f"smoke: backend guard OK: dispatch resolves to claude "
-            f"(model {model!r}) via {source}"
-        )
-        _advise_if_registry_differs(provider.strip().lower())
-        return
+    normalized_provider = provider.strip().lower()
+    if normalized_provider == "" or normalized_provider not in recognized:
+        _reject(provider, normalized_provider, source)
+
+    # ANNOUNCE and PROCEED: one prominent line naming the resolved provider,
+    # the resolved model and the source of the choice (the triple real
+    # dispatch resolves), then continue - the smoke is provider-neutral.
     print(
-        f"smoke: refusing to run: PIPELINE_BACKEND_DISPATCH resolves to "
-        f"{provider!r} (model {model!r}) via {source} - not the claude "
-        "backend.",
-        file=sys.stderr,
+        f"smoke: validating dispatch on {normalized_provider}/{model} "
+        f"(source: {source})"
     )
-    print(
-        "This smoke must never silently depend on a local backend "
-        "(ollama/lmstudio/mlx/local/auto) or an unknown value. Fix: unset "
-        "PIPELINE_BACKEND_DISPATCH or set PIPELINE_BACKEND_DISPATCH=claude, "
-        "and make sure the `claude` CLI is installed and on PATH.",
-        file=sys.stderr,
-    )
-    raise SystemExit(2)
+    _advise_if_registry_differs(normalized_provider)
+    return normalized_provider, model, source
 
 
 def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
@@ -379,18 +420,24 @@ def _prepare_scratch_env(tmp_root: Path | str) -> dict[str, Path]:
 
 def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
     """Drive one story to `tests_passed` inside the scratch layout; returns exit code."""
-    # 1. claude CLI presence FIRST - nothing may be created before it passes.
-    if shutil.which("claude") is None:
+    # 1. backend resolution guard FIRST (announces the resolved provider;
+    # exits 2 only on an empty/unknown dispatch value). Nothing may be
+    # created before it passes.
+    provider, model, _source = _require_claude_backend()
+
+    # 2. claude CLI presence - ONLY when the resolved provider is claude: a
+    # local-backend operator does not need the claude CLI, and requiring it
+    # would be provider lock-in through a different door.
+    if provider == "claude" and shutil.which("claude") is None:
         print("smoke: the `claude` CLI was not found on PATH.", file=sys.stderr)
         print(
-            "Install the claude CLI (https://claude.com/cli) and make sure it "
-            "is on PATH, then re-run this smoke.",
+            "The resolved dispatch provider is claude, which needs the claude "
+            "CLI. Install it (https://claude.com/cli) and make sure it is on "
+            "PATH, then re-run this smoke (or dispatch on a different "
+            "provider via PIPELINE_BACKEND_DISPATCH).",
             file=sys.stderr,
         )
         raise SystemExit(1)
-
-    # 2. backend resolution guard (exit 2 on any local-family value).
-    _require_claude_backend()
 
     # 3. scratch env (fail-closed abort if pipeline.paths resolves outside).
     layout = _prepare_scratch_env(tmp_root)
@@ -512,7 +559,10 @@ def run_smoke(tmp_root: Path | str, timeout_s: int = 1800) -> int:
             story = manifest.get("stories", {}).get(story_key, {})
             last_status = story.get("status", last_status)
         if last_status == "tests_passed":
-            print(f"PASS: story {story_key} implemented, tests passed (plan {PLAN_NAME!r})")
+            print(
+                f"PASS: story {story_key} implemented, tests passed on "
+                f"provider {provider} model {model} (plan {PLAN_NAME!r})"
+            )
             print(f"  final status: {last_status}")
             print(f"  scratch plan dir: {plan_dir}")
             return 0
@@ -567,18 +617,23 @@ def main(
     args = parser.parse_args(argv)
 
     if args.check_preconditions:
-        # Backend guard first: under a local-family/unknown dispatch backend
-        # the script must exit 2 even on a machine without the claude CLI
-        # (a bare CI runner), not 1 for the missing CLI.
-        _require_claude_backend(resolver=resolver)  # exits 2 on a
-        # local-family/unknown/unresolvable dispatch backend
-        if shutil.which("claude") is None:
+        # Backend guard first: it announces the resolved provider/model/
+        # source and exits 2 only on an empty/unknown dispatch value - even
+        # on a machine without the claude CLI (a bare CI runner), a declared
+        # non-claude provider must pass here, not exit 1 for the missing CLI.
+        provider, _model, _source = _require_claude_backend(resolver=resolver)
+        if provider == "claude" and shutil.which("claude") is None:
             print(
-                "precondition FAIL: the `claude` CLI was not found on PATH; "
-                "install it (https://claude.com/cli) or add it to PATH."
+                "precondition FAIL: the resolved dispatch provider is claude "
+                "but the `claude` CLI was not found on PATH; install it "
+                "(https://claude.com/cli) or add it to PATH (or dispatch on "
+                "a different provider via PIPELINE_BACKEND_DISPATCH)."
             )
             return 1
-        print("precondition check PASS: claude CLI on PATH, claude backend resolved")
+        print(
+            f"precondition check PASS: dispatch provider {provider} "
+            "validated"
+        )
         return 0
 
     tmp_root = (

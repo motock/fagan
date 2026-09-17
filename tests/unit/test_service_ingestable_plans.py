@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from pipeline.service import PipelineService
-import pipeline.server as server
+from pipeline import server
 
 # Helper to write a JSON file
 

@@ -1,7 +1,7 @@
 // HTTP helpers for the dashboard. Wrap the browser fetch API and throw on
 // non-OK responses so callers can rely on a resolved promise carrying parsed JSON.
 
-import { state } from "./state.js";
+// import { state } from "./state.js";
 
 // Repo-scoped plan visibility (030576c6): the plan-list request is scoped to
 // the active repository unless the "Show plans from all repositories" opt-out

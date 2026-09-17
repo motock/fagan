@@ -176,3 +176,43 @@ def test_website_url_is_exact():
 
 def test_description_is_exact():
     assert _load_server_json()["description"] == EXPECTED_DESCRIPTION
+
+
+# --- Case 6: the declared schema's length bounds ----------------------------
+#
+# The schema this manifest declares
+# (https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json)
+# constrains definitions.ServerDetail.properties.description to
+# {"type": "string", "minLength": 1, "maxLength": 100}. A manifest whose
+# description exceeds maxLength is rejected by mcp-publisher / the registry,
+# so the *bound* is what this module must pin - not a hand-copied literal.
+#
+# Regression: server.json shipped a 141-character description while the
+# declared schema caps it at 100, so registry validation rejected the file.
+# The suite could not catch it because test_description_is_exact restated the
+# 141-char string verbatim, locking the invalid value in instead of asserting
+# the constraint.
+
+SCHEMA_DESCRIPTION_MIN_LENGTH = 1
+SCHEMA_DESCRIPTION_MAX_LENGTH = 100
+
+
+def test_description_satisfies_schema_length_bounds():
+    """description must satisfy the declared schema's minLength/maxLength.
+
+    The declared MCP Registry schema caps ``description`` at maxLength 100
+    (and floors it at minLength 1). Anything longer makes the manifest invalid
+    against the very schema it declares, so mcp-publisher/registry validation
+    rejects it.
+    """
+    description = _load_server_json()["description"]
+    assert len(description) <= SCHEMA_DESCRIPTION_MAX_LENGTH, (
+        f"description is {len(description)} chars but the declared MCP Registry "
+        f"schema caps it at maxLength {SCHEMA_DESCRIPTION_MAX_LENGTH}; "
+        "mcp-publisher/registry validation rejects the manifest. Shorten it by "
+        f"at least {len(description) - SCHEMA_DESCRIPTION_MAX_LENGTH} characters."
+    )
+    assert len(description) >= SCHEMA_DESCRIPTION_MIN_LENGTH, (
+        f"description must be at least {SCHEMA_DESCRIPTION_MIN_LENGTH} character(s), "
+        f"got {len(description)}"
+    )

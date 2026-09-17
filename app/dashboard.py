@@ -1293,6 +1293,7 @@ def apply_worktree_patch_route(
 
     record = worktree_patch.get_patch_record(patch_id)
     if record is None:
+        logger.info("Patch not found", extra={"route": "apply", "patch_id": patch_id[:64]})
         raise HTTPException(status_code=404, detail="no such patch")
 
     result = worktree_patch.apply_patch(

@@ -385,7 +385,10 @@ class PipelineService:
         sorted alphabetically.
         """
         names = []
+        excluded = {"recent_workspaces.json", "active_workspace.json"}
         for path in sorted(PLAN_DIR.glob("*.json")):
+            if path.name in excluded:
+                continue
             if "." in path.stem:
                 continue
             try:

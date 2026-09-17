@@ -182,3 +182,4 @@ if a precise date is needed when writing one of these up.
 - overlord-parked-story-autonomy — completed 2026-09-14, 9 stories
 - smoke-test-hermeticity-fix — completed 2026-09-16, 1 stories
 - remote-install-script — completed 2026-09-16, 3 stories
+- glama-dockerfile-listing — completed 2026-09-17, 1 stories

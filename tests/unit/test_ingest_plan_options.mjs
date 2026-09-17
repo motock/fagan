@@ -17,8 +17,14 @@ function makeElement() {
     value: '',
     disabled: false,
     addEventListener() {},
+    setAttribute() {},
+    getAttribute() { return null; },
+    removeAttribute() {},
+    appendChild() {},
     classList: { add() {}, remove() {}, toggle() {} },
     style: {},
+    children: [],
+    dataset: {},
   };
 }
 

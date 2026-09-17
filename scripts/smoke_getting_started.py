@@ -287,13 +287,7 @@ def _announce_dispatch_backend(
         raise SystemExit(2)
 
     # Handle env var directly to avoid missing dependency errors
-    if value is None:
-        env_val = os.environ.get("PIPELINE_BACKEND_DISPATCH")
-        if env_val is not None:
-            raw = env_val
-            normalized = raw.strip().lower()
-            if normalized == "" or normalized not in recognized:
-                _reject(raw, normalized, "env var PIPELINE_BACKEND_DISPATCH")
+    # (removed to let default resolver handle empty env var correctly)
     if value is not None:
         raw = value
         normalized = raw.strip().lower()

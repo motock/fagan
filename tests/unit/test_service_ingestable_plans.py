@@ -30,7 +30,9 @@ def test_excludes_non_ingestable_files(plan_dir):
     write_json(plan_dir / "anagram.manifest.json", {"epics": {}})
     write_json(plan_dir / "anagram.decisions.json", {"epics": {}})
     write_json(plan_dir / "anagram.storykey.journal.json", {"epics": {}})
-    write_json(plan_dir / "recent_workspaces.json", {"epics": {}})
+    # Bookkeeping single-dot files are excluded because they lack 'epics'.
+    write_json(plan_dir / "recent_workspaces.json", {"workspaces": []})
+    write_json(plan_dir / "active_workspace.json", {"path": "/tmp/w"})
     service = PipelineService()
     assert service.list_ingestable_plans() == ["anagram"]
 

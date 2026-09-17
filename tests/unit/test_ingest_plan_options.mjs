@@ -80,6 +80,12 @@ async function loadComms({ fetchResponse, withPlanSelect = true } = {}) {
   return { mod, fetchCalls, doc, select: elements.get('ingest-plan-name') };
 }
 
+// Count only calls to the available-plans endpoint; other endpoints fetched by
+// unrelated module code (e.g. sendCommsMessage's POST) must not skew counts.
+function planFetchCount(fetchCalls) {
+  return fetchCalls.filter((c) => String(c.url).includes('/api/ingestable-plans')).length;
+}
+
 function count(haystack, needle) {
   return haystack.split(needle).length - 1;
 }

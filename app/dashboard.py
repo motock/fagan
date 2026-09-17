@@ -1216,6 +1216,15 @@ from app.auth import require_ui_origin
 from app.dashboard_models import ApplyPatchRequest
 
 
+def _origin_class(x_pipeline_origin: str | None) -> str:
+    if x_pipeline_origin is None:
+        return "absent"
+    if x_pipeline_origin == "chat":
+        return "chat"
+    if x_pipeline_origin == "ui":
+        return "ui"
+    return "other"
+
 @app.get("/api/worktree/patch/{patch_id}")
 def get_worktree_patch_route(
     patch_id: str,
@@ -1235,7 +1244,11 @@ def get_worktree_patch_route(
     ``Cache-Control: no-store``: the body holds a live credential and must
     never sit in a shared cache.
     """
-    require_ui_origin(x_pipeline_origin)
+    try:
+        require_ui_origin(x_pipeline_origin)
+    except HTTPException:
+        logger.warning("Patch route origin refused", extra={"route": "review", "patch_id": patch_id[:64], "origin_class": _origin_class(x_pipeline_origin)})
+        raise
     response.headers["Cache-Control"] = "no-store"
 
     record = worktree_patch.get_patch_record(patch_id)
@@ -1271,7 +1284,11 @@ def apply_worktree_patch_route(
     ``unified_diff`` alongside the token is inert (pydantic ignores the
     unknown key and the model has no diff field).
     """
-    require_ui_origin(x_pipeline_origin)
+    try:
+        require_ui_origin(x_pipeline_origin)
+    except HTTPException:
+        logger.warning("Patch route origin refused", extra={"route": "apply", "patch_id": patch_id[:64], "origin_class": _origin_class(x_pipeline_origin)})
+        raise
 
     record = worktree_patch.get_patch_record(patch_id)
     if record is None:

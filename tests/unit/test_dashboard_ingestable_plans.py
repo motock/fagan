@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import dashboard as d
 from app import auth
+from app import dashboard as d
 
 # Use the same header name as auth tests
 _HEADER = "X-Pipeline-Api-Key"

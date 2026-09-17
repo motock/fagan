@@ -32,6 +32,11 @@ function makeDoc({ withPlanSelect = true } = {}) {
   const elements = new Map();
   if (withPlanSelect) {
     elements.set('ingest-plan-name', makeElement());
+  } else {
+    // Explicit null: getElementById must return null/undefined for the plan
+    // select so the element-absent negative test is meaningful, while other
+    // ids still get generic stubs.
+    elements.set('ingest-plan-name', null);
   }
   const doc = {
     getElementById(id) {

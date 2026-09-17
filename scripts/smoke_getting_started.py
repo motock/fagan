@@ -286,6 +286,8 @@ def _announce_dispatch_backend(
         )
         raise SystemExit(2)
 
+    # Handle env var directly to avoid missing dependency errors
+    # (removed to let default resolver handle empty env var correctly)
     if value is not None:
         raw = value
         normalized = raw.strip().lower()
@@ -298,7 +300,6 @@ def _announce_dispatch_backend(
             f"smoke: validating dispatch on {normalized} (source: value argument)"
         )
         return normalized, "", "value argument"
-
     def _default_dispatch_resolver() -> tuple[str, str, str]:
         """Resolve the dispatch backend the way real dispatch actually does.
 

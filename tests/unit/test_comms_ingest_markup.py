@@ -31,10 +31,8 @@ PREEXISTING_IDS = ("comms-input", "comms-send", "comms-thread", "comms-landing")
 EXPECTED_BLOCK_LINES = [
     '<label class="comms-sub" for="ingest-plan-name">Ingest a saved plan</label>',
     '<div class="comms-input-row">',
-    (
-        '<input id="ingest-plan-name" class="comms-input" type="text" '
-        'placeholder="plan name, e.g. anagram" aria-label="Plan name to ingest">'
-    ),
+    # Updated for the ingest-picker select swap: #ingest-plan-name is now a <select>, not a text <input>.
+    '<select id="ingest-plan-name" class="comms-input" aria-label="Plan name to ingest"></select>',
     (
         '<button id="ingest-plan-submit" class="comms-send" type="button" '
         'aria-label="Ingest plan" title="Ingest">INGEST</button>'
@@ -153,22 +151,22 @@ def test_ingest_submit_has_aria_label():
 
 # --- positive: name control shape -----------------------------------------
 
-def test_ingest_name_is_a_text_input():
-    tag = _tag(_read_index(), "input", "ingest-plan-name")
-    assert 'type="text"' in tag, (
-        f'#ingest-plan-name must be an <input type="text">; got {tag!r}'
+def test_ingest_name_is_a_select_element():
+    tag = _tag(_read_index(), "select", "ingest-plan-name")
+    assert tag.startswith("<select"), (
+        f"#ingest-plan-name must be a <select>; got {tag!r}"
     )
 
 
 def test_ingest_name_has_aria_label():
-    tag = _tag(_read_index(), "input", "ingest-plan-name")
+    tag = _tag(_read_index(), "select", "ingest-plan-name")
     assert re.search(r'aria-label="[^"]+"', tag), (
         f"#ingest-plan-name must carry a non-empty aria-label; got {tag!r}"
     )
 
 
 def test_ingest_name_reuses_comms_input_class():
-    tag = _tag(_read_index(), "input", "ingest-plan-name")
+    tag = _tag(_read_index(), "select", "ingest-plan-name")
     assert 'class="comms-input"' in tag, (
         f"#ingest-plan-name must reuse the .comms-input class; got {tag!r}"
     )

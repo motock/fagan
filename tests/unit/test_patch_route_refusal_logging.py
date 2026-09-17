@@ -520,6 +520,7 @@ class TestNotFoundLogging:
         assert rec.getMessage() == NOT_FOUND_MSG
         assert rec.route == "apply"
         assert rec.patch_id == "wp-does-not-exist"
+        assert _extra_keys(rec) == {"route", "patch_id"}
         assert spy.calls == []
         assert SUBMITTED_TOKEN not in _all_blobs(caplog)
 

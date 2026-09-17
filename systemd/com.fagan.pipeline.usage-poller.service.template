@@ -1,0 +1,10 @@
+[Unit]
+Description=Fagan pipeline usage-poller (one-shot; triggered by the paired .timer unit, never run directly)
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO_ROOT}}
+ExecStart={{REPO_ROOT}}/.venv/bin/python3 -c "import app.pipeline_mcp_server as p; p.check_usage()"
+StandardOutput=append:{{REPO_ROOT}}/usage-poller.log
+StandardError=append:{{REPO_ROOT}}/usage-poller.err.log
+Environment=PATH={{HOME}}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin

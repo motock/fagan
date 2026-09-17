@@ -810,9 +810,12 @@ class OllamaDriver:
             tag.endswith(":cloud") or self.provider.name in _HOSTED_PROVIDERS
         ):
             provider_env = f"PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_{self.provider.name.upper()}"
+            provider_default = _PROVIDER_MIN_FREE_MEMORY_MB_DEFAULTS.get(
+                self.provider.name, _DEFAULT_MIN_FREE_MEMORY_MB
+            )
             floor_mb = int(os.environ.get(
                 provider_env,
-                os.environ.get("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048"),
+                os.environ.get("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", provider_default),
             ))
             if free_mb < floor_mb:
                 return {

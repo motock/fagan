@@ -1303,6 +1303,15 @@ def apply_worktree_patch_route(
         request.confirmation_token,
     )
     if not result["ok"]:
+        level = logging.WARNING if result["status_code"] == 403 else logging.INFO
+        logger.log(level, "Patch apply refused", extra={
+            "route": "apply",
+            "patch_id": patch_id,
+            "plan_name": record["plan_name"],
+            "story_key": record["story_key"],
+            "status_code": result["status_code"],
+            "error": result["error"],
+        })
         raise HTTPException(status_code=result["status_code"], detail=result["error"])
     return result
 

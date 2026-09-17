@@ -354,6 +354,45 @@ class TestOriginRefusalLogging:
         assert warnings[0].origin_class == "other"
         assert "evil" not in caplog.text
 
+    def test_get_chat_origin_logs_warning(self, client, caplog):
+        caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+        envelope = _create_record()
+
+        resp = _get(
+            client,
+            envelope["patch_id"],
+            origin=ORIGIN_CHAT,
+            key=get_or_create_api_key(),
+        )
+
+        assert resp.status_code == 403
+        warnings = _records(caplog, logging.WARNING)
+        assert len(warnings) == 1
+        assert warnings[0].getMessage() == ORIGIN_REFUSED_MSG
+        assert warnings[0].route == "review"
+        assert warnings[0].origin_class == "chat"
+
+    def test_origin_gate_runs_before_the_record_lookup(self, client, caplog, spy):
+        """A chat-origin request for an unknown id is refused as an origin
+        refusal (403), never as a not-found (404)."""
+        caplog.set_level(logging.INFO, logger=LOGGER_NAME)
+
+        resp = _apply(
+            client,
+            "wp-unknown",
+            origin=ORIGIN_CHAT,
+            key=get_or_create_api_key(),
+            body={"confirmation_token": SUBMITTED_TOKEN},
+        )
+
+        assert resp.status_code == 403
+        records = _records(caplog, logging.INFO)
+        assert len(records) == 1
+        assert records[0].getMessage() == ORIGIN_REFUSED_MSG
+        assert records[0].route == "apply"
+        assert records[0].origin_class == "chat"
+        assert spy.calls == []
+
 
 # =========================================================================== #
 # Engine refusals on apply

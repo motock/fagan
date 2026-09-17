@@ -1324,4 +1324,3 @@ pipeline-tracked work (claim a story → TDD → detect the test runner → full
 suite green → `review_story` → prompt before committing).
 
 ---
-# Updated

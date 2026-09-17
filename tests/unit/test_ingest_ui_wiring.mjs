@@ -319,7 +319,16 @@ async function loadComms() {
   win.fetch = recorderFetch;
   // Cache-busting query, exactly like the sibling suites: every test gets a
   // fresh module body evaluated against the freshly reset document.
-  return import(`${COMMS_JS_URL.href}?t=${Date.now()}-${Math.random()}`);
+  const mod = await import(`${COMMS_JS_URL.href}?t=${Date.now()}-${Math.random()}`);
+  // populateIngestPlanOptions() fires one /api/ingestable-plans fetch at module
+  // load (9b4e26f3). Drain it and drop it from the recorder so the per-test
+  // assertions below only see fetches the test itself triggers.
+  await settle();
+  const moduleLoadCalls = fetchCalls.filter((c) =>
+    String(c.url).includes("/api/ingestable-plans"));
+  fetchCalls = fetchCalls.filter((c) =>
+    !String(c.url).includes("/api/ingestable-plans"));
+  return { mod, moduleLoadCalls };
 }
 
 function flush() {

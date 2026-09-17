@@ -286,6 +286,14 @@ def _announce_dispatch_backend(
         )
         raise SystemExit(2)
 
+    # Handle env var directly to avoid missing dependency errors
+    if value is None:
+        env_val = os.environ.get("PIPELINE_BACKEND_DISPATCH")
+        if env_val is not None:
+            raw = env_val
+            normalized = raw.strip().lower()
+            if normalized == "" or normalized not in recognized:
+                _reject(raw, normalized, "env var PIPELINE_BACKEND_DISPATCH")
     if value is not None:
         raw = value
         normalized = raw.strip().lower()
@@ -298,7 +306,6 @@ def _announce_dispatch_backend(
             f"smoke: validating dispatch on {normalized} (source: value argument)"
         )
         return normalized, "", "value argument"
-
     def _default_dispatch_resolver() -> tuple[str, str, str]:
         """Resolve the dispatch backend the way real dispatch actually does.
 

@@ -344,6 +344,13 @@ and provider authorization for whichever backend is configured — see
 | Worktrees | `~/.claude/worktrees/` | Isolated per-story branches |
 | Issue tracker | Plane (external, optional) | Mirror of story state; skipped entirely when unconfigured (manifest is the source of truth) |
 
+![Dashboard Comms view](docs/screenshots/dashboard-overview.png)
+
+The dashboard's Comms view — ask what's blocked, draft a plan, or approve a
+merge, all routed through the same gated API the kanban board's own buttons
+call. More screenshots (the live kanban board and the workspace picker) are
+in [docs/DEMO.md](docs/DEMO.md#screenshots).
+
 ---
 
 ## Architecture

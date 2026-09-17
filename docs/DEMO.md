@@ -8,6 +8,31 @@ documented too, in [`retros/`](../retros/) and [`docs/plans/`](plans/).
 
 If you want to see it run yourself, skip to [Try it](#try-it).
 
+## Screenshots
+
+![Kanban board for a real plan](screenshots/kanban-board.png)
+
+A real plan's story lifecycle at `tests_passed`, one step from review — for
+[`mcp-server-registry-listing`](https://github.com/motock/fagan/pull/811),
+the story adding this repo's own `server.json` (PR open, not yet merged, as
+of this screenshot).
+
+![Kanban board mid-gate](screenshots/kanban-live-gate.png)
+
+The same board seconds later on a different plan, caught mid-flicker on the
+local-memory resource gate (`insufficient free memory (2035mb < 2048mb
+floor)`) — the gate held dispatch open rather than starting work it couldn't
+finish, then cleared on its own once memory freed up. Left in unedited: the
+whole point of this project is that its failure modes are named and shown,
+not hidden.
+
+![Workspace picker](screenshots/workspace-picker.png)
+
+The workspace picker — one dashboard instance tracks multiple git repos and
+switches the active one without restarting anything. (Paths shown here are
+fabricated; this is a screenshot of the feature, not of anyone's real
+filesystem.)
+
 ## Try it
 
 ```bash

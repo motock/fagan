@@ -349,6 +349,17 @@ function test(name, fn) {
 const INGEST_URL = "/api/plans/anagram/ingest";
 const XSS = "<img src=x onerror=alert(1)>";
 
+// Default handler for any fetch issued during module load itself. Since the
+// ingest plan picker (9b4e26f3) comms.js now calls fetchIngestablePlans() once
+// at import time; without this default the module-load fetch would reject and
+// pollute the per-test fetch-call counts recorded by the recorder.
+currentFetch = async (url) => {
+  if (String(url).includes("/api/ingestable-plans")) {
+    return jsonResponse(200, { plans: ["anagram"] });
+  }
+  return jsonResponse(200, {});
+};
+
 test("a click on #ingest-plan-submit POSTs the plan name exactly once", async () => {
   await loadComms();
   currentFetch = async () =>

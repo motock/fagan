@@ -337,6 +337,7 @@ Neither new route is registered as a chat tool, and the `k-` API-key
 pass-through stays route-exact on `/api/chat/stream` — a `k-`-prefixed key
 on any of these routes is `401` like anywhere else.
 
+Refused review/apply requests are logged by `app.dashboard` with identifiers only -- route, truncated `patch_id`, an origin class (`absent`/`chat`/`ui`/`other`), and for engine refusals the plan, story, status code and error string. An origin refusal or a wrong token logs at `WARNING`; not-found and other refusals at `INFO`. Tokens, request bodies, diff content and raw header values are never logged.
 ---
 
 ## Notifications: plan_completed and the outbound e-mail channel

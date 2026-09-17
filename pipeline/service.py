@@ -373,6 +373,29 @@ class PipelineService:
     def list_plans(self) -> list[str]:
         return [p.stem for p in PLAN_DIR.glob("*.json")]
 
+    def list_ingestable_plans(self) -> list[str]:
+        """List raw plan-source files in PLAN_DIR that are valid ingest
+        targets: a file named exactly '<name>.json' (no other '.' in the
+        stem, which excludes '<name>.manifest.json', '<name>.decisions.json',
+        journal files, and other bookkeeping JSON in the same directory)
+        whose content parses as a JSON object containing an 'epics' key (the
+        same shape pipeline/ingest.py's _ingest_plan_impl itself requires).
+        A file that fails to parse, or is not a JSON object, or lacks
+        'epics', is silently skipped rather than raising. Returns names
+        sorted alphabetically.
+        """
+        names = []
+        for path in sorted(PLAN_DIR.glob("*.json")):
+            if "." in path.stem:
+                continue
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict) and "epics" in data:
+                names.append(path.stem)
+        return names
+
     def resolve_workspace(self, path: str | None, create: bool = False) -> dict:
         """Resolve a workspace path.
 

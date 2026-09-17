@@ -339,6 +339,13 @@ def list_plans(include_archived: bool = False, repo: str | None = None) -> dict[
     return {"plans": plans}
 
 
+@app.get("/api/ingestable-plans")
+def ingestable_plans() -> dict[str, Any]:
+    """List saved plan files that are valid targets for the Comms panel's
+    ingest picker (distinct from GET /api/plans, which lists already-
+    ingested plan manifests)."""
+    return {"plans": _service.list_ingestable_plans()}
+
 @app.post("/api/plans/{plan_name}/archive")
 def archive_plan(plan_name: str) -> dict[str, Any]:
     """Dismiss a plan from the default sidebar view. This only touches the

@@ -400,6 +400,12 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
         "decided_at": decided_at,
     }
     _service.append_decision(plan_name, record)
+    @app.get("/api/ingestable-plans")
+    def ingestable_plans() -> dict[str, Any]:
+        """List saved plan files that are valid targets for the Comms panel's
+        ingest picker (distinct from GET /api/plans, which lists already-
+        ingested plan manifests)."""
+        return {"plans": _service.list_ingestable_plans()}
     return {"ok": True, "record": record}
 
 

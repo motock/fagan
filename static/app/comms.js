@@ -553,6 +553,7 @@ const ingestPlanStatus = document.getElementById('ingest-plan-status');
 if (commsExportBtn) commsExportBtn.addEventListener('click', exportCommsThread);
 
 applyTraceVisibility();
+populateIngestPlanOptions();
 
 // Ingest a saved plan from the Comms panel (CIH-4). The plan name travels in
 // the URL via ingestPlan(); the status element is the only surface this

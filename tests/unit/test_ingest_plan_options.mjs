@@ -149,35 +149,10 @@ await test('populateIngestPlanOptions element absent', async () => {
   assertEqual(fetchCalls.length, 0);
 });
 
-function makeElement() {
-  const el = {
-    _innerHTML: '',
-    get innerHTML() { return this._innerHTML; },
-    set innerHTML(v) { this._innerHTML = v; },
-    get textContent() { return this._innerHTML; },
-    set textContent(v) { this._innerHTML = v; },
-  };
-  return el;
-}
 
 // Helper to create a stub document with getElementById that can be overridden
-function makeDoc() {
-  const elements = new Map();
-  const doc = {
-    getElementById(id) {
-      if (!elements.has(id)) elements.set(id, makeElement());
-      return elements.get(id);
-    },
-    createElement: makeElement,
-    body: makeElement(),
-  };
-  return doc;
-}
 
 // Helper to flush microtasks
-async function flush() {
-  await new Promise(r => setTimeout(r, 0));
-}
 
 // Test harness setup function
 async function runTest({ fetchResponse, elementAbsent = false, expectFetchCount, description }) {

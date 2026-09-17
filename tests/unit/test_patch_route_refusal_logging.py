@@ -581,6 +581,7 @@ class TestSourceHygiene:
 
     def test_apply_route_logs_before_raising_the_engine_refusal(self):
         src = _route_source(APPLY_PATH, "POST")
+        assert APPLY_REFUSED_MSG in src, "the engine-refusal log call is missing"
         log_idx = src.index(APPLY_REFUSED_MSG)
         raise_idx = src.index("raise HTTPException(status_code=result")
         assert log_idx < raise_idx

@@ -93,6 +93,22 @@ function _scrollCommsToBottom() {
   }
 }
 
+let _typingEl = null;
+function _typingIndicatorEl() {
+  if (_typingEl) return _typingEl;
+  const body = document.getElementById('comms-body');
+  if (!body || typeof document.createElement !== 'function') return null;
+  const el = document.createElement('div');
+  el.className = 'comms-typing hidden';
+  if (typeof el.setAttribute === 'function') el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = _prefersReducedMotion()
+    ? '<span class="comms-typing-static">tower is typing\u2026</span>'
+    : '<span class="comms-typing-dot"></span><span class="comms-typing-dot"></span><span class="comms-typing-dot"></span>';
+  body.appendChild(el);
+  _typingEl = el;
+  return el;
+}
+
 function _commsMessageInnerHtml(role, html) {
   const isTower = role.split(' ')[0] === 'tower';
   const dot = isTower ? '<span class="who-dot" aria-hidden="true"></span>' : '';
@@ -351,6 +367,8 @@ async function sendCommsMessage(text) {
   const onAir = document.getElementById('on-air');
   sendBtn.disabled = true;
   onAir.classList.add('live');
+  const typingEl = _typingIndicatorEl();
+  if (typingEl && typingEl.classList) typingEl.classList.remove('hidden');
   // Live tower bubble for this turn, created on the first streamed tool
   // event. Null when nothing streamed, in which case the reply is appended
   // exactly as the blocking path always did.
@@ -462,6 +480,7 @@ async function sendCommsMessage(text) {
     sendBtn.disabled = false;
     onAir.classList.remove('live');
     pending = null;
+    if (_typingEl && _typingEl.classList) _typingEl.classList.add('hidden');
   }
 }
 

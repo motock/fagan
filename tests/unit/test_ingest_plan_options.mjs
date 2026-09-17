@@ -131,10 +131,10 @@ await test('populateIngestPlanOptions element absent', async () => {
 // Helper to flush microtasks
 
 // Test harness setup function
-import { runTest } from './runTest.js';
+// duplicate import removed
 
 // Helper to count occurrences of a substring
-function count(str, sub) {
+// duplicate count removed
   return (str.match(new RegExp(sub, 'g')) || []).length;
 }
 

@@ -13,8 +13,8 @@ const VALID_SORTS = new Set(SORT_OPTIONS.map(([v]) => v));
 
 const BACKEND_VALUES = ["local", "claude"];
 const ESCALATED_VALUES = ["yes", "no"];
-globalThis.BACKEND_VALUES = BACKEND_VALUES;
-globalThis.ESCALATED_VALUES = ESCALATED_VALUES;
+window.BACKEND_VALUES = BACKEND_VALUES;
+window.ESCALATED_VALUES = ESCALATED_VALUES;
 
 function defaultFilters() {
   return {
@@ -28,7 +28,21 @@ function defaultFilters() {
   };
 }
 
-globalThis.state = {
+window.state = {
+  selectedPlan: null,
+  selectedWorkspace: null,
+  pollHandle: null,
+  refreshIndicatorTimer: null,
+  filters: defaultFilters(),
+  showArchived: false,
+  // Repo-scoped plan visibility: false = show only the active repository's
+  // plans (repo param sent); true = the "Show plans from all repositories"
+  // opt-out (no repo param sent).
+  showAllRepos: false,
+  commsActive: true,
+  configActive: false,
+  workspaceActive: false,
+};
 
 const FILTERS_KEY = "pipeline-dashboard-filters";
 const state = window.state;

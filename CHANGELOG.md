@@ -7,6 +7,114 @@ This is a single-maintainer research project rather than a maintained product
 with an SLA - see the README's "Reliability & limitations" for what that means
 in practice.
 
+## [0.3.0] - 2026-09-16
+
+### Added
+
+**Chat-driven worktree patch apply (WAP)**
+
+- Chat can now propose and apply a patch directly against a stuck story's
+  worktree: origin-gated propose/apply routes distinguishing chat from UI
+  callers, unified-diff parsing with size/path/whole-file-replacement limits,
+  an in-memory patch-record store with a TTL and an HMAC token bound to the
+  patch id and diff hash, a plan-locked atomic apply engine restricted to
+  stuck stories, and every propose/apply journaled and notified with a
+  correlation id (never diff content). A dashboard UI renders the stored
+  diff and requests apply with a UI-origin header, and an end-to-end test
+  suite covers the full propose/review/apply path (#750, #752, #753,
+  #756-#761, #766, #768-#770, #772, #773).
+
+**Overlord parked-story autonomy**
+
+- The overlord can now rule on parked stories under a documented decision
+  matrix and autonomy-mode ladder, informed by a live git-state probe and a
+  fail-closed SPLIT payload parser. It executes its own rulings directly -
+  `split_story` creates child stories in the manifest, `mark_done` corrects
+  the story record from live evidence, `patch_acceptance` rewrites a
+  diagnosed-broken fixture through validation - and adjudicates high-risk
+  merges itself in full-autonomy mode, with every executed action recorded
+  in the decisions log alongside its prior state (#736-#738, #740,
+  #742-#745, #747).
+
+**Registry-authoritative provider/model routing**
+
+- An interactive picker (`scripts/choose_providers.py`) lets an operator
+  choose each role's provider from the command line, and the
+  getting-started smoke now announces and runs on the actually-resolved
+  dispatch provider instead of refusing everything but `claude` (#795-#800).
+- `resolve_role` is now the single source of truth for dispatch and
+  escalation backend resolution: registry roles outrank
+  `PIPELINE_BACKEND_<ROLE>`, which becomes an empty-state fallback rather
+  than an override, preflight reports the registry-aware resolution, and
+  the launchd templates stopped shipping routing env vars now that the
+  registry is authoritative (#801-#807).
+
+**Dashboard & Comms chat**
+
+- The Comms chat panel renders markdown (bold, lists, code) while keeping
+  the raw transcript export (#731, #734, #735), and dashboard plan lists
+  can be filtered to the active repository with an all-repos toggle,
+  backed by `repo_root` on plan summaries (#732, #733). A plan-ingest panel
+  was added to Comms so a plan can be ingested from the dashboard UI
+  without a chat-origin route, since `ingest_plan` is unreachable from
+  chat by design (#782-#784, #787, #788).
+
+**One-line install & public-readiness**
+
+- `scripts/remote-install.sh` (`curl -fsSL ... | bash`) clones or updates a
+  fixed local checkout and runs `install.sh`; README/CLAUDE.md gained the
+  community-health files and fixes needed for public visibility; and the
+  launchd plist/template files and generator were renamed from
+  `com.claude.pipeline.*` to `com.fagan.pipeline.*` end to end, including
+  runtime label references (#779-#781, #785, #786).
+
+### Fixed
+
+**Merge-park & CI-evidence correctness**
+
+- A story parked by the merge gate is no longer offered to triage as a
+  candidate, an unreadable or in-flight CI status is never presented to the
+  overlord as "no PR checks," a parked high-risk merge hold is
+  re-adjudicated when its recorded evidence changes, CI evidence gathering
+  now probes the story's real branch instead of a stale one, and high-risk
+  merge adjudication records name the story instead of leaving it implicit
+  (#751, #754, #755, #762-#765, #767, #771).
+
+**Scheduler reconcile resilience**
+
+- The scheduler process's per-call model budget is now clamped inside the
+  reconcile join deadline, and the abandon-restart escape hatch is driven
+  by whether the abandoned worker is actually still alive rather than a
+  resettable streak counter (#739, #741, #746).
+
+**Chat streaming**
+
+- Fixed a duplicate reply bubble on the server's reply+result frame pair,
+  stopped dropping the user's message and prior turns from the prompt
+  across tool round-trips, and widened stall detection to catch
+  attribute-style `[TOOL_CALL name=...]` openers (#774, #777, #778).
+
+**Getting-started smoke hardening**
+
+- The smoke now drives through the real `ingest_plan` path against a
+  scratch repo with a real origin and a success bar scoped to
+  `tests_passed`, rejects a malformed acceptance entry at ingest instead of
+  crashing, resolves its announced dispatch backend through `resolve_role`,
+  and its subprocess-spawning tests no longer leak the developer's real
+  `.pipeline.env` into the child process (#791-#794, #808, #809).
+
+**Local dispatch reliability**
+
+- An in-flight local-backend story is no longer interrupted on local memory
+  pressure (#790).
+
+**Test infrastructure**
+
+- Node frontend test suites now gate merges instead of being silently
+  skipped, a workspace chat-body test was made behavioral instead of
+  pinning source text, and a benchmark `MockBackend` regression was fixed
+  (#775, #776, #789).
+
 ## [0.2.0] - 2026-09-12
 
 ### Added

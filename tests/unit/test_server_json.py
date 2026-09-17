@@ -99,6 +99,25 @@ def test_required_fields_present_and_non_empty():
         assert value, f"{key!r} must not be empty"
 
 
+def test_description_length_is_within_schema_max_length():
+    """The description must satisfy the schema's ``minLength: 1``/``maxLength: 100``.
+
+    ``definitions.ServerDetail.properties.description`` is
+    ``{"type": "string", "minLength": 1, "maxLength": 100}``. A 141-character
+    description previously shipped and was locked in by an exact-equality
+    assertion, so registry validation rejected the manifest while CI stayed
+    green. The bound is asserted here, in the canonical contract module that
+    resolves ``server.json`` from ``__file__``, rather than in a CWD-relative
+    duplicate.
+    """
+    description = _load_server_json()["description"]
+    assert isinstance(description, str), "description must be a string"
+    assert len(description) >= 1, "description must not be empty (minLength 1)"
+    assert len(description) <= 100, (
+        f"description length {len(description)} exceeds the schema's maxLength 100"
+    )
+
+
 def test_name_format():
     """The ``name`` field must match the GitHub‑auth based registry
     convention.

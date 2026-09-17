@@ -1,6 +1,6 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
-import { fetchJson } from "./api.js";
+import { fetchJson, fetchIngestablePlans } from "./api.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { ingestPlan, normalizePlanName, renderIngestStatusHtml } from './ingest.js';
 let commsHistory = [];
@@ -481,6 +481,25 @@ async function sendCommsMessage(text) {
     onAir.classList.remove('live');
     pending = null;
     if (_typingEl && _typingEl.classList) _typingEl.classList.add('hidden');
+  }
+}
+
+async function populateIngestPlanOptions() {
+  const select = document.getElementById('ingest-plan-name');
+  if (!select) return;
+  try {
+    const data = await fetchIngestablePlans();
+    const plans = Array.isArray(data && data.plans) ? data.plans : [];
+    if (plans.length === 0) {
+      select.innerHTML = '<option value="" disabled selected>no plans found</option>';
+      return;
+    }
+    const options = ['<option value="" disabled selected>select a plan\u2026</option>'].concat(
+      plans.map((name) => `\`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>\``)
+    );
+    select.innerHTML = options.join('');
+  } catch (err) {
+    select.innerHTML = '<option value="" disabled selected>failed to load plans</option>';
   }
 }
 

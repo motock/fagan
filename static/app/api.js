@@ -73,4 +73,8 @@ async function fetchHealth() {
   return fetchJson("/api/health");
 }
 
-export { fetchJson, postJson, fetchPlanMetrics, fetchGuardLiveness, fetchHealth };
+async function fetchIngestablePlans() {
+  return fetchJson('/api/ingestable-plans');
+}
+
+export { fetchJson, postJson, fetchPlanMetrics, fetchGuardLiveness, fetchHealth, fetchIngestablePlans };

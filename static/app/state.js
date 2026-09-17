@@ -13,8 +13,8 @@ const VALID_SORTS = new Set(SORT_OPTIONS.map(([v]) => v));
 
 const BACKEND_VALUES = ["local", "claude"];
 const ESCALATED_VALUES = ["yes", "no"];
-window.BACKEND_VALUES = BACKEND_VALUES;
-window.ESCALATED_VALUES = ESCALATED_VALUES;
+globalThis.BACKEND_VALUES = BACKEND_VALUES;
+globalThis.ESCALATED_VALUES = ESCALATED_VALUES;
 
 function defaultFilters() {
   return {

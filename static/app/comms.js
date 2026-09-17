@@ -4,7 +4,6 @@ import { fetchJson } from "./api.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { ingestPlan, normalizePlanName, renderIngestStatusHtml } from './ingest.js';
 let commsHistory = [];
-let _typingEl = null;
 let showTrace = readStoredShowTrace();
 
 // Node-harness compatibility (dead code in browsers, where `process` is

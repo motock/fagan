@@ -35,8 +35,12 @@ node_modules
 # _registry_path) instead of the shipped provider-neutral model_registry.json.
 model_registry.local.json
 
-.agent_scratchpad.md
- / .agent_scratchpad.md
+# Per-story agent working artifacts (never part of the source diff; see
+# pipeline/paths.py's _WORKTREE_LOG_EXCLUDES). Untracking .agent_scratchpad.md
+# fixed a bug where every dispatched agent wrote its own unrelated progress
+# notes into this shared path and committed it, causing spurious merge-gate
+# rebase conflicts between unrelated concurrent stories.
+
 .agent_plan.md
 .agent_scratchpad.md
 .agent_scratchpad*.md

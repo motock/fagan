@@ -604,26 +604,34 @@ class TestReferenceDoc:
     def _text(self) -> str:
         return Path("REFERENCE.md").read_text(encoding="utf-8")
 
+    def _flat(self) -> str:
+        """Whitespace-collapsed text: pins the wording, not the line wrapping."""
+        import re
+
+        return re.sub(r"\s+", " ", self._text())
+
     def test_paragraph_is_present(self):
-        assert REFERENCE_PARAGRAPH in self._text()
+        assert REFERENCE_PARAGRAPH in self._flat(), (
+            "the WAP-10 logging paragraph is missing from REFERENCE.md"
+        )
 
     def test_paragraph_follows_the_anchor_sentence(self):
-        text = self._text()
-        assert REFERENCE_ANCHOR in text
-        assert REFERENCE_PARAGRAPH in text, "the WAP-10 logging paragraph is missing"
-        anchor_end = text.index(REFERENCE_ANCHOR) + len(REFERENCE_ANCHOR)
-        para_idx = text.index(REFERENCE_PARAGRAPH)
+        flat = self._flat()
+        assert REFERENCE_ANCHOR in flat
+        assert REFERENCE_PARAGRAPH in flat, "the WAP-10 logging paragraph is missing"
+        anchor_end = flat.index(REFERENCE_ANCHOR) + len(REFERENCE_ANCHOR)
+        para_idx = flat.index(REFERENCE_PARAGRAPH)
         assert para_idx > anchor_end
-        assert text[anchor_end:para_idx].strip() == ""
+        assert flat[anchor_end:para_idx].strip() == ""
 
     def test_paragraph_sits_inside_the_wap_9_10_section(self):
-        text = self._text()
-        assert REFERENCE_SECTION in text
-        assert REFERENCE_PARAGRAPH in text, "the WAP-10 logging paragraph is missing"
-        assert text.index(REFERENCE_SECTION) < text.index(REFERENCE_PARAGRAPH)
+        flat = self._flat()
+        assert REFERENCE_SECTION in flat
+        assert REFERENCE_PARAGRAPH in flat, "the WAP-10 logging paragraph is missing"
+        assert flat.index(REFERENCE_SECTION) < flat.index(REFERENCE_PARAGRAPH)
 
     def test_paragraph_is_immediately_before_the_separator(self):
-        text = self._text()
-        assert REFERENCE_PARAGRAPH in text, "the WAP-10 logging paragraph is missing"
-        tail = text[text.index(REFERENCE_PARAGRAPH) + len(REFERENCE_PARAGRAPH):]
+        flat = self._flat()
+        assert REFERENCE_PARAGRAPH in flat, "the WAP-10 logging paragraph is missing"
+        tail = flat[flat.index(REFERENCE_PARAGRAPH) + len(REFERENCE_PARAGRAPH):]
         assert tail.lstrip().startswith("---")

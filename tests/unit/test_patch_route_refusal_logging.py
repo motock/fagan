@@ -573,6 +573,28 @@ class TestSourceHygiene:
         for path, method in ((GET_PATH, "GET"), (APPLY_PATH, "POST")):
             assert "require_ui_origin" in _route_source(path, method), path
 
+    def test_origin_gate_is_wrapped_in_a_try_except(self):
+        for path, method in ((GET_PATH, "GET"), (APPLY_PATH, "POST")):
+            src = _route_source(path, method)
+            assert "try:" in src, path
+            assert "except HTTPException:" in src, path
+
+    def test_apply_route_logs_before_raising_the_engine_refusal(self):
+        src = _route_source(APPLY_PATH, "POST")
+        log_idx = src.index(APPLY_REFUSED_MSG)
+        raise_idx = src.index("raise HTTPException(status_code=result")
+        assert log_idx < raise_idx
+
+    def test_bottom_of_file_sentinels_are_intact(self):
+        src = inspect.getsource(dashboard_module)
+        assert 'app.mount("/", StaticFiles(' in src
+        non_empty = [line for line in src.splitlines() if line.strip()]
+        assert non_empty[-1].strip() == "# End of file"
+
+    def test_propose_route_origin_check_is_untouched(self):
+        src = _route_source("/api/worktree/patch/propose", "POST")
+        assert "x_pipeline_origin not in (ORIGIN_CHAT, ORIGIN_UI)" in src
+
 
 # =========================================================================== #
 # REFERENCE.md

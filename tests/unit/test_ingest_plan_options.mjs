@@ -131,29 +131,7 @@ await test('populateIngestPlanOptions element absent', async () => {
 // Helper to flush microtasks
 
 // Test harness setup function
-async function runTest({ fetchResponse, elementAbsent = false, expectFetchCount, description }) {
-  // Reset global state
-  const doc = makeDoc();
-  if (elementAbsent) {
-    doc.getElementById = () => undefined;
-  }
-  globalThis.document = doc;
-  const fetchCalls = [];
-  globalThis.fetch = async (url) => {
-    fetchCalls.push(url);
-    if (fetchResponse instanceof Error) {
-      return Promise.reject(fetchResponse);
-    }
-    return {
-      ok: true,
-      json: async () => fetchResponse,
-    };
-  };
-  // Import module fresh
-  const mod = await import('../static/app/comms.js?case=' + Math.random());
-  await flush();
-  return { mod, fetchCalls, doc };
-}
+import { runTest } from './runTest.js';
 
 // Helper to count occurrences of a substring
 function count(str, sub) {

@@ -323,9 +323,9 @@ the cost gate.
 
 The chat model may PROPOSE a unified diff against a stuck story's
 worktree; only the ui-origin-authenticated human may review and APPLY it.
-Both routes are UI-only except propose, which is chat-reachable by design
-(the chat tool `propose_patch` drives it); each is gated by
-`X-Pipeline-Origin`:
+All three routes are gated by `X-Pipeline-Origin`: review and apply are
+UI-only, while propose is also chat-reachable by design (the chat tool
+`propose_patch` drives it):
 
 | Route | Origin | Effect |
 |---|---|---|

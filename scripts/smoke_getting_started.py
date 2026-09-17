@@ -408,9 +408,15 @@ def _announce_dispatch_backend(
             backend = backend.strip().lower() or "claude"
             return backend, _model_fallback_for(backend), _env_or_default_source()
 
+        # Adjust model for local-family providers
+        local_family = ("ollama", "lmstudio", "mlx", "local", "auto")
+        provider = resolution.provider
+        model = resolution.model
+        if provider in local_family:
+            model = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", model)
         return (
-            resolution.provider,
-            resolution.model,
+            provider,
+            model,
             _provenance_source(provenance.get("provider_source")),
         )
 

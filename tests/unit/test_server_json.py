@@ -11,14 +11,21 @@ release rather than being hand-maintained as a second source of truth, so the
 version test below reads *both* sides fresh and never hardcodes a literal
 version number - it keeps passing across future releases without modification.
 
-No ``jsonschema`` dependency is used: the handful of fields the official schema
-actually requires are hand-checked here.
+No ``jsonschema`` dependency is used, so the schema's *required* fields are
+hand-checked here. The declared schema's ``description`` bounds are enforced
+too: ``definitions.ServerDetail.properties.description`` is
+``{"type": "string", "minLength": 1, "maxLength": 100}``, so the description
+tests assert those bounds instead of restating a hand-copied literal (a
+141-character description previously shipped and was locked in by an
+exact-equality assertion, so registry validation rejected the manifest while
+CI stayed green).
 """
 
 from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -47,7 +54,15 @@ EXPECTED_SCHEMA_URL = (
     "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"
 )
 EXPECTED_WEBSITE_URL = "https://github.com/motock/fagan#quickstart"
-EXPECTED_DESCRIPTION = (
+# A documented, schema-compliant description (<=100 chars). The description
+# tests assert the declared schema's *bounds* rather than pinning this literal,
+# so any compliant wording passes; this value only appears in failure messages.
+EXPECTED_DESCRIPTION = "MCP server exposing pipeline story tooling to agents."
+
+# The 141-character description this manifest shipped while the declared schema
+# caps ``description`` at maxLength 100. Kept only so the regression test can
+# assert the invalid value is gone.
+OLD_INVALID_DESCRIPTION = (
     "Autonomous coding pipeline: frontier models plan and review, a local model "
     "implements, gated by TDD and an independent merge-time test rerun."
 )
@@ -175,7 +190,43 @@ def test_website_url_is_exact():
 
 
 def test_description_is_exact():
-    assert _load_server_json()["description"] == EXPECTED_DESCRIPTION
+    """The description must be the documented, schema-compliant wording.
+
+    ``EXPECTED_DESCRIPTION`` is a <=100-character value that satisfies the
+    declared schema's ``maxLength``. The previous 141-character value was
+    restated verbatim here, which locked in a manifest the registry rejects;
+    the length assertion below is what actually enforces the contract.
+    """
+    description = _load_server_json()["description"]
+    assert description == EXPECTED_DESCRIPTION, (
+        f"description is {description!r} ({len(description)} chars); expected "
+        f"{EXPECTED_DESCRIPTION!r} ({len(EXPECTED_DESCRIPTION)} chars). Set "
+        "server.json's description to exactly that string - do not edit this "
+        "test."
+    )
+    assert len(description) <= SCHEMA_DESCRIPTION_MAX_LENGTH, (
+        f"description is {len(description)} chars but the declared MCP Registry "
+        f"schema caps it at maxLength {SCHEMA_DESCRIPTION_MAX_LENGTH}"
+    )
+
+
+def test_description_is_not_the_invalid_over_length_value():
+    """Regression: the 141-char description must not come back.
+
+    ``definitions.ServerDetail.properties.description`` in the declared schema
+    is ``{"type": "string", "minLength": 1, "maxLength": 100}``, so the old
+    141-character wording made mcp-publisher/registry validation reject
+    ``server.json``.
+    """
+    description = _load_server_json()["description"]
+    assert description != OLD_INVALID_DESCRIPTION, (
+        "server.json still carries the 141-character description that the "
+        "declared MCP Registry schema (maxLength 100) rejects"
+    )
+    assert len(OLD_INVALID_DESCRIPTION) > SCHEMA_DESCRIPTION_MAX_LENGTH, (
+        "test fixture drift: OLD_INVALID_DESCRIPTION is no longer over the "
+        "schema's maxLength, so this regression test proves nothing"
+    )
 
 
 # --- Case 6: the declared schema's length bounds ----------------------------
@@ -215,4 +266,95 @@ def test_description_satisfies_schema_length_bounds():
     assert len(description) >= SCHEMA_DESCRIPTION_MIN_LENGTH, (
         f"description must be at least {SCHEMA_DESCRIPTION_MIN_LENGTH} character(s), "
         f"got {len(description)}"
+    )
+
+
+# --- Case 7: the scratchpad-only commits must be dropped from the branch -----
+#
+# The second blocking review finding has two halves. Untracking the file is only
+# the first: this branch also carries two commits whose only change is
+# ``.agent_scratchpad.md`` -
+#
+#     afdc682 docs: update scratchpad for server.json story
+#     ba6ad02 docs: update scratchpad for server.json story
+#
+# They carry no source change, and merging them re-introduces the shared
+# scratch-path churn that previously caused spurious merge-gate rebase conflicts
+# between unrelated concurrent stories. The review requires dropping them (e.g.
+# during the same rebase that untracks the file), while keeping the real
+# ``server.json`` change.
+
+SCRATCHPAD_PATH = ".agent_scratchpad.md"
+
+# Tried in order because the pipeline operates across repos that differ on
+# default-branch naming and on whether a remote exists at all.
+_BASE_BRANCH_CANDIDATES = (
+    "origin/HEAD",
+    "origin/main",
+    "origin/master",
+    "main",
+    "master",
+)
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    """Run git in the repo root, capturing output without raising."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _merge_base() -> str:
+    """The commit this branch diverged from, or fail loudly if unresolvable."""
+    for candidate in _BASE_BRANCH_CANDIDATES:
+        result = _git("merge-base", "HEAD", candidate)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    raise AssertionError(
+        "could not resolve a merge base against any of "
+        f"{_BASE_BRANCH_CANDIDATES}; this test needs the branch's base commit"
+    )
+
+
+def test_no_branch_commit_touches_the_scratchpad():
+    """No commit on this branch may add or modify .agent_scratchpad.md.
+
+    The two ``docs: update scratchpad for server.json story`` commits carry no
+    source change and must be dropped from the branch, not merely untracked.
+    ``--diff-filter=AM`` deliberately allows the *deletion* commit that
+    ``git rm --cached`` produces (the fix itself), while still failing on any
+    commit that introduces or edits the file's contents.
+    """
+    base = _merge_base()
+    result = _git(
+        "log",
+        "--format=%h %s",
+        "--diff-filter=AM",
+        f"{base}..HEAD",
+        "--",
+        SCRATCHPAD_PATH,
+    )
+    assert result.returncode == 0, f"git log failed: {result.stderr}"
+    offenders = [line for line in result.stdout.splitlines() if line.strip()]
+    assert offenders == [], (
+        f"{SCRATCHPAD_PATH} is added or modified by {len(offenders)} commit(s) on "
+        f"this branch ({base[:8]}..HEAD): {offenders}. These scratchpad-only "
+        "commits carry no source change and re-introduce the spurious merge-gate "
+        "rebase conflicts between concurrent stories. Drop them (e.g. during the "
+        f"rebase that untracks {SCRATCHPAD_PATH})."
+    )
+
+
+def test_branch_still_carries_the_server_json_change():
+    """Dropping the scratchpad commits must not drop the real source change."""
+    base = _merge_base()
+    result = _git("log", "--format=%h %s", f"{base}..HEAD", "--", "server.json")
+    assert result.returncode == 0, f"git log failed: {result.stderr}"
+    assert result.stdout.strip(), (
+        f"no commit in {base[:8]}..HEAD changes server.json; the branch must "
+        "still carry the manifest change after the scratchpad commits are dropped"
     )

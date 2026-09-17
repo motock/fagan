@@ -237,6 +237,14 @@ class TestOriginClassHelper:
         assert isinstance(dashboard_module._origin_class(None), str)
         assert isinstance(dashboard_module._origin_class("ui"), str)
 
+    def test_signature_takes_one_origin_argument(self):
+        params = inspect.signature(dashboard_module._origin_class).parameters
+        assert list(params) == ["x_pipeline_origin"]
+
+    def test_is_a_module_level_function(self):
+        assert inspect.isfunction(dashboard_module._origin_class)
+        assert dashboard_module._origin_class.__module__ == "app.dashboard"
+
 
 class TestHelperPlacement:
     def test_helper_is_defined_exactly_once(self):

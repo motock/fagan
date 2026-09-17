@@ -229,10 +229,12 @@ threat to the "autonomous, unattended overnight continuity" priority G5 already 
 **Fixed:** `resource_status()`'s floor is now per-provider
 (`PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX`, falling back to the generic
 `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB` when unset) so an operator can give MLX a floor suited to its
-own non-evictable memory model without loosening Ollama's. No default value is shipped for the
-override - Ollama's 2048mb default is unchanged, and MLX keeps the same 2048mb floor until an
-operator opts into a lower one, since the "safe" number depends on total host RAM vs. model size
-and shouldn't be guessed generically. **Not yet fixed:** whether the actual stall in this
+own non-evictable memory model without loosening Ollama's. A provider-aware default is shipped as of MEMFLOOR-1: ollama and lmstudio now default to
+512mb (both can evict a resident model under pressure), while MLX stays pinned at 2048mb because
+mlx_lm.server pins one model's full footprint for its entire process lifetime with nothing to
+evict. An explicit `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB` or per-provider override still wins over
+either default, since the "safe" number depends on total host RAM vs. model size - which is why
+the default is resolved per provider rather than guessed generically. **Not yet fixed:** whether the actual stall in this
 specific cell was *caused* by the outer gate (which only controls whether advance_pipeline
 interrupts/redispatches, not whether the already-running dispatch subprocess itself makes
 progress) or a separate hang inside `local_agent.py`'s own step loop is still unconfirmed - the

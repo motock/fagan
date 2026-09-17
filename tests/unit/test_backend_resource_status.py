@@ -3,6 +3,7 @@
 Split out of test_backend.py to keep it under the project's line-count target; shared fixtures/helpers moved to tests.unit._backend_helpers.
 """
 import json
+from pathlib import Path
 
 import pytest
 
@@ -67,15 +68,20 @@ def test_ollama_resource_status_ok_when_free_memory_above_floor(monkeypatch):
     assert status["ok"] is True
 
 
-def test_ollama_resource_status_memory_floor_defaults_to_2048mb(monkeypatch):
+def test_ollama_resource_status_memory_floor_defaults_to_512mb(monkeypatch):
+    """MEMFLOOR-1: with no PIPELINE_LOCAL_MIN_FREE_MEMORY_MB* set, ollama's
+    floor is the provider-aware 512mb default (ollama can evict a resident
+    model under pressure), NOT the old hardcoded 2048mb that gated every
+    provider identically. Boundary: 511mb gates, 512mb clears."""
     monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
     monkeypatch.delenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", raising=False)
-    driver = b.OllamaDriver()
+    monkeypatch.delenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_OLLAMA", raising=False)
+    driver = b.OllamaDriver(provider_name="ollama")
 
-    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 2047)
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 511)
     assert driver.resource_status()["ok"] is False
 
-    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 2048)
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 512)
     assert driver.resource_status()["ok"] is True
 
 
@@ -856,5 +862,182 @@ def test_resource_status_ok_when_identity_not_yet_checked(monkeypatch):
     monkeypatch.setattr(bc, "_claude_identity_status", None)
 
     assert b.ClaudeCliDriver().resource_status()["ok"] is True
+
+
+# ---------- MEMFLOOR-1: provider-aware unset-env default floor ----------
+# The unset-env default used to be one hardcoded 2048mb for every provider,
+# which permanently gated ollama/lmstudio on hosts whose steady-state free
+# memory sits between 512mb and 2048mb. Providers that can evict a resident
+# model under pressure (ollama, lmstudio) now default to 512mb; mlx, which
+# pins one model's full footprint for its process lifetime with nothing to
+# evict, keeps 2048mb. An explicit PIPELINE_LOCAL_MIN_FREE_MEMORY_MB or
+# per-provider override always wins over either default.
+def _clear_min_free_memory_env(monkeypatch, provider_name):
+    """Unset both the generic and the provider-scoped floor env vars so the
+    provider-aware default is what resource_status() actually reads."""
+    monkeypatch.delenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", raising=False)
+    monkeypatch.delenv(
+        f"PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_{provider_name.upper()}",
+        raising=False,
+    )
+
+
+def _fake_reachable_driver(monkeypatch, provider_name):
+    """An OllamaDriver pinned to `provider_name` whose reachability is faked
+    (never depends on a live server) and whose httpx.get is stubbed so the
+    Ollama-only model-weights probe fails open instead of probing the host."""
+    monkeypatch.setattr(b.httpx, "get", lambda url, timeout: _FakeResponse({}))
+    driver = b.OllamaDriver(provider_name=provider_name)
+    monkeypatch.setattr(driver.provider, "reachable", lambda endpoint: (True, ""))
+    return driver
+
+
+def test_ollama_unset_env_default_floor_is_512mb(monkeypatch):
+    """1500mb free used to fail under the old hardcoded 2048mb default; with
+    the provider-aware default it clears ollama's 512mb floor."""
+    _clear_min_free_memory_env(monkeypatch, "ollama")
+    driver = _fake_reachable_driver(monkeypatch, "ollama")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 1500)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is True
+
+
+def test_ollama_unset_env_default_floor_gates_below_512mb(monkeypatch):
+    """The lower default is still a real floor: 400mb free gates, and the
+    reason names the 512mb floor it tripped."""
+    _clear_min_free_memory_env(monkeypatch, "ollama")
+    driver = _fake_reachable_driver(monkeypatch, "ollama")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 400)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is False
+    assert "insufficient free memory" in status["reason"]
+    assert "512mb floor" in status["reason"]
+
+
+def test_mlx_unset_env_default_floor_stays_2048mb(monkeypatch):
+    """MLX pins one model for its process lifetime with nothing to evict, so
+    its unset-env default must NOT drop to the generic 512mb: 1900mb free
+    (the observed steady state) still gates, naming the 2048mb floor."""
+    _clear_min_free_memory_env(monkeypatch, "mlx")
+    driver = _fake_reachable_driver(monkeypatch, "mlx")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 1900)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is False
+    assert "insufficient free memory" in status["reason"]
+    assert "2048mb floor" in status["reason"]
+
+
+def test_mlx_unset_env_default_floor_clears_above_2048mb(monkeypatch):
+    """Regression guard on the other side of MLX's unchanged default."""
+    _clear_min_free_memory_env(monkeypatch, "mlx")
+    driver = _fake_reachable_driver(monkeypatch, "mlx")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 2200)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is True
+
+
+def test_lmstudio_unset_env_default_floor_is_512mb(monkeypatch):
+    """lmstudio JIT-loads and can evict like ollama, so it inherits the same
+    512mb generic default: 600mb free clears (it would have failed at 2048)."""
+    _clear_min_free_memory_env(monkeypatch, "lmstudio")
+    driver = _fake_reachable_driver(monkeypatch, "lmstudio")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 600)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is True
+
+
+def test_generic_env_override_beats_provider_aware_default(monkeypatch):
+    """An explicit PIPELINE_LOCAL_MIN_FREE_MEMORY_MB still overrides the new
+    provider-aware default: 1000mb set, 800mb free -> gated at 1000mb."""
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "1000")
+    monkeypatch.delenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_OLLAMA", raising=False)
+    driver = _fake_reachable_driver(monkeypatch, "ollama")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 800)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is False
+    assert "insufficient free memory" in status["reason"]
+    assert "1000mb floor" in status["reason"]
+
+
+def test_provider_env_override_beats_its_own_provider_aware_default(monkeypatch):
+    """A provider-scoped env var still overrides that provider's own new
+    default: PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX=100 with 150mb free clears
+    even though mlx's unset default is 2048mb."""
+    monkeypatch.delenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", raising=False)
+    monkeypatch.setenv("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_MLX", "100")
+    driver = _fake_reachable_driver(monkeypatch, "mlx")
+    monkeypatch.setattr(driver, "_free_memory_mb", lambda: 150)
+
+    status = driver.resource_status()
+
+    assert status["ok"] is True
+
+
+def test_provider_aware_default_constants():
+    """The two module-level constants the provider-aware default is built
+    from: a generic 512mb string default plus a per-provider registry that
+    pins only mlx (the non-evicting provider) at 2048mb."""
+    assert bo._DEFAULT_MIN_FREE_MEMORY_MB == "512"
+    assert bo._PROVIDER_MIN_FREE_MEMORY_MB_DEFAULTS["mlx"] == "2048"
+    # ollama/lmstudio can evict a resident model under pressure, so they must
+    # NOT pin a higher default - they fall through to the generic 512.
+    assert bo._PROVIDER_MIN_FREE_MEMORY_MB_DEFAULTS.get(
+        "ollama", bo._DEFAULT_MIN_FREE_MEMORY_MB
+    ) == "512"
+    assert bo._PROVIDER_MIN_FREE_MEMORY_MB_DEFAULTS.get(
+        "lmstudio", bo._DEFAULT_MIN_FREE_MEMORY_MB
+    ) == "512"
+
+
+def _normalized_backend_source():
+    """backend_ollama.py with all whitespace runs collapsed to single spaces,
+    so docstring assertions survive any line-wrapping the implementer picks.
+    Em-dashes are folded to `--` because this file's docstrings use both
+    glyphs interchangeably for the same clause break."""
+    return " ".join(Path(bo.__file__).read_text().replace("\u2014", "--").split())
+
+
+def test_resource_status_docstring_documents_provider_aware_default():
+    """The floor paragraph must document the new provider-aware default (and
+    keep its pre-existing closing sentence verbatim)."""
+    src = _normalized_backend_source()
+    new_sentence = (
+        "The unset-env default is itself provider-aware: 2048mb for mlx "
+        "(matching the steady-state measurement above), 512mb generically for "
+        "providers that can evict a resident model (ollama, lmstudio) -- an "
+        "explicit PIPELINE_LOCAL_MIN_FREE_MEMORY_MB or per-provider override "
+        "always wins over either default."
+    )
+    assert new_sentence in src
+    assert (
+        "The override does not change the generic floor or any other "
+        "provider's default." in src
+    )
+    # Placement: the new sentence belongs at the END of the floor paragraph,
+    # i.e. after the paragraph's opening line and before the next paragraph
+    # (the orthogonal model-too-big-for-total-RAM check).
+    floor_para_start = src.index("The floor itself is per-provider")
+    next_para_start = src.index("For Ollama there is a third, ORTHOGONAL check")
+    assert floor_para_start < src.index(new_sentence) < next_para_start
+
+
+def test_hardcoded_2048_fallback_is_replaced_by_provider_default():
+    """The old single hardcoded fallback is gone, replaced by the
+    provider-aware lookup."""
+    src = _normalized_backend_source()
+    assert 'os.environ.get("PIPELINE_LOCAL_MIN_FREE_MEMORY_MB", "2048")' not in src
+    assert "_PROVIDER_MIN_FREE_MEMORY_MB_DEFAULTS.get(" in src
 
 

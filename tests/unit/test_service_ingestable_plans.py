@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.service import PipelineService
 from pipeline import server
+from pipeline.service import PipelineService
 
 # Helper to write a JSON file
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Fagan pipeline advance-scheduler daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{REPO_ROOT}}
+ExecStart={{REPO_ROOT}}/.venv/bin/python3 -m pipeline.scheduler_daemon
+Restart=always
+RestartSec=5
+StandardOutput=append:{{REPO_ROOT}}/advance-scheduler.log
+StandardError=append:{{REPO_ROOT}}/advance-scheduler.err.log
+Environment=PATH={{HOME}}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+[Install]
+WantedBy=default.target

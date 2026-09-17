@@ -437,6 +437,14 @@ class TestApplyEngineRefusalLogging:
         assert rec.story_key == STORY_KEY
         assert rec.status_code == 403
         assert rec.error == "invalid confirmation token"
+        assert _extra_keys(rec) == {
+            "route",
+            "patch_id",
+            "plan_name",
+            "story_key",
+            "status_code",
+            "error",
+        }
         assert SUBMITTED_TOKEN not in caplog.text
         assert SUBMITTED_TOKEN not in _all_blobs(caplog)
 

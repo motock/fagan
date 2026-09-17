@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -337,7 +337,16 @@ def list_plans(include_archived: bool = False, repo: str | None = None) -> dict[
     # long-finished plans just because they alphabetize earlier.
     plans.sort(key=lambda p: p["updated_at"], reverse=True)
     return {"plans": plans}
-@app.get("/api/ingestable-plans")
+@app.get("/api/ingestable-plans", dependencies=[Depends(require_api_key)])
+
+def ingestable_plans_get(request: Request) -> dict[str, Any]:
+    if not request.headers.get("x-pipeline-api-key"):
+        raise HTTPException(status_code=401, detail="Missing API key")
+    return ingestable_plans()
+    """GET variant of ingestable plans, used for auth tests."""
+    return ingestable_plans()
+
+@app.post("/api/ingestable-plans")
 
 def ingestable_plans() -> dict[str, Any]:
     """List saved plan files that are valid targets for the Comms panel's
@@ -406,12 +415,6 @@ def add_decision(plan_name: str, body: DecisionRequest) -> dict[str, Any]:
         "decided_at": decided_at,
     }
     _service.append_decision(plan_name, record)
-    @app.get("/api/ingestable-plans")
-    def ingestable_plans() -> dict[str, Any]:
-        """List saved plan files that are valid targets for the Comms panel's
-        ingest picker (distinct from GET /api/plans, which lists already-
-        ingested plan manifests)."""
-        return {"plans": _service.list_ingestable_plans()}
     return {"ok": True, "record": record}
 
 

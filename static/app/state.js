@@ -28,21 +28,7 @@ function defaultFilters() {
   };
 }
 
-window.state = {
-  selectedPlan: null,
-  selectedWorkspace: null,
-  pollHandle: null,
-  refreshIndicatorTimer: null,
-  filters: defaultFilters(),
-  showArchived: false,
-  // Repo-scoped plan visibility: false = show only the active repository's
-  // plans (repo param sent); true = the "Show plans from all repositories"
-  // opt-out (no repo param sent).
-  showAllRepos: false,
-  commsActive: true,
-  configActive: false,
-  workspaceActive: false,
-};
+globalThis.state = {
 
 const FILTERS_KEY = "pipeline-dashboard-filters";
 const state = window.state;

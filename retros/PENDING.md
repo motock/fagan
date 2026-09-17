@@ -183,3 +183,4 @@ if a precise date is needed when writing one of these up.
 - smoke-test-hermeticity-fix — completed 2026-09-16, 1 stories
 - remote-install-script — completed 2026-09-16, 3 stories
 - glama-dockerfile-listing — completed 2026-09-17, 1 stories
+- mcp-server-registry-listing — completed 2026-09-17, 1 stories

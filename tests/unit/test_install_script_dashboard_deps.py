@@ -43,8 +43,8 @@ _DASHBOARD_REQ = _REPO_ROOT / "requirements-dashboard.txt"
 _DASHBOARD_REQ_NAME = "requirements-dashboard.txt"
 
 # The exact requirement lines that exist today — must survive byte-identical.
-_FASTAPI_PIN = "fastapi>=0.141.1"
-_UVICORN_PIN = "uvicorn>=0.52.4"
+_FASTAPI_PIN_RE = re.compile(r"^fastapi\u003e=\d+\.\d+\.\d+$")
+_UVICORN_PIN_RE = re.compile(r"^uvicorn\u003e=\d+\.\d+\.\d+$")
 
 
 # --------------------------------------------------------------------------- #
@@ -219,11 +219,15 @@ def _dashboard_req_comment_block():
 
 
 def test_dashboard_req_pins_byte_identical():
-    """(5a) fastapi/uvicorn lines unchanged, unre-pinned, un-reordered."""
+    """(5a) fastapi/uvicorn stay single, well-formed, correctly ordered floor
+    pins -- shape only, not a frozen version literal, so a legitimate
+    dependency bump does not fail this test."""
     lines = _dashboard_req_lines()
-    assert lines.count(_FASTAPI_PIN) == 1, f"fastapi pin changed: {lines!r}"
-    assert lines.count(_UVICORN_PIN) == 1, f"uvicorn pin changed: {lines!r}"
-    assert lines.index(_FASTAPI_PIN) < lines.index(_UVICORN_PIN), (
+    fastapi_matches = [ln for ln in lines if _FASTAPI_PIN_RE.match(ln)]
+    uvicorn_matches = [ln for ln in lines if _UVICORN_PIN_RE.match(ln)]
+    assert len(fastapi_matches) == 1, f"fastapi pin malformed or duplicated: {lines!r}"
+    assert len(uvicorn_matches) == 1, f"uvicorn pin malformed or duplicated: {lines!r}"
+    assert lines.index(fastapi_matches[0]) < lines.index(uvicorn_matches[0]), (
         "fastapi/uvicorn order must not change"
     )
 

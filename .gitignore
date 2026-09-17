@@ -36,6 +36,7 @@ node_modules
 model_registry.local.json
 
 .agent_scratchpad.md
+ / .agent_scratchpad.md
 .agent_plan.md
 .agent_scratchpad.md
 .agent_scratchpad*.md

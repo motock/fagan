@@ -143,11 +143,11 @@ test('populateIngestPlanOptions: called exactly once at module load, not per sen
   const { mod, fetchCalls } = await loadComms({
     fetchResponse: { plans: ['anagram'] },
   });
-  assert.equal(fetchCalls.length, 1, 'exactly one call at module load');
+  assert.equal(planFetchCount(fetchCalls), 1, 'exactly one call at module load');
   if (typeof mod.sendCommsMessage === 'function') {
     await mod.sendCommsMessage('hello');
     await flush();
-    assert.equal(fetchCalls.length, 1, 'no additional call from sendCommsMessage');
+    assert.equal(planFetchCount(fetchCalls), 1, 'no additional call from sendCommsMessage');
   }
 });
 
@@ -157,5 +157,5 @@ test('populateIngestPlanOptions: missing select element is a no-op (no fetch, no
     withPlanSelect: false,
   });
   await flush();
-  assert.equal(fetchCalls.length, 0, 'fetchIngestablePlans must not be called');
+  assert.equal(planFetchCount(fetchCalls), 0, 'fetchIngestablePlans must not be called');
 });

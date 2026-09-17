@@ -34,7 +34,7 @@ _EXACT_PYTEST_PIN_RE = re.compile(r"^pytest==(\d+\.\d+(?:\.\d+)?)", re.MULTILINE
 _PYTEST_FLOOR_RE = re.compile(r"^pytest>=", re.MULTILINE)
 
 # Survivor-list pins that must not be touched by this story.
-_SURVIVOR_PINS = {"ruff": "0.16.5", "pytest-xdist": "3.8.0"}
+
 
 
 def _read_requirements(path: Path) -> str:
@@ -125,13 +125,26 @@ def test_pytest_floor_constraint_is_gone() -> None:
 
 
 def test_ruff_and_pytest_xdist_remain_exactly_pinned() -> None:
-    """Survivor-list regression guard: ruff and pytest-xdist keep == pins."""
+    """Regression guard: ruff and pytest-xdist keep a single, well-formed
+    exact `==` pin. Checks pin SHAPE (one line, `tool==X.Y[.Z]`), not a
+    frozen version number -- the literal version legitimately changes as
+    dependabot bumps these merge-gating tools.
+    `test_no_range_constraint_on_merge_gated_tools` already covers the
+    no-floor/exact-`==` invariant for both tools independently; this test's
+    remaining job is catching an accidental duplicate or malformed pin
+    line, which a frozen literal would also have caught but at the cost of
+    blocking every legitimate bump.
+    """
     text = _read_requirements(_DEV_REQUIREMENTS)
-    for tool, version in _SURVIVOR_PINS.items():
+    for tool in ("ruff", "pytest-xdist"):
         lines = _lines_for_tool(text, tool)
-        assert lines == [f"{tool}=={version}"], (
-            f"the {tool} survivor line must remain exactly "
-            f"'{tool}=={version}' (unmodified, exact pin); found {lines!r}"
+        assert len(lines) == 1, (
+            f"{tool} must be declared exactly once in requirements-dev.txt; "
+            f"found {lines!r}"
+        )
+        assert re.fullmatch(rf"{re.escape(tool)}==\d+\.\d+(?:\.\d+)?", lines[0]) is not None, (
+            f"the {tool} pin must be exactly '{tool}==<major>.<minor>[.<patch>]' "
+            f"(exact pin, well-formed); found {lines[0]!r}"
         )
 
 

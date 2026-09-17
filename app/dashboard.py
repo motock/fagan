@@ -337,7 +337,7 @@ def list_plans(include_archived: bool = False, repo: str | None = None) -> dict[
     # long-finished plans just because they alphabetize earlier.
     plans.sort(key=lambda p: p["updated_at"], reverse=True)
     return {"plans": plans}
-@app.get("/api/ingestable-plans", dependencies=[Depends(require_api_key)])
+@app.get("/api/ingestable-plans", operation_id="ingestable_plans_get", dependencies=[Depends(require_api_key)])
 
 def ingestable_plans_get(request: Request) -> dict[str, Any]:
     if not request.headers.get("x-pipeline-api-key"):
@@ -346,8 +346,7 @@ def ingestable_plans_get(request: Request) -> dict[str, Any]:
     """GET variant of ingestable plans, used for auth tests."""
     return ingestable_plans()
 
-@app.post("/api/ingestable-plans")
-
+@app.post("/api/ingestable-plans", operation_id="ingestable_plans_post")
 def ingestable_plans() -> dict[str, Any]:
     """List saved plan files that are valid targets for the Comms panel's
     ingest picker (distinct from GET /api/plans, which lists already-

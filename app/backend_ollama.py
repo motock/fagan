@@ -771,7 +771,11 @@ class OllamaDriver:
         spike, false for MLX's steady state, so an ungated MLX floor would
         silently paralyze all future dispatch on this plan. The override
         does not change the generic floor or any other provider's default.
-        The unset-env default is itself provider-aware: 2048mb for mlx (matching the steady-state measurement above), 512mb generically for providers that can evict a resident model (ollama, lmstudio) -- an explicit PIPELINE_LOCAL_MIN_FREE_MEMORY_MB or per-provider override always wins over either default.
+        The unset-env default is itself provider-aware: 2048mb for mlx
+        (matching the steady-state measurement above), 512mb generically for
+        providers that can evict a resident model (ollama, lmstudio) -- an
+        explicit PIPELINE_LOCAL_MIN_FREE_MEMORY_MB or per-provider override
+        always wins over either default.
 
         For Ollama there is a third, ORTHOGONAL check after the floor: the
         configured model's weights against TOTAL physical RAM, refusing a

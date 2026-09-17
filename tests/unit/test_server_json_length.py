@@ -10,7 +10,6 @@ characters. Until the implementation is fixed, this assertion will raise an
 ``AssertionError``.
 """
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -45,12 +44,20 @@ def test_manifest_is_found_when_pytest_runs_from_a_foreign_cwd(tmp_path):
     instead of only on a machine whose CWD happens to differ.
     """
     module_path = Path(__file__).resolve()
+    # This module's only test is the one running right now, and the ``-k``
+    # below deselects it inside the subprocess to avoid infinite recursion -
+    # so pointing the subprocess back at this module would collect zero
+    # runnable tests and pytest would exit 5 no matter what the manifest
+    # contains. Run the canonical manifest contract module instead: it
+    # resolves ``server.json``/``CHANGELOG.md`` from ``__file__`` and must
+    # pass from any working directory.
+    contract_module = module_path.parent / "test_server_json.py"
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
-            str(module_path),
+            str(contract_module),
             "-q",
             "-n",
             "0",
@@ -68,7 +75,7 @@ def test_manifest_is_found_when_pytest_runs_from_a_foreign_cwd(tmp_path):
     )
 
     assert result.returncode == 0, (
-        f"{module_path.name} fails when pytest is invoked from {tmp_path} "
+        f"{contract_module.name} fails when pytest is invoked from {tmp_path} "
         "instead of the repo root. Repo-root files must be resolved from "
         "__file__ (REPO_ROOT = Path(__file__).resolve().parents[2]), never from "
         "the process CWD - pyproject.toml documents a past CI breakage from "

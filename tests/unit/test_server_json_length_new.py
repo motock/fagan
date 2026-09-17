@@ -13,7 +13,8 @@ def test_description_length_is_within_schema_limit():
     MCP Registry schema ``maxLength: 100``. This test will fail with an
     ``AssertionError`` until the implementation is corrected.
     """
-    data = json.load(Path("server.json").open("r", encoding="utf-8"))
+    with Path("server.json").open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
     description = data.get("description", "")
     assert isinstance(description, str), "description must be a string"
     assert len(description) <= 100, (

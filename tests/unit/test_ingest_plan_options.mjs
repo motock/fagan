@@ -29,7 +29,12 @@ function makeDoc({ withPlanSelect = true } = {}) {
   }
   const doc = {
     getElementById(id) {
-      return elements.has(id) ? elements.get(id) : null;
+      if (!elements.has(id)) {
+        // Generic stub so unrelated module-load wiring (comms thread, send
+        // button, etc.) never throws; only 'ingest-plan-name' is asserted on.
+        elements.set(id, makeElement());
+      }
+      return elements.get(id);
     },
     createElement: () => makeElement(),
     querySelector: () => null,

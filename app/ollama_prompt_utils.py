@@ -12,12 +12,20 @@ import re
 import subprocess
 from pathlib import Path
 
+from pipeline.config_provenance import ENV_VAR_CATALOG
+
 _LOCAL_TIER_ENV = {
     "opus": "PIPELINE_LOCAL_MODEL_OPUS",
     "sonnet": "PIPELINE_LOCAL_MODEL_SONNET",
     "haiku": "PIPELINE_LOCAL_MODEL_HAIKU",
 }
-_LOCAL_DEFAULT_MODEL = "devstral:24b"
+# Sourced from pipeline/config_provenance.py's ENV_VAR_CATALOG rather than
+# hardcoded here a second time - that catalog is the existing single source
+# of truth for env var defaults (see IGNORED_ENV_VARS in that module for the
+# same "exactly one definition - a second copy would drift" rationale).
+_LOCAL_DEFAULT_MODEL = next(
+    spec.default for spec in ENV_VAR_CATALOG if spec.name == "PIPELINE_LOCAL_MODEL_DEFAULT"
+)
 
 
 def _resolve_local_model(tier: str, provider: str = "ollama") -> str:

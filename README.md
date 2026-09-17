@@ -1,6 +1,7 @@
 # Fagan
 
 [![CI](https://github.com/motock/fagan/actions/workflows/ci.yml/badge.svg)](https://github.com/motock/fagan/actions/workflows/ci.yml)
+[![Fagan MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/motock/fagan/badges/card.svg)](https://glama.ai/mcp/servers/motock/fagan)
 
 **Spend tokens on judgment, not typing.**
 

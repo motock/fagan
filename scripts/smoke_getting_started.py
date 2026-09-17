@@ -420,8 +420,7 @@ def _announce_dispatch_backend(
         )()
     except Exception as exc:  # a broken resolver must fail closed, not traceback
         print(
-            "smoke: refusing to run: the dispatch backend could not be "
-            f"resolved: {exc!r}",
+            f"smoke: refusing to run: the dispatch backend could not be resolved: {exc!r} (value: {os.environ.get('PIPELINE_BACKEND_DISPATCH')!r})",
             file=sys.stderr,
         )
         print(

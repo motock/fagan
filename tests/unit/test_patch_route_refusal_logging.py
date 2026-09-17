@@ -300,6 +300,7 @@ class TestOriginRefusalLogging:
         assert rec.route == "apply"
         assert rec.origin_class == "chat"
         assert rec.patch_id == patch_id
+        assert _extra_keys(rec) == {"route", "patch_id", "origin_class"}
         assert token not in caplog.text
         assert token not in _all_blobs(caplog)
         assert spy.calls == [], "the engine must not be reached on an origin refusal"

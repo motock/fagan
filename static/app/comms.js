@@ -129,7 +129,6 @@ function appendCommsMessage(role, html) {
     landing.style.display = 'none';
     thread.style.display = 'flex';
   }
-  }
   _scrollCommsToBottom();
   return el;
 }

@@ -94,6 +94,22 @@ function _scrollCommsToBottom() {
   }
 }
 
+let _typingEl = null;
+function _typingIndicatorEl() {
+  if (_typingEl) return _typingEl;
+  const body = document.getElementById('comms-body');
+  if (!body || typeof document.createElement !== 'function') return null;
+  const el = document.createElement('div');
+  el.className = 'comms-typing hidden';
+  if (typeof el.setAttribute === 'function') el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = _prefersReducedMotion()
+    ? '<span class="comms-typing-static">tower is typing\u2026</span>'
+    : '<span class="comms-typing-dot"></span><span class="comms-typing-dot"></span><span class="comms-typing-dot"></span>';
+  body.appendChild(el);
+  _typingEl = el;
+  return el;
+}
+
 function _commsMessageInnerHtml(role, html) {
   const isTower = role.split(' ')[0] === 'tower';
   const dot = isTower ? '<span class="who-dot" aria-hidden="true"></span>' : '';
@@ -114,22 +130,7 @@ function appendCommsMessage(role, html) {
     landing.style.display = 'none';
     thread.style.display = 'flex';
   }
-
-let _typingEl = null;
-function _typingIndicatorEl() {
-  if (_typingEl) return _typingEl;
-  const body = document.getElementById('comms-body');
-  if (!body || typeof document.createElement !== 'function') return null;
-  const el = document.createElement('div');
-  el.className = 'comms-typing hidden';
-  if (typeof el.setAttribute === 'function') el.setAttribute('aria-hidden', 'true');
-  el.innerHTML = _prefersReducedMotion()
-    ? '\u003cspan class="comms-typing-static"\u003etower is typing…\u003c/span\u003e'
-    : '\u003cspan class="comms-typing-dot"\u003e\u003c/span\u003e\u003cspan class="comms-typing-dot"\u003e\u003c/span\u003e\u003cspan class="comms-typing-dot"\u003e\u003c/span\u003e';
-  body.appendChild(el);
-  _typingEl = el;
-  return el;
-}
+  }
   _scrollCommsToBottom();
   return el;
 }

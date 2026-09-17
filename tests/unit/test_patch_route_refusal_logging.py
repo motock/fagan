@@ -201,6 +201,7 @@ def _all_blobs(caplog) -> str:
 def _extra_keys(record) -> set:
     """The ``extra=`` keys on *record* (LogRecord's own attrs subtracted)."""
     baseline = set(vars(logging.LogRecord("x", 0, "", 0, "", (), None)))
+    baseline.add("message")  # set by the capture handler's formatter
     return set(vars(record)) - baseline
 
 

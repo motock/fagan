@@ -337,6 +337,8 @@ def list_plans(include_archived: bool = False, repo: str | None = None) -> dict[
     # long-finished plans just because they alphabetize earlier.
     plans.sort(key=lambda p: p["updated_at"], reverse=True)
     return {"plans": plans}
+
+
 @app.get("/api/ingestable-plans")
 def ingestable_plans() -> dict[str, Any]:
     """List saved plan files that are valid targets for the Comms panel's

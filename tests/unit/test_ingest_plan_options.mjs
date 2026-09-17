@@ -1,123 +1,139 @@
-import { test, assert } from 'node:test';
-import assertEqual from 'node:assert/strict';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 
-// Helper to create a stub element with innerHTML and optional textContent
+// ---------------------------------------------------------------------------
+// Harness: stub the browser globals static/app/comms.js touches at import time
+// (document, window, localStorage, fetch), then import the real module with a
+// cache-busting query so each test gets a fresh module evaluation (and thus a
+// fresh populateIngestPlanOptions() call).
+// ---------------------------------------------------------------------------
+
 function makeElement() {
-  const el = {
+  return {
     _innerHTML: '',
     get innerHTML() { return this._innerHTML; },
     set innerHTML(v) { this._innerHTML = v; },
-    get textContent() { return this._innerHTML; },
-    set textContent(v) { this._innerHTML = v; },
+    textContent: '',
+    value: '',
+    disabled: false,
+    addEventListener() {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    style: {},
   };
-  return el;
 }
 
-// Helper to create a stub document with getElementById that can be overridden
-function makeDoc() {
+function makeDoc({ withPlanSelect = true } = {}) {
   const elements = new Map();
+  if (withPlanSelect) {
+    elements.set('ingest-plan-name', makeElement());
+  }
   const doc = {
     getElementById(id) {
-      return elements.get(id) || null;
+      return elements.has(id) ? elements.get(id) : null;
     },
-    querySelector: () => makeElement(),
+    createElement: () => makeElement(),
+    querySelector: () => null,
     querySelectorAll: () => [],
+    addEventListener() {},
+    body: makeElement(),
   };
   return { doc, elements };
 }
 
-// Helper to flush microtasks
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-// Test harness setup function
-async function runTest({ fetchResponse, elementAbsent, expectFetchCount }) {
-  const { doc, elements } = makeDoc();
-  if (elementAbsent) {
-    // Remove the element from the document
-    elements.delete('ingest-plan-name');
-  } else {
-    elements.set('ingest-plan-name', makeElement());
-  }
-  const fetchCalls = [];
-  const recorderFetch = async (url, opts) => {
-    fetchCalls.push({ url, opts });
-    return fetchResponse;
+async function loadComms({ fetchResponse, withPlanSelect = true } = {}) {
+  const { doc, elements } = makeDoc({ withPlanSelect });
+  globalThis.document = doc;
+  globalThis.window = { __PIPELINE_API_KEY__: 'test-key' };
+  globalThis.localStorage = {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
   };
-  globalThis.fetch = recorderFetch;
-  const mod = await import('./comms.js');
-  return { mod, fetchCalls, doc };
+  const fetchCalls = [];
+  globalThis.fetch = async (url, opts) => {
+    fetchCalls.push({ url, opts });
+    if (fetchResponse instanceof Error) throw fetchResponse;
+    return { ok: true, json: async () => fetchResponse };
+  };
+  const mod = await import('../../static/app/comms.js?case=' + Math.random());
+  await flush();
+  return { mod, fetchCalls, doc, select: elements.get('ingest-plan-name') };
 }
 
-// Helper to count occurrences of a substring
-function count(str, sub) {
-  return (str.match(new RegExp(sub, 'g')) || []).length;
+function count(haystack, needle) {
+  return haystack.split(needle).length - 1;
 }
 
-// Test 1: success fixture
-await test('populateIngestPlanOptions success', async () => {
-  const { mod, fetchCalls, doc } = await runTest({
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test('populateIngestPlanOptions: success renders one option per plan plus placeholder', async () => {
+  const { fetchCalls, select } = await loadComms({
     fetchResponse: { plans: ['anagram', 'foo'] },
-    expectFetchCount: 1,
   });
-  const select = doc.getElementById('ingest-plan-name');
+  assert.equal(fetchCalls.length, 1, 'fetchIngestablePlans called exactly once');
+  assert.equal(fetchCalls[0].url, '/api/ingestable-plans');
   const html = select.innerHTML;
-  assertEqual(html, '<option value="" disabled selected>select a plan…</option><option value="anagram">anagram</option><option value="foo">foo</option>');
-  assertEqual(count(html, '<option'), 3);
-  assertEqual(count(html, 'disabled'), 1);
-  assertEqual(fetchCalls.length, 1);
+  assert.equal(count(html, '<option'), 3, 'placeholder + 2 plans');
+  assert.equal(
+    html,
+    '<option value="" disabled selected>select a plan\u2026</option>'
+      + '<option value="anagram">anagram</option>'
+      + '<option value="foo">foo</option>'
+  );
+  assert.equal(count(html, 'disabled'), 1, 'only the placeholder is disabled');
 });
 
-// Test 2: empty fixture
-await test('populateIngestPlanOptions empty', async () => {
-  const { mod, fetchCalls, doc } = await runTest({
-    fetchResponse: { plans: [] },
-    expectFetchCount: 1,
-  });
-  const select = doc.getElementById('ingest-plan-name');
+test('populateIngestPlanOptions: empty plans renders single disabled placeholder', async () => {
+  const { fetchCalls, select } = await loadComms({ fetchResponse: { plans: [] } });
+  assert.equal(fetchCalls.length, 1);
   const html = select.innerHTML;
-  assertEqual(html, '<option value="" disabled selected>no plans found</option>');
-  assertEqual(count(html, '<option'), 1);
-  assertEqual(count(html, 'disabled'), 1);
-  assertEqual(fetchCalls.length, 1);
+  assert.equal(html, '<option value="" disabled selected>no plans found</option>');
+  assert.equal(count(html, '<option'), 1);
 });
 
-// Test 3: error fixture
-await test('populateIngestPlanOptions error', async () => {
-  const { mod, fetchCalls, doc } = await runTest({
-    fetchResponse: Promise.reject(new Error('boom')),
-    expectFetchCount: 1,
+test('populateIngestPlanOptions: rejected fetch is caught and renders failure option', async () => {
+  const { fetchCalls, select } = await loadComms({
+    fetchResponse: new Error('boom'),
   });
-  const select = doc.getElementById('ingest-plan-name');
+  assert.equal(fetchCalls.length, 1);
   const html = select.innerHTML;
-  assertEqual(html, '<option value="" disabled selected>failed to load plans</option>');
-  assertEqual(count(html, '<option'), 1);
-  assertEqual(count(html, 'disabled'), 1);
-  assertEqual(fetchCalls.length, 1);
+  assert.equal(html, '<option value="" disabled selected>failed to load plans</option>');
+  assert.equal(count(html, '<option'), 1);
 });
 
-// Test 4: XSS test
-await test('populateIngestPlanOptions XSS', async () => {
-  const { mod, fetchCalls, doc } = await runTest({
+test('populateIngestPlanOptions: plan names are HTML-escaped', async () => {
+  const { select } = await loadComms({
     fetchResponse: { plans: ['<img src=x onerror=alert(1)>'] },
-    expectFetchCount: 1,
   });
-  const select = doc.getElementById('ingest-plan-name');
   const html = select.innerHTML;
-  assertEqual(html.includes('<img src=x onerror=alert(1)>'), false);
-  assertEqual(count(html, '<option'), 2);
-  assertEqual(count(html, 'disabled'), 1);
-  assertEqual(fetchCalls.length, 1);
+  assert.equal(html.includes('<img src=x onerror=alert(1)>'), false, 'raw tag must not appear');
+  assert.ok(html.includes('&lt;img'), 'escaped markup present');
+  assert.equal(count(html, '<option'), 2, 'placeholder + 1 escaped plan');
 });
 
-// Test 5: element absent
-await test('populateIngestPlanOptions element absent', async () => {
-  const { mod, fetchCalls, doc } = await runTest({
-    fetchResponse: { plans: ['a'] },
-    elementAbsent: true,
-    expectFetchCount: 0,
+test('populateIngestPlanOptions: called exactly once at module load, not per sendCommsMessage', async () => {
+  const { mod, fetchCalls } = await loadComms({
+    fetchResponse: { plans: ['anagram'] },
+  });
+  assert.equal(fetchCalls.length, 1, 'exactly one call at module load');
+  if (typeof mod.sendCommsMessage === 'function') {
+    await mod.sendCommsMessage('hello');
+    await flush();
+    assert.equal(fetchCalls.length, 1, 'no additional call from sendCommsMessage');
+  }
+});
+
+test('populateIngestPlanOptions: missing select element is a no-op (no fetch, no throw)', async () => {
+  const { fetchCalls } = await loadComms({
+    fetchResponse: { plans: ['anagram'] },
+    withPlanSelect: false,
   });
   await flush();
-  assertEqual(fetchCalls.length, 0);
+  assert.equal(fetchCalls.length, 0, 'fetchIngestablePlans must not be called');
 });

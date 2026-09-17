@@ -69,6 +69,13 @@ _REVIEW_LOG_TRUNCATE = 2000
 # applies). Future hosted providers extend this registry.
 _HOSTED_PROVIDERS = frozenset({"litellm"})
 
+_DEFAULT_MIN_FREE_MEMORY_MB = "512"
+# Providers that pin a model's memory for the whole process lifetime with
+# nothing to evict (see resource_status's docstring) keep the old, higher
+# default; providers that CAN evict under pressure (ollama, lmstudio) use
+# the lower _DEFAULT_MIN_FREE_MEMORY_MB unless the operator overrides it.
+_PROVIDER_MIN_FREE_MEMORY_MB_DEFAULTS = {"mlx": "2048"}
+
 
 class OllamaDriver:
     """Backend driver for Ollama's native /api/chat endpoint.
@@ -764,6 +771,7 @@ class OllamaDriver:
         spike, false for MLX's steady state, so an ungated MLX floor would
         silently paralyze all future dispatch on this plan. The override
         does not change the generic floor or any other provider's default.
+        The unset-env default is itself provider-aware: 2048mb for mlx (matching the steady-state measurement above), 512mb generically for providers that can evict a resident model (ollama, lmstudio) -- an explicit PIPELINE_LOCAL_MIN_FREE_MEMORY_MB or per-provider override always wins over either default.
 
         For Ollama there is a third, ORTHOGONAL check after the floor: the
         configured model's weights against TOTAL physical RAM, refusing a

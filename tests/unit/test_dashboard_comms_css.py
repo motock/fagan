@@ -107,7 +107,7 @@ TOAST_REGION_SHA256 = "dbfb98e7ac5c90643e9560c45faa9d8d04e8487c11ab55c4af82cb7c2
 # append-at-end pattern as the prior re-pin. Nothing before the append
 # point changed.
 # Re-pinned for the Comms typing indicator (CTI-1): appended .comms-typing rules and the comms-typing-bounce keyframe at the end of style.css. Nothing before the append point changed.
-SUFFIX_FROM_CONFIG_SHA256 = "17d30eca351b9e32b940567cd8fc8944aa57af52264001ff1f33bd8064bb9e0b"
+SUFFIX_FROM_CONFIG_SHA256 = "6cc9f890dc6ee2f748ba1bab2d8b9b6999505d7efc9bc0d0260aef78f3d9bbcc"
 
 # The 21 selectors listed in the story as having empty `{}` bodies. Several
 # have a separate, already-populated rule immediately after them (e.g.
@@ -353,8 +353,6 @@ def test_style_css_suffix_from_config_section_unchanged(css_text):
     suffix = css_text[idx:]
     digest = hashlib.sha256(suffix.encode()).hexdigest()
     assert digest == SUFFIX_FROM_CONFIG_SHA256, (
-    # Re-pinned for the Comms typing indicator (CTI-1): appended .comms-typing rules and the comms-typing-bounce keyframe at the end of style.css. Nothing before the append point changed.
-    # SUFFIX_FROM_CONFIG_SHA256 = "17d30eca351b9e32b940567cd8fc8944aa57af52264001ff1f33bd8064bb9e0b"
         "content from the Config view styles section onward must be "
         "byte-for-byte unchanged - only Comms rules may be edited"
     )

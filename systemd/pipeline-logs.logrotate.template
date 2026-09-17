@@ -1,0 +1,22 @@
+# logrotate config for the pipeline's systemd unit logs - the Linux
+# equivalent of launchd/pipeline-logs.newsyslog.conf.template. See that
+# file's comment for why rotation matters (an unattended overnight system
+# can accumulate stderr over weeks; systemd does not rotate a unit's
+# StandardOutput/StandardError append-mode log files on its own).
+#
+# Install (one-time, needs sudo):
+#   sudo cp systemd/pipeline-logs.logrotate.conf /etc/logrotate.d/com.fagan.pipeline
+# logrotate normally runs daily via cron or systemd-logrotate.timer; force a
+# pass with:  sudo logrotate -f /etc/logrotate.d/com.fagan.pipeline
+{{REPO_ROOT}}/advance-scheduler.log
+{{REPO_ROOT}}/advance-scheduler.err.log
+{{REPO_ROOT}}/usage-poller.log
+{{REPO_ROOT}}/usage-poller.err.log
+{
+    rotate 5
+    size 5M
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

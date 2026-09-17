@@ -350,6 +350,10 @@ class PipelineService:
         _validate_key(plan_name)
         return _store.get_decisions(plan_name)
 
+    def append_decision(self, plan_name: str, record: dict[str, Any]) -> None:
+        _validate_key(plan_name)
+        _store.append_decision(plan_name, record)
+
     def get_manifest_or_none(self, plan_name: str) -> dict | None:
         _validate_key(plan_name)
         return _store.get_manifest_or_none(plan_name)

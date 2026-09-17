@@ -3,9 +3,6 @@ import { escapeHtml } from "./render/board.js";
 import { fetchJson, fetchIngestablePlans } from "./api.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { ingestPlan, normalizePlanName, renderIngestStatusHtml } from './ingest.js';
-    select.innerHTML = '<option value="" disabled selected>failed to load plans</option>';
-  }
-}
 let commsHistory = [];
 let showTrace = readStoredShowTrace();
 

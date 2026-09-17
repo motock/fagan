@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Fagan pipeline usage-poller every 60 seconds
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+Unit=com.fagan.pipeline.usage-poller.service
+
+[Install]
+WantedBy=timers.target

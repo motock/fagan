@@ -314,7 +314,7 @@ class TestRouteRegistration:
         """The apply route's body is the token-only model, nothing else."""
         route = _route(APPLY_PATH, "POST")
         assert route is not None
-        annotation = inspect.signature(route.endpoint).parameters["request"].annotation
+        annotation = inspect.signature(route.endpoint, eval_str=True).parameters["request"].annotation
         assert annotation is dashboard_models.ApplyPatchRequest
 
     def test_both_routes_use_the_require_ui_origin_helper(self):

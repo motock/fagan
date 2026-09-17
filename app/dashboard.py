@@ -1288,16 +1288,6 @@ def apply_worktree_patch_route(
     return result
 
 
-# Python 3.14 + ``from __future__ import annotations`` (module top) leaves
-# ``inspect.signature`` holding the annotation as a raw STRING, and the
-# committed route-registration test pins the body model to the real class
-# (``annotation is dashboard_models.ApplyPatchRequest``).  Re-bind the
-# resolved classes into the endpoints' ``__annotations__`` so the signature
-# carries the actual pydantic model objects.
-get_worktree_patch_route.__annotations__["x_pipeline_origin"] = str | None
-apply_worktree_patch_route.__annotations__["request"] = ApplyPatchRequest
-apply_worktree_patch_route.__annotations__["x_pipeline_origin"] = str | None
-
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 # End of file

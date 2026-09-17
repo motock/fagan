@@ -11,7 +11,6 @@ characters. Until the implementation is fixed, this assertion will raise an
 """
 
 import json
-import pytest
 from pathlib import Path
 
 # Load the manifest

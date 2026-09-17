@@ -40,7 +40,6 @@ model_registry.local.json
 # fixed a bug where every dispatched agent wrote its own unrelated progress
 # notes into this shared path and committed it, causing spurious merge-gate
 # rebase conflicts between unrelated concurrent stories.
-
 .agent_plan.md
 .agent_scratchpad.md
 .agent_scratchpad*.md

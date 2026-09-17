@@ -212,22 +212,36 @@ this is a research project and not a product:
   [#802](https://github.com/motock/fagan/pull/802)), but the lesson outlives
   them: a green suite is not evidence the thing works end to end. Only running
   it end to end is.
-- **The local memory floor still wants an env var on this machine.** Dispatch
-  to a local (non-`:cloud`) model is gated on free memory, and the 2048 MB
-  default floor sits inside this host's normal idle band (~1.8–2.1 GB) — so an
-  on-device story that has not started yet can be deferred indefinitely while
-  the floor goes unmet. The worse version of this, which is what a run on
-  2026-09-15 actually hit, was that a tripped gate would *interrupt the agent
-  already running* and redispatch it straight back into the same wall: because
-  the agent's own resident weights are much of what depresses the reading, the
-  gate was partly tripped by the very work it killed. Measured that day: 26
-  interrupts in 16 minutes, zero progress. That interrupt defect is fixed
+- **The local memory floor is provider-aware as of MEMFLOOR-1.** Dispatch
+  to a local (non-`:cloud`) model is gated on free memory. The floor
+  resolves per provider, with precedence **per-provider env var >
+  generic env var > provider-aware default**:
+
+  | Provider | No env vars set | `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB` set | Provider-specific env set |
+  |---|---|---|---|
+  | `ollama` | 512 MB | that value (e.g. 1024 → 1024 MB) | that value |
+  | `lmstudio` | 512 MB | that value (e.g. 1024 → 1024 MB) | that value |
+  | `mlx` | 2048 MB | that value (e.g. 1024 → 1024 MB) | that value |
+
+  The generic default is **512 MB** for providers that can evict a
+  resident model under pressure (`ollama`, `lmstudio`); **mlx** is pinned
+  to **2048 MB** because `mlx_lm.server` pins one model's full footprint
+  for its entire process lifetime with nothing to evict. An explicit
+  `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB` overrides both defaults (e.g. with
+  it set to 1024 and no provider-specific var, both `ollama` and `mlx`
+  resolve to 1024 MB), and a provider-specific var wins over the generic
+  one (e.g. provider var 4096 with generic 1024 → 4096 MB). The worse
+  version of the deferral risk this floor guards against, which is what a
+  run on 2026-09-15 actually hit, was that a tripped gate would *interrupt
+  the agent already running* and redispatch it straight back into the same
+  wall: because the agent's own resident weights are much of what depresses
+  the reading, the gate was partly tripped by the very work it killed.
+  Measured that day: 26 interrupts in 16 minutes, zero progress. That
+  interrupt defect is fixed
   ([#790](https://github.com/motock/fagan/pull/790), merged the same day, with
   regression tests). Setting `PIPELINE_LOCAL_MIN_FREE_MEMORY_MB_OLLAMA=0` —
   which this repository's own scheduler already does — clears both the fix's
-  predecessor and the remaining deferral. **Whether the default floor itself
-  should come down is still open**: a gate that can withhold work should be
-  biased against blocking work already known to run.
+  predecessor and the remaining deferral.
 - **There is no clean cross-backend benchmark on record yet.** The one full
   model-comparison run was contaminated mid-run by rate limits
   ([`tests/benchmark/FINDINGS.md`](../tests/benchmark/FINDINGS.md)). The

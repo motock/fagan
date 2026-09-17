@@ -198,6 +198,12 @@ def _all_blobs(caplog) -> str:
     return "\n".join(_blob(r) for r in caplog.records)
 
 
+def _extra_keys(record) -> set:
+    """The ``extra=`` keys on *record* (LogRecord's own attrs subtracted)."""
+    baseline = set(vars(logging.LogRecord("x", 0, "", 0, "", (), None)))
+    return set(vars(record)) - baseline
+
+
 def _route_source(path: str, method: str) -> str:
     for route in dashboard_module.app.routes:
         if getattr(route, "path", None) == path and method in getattr(

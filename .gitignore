@@ -43,4 +43,5 @@ model_registry.local.json
 .agent_plan.md
 .agent_scratchpad.md
 .agent_scratchpad*.md
+*agent_scratchpad*.md
 .agent_transcript.json

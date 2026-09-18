@@ -513,7 +513,7 @@ scripts/generate_launchd_plists.sh \
   --mlx-model-path "$HOME/.cache/qwen2.5_coder_14b_manual"
 ```
 
-These launchd files are macOS‑only - see [Platform support](#platform-support).
+These launchd files are macOS-only - see [Platform support](#platform-support).
 
 ### Rendering the systemd units for Linux
 

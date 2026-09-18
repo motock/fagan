@@ -2,6 +2,8 @@
 
 Split out of test_backend.py to keep it under the project's line-count target; shared fixtures/helpers moved to tests.unit._backend_helpers.
 """
+from pathlib import Path
+
 import pytest
 
 from app import backend as b
@@ -644,5 +646,88 @@ def test_dispatch_partial_table_entry_only_overrides_the_key_present(
 
     assert captured["env"]["PIPELINE_TRANSPORT_NUM_CTX"] == "8192"
     assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "0.3"
+
+
+# ---------- gpt-oss-20b-high:latest num_ctx entry (2026-09-18 manual sweep) ----------
+#
+# New behavior: _LOCAL_MODEL_TUNING gains an entry for the EXACT tag
+# "gpt-oss-20b-high:latest" (a DIFFERENT tag from the existing, untouched
+# "gpt-oss:20b" entry) pinning num_ctx=131072, with a provenance comment in
+# the same style as the 2026-07-03 / 2026-08-14 entries. A sibling story
+# removes PIPELINE_LOCAL_NUM_CTX from the advance-scheduler launchd plist so
+# this per-model entry can take effect (an explicit PIPELINE_LOCAL_NUM_CTX
+# env var still always overrides the table - see _tuned_num_ctx).
+
+
+def test_gpt_oss_20b_high_tuned_to_131072_num_ctx_from_manual_sweep():
+    """gpt-oss-20b-high:latest's entry reflects the 2026-09-18 manual num_ctx
+    sweep on this machine (Apple M4, 24GB unified memory): 32768, 49152,
+    65536, 81920, 98304, 114688 and 131072 were each loaded via Ollama's
+    /api/generate and checked with `ollama ps`. Every step stayed 100% GPU
+    (never split to CPU), resident size only grew 12GB -> 13GB across the
+    full range, and swap usage did not meaningfully grow. Pushing num_ctx
+    above 131072 (163840 up to 1048576 tested) had no further effect: Ollama
+    silently clamps `ollama ps`'s CONTEXT column at 131072, gpt-oss's own
+    trained/YaRN-scaled maximum - a hard ceiling enforced by Ollama itself,
+    not a hardware limit. So 131072 is both the empirically-verified safe
+    value on this hardware AND the model's own ceiling. This is a DIFFERENT
+    tag from "gpt-oss:20b" (untested by this sweep, so its entry is
+    unchanged)."""
+    assert b._LOCAL_MODEL_TUNING["gpt-oss-20b-high:latest"] == {"num_ctx": 131072}
+
+
+def test_gpt_oss_20b_high_entry_comment_documents_sweep_provenance():
+    """The new entry carries a provenance comment in the same style as the
+    2026-07-03 / 2026-08-14 entries: date, machine, swept values, observed
+    result, and the Ollama-side clamp finding - plus the clause noting that
+    num_ctx for THIS tag is now decided in the table, not by the launchd
+    plist's PIPELINE_LOCAL_NUM_CTX (a sibling story removes that env var from
+    the advance-scheduler plist so this entry can take effect)."""
+    lines = Path(bo_tuning.__file__).read_text().splitlines()
+    matches = [i for i, ln in enumerate(lines) if '"gpt-oss-20b-high:latest"' in ln]
+    assert matches, "no gpt-oss-20b-high:latest entry found in ollama_prompt_utils.py"
+    entry_idx = matches[0]
+    comment_lines = []
+    j = entry_idx - 1
+    while j >= 0 and lines[j].lstrip().startswith("#"):
+        comment_lines.append(lines[j])
+        j -= 1
+    comment = "\n".join(reversed(comment_lines))
+    assert comment, "no comment block directly above the gpt-oss-20b-high:latest entry"
+
+    assert "2026-09-18" in comment
+    assert "Apple M4" in comment
+    assert "24GB" in comment.replace(" ", "")
+    # The swept range endpoints (32768 through 131072).
+    assert "32768" in comment
+    assert "131072" in comment
+    # Observed result: 100% GPU throughout, 12GB -> 13GB resident, no swap growth.
+    assert "100%" in comment
+    assert "GPU" in comment
+    assert "12GB" in comment.replace(" ", "")
+    assert "13GB" in comment.replace(" ", "")
+    assert "swap" in comment.lower()
+    # Ollama's own hard clamp for this model, confirmed above 131072.
+    assert "clamp" in comment.lower()
+    assert "1048576" in comment
+    # num_ctx for this tag is decided here, not by the plist.
+    assert "plist" in comment.lower()
+
+
+def test_gptoss_20b_entry_unchanged_by_gpt_oss_20b_high_story():
+    """Regression guard: the new gpt-oss-20b-high:latest entry must not
+    disturb the existing, separately-provenanced "gpt-oss:20b" entry."""
+    assert b._LOCAL_MODEL_TUNING["gpt-oss:20b"] == {"temperature": 0.3}
+
+
+def test_tuned_num_ctx_uses_table_value_for_gpt_oss_20b_high_with_no_env_override(
+    monkeypatch,
+):
+    """With PIPELINE_LOCAL_NUM_CTX unset, the new table entry supplies
+    num_ctx=131072 for gpt-oss-20b-high:latest instead of the constructor
+    fallback (16384) - i.e. num_ctx for this tag is decided by the table, not
+    by the plist/constructor default."""
+    monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
+    assert bo_tuning._tuned_num_ctx("gpt-oss-20b-high:latest", 16384) == 131072
 
 

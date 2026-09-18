@@ -89,6 +89,15 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
     # reasonable default, not shown optimal versus low/high for this tag -
     # revisit if a real benchmark run says otherwise.
     "gemma4:26b-a4b-it-qat": {"think": "medium"},
+    # 2026-09-18 manual sweep (Apple M4, 24GB unified memory) of gpt-oss-20b-high:latest
+    # 1048576 tested and found to have no effect
+    # swept num_ctx values 32768, 49152, 65536, 81920, 98304, 114688, 131072
+    # observed 100% GPU usage, resident size 12GB→13GB, no swap growth
+    # 131072 is Ollama's hard clamp for this model; values above it have no effect
+    # num_ctx for gpt-oss-20b-high is now decided here in the table, not by
+    # PIPELINE_LOCAL_NUM_CTX (unlike other local models which still fall through
+    # to the plist/constructor default).
+    "gpt-oss-20b-high:latest": {"num_ctx": 131072},
 }
 
 

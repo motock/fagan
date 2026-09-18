@@ -102,12 +102,26 @@ function _typingIndicatorEl() {
   const el = document.createElement('div');
   el.className = 'comms-typing hidden';
   if (typeof el.setAttribute === 'function') el.setAttribute('aria-hidden', 'true');
-  el.innerHTML = _prefersReducedMotion()
-    ? '<span class="comms-typing-static">tower is typing\u2026</span>'
-    : '<span class="comms-typing-dot"></span><span class="comms-typing-dot"></span><span class="comms-typing-dot"></span>';
-  body.appendChild(el);
+  el.innerHTML = '<span class="comms-typing-who"><span class="who-dot"></span>TOWER</span>'
+    + '<div class="comms-typing-bubble">' + (_prefersReducedMotion()
+      ? '<span class="comms-typing-static">tower is typing\u2026</span>'
+      : '<span class="comms-typing-dot"></span><span class="comms-typing-dot"></span><span class="comms-typing-dot"></span>')
+    + '</div>';
   _typingEl = el;
+  // Anchor directly after #comms-thread - the logical "next tower message"
+  // slot, right above the compose box - instead of the end of #comms-body
+  // (previously past the ingest panel, reading as detached from the chat).
+  const thread = document.getElementById('comms-thread');
+  if (thread && typeof thread.insertAdjacentElement === 'function') {
+    thread.insertAdjacentElement('afterend', el);
+  } else {
+    body.appendChild(el);
+  }
   return el;
+}
+
+function _hideTypingIndicator() {
+  if (_typingEl && _typingEl.classList) _typingEl.classList.add('hidden');
 }
 
 function _commsMessageInnerHtml(role, html) {
@@ -412,6 +426,7 @@ async function sendCommsMessage(text) {
   };
   const onStreamEvent = (event) => {
     if (!event || typeof event.type !== 'string') return;
+    _hideTypingIndicator();
     if (event.type === 'tool_call') {
       const name = event.data && event.data.name != null ? String(event.data.name) : 'tool';
       if (!pending || !pending.el) {

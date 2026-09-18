@@ -893,20 +893,58 @@ def _last_done_summary(agent_log: Path) -> str:
 
 
 # Rebind _run_lint_gate's globals to pipeline.server's namespace so that
-# bare-name reads inside the body (e.g. `detect_lint_command`) resolve against
-# pipeline.server at call time. This preserves the original behavior where the
-# function lived in pipeline.server and saw monkeypatched module globals
-# (LOAD_GLOBAL does not consult a module-level __getattr__, so a plain
-# re-export would not).
-from . import server as _server
+# bare-name reads inside the body (e.g. `detect_lint_command`) resolve
+# against pipeline.server at call time. This preserves the original
+# behavior where the function lived in pipeline.server and saw
+# monkeypatched module globals (LOAD_GLOBAL does not consult a
+# module-level __getattr__, so a plain re-export would not).
+#
+# The rebind is done LAZILY (on first call, not at import time) because
+# eagerly importing pipeline.server here forces a full import of it as a
+# side effect of merely importing pipeline.build_detect -- and
+# pipeline.ci imports pipeline.build_detect at ITS OWN module level
+# before ci.py has defined names (e.g. _PATCHABLE_STORY_FIELDS) that
+# pipeline.server itself imports back from pipeline.ci. Importing
+# pipeline.ci directly (as tests/unit/test_acceptance_oracle_tamper_detect.py
+# does) then crashes with "ImportError: cannot import name
+# '_PATCHABLE_STORY_FIELDS' from partially initialized module
+# 'pipeline.ci' (most likely due to a circular import)" -- reproduced live
+# on a clean master checkout. Deferring the import/rebind until the
+# function is actually invoked sidesteps the cycle entirely, since by
+# runtime every module involved has finished importing.
+_run_lint_gate_unbound = _run_lint_gate
+_run_lint_gate_bound = None
 
-_run_lint_gate = types.FunctionType(
-    _run_lint_gate.__code__,
-    _server.__dict__,
-    _run_lint_gate.__name__,
-    _run_lint_gate.__defaults__,
-    _run_lint_gate.__closure__,
-)
+
+def _run_lint_gate_lazy(*args, **kwargs):
+    global _run_lint_gate_bound
+    if _run_lint_gate_bound is None:
+        from . import server as _server
+        _run_lint_gate_bound = types.FunctionType(
+            _run_lint_gate_unbound.__code__,
+            _server.__dict__,
+            _run_lint_gate_unbound.__name__,
+            _run_lint_gate_unbound.__defaults__,
+            _run_lint_gate_unbound.__closure__,
+        )
+    return _run_lint_gate_bound(*args, **kwargs)
+
+
+# `_run_lint_gate` is now this lazy wrapper (not the eagerly rebound function
+# it used to be); callers only ever call it, never inspect its identity.
+_run_lint_gate = _run_lint_gate_lazy
+
+# Prime pipeline.server eagerly for every import order EXCEPT the one that
+# cycles. pipeline.ci imports this module at its own module level, before it
+# has defined the names (e.g. _PATCHABLE_STORY_FIELDS) that pipeline.server
+# imports back from it -- so importing server here while ci is mid-import
+# re-enters the half-initialized ci and raises ImportError. Every other order
+# is safe, and companion_server's _ColdOracleGateImport hook depends on
+# importing pipeline.build_detect to pull in pipeline.server (and, through
+# it, pipeline.oracle_gate), so the eager import is kept whenever ci is not
+# in flight. The lazy wrapper above covers the in-flight case.
+if "pipeline.ci" not in sys.modules:
+    import pipeline.server as _server  # noqa: F401  (priming side effect only)
 
 
 __all__ = [

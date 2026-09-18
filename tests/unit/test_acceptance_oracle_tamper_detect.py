@@ -167,7 +167,7 @@ def test_reverify_persists_the_worktree_head_sha(tmp_path, monkeypatch):
 def test_reverify_overwrites_a_stale_noop_snapshot(tmp_path, monkeypatch):
     """Live incident: the manifest kept the portable no-op from an earlier poll
     even though the gate went on to run (and pass on) a real test command."""
-    cmd = [sys.executable, "-c", "import sys; sys.exit(1)"]
+    cmd = [sys.executable, "-c", "import sys; print('1 failed'); sys.exit(1)"]
     worktree = _prepare(tmp_path, monkeypatch, cmd)
     (worktree / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     stale = {

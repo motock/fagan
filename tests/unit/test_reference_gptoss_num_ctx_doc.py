@@ -468,6 +468,21 @@ def _table_rows(text: str) -> list[tuple[int, str]]:
     ]
 
 
+def _cells_unescaped(row: str) -> list[str]:
+    """Split a markdown row on UNESCAPED pipes only.
+
+    Some rows legitimately contain an escaped pipe (``\\|``) inside a cell, so
+    a naive ``str.split("|")`` over-counts their columns. This counts the way a
+    markdown renderer does.
+    """
+    stripped = row.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|") and not stripped.endswith("\\|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in re.split(r"(?<!\\)\|", stripped)]
+
+
 def _tuning_table_rows(text: str) -> list[tuple[int, str]]:
     """Rows of the per-model tuning table block, header through the last row.
 

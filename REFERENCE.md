@@ -857,6 +857,16 @@ against the committed tests rather than rewriting them.
 ---
 
 ## Configuration (environment variables)
+### Launchd Install & Reload
+
+The launchd plist files in this repository are templates. The running daemon reads only the installed agent under `~/Library/LaunchAgents/com.fagan.pipeline.advance-scheduler.plist`. To apply a change to the running daemon you must:
+
+1. Edit the installed plist surgically (do not replace the whole file).
+2. Reload the daemon with `scripts/reload_pipeline_daemon.sh` (or equivalently `launchctl unload` then `launchctl load` on that path).
+
+The change has **no effect until this reload** happens.
+
+**Drift warning**: The installed agent can differ from the repo copy. For example, on this machine the installed plist pins `PIPELINE_LOCAL_NUM_CTX=32768` and sets `PIPELINE_AUTO_TRIAGE` and `PIPELINE_MAX_CONCURRENT_AGENTS=4`, none of which the repo template specifies. A wholesale regenerate-and-install would silently drop these local overrides.
 
 Set global vars in your shell profile; set per-project overrides in the project's
 `.mcp.json` `env` block.

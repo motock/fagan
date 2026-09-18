@@ -33,9 +33,29 @@ shippable, testable, and reviewable.
     in-place re-indent of a large existing function. Move decorators,
     docstrings, and entry validation to the wrapper, not the renamed impl.
     Prescribe anchored `str_replace`-style edits over line-number edits on
-    files >~1,000 lines. One concern per story — split by file/concern even
-    when the combined work would fit a single PR by hand. Full detail:
+    files >~1,000 lines — Markdown docs included (REFERENCE.md and README.md
+    are too large for this tier; route stories that edit them up a tier). One
+    concern per story — split by file/concern even when the combined work
+    would fit a single PR by hand. Full detail:
     @.claude/rules/pipeline-story-schema.md, "Local (non-Claude) dispatch".
+- **For every non-Claude tier, these override the general slicing advice
+  below** (full checklist: @.claude/rules/local-dispatch-preflight.md):
+  - **Keep a code change and the docs it makes stale in the same story.** The
+    reviewer sees only the diff, never the plan, so a code story whose doc
+    update lives in a sibling story is sent back with "docs not updated".
+  - **Write comments that stay true after later stories merge** — state the
+    invariant, never "inert until the sibling story removes X".
+  - **Doc-only or config-only stories get `"tdd_split": false`** and at most
+    one small test. Otherwise the test-author phase writes hundreds of lines
+    of prose assertions the executor then drifts into editing.
+  - **Every story needs an impact run before ingest**: apply a rough stand-in
+    of the change in a scratch worktree, run the full suite, and pre-authorize
+    or re-scope every failing pre-existing test. If you cannot run commands
+    (e.g. a single-turn `decompose_plan` call with read-only tools), start
+    each story's `agent_instructions` with `Preflight: NOT RUN` so whoever
+    ingests the plan knows it must be done first.
+  - **Put an explicit `key` on every story** so a re-ingest updates stories
+    instead of duplicating them.
 - Recommend the right **persona** and **risk** level for each story so the
   pipeline can dispatch it correctly.
 
@@ -90,7 +110,9 @@ Produce plans as JSON matching the pipeline's `save_plan` schema:
 
 1. **Outcome first** — state the user-visible outcome each story delivers.
 2. **Independent slices** — prefer vertical slices that each deliver value over
-   horizontal layers that only work once everything lands.
+   horizontal layers that only work once everything lands. For non-Claude
+   tiers, the tier's file/function caps come first: slice vertically *within*
+   them, and never split a change away from the doc update it requires.
 3. **Negative cases are requirements** — for every behavior, define what happens
    on invalid/missing input (CLAUDE.md, Testing). Put these in acceptance criteria.
 4. **Surface unknowns** — if a requirement is genuinely ambiguous and would change

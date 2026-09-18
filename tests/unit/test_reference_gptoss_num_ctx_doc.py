@@ -612,6 +612,35 @@ class TestPerModelTuningTableShape:
             f"sequence '\\n' (backslash + n): {offenders!r}"
         )
 
+    def test_no_tuning_block_row_has_more_than_four_cells(self):
+        """A merged row shows up as extra columns (the bug had 7 cells)."""
+        rows = _tuning_table_rows(_reference_text())
+        assert rows, "no per-model tuning table rows found in REFERENCE.md"
+        bad = [
+            (lineno, len(_cells_unescaped(line)), line)
+            for lineno, line in rows
+            if len(_cells_unescaped(line)) > 4
+        ]
+        assert not bad, (
+            "no row in the per-model tuning table block may have more than 4 "
+            "cells (a merged row appears as extra columns); offenders "
+            f"(line, cells, row): {bad!r}"
+        )
+
+    def test_helper_detects_the_merged_row_as_extra_cells(self):
+        """Self-test: the exact broken shape yields 7 cells, not 3."""
+        merged = (
+            "| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Legacy. |"
+            "\\n| `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` | `600` | Budget. |"
+        )
+        assert len(_cells_unescaped(merged)) == 7, _cells_unescaped(merged)
+        assert len(_cells_unescaped(merged)) > 4
+
+    def test_helper_ignores_escaped_pipes_when_counting_cells(self):
+        """Self-test: an escaped ``\\|`` inside a cell is not a column break."""
+        row = "| `PIPELINE_LOCAL_MAX_RISK` | `low` | one \\| two \\| three |"
+        assert len(_cells_unescaped(row)) == 3, _cells_unescaped(row)
+
     def test_helper_cuts_the_block_at_the_first_non_pipe_line(self):
         """Self-test: the block runs to the first non-pipe line."""
         text = (

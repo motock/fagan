@@ -519,7 +519,7 @@ These launchd files are macOS‑only - see [Platform support](#platform-support)
 
 `scripts/generate_systemd_units.sh` renders the equivalent systemd user-unit
 and logrotate files from `systemd/*.template`, the same way
-`scripts/generate_launchd_plists.sh` does for launchd - minus MLX, which is
+`scripts/generate_launchd_plists.sh` does for launchd – minus MLX, which is
 Apple Silicon-only:
 
 ```bash

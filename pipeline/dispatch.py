@@ -233,6 +233,37 @@ def _resolve_dispatch_target(
     return provider, model or None
 
 
+# Bound on the baseline snapshot's test run. The snapshot runs synchronously
+# in the dispatch path, so it must never hold a dispatch open indefinitely; a
+# suite that outruns this fails open (no baseline recorded) rather than
+# blocking. Generous enough for a real full suite (the grading gate's own
+# full-suite runs are ~19 min on the pipeline repo, but the snapshot only
+# needs to be long enough to observe an ALREADY-failing suite).
+_BASELINE_TEST_TIMEOUT_S = 900
+
+
+def _baseline_test_env() -> dict[str, str]:
+    """The dispatch process's env minus the operational overrides that
+    false-fail a suite in a repo that vendors the pipeline's own tests.
+
+    Mirrors the grading gate's env (story_status.py's test_env: the same
+    PIPELINE_*/LOCAL_AGENT_*/REPO_ROOT strips) so the baseline snapshot and
+    the real gate agree on what "failing" means. The server carries
+    PIPELINE_* config (pause/resume thresholds, backend dispatch, model
+    defaults) that overrides the defaults the suite asserts against, and
+    REPO_ROOT is a per-plan sentinel (/nonexistent-...) that isn't a
+    developer default - either one surviving into the run false-fails the
+    suite for every story in the pipeline repo itself.
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("PIPELINE_")
+        and not k.startswith("LOCAL_AGENT_")
+        and k != "REPO_ROOT"
+    }
+
+
 def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
     """Run the detected test command once against a freshly created
     worktree, BEFORE the dispatched agent (or the test-author/planner
@@ -257,9 +288,17 @@ def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
     # that assert on the subprocesses a dispatch makes).
     if len(test_cmd) == 3 and test_cmd[1:] == ["-c", "pass"]:
         return None
-    r = subprocess.run(
-        test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
-    )
+    try:
+        r = subprocess.run(
+            test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+            env=_baseline_test_env(), timeout=_BASELINE_TEST_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        # Fail open: a suite that outruns the bound tells us nothing about
+        # whether it was ALREADY failing, and the snapshot must never hold the
+        # dispatch path open indefinitely (the docstring's "never block or
+        # slow down a normal dispatch").
+        return None
     return {
         "cmd": test_cmd,
         "returncode": r.returncode,

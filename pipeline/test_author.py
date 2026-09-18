@@ -159,11 +159,53 @@ _TEST_AUTHOR_ALLOWED_TOOLS = "Read,Write,Edit,Bash"
 # free-text phrases like "no new tests" that appear in ordinary briefs.
 _TEST_AUTHOR_OPT_OUT_MARKER = "[no-new-tests]"
 
+# A brief that MENTIONS the sentinel while forbidding it (e.g. "[no-new-tests]
+# must NOT be used for this story") is not an opt-out. Such a mention is
+# detected as a negation word plus a use-verb in the same sentence as the
+# token -- the token is being *talked about*, not *invoked*.
+_TEST_AUTHOR_OPT_OUT_NEGATIONS = ("not", "never", "no")
+_TEST_AUTHOR_OPT_OUT_USE_VERBS = (
+    "use", "used", "uses", "using", "apply", "applied", "applies",
+)
+
+
+def _mentions_opt_out_without_invoking_it(remainder: str) -> bool:
+    """True iff the text following a ``[no-new-tests]`` token negates the
+    token itself (e.g. "must NOT be used for this story") -- i.e. the brief
+    is explaining that the opt-out must not be used, rather than opting out.
+    """
+    words = remainder.split(".", 1)[0].lower().replace(",", " ").split()
+    negated = any(
+        word in _TEST_AUTHOR_OPT_OUT_NEGATIONS or word.endswith("n't")
+        for word in words
+    )
+    invokes = any(word in _TEST_AUTHOR_OPT_OUT_USE_VERBS for word in words)
+    return negated and invokes
+
 
 def _story_opts_out_of_test_author(story: dict) -> bool:
     """True iff the story's agent_instructions explicitly opt out of the
-    test-author phase via the ``[no-new-tests]`` sentinel."""
-    return _TEST_AUTHOR_OPT_OUT_MARKER in story.get("agent_instructions", "")
+    test-author phase via the ``[no-new-tests]`` sentinel.
+
+    A plain substring search also matched sentences that MENTION the sentinel
+    while forbidding it (e.g. "[no-new-tests] must NOT be used for this story
+    -- this adds new behavior"), silently skipping the test-author phase for
+    stories that needed it (observed live 2026-09-17: 3 chat-ux-improvements
+    stories, all had to be escalated after burning their local rework
+    budget). A token whose own sentence negates its use is therefore read as
+    a mention, not an opt-out; every other occurrence -- leading the brief or
+    trailing it -- still opts out, so existing briefs keep working. The check
+    is a pure read: it sets no flag and mutates nothing."""
+    instructions = story.get("agent_instructions", "")
+    start = 0
+    while True:
+        index = instructions.find(_TEST_AUTHOR_OPT_OUT_MARKER, start)
+        if index == -1:
+            return False
+        remainder = instructions[index + len(_TEST_AUTHOR_OPT_OUT_MARKER):]
+        if not _mentions_opt_out_without_invoking_it(remainder):
+            return True
+        start = index + len(_TEST_AUTHOR_OPT_OUT_MARKER)
 
 
 def _test_author_prompt(agent_instructions: str) -> str:

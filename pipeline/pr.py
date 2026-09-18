@@ -124,8 +124,24 @@ def _merge_pr(worktree: str, story_key: str) -> str:
     # via p.REPO_ROOT; the lazy import at call time sees the patched value.
     from .server import REPO_ROOT
     branch = _resolve_story_branch(worktree, story_key)
+    # Recover the PR's own title (the same one _open_pr set via `gh pr
+    # create --title`) and pass it explicitly as the squash commit's subject.
+    # Without --subject, `gh pr merge --squash` can fall back to the branch's
+    # own last commit message instead of the PR title -- observed live
+    # 2026-09-17 (PR #821): a step-cap checkpoint's own "WIP (step cap
+    # reached)" commit message became the PERMANENT squash-merge title on
+    # master instead of the story's real summary. Fails open: a failed title
+    # lookup must never block a merge that would otherwise have succeeded.
+    title_proc = subprocess.run(
+        ["gh", "pr", "view", branch, "--json", "title", "-q", ".title"],
+        cwd=worktree, check=False, capture_output=True, text=True,
+    )
+    subject = title_proc.stdout.strip() if title_proc.returncode == 0 else ""
+    merge_cmd = ["gh", "pr", "merge", branch, "--squash"]
+    if subject:
+        merge_cmd += ["--subject", subject]
     proc = subprocess.run(
-        ["gh", "pr", "merge", branch, "--squash"],
+        merge_cmd,
         cwd=worktree, check=True, capture_output=True, text=True,
     )
     result = proc.stdout.strip()

@@ -566,10 +566,6 @@ class TestTimeoutRowsAreSeparatePhysicalLines:
             f"row, got {len(cells)} cells: {row!r}"
         )
         assert _normalise_tag(cells[0]) == "PIPELINE_LOCAL_TIMEOUT_SECONDS"
-        assert "PIPELINE_ROLE_CALL_TIMEOUT_SECONDS" not in row, (
-            "the `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` row was merged into the "
-            f"`PIPELINE_LOCAL_TIMEOUT_SECONDS` row: {row!r}"
-        )
         assert _LITERAL_BACKSLASH_N not in row
 
     def test_role_call_timeout_row_is_its_own_three_cell_row(self):

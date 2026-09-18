@@ -222,3 +222,53 @@ def test_commit_wip_untracks_broad_glob_scratchpad_variant(tmp_path: Path):
     assert _git(repo, "ls-files", "--", "foo.agent_scratchpad.notes.md").strip() == ""
     assert scratch.exists()
     assert scratch.read_text() == "v2\n"
+
+
+# ---------- guard_against_deletion must not resurrect the scratchpad ----------
+#
+# The untrack loop leaves a SYNTHETIC staged deletion for the scratchpad: the
+# file is in HEAD but no longer in the index. The guard's `--diff-filter=AM`
+# check therefore comes back empty, so an unfiltered guard reads that synthetic
+# deletion as a REAL one and runs `git checkout HEAD -- .agent_scratchpad.md` +
+# `git add`. That (a) re-tracks the scratchpad, making the untrack a no-op on
+# the watchdog/interrupt path (pipeline/checkpoint.py, a live path), and (b)
+# overwrites the working-tree file with HEAD's blob, destroying the running
+# agent's latest notes.
+
+def test_commit_wip_guard_against_deletion_untracks_scratchpad(tmp_path: Path):
+    """guard_against_deletion=True (watchdog timeout / manual interrupt) must
+    still untrack a previously-committed scratchpad, and must never clobber the
+    running agent's newest notes with HEAD's older blob."""
+    repo = _init_repo(tmp_path)
+    scratch = repo / ".agent_scratchpad.md"
+    scratch.write_text("old notes")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "prior direct commit")
+
+    scratch.write_text("new notes")
+    _commit_wip(str(repo), "S1", "checkpoint", guard_against_deletion=True)
+
+    tree = _git(repo, "ls-tree", "-r", "--name-only", "HEAD")
+    assert ".agent_scratchpad.md" not in tree
+    assert scratch.read_text() == "new notes"
+
+
+def test_commit_wip_guard_against_deletion_followup_call_keeps_notes(tmp_path: Path):
+    """The bug compounds across calls: a first guarded call that re-tracks the
+    scratchpad as HEAD's old blob leaves the second call clobbering the notes
+    again. After two guarded calls the scratchpad must still be untracked and
+    the worktree must hold the newest notes."""
+    repo = _init_repo(tmp_path)
+    scratch = repo / ".agent_scratchpad.md"
+    scratch.write_text("old notes")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "prior direct commit")
+
+    scratch.write_text("new notes")
+    _commit_wip(str(repo), "S1", "checkpoint", guard_against_deletion=True)
+    scratch.write_text("newer notes")
+    _commit_wip(str(repo), "S1", "checkpoint", guard_against_deletion=True)
+
+    tree = _git(repo, "ls-tree", "-r", "--name-only", "HEAD")
+    assert ".agent_scratchpad.md" not in tree
+    assert scratch.read_text() == "newer notes"

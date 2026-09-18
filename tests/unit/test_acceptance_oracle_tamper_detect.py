@@ -127,7 +127,7 @@ def _prepare(tmp_path, monkeypatch, cmd):
 
 
 def test_reverify_persists_a_failing_run_onto_story(tmp_path, monkeypatch):
-    cmd = [sys.executable, "-c", "import sys; sys.exit(1)"]
+    cmd = [sys.executable, "-c", "import sys; print('1 failed'); sys.exit(1)"]
     worktree = _prepare(tmp_path, monkeypatch, cmd)
     story = {"acceptance": []}
 
@@ -135,7 +135,7 @@ def test_reverify_persists_a_failing_run_onto_story(tmp_path, monkeypatch):
 
     # Return shape is unchanged (additive side effect only).
     assert result["state"] == "fail"
-    assert result["error"]
+    assert result["error"] == "1 failed"
     assert story["last_test_check"]["returncode"] == 1
     assert story["last_test_check"]["cmd"] == cmd
     assert story["last_test_check"]["cwd"] == str(worktree)

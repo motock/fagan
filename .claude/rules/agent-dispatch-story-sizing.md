@@ -43,7 +43,11 @@ edits instead of line-number edits helps but does not fully prevent this;
 models revert to line-number edits once their context has been evicted.
 
 **How to apply:** before dispatch, check the line count of every production
-file a story touches. If any file exceeds ~1000 lines, route that story to
+file a story touches — **including Markdown docs** (REFERENCE.md is ~1330
+lines; a 2026-09-18 story on the weakest tier wrote a 3-cell row into
+its 4-column table and another merged two rows with a literal `\n`). The
+ingest-time sizing warning skips `.md` and repo-root files, so it will not
+flag these; check by hand. If any file exceeds ~1000 lines, route that story to
 a stronger executor tier — do not leave it on the default/weakest tier.
 Better still, split the story so no single dispatch has to edit deep inside
 a large file's interior; a story that only appends a new method at the end,

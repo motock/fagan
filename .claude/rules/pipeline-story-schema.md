@@ -199,14 +199,23 @@ commits (`"no new commit after 2 rework redispatches"`). Unblocked only by
 a human patching `agent_instructions` with the exact before/after text of
 the one authorized edit and redispatching.
 
-**How to apply at plan-authoring time:** before finalizing
-`agent_instructions` for a story that changes an existing return value,
-request/response body, or any other shape already in production, grep the
-existing test suite for other tests exercising that same call path or
-contract (not just the file the test-author phase will write to) — a
-strict `==` on a dict/list/string is the highest-risk shape, since adding
-one field anywhere in that structure breaks it. If a conflict exists,
-either:
+**This applies to EVERY story, not only shape changes.** The same collision
+happens when a story deletes a config key a survivor-list test requires
+(`gptoss-num-ctx-ceiling`, 2026-09-18: `test_launchd_templates_no_routing_env.py`
+pinned `PIPELINE_LOCAL_NUM_CTX` as a must-survive key; the executor then
+restored the key to go green, undoing its own deliverable), or inserts doc
+text inside a section a verbatim-body test pins (`test_readme_reference_split.py`).
+Across 500 PRs since 2026-08-01, 48% of gate-synthesized test failures were
+in pre-existing test files the story never touched.
+
+**How to apply at plan-authoring time:** do NOT rely on grepping — a grep for
+the touched key returned 22 files and the one that mattered was missed. Run
+the impact check in `.claude/rules/local-dispatch-preflight.md` §1: apply a
+rough stand-in of the change in a scratch worktree, run the full suite, and
+treat every failure outside the story's own new test files as a conflict. A
+strict `==` on a dict/list/string, a survivor list, a verbatim/byte-for-byte
+body check, a hash pin, and an exact count are the highest-risk shapes. For
+each conflict, either:
 - pre-authorize the exact reconciling edit by naming the file, the test,
   and the literal before/after text (mirroring `d914df45`'s "AUTHORIZED
   EDITS: make exactly these N edits, nothing else" pattern elsewhere in

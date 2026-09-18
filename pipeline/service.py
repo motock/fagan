@@ -383,10 +383,13 @@ class PipelineService:
         A file that fails to parse, or is not a JSON object, or lacks
         'epics', is silently skipped rather than raising. Returns names
         sorted alphabetically.
+        Plans that already have a companion '<stem>.manifest.json' are excluded as already ingested.
         """
         names = []
         for path in sorted(PLAN_DIR.glob("*.json")):
             if "." in path.stem:
+                continue
+            if (PLAN_DIR / f'{path.stem}.manifest.json').exists():
                 continue
             try:
                 data = json.loads(path.read_text())

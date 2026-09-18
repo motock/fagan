@@ -17,6 +17,7 @@ time rather than holding a copy imported at module load. This mirrors the
 import json
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,76 @@ _scaffolding_provider_mismatch_warning = _ServerRef(
     "_scaffolding_provider_mismatch_warning"
 )
 role_registry = _ServerRef("role_registry")
+
+# .claude/rules/agent-dispatch-story-sizing.md's mechanically-checkable caps
+# for a story dispatched to a non-Claude executor: at most 2 production files
+# in scope, and no production file over ~1000 lines.
+_SIZING_MAX_PRODUCTION_FILES = 2
+_SIZING_MAX_FILE_LINES = 1000
+
+
+def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
+    """Return a non-blocking warning string when a story's own
+    agent_instructions names more production files than
+    .claude/rules/agent-dispatch-story-sizing.md's caps for a non-Claude
+    dispatch tier, or names a file that already exceeds the file-size
+    cap on disk. Returns None when the story looks fine or the backend
+    isn't a non-Claude tier (only local/cloud-open-source stories are
+    checked -- Claude-class dispatch doesn't need this crutch, mirroring
+    the same backend gate the test-author/planner phases already use).
+    Never raises; a filesystem read failure degrades to None (this must
+    stay an observability hook, never a gate -- see
+    pipeline/dispatch.py's 'multi-model concurrent dispatch' and 'ollama
+    serving parallelism' warnings for the established pattern this
+    mirrors)."""
+    backend = (story.get("backend") or "").strip().lower()
+    if backend not in ("local", "ollama", "lmstudio", "mlx", "litellm"):
+        return None
+    instructions = story.get("agent_instructions") or ""
+    # Reuse the same backtick-quoted-repo-path convention every brief in
+    # this codebase already follows (see any story's "Files:" line).
+    paths = sorted(
+        set(
+            re.findall(
+                r"`((?:app|pipeline|static|scripts|tests|docs|src|systemd)/[\w/.\-]+)`",
+                instructions,
+            )
+        )
+    )
+    production_paths = [
+        p
+        for p in paths
+        if not p.split("/")[-1].startswith("test_")
+        and "/test" not in p
+        and not p.endswith(".md")
+    ]
+    reasons = []
+    if len(production_paths) > _SIZING_MAX_PRODUCTION_FILES:
+        reasons.append(
+            f"names {len(production_paths)} production files "
+            f"({', '.join(production_paths)}), over the "
+            f"{_SIZING_MAX_PRODUCTION_FILES}-file cap for a non-Claude "
+            f"dispatch tier"
+        )
+    for p in production_paths:
+        try:
+            full = Path(repo_root) / p
+            if full.is_file():
+                line_count = sum(1 for _ in full.open("r", errors="replace"))
+                if line_count > _SIZING_MAX_FILE_LINES:
+                    reasons.append(
+                        f"edits {p} ({line_count} lines), over the "
+                        f"{_SIZING_MAX_FILE_LINES}-line file-size cap for "
+                        f"the weakest dispatch tier"
+                    )
+        except OSError:
+            continue
+    if not reasons:
+        return None
+    return (
+        "story sizing risk (see .claude/rules/agent-dispatch-story-sizing.md): "
+        + "; ".join(reasons)
+    )
 
 
 def _ingest_plan_impl(
@@ -214,6 +285,17 @@ def _ingest_plan_impl(
             if msg is not None:
                 _notify_user(plan_name, f"{key}: {msg}")
                 logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {msg}")
+
+        # Non-blocking sizing nudge: flag a story whose own brief names more
+        # production files than .claude/rules/agent-dispatch-story-sizing.md
+        # allows a non-Claude dispatch tier, or names a file already over the
+        # file-size cap. Advisory only -- a human plan author may have
+        # deliberately authorized a larger story, so this never blocks.
+        for key, story in final_manifest["stories"].items():
+            warning = _story_sizing_warning(story, repo_root)
+            if warning:
+                _notify_user(plan_name, f"{key}: {warning}")
+                logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {warning}")
             # Non-blocking authoring nudge: flag acceptance fixtures that
             # depend on macOS-only tooling. Dispatch, the done-bar and the
             # merge-gate reverify all run on macOS, but CI runs ubuntu-latest

@@ -517,6 +517,22 @@ def _reverify_acceptance(
         and not k.startswith("LOCAL_AGENT_")
         and k != "REPO_ROOT"
     }
+    # Resolve the worktree's HEAD *before* the test run: the diagnostic
+    # snapshot below records the commit that was actually graded, and keeping
+    # this probe ahead of the test command leaves the gate's own test command
+    # as the last subprocess invocation (which callers and tests observe).
+    check_sha = None
+    try:
+        check_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
     if _is_heavy(test_cmd):
         with _heavy_lock():
             r = subprocess.run(
@@ -533,17 +549,6 @@ def _reverify_acceptance(
     # unrelated poll (e.g. one taken before a build marker like pom.xml existed,
     # recording the portable no-op command) instead of the real result this gate
     # just produced and is about to act on.
-    check_sha = None
-    try:
-        check_sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=worktree,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, OSError):
-        pass
     story["last_test_check"] = {
         "cmd": test_cmd,
         "cwd": str(test_dir),

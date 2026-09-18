@@ -107,7 +107,15 @@ TOAST_REGION_SHA256 = "dbfb98e7ac5c90643e9560c45faa9d8d04e8487c11ab55c4af82cb7c2
 # append-at-end pattern as the prior re-pin. Nothing before the append
 # point changed.
 # Re-pinned for the Comms typing indicator (CTI-1): appended .comms-typing rules and the comms-typing-bounce keyframe at the end of style.css. Nothing before the append point changed.
-SUFFIX_FROM_CONFIG_SHA256 = "6cc9f890dc6ee2f748ba1bab2d8b9b6999505d7efc9bc0d0260aef78f3d9bbcc"
+# Re-pinned for the typing-indicator chat-UI cleanup (2026-09-17): the
+# indicator's markup/CSS changed from a bare row of dots to a pending
+# TOWER-style bubble (.comms-typing-who / .comms-typing-bubble replace the
+# old flat .comms-typing rule) so it reads as part of the conversation
+# rather than a floating widget - see static/app/comms.js's
+# _typingIndicatorEl, which now anchors the element after #comms-thread
+# instead of appending it to the end of #comms-body. Only the
+# .comms-typing* rules changed; nothing else in this suffix region moved.
+SUFFIX_FROM_CONFIG_SHA256 = "59027f36151a78a88de41a39185ebb2901906a88394fc7d51c6ac4716b1bb079"
 
 # The 21 selectors listed in the story as having empty `{}` bodies. Several
 # have a separate, already-populated rule immediately after them (e.g.

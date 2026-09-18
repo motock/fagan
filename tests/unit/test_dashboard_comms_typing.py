@@ -1,19 +1,30 @@
-"""Node-eval harness tests for the Comms typing indicator (CTI-1).
+"""Node-eval harness tests for the Comms typing indicator.
 
-While a chat reply is pending, sendCommsMessage shows a typing indicator
-in the Comms panel: a single `.comms-typing` element created lazily by the
-private helper `_typingIndicatorEl()` and appended ONCE to the EXISTING
-#comms-body element (never to #comms-thread, so the append-count pins in
-test_dashboard_comms_send.py are unaffected). The element is memoized in
-the module-level `_typingEl` cache and hidden again in sendCommsMessage's
+While a chat reply is pending, sendCommsMessage shows a typing indicator in
+the Comms panel: a single `.comms-typing` element created lazily by the
+private helper `_typingIndicatorEl()`. The element is memoized in the
+module-level `_typingEl` cache and hidden again in sendCommsMessage's
 finally block.
+
+Placement (chat-UI cleanup pass, 2026-09-17): the indicator is anchored
+directly after #comms-thread via `insertAdjacentElement('afterend', ...)` -
+the logical "next tower message" slot, right above the compose box -
+falling back to `body.appendChild` only when #comms-thread or
+insertAdjacentElement is unavailable (e.g. a minimal test shim). Earlier
+versions of this suite pinned the indicator being unconditionally appended
+to the END of #comms-body (after the ingest panel) as intentional; that was
+the actual bug being fixed here - the indicator read as detached from the
+conversation instead of sitting where the next reply will appear.
 
 Harness pattern copied from tests/unit/test_dashboard_comms_send.py (which
 copied it from test_dashboard_comms_nav.py / test_dashboard.py), but this
 file loads static/app/comms.js DIRECTLY (app_js=COMMS_JS) the way
 test_comms_trace_toggle.py does, and extends the shim IN THIS FILE ONLY:
   - #comms-body is a stable instrumented element whose appendChild calls
-    are counted, so memoization (append exactly once) is observable.
+    are counted, to prove the indicator no longer lands there.
+  - #comms-thread is a stable instrumented element whose
+    insertAdjacentElement calls are counted, so the anchor-after-thread
+    placement is observable.
   - document.createElement records classList add/remove calls per element,
     so the show ('hidden' removed) / hide ('hidden' added) wiring inside
     sendCommsMessage is observable on the created typing element.
@@ -41,8 +52,10 @@ _SHIM = r"""
             querySelectorAll: () => [],
             dataset: {},
         };
-        // Counters for #comms-thread (mirrors test_dashboard_comms_send.py).
-        globalThis.__commsThread = { appendChildCalls: 0, appendedClasses: [] };
+        // Counters for #comms-thread (mirrors test_dashboard_comms_send.py),
+        // plus an insertAdjacentElement stub so the anchor-after-thread
+        // placement of the typing indicator is observable.
+        globalThis.__commsThread = { appendChildCalls: 0, appendedClasses: [], insertAdjacentElementCalls: [] };
         const commsThreadEl = {
             ...fakeEl,
             dataset: {},
@@ -55,6 +68,10 @@ _SHIM = r"""
                     globalThis.__commsThread.appendedClasses.push(child.className);
                 }
                 return child;
+            },
+            insertAdjacentElement: function (position, el) {
+                globalThis.__commsThread.insertAdjacentElementCalls.push({ position: position, el: el });
+                return el;
             },
         };
         const commsLandingEl = {
@@ -81,8 +98,9 @@ _SHIM = r"""
             get disabled() { return false; },
         };
         const commsInputEl = { ...fakeEl, dataset: {}, value: "", addEventListener: noop };
-        // CTI-1 extension: #comms-body is a STABLE instrumented element so
-        // the typing indicator's append-once memoization is observable.
+        // #comms-body is a STABLE instrumented element so tests can prove
+        // the typing indicator no longer lands there when insertAdjacentElement
+        // is available on #comms-thread.
         globalThis.__commsBody = { appendChildCalls: 0, appendedClasses: [], appended: [] };
         const commsBodyEl = {
             ...fakeEl,
@@ -217,16 +235,22 @@ def test_comms_js_defines_typing_indicator_el_once():
     )
 
 
-def test_typing_indicator_appended_to_comms_body_not_thread():
+def test_typing_indicator_anchors_after_thread_not_end_of_body():
     fn_src = _typing_fn_source()
     assert "getElementById('comms-body')" in fn_src, (
-        "_typingIndicatorEl must anchor the indicator to #comms-body"
+        "_typingIndicatorEl must still resolve #comms-body as its home container"
+    )
+    assert "getElementById('comms-thread')" in fn_src, (
+        "_typingIndicatorEl must look up #comms-thread so it can anchor the "
+        "indicator directly after the last message, not at the end of the panel"
+    )
+    assert "insertAdjacentElement('afterend'" in fn_src, (
+        "the indicator must be inserted as #comms-thread's next sibling "
+        "(the logical 'next tower message' slot)"
     )
     assert "body.appendChild(el)" in fn_src, (
-        "_typingIndicatorEl must append the indicator to #comms-body"
-    )
-    assert "comms-thread" not in fn_src, (
-        "the typing indicator must never be appended to #comms-thread"
+        "a body.appendChild fallback must remain for environments without "
+        "#comms-thread or insertAdjacentElement (e.g. minimal test shims)"
     )
     assert "aria-hidden" in fn_src, "the indicator must be aria-hidden"
 
@@ -247,23 +271,34 @@ def test_send_comms_message_shows_and_hides_typing_indicator():
 # === behavior: show/hide + memoization via sendCommsMessage ==============
 
 def test_send_shows_then_hides_typing_indicator_once():
-    """One happy-path send: the indicator is appended to #comms-body once,
-    un-hidden at send start, and re-hidden by the finally block."""
+    """One happy-path send: the indicator is inserted after #comms-thread
+    exactly once, un-hidden at send start, and re-hidden by the finally
+    block - and never appended to #comms-body, since insertAdjacentElement
+    is available on the thread stub."""
     result = _run_comms_js(
-        "sendCommsMessage('hello').then(() => ({"
+        "sendCommsMessage('hello').then(() => { "
+        " const call = globalThis.__commsThread.insertAdjacentElementCalls[0];"
+        " return {"
         " bodyAppends: globalThis.__commsBody.appendChildCalls,"
-        " bodyClasses: globalThis.__commsBody.appendedClasses,"
-        " clsCalls: (globalThis.__commsBody.appended[0]"
-        "   && globalThis.__commsBody.appended[0].classList.__clsCalls) || [],"
-        " attrs: (globalThis.__commsBody.appended[0]"
-        "   && globalThis.__commsBody.appended[0].__attrs) || [] }))",
+        " threadInserts: globalThis.__commsThread.insertAdjacentElementCalls.length,"
+        " position: call && call.position,"
+        " className: call && call.el && call.el.className,"
+        " clsCalls: (call && call.el && call.el.classList.__clsCalls) || [],"
+        " attrs: (call && call.el && call.el.__attrs) || [] }; })",
         fetch_impl=_OK_FETCH,
     )
-    assert result["bodyAppends"] == 1, (
-        f"expected exactly 1 appendChild on #comms-body, got {result!r}"
+    assert result["bodyAppends"] == 0, (
+        f"the indicator must not be appended to #comms-body when "
+        f"insertAdjacentElement is available, got {result!r}"
     )
-    assert result["bodyClasses"] == ["comms-typing hidden"], (
-        f"the appended indicator must start hidden, got {result!r}"
+    assert result["threadInserts"] == 1, (
+        f"expected exactly 1 insertAdjacentElement call on #comms-thread, got {result!r}"
+    )
+    assert result["position"] == "afterend", (
+        f"the indicator must be inserted as #comms-thread's next sibling, got {result!r}"
+    )
+    assert result["className"] == "comms-typing hidden", (
+        f"the inserted indicator must start hidden, got {result!r}"
     )
     assert ["remove", "hidden"] in result["clsCalls"], (
         f"the indicator must be shown while pending, got {result!r}"
@@ -272,27 +307,30 @@ def test_send_shows_then_hides_typing_indicator_once():
         f"the indicator must be hidden again after the reply, got {result!r}"
     )
     assert ["aria-hidden", "true"] in result["attrs"], (
-        "the indicator must carry aria-hidden=true, got {result!r}"
+        f"the indicator must carry aria-hidden=true, got {result!r}"
     )
 
 
 def test_typing_indicator_memoized_across_sends():
-    """Two sequential sends reuse the SAME element: #comms-body sees exactly
-    one appendChild total, while the cached element is shown/hidden once per
-    send (2 removes + 2 adds of 'hidden' on that single element)."""
+    """Two sequential sends reuse the SAME element: #comms-thread sees
+    exactly one insertAdjacentElement call total, while the cached element is
+    shown/hidden once per send (2 removes + 2 adds of 'hidden' on that
+    single element)."""
     result = _run_comms_js(
         "sendCommsMessage('first')"
         ".then(() => sendCommsMessage('second'))"
-        ".then(() => ({"
+        ".then(() => { "
+        " const calls = globalThis.__commsThread.insertAdjacentElementCalls;"
+        " const first = calls[0];"
+        " return {"
         " bodyAppends: globalThis.__commsBody.appendChildCalls,"
-        " appended: globalThis.__commsBody.appended.length,"
-        " clsCalls: (globalThis.__commsBody.appended[0]"
-        "   && globalThis.__commsBody.appended[0].classList.__clsCalls) || [] }))",
+        " threadInserts: calls.length,"
+        " clsCalls: (first && first.el && first.el.classList.__clsCalls) || [] }; })",
         fetch_impl=_OK_FETCH,
     )
-    assert result["bodyAppends"] == 1 and result["appended"] == 1, (
-        "the typing indicator must be memoized: exactly one element appended "
-        f"to #comms-body across both sends, got {result!r}"
+    assert result["bodyAppends"] == 0 and result["threadInserts"] == 1, (
+        "the typing indicator must be memoized: exactly one insertAdjacentElement "
+        f"call on #comms-thread across both sends, got {result!r}"
     )
     removes = [c for c in result["clsCalls"] if c[0] == "remove" and c[1] == "hidden"]
     adds = [c for c in result["clsCalls"] if c[0] == "add" and c[1] == "hidden"]
@@ -303,17 +341,22 @@ def test_typing_indicator_memoized_across_sends():
 
 
 def test_typing_indicator_null_body_does_not_throw():
-    """With #comms-body missing, _typingIndicatorEl must bail out (null) and
-    sendCommsMessage must still complete its normal happy path."""
+    """With #comms-body missing, _typingIndicatorEl must bail out (null)
+    before ever touching #comms-thread, and sendCommsMessage must still
+    complete its normal happy path."""
     result = _run_comms_js(
         "sendCommsMessage('hello').then(() => ({"
         " bodyAppends: globalThis.__commsBody.appendChildCalls,"
+        " threadInserts: globalThis.__commsThread.insertAdjacentElementCalls.length,"
         " threadAppends: globalThis.__commsThread.appendChildCalls }))",
         fetch_impl=_OK_FETCH,
         extra_setup="globalThis.__commsBodyNull = true;",
     )
     assert result["bodyAppends"] == 0, (
         f"no indicator may be appended when #comms-body is missing, got {result!r}"
+    )
+    assert result["threadInserts"] == 0, (
+        f"no indicator may be anchored to #comms-thread when #comms-body is missing, got {result!r}"
     )
     assert result["threadAppends"] == 2, (
         f"the send itself must still append user+tower messages, got {result!r}"
@@ -325,7 +368,7 @@ def test_typing_indicator_null_body_does_not_throw():
 def test_typing_indicator_dots_when_motion_allowed():
     result = _run_comms_js(
         "sendCommsMessage('hello').then(() => "
-        "globalThis.__commsBody.appended[0].innerHTML)",
+        "globalThis.__commsThread.insertAdjacentElementCalls[0].el.innerHTML)",
         fetch_impl=_OK_FETCH,
     )
     assert result.count('class="comms-typing-dot"') == 3, (
@@ -342,7 +385,7 @@ def test_typing_indicator_static_text_when_reduced_motion():
     ever attempted for a user who opted out)."""
     result = _run_comms_js(
         "sendCommsMessage('hello').then(() => "
-        "globalThis.__commsBody.appended[0].innerHTML)",
+        "globalThis.__commsThread.insertAdjacentElementCalls[0].el.innerHTML)",
         fetch_impl=_OK_FETCH,
         extra_setup=_REDUCED_MOTION_SETUP,
     )
@@ -359,8 +402,9 @@ def test_typing_indicator_static_text_when_reduced_motion():
 def test_send_happy_path_still_appends_exactly_two_thread_messages():
     """Regression guard mirroring test_dashboard_comms_send.py's pins: with
     the typing indicator active, a successful send still appends EXACTLY two
-    messages to #comms-thread (user then tower) — the indicator lives on
-    #comms-body and is invisible to the thread counters."""
+    messages to #comms-thread via appendChild (user then tower) - the
+    indicator is anchored via insertAdjacentElement, a separate call the
+    appendChild counters never see."""
     result = _run_comms_js(
         "sendCommsMessage('hello').then(() => ({"
         " threadAppends: globalThis.__commsThread.appendChildCalls,"

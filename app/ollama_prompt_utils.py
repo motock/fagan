@@ -94,12 +94,12 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
     # swept num_ctx values 32768, 49152, 65536, 81920, 98304, 114688, 131072
     # observed 100% GPU usage, resident size 12GB→13GB, no swap growth
     # 131072 is Ollama's hard clamp for this model; values above it have no effect
-    # num_ctx for gpt-oss-20b-high is now decided here in the table, not by
-    # PIPELINE_LOCAL_NUM_CTX (unlike other local models which still fall through
-    # to the plist/constructor default).
+    # PIPELINE_LOCAL_NUM_CTX still overrides this table entry; the table value
+    # only takes effect once the launchd plist's PIPELINE_LOCAL_NUM_CTX is
+    # removed by the sibling story.  The table entry is inert in production
+    # today because the env var is set to 16384.
     "gpt-oss-20b-high:latest": {"num_ctx": 131072},
 }
-
 
 def _tuned_num_ctx(model_tag: str, fallback: int) -> int:
     # A ":cloud"-tagged model (deepseek-v4-flash:cloud, glm-5.2:cloud,

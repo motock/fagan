@@ -644,9 +644,17 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # say so up front - before the plan-authored brief - so the agent
         # doesn't spend its own step/rework budget rediscovering (or trying to
         # "fix") a failure it did not cause. Only a non-zero baseline is worth
-        # a note; a passing baseline (or none at all) adds nothing.
+        # a note; a passing baseline (or none at all) adds nothing. Gated on
+        # `not resuming` too: a resumed dispatch acts on a worktree the agent
+        # has already been editing, so a baseline recorded on the first
+        # dispatch is stale by then and re-emitting it would misdirect the
+        # agent toward failures it may well have already fixed.
         baseline = story.get("baseline_test_check")
-        if baseline and baseline.get("returncode") not in (None, 0):
+        if (
+            baseline
+            and baseline.get("returncode") not in (None, 0)
+            and not resuming
+        ):
             baseline_note = (
                 "NOTE: the test command already fails on a clean, unmodified "
                 "checkout of this worktree (exit code "

@@ -4,11 +4,13 @@ Split out of test_pipeline_mcp_server.py to keep it under the project's line-cou
 """
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from pipeline import git_ops
 from pipeline import server as p
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _STEP_CAP_MARKER_LOCAL,
@@ -739,5 +741,180 @@ def test_escalate_to_claude_pops_infra_failure_streak_fields(
     assert "infra_failure_streak" not in story
     assert "infra_failure_streak_model" not in story
     assert story["backend"] == "claude"
+
+
+# ---------- _rebase_onto_master: pre-rebase WIP checkpoint ----------
+
+def _git(*args, cwd):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+@pytest.fixture
+def origin_clone_and_worktree(tmp_path):
+    """Real origin + clone + linked worktree on branch ``agent/s1``.
+
+    origin/main is advanced one commit past the branch's base using a
+    brand-new file, so the rebase has real work to replay and can never
+    conflict with the branch's own commits. Returns ``(repo, wt)`` where
+    ``repo`` is the clone to use as REPO_ROOT.
+    """
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _git("init", "-q", "-b", "main", cwd=seed)
+    _git("config", "user.email", "t@e", cwd=seed)
+    _git("config", "user.name", "t", cwd=seed)
+    (seed / "README.md").write_text("seed\n")
+    _git("add", "-A", cwd=seed)
+    _git("commit", "-q", "-m", "seed", cwd=seed)
+
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(seed), str(origin)],
+                   check=True, capture_output=True, text=True)
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "clone", "-q", str(origin), str(repo)],
+                   check=True, capture_output=True, text=True)
+    _git("config", "user.email", "t@e", cwd=repo)
+    _git("config", "user.name", "t", cwd=repo)
+    _git("checkout", "-q", "-b", "agent/s1", cwd=repo)
+    (repo / "story.txt").write_text("story\n")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-q", "-m", "story work", cwd=repo)
+    _git("checkout", "-q", "main", cwd=repo)
+
+    wt = tmp_path / "wt"
+    _git("worktree", "add", "-q", str(wt), "agent/s1", cwd=repo)
+
+    (seed / "main_only.txt").write_text("main\n")
+    _git("add", "-A", cwd=seed)
+    _git("commit", "-q", "-m", "advance main", cwd=seed)
+    _git("push", "-q", str(origin), "main", cwd=seed)
+    return repo, wt
+
+
+def _patch_rebase_env(monkeypatch, repo):
+    monkeypatch.setattr(p, "REPO_ROOT", str(repo))
+    monkeypatch.setattr(p, "_default_branch", lambda: "main")
+
+
+def test_rebase_commits_dirty_worktree_before_rebasing(
+    origin_clone_and_worktree, monkeypatch,
+):
+    """Regression: a worktree with unstaged changes used to make every
+    merge-gate rebase fail identically ("cannot rebase: You have unstaged
+    changes") and the retry loop gave up after PIPELINE_MERGE_MAX_ATTEMPTS.
+    The dirty state must be committed as a WIP checkpoint first, then the
+    rebase must succeed."""
+    repo, wt = origin_clone_and_worktree
+    (wt / "story.txt").write_text("story\ndirty\n")  # tracked, unstaged
+
+    calls = []
+    real_commit_wip = git_ops._commit_wip
+
+    def _spy_commit_wip(worktree, story_key, step, guard_against_deletion=False):
+        calls.append(("commit_wip", story_key, step))
+        return real_commit_wip(worktree, story_key, step, guard_against_deletion)
+
+    monkeypatch.setattr(git_ops, "_commit_wip", _spy_commit_wip)
+    real_run = subprocess.run
+
+    def _spy_run(argv, **kwargs):
+        calls.append(("run", argv[1]))
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(p.subprocess, "run", _spy_run)
+    _patch_rebase_env(monkeypatch, repo)
+
+    rb = p._rebase_onto_master(str(wt), "agent/s1")
+
+    assert rb["ok"] is True, rb
+    # The checkpoint runs first, before any git subprocess the rebase issues.
+    assert calls[0] == ("commit_wip", "merge-gate", "pre-rebase-checkpoint")
+    assert ("run", "rebase") in calls
+    # The dirty edit survived as a commit rather than being discarded.
+    assert (wt / "story.txt").read_text() == "story\ndirty\n"
+    subjects = subprocess.run(["git", "log", "--format=%s", "agent/s1"], cwd=wt,
+                              capture_output=True, text=True, check=True).stdout
+    assert "wip(merge-gate): pre-rebase-checkpoint" in subjects
+
+
+def test_rebase_calls_commit_wip_even_when_worktree_is_clean(
+    origin_clone_and_worktree, monkeypatch,
+):
+    """No uncommitted changes: _commit_wip is still called (it is a no-op
+    then) and creates no extra commit, so the plain-success return shape and
+    the branch's own commits are unchanged."""
+    repo, wt = origin_clone_and_worktree
+
+    calls = []
+    real_commit_wip = git_ops._commit_wip
+
+    def _spy_commit_wip(worktree, story_key, step, guard_against_deletion=False):
+        calls.append((story_key, step))
+        return real_commit_wip(worktree, story_key, step, guard_against_deletion)
+
+    monkeypatch.setattr(git_ops, "_commit_wip", _spy_commit_wip)
+    _patch_rebase_env(monkeypatch, repo)
+
+    rb = p._rebase_onto_master(str(wt), "agent/s1")
+
+    assert calls == [("merge-gate", "pre-rebase-checkpoint")]
+    assert rb == {"ok": True, "conflict": False, "error": ""}
+    subjects = subprocess.run(["git", "log", "--format=%s", "agent/s1"], cwd=wt,
+                              capture_output=True, text=True, check=True).stdout
+    assert "wip(merge-gate)" not in subjects
+    assert "story work" in subjects
+
+
+def test_rebase_survives_commit_wip_failure_and_still_attempts_rebase(
+    origin_clone_and_worktree, monkeypatch,
+):
+    """Negative: if the WIP checkpoint itself fails (e.g. `git` missing), the
+    failure must not escape - the rebase is still attempted and reports its
+    own clear error, strictly no worse than before the checkpoint existed."""
+    repo, wt = origin_clone_and_worktree
+    (wt / "story.txt").write_text("story\ndirty\n")
+
+    def _raise_commit_wip(*a, **k):
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'git'")
+
+    monkeypatch.setattr(git_ops, "_commit_wip", _raise_commit_wip)
+    ran = []
+    real_run = subprocess.run
+
+    def _spy_run(argv, **kwargs):
+        ran.append(argv[1])
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(p.subprocess, "run", _spy_run)
+    _patch_rebase_env(monkeypatch, repo)
+
+    rb = p._rebase_onto_master(str(wt), "agent/s1")
+
+    assert "rebase" in ran  # the rebase was still attempted
+    assert rb["ok"] is False
+    assert rb["conflict"] is False
+    assert "unstaged" in rb["error"].lower()
+
+
+def test_rebase_survives_non_oserror_commit_wip_failure(
+    origin_clone_and_worktree, monkeypatch,
+):
+    """Negative: _commit_wip can also fail with a non-OSError (it raises
+    RuntimeError on a genuine `git commit` failure and CalledProcessError when
+    its own `git add -A` fails, e.g. a stale index.lock). Those must not escape
+    either - _rebase_onto_master's contract is to never raise, so a clean-tree
+    rebase still succeeds."""
+    repo, wt = origin_clone_and_worktree
+
+    def _raise_commit_wip(*a, **k):
+        raise RuntimeError("git commit failed (exit 1): boom")
+
+    monkeypatch.setattr(git_ops, "_commit_wip", _raise_commit_wip)
+    _patch_rebase_env(monkeypatch, repo)
+
+    rb = p._rebase_onto_master(str(wt), "agent/s1")
+
+    assert rb == {"ok": True, "conflict": False, "error": ""}
 
 

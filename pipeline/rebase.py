@@ -10,6 +10,7 @@ re-export -> patch lands. _rebase_onto_master reads REPO_ROOT and
 _default_branch via lazy imports from the server (circular-avoidance).
 """
 
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -129,7 +130,34 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
     # globals patched by tests via p.<name>; reading them here at call time
     # sees the patched value. The server imports this module at top level, so
     # a module-load import would cycle.
+    from .git_ops import _commit_wip
     from .server import REPO_ROOT, _default_branch
+    # A worktree can reach this gate with uncommitted changes (e.g. a
+    # checkpoint that landed mid-edit after an infra-failure interrupt).
+    # `git rebase` refuses to run at all against a dirty tree ("cannot
+    # rebase: You have unstaged changes"), and the merge-gate retry loop in
+    # advance.py calls this function up to PIPELINE_MERGE_MAX_ATTEMPTS times
+    # with no change in between -- an uncommitted-changes failure was
+    # observed live 2026-09-17 retrying identically 3x and giving up,
+    # needing a human to intervene. Commit any dirty state first (never
+    # discard it) using the same WIP-checkpoint helper the dispatch/
+    # interrupt paths already use, so the rebase always sees a clean tree.
+    # A failure here must not crash the tick: _commit_wip raises OSError when
+    # `git` is absent, RuntimeError on a genuine commit failure, and
+    # CalledProcessError when its own `git add -A` fails (e.g. a stale
+    # index.lock). This function's contract is to never raise, so degrade to
+    # attempting the rebase anyway - it then fails with its own clear error,
+    # strictly no worse than before this checkpoint existed.
+    try:
+        _commit_wip(worktree, "merge-gate", "pre-rebase-checkpoint")
+    except Exception:  # never-raises contract; see above
+        # Logged rather than swallowed silently: a checkpoint failure here
+        # means the rebase below will most likely fail on the dirty tree, and
+        # the operator needs the cause in the tick log.
+        logging.getLogger("pipeline").warning(
+            "pre-rebase WIP checkpoint failed in %s; attempting rebase anyway",
+            worktree, exc_info=True,
+        )
     # Full `git fetch origin` (not `fetch origin <branch>`) so every
     # remote-tracking ref is updated on configs with a narrow/custom refspec,
     # keeping the rebase target current. The rebase target itself must follow

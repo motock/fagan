@@ -23,7 +23,7 @@ from .build_detect import detect_test_command
 from .build_detect import _lint_acceptance_fixtures, _pytest_acceptance_fixtures
 from .oracle_gate import acceptance_digests, validate_acceptance_fixtures
 from .concurrency import _heavy_lock, _is_heavy
-from .config import STEP_CAP_FALLBACK_THRESHOLD
+from .config import STEP_CAP_FALLBACK_THRESHOLD, INFRA_FAILURE_LOG_SUBSTRING
 from .rebrief import collect_failure_evidence
 from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
@@ -619,7 +619,10 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
                 )
                 return "escalate_model"
         except Exception as exc:
-            reason = f"escalate_model ruled but ladder exhausted: {type(exc).__name__}"
+            reason = (
+                f"escalate_model ruled but ladder exhausted: "
+                f"{type(exc).__name__}: {str(exc)[:300]}"
+            )
             return _park(plan_name, story_key, story, reason)
         # ladder exhausted
         reason = f"escalate_model ruled but ladder exhausted: {rationale}"
@@ -819,6 +822,18 @@ def run_triage_sweep(plan_name: str) -> dict:
             except Exception:
                 findings = []
             evidence = collect_triage_evidence(story.get("worktree", ""), story, findings)
+            if (
+                INFRA_FAILURE_LOG_SUBSTRING in evidence
+                and _evidence_shows_no_new_commits(evidence)
+            ):
+                # An unresolved LLM/Ollama transport failure belongs to
+                # check_story_status's own infra-failure classifier and resume
+                # path (see INFRA_FAILURE_LOG_SUBSTRING's docstring in
+                # config.py), not to triage's LLM ruling -- that classifier
+                # excludes infra deaths from rework/attempt counters on
+                # purpose, and triage has no ruling that does the same. Skip
+                # this tick; do not spend a triage attempt or park the story.
+                continue
             ruling = rule_on_story(plan_name, key, story, evidence)
             if action_already_tried(story, ruling["action"]):
                 ruling = {"action": "park_for_human", "rationale": f"action {ruling['action']} already tried"}
@@ -1088,6 +1103,12 @@ def _current_git_state_impl(worktree: str, story: dict) -> str:
         return "\n".join(lines)
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _evidence_shows_no_new_commits(evidence: str) -> bool:
+    """True iff collect_triage_evidence's git-state section reports the
+    branch has zero commits beyond base (see _current_git_state_impl)."""
+    return "0 new commits" in evidence or "NO NEW COMMITS" in evidence
 
 # ---------------------------------------------------------------------------
 # Main triage evidence collection

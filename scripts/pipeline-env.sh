@@ -23,15 +23,12 @@ ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)}"
 # Save the caller's allexport state (safe under the caller's `set -euo pipefail`).
 __pipeline_env_allexport_was_on=0
 if [[ $- == *a* ]]; then __pipeline_env_allexport_was_on=1; fi
-
 # .pipeline.env first: the pipeline-wide operator overrides.
 set -a
 if [ -f "$ROOT/.pipeline.env" ]; then source "$ROOT/.pipeline.env"; fi
-
 # .dashboard.env second: legacy dashboard-only overrides keep last-write
 # precedence, so installs that already have one see no behaviour change.
 if [ -f "$ROOT/.dashboard.env" ]; then source "$ROOT/.dashboard.env"; fi
-
 # Restore the caller's allexport mode exactly as we found it, then drop the
 # temp var so nothing leaks into the caller's shell.
 if [[ $__pipeline_env_allexport_was_on == 1 ]]; then set -a; else set +a; fi

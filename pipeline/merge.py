@@ -484,7 +484,6 @@ def _merge_decision(
 def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     from .pr import _resolve_story_branch
     from .server import (
-        REPO_ROOT,
         _atomic_write_json,
         _ci_rerun,
         _ci_status,
@@ -572,7 +571,7 @@ def _approve_merge_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     push = subprocess.run(
                         ["git", "push", "--force-with-lease", "origin", branch],
                         check=False,
-                        cwd=REPO_ROOT,
+                        cwd=worktree,
                         capture_output=True,
                         text=True,
                     )

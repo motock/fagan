@@ -576,7 +576,7 @@ class TestPerModelTuningTableShape:
     """Every per-model tuning table row must have exactly 4 cells (5 pipes)."""
 
     def test_every_tuning_table_row_has_exactly_four_cells(self):
-        rows = _tuning_table_rows(_reference_text())
+        rows = _tuning_model_rows(_reference_text())
         assert rows, "no per-model tuning table rows found in REFERENCE.md"
         bad = [
             (lineno, len(_cells(line)), line)
@@ -599,13 +599,25 @@ class TestPerModelTuningTableShape:
             f"sequence '\\n' (backslash + n): {offenders!r}"
         )
 
-    def test_helper_cuts_the_block_at_the_env_var_rows(self):
-        """Self-test: the glued env-var rows are not counted as tuning rows."""
+    def test_helper_cuts_the_block_at_the_first_non_pipe_line(self):
+        """Self-test: the block runs to the first non-pipe line."""
+        text = (
+            "| Model tag | `temperature` | `num_ctx` | Why |\n"
+            "|---|---|---|---|\n"
+            "| `gpt-oss:20b` | `0.3` |  | why |\n"
+            "| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Legacy. |\n"
+            "\n"
+            "prose\n"
+        )
+        rows = _tuning_table_rows(text)
+        assert [lineno for lineno, _ in rows] == [1, 2, 3, 4]
+
+    def test_helper_excludes_env_var_rows_from_the_four_cell_check(self):
+        """Self-test: glued env-var rows are not counted as model rows."""
         text = (
             "| Model tag | `temperature` | `num_ctx` | Why |\n"
             "|---|---|---|---|\n"
             "| `gpt-oss:20b` | `0.3` |  | why |\n"
             "| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Legacy. |\n"
         )
-        rows = _tuning_table_rows(text)
-        assert [lineno for lineno, _ in rows] == [1, 2, 3]
+        assert [lineno for lineno, _ in _tuning_model_rows(text)] == [1, 2, 3]

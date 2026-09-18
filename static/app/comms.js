@@ -1,6 +1,7 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
-import { fetchJson, fetchIngestablePlans } from "./api.js";
+import { fetchJson } from "./api.js";
+import { fetchIngestablePlans } from './api.js';
 import { renderMarkdown } from "./render/markdown.js";
 import { ingestPlan, normalizePlanName, renderIngestStatusHtml } from './ingest.js';
 let commsHistory = [];

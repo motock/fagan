@@ -475,9 +475,7 @@ def _cells_unescaped(row: str) -> list[str]:
     a naive ``str.split("|")`` over-counts their columns. This counts the way a
     markdown renderer does.
     """
-    stripped = row.strip()
-    if stripped.startswith("|"):
-        stripped = stripped[1:]
+    stripped = row.strip().removeprefix("|")
     if stripped.endswith("|") and not stripped.endswith("\\|"):
         stripped = stripped[:-1]
     return [cell.strip() for cell in re.split(r"(?<!\\)\|", stripped)]

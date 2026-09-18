@@ -89,8 +89,17 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
     # reasonable default, not shown optimal versus low/high for this tag -
     # revisit if a real benchmark run says otherwise.
     "gemma4:26b-a4b-it-qat": {"think": "medium"},
+    # 2026-09-18 manual sweep (Apple M4, 24GB unified memory) of gpt-oss-20b-high:latest
+    # 1048576 tested and found to have no effect
+    # swept num_ctx values 32768, 49152, 65536, 81920, 98304, 114688, 131072
+    # observed 100% GPU usage, resident size 12GB→13GB, no swap growth
+    # 131072 is Ollama's hard clamp for this model; values above it have no effect
+    # PIPELINE_LOCAL_NUM_CTX still overrides this table entry; the table value
+    # only takes effect once the launchd plist's PIPELINE_LOCAL_NUM_CTX is
+    # removed by the sibling story.  The table entry is inert in production
+    # today because the env var is set to 16384.
+    "gpt-oss-20b-high:latest": {"num_ctx": 131072},
 }
-
 
 def _tuned_num_ctx(model_tag: str, fallback: int) -> int:
     # A ":cloud"-tagged model (deepseek-v4-flash:cloud, glm-5.2:cloud,

@@ -538,13 +538,12 @@ cp systemd/com.fagan.pipeline.usage-poller.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now com.fagan.pipeline.advance-scheduler.service
 systemctl --user enable --now com.fagan.pipeline.usage-poller.timer
-Optional: let these run even when you are not logged in
+  # Optional: let these run even when you are not logged in
 loginctl enable-linger "$USER"
-```bash
-scripts/generate_systemd_units.sh \
-  --repo-root "$HOME/fagan" \
-  --out-dir "$HOME/fagan/systemd"
 ```
+
+Log rotation (needs root, one-time):
+
 ```bash
 sudo cp systemd/pipeline-logs.logrotate.conf /etc/logrotate.d/com.fagan.pipeline
 ```

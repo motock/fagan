@@ -319,7 +319,16 @@ async function loadComms() {
   win.fetch = recorderFetch;
   // Cache-busting query, exactly like the sibling suites: every test gets a
   // fresh module body evaluated against the freshly reset document.
-  return import(`${COMMS_JS_URL.href}?t=${Date.now()}-${Math.random()}`);
+  const mod = await import(`${COMMS_JS_URL.href}?t=${Date.now()}-${Math.random()}`);
+  // populateIngestPlanOptions() fires one /api/ingestable-plans fetch at module
+  // load (9b4e26f3). Drain it and drop it from the recorder so the per-test
+  // assertions below only see fetches the test itself triggers.
+  await settle();
+  const moduleLoadCalls = fetchCalls.filter((c) =>
+    String(c.url).includes("/api/ingestable-plans"));
+  fetchCalls = fetchCalls.filter((c) =>
+    !String(c.url).includes("/api/ingestable-plans"));
+  return { mod, moduleLoadCalls };
 }
 
 function flush() {
@@ -348,6 +357,17 @@ function test(name, fn) {
 
 const INGEST_URL = "/api/plans/anagram/ingest";
 const XSS = "<img src=x onerror=alert(1)>";
+
+// Default handler for any fetch issued during module load itself. Since the
+// ingest plan picker (9b4e26f3) comms.js now calls fetchIngestablePlans() once
+// at import time; without this default the module-load fetch would reject and
+// pollute the per-test fetch-call counts recorded by the recorder.
+currentFetch = async (url) => {
+  if (String(url).includes("/api/ingestable-plans")) {
+    return jsonResponse(200, { plans: ["anagram"] });
+  }
+  return jsonResponse(200, {});
+};
 
 test("a click on #ingest-plan-submit POSTs the plan name exactly once", async () => {
   await loadComms();

@@ -1,6 +1,7 @@
 import { state } from "./state.js";
 import { escapeHtml } from "./render/board.js";
 import { fetchJson } from "./api.js";
+import { fetchIngestablePlans } from './api.js';
 import { renderMarkdown } from "./render/markdown.js";
 import { ingestPlan, normalizePlanName, renderIngestStatusHtml } from './ingest.js';
 let commsHistory = [];
@@ -484,6 +485,25 @@ async function sendCommsMessage(text) {
   }
 }
 
+async function populateIngestPlanOptions() {
+  const select = document.getElementById('ingest-plan-name');
+  if (!select) return;
+  try {
+    const data = await fetchIngestablePlans();
+    const plans = Array.isArray(data && data.plans) ? data.plans : [];
+    if (plans.length === 0) {
+      select.innerHTML = '<option value="" disabled selected>no plans found</option>';
+      return;
+    }
+    const options = ['<option value="" disabled selected>select a plan\u2026</option>'].concat(
+      plans.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+    );
+    select.innerHTML = options.join('');
+  } catch (err) {
+    select.innerHTML = '<option value="" disabled selected>failed to load plans</option>';
+  }
+}
+
 // Wire UI events
 const commsSendBtn = document.getElementById('comms-send');
 if (commsSendBtn) {
@@ -534,6 +554,7 @@ const ingestPlanStatus = document.getElementById('ingest-plan-status');
 if (commsExportBtn) commsExportBtn.addEventListener('click', exportCommsThread);
 
 applyTraceVisibility();
+populateIngestPlanOptions();
 
 // Ingest a saved plan from the Comms panel (CIH-4). The plan name travels in
 // the URL via ingestPlan(); the status element is the only surface this

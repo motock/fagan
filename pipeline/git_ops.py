@@ -16,6 +16,19 @@ import re
 import subprocess
 from pathlib import Path
 
+# Scratchpad files are the dispatched agent's own running notes. They must
+# never be tracked by a checkpoint commit: .gitignore keeps a NEW one out, but
+# ignore rules do nothing once a file is tracked, and a tracked scratchpad has
+# repeatedly caused real rebase conflicts on master (2026-09-17).
+_SCRATCHPAD_PATTERNS = (
+    ".agent_scratchpad.md",
+    ".agent_scratchpad*.md",
+    "*agent_scratchpad*.md",
+)
+
+# The same patterns as git pathspec magic, for excluding them from a diff.
+_SCRATCHPAD_EXCLUDES = tuple(f":(exclude){p}" for p in _SCRATCHPAD_PATTERNS)
+
 
 def _last_nonempty_line(path: Path) -> str:
     """Return the last stripped-non-empty line of `path`, or ``""`` if the file
@@ -77,15 +90,26 @@ def _commit_wip(worktree: str, story_key: str, step: str,
         # Detect staged deletions and restore them from HEAD before committing.
         # If there are any staged additions or modifications (e.g., rename-in-progress),
         # skip restoration to preserve real WIP changes.
+        #
+        # The scratchpad paths are excluded from BOTH filters. The untrack loop
+        # below deliberately leaves a SYNTHETIC staged deletion for them (still
+        # in HEAD, gone from the index); an unfiltered guard would misread that
+        # as a real deletion and "restore" it, which re-tracks the scratchpad
+        # (making the untrack a no-op on this watchdog/interrupt path) and
+        # overwrites the running agent's newest notes with HEAD's older blob.
+        # Excluding them from the AM filter too keeps a scratchpad modification
+        # from masking a genuine deletion of some other file.
         added_mods = subprocess.run(
-            ["git", "diff", "--cached", "--diff-filter=AM", "--name-only"],
+            ["git", "diff", "--cached", "--diff-filter=AM", "--name-only", "--",
+             ".", *_SCRATCHPAD_EXCLUDES],
             check=False, cwd=worktree,
             capture_output=True,
             text=True,
         )
         if not added_mods.stdout.strip():
             diff_res = subprocess.run(
-                ["git", "diff", "--cached", "--diff-filter=D", "--name-only"],
+                ["git", "diff", "--cached", "--diff-filter=D", "--name-only", "--",
+                 ".", *_SCRATCHPAD_EXCLUDES],
                 check=False, cwd=worktree,
                 capture_output=True,
                 text=True,
@@ -94,6 +118,30 @@ def _commit_wip(worktree: str, story_key: str, step: str,
                 if path.strip():
                     subprocess.run(["git", "checkout", "HEAD", "--", path], cwd=worktree, check=True)
                     subprocess.run(["git", "add", "--", path], cwd=worktree, check=True)
+
+    # Untrack any scratchpad file from the commit, even if a PRIOR commit
+    # (possibly made directly by the dispatched agent's own `git add`/`git
+    # commit` calls, bypassing this helper) already tracked it. `git add -A`
+    # above re-stages an already-tracked file's changes regardless of
+    # .gitignore -- ignore rules only stop a NEW file from being staged, they
+    # do nothing once a file is tracked. `git rm --cached` removes it from
+    # the index (and this commit) while leaving the working-tree file alone,
+    # so a currently-running agent's own scratchpad notes are never lost --
+    # only the git history of it is cleaned up. This must never fail the
+    # checkpoint: --ignore-unmatch makes it a no-op when nothing matches.
+    #
+    # This runs AFTER the guard above, and must stay the LAST index mutation
+    # before the commit: `git rm --cached` leaves a synthetic staged deletion,
+    # so a later `git add -A` would re-stage the file as a brand-new one.
+    # Observed live 2026-09-17: two same-day stories each committed
+    # .agent_scratchpad.md directly, and a third story's merge then hit a
+    # real rebase conflict in that same file, burning its triage budget and
+    # sitting parked for hours before a human intervened.
+    for pattern in _SCRATCHPAD_PATTERNS:
+        subprocess.run(
+            ["git", "rm", "-r", "--cached", "--ignore-unmatch", "-q", "--", pattern],
+            check=False, cwd=worktree, capture_output=True, text=True,
+        )
     commit = subprocess.run(
         ["git", "commit", "-m", f"wip({story_key}): {step}"],
         check=False, cwd=worktree, capture_output=True, text=True,

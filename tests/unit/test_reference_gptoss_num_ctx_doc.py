@@ -469,11 +469,13 @@ def _table_rows(text: str) -> list[tuple[int, str]]:
 
 
 def _tuning_table_rows(text: str) -> list[tuple[int, str]]:
-    """Rows of the per-model tuning table, header through the last model row.
+    """Rows of the per-model tuning table block, header through the last row.
 
-    The tuning table is glued to the following environment-variable table (no
-    blank line between them), so the block is cut at the first row whose first
-    cell is an env-var name (SCREAMING_SNAKE_CASE) rather than a model tag.
+    The tuning table is glued to the following environment-variable rows (no
+    blank line between them), so the block is every contiguous pipe row from
+    the ``Model tag`` header until the first non-pipe line. The merged
+    ``PIPELINE_LOCAL_TIMEOUT_SECONDS``/``PIPELINE_ROLE_CALL_TIMEOUT_SECONDS``
+    line lives inside this block, so a literal ``\\n`` there is caught here.
     """
     lines = text.splitlines()
     start = None
@@ -493,13 +495,22 @@ def _tuning_table_rows(text: str) -> list[tuple[int, str]]:
         line = lines[i]
         if not line.lstrip().startswith("|"):
             break
-        cells = _cells(line)
-        if i > start and cells and _ENV_VAR_FIRST_CELL.match(
-            _normalise_tag(cells[0])
-        ):
-            break
         rows.append((i + 1, line))
     return rows
+
+
+def _tuning_model_rows(text: str) -> list[tuple[int, str]]:
+    """The per-model rows of the tuning table (first cell is a model tag).
+
+    The legacy environment-variable rows glued onto the end of the block have
+    a SCREAMING_SNAKE_CASE first cell and are excluded; only rows whose first
+    cell is a model tag are expected to carry the table's 4 columns.
+    """
+    return [
+        (lineno, line)
+        for lineno, line in _tuning_table_rows(text)
+        if not _ENV_VAR_FIRST_CELL.match(_normalise_tag(_cells(line)[0]))
+    ]
 
 
 class TestNoLiteralBackslashNInTableRows:

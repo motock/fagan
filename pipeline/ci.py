@@ -517,6 +517,22 @@ def _reverify_acceptance(
         and not k.startswith("LOCAL_AGENT_")
         and k != "REPO_ROOT"
     }
+    # Resolve the worktree's HEAD *before* the test run: the diagnostic
+    # snapshot below records the commit that was actually graded, and keeping
+    # this probe ahead of the test command leaves the gate's own test command
+    # as the last subprocess invocation (which callers and tests observe).
+    check_sha = None
+    try:
+        check_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
     if _is_heavy(test_cmd):
         with _heavy_lock():
             r = subprocess.run(
@@ -526,6 +542,22 @@ def _reverify_acceptance(
         r = subprocess.run(
             test_cmd, check=False, cwd=test_dir, capture_output=True, text=True, env=test_env
         )
+
+    # Keep the manifest's diagnostic last_test_check field in sync with this
+    # gate's OWN fresh result -- without this, an operator reading the manifest
+    # after a successful merge can see a stale snapshot from an earlier,
+    # unrelated poll (e.g. one taken before a build marker like pom.xml existed,
+    # recording the portable no-op command) instead of the real result this gate
+    # just produced and is about to act on.
+    story["last_test_check"] = {
+        "cmd": test_cmd,
+        "cwd": str(test_dir),
+        "returncode": r.returncode,
+        "stdout_tail": (r.stdout or "")[-2000:],
+        "stderr_tail": (r.stderr or "")[-2000:],
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "sha": check_sha,
+    }
 
     if r.returncode == 0:
         return {"state": "pass", "error": ""}

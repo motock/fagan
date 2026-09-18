@@ -38,9 +38,10 @@ tests it on Ubuntu across Python 3.12–3.14 on every push. Two pieces are
 **macOS-only**:
 
 - **`launchd/*.plist`** — the scheduler/MLX-supervisor/usage-poller are
-  packaged as launchd jobs. On Linux, run the same entry points directly
-  (e.g. `python3 -m pipeline.scheduler_daemon`) under your init system or
-  supervisor of choice, or in a foreground terminal/`tmux` session.
+  packaged as launchd jobs on macOS. On Linux, render the systemd equivalent
+  with `scripts/generate_systemd_units.sh` (see [Scheduler](#scheduler) below)
+  instead of hand-rolling init files, or run the entry points directly in a
+  foreground terminal/`tmux` session.
 - **MLX** (`PIPELINE_LOCAL_PROVIDER=mlx`) — Apple Silicon only. Local dispatch
   works fine on Linux via **Ollama** or **LM Studio** instead
   (`PIPELINE_LOCAL_PROVIDER=ollama` / `lmstudio`).
@@ -512,8 +513,40 @@ scripts/generate_launchd_plists.sh \
   --mlx-model-path "$HOME/.cache/qwen2.5_coder_14b_manual"
 ```
 
-These launchd files are macOS-only — see [Platform support](#platform-support);
-on Linux, run the entry points under your own init system instead.
+These launchd files are macOS-only - see [Platform support](#platform-support).
+
+### Rendering the systemd units for Linux
+
+`scripts/generate_systemd_units.sh` renders the equivalent systemd user-unit
+and logrotate files from `systemd/*.template`, the same way
+`scripts/generate_launchd_plists.sh` does for launchd – minus MLX, which is
+Apple Silicon-only:
+
+```bash
+scripts/generate_systemd_units.sh \
+  --repo-root "$HOME/fagan" \
+  --out-dir "$HOME/fagan/systemd"
+```
+
+Install as per-user systemd units (no root required):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/com.fagan.pipeline.advance-scheduler.service ~/.config/systemd/user/
+cp systemd/com.fagan.pipeline.usage-poller.service ~/.config/systemd/user/
+cp systemd/com.fagan.pipeline.usage-poller.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now com.fagan.pipeline.advance-scheduler.service
+systemctl --user enable --now com.fagan.pipeline.usage-poller.timer
+  # Optional: let these run even when you are not logged in
+loginctl enable-linger "$USER"
+```
+
+Log rotation (needs root, one-time):
+
+```bash
+sudo cp systemd/pipeline-logs.logrotate.conf /etc/logrotate.d/com.fagan.pipeline
+```
 
 ## Reliability & limitations
 

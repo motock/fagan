@@ -581,7 +581,7 @@ class TestTimeoutRowsAreSeparatePhysicalLines:
             "the `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` row must be its own "
             f"3-cell row, got {len(cells)} cells: {row!r}"
         )
-        assert cells[0] == "PIPELINE_ROLE_CALL_TIMEOUT_SECONDS"
+        assert _normalise_tag(cells[0]) == "PIPELINE_ROLE_CALL_TIMEOUT_SECONDS"
         assert _LITERAL_BACKSLASH_N not in row
 
 

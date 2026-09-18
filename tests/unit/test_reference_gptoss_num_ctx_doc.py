@@ -438,3 +438,163 @@ class TestRowParsingHelpers:
             "`gpt-oss-20b-high:latest` effectively runs at 131072.\n"
         )
         assert _rows_with_tag(text, _HIGH_TAG) == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: a table row must never contain a literal two-character "\n"
+# ---------------------------------------------------------------------------
+#
+# A previous edit to REFERENCE.md merged two table rows into ONE physical line
+# by writing the two-character sequence backslash + "n" instead of a real
+# newline (REFERENCE.md:984). Rendered, the second row
+# (``PIPELINE_ROLE_CALL_TIMEOUT_SECONDS``) was swallowed into the first as two
+# extra columns and vanished from the table. The tests below pin the shape so
+# the same mistake cannot land again.
+
+# The literal two-character sequence backslash + "n" (NOT a newline).
+_LITERAL_BACKSLASH_N = "\\n"
+
+# An env-var name in the first cell of the (3-column) environment-variable
+# table that the per-model tuning table is glued to.
+_ENV_VAR_FIRST_CELL = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _table_rows(text: str) -> list[tuple[int, str]]:
+    """Every markdown table row in ``text`` as ``(1-based line number, line)``."""
+    return [
+        (lineno, line)
+        for lineno, line in enumerate(text.splitlines(), 1)
+        if line.lstrip().startswith("|")
+    ]
+
+
+def _tuning_table_rows(text: str) -> list[tuple[int, str]]:
+    """Rows of the per-model tuning table, header through the last model row.
+
+    The tuning table is glued to the following environment-variable table (no
+    blank line between them), so the block is cut at the first row whose first
+    cell is an env-var name (SCREAMING_SNAKE_CASE) rather than a model tag.
+    """
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = _cells(line)
+        if cells and cells[0] == _TUNING_TABLE_HEADER_FIRST_CELL:
+            start = i
+            break
+    assert start is not None, (
+        "could not find the per-model tuning table header "
+        f"(first cell {_TUNING_TABLE_HEADER_FIRST_CELL!r}) in REFERENCE.md"
+    )
+    rows: list[tuple[int, str]] = []
+    for i in range(start, len(lines)):
+        line = lines[i]
+        if not line.lstrip().startswith("|"):
+            break
+        cells = _cells(line)
+        if i > start and cells and _ENV_VAR_FIRST_CELL.match(
+            _normalise_tag(cells[0])
+        ):
+            break
+        rows.append((i + 1, line))
+    return rows
+
+
+class TestNoLiteralBackslashNInTableRows:
+    """No table row may embed a literal ``\\n`` (backslash + n)."""
+
+    def test_no_table_row_contains_a_literal_backslash_n(self):
+        offenders = [
+            (lineno, line)
+            for lineno, line in _table_rows(_reference_text())
+            if _LITERAL_BACKSLASH_N in line
+        ]
+        assert not offenders, (
+            "table row(s) contain the literal two-character sequence '\\n' "
+            "(backslash + n) instead of a real newline, merging two rows into "
+            f"one physical line: {offenders!r}"
+        )
+
+    def test_helper_detects_a_merged_row(self):
+        """Self-test: the fixture reproduces the exact broken shape."""
+        merged = (
+            "| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Legacy. |"
+            "\\n| `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` | `600` | Budget. |"
+        )
+        assert _LITERAL_BACKSLASH_N in merged
+        # 8 pipes -> 7 cells, instead of two 3-cell rows.
+        assert len(_cells(merged)) == 7, _cells(merged)
+        assert _table_rows(merged) == [(1, merged)]
+
+
+class TestTimeoutRowsAreSeparatePhysicalLines:
+    """The two timeout rows must each be their own physical table line."""
+
+    def test_local_timeout_row_is_a_well_formed_three_cell_row(self):
+        row = _single_row_with_tag(
+            _reference_text(), "PIPELINE_LOCAL_TIMEOUT_SECONDS"
+        )
+        cells = _cells(row)
+        assert len(cells) == 3, (
+            "the `PIPELINE_LOCAL_TIMEOUT_SECONDS` row must be its own 3-cell "
+            f"row, got {len(cells)} cells: {row!r}"
+        )
+        assert cells[0] == "PIPELINE_LOCAL_TIMEOUT_SECONDS"
+        assert "PIPELINE_ROLE_CALL_TIMEOUT_SECONDS" not in row, (
+            "the `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` row was merged into the "
+            f"`PIPELINE_LOCAL_TIMEOUT_SECONDS` row: {row!r}"
+        )
+        assert _LITERAL_BACKSLASH_N not in row
+
+    def test_role_call_timeout_row_is_its_own_three_cell_row(self):
+        row = _single_row_with_tag(
+            _reference_text(), "PIPELINE_ROLE_CALL_TIMEOUT_SECONDS"
+        )
+        cells = _cells(row)
+        assert len(cells) == 3, (
+            "the `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` row must be its own "
+            f"3-cell row, got {len(cells)} cells: {row!r}"
+        )
+        assert cells[0] == "PIPELINE_ROLE_CALL_TIMEOUT_SECONDS"
+        assert _LITERAL_BACKSLASH_N not in row
+
+
+class TestPerModelTuningTableShape:
+    """Every per-model tuning table row must have exactly 4 cells (5 pipes)."""
+
+    def test_every_tuning_table_row_has_exactly_four_cells(self):
+        rows = _tuning_table_rows(_reference_text())
+        assert rows, "no per-model tuning table rows found in REFERENCE.md"
+        bad = [
+            (lineno, len(_cells(line)), line)
+            for lineno, line in rows
+            if len(_cells(line)) != 4
+        ]
+        assert not bad, (
+            "every per-model tuning table row must have exactly 4 cells "
+            f"(5 pipes); offenders (line, cells, row): {bad!r}"
+        )
+
+    def test_tuning_table_rows_do_not_contain_a_literal_backslash_n(self):
+        offenders = [
+            (lineno, line)
+            for lineno, line in _tuning_table_rows(_reference_text())
+            if _LITERAL_BACKSLASH_N in line
+        ]
+        assert not offenders, (
+            "per-model tuning table row(s) contain the literal two-character "
+            f"sequence '\\n' (backslash + n): {offenders!r}"
+        )
+
+    def test_helper_cuts_the_block_at_the_env_var_rows(self):
+        """Self-test: the glued env-var rows are not counted as tuning rows."""
+        text = (
+            "| Model tag | `temperature` | `num_ctx` | Why |\n"
+            "|---|---|---|---|\n"
+            "| `gpt-oss:20b` | `0.3` |  | why |\n"
+            "| `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Legacy. |\n"
+        )
+        rows = _tuning_table_rows(text)
+        assert [lineno for lineno, _ in rows] == [1, 2, 3]

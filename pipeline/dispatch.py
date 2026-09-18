@@ -233,6 +233,80 @@ def _resolve_dispatch_target(
     return provider, model or None
 
 
+# Bound on the baseline snapshot's test run. The snapshot runs synchronously
+# in the dispatch path, so it must never hold a dispatch open indefinitely; a
+# suite that outruns this fails open (no baseline recorded) rather than
+# blocking. Generous enough for a real full suite (the grading gate's own
+# full-suite runs are ~19 min on the pipeline repo, but the snapshot only
+# needs to be long enough to observe an ALREADY-failing suite).
+_BASELINE_TEST_TIMEOUT_S = 900
+
+
+def _baseline_test_env() -> dict[str, str]:
+    """The dispatch process's env minus the operational overrides that
+    false-fail a suite in a repo that vendors the pipeline's own tests.
+
+    Mirrors the grading gate's env (story_status.py's test_env: the same
+    PIPELINE_*/LOCAL_AGENT_*/REPO_ROOT strips) so the baseline snapshot and
+    the real gate agree on what "failing" means. The server carries
+    PIPELINE_* config (pause/resume thresholds, backend dispatch, model
+    defaults) that overrides the defaults the suite asserts against, and
+    REPO_ROOT is a per-plan sentinel (/nonexistent-...) that isn't a
+    developer default - either one surviving into the run false-fails the
+    suite for every story in the pipeline repo itself.
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("PIPELINE_")
+        and not k.startswith("LOCAL_AGENT_")
+        and k != "REPO_ROOT"
+    }
+
+
+def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
+    """Run the detected test command once against a freshly created
+    worktree, BEFORE the dispatched agent (or the test-author/planner
+    phases) touch anything, and return its result in the same shape
+    story_status.py's last_test_check already uses. Used to tell the
+    agent up front which failures (if any) predate its own changes, so it
+    doesn't spend budget investigating or "fixing" something it didn't
+    cause. Observed live 2026-09-17: 4 separate stories independently
+    rediscovered the same pre-existing failure pattern from scratch.
+    Never raises; returns None on any failure (missing worktree, no
+    detectable test command that can run, etc.) -- this is purely
+    informational and must never block or slow down a normal dispatch on
+    a repo where nothing is wrong."""
+    from .build_detect import detect_test_command
+    if not worktree_path.is_dir():
+        return None
+    test_dir, test_cmd = detect_test_command(worktree_path)
+    # detect_test_command's documented no-op for a repo with no build system
+    # at all (`[sys.executable, "-c", "pass"]`): there is no test suite to
+    # snapshot, so spawning it would be a pointless extra subprocess on every
+    # fresh dispatch of such a repo (and a spurious non-git spawn for callers
+    # that assert on the subprocesses a dispatch makes).
+    if len(test_cmd) == 3 and test_cmd[1:] == ["-c", "pass"]:
+        return None
+    try:
+        r = subprocess.run(
+            test_cmd, check=False, cwd=test_dir, capture_output=True, text=True,
+            env=_baseline_test_env(), timeout=_BASELINE_TEST_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        # Fail open: a suite that outruns the bound tells us nothing about
+        # whether it was ALREADY failing, and the snapshot must never hold the
+        # dispatch path open indefinitely (the docstring's "never block or
+        # slow down a normal dispatch").
+        return None
+    return {
+        "cmd": test_cmd,
+        "returncode": r.returncode,
+        "stdout_tail": (r.stdout or "")[-1000:],
+        "stderr_tail": (r.stderr or "")[-1000:],
+    }
+
+
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
@@ -455,6 +529,44 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # Persist so check_story_status and escalation see which backend ran.
         story["backend"] = dispatch_backend
 
+        # BASELINE-1: on a story's FIRST dispatch, run the detected test
+        # command ONCE against the freshly created, still-unmodified worktree
+        # and remember whether it already failed. Observed live 2026-09-17:
+        # 4 separate dispatched stories each independently rediscovered the
+        # same pre-existing, out-of-scope failures (a "5 pre-existing ...
+        # failures (httpx missing in subprocess interpreter)" pattern, named
+        # almost verbatim in 4 separate journal entries across 2 plans) and
+        # each spent part of its own step/rework budget investigating them
+        # before concluding they were unrelated to its task. Recording the
+        # baseline here lets the prompt below tell the agent up front which
+        # failures predate its own changes. Gated exactly like the
+        # test-author/planner phases further down:
+        #   - a local-family backend (the same weak-local-executor rationale)
+        #   - not resuming (a resumed dispatch acts on a worktree the agent
+        #     has already been editing, so there is no meaningful "before"
+        #     state left to snapshot)
+        #   - no existing marker (belt-and-suspenders with `resuming`, and
+        #     what stops a second run on a later fresh-looking call)
+        # Never a gate: the helper is wrapped so any failure degrades to "no
+        # baseline", and the marker is written unconditionally right after so
+        # a raising snapshot is not retried on every subsequent dispatch.
+        baseline_marker = worktree_path / ".dispatch_baseline_test_checked"
+        if (
+            dispatch_backend in _LOCAL_BACKEND_NAMES
+            and not resuming
+            and not baseline_marker.exists()
+        ):
+            try:
+                baseline = _run_baseline_test_snapshot(worktree_path)
+            except Exception:  # noqa: BLE001 (observability hook, never a gate)
+                baseline = None
+            try:
+                baseline_marker.write_text("ok\n")
+            except OSError:
+                pass
+            if baseline is not None and baseline.get("returncode") != 0:
+                story["baseline_test_check"] = baseline
+
         # A rework redispatch (changes_requested with stored review_feedback)
         # on the local Ollama driver can resume the prior dispatch's message
         # transcript instead of rebuilding a cold-start prompt via
@@ -527,6 +639,33 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # every command there, landing commits straight on master. Prepend
         # unconditionally so the rule survives an empty brief too.
         spec["prompt"] = f"{WORKTREE_SCOPE_RULE}\n\n{spec['prompt']}"
+        # BASELINE-1: when the fresh-dispatch baseline snapshot above found
+        # the test command ALREADY failing on the clean, unmodified worktree,
+        # say so up front - before the plan-authored brief - so the agent
+        # doesn't spend its own step/rework budget rediscovering (or trying to
+        # "fix") a failure it did not cause. Only a non-zero baseline is worth
+        # a note; a passing baseline (or none at all) adds nothing. Gated on
+        # `not resuming` too: a resumed dispatch acts on a worktree the agent
+        # has already been editing, so a baseline recorded on the first
+        # dispatch is stale by then and re-emitting it would misdirect the
+        # agent toward failures it may well have already fixed.
+        baseline = story.get("baseline_test_check")
+        if (
+            baseline
+            and baseline.get("returncode") not in (None, 0)
+            and not resuming
+        ):
+            baseline_note = (
+                "NOTE: the test command already fails on a clean, unmodified "
+                "checkout of this worktree (exit code "
+                f"{baseline['returncode']}), before you have changed anything. "
+                "Do not spend time investigating or fixing a failure that is "
+                "unrelated to your assigned scope below -- if a test you see "
+                "failing looks unrelated to what you were asked to build, it "
+                "was very likely already broken. Focus only on your own "
+                "assigned files.\n\n"
+            )
+            spec["prompt"] = baseline_note + spec["prompt"]
         worktree_path.mkdir(parents=True, exist_ok=True)
         log_path = worktree_path / "agent.log"
 

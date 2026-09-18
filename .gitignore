@@ -26,6 +26,7 @@ node_modules
 .DS_Store
 *.bak
 .tdd_split_test_author_done
+.dispatch_baseline_test_checked
 
 # Local scratch/runtime state (not source)
 .local/

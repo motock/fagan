@@ -403,6 +403,105 @@ def test_merge_pr_merges_and_cleans_up_the_same_rework_alias_branch(
     )
 
 
+def _stub_run_with_pr_title(title, *, title_returncode=0, head="agent/s1\n"):
+    """subprocess.run stub answering `git rev-parse --abbrev-ref HEAD` with
+    `head` and `gh pr view ... --json title` with `title`/`title_returncode`,
+    recording every non-rev-parse command."""
+    calls = []
+
+    def _fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "rev-parse"]:
+            class Head:
+                stdout = head
+                returncode = 0
+            return Head()
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "pr", "view"]:
+            class Title:
+                stdout = title
+                stderr = "" if title_returncode == 0 else "no pull requests found"
+                returncode = title_returncode
+            return Title()
+
+        class Ok:
+            stdout = "https://gh/pr/1\n"
+            returncode = 0
+        return Ok()
+
+    return calls, _fake_run
+
+
+def test_merge_pr_passes_pr_title_as_explicit_squash_subject(
+    monkeypatch, tmp_path,
+):
+    """Without --subject, `gh pr merge --squash` can fall back to the branch's
+    own last commit message (observed live 2026-09-17, PR #821: a step-cap
+    "WIP (step cap reached)" checkpoint became master's permanent title). The
+    PR's own title must be read and passed explicitly."""
+    calls, _fake_run = _stub_run_with_pr_title("S1: Add thing\n")
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "REPO_ROOT", str(tmp_path / "repo"))
+    result = p._merge_pr(str(tmp_path / "wt"), "S1")
+
+    view_calls = [c for c in calls if c[:3] == ["gh", "pr", "view"]]
+    assert view_calls == [
+        ["gh", "pr", "view", "agent/s1", "--json", "title", "-q", ".title"],
+    ], "the PR's own title must be read before merging"
+    merge_idx = next(
+        i for i, c in enumerate(calls) if c[:3] == ["gh", "pr", "merge"]
+    )
+    assert calls.index(view_calls[0]) < merge_idx, (
+        "the title lookup must run before the merge subprocess call"
+    )
+
+    merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+    assert merge_calls == [[
+        "gh", "pr", "merge", "agent/s1", "--squash",
+        "--subject", "S1: Add thing",
+    ]]
+
+    # Return value and cleanup side effects are unaffected by the new flag.
+    assert result == "https://gh/pr/1"
+    assert [c for c in calls if c[:2] == ["git", "worktree"]], (
+        "worktree cleanup must still happen"
+    )
+    assert [c for c in calls if c[:2] == ["git", "branch"]] == [
+        ["git", "branch", "-D", "agent/s1"],
+    ]
+
+
+def test_merge_pr_omits_subject_when_title_lookup_fails(monkeypatch, tmp_path):
+    """A failed `gh pr view` must never block a merge that would otherwise
+    have succeeded: fall back to today's exact argv (no --subject at all)."""
+    calls, _fake_run = _stub_run_with_pr_title("", title_returncode=1)
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "REPO_ROOT", str(tmp_path / "repo"))
+    result = p._merge_pr(str(tmp_path / "wt"), "S1")
+
+    merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+    assert merge_calls == [["gh", "pr", "merge", "agent/s1", "--squash"]], (
+        "a failed title lookup must not block the merge nor invent a subject"
+    )
+    assert result == "https://gh/pr/1"
+
+
+@pytest.mark.parametrize("blank", ["", "   \n"])
+def test_merge_pr_omits_subject_when_title_is_blank(
+    monkeypatch, tmp_path, blank,
+):
+    """An empty/whitespace-only title must degrade to no --subject, never to
+    `--subject ""` (which would blank out master's commit title)."""
+    calls, _fake_run = _stub_run_with_pr_title(blank)
+    monkeypatch.setattr(p.subprocess, "run", _fake_run)
+    monkeypatch.setattr(p, "REPO_ROOT", str(tmp_path / "repo"))
+    result = p._merge_pr(str(tmp_path / "wt"), "S1")
+
+    merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+    assert merge_calls == [["gh", "pr", "merge", "agent/s1", "--squash"]]
+    assert "--subject" not in merge_calls[0]
+    assert result == "https://gh/pr/1"
+
+
 def test_resolve_story_branch_helper_contract_in_pipeline_pr_module():
     """The resolver must be a module-level helper in pipeline/pr.py, both
     _open_pr and _merge_pr must route through it (the old inline

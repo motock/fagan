@@ -73,6 +73,30 @@ def _commit_wip(worktree: str, story_key: str, step: str,
     subprocess.run(["git", "reset", "-q", "--", "agent.log"], check=False, cwd=worktree,
                     capture_output=True, text=True)
 
+    # Untrack any scratchpad file from the commit, even if a PRIOR commit
+    # (possibly made directly by the dispatched agent's own `git add`/`git
+    # commit` calls, bypassing this helper) already tracked it. `git add -A`
+    # above re-stages an already-tracked file's changes regardless of
+    # .gitignore -- ignore rules only stop a NEW file from being staged, they
+    # do nothing once a file is tracked. `git rm --cached` removes it from
+    # the index (and this commit) while leaving the working-tree file alone,
+    # so a currently-running agent's own scratchpad notes are never lost --
+    # only the git history of it is cleaned up. This must never fail the
+    # checkpoint: --ignore-unmatch makes it a no-op when nothing matches.
+    # Observed live 2026-09-17: two same-day stories each committed
+    # .agent_scratchpad.md directly, and a third story's merge then hit a
+    # real rebase conflict in that same file, burning its triage budget and
+    # sitting parked for hours before a human intervened.
+    for pattern in (
+        ".agent_scratchpad.md",
+        ".agent_scratchpad*.md",
+        "*agent_scratchpad*.md",
+    ):
+        subprocess.run(
+            ["git", "rm", "-r", "--cached", "--ignore-unmatch", "-q", "--", pattern],
+            check=False, cwd=worktree, capture_output=True, text=True,
+        )
+
     if guard_against_deletion:
         # Detect staged deletions and restore them from HEAD before committing.
         # If there are any staged additions or modifications (e.g., rename-in-progress),

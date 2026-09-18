@@ -126,3 +126,99 @@ def test_error_message_includes_stdout_when_stderr_is_empty(tmp_path: Path):
     message = str(excinfo.value)
     assert message.startswith("git commit failed")
     assert "hook says no" in message
+
+
+# ---------- scratchpad never enters a checkpoint commit ----------
+#
+# ROOT CAUSE: `git add -A` re-stages an ALREADY-TRACKED file's changes no
+# matter what .gitignore says — ignore rules only stop a NEW file from being
+# staged. `git reset -- <path>` (the pattern used for agent.log) only unstages
+# the diff; it never removes the tracked index entry, so a scratchpad file that
+# a PRIOR commit tracked (e.g. the dispatched agent ran its own `git add` /
+# `git commit` via its Bash tool, bypassing _commit_wip) rides along in every
+# future checkpoint commit forever. Observed live 2026-09-17: two same-day
+# stories each committed .agent_scratchpad.md directly, and a third story's
+# merge then hit a real rebase conflict in that same file, burning its triage
+# budget and sitting parked for hours before a human intervened.
+#
+# The fix is `git rm -r --cached --ignore-unmatch` (index-only removal, so the
+# working-tree file survives untouched) applied AFTER `git add -A`, the last
+# index mutation before the commit.
+
+def test_commit_wip_untracks_previously_committed_scratchpad(tmp_path: Path):
+    """Live reproduction: .agent_scratchpad.md was already committed in a PRIOR
+    commit (made directly, bypassing _commit_wip, exactly as an agent's own
+    Bash `git commit` would). The NEXT checkpoint must not carry it, and the
+    on-disk file must survive with its modified content intact."""
+    repo = _init_repo(tmp_path)
+    scratch = repo / ".agent_scratchpad.md"
+    scratch.write_text("v1\n")
+    (repo / "app.py").write_text("a\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "prior direct commit")
+
+    # Precondition: the scratchpad really is tracked in HEAD.
+    assert ".agent_scratchpad.md" in _git(repo, "ls-tree", "-r", "HEAD", "--name-only")
+
+    scratch.write_text("v2\n")
+    (repo / "app.py").write_text("b\n")
+    before = _git(repo, "rev-parse", "HEAD").strip()
+    _commit_wip(str(repo), "S1", "checkpoint")
+    after = _git(repo, "rev-parse", "HEAD").strip()
+
+    assert after != before
+    tree = _git(repo, "ls-tree", "-r", after, "--name-only")
+    assert ".agent_scratchpad.md" not in tree
+    assert "app.py" in tree
+    # Not merely unstaged: gone from the index entirely.
+    assert _git(repo, "ls-files", "--", ".agent_scratchpad.md").strip() == ""
+    # The working-tree file is never deleted — only its git history is cleaned.
+    assert scratch.exists()
+    assert scratch.read_text() == "v2\n"
+
+
+def test_commit_wip_noop_when_scratchpad_never_tracked(tmp_path: Path):
+    """Today's already-passing case: the scratchpad was never tracked. The new
+    `git rm --cached --ignore-unmatch` must be a documented no-op (no error, no
+    unexpected commit content change) — the call not raising is itself an
+    assertion."""
+    repo = _init_repo(tmp_path)
+    scratch = repo / ".agent_scratchpad.md"
+    scratch.write_text("notes\n")
+    (repo / "app.py").write_text("a\n")
+
+    _commit_wip(str(repo), "S1", "checkpoint")
+
+    tree = _git(repo, "ls-tree", "-r", "HEAD", "--name-only")
+    assert "app.py" in tree
+    assert ".agent_scratchpad.md" not in tree
+    assert scratch.read_text() == "notes\n"
+
+
+def test_commit_wip_untracks_broad_glob_scratchpad_variant(tmp_path: Path):
+    """Boundary case: `foo.agent_scratchpad.notes.md` matches only the broadest
+    pattern `*agent_scratchpad*.md` — not `.agent_scratchpad.md` (different
+    name) and not `.agent_scratchpad*.md` (which requires the name to START
+    with `.agent_scratchpad`). It must be untracked too."""
+    repo = _init_repo(tmp_path)
+    scratch = repo / "foo.agent_scratchpad.notes.md"
+    scratch.write_text("v1\n")
+    (repo / "app.py").write_text("a\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "prior direct commit")
+
+    assert "foo.agent_scratchpad.notes.md" in _git(repo, "ls-tree", "-r", "HEAD", "--name-only")
+
+    scratch.write_text("v2\n")
+    (repo / "app.py").write_text("b\n")
+    before = _git(repo, "rev-parse", "HEAD").strip()
+    _commit_wip(str(repo), "S1", "checkpoint")
+    after = _git(repo, "rev-parse", "HEAD").strip()
+
+    assert after != before
+    tree = _git(repo, "ls-tree", "-r", after, "--name-only")
+    assert "foo.agent_scratchpad.notes.md" not in tree
+    assert "app.py" in tree
+    assert _git(repo, "ls-files", "--", "foo.agent_scratchpad.notes.md").strip() == ""
+    assert scratch.exists()
+    assert scratch.read_text() == "v2\n"

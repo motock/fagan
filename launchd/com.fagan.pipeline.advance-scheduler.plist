@@ -22,8 +22,6 @@
 		<string>5400</string>
 		<key>PIPELINE_LOCAL_MAX_STEPS</key>
 		<string>60</string>
-		<key>PIPELINE_LOCAL_NUM_CTX</key>
-		<string>16384</string>
 		<key>PIPELINE_LOCAL_TEMPERATURE</key>
 		<string>0.3</string>
 		<key>PIPELINE_MAX_CONCURRENT_AGENTS</key>

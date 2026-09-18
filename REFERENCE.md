@@ -971,7 +971,11 @@ concrete model tag* (e.g. `gpt-oss:20b`), not the tier. An explicit
 wins over a table entry; a model tag with no entry falls back to the global
 defaults above. This exists so a tuning finding travels with the model
 instead of requiring the operator to remember to flip a global env var every
-time the active local model changes. Currently populated:
+time the active local model changes. The shipped advance-scheduler launchd
+plist no longer pins `PIPELINE_LOCAL_NUM_CTX`, so locally-dispatched models
+use the per-model table values (e.g. `gpt-oss-20b-high:latest` effectively
+runs at `num_ctx` 131072); an operator-set `PIPELINE_LOCAL_NUM_CTX` env var
+still overrides. Currently populated:
 
 | Model tag | `temperature` | `num_ctx` | Why |
 |---|---|---|---|

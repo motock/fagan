@@ -64,7 +64,6 @@ _SURVIVOR_ENV_KEYS = (
     "PIPELINE_DECOMPOSE_SCRATCHPAD",
     "PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS",
     "PIPELINE_LOCAL_MAX_STEPS",
-    "PIPELINE_LOCAL_NUM_CTX",
     "PIPELINE_LOCAL_TEMPERATURE",
     "PIPELINE_MAX_CONCURRENT_AGENTS",
     "PIPELINE_PAUSE_THRESHOLD",
@@ -196,6 +195,17 @@ def test_named_survivor_env_key_is_still_present(name):
             "EnvironmentVariables block; it is not a routing variable and must "
             "survive this cleanup"
         )
+
+
+@pytest.mark.parametrize("path", _ADVANCE_FILES, ids=_ids(_ADVANCE_FILES))
+def test_pipeline_local_num_ctx_is_deliberately_removed_from_env_block(path):
+    """This story removes PIPELINE_LOCAL_NUM_CTX on purpose, so the per-model
+    _LOCAL_MODEL_TUNING table governs num_ctx for locally-dispatched models."""
+    assert "PIPELINE_LOCAL_NUM_CTX" not in _env_keys(path), (
+        f"{path.relative_to(_REPO_ROOT)} still pins PIPELINE_LOCAL_NUM_CTX in "
+        "EnvironmentVariables; it must be removed so app/ollama_prompt_utils.py's "
+        "per-model tuning table can govern num_ctx"
+    )
 
 
 @pytest.mark.parametrize("key", _STRUCTURAL_KEYS)

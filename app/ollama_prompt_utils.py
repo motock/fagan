@@ -76,8 +76,10 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
     # temperature) and PIPELINE_LOCAL_NUM_CTX always overrides this table
     # anyway (see _tuned_num_ctx) - keeping an unvalidated number here just
     # invited it to be mistaken for a settled finding. See
-    # TOKEN_CONTEXT_OPTIMIZATION_PLAN.md and the launchd plist's
-    # PIPELINE_LOCAL_NUM_CTX for where num_ctx is actually decided.
+    # TOKEN_CONTEXT_OPTIMIZATION_PLAN.md and the per-model tuning table
+    # (_LOCAL_MODEL_TUNING below), which governs num_ctx for
+    # locally-dispatched models; an operator-set PIPELINE_LOCAL_NUM_CTX
+    # overrides the table when present.
     "gpt-oss:20b": {"temperature": 0.3},
     # 2026-08-14 manual probe (not a full benchmark matrix - 5 tasks,
     # single trial each, think="medium" throughout, no A/B against
@@ -94,10 +96,9 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
     # swept num_ctx values 32768, 49152, 65536, 81920, 98304, 114688, 131072
     # observed 100% GPU usage, resident size 12GB→13GB, no swap growth
     # 131072 is Ollama's hard clamp for this model; values above it have no effect
-    # PIPELINE_LOCAL_NUM_CTX still overrides this table entry; the table value
-    # only takes effect once the launchd plist's PIPELINE_LOCAL_NUM_CTX is
-    # removed by the sibling story.  The table entry is inert in production
-    # today because the env var is set to 16384.
+    # The shipped launchd plist no longer pins PIPELINE_LOCAL_NUM_CTX, so this
+    # per-model table value governs num_ctx for locally-dispatched models.
+    # An operator-set PIPELINE_LOCAL_NUM_CTX still wins when present.
     "gpt-oss-20b-high:latest": {"num_ctx": 131072},
 }
 

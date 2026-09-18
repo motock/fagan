@@ -2,4 +2,4 @@
 # Dashboard dependencies - installed automatically by scripts/install.sh and
 # required to run the dashboard (scripts/dashboard.sh).
 fastapi>=0.141.1
-uvicorn>=0.52.4
+uvicorn>=0.53.0

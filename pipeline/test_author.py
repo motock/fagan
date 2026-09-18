@@ -162,8 +162,22 @@ _TEST_AUTHOR_OPT_OUT_MARKER = "[no-new-tests]"
 
 def _story_opts_out_of_test_author(story: dict) -> bool:
     """True iff the story's agent_instructions explicitly opt out of the
-    test-author phase via the ``[no-new-tests]`` sentinel."""
-    return _TEST_AUTHOR_OPT_OUT_MARKER in story.get("agent_instructions", "")
+    test-author phase via the ``[no-new-tests]`` sentinel.
+
+    The marker must be the FIRST thing in agent_instructions (after
+    stripping leading whitespace), not merely present anywhere in the text.
+    A plain substring search also matched sentences that MENTION the
+    sentinel while forbidding it (e.g. "[no-new-tests] must NOT be used for
+    this story -- this adds new behavior"), silently skipping the
+    test-author phase for stories that needed it (observed live
+    2026-09-17: 3 chat-ux-improvements stories, all had to be escalated
+    after burning their local rework budget). Anchoring to the start is
+    safe: every legitimate opt-out authored so far already puts the marker
+    first, and a plan author who wants to explain the opt-out can still put
+    the explanation right after it on the same line."""
+    return story.get("agent_instructions", "").lstrip().startswith(
+        _TEST_AUTHOR_OPT_OUT_MARKER
+    )
 
 
 def _test_author_prompt(agent_instructions: str) -> str:

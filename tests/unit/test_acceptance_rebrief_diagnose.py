@@ -134,3 +134,119 @@ def test_explicit_diagnosis_env_wins_over_story_backend_default(monkeypatch):
     story = {"summary": "s", "backend": "ollama", "dispatched_model": "gpt-oss:20b"}
     rebrief._run_diagnosis_role("evidence", story)
     assert seen["name"] == "mlx"
+
+
+# --- the ORIGINAL BRIEF must reach the diagnosis prompt ---
+# Observed live 2026-09-17 (story 146753bb): the brief pre-authorized a specific
+# test re-pin, but the diagnosis role only ever saw the evidence (diff/log facts)
+# and invented a conflicting fix, which the next attempt then followed. The
+# diagnosis model must be given the chance to see what the story was ORIGINALLY
+# asked to do, so it cannot contradict an already pre-authorized edit.
+
+
+def test_original_brief_excerpt_labels_and_includes_the_instructions():
+    story = {"agent_instructions": "Re-pin FOO_HASH to the new digest."}
+    excerpt = rebrief._original_brief_excerpt(story)
+    assert "ORIGINAL BRIEF" in excerpt
+    assert "Re-pin FOO_HASH to the new digest." in excerpt
+
+
+def test_original_brief_excerpt_is_empty_without_instructions():
+    assert rebrief._original_brief_excerpt({}) == ""
+    assert rebrief._original_brief_excerpt({"agent_instructions": ""}) == ""
+    assert rebrief._original_brief_excerpt({"agent_instructions": "   \n  "}) == ""
+    assert rebrief._original_brief_excerpt({"agent_instructions": None}) == ""
+
+
+def test_original_brief_excerpt_truncates_a_long_brief():
+    long_brief = "A" * (rebrief._ORIGINAL_BRIEF_EXCERPT_LIMIT + 500)
+    excerpt = rebrief._original_brief_excerpt({"agent_instructions": long_brief})
+    assert "A" * rebrief._ORIGINAL_BRIEF_EXCERPT_LIMIT in excerpt
+    assert "A" * (rebrief._ORIGINAL_BRIEF_EXCERPT_LIMIT + 1) not in excerpt
+
+
+def test_original_brief_excerpt_keeps_the_head_not_the_tail():
+    """Pre-authorized edits are stated explicitly and early, so the HEAD is what
+    matters here (contrast with the log/evidence tails elsewhere in the module)."""
+    head = "PRE-AUTHORIZED: re-pin FOO_HASH."
+    tail = "B" * (rebrief._ORIGINAL_BRIEF_EXCERPT_LIMIT + 100) + "TAIL-MARKER"
+    excerpt = rebrief._original_brief_excerpt({"agent_instructions": head + tail})
+    assert head in excerpt
+    assert "TAIL-MARKER" not in excerpt
+
+
+def test_diagnosis_prompt_includes_the_original_brief_for_the_story_backend_default(monkeypatch):
+    _no_diagnosis_role(monkeypatch)
+    driver = _RecordingDriver()
+    monkeypatch.setattr(rebrief.backend, "get_backend", lambda role, name=None: driver)
+
+    story = {
+        "summary": "s",
+        "backend": "ollama",
+        "dispatched_model": "gpt-oss:20b",
+        "agent_instructions": "Re-pin FOO_HASH to the new digest.",
+    }
+    rebrief._run_diagnosis_role("evidence", story)
+    prompt = driver.complete_kwargs["prompt"]
+    assert "ORIGINAL BRIEF (what this story was originally asked to do):" in prompt
+    assert "Re-pin FOO_HASH to the new digest." in prompt
+    # The evidence is still there, and the two concerns stay visually distinct.
+    assert "evidence" in prompt
+
+
+def test_diagnosis_prompt_includes_the_original_brief_for_the_provider_override(monkeypatch):
+    monkeypatch.setenv("PIPELINE_BACKEND_DIAGNOSIS", "mlx")
+    monkeypatch.setattr(rebrief.role_registry, "load_registry", lambda: {"roles": {}})
+    from app.role_registry import RoleResolution
+    monkeypatch.setattr(rebrief.role_registry, "resolve_role",
+                        lambda role, **k: RoleResolution(provider="mlx", model="qwen:30b"))
+    driver = _RecordingDriver()
+    monkeypatch.setattr(rebrief.backend, "get_backend", lambda role, name=None: driver)
+
+    story = {
+        "summary": "s",
+        "backend": "ollama",
+        "dispatched_model": "gpt-oss:20b",
+        "agent_instructions": "Re-pin FOO_HASH to the new digest.",
+    }
+    rebrief._run_diagnosis_role("evidence", story)
+    prompt = driver.complete_kwargs["prompt"]
+    assert "ORIGINAL BRIEF (what this story was originally asked to do):" in prompt
+    assert "Re-pin FOO_HASH to the new digest." in prompt
+
+
+def test_diagnosis_prompt_is_unchanged_when_there_is_no_original_brief(monkeypatch):
+    _no_diagnosis_role(monkeypatch)
+    driver = _RecordingDriver()
+    monkeypatch.setattr(rebrief.backend, "get_backend", lambda role, name=None: driver)
+
+    story = {"summary": "s", "backend": "ollama", "dispatched_model": "gpt-oss:20b"}
+    rebrief._run_diagnosis_role("evidence", story)
+    prompt = driver.complete_kwargs["prompt"]
+    assert "ORIGINAL BRIEF (what this story was originally asked to do):" not in prompt
+    assert prompt.endswith("evidence")
+
+
+def test_diagnosis_prompt_carries_a_pre_authorized_instruction_verbatim(monkeypatch):
+    """Regression guard for the 2026-09-17 contradiction: the literal
+    pre-authorized instruction must be in the prompt, so the model was given the
+    chance to see and follow it instead of inventing a conflicting fix."""
+    _no_diagnosis_role(monkeypatch)
+    driver = _RecordingDriver()
+    monkeypatch.setattr(rebrief.backend, "get_backend", lambda role, name=None: driver)
+
+    pre_authorized = (
+        "Replace the value of SUFFIX_FROM_CONFIG_SHA256 with the printed digest; "
+        "do NOT replace this check with something else."
+    )
+    story = {
+        "summary": "s",
+        "backend": "ollama",
+        "dispatched_model": "gpt-oss:20b",
+        "agent_instructions": pre_authorized,
+    }
+    rebrief._run_diagnosis_role("evidence", story)
+    prompt = driver.complete_kwargs["prompt"]
+    assert pre_authorized in prompt
+    # And the model is told to defer to it rather than invent an alternative.
+    assert "MUST follow it exactly" in prompt

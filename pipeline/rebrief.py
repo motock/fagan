@@ -377,6 +377,30 @@ def collect_attempt_facts(worktree, story: dict[str, Any]) -> str:
 _CLAUDE_SPEND_BACKENDS = ("claude", "auto")
 
 
+_ORIGINAL_BRIEF_EXCERPT_LIMIT = 3000
+
+
+def _original_brief_excerpt(story: dict[str, Any]) -> str:
+    """Return a bounded, labeled excerpt of the story's ORIGINAL
+    agent_instructions for the diagnosis prompt, or "" if there is none.
+
+    Without this, the diagnosis role only sees what happened (evidence),
+    never what was originally asked -- it can then invent a "fix" that
+    directly contradicts an instruction the brief already pre-authorized
+    (observed live 2026-09-17: a diagnosis told the next attempt to weaken
+    a hash-pinned test check the brief had explicitly said to re-pin
+    instead). Bounded to keep the prompt from growing unboundedly across a
+    long brief; the tail matters least here since pre-authorized edits are
+    typically stated explicitly and early, so this takes the HEAD of the
+    text, not the tail (contrast with the log/evidence tails elsewhere in
+    this module, where the tail is where the failure is)."""
+    text = (story.get("agent_instructions") or "").strip()
+    if not text:
+        return ""
+    excerpt = text[:_ORIGINAL_BRIEF_EXCERPT_LIMIT]
+    return f"\n\nORIGINAL BRIEF (what this story was originally asked to do):\n{excerpt}"
+
+
 def _run_diagnosis_role(
     evidence: str, story: dict[str, Any], plan_role_config: dict | None = None
 ) -> str | None:
@@ -422,7 +446,15 @@ def _run_diagnosis_role(
         "they report a possible clobber, the minimal fix is restoring the "
         "deleted code. If they carry a traceback, name the exact file and line "
         "it points at. Do not speculate beyond the evidence.\n\n"
+        "If the ORIGINAL BRIEF below already pre-authorizes a specific edit, "
+        "names an exact file/test/value to change, or gives literal "
+        "before/after text, your fix MUST follow it exactly - do not invent "
+        "a different or conflicting approach (e.g. do not suggest weakening "
+        "or replacing a check the brief explicitly says to re-pin/update). "
+        "Only propose an alternative when the brief gives no guidance at "
+        "all on this specific point.\n\n"
         f"{evidence}"
+        f"{_original_brief_excerpt(story)}"
     )
     if provider_override:
         resolution = role_registry.resolve_role(

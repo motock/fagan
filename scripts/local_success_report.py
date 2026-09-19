@@ -40,14 +40,9 @@ import os
 import sys
 from pathlib import Path
 
-# Insert the repository root into ``sys.path`` so that the ``pipeline``
-# package can be imported when the script is executed from a checkout.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# Import only the helpers that are required.  Importing other parts of the
-# application (e.g. ``pipeline.server``) would create directories and load
-# configuration at import time, which is undesirable for a CLI.
 from pipeline.local_success import classify_story
 from pipeline.story_metrics import load_notification_records
 
@@ -83,12 +78,6 @@ def _load_and_classify(plan_dir: Path) -> list[tuple[str, str, str]]:
 
 
 def _print_block(label: str, data: list[tuple[str, str, str]]) -> None:
-    """Print a single tier block.
-
-    ``data`` contains tuples ``(tier, reason, key)`` for the stories in this
-    tier.  The function aggregates the counts and prints the required
-    formatting.
-    """
     total = len(data)
     clean = sum(1 for _, reason, _ in data if not reason)
     pct = f"{(clean / total * 100):.1f}%" if total else "n/a"

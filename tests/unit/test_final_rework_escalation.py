@@ -270,7 +270,7 @@ def test_final_rework_escalation_fires_on_last_attempt(
     notify_calls = []
     monkeypatch.setattr(
         p, "_notify_user",
-        lambda plan_name, msg: notify_calls.append((plan_name, msg)),
+        lambda plan_name, msg, **kwargs: notify_calls.append((plan_name, msg)),
     )
 
     _force_request_changes(monkeypatch)

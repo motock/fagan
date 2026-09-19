@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import pytest
+
 from scripts.local_success_report import main
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "local_success_report.py"

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import datetime
 import sys
 from pathlib import Path
 
@@ -47,15 +47,12 @@ from pipeline.local_success import classify_story
 from pipeline.story_metrics import load_notification_records
 
 
-def _load_and_classify(plan_dir: Path) -> list[tuple[str, str, str]]:
-    """Return a list of ``(tier, reason, key)`` tuples for all stories.
+def _load_and_classify(plan_dir: Path) -> list[dict]:
+    """Return a list of dicts for all stories.
 
-    Each tuple represents a story that was classified as *dirty*.
-    ``tier`` is one of ``on-device``, ``cloud-oss`` or ``unknown``.
-    ``reason`` is the reason string returned by :func:`classify_story`.
-    ``key`` is the story key.
+    Each dict contains ``tier``, ``reason`` (first reason or ``None``), ``key``.
     """
-    results: list[tuple[str, str, str]] = []
+    results: list[dict] = []
     for manifest_path in sorted(plan_dir.glob("*.manifest.json")):
         plan_name = manifest_path.stem.replace(".manifest", "")
         try:
@@ -74,18 +71,19 @@ def _load_and_classify(plan_dir: Path) -> list[tuple[str, str, str]]:
             result = classify_story(key, story, records)
             tier = result["tier"]
             reasons = result["reasons"]
-            if reasons:
-                results.append((tier, reasons[0], key))
+            reason = reasons[0] if reasons else None
+            results.append({"tier": tier, "reason": reason, "key": key, "dispatched_at": story.get("dispatched_at")})
     return results
 
 
-def _print_block(label: str, data: list[tuple[str, str, str]]) -> None:
+def _print_block(label: str, data: list[dict]) -> None:
     total = len(data)
-    clean = sum(1 for _, reason, _ in data if not reason)
+    clean = sum(1 for d in data if d["reason"] is None)
     pct = f"{(clean / total * 100):.1f}%" if total else "n/a"
     print(f"{label}: {clean}/{total} clean ({pct})")
     reason_counts: dict[str, int] = {}
-    for _, reason, _ in data:
+    for d in data:
+        reason = d["reason"]
         if reason:
             reason_counts[reason] = reason_counts.get(reason, 0) + 1
     for reason, count in sorted(reason_counts.items(), key=lambda x: (-x[1], x[0])):
@@ -114,13 +112,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     classified = _load_and_classify(plan_dir)
-    tier_map: dict[str, list[tuple[str, str, str]]] = {
+    tier_map: dict[str, list[dict]] = {
         "on-device": [],
         "cloud-oss": [],
         "unknown": [],
     }
-    for tier, reason, key in classified:
-        tier_map.setdefault(tier, []).append((tier, reason, key))
+    for entry in classified:
+        tier_map.setdefault(entry["tier"], []).append(entry)
 
     window_name = "all" if args.window == 0 else str(args.window)
     print(f"Window: {window_name}")

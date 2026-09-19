@@ -11,10 +11,10 @@ EnvironmentVariables material. It must state, in prose:
   ``launchctl load`` on that path) — and that the change has NO effect until
   this reload happens.
 * the drift warning: the installed agent can differ from the repo copy (this
-  machine's installed copy pins ``PIPELINE_LOCAL_NUM_CTX=32768`` and sets
-  ``PIPELINE_AUTO_TRIAGE`` and ``PIPELINE_MAX_CONCURRENT_AGENTS=4``, none of
-  which the repo template says), so a wholesale regenerate-and-install silently
-  drops local overrides.
+  machine's installed copy sets ``PIPELINE_AUTO_TRIAGE`` and
+  ``PIPELINE_MAX_CONCURRENT_AGENTS=2``, which the repo template does not, and
+  it no longer pins ``PIPELINE_LOCAL_NUM_CTX`` at all), so a wholesale
+  regenerate-and-install silently drops local overrides.
 
 ``REFERENCE.md`` is a shared, cumulative artifact that sibling stories also
 edit, so these tests locate the new subsection by unique text (the
@@ -214,11 +214,18 @@ class TestDriftWarning:
             "repo copy"
         )
 
-    def test_names_concrete_drifted_num_ctx_value(self):
+    def test_no_longer_claims_the_plist_pins_local_num_ctx(self):
+        """The installed plist stopped pinning PIPELINE_LOCAL_NUM_CTX, so the
+        drift example must not cite it as a drifted value any more."""
         section = _subsection_containing(_reference_text(), _ANCHOR)
-        assert "PIPELINE_LOCAL_NUM_CTX=32768" in section, (
-            "subsection must name the concrete drifted value "
-            "PIPELINE_LOCAL_NUM_CTX=32768"
+        assert "PIPELINE_LOCAL_NUM_CTX=32768" not in section, (
+            "subsection still names PIPELINE_LOCAL_NUM_CTX=32768 as a drifted "
+            "value; the installed plist no longer pins it"
+        )
+        assert "PIPELINE_LOCAL_NUM_CTX" in section, (
+            "subsection must state that the installed plist does not pin "
+            "PIPELINE_LOCAL_NUM_CTX (locally-dispatched models use the "
+            "per-model tuning table instead)"
         )
 
     def test_names_concrete_drifted_auto_triage(self):
@@ -229,9 +236,10 @@ class TestDriftWarning:
 
     def test_names_concrete_drifted_max_concurrent_agents(self):
         section = _subsection_containing(_reference_text(), _ANCHOR)
-        assert "PIPELINE_MAX_CONCURRENT_AGENTS=4" in section, (
+        assert "PIPELINE_MAX_CONCURRENT_AGENTS=2" in section, (
             "subsection must name the concrete drifted value "
-            "PIPELINE_MAX_CONCURRENT_AGENTS=4"
+            "PIPELINE_MAX_CONCURRENT_AGENTS=2 (the installed plist's current "
+            "value, which the repo template does not carry)"
         )
 
     def test_warns_wholesale_regenerate_drops_local_overrides(self):

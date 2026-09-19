@@ -91,15 +91,32 @@ _LOCAL_MODEL_TUNING: dict[str, dict[str, float | int | str]] = {
     # reasonable default, not shown optimal versus low/high for this tag -
     # revisit if a real benchmark run says otherwise.
     "gemma4:26b-a4b-it-qat": {"think": "medium"},
-    # 2026-09-18 manual sweep (Apple M4, 24GB unified memory) of gpt-oss-20b-high:latest
-    # 1048576 tested and found to have no effect
-    # swept num_ctx values 32768, 49152, 65536, 81920, 98304, 114688, 131072
-    # observed 100% GPU usage, resident size 12GB→13GB, no swap growth
-    # 131072 is Ollama's hard clamp for this model; values above it have no effect
-    # The shipped launchd plist no longer pins PIPELINE_LOCAL_NUM_CTX, so this
+    # num_ctx here is PER SLOT, not per host: Ollama starts the runner with
+    # -np OLLAMA_NUM_PARALLEL slots each of this size, so the total context
+    # the runner allocates is num_ctx x OLLAMA_NUM_PARALLEL. Size it against
+    # that product, never against this value alone.
+    #
+    # On the Apple M4 / 24GB host this was settled on, the GPU fits ~18186
+    # MiB, the weights are ~12360 MiB and the compute buffer ~1260 MiB,
+    # leaving ~4566 MiB for KV; gpt-oss KV costs ~24 KiB/token (12
+    # full-attention layers, plus a 768-token sliding window on the other
+    # 12). That puts the 100%-GPU ceiling at roughly 163840 tokens TOTAL
+    # across all slots, i.e. 81920 per slot at OLLAMA_NUM_PARALLEL=2, which
+    # is what the shipped plist pairs it with (PIPELINE_MAX_CONCURRENT_AGENTS
+    # must match OLLAMA_NUM_PARALLEL - see pipeline/dispatch.py's serving-
+    # parallelism guard). Over that ceiling Ollama falls back to CPU_REPACK
+    # and the runner goes mostly to CPU: measured 2026-09-18, 262144 total
+    # -> 78% GPU, and 524288 total -> 68% CPU with a 129s load. At 163840
+    # total the model loads at 100% GPU, 13GB resident, no swap growth.
+    # 131072 is gpt-oss's own trained ceiling (Ollama clamps there; values
+    # up to 1048576 had no further effect), so it is reachable only at
+    # OLLAMA_NUM_PARALLEL=1.
+    #
+    # The shipped launchd plist does not pin PIPELINE_LOCAL_NUM_CTX, so this
     # per-model table value governs num_ctx for locally-dispatched models.
-    # An operator-set PIPELINE_LOCAL_NUM_CTX still wins when present.
-    "gpt-oss-20b-high:latest": {"num_ctx": 131072},
+    # An operator-set PIPELINE_LOCAL_NUM_CTX still wins when present - and is
+    # likewise per slot, so it must respect the same total budget.
+    "gpt-oss-20b-high:latest": {"num_ctx": 81920},
 }
 
 def _tuned_num_ctx(model_tag: str, fallback: int) -> int:

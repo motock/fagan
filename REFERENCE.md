@@ -866,10 +866,45 @@ The launchd plist files in this repository are templates. The running daemon rea
 
 The change has **no effect until this reload** happens.
 
-**Drift warning**: The installed agent can differ from the repo copy. For example, on this machine the installed plist pins `PIPELINE_LOCAL_NUM_CTX=32768` and sets `PIPELINE_AUTO_TRIAGE` and `PIPELINE_MAX_CONCURRENT_AGENTS=4`, none of which the repo template specifies. A wholesale regenerate-and-install would silently drop these local overrides.
+**Drift warning**: The installed agent can differ from the repo copy. On this machine the installed plist sets `PIPELINE_AUTO_TRIAGE` and `PIPELINE_MAX_CONCURRENT_AGENTS=2`, along with several other knobs the repo template does not carry, and it does **not** pin `PIPELINE_LOCAL_NUM_CTX` at all (locally-dispatched models take the per-model tuning table values instead — see above). A wholesale regenerate-and-install would silently drop these local overrides.
 
 Set global vars in your shell profile; set per-project overrides in the project's
 `.mcp.json` `env` block.
+
+### Ollama serving parallelism (`OLLAMA_NUM_PARALLEL`)
+
+`OLLAMA_NUM_PARALLEL` is how many requests one Ollama runner serves
+concurrently, and **each slot allocates the full `num_ctx`** — so the runner's
+total KV reservation is `num_ctx` × `OLLAMA_NUM_PARALLEL`, and that product is
+what has to fit the GPU. See the per-model tuning table above: on the 24GB M4
+this was settled on, ~163840 tokens total (81920 per slot at
+`OLLAMA_NUM_PARALLEL=2`) is the 100%-GPU ceiling, and above it Ollama falls
+back to `CPU_REPACK` and the runner goes mostly to CPU. Two consequences:
+
+- `PIPELINE_MAX_CONCURRENT_AGENTS` must not exceed `OLLAMA_NUM_PARALLEL`, or
+  extra local dispatches queue behind slots that were never sized for them.
+  `pipeline/dispatch.py` warns when the running server's detected slot count is
+  lower than the concurrency cap; that warning is a stop sign, not noise.
+- Raising `OLLAMA_NUM_PARALLEL` without lowering the per-model `num_ctx` (or
+  the reverse) silently blows the budget. The old pairing of 4 slots × 131072
+  per slot reserved 524288 tokens — 3.2× the ceiling — and is what made a
+  2026-09-18 benchmark run unusable (68% CPU, 129s model load).
+
+Ollama.app is a Squirrel login item and inherits its environment from the
+launchd session **at the moment it launches**, so the slot count has to be in
+place before the app starts; and a `launchctl setenv` typed into a shell does
+not survive a reboot. `launchd/com.fagan.ollama-num-parallel.plist` is a
+one-shot `RunAtLoad` agent that re-applies it at every login:
+
+```sh
+cp launchd/com.fagan.ollama-num-parallel.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.fagan.ollama-num-parallel.plist
+```
+
+If Ollama is already running when the value changes, the live runner keeps its
+old slot count until Ollama restarts (quit and reopen Ollama.app, or
+`pkill -KILL -f 'ollama serve' && open -a Ollama`) — the agent only sets the
+environment that a *later* launch inherits.
 
 ### Minimal configuration
 
@@ -984,13 +1019,17 @@ instead of requiring the operator to remember to flip a global env var every
 time the active local model changes. The shipped advance-scheduler launchd
 plist no longer pins `PIPELINE_LOCAL_NUM_CTX`, so locally-dispatched models
 use the per-model table values (e.g. `gpt-oss-20b-high:latest` effectively
-runs at `num_ctx` 131072); an operator-set `PIPELINE_LOCAL_NUM_CTX` env var
-still overrides. Currently populated:
+runs at `num_ctx` 81920). Note the `num_ctx` column is **per slot**: Ollama
+starts its runner with `OLLAMA_NUM_PARALLEL` slots of that size each, so the
+total context allocated is `num_ctx` × `OLLAMA_NUM_PARALLEL` — size a table
+entry against that product, not against the per-slot value alone. An
+operator-set `PIPELINE_LOCAL_NUM_CTX` env var still overrides, and is
+likewise per slot. Currently populated:
 
 | Model tag | `temperature` | `num_ctx` | Why |
 |---|---|---|---|
 | `gpt-oss:20b` | `0.3` |  | 2026-07-03 A/B benchmark (`tests/benchmark/_runs/full_20260703_postfix` vs `temp_tune_20260703`, 15 cells each): `temperature=1.0` scored 6/15 success with 3 cells where the implementation never landed on disk at all; `temperature=0.3` scored 9/15 with only 1, at an unchanged 11/15 ground-truth-pass rate. num_ctx was never A/B-tested and removed from the table for that reason. |
-| `gpt-oss-20b-high:latest` |  | 131072 | 2026-09-18 manual sweep (Apple M4, 24GB unified memory) of gpt-oss-20b-high:latest: swept num_ctx from 32768 to 131072 in 7 steps, 100% GPU throughout, 12GB → 13GB resident, no swap growth; 131072 is gpt-oss's own trained/Ollama-enforced ceiling (values up to 1048576 had no further effect). |
+| `gpt-oss-20b-high:latest` |  | 81920 | **Per slot, not per host.** Ollama runs `-np OLLAMA_NUM_PARALLEL` slots of this size each, so the runner's total context is `num_ctx` × `OLLAMA_NUM_PARALLEL` — size against that product, never this value alone. On the Apple M4 / 24GB host this was settled on, the GPU fits ~18186 MiB, the weights are ~12360 MiB and the compute buffer ~1260 MiB, leaving ~4566 MiB for KV at ~24 KiB per token, so the 100%-GPU ceiling is ~163840 tokens TOTAL: 81920 per slot at `OLLAMA_NUM_PARALLEL=2`, which is what the shipped plist pairs it with (`PIPELINE_MAX_CONCURRENT_AGENTS` must match `OLLAMA_NUM_PARALLEL`; see `pipeline/dispatch.py`'s serving-parallelism guard). Measured 2026-09-18: 163840 total loads at 100% GPU, 13GB resident, no swap growth; over that ceiling Ollama falls back to CPU_REPACK and the runner goes mostly to CPU (262144 total → 78% GPU; 524288 total → 68% CPU with a 129s load). 131072 is gpt-oss's own trained/Ollama-enforced ceiling (values up to 1048576 had no further effect), so it is reachable only at `OLLAMA_NUM_PARALLEL=1`. |
 | `PIPELINE_LOCAL_TIMEOUT_SECONDS` | `600` | Legacy/unused — no longer read by the code; superseded by `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` below. |
 | `PIPELINE_ROLE_CALL_TIMEOUT_SECONDS` | `600` | Total wall-clock budget in seconds for local role-call attempts (single-shot `complete()` and review-loop turns) **including retries and backoff** — the per‑attempt HTTP timeout and each backoff sleep are capped at the remaining budget, so the whole call is bounded no matter how many attempts fit. Default `600`; blank, unparseable, non‑positive, or non‑finite values fall back to `600`. |
 | `PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS` | `900` | Legacy. Was the per-request timeout for the dispatch/review chat loop; since streaming landed this only seeds the harness boot log (`steps=… timeout=…s`). The live timeout is `LOCAL_AGENT_READ_SILENCE_SECONDS` below — kept set by `backend.py` for back-compat. |

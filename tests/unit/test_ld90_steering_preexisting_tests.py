@@ -152,4 +152,4 @@ def test_constant_name_is_exported_from_both_modules():
 def test_dispatch_server_ref_still_resolves_the_constant():
     ref = dispatch._NEVER_TOUCH_TESTS_STEERING
     assert isinstance(ref, dispatch._ServerRef)
-    assert str(ref) == "_NEVER_TOUCH_TESTS_STEERING"
+    assert ref._name == "_NEVER_TOUCH_TESTS_STEERING"

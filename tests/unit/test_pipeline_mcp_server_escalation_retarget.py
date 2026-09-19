@@ -769,13 +769,10 @@ def test_review_story_transient_500_retry_resolves_to_approve(
     assert story.get("review_inconclusive_count", 0) == 0
 
 
-def test_review_story_transient_500_retry_also_fails_increments_inconclusive_once(
+def test_review_story_transient_500_retry_also_fails_defers_without_burning_inconclusive(
     plan_dir, agents_dir, monkeypatch
 ):
-    """Both the original and the retry return transient-500 UNKNOWN. The retry
-    must happen exactly once (2 total calls) and review_inconclusive_count
-    must increment by exactly 1, falling through to the existing inconclusive
-    path unchanged."""
+    """Both the original and the retry return transient-500 UNKNOWN. The retry must happen exactly once (2 total calls); the review is then deferred like a rate limit and review_inconclusive_count is not touched."""
     _write_manifest(plan_dir, "transient_fail", {
         "S1": {"summary": "Add thing", "status": "tests_passed",
                "worktree": str(plan_dir / "wt"), "risk": "low"},
@@ -795,9 +792,10 @@ def test_review_story_transient_500_retry_also_fails_increments_inconclusive_onc
     result = p.review_story("transient_fail", "S1")
 
     assert call_count["n"] == 2  # original + exactly one retry
-    assert result["verdict"] == "UNKNOWN"
+    assert result.get("deferred") == "transient_backend"
     story = _read_manifest(plan_dir, "transient_fail")["stories"]["S1"]
-    assert story["review_inconclusive_count"] == 1  # incremented exactly once
+    assert "review_inconclusive_count" not in story
+    assert story["review_deferred_count"] == 1
     assert story["status"] == "tests_passed"
 
 

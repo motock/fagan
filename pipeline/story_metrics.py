@@ -213,5 +213,35 @@ def compute_plan_rollup(stories: list[dict[str, Any]]) -> dict[str, Any]:
         "total_dispatch_failures": total_dispatch_failures,
         "total_cost": total_cost,
         "cost_per_merged_story": cost_per_merged_story,
-        "first_pass_clean_rate": None
+        # Eligible = a real story: story_key or correlation_id is present. The
+        # "<uncorrelated>" group is not a story and never counts. A payload
+        # without a first_pass_clean key counts as not clean.
+        "first_pass_clean_rate": (
+            round(
+                sum(
+                    1
+                    for story in stories
+                    if (
+                        story.get("story_key") is not None
+                        or story.get("correlation_id") is not None
+                    )
+                    and story.get("first_pass_clean") is True
+                )
+                / sum(
+                    1
+                    for story in stories
+                    if (
+                        story.get("story_key") is not None
+                        or story.get("correlation_id") is not None
+                    )
+                ),
+                3,
+            )
+            if any(
+                story.get("story_key") is not None
+                or story.get("correlation_id") is not None
+                for story in stories
+            )
+            else None
+        ),
     }

@@ -55,6 +55,10 @@ _REWORK_EVENTS = frozenset(
 )
 _ESCALATION_EVENTS = frozenset({"escalated", "model_fallback"})
 
+_FIRST_PASS_DISQUALIFYING_EVENTS = frozenset(
+    {"escalated", "model_fallback", "story_parked", "brief_patched"}
+)
+
 
 def load_notification_records(path: Path) -> tuple[list[dict[str, Any]], int]:
     """Parse a notifications JSONL sidecar into records.
@@ -116,6 +120,7 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
     counted twice: these are raw counts, and deduplication is the sink's job.
     """
     groups: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
+    disqualifying = {}
     for record in records:
         if not isinstance(record, dict):
             continue
@@ -143,6 +148,8 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
             payload["story_key"] = str(story_key)
 
         event = record.get("event")
+        if event in _FIRST_PASS_DISQUALIFYING_EVENTS:
+            disqualifying[group_id] = disqualifying.get(group_id, 0) + 1
         if event == _DISPATCH_FAILED_EVENT:
             payload["dispatch_failures"] += 1
         elif event in _REWORK_EVENTS:
@@ -204,4 +211,5 @@ def compute_plan_rollup(stories: list[dict[str, Any]]) -> dict[str, Any]:
         "total_dispatch_failures": total_dispatch_failures,
         "total_cost": total_cost,
         "cost_per_merged_story": cost_per_merged_story,
+        "first_pass_clean_rate": None
     }

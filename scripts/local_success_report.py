@@ -71,9 +71,11 @@ def _load_and_classify(plan_dir: Path) -> list[tuple[str, str, str]]:
         for key, story in stories.items():
             if not isinstance(story, dict):
                 continue
-            tier, reason = classify_story(key, story, records)
-            if reason:
-                results.append((tier, reason, key))
+            result = classify_story(key, story, records)
+            tier = result["tier"]
+            reasons = result["reasons"]
+            if reasons:
+                results.append((tier, reasons[0], key))
     return results
 
 

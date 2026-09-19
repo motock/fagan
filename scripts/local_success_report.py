@@ -37,7 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import datetime
-import sys
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent

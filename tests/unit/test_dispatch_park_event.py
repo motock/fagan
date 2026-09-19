@@ -283,8 +283,8 @@ def test_park_event_is_bare_string_keyword_literal(
     plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
 ):
     """The stamp is a bare ``str`` literal passed as a KEYWORD, the two
-    positional arguments and the message text are unchanged, and no other
-    kwargs were introduced."""
+    positional arguments and the message text are unchanged, and only the
+    story_key/correlation_id attribution kwargs accompany it."""
     origin, repo, branch = _make_origin_and_repo(tmp_path)
     _make_resumed_worktree(tmp_path, worktree_root, repo, branch, "S1")
     _push_extra_commit_directly_to_origin(tmp_path, origin, branch, name="extra0")
@@ -304,8 +304,9 @@ def test_park_event_is_bare_string_keyword_literal(
     assert "event" in call["kwargs"]
     assert isinstance(call["kwargs"]["event"], str)
     assert call["kwargs"]["event"] == "story_parked"
-    # No other kwargs introduced on this call.
-    assert call["kwargs"] == {"event": "story_parked"}
+    # Only the attribution kwargs accompany the event.
+    assert set(call["kwargs"]) == {"event", "story_key", "correlation_id"}
+    assert call["kwargs"]["story_key"] == "S1"
 
     # The two positional args are unchanged: (plan_name, message).
     assert call["args"][0] == "park2"

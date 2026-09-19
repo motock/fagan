@@ -119,10 +119,11 @@ def test_park_event_is_passed_as_a_keyword_not_positionally(notify_calls):
 
 
 def test_park_adds_no_other_kwargs(notify_calls):
-    """Severity/correlation-id kwargs are not introduced by this story."""
+    """Only the story_key attribution accompanies the event: severity is not
+    introduced, and a story without a correlation_id passes none."""
     triage._park("plan-x", "story-1", {"status": "failed"}, "reason")
 
-    assert set(notify_calls[0]["kwargs"]) == {"event"}
+    assert set(notify_calls[0]["kwargs"]) == {"event", "story_key"}
 
 
 def test_park_signature_is_unchanged():

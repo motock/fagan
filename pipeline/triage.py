@@ -25,7 +25,7 @@ from .oracle_gate import acceptance_digests, validate_acceptance_fixtures
 from .concurrency import _heavy_lock, _is_heavy
 from .config import STEP_CAP_FALLBACK_THRESHOLD, INFRA_FAILURE_LOG_SUBSTRING
 from .rebrief import collect_failure_evidence
-from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model)
+from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
 from .repo_health import format_findings, classify_repo_health
 from .git_ops import _worktree_has_new_commits
@@ -73,10 +73,13 @@ def _park(plan_name, story_key, story, reason) -> str:
     story["status"] = "parked"
     story["parked_reason"] = reason
     try:
+        cid = story.get("correlation_id") if isinstance(story, dict) else None
         _notify_user(
             plan_name,
             f"{story_key} triage: {reason}",
             event="story_parked",
+            story_key=story_key,
+            **({"correlation_id": cid} if cid else {}),
         )
     except Exception:  # pragma: no cover – notification failures are ignored
         pass
@@ -551,6 +554,25 @@ def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest, man
     return "patch_acceptance"
 
 
+def _notify_escalate_model(plan_name, story_key, story, message, event) -> None:
+    """Record a triage escalate_model outcome as a structured notification.
+
+    A notification failure must never turn a completed escalation into a
+    park, so any exception from the notifier is swallowed here instead of
+    reaching execute_ruling's surrounding ``except`` (which parks)."""
+    cid = story.get("correlation_id") if isinstance(story, dict) else None
+    try:
+        _notify_user(
+            plan_name,
+            message,
+            story_key=story_key,
+            event=event,
+            **({"correlation_id": cid} if cid else {}),
+        )
+    except Exception:  # noqa: BLE001 - see docstring
+        pass
+
+
 def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
     """Execute a ruling in this slice.
 
@@ -586,6 +608,12 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
                     plan_name,
                     f"{story_key} triage: {existing}",
                     event="story_parked",
+                    story_key=story_key,
+                    **(
+                        {"correlation_id": story["correlation_id"]}
+                        if story.get("correlation_id")
+                        else {}
+                    ),
                 )
             except Exception:  # pragma: no cover – notification failures are ignored
                 pass
@@ -612,10 +640,22 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
                 _escalate_to_local_fallback_model(
                     manifest, plan_name, story_key, manifest_path, fallback
                 )
+                _notify_escalate_model(
+                    plan_name, story_key, story,
+                    f"{story_key} triage ruled escalate_model; retrying on "
+                    f"fallback model {fallback}.",
+                    "model_fallback",
+                )
                 return "escalate_model"
             if _auto_escalation_enabled() and not story.get("escalated"):
                 _escalate_to_claude(
                     manifest, plan_name, story_key, manifest_path
+                )
+                _notify_escalate_model(
+                    plan_name, story_key, story,
+                    f"{story_key} triage ruled escalate_model; escalating to "
+                    f"{_escalation_label()}.",
+                    "escalated",
                 )
                 return "escalate_model"
         except Exception as exc:

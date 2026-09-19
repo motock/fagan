@@ -595,6 +595,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} parked: review inconclusive after "
                     f"{inconclusive} attempts - needs human review.",
                     event="story_parked",
+                    story_key=story_key,
                     **_cid_kwargs,
                 )
         else:
@@ -637,6 +638,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} parked: review inconclusive after "
                     f"{inconclusive} attempts - needs human review.",
                     event="story_parked",
+                    story_key=story_key,
                     **_cid_kwargs,
                 )
         else:
@@ -906,6 +908,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} parked: reviewer still requesting changes "
                     f"after {attempts} cycles - needs human review.",
                     event="story_parked",
+                    story_key=story_key,
                     **_rework_kwargs,
                 )
         else:
@@ -919,6 +922,8 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     _notify_user(
                         plan_name,
                         f"{story_key} final rework attempt ({attempts}/{rework_cap}) escalating to {provider}/{model}.",
+                        story_key=story_key,
+                        event="escalated",
                         **_rework_kwargs,
                     )
             story["status"] = "changes_requested"

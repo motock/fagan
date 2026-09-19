@@ -139,11 +139,18 @@ _TRANSIENT_BACKEND_PATTERNS = [
     r"internal\s+server\s+error",
     r"connection\s+reset",
     r"connection\s+refused",
+    r"502\s+bad\s+gateway",
+    r"bad\s+gateway",
+    r"503\s+service\s+unavailable",
+    r"service\s+unavailable",
+    r"gateway\s+time-?out",
+    r"read\s+timed\s+out",
+    r"\btimed\s+out\b",
 ]
 
 
 def _is_transient_backend_error(text: str) -> bool:
-    """True when `text` looks like a transient backend error (HTTP 500,
+    """True when `text` looks like a transient backend error (5xx, bad gateway, service unavailable, timed out), not a rate-limit message or a genuine review.
     connection-reset/refused), not a rate-limit message or a genuine review.
 
     Intentionally called only after _parse_verdict returns UNKNOWN, so a
@@ -151,6 +158,29 @@ def _is_transient_backend_error(text: str) -> bool:
     line) is never mistaken for a transient backend failure.
     """
     return any(re.search(pat, text, re.IGNORECASE) for pat in _TRANSIENT_BACKEND_PATTERNS)
+
+def _is_transient_backend_exception(exc: BaseException) -> bool:
+    """True when ``exc`` - or an exception in its ``__cause__``/``__context__``
+    chain (at most 5 links) - is a reviewer transport failure: a builtin
+    ``TimeoutError``/``ConnectionError``, a type whose name contains
+    "Timeout" (e.g. httpx.ReadTimeout), or one whose message matches
+    ``_is_transient_backend_error``. Backends wrap transport errors in a
+    ``RuntimeError`` chained ``from`` the original, hence the chain walk. Anything
+    else (a malformed tool call, a parse error) is not transient."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    for _ in range(5):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, (TimeoutError, ConnectionError)):
+            return True
+        if "Timeout" in type(current).__name__:
+            return True
+        if _is_transient_backend_error(str(current)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 # ---------- Conflict-marker parsing for the rebase auto-resolve path ----------
@@ -405,6 +435,7 @@ __all__ = [
     "_is_rate_limited",
     "_is_test_file_path",
     "_is_transient_backend_error",
+    "_is_transient_backend_exception",
     "_parse_conflict_blocks",
     "_parse_ruling",
     "_parse_verdict",

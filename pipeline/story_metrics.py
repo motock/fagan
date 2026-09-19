@@ -175,6 +175,8 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
             + payload["escalations"]
         )
         result[_group_id_for(payload)] = payload
+        payload["disqualifying_events"] = disqualifying.get(_group_id_for(payload), 0)
+        payload["first_pass_clean"] = bool(payload["merged"]) and payload["disqualifying_events"] == 0
     return result
 
 

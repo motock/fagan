@@ -68,6 +68,8 @@ GROUP_KEYS = {
     "merged",
     "merged_ts",
     "cost",
+    "disqualifying_events",
+    "first_pass_clean",
 }
 
 ROLLUP_KEYS = {
@@ -78,6 +80,7 @@ ROLLUP_KEYS = {
     "total_dispatch_failures",
     "total_cost",
     "cost_per_merged_story",
+    "first_pass_clean_rate",
 }
 
 _OMIT = object()  # sentinel: leave the key absent entirely (older-record shape)

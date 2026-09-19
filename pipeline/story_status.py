@@ -271,6 +271,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; switching to "
                 f"fallback model {fallback_model} for the next resume.",
+                story_key=story_key,
+                event="model_fallback",
+                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
             )
         elif (
             not fallback_model
@@ -285,6 +288,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 f"{story_key} hit {INFRA_FAILURE_FALLBACK_THRESHOLD} consecutive "
                 f"infrastructure failures on {current_model}; escalating to "
                 f"{_escalation_label()} (no local_model_fallback configured).",
+                story_key=story_key,
+                event="escalated",
+                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
             )
             return {
                 "status": "todo",
@@ -362,6 +368,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
                     f"on {current_model}; switching to fallback model "
                     f"{fallback_model} for the next resume.",
+                    story_key=story_key,
+                    event="model_fallback",
+                    **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
                 )
         elif (
             not fallback_model
@@ -386,6 +395,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} hit the step cap {STEP_CAP_FALLBACK_THRESHOLD}x "
                     f"on {current_model}; escalating to {_escalation_label()} (no "
                     f"local_model_fallback configured).",
+                    story_key=story_key,
+                    event="escalated",
+                    **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
                 )
                 return {
                     "status": "todo",
@@ -889,6 +901,8 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     f"{story_key} parked: no new commit after {attempts} rework "
                     f"redispatches - needs human review.",
                     event="story_parked",
+                    story_key=story_key,
+                    **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
                 )
                 return {
                     "status": "parked",

@@ -139,8 +139,9 @@ def test_park_path_notifies_with_story_parked_event(plan_dir, monkeypatch):
 
 
 def test_park_notify_kwargs_are_exactly_the_event(plan_dir, monkeypatch):
-    """The stamp is a bare keyword literal and nothing else was added: the
-    call is still (plan_name, message) positionally plus event=... only."""
+    """The stamp is a bare keyword literal: the call is still (plan_name,
+    message) positionally plus event=... and the story_key attribution (the
+    fixture story has no correlation_id, so none is passed)."""
     _park_setup(plan_dir, monkeypatch, rework_attempts=2)
     spy = _NotifySpy()
     monkeypatch.setattr(p, "_notify_user", spy)
@@ -155,7 +156,7 @@ def test_park_notify_kwargs_are_exactly_the_event(plan_dir, monkeypatch):
             "needs human review."
         ),
     )
-    assert kwargs == {"event": PARK_EVENT}
+    assert kwargs == {"event": PARK_EVENT, "story_key": "S1"}
 
 
 def test_park_notify_message_text_is_unchanged(plan_dir, monkeypatch):

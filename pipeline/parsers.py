@@ -139,11 +139,18 @@ _TRANSIENT_BACKEND_PATTERNS = [
     r"internal\s+server\s+error",
     r"connection\s+reset",
     r"connection\s+refused",
+    r"502\s+bad\s+gateway",
+    r"bad\s+gateway",
+    r"503\s+service\s+unavailable",
+    r"service\s+unavailable",
+    r"gateway\s+time-?out",
+    r"read\s+timed\s+out",
+    r"\btimed\s+out\b",
 ]
 
 
 def _is_transient_backend_error(text: str) -> bool:
-    """True when `text` looks like a transient backend error (HTTP 500,
+    """True when `text` looks like a transient backend error (5xx, bad gateway, service unavailable, timed out), not a rate-limit message or a genuine review.
     connection-reset/refused), not a rate-limit message or a genuine review.
 
     Intentionally called only after _parse_verdict returns UNKNOWN, so a

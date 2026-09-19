@@ -648,41 +648,48 @@ def test_dispatch_partial_table_entry_only_overrides_the_key_present(
     assert captured["env"]["PIPELINE_TRANSPORT_TEMPERATURE"] == "0.3"
 
 
-# ---------- gpt-oss-20b-high:latest num_ctx entry (2026-09-18 manual sweep) ----------
+# ---------- gpt-oss-20b-high:latest num_ctx entry (per-slot budget) ----------
 #
-# New behavior: _LOCAL_MODEL_TUNING gains an entry for the EXACT tag
+# Behavior: _LOCAL_MODEL_TUNING has an entry for the EXACT tag
 # "gpt-oss-20b-high:latest" (a DIFFERENT tag from the existing, untouched
-# "gpt-oss:20b" entry) pinning num_ctx=131072, with a provenance comment in
-# the same style as the 2026-07-03 / 2026-08-14 entries. A sibling story
-# removes PIPELINE_LOCAL_NUM_CTX from the advance-scheduler launchd plist so
-# this per-model entry can take effect (an explicit PIPELINE_LOCAL_NUM_CTX
-# env var still always overrides the table - see _tuned_num_ctx).
+# "gpt-oss:20b" entry) pinning num_ctx=81920. That value is PER SLOT: Ollama
+# runs -np OLLAMA_NUM_PARALLEL slots of that size each, so the runner's total
+# context is num_ctx x OLLAMA_NUM_PARALLEL and has to fit the host's 100%-GPU
+# KV budget (~163840 tokens here). The advance-scheduler launchd plist pins
+# neither PIPELINE_LOCAL_NUM_CTX nor OLLAMA_NUM_PARALLEL in a way that
+# overrides the table, so this per-model entry governs num_ctx for this tag;
+# an explicit PIPELINE_LOCAL_NUM_CTX env var still always overrides the table
+# (and is likewise per slot) - see _tuned_num_ctx.
 
 
-def test_gpt_oss_20b_high_tuned_to_131072_num_ctx_from_manual_sweep():
-    """gpt-oss-20b-high:latest's entry reflects the 2026-09-18 manual num_ctx
-    sweep on this machine (Apple M4, 24GB unified memory): 32768, 49152,
-    65536, 81920, 98304, 114688 and 131072 were each loaded via Ollama's
-    /api/generate and checked with `ollama ps`. Every step stayed 100% GPU
-    (never split to CPU), resident size only grew 12GB -> 13GB across the
-    full range, and swap usage did not meaningfully grow. Pushing num_ctx
-    above 131072 (163840 up to 1048576 tested) had no further effect: Ollama
-    silently clamps `ollama ps`'s CONTEXT column at 131072, gpt-oss's own
-    trained/YaRN-scaled maximum - a hard ceiling enforced by Ollama itself,
-    not a hardware limit. So 131072 is both the empirically-verified safe
-    value on this hardware AND the model's own ceiling. This is a DIFFERENT
-    tag from "gpt-oss:20b" (untested by this sweep, so its entry is
-    unchanged)."""
-    assert b._LOCAL_MODEL_TUNING["gpt-oss-20b-high:latest"] == {"num_ctx": 131072}
+def test_gpt_oss_20b_high_num_ctx_is_sized_per_slot_for_the_parallel_budget():
+    """gpt-oss-20b-high:latest's entry reflects the 2026-09-18 measurement on
+    this machine (Apple M4, 24GB unified memory). num_ctx here is per slot:
+    the runner allocates num_ctx x OLLAMA_NUM_PARALLEL tokens in total, and
+    the GPU fits ~163840 tokens total (81920 per slot at
+    OLLAMA_NUM_PARALLEL=2, which is what the shipped plist pairs it with).
+    Above that ceiling Ollama falls back to CPU_REPACK and the runner goes
+    mostly to CPU (262144 total -> 78% GPU; 524288 total -> 68% CPU with a
+    129s load). 131072 is gpt-oss's own trained/Ollama-enforced ceiling
+    (values up to 1048576 had no further effect), so it is only reachable at
+    OLLAMA_NUM_PARALLEL=1 - which is why the table pins 81920, not 131072.
+    This is a DIFFERENT tag from "gpt-oss:20b" (whose entry is unchanged)."""
+    assert b._LOCAL_MODEL_TUNING["gpt-oss-20b-high:latest"] == {"num_ctx": 81920}
 
 
-def test_gpt_oss_20b_high_entry_comment_documents_sweep_provenance():
-    """The new entry carries a provenance comment in the same style as the
-    2026-07-03 / 2026-08-14 entries: date, machine, swept values, observed
-    result, and the Ollama-side clamp finding - plus the clause noting that
-    num_ctx for THIS tag is now decided in the table, not by the launchd
-    plist's PIPELINE_LOCAL_NUM_CTX (a sibling story removes that env var from
-    the advance-scheduler plist so this entry can take effect)."""
+def test_gpt_oss_20b_high_entry_value_is_not_the_host_wide_131072():
+    """Negative control: 131072 is host-wide only at OLLAMA_NUM_PARALLEL=1,
+    so it must not be what the shipped table pins."""
+    entry = b._LOCAL_MODEL_TUNING["gpt-oss-20b-high:latest"]
+    assert entry.get("num_ctx") != 131072
+
+
+def test_gpt_oss_20b_high_entry_comment_documents_the_per_slot_budget():
+    """The entry carries a provenance comment in the same style as the
+    2026-07-03 / 2026-08-14 entries: date, machine, the per-slot/total
+    relation, the measured ceiling and the over-ceiling CPU fallback, and
+    the Ollama-side clamp finding - plus the invariant that an operator-set
+    PIPELINE_LOCAL_NUM_CTX still overrides the table."""
     lines = Path(bo_tuning.__file__).read_text().splitlines()
     matches = [i for i, ln in enumerate(lines) if '"gpt-oss-20b-high:latest"' in ln]
     assert matches, "no gpt-oss-20b-high:latest entry found in ollama_prompt_utils.py"
@@ -698,19 +705,26 @@ def test_gpt_oss_20b_high_entry_comment_documents_sweep_provenance():
     assert "2026-09-18" in comment
     assert "Apple M4" in comment
     assert "24GB" in comment.replace(" ", "")
-    # The swept range endpoints (32768 through 131072).
-    assert "32768" in comment
-    assert "131072" in comment
-    # Observed result: 100% GPU throughout, 12GB -> 13GB resident, no swap growth.
+    # num_ctx is PER SLOT, and the total is the product with the slot count.
+    assert "per slot" in comment.lower()
+    assert "OLLAMA_NUM_PARALLEL" in comment
+    # The measured 100%-GPU total-context ceiling, and the value that fits it.
+    assert "81920" in comment
+    assert "163840" in comment
     assert "100%" in comment
     assert "GPU" in comment
-    assert "12GB" in comment.replace(" ", "")
     assert "13GB" in comment.replace(" ", "")
+    assert "resident" in comment.lower()
     assert "swap" in comment.lower()
+    # Over the ceiling: the CPU fallback, with the measured configurations.
+    assert "CPU_REPACK" in comment or "CPU" in comment
+    assert "524288" in comment
     # Ollama's own hard clamp for this model, confirmed above 131072.
     assert "clamp" in comment.lower()
+    assert "131072" in comment
     assert "1048576" in comment
-    # num_ctx for this tag is decided here, not by the plist.
+    # The concurrency cap must be paired with the slot count.
+    assert "PIPELINE_MAX_CONCURRENT_AGENTS" in comment
     assert "plist" in comment.lower()
 
 
@@ -723,11 +737,11 @@ def test_gptoss_20b_entry_unchanged_by_gpt_oss_20b_high_story():
 def test_tuned_num_ctx_uses_table_value_for_gpt_oss_20b_high_with_no_env_override(
     monkeypatch,
 ):
-    """With PIPELINE_LOCAL_NUM_CTX unset, the new table entry supplies
-    num_ctx=131072 for gpt-oss-20b-high:latest instead of the constructor
-    fallback (16384) - i.e. num_ctx for this tag is decided by the table, not
-    by the plist/constructor default."""
+    """With PIPELINE_LOCAL_NUM_CTX unset, the table entry supplies
+    num_ctx=81920 (per slot) for gpt-oss-20b-high:latest instead of the
+    constructor fallback (16384) - i.e. num_ctx for this tag is decided by
+    the table, not by the plist/constructor default."""
     monkeypatch.delenv("PIPELINE_LOCAL_NUM_CTX", raising=False)
-    assert bo_tuning._tuned_num_ctx("gpt-oss-20b-high:latest", 16384) == 131072
+    assert bo_tuning._tuned_num_ctx("gpt-oss-20b-high:latest", 16384) == 81920
 
 

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  One-shot login agent: put OLLAMA_NUM_PARALLEL into the user's launchd
+  session environment, because Ollama.app is launched by Squirrel at login
+  and inherits whatever that environment held at the time. A launchctl
+  setenv typed into a shell does NOT survive a reboot, so without this the
+  slot count silently reverts to Ollama's default on the next restart.
+
+  Unlike launchd/com.fagan.pipeline.*.plist this file is NOT rendered from a
+  .template by scripts/generate_launchd_plists.sh (it carries no
+  machine-specific substitution). Install it by copying it verbatim:
+
+    cp launchd/com.fagan.ollama-num-parallel.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.fagan.ollama-num-parallel.plist
+
+  The slot count set here must be >= PIPELINE_MAX_CONCURRENT_AGENTS in the
+  advance-scheduler plist, and num_ctx x OLLAMA_NUM_PARALLEL must fit the
+  host's KV budget - see REFERENCE.md's "Ollama serving parallelism" section.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.fagan.ollama-num-parallel</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>launchctl setenv OLLAMA_NUM_PARALLEL 2</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+</dict>
+</plist>

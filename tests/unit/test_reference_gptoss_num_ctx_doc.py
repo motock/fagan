@@ -8,10 +8,13 @@ Docs-only story touching three rows of ``REFERENCE.md``:
    both confirm that entry is ``{"temperature": 0.3}`` ONLY. The stale
    ``32768`` must be cleared from the ``num_ctx`` cell and the Why cell must
    note the value was never itself A/B-tested (mirroring the code comment).
-2. A ``gpt-oss-20b-high:latest`` row with ``num_ctx=131072`` must exist
+2. A ``gpt-oss-20b-high:latest`` row with ``num_ctx=81920`` must exist
    EXACTLY ONCE, correctly aligned in the 4-column table
    (``| Model tag | temperature | num_ctx | Why |``), immediately after the
-   ``gpt-oss:20b`` row, with provenance in the Why cell.
+   ``gpt-oss:20b`` row, with provenance in the Why cell. 81920 is the
+   per-slot value, not a host-wide one: the Why cell must say so, and must
+   state the total-context budget it is derived from
+   (``num_ctx`` × ``OLLAMA_NUM_PARALLEL``).
 3. The ``PIPELINE_LOCAL_NUM_CTX`` row must note it is no longer pinned by the
    advance-scheduler launchd plist, so locally-dispatched models fall through
    to the per-model tuning table.
@@ -95,14 +98,14 @@ def _high_row_is_well_formed(cells: list[str]) -> bool:
     """True only for a correctly aligned 4-cell ``gpt-oss-20b-high:latest`` row.
 
     Cell order is the table header's: ``| Model tag | temperature | num_ctx |
-    Why |``. A 3-cell row that dumps ``131072`` into the temperature column
+    Why |``. A 3-cell row that dumps ``81920`` into the temperature column
     must NOT satisfy this.
     """
     return (
         len(cells) == 4
         and _normalise_tag(cells[0]) == _HIGH_TAG
         and cells[1] in _EMPTY_CELLS
-        and cells[2] == "131072"
+        and cells[2] == "81920"
     )
 
 
@@ -212,15 +215,24 @@ class TestGptOss20bHighRow:
         cells = _cells(row)
         assert _high_row_is_well_formed(cells), (
             "gpt-oss-20b-high:latest row must be a correctly aligned 4-cell "
-            "row: | `gpt-oss-20b-high:latest` | <empty> | `131072` | <why> |; "
+            "row: | `gpt-oss-20b-high:latest` | <empty> | `81920` | <why> |; "
             f"got {cells!r}"
         )
 
-    def test_num_ctx_cell_is_exactly_131072(self):
+    def test_num_ctx_cell_is_exactly_81920(self):
         cells = _cells(_single_row_with_tag(_reference_text(), _HIGH_TAG))
-        assert cells[2] == "131072", (
+        assert cells[2] == "81920", (
             "gpt-oss-20b-high:latest num_ctx cell (cell index 2) must be "
-            f"exactly '131072', got {cells[2]!r}"
+            f"exactly '81920', got {cells[2]!r}"
+        )
+
+    def test_num_ctx_cell_is_not_the_old_host_wide_131072(self):
+        """Negative control: 131072 is only reachable at OLLAMA_NUM_PARALLEL=1,
+        so it must not be the value the shipped table pins."""
+        cells = _cells(_single_row_with_tag(_reference_text(), _HIGH_TAG))
+        assert cells[2] != "131072", (
+            "gpt-oss-20b-high:latest num_ctx cell still pins the old "
+            f"host-wide 131072, got {cells[2]!r}"
         )
 
     def test_temperature_cell_is_empty(self):
@@ -253,27 +265,55 @@ class TestGptOss20bHighRow:
             "host"
         )
 
-    def test_why_cell_cites_the_sweep_range_and_step_count(self):
+    def test_why_cell_states_num_ctx_is_per_slot(self):
         why = _cells(_single_row_with_tag(_reference_text(), _HIGH_TAG))[3]
-        assert "32768" in why and "131072" in why, (
-            "gpt-oss-20b-high:latest Why cell must cite the 32768 -> 131072 "
-            "sweep range"
-        )
-        assert re.search(r"\b(7|seven)[- ]step", why, re.IGNORECASE), (
-            "gpt-oss-20b-high:latest Why cell must cite the 7-step sweep"
+        assert re.search(r"per[- ]slot", why, re.IGNORECASE), (
+            "gpt-oss-20b-high:latest Why cell must state that the table's "
+            "num_ctx value is per slot, not host-wide"
         )
 
-    def test_why_cell_cites_full_gpu_throughout(self):
+    def test_why_cell_cites_the_total_context_product(self):
+        why = _cells(_single_row_with_tag(_reference_text(), _HIGH_TAG))[3]
+        assert "OLLAMA_NUM_PARALLEL" in why, (
+            "gpt-oss-20b-high:latest Why cell must cite OLLAMA_NUM_PARALLEL, "
+            "since total context is num_ctx x OLLAMA_NUM_PARALLEL"
+        )
+        assert "163840" in why, (
+            "gpt-oss-20b-high:latest Why cell must cite the ~163840-token "
+            "total context ceiling this host fits at 100% GPU"
+        )
+
+    def test_why_cell_pairs_the_value_with_the_concurrency_cap(self):
+        why = _cells(_single_row_with_tag(_reference_text(), _HIGH_TAG))[3]
+        assert "PIPELINE_MAX_CONCURRENT_AGENTS" in why, (
+            "gpt-oss-20b-high:latest Why cell must state that "
+            "PIPELINE_MAX_CONCURRENT_AGENTS has to match "
+            "OLLAMA_NUM_PARALLEL"
+        )
+
+    def test_why_cell_cites_the_cpu_repack_fallback(self):
+        why = _cells(_single_row_with_tag(_reference_text(), _HIGH_TAG))[3]
+        assert "CPU_REPACK" in why or "CPU" in why, (
+            "gpt-oss-20b-high:latest Why cell must name the CPU fallback "
+            "that kicks in above the ceiling"
+        )
+        assert "524288" in why, (
+            "gpt-oss-20b-high:latest Why cell must cite the measured "
+            "over-ceiling configuration"
+        )
+
+    def test_why_cell_cites_full_gpu_at_the_settled_size(self):
         why = _cells(_single_row_with_tag(_reference_text(), _HIGH_TAG))[3]
         assert "100%" in why and "GPU" in why, (
-            "gpt-oss-20b-high:latest Why cell must state 100% GPU throughout"
+            "gpt-oss-20b-high:latest Why cell must state the settled size "
+            "loads at 100% GPU"
         )
 
-    def test_why_cell_cites_resident_growth(self):
+    def test_why_cell_cites_the_resident_size(self):
         why = _cells(_single_row_with_tag(_reference_text(), _HIGH_TAG))[3]
-        assert "12GB" in why and "13GB" in why, (
-            "gpt-oss-20b-high:latest Why cell must cite the 12GB -> 13GB "
-            "resident growth"
+        assert "13GB" in why, (
+            "gpt-oss-20b-high:latest Why cell must cite the 13GB resident "
+            "size"
         )
         assert "resident" in why.lower(), (
             "gpt-oss-20b-high:latest Why cell must describe the resident size"
@@ -369,16 +409,15 @@ class TestPipelineLocalNumCtxRow:
 # Negative / boundary cases for the row-parsing helpers themselves
 # ---------------------------------------------------------------------------
 
-# The malformed row an earlier sibling story produced: THREE cells, with
-# 131072 in the temperature column and the provenance prose in the num_ctx
-# column. It contains the substring "131072", so a naive substring assertion
-# would wrongly pass on it.
+# The malformed row an earlier sibling story produced: THREE cells, with the
+# num_ctx VALUE in the temperature column and the provenance prose in the
+# num_ctx column. It contains the substring "81920", so a naive substring
+# assertion would wrongly pass on it.
 _MALFORMED_HIGH_ROW = (
-    "| `gpt-oss-20b-high:latest` | `131072` | 2026-09-18 manual sweep "
-    "(Apple M4, 24GB unified memory) of gpt-oss-20b-high:latest: swept "
-    "num_ctx 32768 -> 131072 in 7 steps, 100% GPU throughout, 12GB -> 13GB "
-    "resident, no swap growth; 131072 is gpt-oss's own trained ceiling "
-    "(values up to 1048576 had no further effect). |"
+    "| `gpt-oss-20b-high:latest` | `81920` | 2026-09-18 measurement "
+    "(Apple M4, 24GB unified memory): 81920 per slot at "
+    "OLLAMA_NUM_PARALLEL=2, 100% GPU at ~163840 total tokens, 13GB "
+    "resident, no swap growth. |"
 )
 
 
@@ -386,48 +425,55 @@ class TestRowParsingHelpers:
     def test_malformed_three_cell_row_is_rejected(self):
         cells = _cells(_MALFORMED_HIGH_ROW)
         assert len(cells) == 3, f"fixture should have 3 cells, got {cells!r}"
-        assert "131072" in _MALFORMED_HIGH_ROW  # naive check would pass
+        assert "81920" in _MALFORMED_HIGH_ROW  # naive check would pass
         assert not _high_row_is_well_formed(cells), (
-            "a 3-cell row with 131072 in the temperature column must NOT be "
+            "a 3-cell row with 81920 in the temperature column must NOT be "
             "accepted as well formed"
         )
 
-    def test_131072_in_the_temperature_cell_is_rejected(self):
+    def test_81920_in_the_temperature_cell_is_rejected(self):
         cells = _cells(
-            "| `gpt-oss-20b-high:latest` | `131072` | `131072` | why |"
+            "| `gpt-oss-20b-high:latest` | `81920` | `81920` | why |"
         )
         assert not _high_row_is_well_formed(cells)
 
-    def test_131072_in_the_why_cell_is_rejected(self):
+    def test_131072_in_the_num_ctx_cell_is_rejected(self):
+        """The old host-wide value must not satisfy the shape check either."""
         cells = _cells(
-            "| `gpt-oss-20b-high:latest` | -- | -- | 131072 |"
+            "| `gpt-oss-20b-high:latest` | -- | `131072` | why |"
+        )
+        assert not _high_row_is_well_formed(cells)
+
+    def test_81920_in_the_why_cell_is_rejected(self):
+        cells = _cells(
+            "| `gpt-oss-20b-high:latest` | -- | -- | 81920 |"
         )
         assert not _high_row_is_well_formed(cells)
 
     def test_wrong_tag_is_rejected(self):
-        cells = _cells("| `other-model` | -- | `131072` | why |")
+        cells = _cells("| `other-model` | -- | `81920` | why |")
         assert not _high_row_is_well_formed(cells)
 
     def test_empty_temperature_cell_variants_are_accepted(self):
         for empty in ("", "--", "—", "-"):
-            cells = ["`gpt-oss-20b-high:latest`", empty, "131072", "why"]
+            cells = ["`gpt-oss-20b-high:latest`", empty, "81920", "why"]
             assert _high_row_is_well_formed(cells), (
                 f"empty temperature cell {empty!r} should be accepted"
             )
 
     def test_rows_with_tag_returns_empty_list_when_absent(self):
-        text = "| `some-other-model` | -- | `131072` | why |\n"
+        text = "| `some-other-model` | -- | `81920` | why |\n"
         assert _rows_with_tag(text, _HIGH_TAG) == []
 
     def test_single_row_with_tag_raises_on_zero_matches(self):
-        text = "| `some-other-model` | -- | `131072` | why |\n"
+        text = "| `some-other-model` | -- | `81920` | why |\n"
         with pytest.raises(AssertionError, match="expected exactly one"):
             _single_row_with_tag(text, _HIGH_TAG)
 
     def test_single_row_with_tag_raises_on_duplicate_matches(self):
         text = (
-            "| `gpt-oss-20b-high:latest` | -- | `131072` | why |\n"
-            "| `gpt-oss-20b-high:latest` | -- | `131072` | why |\n"
+            "| `gpt-oss-20b-high:latest` | -- | `81920` | why |\n"
+            "| `gpt-oss-20b-high:latest` | -- | `81920` | why |\n"
         )
         with pytest.raises(AssertionError, match="expected exactly one"):
             _single_row_with_tag(text, _HIGH_TAG)
@@ -435,7 +481,7 @@ class TestRowParsingHelpers:
     def test_rows_with_tag_ignores_prose_mentions(self):
         text = (
             "The shipped plist no longer pins `PIPELINE_LOCAL_NUM_CTX`, so "
-            "`gpt-oss-20b-high:latest` effectively runs at 131072.\n"
+            "`gpt-oss-20b-high:latest` effectively runs at 81920.\n"
         )
         assert _rows_with_tag(text, _HIGH_TAG) == []
 

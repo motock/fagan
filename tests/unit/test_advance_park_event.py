@@ -227,12 +227,13 @@ def test_park_message_text_is_unchanged(plan_dir, monkeypatch, notify_calls):
 
 
 def test_park_adds_no_other_kwargs(plan_dir, monkeypatch, notify_calls):
-    """Severity/story_key/dedup kwargs are not introduced by this story."""
+    """Only the story_key attribution accompanies the event: severity and
+    dedup kwargs are not introduced."""
     _park_harness(plan_dir, monkeypatch)
 
     adv._adjudicate_merges(PLAN, _summary())
 
-    assert set(notify_calls[0]["kwargs"]) == {"event"}
+    assert set(notify_calls[0]["kwargs"]) == {"event", "story_key"}
 
 
 def test_park_emits_exactly_one_notification(plan_dir, monkeypatch, notify_calls):
@@ -299,7 +300,7 @@ def test_park_preserves_correlation_id_kwarg(plan_dir, monkeypatch, notify_calls
     kwargs = notify_calls[0]["kwargs"]
     assert kwargs.get("event") == "story_parked"
     assert kwargs.get("correlation_id") == "corr-123"
-    assert set(kwargs) == {"event", "correlation_id"}
+    assert set(kwargs) == {"event", "story_key", "correlation_id"}
 
 
 def test_park_without_correlation_id_omits_it(plan_dir, monkeypatch, notify_calls):

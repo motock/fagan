@@ -653,6 +653,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} local agent failed; escalating to {_escalation_label()} and starting clean.",
                         event="escalated",
+                        story_key=key,
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -684,6 +685,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         f"{key} local agent failed on {failed_model}; retrying on "
                         f"fallback model {fallback_model} before parking.",
                         event="model_fallback",
+                        story_key=key,
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -938,6 +940,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                 plan_name,
                 f"{key} parked: {decision['reason']}",
                 event="story_parked",
+                story_key=key,
                 **(
                     {"correlation_id": story["correlation_id"]}
                     if story.get("correlation_id")

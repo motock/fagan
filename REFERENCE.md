@@ -474,6 +474,11 @@ Each record has the following keys:
   `tests_failed`, `story_parked`, `merge_ci_rework`, `merge_gate_failed`,
   `merge_gate_retry`, `merge_failed`, `merge_retry`, and `story_merged` (emitted on the
   successful‑merge path only, immediately after the story is marked done).
+  `brief_patched` is emitted by the `patch_story` MCP tool (not by
+  `pipeline/advance.py`) when it changes the `agent_instructions` of a story
+  that has already been dispatched (its manifest entry carries
+  `dispatched_at`); patching a never-dispatched story, patching any other
+  field, or re-setting identical text emits nothing.
   One notification is intentionally excluded from this vocabulary: the
   dispatch‑retry notice (`"<key> dispatch attempt n/max failed …; will
   retry."`), a transient scheduling state rather than a terminal story

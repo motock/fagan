@@ -103,6 +103,7 @@ class _ServerRef:
 # resolves to the live ``pipeline.server`` binding at call time so
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands.
 _store = _ServerRef("_store")
+_notify_user = _ServerRef("_notify_user")
 PLAN_DIR = _ServerRef("PLAN_DIR")
 config_provenance = _ServerRef("config_provenance")
 role_registry = _ServerRef("role_registry")
@@ -931,9 +932,29 @@ class PipelineService:
                     "skipped": "locked",
                     "reason": "another dispatch/ingest/interrupt is in progress for this plan",
                 }
+            before = _store.get_manifest(plan_name).get("stories", {}).get(story_key)
+            previous_instructions = before.get("agent_instructions") if before else None
+            was_dispatched = bool(before and before.get("dispatched_at"))
             story = _store.update_story(plan_name, story_key, fields)
             if story is None:
                 return {"ok": False, "error": f"No such story {story_key!r}"}
+            if (
+                was_dispatched
+                and "agent_instructions" in fields
+                and fields["agent_instructions"] != previous_instructions
+            ):
+                _notify_user(
+                    plan_name,
+                    f"{story_key} brief patched after dispatch "
+                    f"(agent_instructions changed via patch_story).",
+                    story_key=story_key,
+                    event="brief_patched",
+                    **(
+                        {"correlation_id": story["correlation_id"]}
+                        if story.get("correlation_id")
+                        else {}
+                    ),
+                )
             return {"ok": True, "story_key": story_key, "story": story}
 
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:

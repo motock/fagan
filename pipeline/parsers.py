@@ -159,28 +159,28 @@ def _is_transient_backend_error(text: str) -> bool:
     """
     return any(re.search(pat, text, re.IGNORECASE) for pat in _TRANSIENT_BACKEND_PATTERNS)
 
-    def _is_transient_backend_exception(exc: BaseException) -> bool:
-        """True when ``exc`` - or an exception in its ``__cause__``/``__context__``
-        chain (at most 5 links) - is a reviewer transport failure: a builtin
-        ``TimeoutError``/``ConnectionError``, a type whose name contains
-        "Timeout" (e.g. httpx.ReadTimeout), or one whose message matches
-        ``_is_transient_backend_error``. Backends wrap transport errors in a
-        ``RuntimeError`` chained ``from`` the original, hence the chain walk. Anything
-        else (a malformed tool call, a parse error) is not transient."""
-        seen: set[int] = set()
-        current: BaseException | None = exc
-        for _ in range(5):
-            if current is None or id(current) in seen:
-                break
-            seen.add(id(current))
-            if isinstance(current, (TimeoutError, ConnectionError)):
-                return True
-            if "Timeout" in type(current).__name__:
-                return True
-            if _is_transient_backend_error(str(current)):
-                return True
-            current = current.__cause__ or current.__context__
-        return False
+def _is_transient_backend_exception(exc: BaseException) -> bool:
+    """True when ``exc`` - or an exception in its ``__cause__``/``__context__``
+    chain (at most 5 links) - is a reviewer transport failure: a builtin
+    ``TimeoutError``/``ConnectionError``, a type whose name contains
+    "Timeout" (e.g. httpx.ReadTimeout), or one whose message matches
+    ``_is_transient_backend_error``. Backends wrap transport errors in a
+    ``RuntimeError`` chained ``from`` the original, hence the chain walk. Anything
+    else (a malformed tool call, a parse error) is not transient."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    for _ in range(5):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, (TimeoutError, ConnectionError)):
+            return True
+        if "Timeout" in type(current).__name__:
+            return True
+        if _is_transient_backend_error(str(current)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 # ---------- Conflict-marker parsing for the rebase auto-resolve path ----------

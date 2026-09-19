@@ -273,6 +273,8 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
         plan_name,
         f"{story_key} escalating to {_escalation_label()} ({reason}); "
         f"retrying the same worktree with a fresh budget.",
+        story_key=story_key,
+        event="escalated",
         **_cid_kwargs,
     )
 

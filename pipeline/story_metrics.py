@@ -55,6 +55,10 @@ _REWORK_EVENTS = frozenset(
 )
 _ESCALATION_EVENTS = frozenset({"escalated", "model_fallback"})
 
+_FIRST_PASS_DISQUALIFYING_EVENTS = frozenset(
+    {"escalated", "model_fallback", "story_parked", "brief_patched"}
+)
+
 
 def load_notification_records(path: Path) -> tuple[list[dict[str, Any]], int]:
     """Parse a notifications JSONL sidecar into records.
@@ -106,9 +110,22 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
     ``story_key``, else into the single ``"<uncorrelated>"`` group, and the
     returned mapping is keyed by that same group key.  Each group payload has
     ``story_key``, ``correlation_id``, ``dispatch_failures``, ``rework_cycles``,
-    ``escalations``, ``merged``, ``merged_ts`` and ``cost`` (``1 +
-    dispatch_failures + rework_cycles + escalations``).  Groups are ordered by
+    ``escalations``, ``merged``, ``merged_ts``, ``cost`` (``1 +
+    dispatch_failures + rework_cycles + escalations``),
+    ``disqualifying_events`` and ``first_pass_clean``.  Groups are ordered by
     ``story_key`` (groups with no story key last).
+
+    ``disqualifying_events`` counts the group's records whose ``event`` is in
+    ``_FIRST_PASS_DISQUALIFYING_EVENTS`` (``escalated``, ``model_fallback``,
+    ``story_parked``, ``brief_patched``); it is published because a consumer
+    that collapses groups sharing a story_key can only recompute
+    ``first_pass_clean`` correctly from the count - parks and brief patches
+    are not escalations.  ``first_pass_clean`` is ``merged`` with zero
+    disqualifying events.  first_pass_clean is only as complete as the event
+    attribution in the sidecar: a disqualifying record that carries neither a
+    ``correlation_id`` nor a ``story_key`` (for example one written before its
+    emitter stamped attribution) lands in the ``"<uncorrelated>"`` group and
+    cannot disqualify its story.
 
     Records with no recognizable ``event`` - absent, ``None``, or an event name
     outside the known sets - are still attributed to their group but change no
@@ -116,6 +133,7 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
     counted twice: these are raw counts, and deduplication is the sink's job.
     """
     groups: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
+    disqualifying = {}
     for record in records:
         if not isinstance(record, dict):
             continue
@@ -143,6 +161,8 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
             payload["story_key"] = str(story_key)
 
         event = record.get("event")
+        if event in _FIRST_PASS_DISQUALIFYING_EVENTS:
+            disqualifying[group_id] = disqualifying.get(group_id, 0) + 1
         if event == _DISPATCH_FAILED_EVENT:
             payload["dispatch_failures"] += 1
         elif event in _REWORK_EVENTS:
@@ -168,6 +188,8 @@ def compute_story_metrics(records: list[dict[str, Any]]) -> dict[str, dict[str, 
             + payload["escalations"]
         )
         result[_group_id_for(payload)] = payload
+        payload["disqualifying_events"] = disqualifying.get(_group_id_for(payload), 0)
+        payload["first_pass_clean"] = bool(payload["merged"]) and payload["disqualifying_events"] == 0
     return result
 
 
@@ -185,6 +207,14 @@ def compute_plan_rollup(stories: list[dict[str, Any]]) -> dict[str, Any]:
 
     ``cost_per_merged_story`` is ``total_cost / stories_merged`` rounded to one
     decimal, and is ``None`` when nothing merged (no division by zero).
+
+    ``first_pass_clean_rate`` is the share of eligible payloads whose
+    ``first_pass_clean`` is True, rounded to three decimals.  A payload is
+    eligible when its ``story_key`` or ``correlation_id`` is not None - the
+    ``"<uncorrelated>"`` group is not a story and is excluded - and a payload
+    missing the ``first_pass_clean`` key counts as not clean.  It is ``None``
+    when there are zero eligible payloads.  The inputs are read only; nothing
+    is written back into the payloads.
     """
     stories_total = len(stories)
     stories_merged = sum(1 for story in stories if story.get("merged"))
@@ -204,4 +234,35 @@ def compute_plan_rollup(stories: list[dict[str, Any]]) -> dict[str, Any]:
         "total_dispatch_failures": total_dispatch_failures,
         "total_cost": total_cost,
         "cost_per_merged_story": cost_per_merged_story,
+        # Eligible = a real story: story_key or correlation_id is present. The
+        # "<uncorrelated>" group is not a story and never counts. A payload
+        # without a first_pass_clean key counts as not clean.
+        "first_pass_clean_rate": (
+            round(
+                sum(
+                    1
+                    for story in stories
+                    if (
+                        story.get("story_key") is not None
+                        or story.get("correlation_id") is not None
+                    )
+                    and story.get("first_pass_clean") is True
+                )
+                / sum(
+                    1
+                    for story in stories
+                    if (
+                        story.get("story_key") is not None
+                        or story.get("correlation_id") is not None
+                    )
+                ),
+                3,
+            )
+            if any(
+                story.get("story_key") is not None
+                or story.get("correlation_id") is not None
+                for story in stories
+            )
+            else None
+        ),
     }

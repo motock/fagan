@@ -155,6 +155,11 @@ def _consolidate_stories_by_key(stories: list[dict[str, Any]]) -> list[dict[str,
     neither story_key nor correlation_id, e.g. a plan-level notice) are
     dropped entirely - they describe no single story and don't belong in a
     per-story table.
+
+    ``disqualifying_events`` is summed the same way as the other counters,
+    and ``first_pass_clean`` is recomputed from the collapsed ``merged``
+    flag and that total, so a story that escalated, parked or had its brief
+    patched under either of its group keys is never reported first-pass-clean.
     """
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -169,6 +174,7 @@ def _consolidate_stories_by_key(stories: list[dict[str, Any]]) -> list[dict[str,
                 "dispatch_failures": 0,
                 "rework_cycles": 0,
                 "escalations": 0,
+                "disqualifying_events": 0,
                 "merged": False,
                 "merged_ts": None,
             }
@@ -177,6 +183,7 @@ def _consolidate_stories_by_key(stories: list[dict[str, Any]]) -> list[dict[str,
         target["dispatch_failures"] += story.get("dispatch_failures", 0) or 0
         target["rework_cycles"] += story.get("rework_cycles", 0) or 0
         target["escalations"] += story.get("escalations", 0) or 0
+        target["disqualifying_events"] += story.get("disqualifying_events", 0) or 0
         if story.get("merged"):
             target["merged"] = True
             if target["merged_ts"] is None:
@@ -192,6 +199,7 @@ def _consolidate_stories_by_key(stories: list[dict[str, Any]]) -> list[dict[str,
             + payload["rework_cycles"]
             + payload["escalations"]
         )
+        payload["first_pass_clean"] = bool(payload["merged"]) and payload["disqualifying_events"] == 0
         result.append(payload)
     return result
 

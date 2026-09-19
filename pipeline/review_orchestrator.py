@@ -21,6 +21,8 @@ from typing import Any
 
 import pipeline.server as _server
 
+from .parsers import _is_transient_backend_exception
+
 
 class _ServerRef:
     """Delegates to the *current* ``pipeline.server`` binding for a name.
@@ -413,6 +415,25 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
         except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
+            if _is_transient_backend_exception(e):
+                # A reviewer transport failure (timeout, refused or reset
+                # connection) is infrastructure, not a review outcome: defer
+                # like the rate-limit path and never charge
+                # review_inconclusive_count. Only the exception TYPE reaches
+                # logs and the notification; its text may carry sensitive detail.
+                logging.getLogger("pipeline").warning(
+                    "%s/%s review deferred: reviewer transport failure %s",
+                    plan_name, story_key, type(e).__name__,
+                )
+                story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
+                _notify_user(
+                    plan_name,
+                    f"{story_key} review deferred: reviewer backend transport "
+                    f"failure ({type(e).__name__}); will retry next tick.",
+                    **_cid_kwargs,
+                )
+                _atomic_write_json(manifest_path, manifest)
+                return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
             # Defense in depth: a reviewer backend's own internal error (a bad
             # tool-call shape, a malformed backend response, ...) must not crash
             # the pipeline process. Fail safe into the same UNKNOWN-verdict path
@@ -480,11 +501,11 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
 
-    # Transient backend error (HTTP 500 / connection-reset / connection-refused):
-    # re-invoke the reviewer once inline. This is an infrastructure hiccup, not
-    # a genuine review cycle, so do NOT increment review_inconclusive_count for
-    # this branch itself — only the fallback inconclusive path below (reached
-    # when still UNKNOWN after the single retry) touches that counter.
+    # Transient backend error (HTTP 5xx / connection reset or refused / timed
+    # out): re-invoke the reviewer once inline. This is an infrastructure
+    # hiccup, not a genuine review cycle, so it never increments
+    # review_inconclusive_count; a retry that is still a transient failure is
+    # deferred to the next tick just below.
     _transient_retried = False
     if verdict == "UNKNOWN" and _is_transient_backend_error(reviewer_output):
         _notify_user(
@@ -513,6 +534,23 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         )
         verdict = _parse_verdict(reviewer_output)
         _transient_retried = True
+    # A transport failure that survives the single inline retry is an
+    # infrastructure event, not a review outcome: defer to the next tick like
+    # the rate-limit path and never charge review_inconclusive_count.
+    if (
+        _transient_retried
+        and verdict == "UNKNOWN"
+        and _is_transient_backend_error(reviewer_output)
+    ):
+        story["review_deferred_count"] = story.get("review_deferred_count", 0) + 1
+        _notify_user(
+            plan_name,
+            f"{story_key} review deferred: reviewer backend still failing after "
+            f"one retry (transient transport error); will retry next tick.",
+            **_cid_kwargs,
+        )
+        _atomic_write_json(manifest_path, manifest)
+        return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
 
     # Reviewer self-fix (2026-07-29): the reviewer's own "trivial and
     # confident" self-assessment is never trusted alone - mechanically

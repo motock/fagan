@@ -32,9 +32,14 @@ from .persistence import _notify_user
 _NEVER_TOUCH_TESTS_STEERING = (
     "fixes go in the implementation file named by the task; NEVER edit, "
     "rename, weaken, or delete the test files (anything matching "
-    "test_*.py) to make a test pass - if a test fails, the bug is in the "
-    "implementation, so fix it there."
-)
+    "test_*.py) to make a test pass. If a test written for THIS task "
+    "fails, the bug is in the implementation, so fix it there. If a "
+    "PRE-EXISTING test (one this task did not add) fails and your change "
+    "is what the task asks for, do NOT undo the task's required change to "
+    "make that test pass - stop and report the conflict, naming the "
+    "failing test and the task requirement it contradicts."
+    )
+
 
 
 def _resolve_test_author_backend(

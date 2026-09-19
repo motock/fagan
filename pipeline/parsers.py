@@ -435,6 +435,7 @@ __all__ = [
     "_is_rate_limited",
     "_is_test_file_path",
     "_is_transient_backend_error",
+    "_is_transient_backend_exception",
     "_parse_conflict_blocks",
     "_parse_ruling",
     "_parse_verdict",

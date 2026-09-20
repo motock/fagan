@@ -220,7 +220,7 @@ def _check_scheduler_revision(plan_dir):
 
 
 def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
-    """Run the four preflight checks; return one result dict per check.
+    """Run the seven preflight checks; return one result dict per check.
 
     plan_dir: explicit plan directory to check. None resolves the way
         production does: the PLAN_DIR env var (read at call time), then

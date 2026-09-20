@@ -85,6 +85,20 @@ def _escalation_label() -> str:
     return "Claude" if backend == "claude" else backend
 
 
+def _escalation_repo_root(manifest: dict) -> Path:
+    """Return the repo the escalation git teardown must run in.
+
+    The plan's own repo_root is authoritative: plans share one PLAN_DIR but
+    each belongs to a different repo. The process-global REPO_ROOT is only a
+    fallback for manifests ingested before repo_root existed - under the
+    installed scheduler it holds the /nonexistent-repo-root-set-per-plan-only
+    sentinel, so it must never be the primary source.
+    """
+    from .server import REPO_ROOT
+
+    return Path(manifest.get("repo_root") or REPO_ROOT)
+
+
 def _escalate_to_claude(
     manifest: dict, plan_name: str, story_key: str, manifest_path: Path
 ) -> None:
@@ -100,7 +114,7 @@ def _escalate_to_claude(
     clean-slate teardown applies since a repeated step-cap streak isn't a
     trustworthy foundation for Claude to build on either.
     """
-    from .server import PLAN_DIR, REPO_ROOT
+    from .server import PLAN_DIR
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
@@ -175,7 +189,7 @@ def _escalate_to_local_fallback_model(
     since the prior run may have left broken/half-written state a different
     model shouldn't inherit.
     """
-    from .server import PLAN_DIR, REPO_ROOT
+    from .server import PLAN_DIR
     story = manifest["stories"][story_key]
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"

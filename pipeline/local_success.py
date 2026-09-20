@@ -61,15 +61,29 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
 
     The returned dict contains the keys ``story_key``, ``in_population``,
     ``tier``, ``dispatched_at``, ``clean`` and ``reasons``.  ``reasons`` is a
-    sorted list of strings; it is empty iff ``clean`` is ``True``.
+    sorted list of strings, each reason appearing at most once; it is empty iff ``clean`` is ``True``.
     """
     matched = _matched_records(story_key, story, records)
 
     # Population logic.
-    backend = story.get("backend")
+    backend = story.get("pre_escalation_backend") or story.get("backend")
     escalated_flag = story.get("escalated") is True
+    tag = (
+        story.get("pre_escalation_model")
+        or story.get("dispatched_model")
+        or story.get("model")
+        or ""
+    )
     any_escalated_event = any(rec.get("event") in {"escalated", "model_fallback"} for rec in matched)
-    in_population = bool(backend and backend != "claude") or escalated_flag or any_escalated_event
+    # A manifest written before the dispatch path stamped ``backend`` carries
+    # only the model tag; a non-cloud tag is still a local dispatch, so that
+    # story belongs to the population too.
+    in_population = (
+        bool(backend and backend != "claude")
+        or escalated_flag
+        or any_escalated_event
+        or (not backend and bool(tag))
+    )
 
     # Tier determination.
     tag = story.get("dispatched_model") or story.get("model") or ""

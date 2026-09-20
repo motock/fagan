@@ -360,10 +360,6 @@ def _run_reviewer(
         f"{large_diff_note}"
         f"End with your VERDICT line; if you APPROVE, "
         f"also include a PR title and body."
-        f"End with your VERDICT line; if you APPROVE, "
-        f"also include a PR title and body."
-        f"End with your VERDICT line; if you APPROVE, "
-        f"also include a PR title and body."
     )
     # cell_dir points at the worktree's parent directory. In production
     # that's ~/.claude/worktrees/; in the benchmark it's
@@ -448,4 +444,3 @@ __all__ = [
     "_run_reviewer",
     "_run_security_reviewer",
 ]
-    # Added by MFR-06 to ensure file-inventory criterion is present

@@ -263,48 +263,7 @@ def _announce_dispatch_backend(
     Returns the validated (provider, model, source) triple so callers can
     name the validated backend in their own output.
     """
-    def _reject(raw: str, provider: str, source: str) -> None:
-        """Fail closed on an unusable dispatch value: print + exit 2."""
-        if provider.strip() == "":
-            detail = "the resolved provider is empty"
-            if raw is not None and raw.strip() == "":
-                detail = "the value is empty or whitespace-only"
-        else:
-            detail = f"unrecognised provider {provider!r}"
-        message = (
-            f"smoke: unrecognised dispatch backend {raw!r} ({detail}); "
-            f"recognised providers: {', '.join(recognized)}"
-        )
-        print(message, file=sys.stderr)
-        print(
-            "Fix: set PIPELINE_BACKEND_DISPATCH to one of the recognised "
-            "providers above (e.g. PIPELINE_BACKEND_DISPATCH=claude).", file=sys.stderr
-        )
-        raise SystemExit(2)
     recognized = ("claude", "ollama", "lmstudio", "mlx", "local", "auto")
-    skip_import = os.environ.get("PIPELINE_SKIP_BACKEND_IMPORT") == "1"
-    if skip_import:
-        # Resolve using resolver if provided, otherwise use env var
-        if resolver is not None:
-            provider, model, source = resolver()
-        else:
-            provider = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
-            if provider == "":
-                provider = "claude"
-            if provider == "claude":
-                model = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
-            else:
-                model = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", os.environ.get("PIPELINE_DEFAULT_MODEL", "devstral:24b"))
-            source = "PIPELINE_BACKEND_DISPATCH"
-        # Validate provider
-        if provider not in recognized:
-            _reject(provider, provider, source)
-        print(f"validating dispatch on {provider}/{model} (source: {source})")
-        return provider, model, source
-        _reject(provider, provider, source)
-        print(f"validating dispatch on {provider}/{model} (source: {source})")
-        return provider, model, source
-    # duplicate removed
 
     def _reject(raw: str, provider: str, source: str) -> None:
         """Fail closed on an unusable dispatch value: print + exit 2."""
@@ -321,7 +280,9 @@ def _announce_dispatch_backend(
         print(message, file=sys.stderr)
         print(
             "Fix: set PIPELINE_BACKEND_DISPATCH to one of the recognised "
-            "providers above (e.g. PIPELINE_BACKEND_DISPATCH=claude).", file=sys.stderr
+            "providers above (e.g. PIPELINE_BACKEND_DISPATCH=claude), or "
+            "unset it to use the default.",
+            file=sys.stderr,
         )
         raise SystemExit(2)
 
@@ -483,7 +444,10 @@ def _announce_dispatch_backend(
     # ANNOUNCE and PROCEED: one prominent line naming the resolved provider,
     # the resolved model and the source of the choice (the triple real
     # dispatch resolves), then continue - the smoke is provider-neutral.
-    print(f"validating dispatch on {normalized_provider}/{model} (source: {source})")
+    print(
+        f"smoke: validating dispatch on {normalized_provider}/{model} "
+        f"(source: {source})"
+    )
     return normalized_provider, model, source
 
 
@@ -690,7 +654,6 @@ def main(
         # source and exits 2 only on an empty/unknown dispatch value - even
         # on a machine without the claude CLI (a bare CI runner), a declared
         # non-claude provider must pass here, not exit 1 for the missing CLI.
-        os.environ["PIPELINE_SKIP_BACKEND_IMPORT"] = "1"
         provider, _model, _source = _announce_dispatch_backend(resolver=resolver)
         if provider == "claude" and shutil.which("claude") is None:
             print(

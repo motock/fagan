@@ -86,10 +86,15 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     )
 
     # Tier determination.
-    tag = story.get("dispatched_model") or story.get("model") or ""
+    # tag assignment removed; tag already defined earlier
+    # Tier determination.
     if tag.endswith(":cloud"):
         tier = "cloud-oss"
     elif backend and backend != "claude":
+        tier = "on-device"
+    elif backend:
+        tier = "unknown"
+    elif tag:
         tier = "on-device"
     else:
         tier = "unknown"
@@ -97,30 +102,39 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     dispatched_at = story.get("dispatched_at")
 
     # Clean determination.
-    reasons: list[str] = []
+    # Clean determination.  Reasons are a SET: one record per event is enough
+    # to make a story not-clean, and three park records for the same story are
+    # one reason, not three.
+    reasons: set[str] = set()
     clean = True
 
     if story.get("status") != "done":
-        reasons.append("not_done")
+        reasons.add("not_done")
         clean = False
+
+        if escalated_flag:
+            # The manifest flag is the durable record of an escalation; the
+            # sidecar event is not always present.
+            reasons.add("escalated")
+            clean = False
 
     for rec in matched:
         event = rec.get("event")
         if event in {"escalated", "model_fallback", "story_parked", "brief_patched"}:
-            reasons.append(event)
+            reasons.add(event)
             clean = False
         elif event is None:
             msg = str(rec.get("message", ""))
             if _RE_LEGACY_MESSAGE.search(msg):
-                reasons.append("legacy_message")
+                reasons.add("legacy_message")
                 clean = False
 
     instr = str(story.get("agent_instructions", ""))
     if _RE_BRIEF_REWRITE.search(instr):
-        reasons.append("brief_rewrite_marker")
+        reasons.add("brief_rewrite_marker")
         clean = False
 
-    reasons.sort()
+    
 
     return {
         "story_key": story_key,
@@ -128,7 +142,7 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
         "tier": tier,
         "dispatched_at": dispatched_at,
         "clean": clean,
-        "reasons": reasons,
+        "reasons": sorted(reasons),
     }
 
 

@@ -17,8 +17,11 @@ Usage:
 
     .venv/bin/python scripts/local_success_report.py [--window 30] [--plan-dir DIR]
 
-The ``--window`` flag controls the size of the rolling window; ``0``
-means all stories.  The ``--plan-dir`` flag points to the directory
+The ``--window`` flag selects how many of the newest stories in the
+population to report; every tier block is computed over that same cohort
+(``--window 0`` means all stories), so the tier rates partition the
+overall rate instead of each covering a different period.  The
+``--plan-dir`` flag points to the directory
 containing plan sidecars.  If the directory does not exist, the
 command prints a message to ``stderr`` and exits with status ``2``.
 
@@ -100,8 +103,27 @@ def main(argv: list[str] | None = None) -> int:
     # Header
     print(f"window: {args.window}")
 
+    # One cohort for every block: the newest N population stories, selected
+    # once here so the tier blocks partition the overall block instead of each
+    # taking its own last-N window (which made them cover different periods).
+    population = [
+        entry
+        for entry in all_classified
+        if entry.get("in_population") and entry.get("dispatched_at")
+    ]
+    population.sort(key=lambda entry: entry["dispatched_at"])
+    if args.window <= 0:
+        cohort = population
+    else:
+        cohort = population[-args.window:]
+    if cohort:
+        print(
+            f"cohort: {cohort[0]['dispatched_at']} .. "
+            f"{cohort[-1]['dispatched_at']} ({len(cohort)} stories)"
+        )
+
     # Overall block
-    overall = rolling_rate(all_classified, window=args.window)
+    overall = rolling_rate(cohort, window=0)
     count = overall.get("count", 0)
     clean = overall.get("clean", 0)
     rate = overall.get("rate")
@@ -115,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Tier blocks
     for tier in TIERS:
-        tier_rate = rolling_rate(all_classified, window=args.window, tier=tier)
+        tier_rate = rolling_rate(cohort, window=0, tier=tier)
         count = tier_rate.get("count", 0)
         clean = tier_rate.get("clean", 0)
         rate = tier_rate.get("rate")

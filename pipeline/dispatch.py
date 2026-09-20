@@ -277,7 +277,7 @@ def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
     detectable test command that can run, etc.) -- this is purely
     informational and must never block or slow down a normal dispatch on
     a repo where nothing is wrong."""
-    from .build_detect import detect_test_command
+    from .build_detect import detect_test_command, failed_node_ids
     if not worktree_path.is_dir():
         return None
     test_dir, test_cmd = detect_test_command(worktree_path)
@@ -303,6 +303,7 @@ def _run_baseline_test_snapshot(worktree_path: Path) -> dict | None:
         "cmd": test_cmd,
         "returncode": r.returncode,
         "stdout_tail": (r.stdout or "")[-1000:],
+        "failed_node_ids": failed_node_ids(r.stdout or ""),
         "stderr_tail": (r.stderr or "")[-1000:],
     }
 

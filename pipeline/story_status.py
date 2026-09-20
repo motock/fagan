@@ -23,6 +23,7 @@ from .build_detect import (
     _added_pytest_test_paths,
     _is_pytest_cmd,
     _scope_test_cmd_to_acceptance,
+    failed_node_ids,
 )
 from .checkpoint import _terminate_and_checkpoint
 from .ci import _acceptance_tampered
@@ -720,6 +721,19 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 env=test_env,
             )
     passed = test_result.returncode == 0
+    if not passed:
+        exempted = _baseline_exempted_failures(story, test_result)
+        if exempted:
+            # This red run failed only on node ids the pre-dispatch baseline
+            # was already failing before this story touched the worktree, so
+            # the grade must not reject the story for them. Recorded, never
+            # silent: the exempted ids stay on the manifest for audit.
+            passed = True
+            story["grade_baseline_exemption"] = {
+                "failed_node_ids": exempted,
+                "baseline_returncode": story["baseline_test_check"]["returncode"],
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
 
     # Diagnostic gap found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD):
     # this test-run result was only ever returned transiently from the tool
@@ -960,6 +974,42 @@ _server.DISPATCH_STALE_ACTIVITY_SECONDS = DISPATCH_STALE_ACTIVITY_SECONDS
 _server.collect_story_wedge_signals = collect_story_wedge_signals
 
 
+def _baseline_exempted_failures(story: dict, test_result) -> list[str] | None:
+    """The failing node ids of this run that the recorded pre-dispatch
+    baseline was ALREADY failing, or None when this run must not be
+    exempted.
+
+    None (never an empty list) in every case the exemption cannot be
+    justified, so the caller's red run stays red - this is a fail-closed
+    check, and a run that reports a single failure or error the baseline did
+    not has to keep rejecting:
+
+    * no recorded baseline, or one that was not itself failing;
+    * a baseline with no parseable failing node ids (a non-pytest runner,
+      or a truncated payload) - nothing to compare against;
+    * a run whose own failures cannot be parsed - an unparseable red run is
+      a red run;
+    * a run reporting any failing or erroring node id the baseline did not.
+
+    Returns the exempted node ids otherwise, so the caller can record
+    exactly what it waved through.
+    """
+    baseline = story.get("baseline_test_check")
+    if not isinstance(baseline, dict):
+        return None
+    if baseline.get("returncode") in (None, 0):
+        return None
+    baseline_ids = baseline.get("failed_node_ids")
+    if not baseline_ids:
+        return None
+    run_ids = failed_node_ids(getattr(test_result, "stdout", "") or "")
+    if not run_ids:
+        return None
+    if not set(run_ids) <= set(baseline_ids):
+        return None
+    return run_ids
+
+
 GRADE_WRAPPER = """\
 import json
 import subprocess
@@ -1056,6 +1106,12 @@ def collect_detached_grade(pid: int, result_path: str) -> dict | None:
 # runs to detached grades and break them. The detached-grading tests patch
 # p.start_detached_grade / p.collect_detached_grade directly — exactly the
 # surface the rebound body reads via globals().
+# The rebound check_story_status body resolves bare names against
+# pipeline.server's namespace, so the helper its verdict block calls must
+# be reachable there - same reason the detached-grade primitives below are
+# exported.
+_server._baseline_exempted_failures = _baseline_exempted_failures
+
 if "pytest" not in sys.modules:
     _server.start_detached_grade = start_detached_grade
     _server.collect_detached_grade = collect_detached_grade

@@ -114,3 +114,36 @@ def test_venv_creation_uses_check_true_and_propagates_failure(tmp_path, monkeypa
         assert False, "expected CalledProcessError to propagate"
     except real_subprocess.CalledProcessError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# failed_node_ids: the single pytest short-summary parser both call sites use
+# ---------------------------------------------------------------------------
+def test_should_parse_an_error_line_as_a_failing_node_id():
+    """pytest reports collection/setup/teardown errors under an ``ERROR`` tag
+    in the same short-summary shape; those are failures too."""
+    assert (
+        bd.failed_node_ids("ERROR tests/a.py::test_x - fixture 'db' not found\n")
+        == ["tests/a.py::test_x"]
+    )
+
+
+def test_should_keep_a_node_id_containing_spaces_whole():
+    """The node id runs from the tag to the `` - `` reason separator; a
+    parametrized id can itself contain spaces."""
+    assert (
+        bd.failed_node_ids("FAILED tests/a.py::test_x[foo bar] - assert False\n")
+        == ["tests/a.py::test_x[foo bar]"]
+    )
+
+
+def test_should_ignore_a_bare_tag_with_no_node_id():
+    """A line with nothing after the tag contributes no id rather than
+    raising."""
+    assert bd.failed_node_ids("FAILED \n") == []
+    assert bd.failed_node_ids("ERROR\n") == []
+
+
+def test_should_return_no_ids_for_empty_input():
+    assert bd.failed_node_ids("") == []
+    assert bd.failed_node_ids(None) == []

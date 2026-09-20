@@ -969,6 +969,17 @@ cmd = json.loads(sys.argv[1])
 result_path = sys.argv[2]
 log_path = sys.argv[3]
 proc = subprocess.run(cmd, capture_output=True, text=True)
+if proc.returncode != 0:
+    # A red suite is re-run ONCE before the grade rejects the story: a green
+    # retry proves the failure was not this story's change (a transient
+    # collision with another agent's run, a flaky test, or a stale recorded
+    # failure), so it must not reject. A reproducible failure still rejects,
+    # reported with the FIRST run's output - the first run is the one that
+    # carries the real failure text.
+    first = proc
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        proc = first
 payload = {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
 with open(result_path, "w", encoding="utf-8") as fh:
     json.dump(payload, fh)

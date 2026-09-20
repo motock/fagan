@@ -103,22 +103,6 @@ def _stamp_first_dispatch(story: dict) -> None:
     )
 
 
-def _stamp_first_dispatch(story: dict) -> None:
-    """Record the tier a story was FIRST dispatched on, before escalation
-    overwrites it with the escalation target.
-
-    Escalation rewrites ``backend`` / ``model`` / ``dispatched_model`` to the
-    target it escalates TO, so afterwards a story that failed on the local tier
-    is indistinguishable from one that ran on the escalation tier from the
-    start - which is exactly the attribution the first-pass-clean metric needs.
-    ``setdefault`` makes the stamp sticky: a second escalation never overwrites
-    the original tier.
-    """
-    story.setdefault("pre_escalation_backend", story.get("backend"))
-    story.setdefault(
-        "pre_escalation_model",
-        story.get("dispatched_model") or story.get("model"),
-    )
 
 def _escalation_repo_root(manifest: dict) -> Path:
     """Return the repo the escalation git teardown must run in.

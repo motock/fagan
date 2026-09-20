@@ -356,7 +356,8 @@ def test_full_suite_result_does_not_run_lint_when_tests_fail(tmp_path, monkeypat
     assert ok is False
     assert gate == "test"
     assert "test_y" in tail
-    assert calls == [["pytest", "-q"]]
+    # Re-run once before rejecting (retry-once exemption).
+    assert calls == [["pytest", "-q"], ["pytest", "-q"]]
 
 
 def test_create_file_appends_lint_feedback_when_ruff_finds_issues(tmp_path, monkeypatch):

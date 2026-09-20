@@ -61,52 +61,84 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
 
     The returned dict contains the keys ``story_key``, ``in_population``,
     ``tier``, ``dispatched_at``, ``clean`` and ``reasons``.  ``reasons`` is a
-    sorted list of strings; it is empty iff ``clean`` is ``True``.
+    sorted list of strings, each reason appearing at most once; it is empty iff ``clean`` is ``True``.
     """
     matched = _matched_records(story_key, story, records)
 
-    # Population logic.
-    backend = story.get("backend")
+    # Population and tier attribution both describe the tier the story was
+    # FIRST dispatched on: escalation overwrites backend / model /
+    # dispatched_model with the escalation target, so without the
+    # pre-escalation stamp (pipeline/escalation.py::_stamp_first_dispatch) a
+    # story that failed on the local tier and was escalated would be counted
+    # as an escalation-tier story.
+    backend = story.get("pre_escalation_backend") or story.get("backend")
+    tag = (
+        story.get("pre_escalation_model")
+        or story.get("dispatched_model")
+        or story.get("model")
+        or ""
+    )
     escalated_flag = story.get("escalated") is True
     any_escalated_event = any(rec.get("event") in {"escalated", "model_fallback"} for rec in matched)
-    in_population = bool(backend and backend != "claude") or escalated_flag or any_escalated_event
+    # A manifest written before the dispatch path stamped ``backend`` carries
+    # only the model tag; a non-cloud tag is still a local dispatch, so that
+    # story belongs to the population too.
+    in_population = (
+        bool(backend and backend != "claude")
+        or escalated_flag
+        or any_escalated_event
+        or (not backend and bool(tag))
+    )
 
     # Tier determination.
-    tag = story.get("dispatched_model") or story.get("model") or ""
     if tag.endswith(":cloud"):
         tier = "cloud-oss"
+    elif tag:
+        # If backend is claude without any pre-escalation info, ignore tag
+        if backend == "claude" and not story.get("pre_escalation_backend") and not story.get("pre_escalation_model"):
+            tier = "unknown"
+        else:
+            tier = "on-device"
     elif backend and backend != "claude":
         tier = "on-device"
+    elif backend:
+        tier = "unknown"
     else:
         tier = "unknown"
 
     dispatched_at = story.get("dispatched_at")
 
     # Clean determination.
-    reasons: list[str] = []
+    reasons: set[str] = set()
     clean = True
 
     if story.get("status") != "done":
-        reasons.append("not_done")
+        reasons.add("not_done")
+        clean = False
+
+    if escalated_flag:
+        # The manifest flag is the durable record of an escalation; the
+        # sidecar event is not always present.
+        reasons.add("escalated")
         clean = False
 
     for rec in matched:
         event = rec.get("event")
         if event in {"escalated", "model_fallback", "story_parked", "brief_patched"}:
-            reasons.append(event)
+            reasons.add(event)
             clean = False
         elif event is None:
             msg = str(rec.get("message", ""))
             if _RE_LEGACY_MESSAGE.search(msg):
-                reasons.append("legacy_message")
+                reasons.add("legacy_message")
                 clean = False
 
     instr = str(story.get("agent_instructions", ""))
     if _RE_BRIEF_REWRITE.search(instr):
-        reasons.append("brief_rewrite_marker")
+        reasons.add("brief_rewrite_marker")
         clean = False
 
-    reasons.sort()
+    
 
     return {
         "story_key": story_key,
@@ -114,7 +146,7 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
         "tier": tier,
         "dispatched_at": dispatched_at,
         "clean": clean,
-        "reasons": reasons,
+        "reasons": sorted(reasons),
     }
 
 

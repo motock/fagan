@@ -1,7 +1,8 @@
 """Runtime environment validation for the pipeline ("can this host run it?").
 
-run_preflight() performs four checks -- PLAN_DIR, git, the dispatch backend,
-and the model registry -- and returns one dict per check:
+run_preflight() performs seven checks -- PLAN_DIR, git, the dispatch backend,
+the merge CI gate, the model registry, the scheduler config fingerprint, and
+the scheduler revision -- and returns one dict per check:
 
     {"name": ..., "status": "ok" | "warn" | "fail", "message": ...}
 
@@ -124,8 +125,103 @@ def _check_scheduler_config(plan_dir, worktree_root):
     }
 
 
+def _check_scheduler_revision(plan_dir):
+    """Report whether the RUNNING scheduler is executing current code.
+
+    Reads the ``config.checkout_sha`` / ``config.checkout_behind_origin`` the
+    scheduler daemon records in the same ``<plan_dir>/.scheduler_health.json``
+    the config check reads. The daemon measures both against its own checkout's
+    upstream, so this compares like with like and never needs git here.
+
+    Outcomes:
+        behind_origin == 0  -> "ok"   (the daemon runs its checkout's revision)
+        behind_origin  > 0  -> "warn" (names the count: the merge landed, but
+                                       the checkout was not pulled/restarted)
+        keys absent         -> "warn" (the running daemon predates the revision
+                                       keys, so it is executing old code)
+        file absent         -> "ok"   (a standalone or not-yet-started
+                                       scheduler is a normal state)
+        malformed/unreadable-> "warn" (never an exception)
+        value None          -> "ok"   (git could not answer, e.g. no upstream
+                                       configured; an unclearable warn would
+                                       only train operators to ignore these)
+
+    A stale revision is a warn, never a fail: it must not block startup.
+    Read-only: the fingerprint is never created, written, or removed here.
+    """
+    fingerprint_path = os.path.join(str(plan_dir), ".scheduler_health.json")
+    try:
+        if not os.path.exists(fingerprint_path):
+            return {
+                "name": "SCHEDULER_REVISION",
+                "status": "ok",
+                "message": (
+                    "no scheduler fingerprint found at "
+                    f"{fingerprint_path} (a standalone or not-yet-started "
+                    "scheduler is normal)"
+                ),
+            }
+        with open(fingerprint_path, "r", encoding="utf-8") as handle:
+            payload = json.loads(handle.read())
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("config"), dict
+        ):
+            raise TypeError("fingerprint carries no usable config object")
+        fingerprint = payload["config"]
+    except Exception as exc:  # noqa: BLE001 - any fingerprint problem is a warn
+        # Non-leaking: report the error CLASS name only, never str(exc) /
+        # repr(exc) (they may carry env values or file contents).
+        return {
+            "name": "SCHEDULER_REVISION",
+            "status": "warn",
+            "message": (
+                f"scheduler fingerprint at {fingerprint_path} is malformed "
+                f"or unreadable ({type(exc).__name__}) — cannot tell which "
+                "revision the running scheduler is executing"
+            ),
+        }
+
+    if "checkout_sha" not in fingerprint:
+        return {
+            "name": "SCHEDULER_REVISION",
+            "status": "warn",
+            "message": (
+                "the running scheduler does not report a checkout revision "
+                f"(fingerprint at {fingerprint_path}) — it is executing code "
+                "from before that field existed; pull the checkout and "
+                "restart the scheduler so it runs the current code"
+            ),
+        }
+    behind = fingerprint.get("checkout_behind_origin")
+    sha = fingerprint.get("checkout_sha")
+    if isinstance(behind, int) and behind > 0:
+        return {
+            "name": "SCHEDULER_REVISION",
+            "status": "warn",
+            "message": (
+                f"the running scheduler is {behind} commit(s) behind its "
+                "checkout's upstream — pull the checkout and restart the "
+                "scheduler to run the current code"
+            ),
+        }
+    if behind == 0:
+        return {
+            "name": "SCHEDULER_REVISION",
+            "status": "ok",
+            "message": f"running scheduler is on its checkout's revision ({sha})",
+        }
+    return {
+        "name": "SCHEDULER_REVISION",
+        "status": "ok",
+        "message": (
+            f"running scheduler revision is {sha}; its distance from upstream "
+            "could not be measured"
+        ),
+    }
+
+
 def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
-    """Run the four preflight checks; return one result dict per check.
+    """Run the seven preflight checks; return one result dict per check.
 
     plan_dir: explicit plan directory to check. None resolves the way
         production does: the PLAN_DIR env var (read at call time), then
@@ -393,6 +489,11 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         Path(env_worktree_root).expanduser() if env_worktree_root else None
     )
     results.append(_check_scheduler_config(plan_path, worktree_root))
+    # check f: the scheduler's checkout revision. The config check above proves
+    # the running scheduler agrees about configuration; this one proves the code
+    # it is executing is the merged code (a restart alone does not advance the
+    # checkout, so an unrestarted daemon runs pre-merge modules indefinitely).
+    results.append(_check_scheduler_revision(plan_path))
 
     return results
 

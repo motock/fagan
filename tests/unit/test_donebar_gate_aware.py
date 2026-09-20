@@ -75,8 +75,10 @@ def test_full_suite_test_fails_returns_test_gate(monkeypatch, mod):
 
     result = _run_suite(monkeypatch, mod, ["pytest", "-q"], ("/repo", ["ruff", "check", "."]), _run)
     assert result == (False, "FAILED test_x.py::test_y - assert 1 == 2", "test")
-    # pytest runs first; lint is NOT run on a red suite.
-    assert calls == [["pytest", "-q"]]
+    # pytest runs first; lint is NOT run on a red suite. A red suite is
+    # re-run once before rejecting (retry-once exemption), so pytest is
+    # invoked twice - and lint still never.
+    assert calls == [["pytest", "-q"], ["pytest", "-q"]]
 
 
 @pytest.mark.parametrize("mod", BOTH)
@@ -131,7 +133,8 @@ def test_full_suite_both_fail_reports_test_gate_first(monkeypatch, mod):
     result = _run_suite(monkeypatch, mod, ["pytest", "-q"], ("/repo", ["ruff", "check", "."]), _run)
     assert result[0] is False
     assert result[2] == "test"
-    assert calls == [["pytest", "-q"]]
+    # Re-run once before rejecting (retry-once exemption).
+    assert calls == [["pytest", "-q"], ["pytest", "-q"]]
 
 
 @pytest.mark.parametrize("mod", BOTH)

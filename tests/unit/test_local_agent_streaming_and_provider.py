@@ -887,6 +887,7 @@ def test_full_suite_result_does_not_run_lint_when_tests_fail(tmp_path, monkeypat
     assert ok is False
     assert gate == "test"
     assert "test_y" in tail
-    assert calls == [["pytest", "-q"]]  # lint never invoked
+    # Re-run once before rejecting (retry-once exemption); lint never invoked.
+    assert calls == [["pytest", "-q"], ["pytest", "-q"]]
 
 

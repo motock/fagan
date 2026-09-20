@@ -265,6 +265,7 @@ def _escalate_to_local_fallback_model(
 
 
 def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name: str, reason: str) -> None:
+    _stamp_first_dispatch(story)
     """Under PIPELINE_BACKEND_DISPATCH=auto, when local review can't converge
     (rework budget or inconclusive-review budget exhausted), give the story
     to Claude instead of parking for a human - for both review and any

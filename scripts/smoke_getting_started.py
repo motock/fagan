@@ -271,9 +271,11 @@ def _announce_dispatch_backend(
         if provider == "claude":
             model = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
         else:
-            model = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet"))
+            model = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", os.environ.get("PIPELINE_DEFAULT_MODEL", "devstral:24b"))
+        print(f"smoke: validating dispatch on {provider} (model: {model}) (source: skip-backend-import)")
         return provider, model, "skip-backend-import"
     recognized = ("claude", "ollama", "lmstudio", "mlx", "local", "auto")
+    # duplicate removed
 
     def _reject(raw: str, provider: str, source: str) -> None:
         """Fail closed on an unusable dispatch value: print + exit 2."""

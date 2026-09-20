@@ -1,7 +1,8 @@
 """Runtime environment validation for the pipeline ("can this host run it?").
 
-run_preflight() performs four checks -- PLAN_DIR, git, the dispatch backend,
-and the model registry -- and returns one dict per check:
+run_preflight() performs seven checks -- PLAN_DIR, git, the dispatch backend,
+the merge CI gate, the model registry, the scheduler config fingerprint, and
+the scheduler revision -- and returns one dict per check:
 
     {"name": ..., "status": "ok" | "warn" | "fail", "message": ...}
 

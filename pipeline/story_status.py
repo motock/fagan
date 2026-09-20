@@ -981,15 +981,15 @@ def _baseline_exempted_failures(story: dict, test_result) -> list[str] | None:
 
     None (never an empty list) in every case the exemption cannot be
     justified, so the caller's red run stays red - this is a fail-closed
-    check, and a run that reports a single failure the baseline did not has
-    to keep rejecting:
+    check, and a run that reports a single failure or error the baseline did
+    not has to keep rejecting:
 
     * no recorded baseline, or one that was not itself failing;
     * a baseline with no parseable failing node ids (a non-pytest runner,
       or a truncated payload) - nothing to compare against;
     * a run whose own failures cannot be parsed - an unparseable red run is
       a red run;
-    * a run reporting any node id the baseline did not.
+    * a run reporting any failing or erroring node id the baseline did not.
 
     Returns the exempted node ids otherwise, so the caller can record
     exactly what it waved through.

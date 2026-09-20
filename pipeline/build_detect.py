@@ -175,20 +175,38 @@ def detect_build_command(cwd: Path) -> tuple[Path, list[str]] | None:
     return None
 
 
-def failed_node_ids(stdout: str | None) -> list[str]:
-    """The test node ids a runner reported as FAILED, sorted and unique.
+# pytest's short summary reports both failures and collection/setup/teardown
+# errors in the same shape, one line per node id.  pipeline/parsers.py's
+# _PYTEST_FAILED_RE also scans pytest failure lines, but for a different
+# target (it extracts the test FILE for gate-synthesized review feedback, not
+# the node id), so the two are deliberately separate.
+_PYTEST_SUMMARY_LINE_RE = re.compile(r"^(?:FAILED|ERROR) (.+)$")
 
-    pytest prints a short summary line per failure in the shape
-    ``FAILED tests/unit/test_x.py::test_y - assert False``; the node id is
-    the second whitespace-separated token. A runner that prints no such
-    lines (any non-pytest command) yields an empty list, which callers must
-    treat as "no parseable failures" and never as "nothing failed".
+
+def failed_node_ids(stdout: str | None) -> list[str]:
+    """The test node ids a runner reported as failing, sorted and unique.
+
+    pytest prints one short-summary line per failure in the shape
+    ``FAILED tests/unit/test_x.py::test_y - assert False``, and reports
+    collection, setup and teardown errors under an ``ERROR`` tag in the
+    same shape; both are failures for the caller's purposes, so both tags
+    are parsed. The node id runs from the tag to the `` - `` reason
+    separator - a parametrized id can itself contain spaces, so splitting
+    on whitespace would merge two distinct failures into one - and a line
+    with nothing after the tag contributes no id rather than raising. A
+    runner that prints no such lines (any non-pytest command) yields an
+    empty list, which callers must treat as "no parseable failures" and
+    never as "nothing failed".
     """
-    ids = []
+    ids = set()
     for line in (stdout or "").splitlines():
-        if line.startswith("FAILED "):
-            ids.append(line.split()[1])
-    return sorted(set(ids))
+        match = _PYTEST_SUMMARY_LINE_RE.match(line)
+        if match is None:
+            continue
+        node_id = match.group(1).split(" - ")[0].strip()
+        if node_id:
+            ids.add(node_id)
+    return sorted(ids)
 
 
 def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:

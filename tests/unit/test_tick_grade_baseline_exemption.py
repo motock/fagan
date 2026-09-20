@@ -53,6 +53,12 @@ RED_STDOUT_WITH_NEW_FAILURE = (
     f"FAILED {BASELINE_NODE} - assert False\n"
     f"FAILED {NEW_NODE} - assert False\n"
 )
+# pytest reports collection/setup/teardown errors under an ERROR tag in the
+# same short-summary shape; those are failures for the exemption's purposes.
+RED_STDOUT_BASELINE_PLUS_ERROR = (
+    f"FAILED {BASELINE_NODE} - assert False\n"
+    f"ERROR {NEW_NODE} - fixture 'db' not found\n"
+)
 
 
 def _completed(stdout, returncode=1):
@@ -169,6 +175,49 @@ def test_should_refuse_when_the_run_reports_no_parseable_failure():
     """An unparseable red run is a red run."""
     story = {"baseline_test_check": _baseline()}
     result = _completed("1 failed in 0.01s\n")
+    assert ss._baseline_exempted_failures(story, result) is None
+
+
+def test_should_refuse_when_the_run_adds_an_error_the_baseline_lacked():
+    """THE REVIEWER'S BLOCKING FINDING: pytest reports collection, fixture
+    setup and teardown errors as ``ERROR <nodeid>`` lines in the same short
+    summary. The baseline records only FAILED ids, so every ERROR in a run is
+    necessarily new and must block the exemption - a run that reports a
+    baseline FAILED node PLUS a brand-new ERROR is not a subset of it."""
+    story = {"baseline_test_check": _baseline()}
+    result = _completed(RED_STDOUT_BASELINE_PLUS_ERROR)
+    assert ss._baseline_exempted_failures(story, result) is None
+
+
+def test_should_exempt_when_the_run_repeats_a_baseline_error():
+    """An ERROR the baseline was already reporting is exemptible, exactly
+    like a failure the baseline was already reporting."""
+    story = {
+        "baseline_test_check": _baseline(node_ids=(BASELINE_NODE, NEW_NODE))
+    }
+    result = _completed(RED_STDOUT_BASELINE_PLUS_ERROR)
+    assert ss._baseline_exempted_failures(story, result) == [
+        BASELINE_NODE,
+        NEW_NODE,
+    ]
+
+
+def test_should_refuse_when_a_new_parametrized_id_differs_only_after_a_space():
+    """A parametrized node id can contain spaces; truncating it at the first
+    space would merge two distinct failures into one and falsely exempt the
+    new one."""
+    story = {
+        "baseline_test_check": _baseline(node_ids=("tests/a.py::test_x[foo bar]",))
+    }
+    result = _completed("FAILED tests/a.py::test_x[foo baz] - assert False\n")
+    assert ss._baseline_exempted_failures(story, result) is None
+
+
+def test_should_refuse_when_the_run_reports_only_unparseable_failure_lines():
+    """A bare ``FAILED `` line carries no node id; a run whose only failure
+    lines are unparseable is a red run, not an exemptible one."""
+    story = {"baseline_test_check": _baseline()}
+    result = _completed("FAILED \n")
     assert ss._baseline_exempted_failures(story, result) is None
 
 
@@ -400,6 +449,25 @@ def test_should_reject_a_story_whose_run_adds_a_new_failure(plan_dir, monkeypatc
     assert "grade_baseline_exemption" not in story
 
 
+def test_should_reject_a_story_whose_run_adds_an_error(plan_dir, monkeypatch):
+    """The wiring is what is graded here, not just the helper: the REAL
+    ``check_story_status`` must not exempt a run that reports a baseline
+    FAILED node PLUS a brand-new ERROR (collection/setup/teardown). The
+    baseline records only FAILED ids, so that ERROR is necessarily new."""
+    _install_grade_harness(
+        plan_dir,
+        monkeypatch,
+        test_stdout=RED_STDOUT_BASELINE_PLUS_ERROR,
+        baseline=_baseline(),
+    )
+
+    result = p.check_story_status(PLAN_NAME, STORY_KEY)
+    story = _read_story(plan_dir)
+
+    assert result["status"] != "tests_passed"
+    assert "grade_baseline_exemption" not in story
+
+
 def test_should_reject_a_story_whose_baseline_predates_the_parser(
     plan_dir, monkeypatch
 ):
@@ -442,7 +510,7 @@ def test_should_still_run_the_lint_and_dead_code_checks_for_an_exempted_story(
 # ---------------------------------------------------------------------------
 def test_snapshot_parses_failures_outside_the_truncated_tail(tmp_path, monkeypatch):
     """``failed_node_ids`` is parsed from the FULL ``r.stdout``: a failure
-    summary that falls outside the 2000-char ``stdout_tail`` must still be
+    summary that falls outside the 1000-char ``stdout_tail`` must still be
     recorded, or the tick-side comparison would silently weaken."""
     wt = tmp_path / "wt"
     wt.mkdir()

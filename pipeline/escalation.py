@@ -8,7 +8,7 @@ failure to Claude without wiping the worktree (the code is often already
 correct). _auto_escalation_enabled reports whether escalation is enabled -
 PIPELINE_AUTO_ESCALATE if set, else PIPELINE_BACKEND_DISPATCH=="auto".
 
-All read REPO_ROOT / PLAN_DIR via lazy imports from the server (tests patch
+All read PLAN_DIR via lazy imports from the server (tests patch
 p.<name>; circular-avoidance). _atomic_write_json comes from pipeline_parsers,
 _notify_user from pipeline_persistence.
 """
@@ -116,6 +116,7 @@ def _escalate_to_claude(
     """
     from .server import PLAN_DIR
     story = manifest["stories"][story_key]
+    repo_root = _escalation_repo_root(manifest)
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
     # A rework round can leave the worktree HEAD on an alias branch
@@ -142,14 +143,14 @@ def _escalate_to_claude(
     # Remove worktree and branch — best-effort (may already be gone).
     if worktree:
         subprocess.run(["git", "worktree", "remove", "--force", worktree],
-                        check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                        check=False, cwd=repo_root, capture_output=True, text=True)
     subprocess.run(["git", "branch", "-D", branch],
-                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=repo_root, capture_output=True, text=True)
     if resolved != branch:
         # Best-effort, same error-swallowing style as the deletes above: the
         # alias may already be gone (e.g. squash-merged by _merge_pr).
         subprocess.run(["git", "branch", "-D", resolved],
-                        check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                        check=False, cwd=repo_root, capture_output=True, text=True)
     # Clear journal so Claude starts fresh (not from a broken local checkpoint).
     journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"
     if journal_path.exists():
@@ -191,6 +192,7 @@ def _escalate_to_local_fallback_model(
     """
     from .server import PLAN_DIR
     story = manifest["stories"][story_key]
+    repo_root = _escalation_repo_root(manifest)
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
     # A rework round can leave the worktree HEAD on an alias branch
@@ -217,14 +219,14 @@ def _escalate_to_local_fallback_model(
     # Remove worktree and branch — best-effort (may already be gone).
     if worktree:
         subprocess.run(["git", "worktree", "remove", "--force", worktree],
-                        check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                        check=False, cwd=repo_root, capture_output=True, text=True)
     subprocess.run(["git", "branch", "-D", branch],
-                    check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                    check=False, cwd=repo_root, capture_output=True, text=True)
     if resolved != branch:
         # Best-effort, same error-swallowing style as the deletes above: the
         # alias may already be gone (e.g. squash-merged by _merge_pr).
         subprocess.run(["git", "branch", "-D", resolved],
-                        check=False, cwd=REPO_ROOT, capture_output=True, text=True)
+                        check=False, cwd=repo_root, capture_output=True, text=True)
     # Clear journal so the fallback model starts fresh, not from a broken
     # checkpoint left by the model that just failed.
     journal_path = PLAN_DIR / f"{plan_name}.{story_key}.journal.json"

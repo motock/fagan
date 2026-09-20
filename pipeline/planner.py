@@ -92,6 +92,9 @@ _PLANNER_SCRATCHPAD_CLAUSE = (
     "in the worktree root (erasing any prior content) and each subsequent "
     "step must end by appending its progress and the next step's hint to "
     "that file, so an interrupted run can resume from where it left off."
+    " The scratchpad is gitignored by design: never `git add` it - not even "
+    "`git add -f` - and never commit it. The worktree diff must contain only "
+    "the implementation and test files the task names, never the scratchpad."
 )
 
 # Spliced into _PLANNER_SYSTEM when the TDD-split test-author phase already

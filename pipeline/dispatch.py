@@ -945,6 +945,8 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                     "moving on to the next step. The FIRST line must be "
                     "PROGRESS: <done>/<total> showing how many checklist "
                     "items you've completed (e.g. PROGRESS: 2/5)."
+                    " The scratchpad is gitignored by design: never `git add` "
+                    "it - not even `git add -f` - and never commit it."
                 )
             spec["prompt"] = (
                 f"{spec['prompt']}\n\n"

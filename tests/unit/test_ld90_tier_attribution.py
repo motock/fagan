@@ -22,7 +22,6 @@ the classifier is graded against what the producer actually writes.
 from __future__ import annotations
 
 import os
-import pytest
 
 import pipeline.local_success as mod
 from pipeline import escalation as esc

@@ -65,15 +65,20 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     """
     matched = _matched_records(story_key, story, records)
 
-    # Population logic.
+    # Population and tier attribution both describe the tier the story was
+    # FIRST dispatched on: escalation overwrites backend / model /
+    # dispatched_model with the escalation target, so without the
+    # pre-escalation stamp (pipeline/escalation.py::_stamp_first_dispatch) a
+    # story that failed on the local tier and was escalated would be counted
+    # as an escalation-tier story.
     backend = story.get("pre_escalation_backend") or story.get("backend")
-    escalated_flag = story.get("escalated") is True
     tag = (
         story.get("pre_escalation_model")
         or story.get("dispatched_model")
         or story.get("model")
         or ""
     )
+    escalated_flag = story.get("escalated") is True
     any_escalated_event = any(rec.get("event") in {"escalated", "model_fallback"} for rec in matched)
     # A manifest written before the dispatch path stamped ``backend`` carries
     # only the model tag; a non-cloud tag is still a local dispatch, so that

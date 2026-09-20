@@ -456,12 +456,15 @@ class SchedulerDaemon:
         from pipeline import config, paths
 
         checkout = _checkout_git_state()
+        checkout = _checkout_git_state()
         return {
             "plan_dir": str(paths.PLAN_DIR),
             "worktree_root": str(paths.WORKTREE_ROOT),
             "autonomy": config.PIPELINE_AUTONOMY,
             "dispatch_backend": os.environ.get("PIPELINE_BACKEND_DISPATCH")
-            or None,
+                    or None,
+            "checkout_sha": checkout["sha"],
+            "checkout_behind_origin": checkout["behind_origin"],
             "pid": os.getpid(),
         }
 

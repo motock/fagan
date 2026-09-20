@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import signal as _signal_module
+import subprocess
 import sys
 import threading
 import time
@@ -27,6 +28,51 @@ from pipeline.paths import PLAN_DIR
 from pipeline.watchers import scan_all_plans
 
 logger = logging.getLogger(__name__)
+
+def _checkout_git_state() -> dict:
+    """Report the revision of the checkout THIS process imported ``pipeline``
+    from, and how far that checkout trails its configured upstream.
+
+    A merged change is invisible to a running scheduler until its checkout is
+    pulled AND the process is restarted: the daemon imports ``pipeline.*`` from
+    the checkout it was started in, so the running code is that working tree's
+    revision, never the remote's.  Both values are recorded so a stale
+    scheduler is distinguishable from a current one.
+
+    ``REPO_ROOT`` is deliberately not consulted: it is a configured value (the
+    installed scheduler sets it to a per-plan sentinel), not necessarily the
+    tree this code was imported from.  The code's own location is the only
+    reliable answer, so it is what is used.
+
+    Never raises: missing git, a checkout that is not a repository, an
+    unconfigured upstream, or a timeout leaves the value ``None``.
+    """
+    from pipeline import paths
+
+    checkout = os.path.dirname(os.path.dirname(os.path.abspath(paths.__file__)))
+    state: dict = {"sha": None, "behind_origin": None}
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=checkout, check=False, capture_output=True, text=True, timeout=10,
+        )
+        if head.returncode == 0:
+            state["sha"] = head.stdout.strip() or None
+        behind = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD..@{upstream}"],
+            cwd=checkout, check=False, capture_output=True, text=True, timeout=10,
+        )
+        if behind.returncode == 0:
+            state["behind_origin"] = int(behind.stdout.strip() or "0")
+    except Exception as exc:  # noqa: BLE001 - a probe must never raise
+        # Missing git, a checkout that is not a repository, an unconfigured
+        # upstream, a timeout, or unparsable output: all of them leave the
+        # corresponding field None rather than taking the daemon's health
+        # surface (or the preflight check reading it) down. The error class is
+        # logged (never the values) so a permanently blind probe is visible.
+        logger.debug("checkout revision probe failed (%s)", type(exc).__name__)
+    return state
+
 
 # Exposed as a bare callable (rather than the module) so tests can patch it
 # in isolation with a fake handler-recorder without losing access to the

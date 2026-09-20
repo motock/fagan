@@ -94,8 +94,8 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     if tag.endswith(":cloud"):
         tier = "cloud-oss"
     elif tag:
-        # If backend is claude without pre-escalation, ignore tag
-        if backend == "claude" and not story.get("pre_escalation_backend"):
+        # If backend is claude without any pre-escalation info, ignore tag
+        if backend == "claude" and not story.get("pre_escalation_backend") and not story.get("pre_escalation_model"):
             tier = "unknown"
         else:
             tier = "on-device"

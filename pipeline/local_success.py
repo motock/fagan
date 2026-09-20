@@ -91,18 +91,14 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     )
 
     # Tier determination.
-    # tag assignment removed; tag already defined earlier
-    # Tier determination.
     if tag.endswith(":cloud"):
         tier = "cloud-oss"
-    elif backend == "claude" and not story.get("pre_escalation_backend"):
-        tier = "unknown"
-    elif tag:
-        tier = "on-device"
     elif backend and backend != "claude":
         tier = "on-device"
     elif backend:
         tier = "unknown"
+    elif tag:
+        tier = "on-device"
     else:
         tier = "unknown"
 

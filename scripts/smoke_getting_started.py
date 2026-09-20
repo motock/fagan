@@ -263,6 +263,16 @@ def _announce_dispatch_backend(
     Returns the validated (provider, model, source) triple so callers can
     name the validated backend in their own output.
     """
+    skip_import = os.environ.get("PIPELINE_SKIP_BACKEND_IMPORT") == "1"
+    if skip_import:
+        provider = os.environ.get("PIPELINE_BACKEND_DISPATCH", "claude").strip().lower()
+        if provider == "":
+            provider = "claude"
+        if provider == "claude":
+            model = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
+        else:
+            model = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet"))
+        return provider, model, "skip-backend-import"
     recognized = ("claude", "ollama", "lmstudio", "mlx", "local", "auto")
 
     def _reject(raw: str, provider: str, source: str) -> None:

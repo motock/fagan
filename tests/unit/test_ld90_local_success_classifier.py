@@ -144,8 +144,19 @@ def test_claude_story_without_escalation_or_records_is_out_of_population():
 
 
 def test_empty_backend_is_not_a_non_claude_backend():
-    out = classify_story("S1", _story(backend=""), [])
+    """An empty backend is not a non-Claude backend.
+
+    On its own - with no model tag to attribute the story to a tier - it stays
+    out of the population. The model tags are dropped here deliberately so this
+    fixture pins the empty-backend signal alone; see
+    test_a_story_with_no_backend_but_a_local_tag_is_in_population for the tag-only
+    population clause added alongside it.
+    """
+    out = classify_story(
+        "S1", _story(backend="", model=None, dispatched_model=None), []
+    )
     assert out["in_population"] is False
+    assert out["tier"] == "unknown"
 
 
 # --------------------------------------------------------------------------

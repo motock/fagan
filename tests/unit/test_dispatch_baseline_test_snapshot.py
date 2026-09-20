@@ -192,7 +192,39 @@ def test_snapshot_returns_failing_returncode(tmp_path, monkeypatch):
     assert result is not None
     assert result["returncode"] == 1
     assert result["cmd"] == cmd
-    assert set(result) == {"cmd", "returncode", "stdout_tail", "stderr_tail"}
+    assert set(result) == {
+        "cmd",
+        "failed_node_ids",
+        "returncode",
+        "stdout_tail",
+        "stderr_tail",
+    }
+    assert result["failed_node_ids"] == []
+
+
+def test_snapshot_records_parsed_failing_node_ids(tmp_path, monkeypatch):
+    """The snapshot payload carries the failing node ids the runner reported,
+    parsed from the FULL stdout, so the tick-side grade can compare a later
+    red run against exactly what was already failing before the story's own
+    edits. A command that prints no pytest failure summary records []."""
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    cmd = [
+        sys.executable,
+        "-c",
+        (
+            "import sys;"
+            "print('FAILED tests/a.py::test_x - assert False');"
+            "sys.exit(1)"
+        ),
+    ]
+    monkeypatch.setattr(
+        "pipeline.build_detect.detect_test_command", lambda path: (str(wt), cmd)
+    )
+
+    result = dispatch._run_baseline_test_snapshot(wt)
+
+    assert result["failed_node_ids"] == ["tests/a.py::test_x"]
 
 
 def test_snapshot_returns_zero_for_passing(tmp_path, monkeypatch):

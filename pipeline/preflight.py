@@ -488,6 +488,11 @@ def run_preflight(plan_dir=None, which=shutil.which, registry_loader=None):
         Path(env_worktree_root).expanduser() if env_worktree_root else None
     )
     results.append(_check_scheduler_config(plan_path, worktree_root))
+    # check f: the scheduler's checkout revision. The config check above proves
+    # the running scheduler agrees about configuration; this one proves the code
+    # it is executing is the merged code (a restart alone does not advance the
+    # checkout, so an unrestarted daemon runs pre-merge modules indefinitely).
+    results.append(_check_scheduler_revision(plan_path))
 
     return results
 

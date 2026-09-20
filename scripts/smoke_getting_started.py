@@ -272,7 +272,7 @@ def _announce_dispatch_backend(
             model = os.environ.get("PIPELINE_DEFAULT_MODEL", "sonnet")
         else:
             model = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", os.environ.get("PIPELINE_DEFAULT_MODEL", "devstral:24b"))
-        print(f"smoke: validating dispatch on {provider} (model: {model}) (source: skip-backend-import)")
+        print(f"validating dispatch on {provider}/{model} (source: skip-backend-import)")
         return provider, model, "skip-backend-import"
     recognized = ("claude", "ollama", "lmstudio", "mlx", "local", "auto")
     # duplicate removed
@@ -456,10 +456,7 @@ def _announce_dispatch_backend(
     # ANNOUNCE and PROCEED: one prominent line naming the resolved provider,
     # the resolved model and the source of the choice (the triple real
     # dispatch resolves), then continue - the smoke is provider-neutral.
-    print(
-        f"smoke: validating dispatch on {normalized_provider}/{model} "
-        f"(source: {source})"
-    )
+    print(f"validating dispatch on {normalized_provider}/{model} (source: {source})")
     return normalized_provider, model, source
 
 

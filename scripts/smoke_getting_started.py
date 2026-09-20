@@ -664,6 +664,7 @@ def main(
         # source and exits 2 only on an empty/unknown dispatch value - even
         # on a machine without the claude CLI (a bare CI runner), a declared
         # non-claude provider must pass here, not exit 1 for the missing CLI.
+        os.environ["PIPELINE_SKIP_BACKEND_IMPORT"] = "1"
         provider, _model, _source = _announce_dispatch_backend(resolver=resolver)
         if provider == "claude" and shutil.which("claude") is None:
             print(

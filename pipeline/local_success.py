@@ -90,6 +90,8 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     # Tier determination.
     if tag.endswith(":cloud"):
         tier = "cloud-oss"
+    elif backend == "claude" and not story.get("pre_escalation_backend"):
+        tier = "unknown"
     elif tag:
         tier = "on-device"
     elif backend and backend != "claude":
@@ -98,14 +100,10 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
         tier = "unknown"
     else:
         tier = "unknown"
-        tier = "unknown"
 
     dispatched_at = story.get("dispatched_at")
 
     # Clean determination.
-    # Clean determination.  Reasons are a SET: one record per event is enough
-    # to make a story not-clean, and three park records for the same story are
-    # one reason, not three.
     reasons: set[str] = set()
     clean = True
 
@@ -113,6 +111,11 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
         reasons.add("not_done")
         clean = False
 
+    if escalated_flag:
+        # The manifest flag is the durable record of an escalation; the
+        # sidecar event is not always present.
+        reasons.add("escalated")
+        clean = False
         if escalated_flag:
             # The manifest flag is the durable record of an escalation; the
             # sidecar event is not always present.

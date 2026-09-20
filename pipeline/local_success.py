@@ -117,6 +117,7 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
         # sidecar event is not always present.
         reasons.add("escalated")
         clean = False
+        clean = False
         if escalated_flag:
             # The manifest flag is the durable record of an escalation; the
             # sidecar event is not always present.

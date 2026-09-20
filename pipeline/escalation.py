@@ -216,10 +216,9 @@ def _escalate_to_local_fallback_model(
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
     # A rework round can leave the worktree HEAD on an alias branch
-    backend, model = _escalation_target()
-    story["backend"] = backend
-    if model:
-        story["model"] = model
+    # keep local backend, set fallback model
+    story["backend"] = "local"
+    story["model"] = fallback_model
     from .pr import _resolve_story_branch
 
     resolved = _resolve_story_branch(worktree, story_key)

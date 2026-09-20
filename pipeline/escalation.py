@@ -281,7 +281,8 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
     fresh budget for Claude; a second exhaustion after escalation (checked
     by the caller via story.get("escalated")) is terminal - there is no
     further fallback past Claude, so it must park rather than escalate
-    again or loop forever."""
+    """
+    _stamp_first_dispatch(story)
     backend, model = _escalation_target()
     story["backend"] = backend
     if model:

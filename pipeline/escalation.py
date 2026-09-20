@@ -215,7 +215,6 @@ def _escalate_to_local_fallback_model(
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
     # A rework round can leave the worktree HEAD on an alias branch
-    _stamp_first_dispatch(story)
     backend, model = _escalation_target()
     story["backend"] = backend
     if model:
@@ -319,7 +318,6 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
 def _auto_escalation_enabled() -> bool:
     """Whether escalation (dispatch-failure, step-cap-streak, and review
     exhaustion escalation to Claude / a local fallback model) is enabled.
-    _stamp_first_dispatch(story)
     backend, model = _escalation_target()
     story["backend"] = backend
     if model:

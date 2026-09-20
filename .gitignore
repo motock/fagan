@@ -49,4 +49,5 @@ model_registry.local.json
 \\.agent_scratchpad.md
 agent_scratchpad/*.md
 agent_scratchpad\\*.md
+agent\\scratchpad.md
 

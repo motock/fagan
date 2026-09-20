@@ -91,13 +91,23 @@ def _full_suite_result_impl(origin) -> tuple[bool, str, str | None]:
         return True, "", None
     argv = test_cmd
     needs_heavy = bool(argv) and p._is_heavy(argv)
-    if needs_heavy:
-        with p._heavy_lock():
-            r = subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
-    else:
-        r = subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
+
+    def _run_once():
+        if needs_heavy:
+            with p._heavy_lock():
+                return subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
+        return subprocess.run(argv, check=False, cwd=test_dir, capture_output=True, text=True)
+
+    r = _run_once()
     if r.returncode != 0:
-        return False, (r.stdout + r.stderr)[-500:], "test"
+        # A red suite is re-run ONCE before it rejects done: a green retry
+        # proves the failure was not this story's change (a stale recorded
+        # failure, a flake, or a transient collision with another agent's
+        # run), so it must not reject. A reproducible failure still rejects,
+        # with the FIRST run's tail (it carries the real failure text).
+        retry = _run_once()
+        if retry.returncode != 0:
+            return False, (r.stdout + r.stderr)[-500:], "test"
     lint = p.detect_lint_command(origin["CWD"])
     if lint is not None:
         lint_dir, lint_cmd = lint

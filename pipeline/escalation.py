@@ -216,7 +216,7 @@ def _escalate_to_local_fallback_model(
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
     # A rework round can leave the worktree HEAD on an alias branch
-    _stamp_first_dispatch(story)
+    # _stamp_first_dispatch(story)
     backend, model = _escalation_target()
     story["backend"] = backend
     if model:

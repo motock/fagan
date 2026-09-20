@@ -132,8 +132,10 @@ def test_run_preflight_returns_four_well_formed_checks_all_ok(tmp_path):
     # SCHEDULER_CONFIG startup check (see
     # tests/unit/test_preflight_scheduler_config.py, which locates its entry
     # by name and never pins the total), plus the merge-CI-gate visibility
-    # check (CIGATEVISIBLE-1).
-    assert len(results) == 6
+    # check (CIGATEVISIBLE-1), plus the SCHEDULER_REVISION checkout-revision
+    # check (see tests/unit/test_preflight_scheduler_revision.py, which
+    # locates its entry by name and never pins the total).
+    assert len(results) == 7
     for check in results:
         assert set(check) == {"name", "status", "message"}
         assert check["status"] in {"ok", "warn", "fail"}

@@ -85,6 +85,24 @@ def _escalation_label() -> str:
     return "Claude" if backend == "claude" else backend
 
 
+def _stamp_first_dispatch(story: dict) -> None:
+    """Record the tier a story was FIRST dispatched on, before escalation
+    overwrites it with the escalation target.
+
+    Escalation rewrites ``backend`` / ``model`` / ``dispatched_model`` to the
+    target it escalates TO, so afterwards a story that failed on the local tier
+    is indistinguishable from one that ran on the escalation tier from the
+    start - which is exactly the attribution the first-pass-clean metric needs.
+    ``setdefault`` makes the stamp sticky: a second escalation never overwrites
+    the original tier.
+    """
+    story.setdefault("pre_escalation_backend", story.get("backend"))
+    story.setdefault(
+        "pre_escalation_model",
+        story.get("dispatched_model") or story.get("model"),
+    )
+
+
 def _escalation_repo_root(manifest: dict) -> Path:
     """Return the repo the escalation git teardown must run in.
 
@@ -196,10 +214,11 @@ def _escalate_to_local_fallback_model(
     worktree = story.get("worktree", "")
     branch = f"agent/{story_key.lower()}"
     # A rework round can leave the worktree HEAD on an alias branch
-    # agent/<key>-<suffix>. Resolve it BEFORE the worktree is removed below
-    # (rev-parse needs the worktree) so the teardown deletes the branch the
-    # agent actually built on, not just the convention name - otherwise the
-    # alias lingers after the force worktree removal.
+    _stamp_first_dispatch(story)
+    backend, model = _escalation_target()
+    story["backend"] = backend
+    if model:
+        story["model"] = model
     from .pr import _resolve_story_branch
 
     resolved = _resolve_story_branch(worktree, story_key)
@@ -298,10 +317,11 @@ def _escalate_review_to_claude(story: dict[str, Any], story_key: str, plan_name:
 def _auto_escalation_enabled() -> bool:
     """Whether escalation (dispatch-failure, step-cap-streak, and review
     exhaustion escalation to Claude / a local fallback model) is enabled.
-
-    Historically this was exactly `PIPELINE_BACKEND_DISPATCH == "auto"` -
-    welding two unrelated decisions (how a story is routed vs. whether a
-    stuck story escalates) onto one variable, so an operator running
+    _stamp_first_dispatch(story)
+    backend, model = _escalation_target()
+    story["backend"] = backend
+    if model:
+        story["model"] = model
     PIPELINE_BACKEND_DISPATCH=local could not turn on escalation without also
     changing dispatch routing. PIPELINE_AUTO_ESCALATE now lets an operator set
     escalation independently; when unset (or unrecognized), behavior falls

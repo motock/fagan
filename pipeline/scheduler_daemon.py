@@ -455,6 +455,7 @@ class SchedulerDaemon:
         # of this module is an import-time snapshot and must not be used.
         from pipeline import config, paths
 
+        checkout = _checkout_git_state()
         return {
             "plan_dir": str(paths.PLAN_DIR),
             "worktree_root": str(paths.WORKTREE_ROOT),

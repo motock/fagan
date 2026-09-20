@@ -28,6 +28,9 @@ When you approve, you are asserting all of the following are true:
   surrounding code.
 - The commit message follows Conventional Commits and accurately describes the
   change.
+- The diff's file inventory matches the change: no scratch or one-shot helper
+  scripts, dump files, or duplicated modules that the change's own code and
+  tests do not depend on. An added file nobody asked for is Blocking.
 
 ## Reviewing AI-generated code (the common case here)
 

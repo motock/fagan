@@ -18,6 +18,10 @@ Approving a pull request is a statement that the reviewer has verified all of th
 - The commit message accurately describes the change
 - If the change alters externally visible behavior (API contracts, configuration, CLI flags, user-facing functionality), documentation is updated — request changes and name the specific doc if it's missing, rather than approving with the gap unaddressed
 - If the diff modifies or removes an existing test (see CLAUDE.md's Agent Workflow Step 4), the author's stated justification holds up: the new assertion reflects a real, requested behavior change — not a loosened or deleted check made just to pass. No justification present is itself a **Blocking** finding
+- The diff's file inventory matches the change: no scratch or one-shot helper
+  scripts, dump files, or duplicated modules that the change's own code and
+  tests do not depend on. An added file nobody asked for is a **Blocking**
+  finding
 
 An approver who has not checked these items should not approve.
 

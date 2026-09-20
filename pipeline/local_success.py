@@ -90,13 +90,14 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     # Tier determination.
     if tag.endswith(":cloud"):
         tier = "cloud-oss"
+    elif tag:
+        tier = "on-device"
     elif backend and backend != "claude":
         tier = "on-device"
     elif backend:
         tier = "unknown"
-    elif tag:
-        tier = "on-device"
     else:
+        tier = "unknown"
         tier = "unknown"
 
     dispatched_at = story.get("dispatched_at")

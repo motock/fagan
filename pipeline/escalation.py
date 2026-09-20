@@ -178,6 +178,7 @@ def _escalate_to_claude(
     # a non-Claude provider while Claude usage is capped). Only set the model
     # when one is configured - the default leaves story["model"] untouched so
     # Claude dispatch resolves its own model exactly as before this existed.
+    _stamp_first_dispatch(story)
     backend, model = _escalation_target()
     story["backend"] = backend
     if model:

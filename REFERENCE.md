@@ -171,6 +171,28 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
 
 ---
 
+## Overlord decision fail-open
+
+`request_decision` (see "MCP tools reference" above) fails open when the
+overlord backend errors — a timeout, a crashed CLI, an unparseable reply. The
+tool never raises to the calling agent:
+
+- it appends a `<plan>.decisions.json` record with `action: "park_for_human"`
+  and `failed_open: true`, whose `summary` is the exception **class name only**
+  (`"RuntimeError"` — never the message, traceback, file paths or payload data);
+- it parks the story with `parked_reason: "overlord failure: <ClassName>"`;
+- it returns the single-line message `decision escalated to human: story parked,
+  see decisions log` — a plain `str`, not the usual ruling `dict`, so callers
+  must handle both return types.
+
+Both the decisions append and the park transition are individually guarded, so
+a persistence failure or an already-parked story cannot crash the tool. The
+dashboard's `POST /api/plans/{plan_name}/stories/{story_key}/decisions` route
+surfaces the message as `{"ok": false, "action": "park_for_human", "message":
+...}` instead of 500ing.
+
+---
+
 ## Status lifecycle
 
 ```

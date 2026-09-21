@@ -25,6 +25,12 @@ from .concurrency import PlanLockReacquireTimeout, _released_plan_lock
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target
 from .dispatch_lease import claim_dispatch_lease
+from .rebrief import (
+    collect_failure_evidence,
+    compose_rebriefed_instructions,
+    detect_unsatisfiable_signal,
+    diagnose_failure,
+)
 from .wedge_io import run_wedge_scan
 
 # MERGEATTR-1: ``_merge_mod``'s story-key adjudication context is bound around
@@ -714,6 +720,50 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     )
                     summary["failed"].append(key)
                     summary["notify"].append(key)
+                    # OA2-08: a surrender is the same "the brief, not the
+                    # model, is the problem" signal the step-cap path already
+                    # diagnoses (pipeline/story_status.py's
+                    # _rebrief_step_cap_struggle). Run the SAME rebrief
+                    # machinery here so the next dispatch carries a rewritten
+                    # brief instead of the identical one that just failed.
+                    # Fail-open: any error (unconfigured/raising diagnosis
+                    # role, unreadable manifest) degrades to the notify-only
+                    # behaviour above - a diagnosis must never crash the tick.
+                    try:
+                        evidence = collect_failure_evidence(
+                            story.get("worktree", ""), story
+                        )
+                        unsat_reason = detect_unsatisfiable_signal(evidence)
+                        if unsat_reason is not None:
+                            _notify_user(
+                                plan_name,
+                                f"Story may be unsatisfiable as specified: "
+                                f"{unsat_reason}. Story {key} may need "
+                                f"re-planning rather than another retry.",
+                            )
+                        diagnosis = diagnose_failure(
+                            evidence, story, manifest.get("role_config")
+                        )
+                        story["agent_instructions"] = compose_rebriefed_instructions(
+                            story.get("agent_instructions", ""), diagnosis
+                        )
+                        # Persist onto a FRESH read: check_story_status already
+                        # wrote this story's terminal status/failure_kind, so
+                        # writing the tick's stale top-of-loop `manifest` back
+                        # would revert it to in_progress. Only the rewritten
+                        # brief is carried over.
+                        fresh = json.loads(manifest_path.read_text())
+                        fresh["stories"][key]["agent_instructions"] = story[
+                            "agent_instructions"
+                        ]
+                        _atomic_write_json(manifest_path, fresh)
+                    except Exception:  # fallback: notify-only, never crash the tick
+                        logging.getLogger("pipeline").debug(
+                            "give_up rebrief diagnosis failed for %s; "
+                            "falling back to notify-only",
+                            key,
+                            exc_info=True,
+                        )
                 else:
                     _notify_user(
                         plan_name,

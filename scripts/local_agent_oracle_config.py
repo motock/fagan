@@ -139,6 +139,21 @@ PARK_ENABLED = os.environ.get("LOCAL_AGENT_PARK_ENABLED", "1") != "0"
 # never set this, so their oracle-green done-bar is byte-for-byte unchanged.
 REWORK_FULL_SUITE = os.environ.get("LOCAL_AGENT_REWORK_FULL_SUITE") == "1"
 
+# A reviewer-feedback rework round (a reviewer's REQUEST_CHANGES, story
+# ["review_feedback"]) is a DIFFERENT done-bar from a CI-fail rework: the
+# defect is whatever the reviewer asked for, and the acceptance oracle is
+# typically green BEFORE the round starts - that first dispatch is what the
+# reviewer read. So oracle-green is not evidence the findings were addressed.
+# Set by dispatch_story when the rework round reworks stored review feedback
+# (story["review_feedback"] -> backend.dispatch(review_feedback_rework=True)
+# -> this env); finish_if_green refuses to decide `done` while it is set,
+# deferring to the model's explicit `done` - which still has to clear the
+# dirty-tree and full-suite gates. Cold starts and CI-fail reworks never set
+# it, so their oracle-green done-bar is byte-for-byte unchanged.
+REVIEW_FEEDBACK_REWORK = (
+    os.environ.get("LOCAL_AGENT_REVIEW_FEEDBACK_REWORK") == "1"
+)
+
 # Oracle paths: the harness owns these, the model cannot author or edit them.
 # Set by backend.OllamaDriver.dispatch as a JSON list when the story carries
 # an `acceptance` block; empty otherwise (in which case this variant should

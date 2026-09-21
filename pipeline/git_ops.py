@@ -291,3 +291,65 @@ def _test_names_in_file(worktree: Path, rel_path: str) -> list[str]:
     except (OSError, UnicodeDecodeError):
         return []
     return re.findall(r"^def (test_\w+)\b", text, re.MULTILINE)
+
+
+def _untrack_scratchpad(worktree: str, story_key: str) -> dict:
+    """Untrack every scratchpad path tracked in `worktree`, as a commit.
+
+    Companion to the untrack loop inside ``_commit_wip``. That one only cleans
+    the index for the commit the harness itself is about to make, so a
+    scratchpad a dispatched agent tracked with its own ``git add -f`` /
+    ``git commit`` -- bypassing every harness commit path -- survives until
+    the next harness commit. A tracked scratchpad is not cosmetic: the repo's
+    guard tests fail on it, the tick-side grade then rejects a story that was
+    otherwise fine, and the file travels into the eventual merge, where a
+    rebase against another story that tracked it conflicts (2026-09-17).
+
+    External boundary: spawns ``git``, and never raises - a git failure is
+    reported in the returned dict so a caller inside the scheduler tick keeps
+    grading. Returns ``{"paths": [...], "sha": ...}``: the sorted tracked
+    paths found, and the commit's sha, or ``""`` when nothing was tracked or
+    the untrack left nothing to record (a scratchpad that was staged but never
+    committed disappears with its index entry, leaving no deletion to commit),
+    plus an ``"error"`` key when git itself failed.
+    """
+    listed: list[str] = []
+    try:
+        probe = subprocess.run(
+            ["git", "ls-files", "--", *_SCRATCHPAD_PATTERNS],
+            check=False, cwd=worktree, capture_output=True, text=True,
+        )
+        listed = (getattr(probe, "stdout", "") or "").split()
+        if not listed:
+            return {"paths": [], "sha": ""}
+        for pattern in _SCRATCHPAD_PATTERNS:
+            subprocess.run(
+                ["git", "rm", "-r", "--cached", "--ignore-unmatch", "-q", "--", pattern],
+                check=False, cwd=worktree, capture_output=True, text=True,
+            )
+        commit = subprocess.run(
+            ["git", "commit", "-m", f"chore({story_key}): untrack agent scratchpad"],
+            check=False, cwd=worktree, capture_output=True, text=True,
+        )
+        # getattr-defended: some test doubles for subprocess.run's return
+        # value define no stdout/stderr at all.
+        output = (getattr(commit, "stdout", "") or "") + (
+            getattr(commit, "stderr", "") or ""
+        )
+        nothing_to_commit = (
+            "nothing to commit" in output
+            or "nothing added to commit" in output
+            or "no changes added to commit" in output
+        )
+        if commit.returncode != 0 and not nothing_to_commit:
+            return {"paths": sorted(listed), "sha": "", "error": output.strip()}
+        if commit.returncode != 0:
+            return {"paths": sorted(listed), "sha": ""}
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=False, cwd=worktree, capture_output=True, text=True,
+        )
+        sha = (getattr(head, "stdout", "") or "").strip()
+    except OSError as e:
+        return {"paths": sorted(listed), "sha": "", "error": str(e)}
+    return {"paths": sorted(listed), "sha": sha}

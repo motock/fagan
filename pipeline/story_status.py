@@ -44,7 +44,7 @@ from .escalation import (
     _escalate_to_claude,
     _escalation_label,
 )
-from .git_ops import _commit_wip
+from .git_ops import _commit_wip, _untrack_scratchpad
 from .parsers import (
     _atomic_write_json,
     _is_give_up_summary,
@@ -566,6 +566,20 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
 
     test_result = None
     if grading_pid is None:
+        # The agent process is gone, so it can no longer clean up after
+        # itself: any scratchpad path it tracked with its own `git add -f` /
+        # `git commit` is untracked and committed away HERE, before the grade,
+        # so a stray scratchpad cannot fail the guard tests, reach review, or
+        # land in the merge (where a rebase against another story that tracked
+        # it conflicts). Recorded on the manifest for audit; the common case
+        # (nothing tracked) records nothing and makes no commit.
+        _untracked = _untrack_scratchpad(str(worktree), story_key)
+        if _untracked["paths"]:
+            story["scratchpad_untrack"] = {
+                **_untracked,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+
         starter = globals().get("start_detached_grade")
         if starter is not None:
             # Security review (REQUEST_CHANGES): the detached grade's result
@@ -1111,6 +1125,11 @@ def collect_detached_grade(pid: int, result_path: str) -> dict | None:
 # be reachable there - same reason the detached-grade primitives below are
 # exported.
 _server._baseline_exempted_failures = _baseline_exempted_failures
+
+# Same reason as the export above: the rebound grade body resolves bare
+# names against pipeline.server's namespace, so the post-agent scratchpad
+# untrack it calls must be reachable there too.
+_server._untrack_scratchpad = _untrack_scratchpad
 
 if "pytest" not in sys.modules:
     _server.start_detached_grade = start_detached_grade

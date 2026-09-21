@@ -184,3 +184,16 @@ if a precise date is needed when writing one of these up.
 - remote-install-script — completed 2026-09-16, 3 stories
 - glama-dockerfile-listing — completed 2026-09-17, 1 stories
 - mcp-server-registry-listing — completed 2026-09-17, 1 stories
+- ingestable-plans-exclude-ingested — completed 2026-09-18, 1 stories
+- pipeline-reliability-2026-09-17-retro — completed 2026-09-18, 10 stories
+- gptoss-num-ctx-ceiling — completed 2026-09-18, 5 stories
+- local-dispatch-90-t1 — completed 2026-09-19, 17 stories
+- escalation-repo-root-fix — completed 2026-09-20, 1 stories
+- mfr-measurement-freshness-review — completed 2026-09-20, 7 stories
+- fsu-retry-once-suite-exemption — completed 2026-09-20, 1 stories
+- seed-forbids-tracked-scratchpad — completed 2026-09-20, 1 stories
+- tick-grade-exemption — completed 2026-09-20, 2 stories
+- harness-git-artifact-hygiene — completed 2026-09-21, 2 stories
+- harness-rework-gates — completed 2026-09-21, 2 stories
+- agent-side-baseline-exemption — completed 2026-09-21, 2 stories
+- review-feedback-rework-done-bar — completed 2026-09-21, 2 stories

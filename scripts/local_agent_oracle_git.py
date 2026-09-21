@@ -95,7 +95,9 @@ def _full_suite_result_impl(origin) -> tuple[bool, str, str | None]:
         # proves the failure was not this story's change (a stale recorded
         # failure, a flake, or a transient collision with another agent's
         # run), so it must not reject. A reproducible failure still rejects,
-        # with the FIRST run's tail (it carries the real failure text).
+        # with the FIRST run's tail (it carries the real failure text) -
+        # unless every failure in it was already failing in the pre-dispatch
+        # baseline snapshot (see _baseline_only_failures).
         retry = _run_once()
         if retry.returncode != 0 and not _baseline_only_failures(origin, r.stdout):
             return False, (r.stdout + r.stderr)[-500:], "test"

@@ -1030,6 +1030,16 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             story.get("ci_rework") or story.get("review_feedback")
         ):
             dispatch_kwargs["rework_full_suite"] = True
+        # A reviewer-feedback rework gets its own signal, distinct from
+        # REWORK_FULL_SUITE (which both kinds of rework share): on a CI-fail
+        # rework the agent's own committed test is the defect and a green
+        # suite settles it, but on a reviewer-feedback rework the acceptance
+        # oracle is usually ALREADY green when the round starts - that first
+        # dispatch is exactly what the reviewer read - so oracle-green cannot
+        # stand for "the findings are addressed". The oracle harness needs to
+        # tell the two apart to know which done-bar applies.
+        if dispatch_backend in _LOCAL_BACKEND_NAMES and story.get("review_feedback"):
+            dispatch_kwargs["review_feedback_rework"] = True
 
         if resume_via_transcript:
             dispatch_kwargs["resume_transcript_path"] = transcript_path

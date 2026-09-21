@@ -610,6 +610,7 @@ class OllamaDriver:
         resume_transcript_path: Path | None = None,
         resume_append_content: str | None = None,
         rework_full_suite: bool = False,
+        review_feedback_rework: bool = False,
     ) -> AgentHandle:
         if allowed_tools and not ({"Edit", "Write"} & set(allowed_tools.split(","))):
             raise NotImplementedError(
@@ -708,6 +709,12 @@ class OllamaDriver:
         # dispatchs leave it unset so the oracle-green bar is unchanged.
         if rework_full_suite:
             env["LOCAL_AGENT_REWORK_FULL_SUITE"] = "1"
+        # Reviewer-feedback rework: a signal distinct from rework_full_suite,
+        # which both kinds of rework share. The oracle harness stands its
+        # automatic done-bar down while this is set, because the oracle is
+        # usually already green when such a round starts.
+        if review_feedback_rework:
+            env["LOCAL_AGENT_REVIEW_FEEDBACK_REWORK"] = "1"
         # Always persist the transcript so a later rework redispatch can
         # resume the prior message history instead of rebuilding a cold-start
         # prompt. The path is deterministic and lives inside the worktree (cwd)

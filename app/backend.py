@@ -88,6 +88,7 @@ class Backend(Protocol):
         resume_transcript_path: Path | None = None,
         resume_append_content: str | None = None,
         rework_full_suite: bool = False,
+        review_feedback_rework: bool = False,
     ) -> AgentHandle:
         """Spawn a non-blocking agentic run, streaming output to log_path."""
         ...

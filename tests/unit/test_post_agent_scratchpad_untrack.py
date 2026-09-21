@@ -233,16 +233,20 @@ def _install_grade_harness(plan_dir, monkeypatch):
 
 
 def _recorder(monkeypatch, *, result):
-    """Replace the untrack helper with a recorder. The helper is exported into
-    pipeline.server's namespace, which is where the rebound grade body resolves
-    the bare name -- so this grades the call site, not a fake of it."""
+    """Replace the untrack helper with a recorder. The rebound grade body
+    resolves the name through globals() against pipeline.server's namespace, so
+    patching pipeline.server is what grades the real call site -- the helper is
+    deliberately not exported there under pytest, hence raising=False. The
+    story_status attribute is patched too, mirroring the detached-grade tests'
+    two-surface pattern."""
     calls = []
 
     def fake(worktree, story_key):
         calls.append((worktree, story_key))
         return result
 
-    monkeypatch.setattr(p, "_untrack_scratchpad", fake)
+    monkeypatch.setattr(ss, "_untrack_scratchpad", fake)
+    monkeypatch.setattr(p, "_untrack_scratchpad", fake, raising=False)
     return calls
 
 
@@ -312,29 +316,39 @@ def test_the_helper_lives_in_git_ops_and_is_not_exported_from_story_status():
     assert "def _untrack_scratchpad(" not in Path(ss.__file__).read_text()
 
 
-def test_the_helper_is_exported_into_the_server_namespace():
-    """The grade body's globals are REBOUND to pipeline.server's namespace, so
-    the bare name it calls has to be reachable there."""
-    assert p._untrack_scratchpad is git_ops._untrack_scratchpad
+def test_the_helper_is_exported_only_outside_pytest():
+    """The export must sit INSIDE the ``if "pytest" not in sys.modules:`` guard,
+    beside the detached-grade primitives it mirrors. ``_untrack_scratchpad``
+    shells out to git, so exporting the real function under pytest would run it
+    inside every pre-existing test that drives the dead-pid grade path -- they
+    stub subprocess.run and pin its call sequence. The wiring tests above patch
+    ``p._untrack_scratchpad`` directly, which is the surface the rebound body
+    reads via globals()."""
+    src = Path(ss.__file__).read_text()
+    export = "_server._untrack_scratchpad = _untrack_scratchpad"
+    guard = 'if "pytest" not in sys.modules:'
+    assert export in src
+    assert guard in src
+    assert src.index(guard) < src.index(export)
 
 
 def test_the_call_site_precedes_the_detached_grade_spawn():
     """Edit order matters: the untrack must land BEFORE the grade runs, or a
     tracked scratchpad fails the repo's guard tests and rejects the story."""
     src = Path(ss.__file__).read_text()
-    call = "_untrack_scratchpad(str(worktree), story_key)"
+    call = 'untrack = globals().get("_untrack_scratchpad")'
     spawn = 'starter = globals().get("start_detached_grade")'
     assert call in src
     assert spawn in src
     assert src.index(call) < src.index(spawn)
 
 
-def test_the_export_line_precedes_the_pytest_guard():
-    """The export is deliberately NOT inside the ``if "pytest" not in
-    sys.modules:`` block, so the wiring tests exercise the real call site."""
+def test_the_call_site_tolerates_the_helper_being_absent():
+    """Absent under pytest (the guard skipped the export), so the grade body
+    resolves it the way it resolves ``start_detached_grade``: a ``globals()``
+    lookup plus a ``None`` check, never a bare call that would raise."""
     src = Path(ss.__file__).read_text()
-    export = "_server._untrack_scratchpad = _untrack_scratchpad"
-    guard = 'if "pytest" not in sys.modules:'
-    assert export in src
-    assert guard in src
-    assert src.index(export) < src.index(guard)
+    lookup = 'untrack = globals().get("_untrack_scratchpad")'
+    assert lookup in src
+    assert "if untrack is not None:" in src
+    assert src.index(lookup) < src.index("if untrack is not None:")

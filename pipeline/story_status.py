@@ -573,12 +573,18 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         # land in the merge (where a rebase against another story that tracked
         # it conflicts). Recorded on the manifest for audit; the common case
         # (nothing tracked) records nothing and makes no commit.
-        _untracked = _untrack_scratchpad(str(worktree), story_key)
-        if _untracked["paths"]:
-            story["scratchpad_untrack"] = {
-                **_untracked,
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }
+        # Resolved through globals() exactly like the detached-grade spawner
+        # below: the helper is exported only outside pytest (it shells out to
+        # git, so exporting it under pytest would run the real function inside
+        # every pre-existing test that pins subprocess.run's call sequence).
+        untrack = globals().get("_untrack_scratchpad")
+        if untrack is not None:
+            _untracked = untrack(str(worktree), story_key)
+            if _untracked["paths"]:
+                story["scratchpad_untrack"] = {
+                    **_untracked,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
 
         starter = globals().get("start_detached_grade")
         if starter is not None:
@@ -1126,11 +1132,13 @@ def collect_detached_grade(pid: int, result_path: str) -> dict | None:
 # exported.
 _server._baseline_exempted_failures = _baseline_exempted_failures
 
-# Same reason as the export above: the rebound grade body resolves bare
-# names against pipeline.server's namespace, so the post-agent scratchpad
-# untrack it calls must be reachable there too.
-_server._untrack_scratchpad = _untrack_scratchpad
-
+# The post-agent scratchpad untrack has the detached-grade primitives'
+# reason AND one of its own: it shells out to git, so exporting the real
+# function under pytest would run it inside every pre-existing test that
+# drives the dead-pid grade path (they stub subprocess.run and pin its call
+# sequence). The untrack wiring tests patch p._untrack_scratchpad directly -
+# the surface the rebound body reads via globals().
 if "pytest" not in sys.modules:
     _server.start_detached_grade = start_detached_grade
     _server.collect_detached_grade = collect_detached_grade
+    _server._untrack_scratchpad = _untrack_scratchpad

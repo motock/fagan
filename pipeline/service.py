@@ -640,12 +640,16 @@ class PipelineService:
         question: str,
         options: list[str],
         context: str = "",
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | str:
         """
         Escalate a blocking decision to the overlord, which rules on the user's
         behalf per the decision policy. The ruling is appended to the plan's
         decisions log (audit trail) and returned. Call this from a story agent
         when you are blocked on a choice the user would normally make.
+
+        Fails open: if the overlord backend errors, the story is parked for a
+        human and a single-line escalation message (a plain ``str``) is
+        returned instead of raising.
         """
         _validate_key(plan_name)
         _validate_key(story_key)
@@ -660,9 +664,72 @@ class PipelineService:
             f"DECISION POLICY:\n{policy}\n\n"
             f"Rule now, using your output contract exactly."
         )
-        ruling = _parse_ruling(
-            _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
-        )
+        try:
+            ruling = _parse_ruling(
+                _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
+            )
+        except Exception as exc:  # noqa: BLE001 - fail open: an overlord error must not reach the agent
+            # Fail open: an overlord backend error must never surface to the
+            # calling agent as a raw tool error. Park the story for a human and
+            # return an actionable message instead (mirrors triage.rule_on_story).
+            # Only the exception class name is recorded - never the traceback,
+            # file paths or payload data (Secure-by-Design).
+            summary = type(exc).__name__
+            logging.getLogger("pipeline").warning(
+                "request_decision overlord call failed open for story %s: %s",
+                story_key,
+                summary,
+            )
+            record = {
+                "story_key": story_key,
+                "question": question,
+                "options": list(options),
+                "ruling": "",
+                "tier": "",
+                "risk": "",
+                "rationale": f"overlord call failed open: {summary}",
+                "action": "park_for_human",
+                "notify_user": True,
+                "split": [],
+                "failed_open": True,
+                "summary": summary,
+                "decided_by": "overlord",
+                "decided_at": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                _store.append_decision(plan_name, record)
+            except Exception:  # noqa: BLE001 - persistence failure must not crash the tool
+                logging.getLogger("pipeline").warning(
+                    "Failed to append fail-open decision for story %s", story_key
+                )
+            try:
+                _store.update_story(
+                    plan_name,
+                    story_key,
+                    {
+                        "status": "parked",
+                        "parked_reason": f"overlord failure: {summary}",
+                    },
+                )
+            except Exception:  # noqa: BLE001 - an already-parked story must not crash the tool
+                logging.getLogger("pipeline").warning(
+                    "Failed to park story %s after overlord failure", story_key
+                )
+            try:
+                # Make the park visible to the operator (mirrors triage._park).
+                # Only the exception class name is included - no payload data.
+                _notify_user(
+                    plan_name,
+                    f"request_decision failed open for {story_key}: {summary}",
+                    story_key=story_key,
+                    severity="warning",
+                    event="overlord_failure",
+                )
+            except Exception:  # noqa: BLE001 - notification failure must not crash the tool
+                logging.getLogger("pipeline").warning(
+                    "Failed to notify user about fail-open decision for story %s", story_key
+                )
+            return "decision escalated to human: story parked, see decisions log"
         record = {
             "story_key": story_key,
             "question": question,

@@ -859,12 +859,16 @@ def request_decision(
     question: str,
     options: list[str],
     context: str = "",
-) -> dict[str, Any]:
+) -> dict[str, Any] | str:
     """
     Escalate a blocking decision to the overlord, which rules on the user's
     behalf per the decision policy. The ruling is appended to the plan's
     decisions log (audit trail) and returned. Call this from a story agent
     when you are blocked on a choice the user would normally make.
+
+    Fails open: if the overlord backend errors, the story is parked for a
+    human and a single-line escalation message (a plain string) is returned
+    instead of raising.
     """
     return _service.request_decision(
         plan_name,

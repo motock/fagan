@@ -124,6 +124,10 @@ def request_decision_route(plan_name: str, story_key: str, body: StoryDecisionRe
     if not body.options:
         raise HTTPException(status_code=422, detail="options must not be empty")
     result = _service.request_decision(plan_name, story_key, body.question, body.options, body.context)
+    if isinstance(result, str):
+        # Fail-open path: the overlord backend errored, the story was parked for
+        # a human and the tool returned a single-line escalation message.
+        return {"ok": False, "action": "park_for_human", "message": result}
     if not result.get("ok", True):
         raise HTTPException(status_code=400, detail=result.get("error", "unknown error"))
     return result

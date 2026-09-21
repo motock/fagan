@@ -73,6 +73,9 @@ from .build_detect import (  # noqa: F401
     detect_build_command,
     detect_lint_command,
     detect_test_command,
+    # The agent-side full-suite done-gate parses a red run's failing node ids
+    # through this handle (scripts/local_agent_git.py + its oracle twin).
+    failed_node_ids,
 )
 
 # Checkpoint helpers. _checkpoint_impl reads PLAN_DIR via a lazy import from

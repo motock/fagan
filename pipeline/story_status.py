@@ -29,6 +29,7 @@ from .checkpoint import _terminate_and_checkpoint
 from .ci import _acceptance_tampered
 from .concurrency import _heavy_lock
 from .config import (
+    _LOCAL_BACKEND_NAMES,
     DISPATCH_MAX_ATTEMPTS,
     DISPATCH_STALE_ACTIVITY_SECONDS,
     DISPATCH_STARTUP_GRACE_SECONDS,
@@ -444,7 +445,19 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # doesn't live at the worktree root (detect_test_command's fallback).
     # Use absolute paths so the scoped run works regardless of test_dir.
     acceptance = story.get("acceptance") or []
-    if acceptance:
+    # A rework redispatch is held to a full-suite-green done-bar (dispatch.py
+    # raises it on the agent side under exactly this condition). Re-applying the
+    # FM-A acceptance scoping here would grade the same round on a narrower bar
+    # than the one the agent was held to, so a round the agent could not green
+    # would land on tests_passed anyway - fail-open (observed live 2026-09-21:
+    # the oracle parked at the suite-reject cap with the branch tip unchanged
+    # and the repo-wide suite red, and the tick still promoted the story off the
+    # scoped fixture run).
+    rework_full_suite = (
+        story.get("backend", "local") in _LOCAL_BACKEND_NAMES
+        and bool(story.get("ci_rework") or story.get("review_feedback"))
+    )
+    if acceptance and not rework_full_suite:
         acceptance_paths = [str(worktree / p) for p in _acceptance_rel_paths(story)]
         scoped = _scope_test_cmd_to_acceptance(test_cmd, acceptance_paths, test_dir)
         if scoped is not None:

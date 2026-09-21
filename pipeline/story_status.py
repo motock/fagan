@@ -44,7 +44,7 @@ from .escalation import (
     _escalate_to_claude,
     _escalation_label,
 )
-from .git_ops import _commit_wip
+from .git_ops import _commit_wip, _untrack_scratchpad
 from .parsers import (
     _atomic_write_json,
     _is_give_up_summary,
@@ -566,6 +566,26 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
 
     test_result = None
     if grading_pid is None:
+        # The agent process is gone, so it can no longer clean up after
+        # itself: any scratchpad path it tracked with its own `git add -f` /
+        # `git commit` is untracked and committed away HERE, before the grade,
+        # so a stray scratchpad cannot fail the guard tests, reach review, or
+        # land in the merge (where a rebase against another story that tracked
+        # it conflicts). Recorded on the manifest for audit; the common case
+        # (nothing tracked) records nothing and makes no commit.
+        # Resolved through globals() exactly like the detached-grade spawner
+        # below: the helper is exported only outside pytest (it shells out to
+        # git, so exporting it under pytest would run the real function inside
+        # every pre-existing test that pins subprocess.run's call sequence).
+        untrack = globals().get("_untrack_scratchpad")
+        if untrack is not None:
+            _untracked = untrack(str(worktree), story_key)
+            if _untracked["paths"]:
+                story["scratchpad_untrack"] = {
+                    **_untracked,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+
         starter = globals().get("start_detached_grade")
         if starter is not None:
             # Security review (REQUEST_CHANGES): the detached grade's result
@@ -1112,6 +1132,13 @@ def collect_detached_grade(pid: int, result_path: str) -> dict | None:
 # exported.
 _server._baseline_exempted_failures = _baseline_exempted_failures
 
+# The post-agent scratchpad untrack has the detached-grade primitives'
+# reason AND one of its own: it shells out to git, so exporting the real
+# function under pytest would run it inside every pre-existing test that
+# drives the dead-pid grade path (they stub subprocess.run and pin its call
+# sequence). The untrack wiring tests patch p._untrack_scratchpad directly -
+# the surface the rebound body reads via globals().
 if "pytest" not in sys.modules:
     _server.start_detached_grade = start_detached_grade
     _server.collect_detached_grade = collect_detached_grade
+    _server._untrack_scratchpad = _untrack_scratchpad

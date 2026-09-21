@@ -591,6 +591,7 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             dispatch_backend in _LOCAL_BACKEND_NAMES
             and review_feedback
             and transcript_path.exists()
+            and not _transcript_ends_with_done(transcript_path)
         )
         # Detect an operator's patch_story edit to agent_instructions since
         # the story's last dispatch. A transcript-resume rework otherwise
@@ -1373,5 +1374,35 @@ def _rebrief_step_cap_struggle(
     # of it with no replacement.
     story["agent_instructions"] = compose_attempt_facts(
         story.get("agent_instructions", ""), facts)
+
+
+def _transcript_ends_with_done(transcript_path: Path) -> bool:
+    """Whether the prior dispatch's transcript ends with the agent calling its
+    completion tool ``done``.
+
+    A rework redispatch that resumes such a transcript replays the agent's own
+    "I already finished" turn as its most recent state, which dominates the
+    reviewer-feedback turn appended after it: the resumed agent re-emits
+    ``done`` without doing any work, burning the rework budget against an
+    unchanged HEAD. A transcript ending any other way (a tool result, a
+    rejection nudge, a plain assistant turn) is still safe to resume.
+
+    Fails open (returns False) on any read/parse problem, so a corrupt
+    transcript degrades to the existing resume behavior rather than breaking
+    dispatch.
+    """
+    try:
+        msgs = json.loads(transcript_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 (a bad transcript must never break dispatch)
+        return False
+    if not isinstance(msgs, list) or not msgs:
+        return False
+    last = msgs[-1]
+    if not isinstance(last, dict):
+        return False
+    for call in last.get("tool_calls") or []:
+        if isinstance(call, dict) and (call.get("function") or {}).get("name") == "done":
+            return True
+    return False
 
 

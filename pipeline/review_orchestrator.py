@@ -573,14 +573,16 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # High-risk stories require an additional security-engineer pass; both
     # must APPROVE before the story proceeds to pr_open.
     if verdict == "APPROVE" and story.get("risk") == "high":
-        security_output = _run_security_reviewer(
-            worktree, branch, since_sha=story.get("last_reviewed_sha"),
-            plan_role_config=plan_role_config,
-        )
-        security_verdict = _parse_verdict(security_output)
-
-        # FM-B: same rate-limit deferral for the security-reviewer pass.
-        if security_verdict == "UNKNOWN" and _is_rate_limited(security_output):
+        try:
+            security_output = _run_security_reviewer(
+                worktree, branch, since_sha=story.get("last_reviewed_sha"),
+                plan_role_config=plan_role_config,
+            )
+        except backend.RateLimitedError:
+            # OA2-04: mirror the main reviewer's rate-limit deferral. A 429 on
+            # the security pass is an infrastructure event, not a review cycle:
+            # defer and retry on the next tick, never burn the rework or
+            # inconclusive budget.
             _notify_user(
                 plan_name,
                 f"{story_key} security review deferred: reviewer rate-limited; will retry next tick.",
@@ -588,6 +590,64 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             )
             _atomic_write_json(manifest_path, manifest)
             return {"ok": True, "status": story["status"], "deferred": "rate_limited"}
+        except Exception as e:  # noqa: BLE001 (defense in depth, per the comment below)
+            if _is_transient_backend_exception(e):
+                # A security-reviewer transport failure (timeout, refused or
+                # reset connection) is infrastructure, not a review outcome:
+                # defer like the rate-limit path and never charge
+                # review_inconclusive_count. Only the exception TYPE reaches
+                # logs and the notification; its text may carry sensitive detail.
+                logging.getLogger("pipeline").warning(
+                    "%s/%s security review deferred: reviewer transport failure %s",
+                    plan_name, story_key, type(e).__name__,
+                )
+                _notify_user(
+                    plan_name,
+                    f"{story_key} security review deferred: reviewer backend "
+                    f"transport failure ({type(e).__name__}); will retry next tick.",
+                    **_cid_kwargs,
+                )
+                _atomic_write_json(manifest_path, manifest)
+                return {"ok": True, "status": story["status"], "deferred": "transient_backend"}
+            # Defense in depth: the security backend's own internal error (a bad
+            # tool-call shape, a malformed backend response, ...) must not crash
+            # the pipeline process or abort the plan's review pass for the tick.
+            # Defer like the rate-limit path (never treat this as an APPROVE -
+            # fail closed) and never charge review_inconclusive_count. Log a
+            # full traceback server-side at ERROR (never INFO/below - see
+            # Observability & Logging) so it stays diagnosable without exposing
+            # exception text to the operator-facing notification.
+            logging.getLogger("pipeline").error(
+                f"{plan_name}/{story_key} security review raised {type(e).__name__}:\n"
+                f"{traceback.format_exc()}"
+            )
+            _notify_user(
+                plan_name,
+                f"{story_key} security review deferred: unexpected "
+                f"{type(e).__name__}; will retry next tick.",
+                **_cid_kwargs,
+            )
+            _atomic_write_json(manifest_path, manifest)
+            return {"ok": True, "status": story["status"], "deferred": "backend_error"}
+        security_verdict = _parse_verdict(security_output)
+
+        # FM-B/OA2-04: a non-verdict from the security reviewer is an
+        # infrastructure event, not a rejection. Defer like a rate limit - never
+        # fall through to the rework routing below (which would burn the rework
+        # budget) and never charge review_inconclusive_count. A rate-limit text
+        # response keeps its own sentinel; any other non-verdict defers too.
+        if security_verdict == "UNKNOWN":
+            deferred_reason = (
+                "rate_limited" if _is_rate_limited(security_output) else "unknown_verdict"
+            )
+            _notify_user(
+                plan_name,
+                f"{story_key} security review deferred: reviewer returned no "
+                f"verdict; will retry next tick.",
+                **_cid_kwargs,
+            )
+            _atomic_write_json(manifest_path, manifest)
+            return {"ok": True, "status": story["status"], "deferred": deferred_reason}
 
         story["security_review_verdict"] = security_verdict
         if security_verdict != "APPROVE":

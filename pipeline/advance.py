@@ -887,7 +887,14 @@ def _readjudicate_parked_merge_hold(
     """
     if story["status"] != "parked":
         return None
-    if story.get("parked_reason") != _MERGE_HOLD_REASON:
+    parked_reason = story.get("parked_reason")
+    if not (
+        parked_reason == _MERGE_HOLD_REASON
+        or (
+            parked_reason is not None
+            and parked_reason.startswith("risk above threshold")
+        )
+    ):
         return None
     if story.get("review_verdict") != "APPROVE":
         return None

@@ -25,6 +25,7 @@ and _full_suite_result's subprocess.run calls differ from the la twin's).
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path

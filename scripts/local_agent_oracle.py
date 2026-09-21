@@ -17,6 +17,11 @@ This variant owns the acceptance suite:
     same detector check_story_status uses) against the oracle files.
     First time it passes -> auto-commit -> exit 0. The model cannot
     author or modify the exam it's graded on.
+  - `LOCAL_AGENT_REVIEW_FEEDBACK_REWORK=1` marks a round that reworks a
+    reviewer's REQUEST_CHANGES feedback. The oracle is usually already green
+    when such a round starts, so oracle-green is not evidence the findings
+    were addressed: the automatic done-bar stands down and the model's own
+    `done` - still dirty-tree- and suite-gated by the loop - decides it.
 
 Everything else (native /api/chat loop, tolerant parser, per-target
 repetition guard, read-heavy-pattern guard, runtime-artifact exclusion) is
@@ -171,6 +176,7 @@ from scripts.local_agent_oracle_config import (  # noqa: F401 (re-exported: the 
     READ_HEAVY_DISTINCT_WINDOWS,
     READ_HEAVY_WINDOW,
     READ_SILENCE_SECONDS,
+    REVIEW_FEEDBACK_REWORK,
     REWORK_FULL_SUITE,
     REWORK_SUITE_REJECT_CAP,
     TEMPERATURE,
@@ -280,6 +286,13 @@ def _full_suite_result() -> tuple[bool, str, str | None]:
 _full_suite_result = _full_suite_result  # noqa: PLW0127
 
 
+# Whether the reviewer-feedback rework nudge (see finish_if_green) has been
+# appended to the transcript. One-shot: finish_if_green runs after EVERY
+# mutating tool call, so an un-gated nudge would append an identical user turn
+# on each step and flood the model's context.
+_FEEDBACK_NUDGED = False
+
+
 # Full-suite rejections recorded by finish_if_green. The `done` handler keeps
 # its own local counter for the path the model drives; this one bounds the
 # AUTOMATIC path, which fires after every mutating tool call and so can spin
@@ -315,11 +328,39 @@ def finish_if_green(step: int, messages: list | None = None) -> bool:
     excerpt is fed back into `messages` (a user turn) and False is returned so
     the loop keeps working the broken test until fixed or the step cap binds;
     no commit happens on a failure. Cold-start dispatches never set
-    REWORK_FULL_SUITE, so their oracle-green done-bar is unchanged.
+    REWORK_FULL_SUITE, so their oracle-green done-bar is unchanged. A
+    reviewer-feedback rework round (REVIEW_FEEDBACK_REWORK) does not terminate
+    on oracle-green at all - the model's own `done` decides it, still suite-
+    and dirty-tree-gated.
     """
-    global _SUITE_REJECTIONS
+    global _SUITE_REJECTIONS, _FEEDBACK_NUDGED
     ok, _ = oracle_result()
     if not ok:
+        return False
+    if REVIEW_FEEDBACK_REWORK:
+        # A reviewer-feedback rework round: the oracle was usually green
+        # BEFORE this round started (the first dispatch is what the reviewer
+        # read), so oracle-green is not evidence the findings were addressed.
+        # Deciding `done` here ends the round after the agent's FIRST mutating
+        # step - committing whatever it happened to touch and never the
+        # finding (observed live 2026-09-21 on ASB-2: three of four
+        # redispatches ended this way, two with no commit at all). The
+        # findings are this round's bar and only the reviewer can judge them,
+        # so defer to the model's explicit `done` - which still has to clear
+        # the dirty-tree and full-suite gates in the loop. Deliberately does
+        # NOT touch _SUITE_REJECTIONS: this path no longer enforces the suite,
+        # so a red suite here must not count toward the automatic-path park
+        # cap that would park the round for the wrong reason.
+        if messages is not None and not _FEEDBACK_NUDGED:
+            _FEEDBACK_NUDGED = True
+            messages.append({"role": "user", "content": (
+                "The acceptance oracle passes already - it was passing "
+                "before this round began, so it is NOT evidence that the "
+                "review findings are addressed. This round's bar is the "
+                "reviewer's feedback: work those findings, then call done.")})
+        print(f"[step {step}] ORACLE GREEN — reviewer-feedback rework: the "
+              f"harness will not decide done on oracle-green alone; the "
+              f"review findings are the bar.", flush=True)
         return False
     if REWORK_FULL_SUITE:
         full_ok, full_tail, gate = _full_suite_result()

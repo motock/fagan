@@ -568,7 +568,17 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             except Exception:  # noqa: BLE001 (observability hook, never a gate)
                 baseline = None
             try:
-                baseline_marker.write_text("ok\n")
+                # The marker carries the baseline's failing node ids, not a
+                # bare "ok": the agent-side full-suite done-gate reads them
+                # back out of the worktree to tell a failure the story's own
+                # change introduced from one that was already failing before
+                # it touched the tree (mirroring the tick-side grade's own
+                # baseline exemption). No recorded ids -> an empty list, which
+                # exempts nothing.
+                baseline_ids = (baseline or {}).get("failed_node_ids") or []
+                baseline_marker.write_text(
+                    json.dumps({"failed_node_ids": baseline_ids})
+                )
             except OSError:
                 pass
             if baseline is not None and baseline.get("returncode") != 0:

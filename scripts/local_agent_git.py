@@ -19,6 +19,9 @@ the test actually patched (the refined variant of pipeline/service.py's
 
 This module imports ONLY the stdlib — it must never import the agent module
 or its config module (no cycles, ever).
+
+``_baseline_only_failures`` below was added after that move and is not one of
+the verbatim relocations.
 """
 from __future__ import annotations
 
@@ -118,37 +121,8 @@ def _full_suite_result_impl(origin) -> tuple[bool, str, str | None]:
         if lr.returncode != 0:
             return False, (lr.stdout + lr.stderr)[-500:], "lint"
     return True, "", None
-def _baseline_only_failures(origin, stdout: str) -> bool:
-    """Whether every failure in ``stdout`` was already failing in the
-    pre-dispatch baseline snapshot recorded for this worktree.
 
-    dispatch.py writes that snapshot's failing node ids into
-    ``.dispatch_baseline_test_checked`` before the agent's first run. A rework
-    round on a repo with pre-existing, unrelated failures could otherwise never
-    reach a green full suite: it would keep rejecting ``done`` until the
-    suite-reject cap parked it, even though the tick grading that same round
-    exempts exactly those failures.
 
-    Fails closed on every unjustifiable case - no marker, a legacy "ok" marker,
-    an unreadable or empty baseline, or a single failure the baseline does not
-    also name - so a baseline we cannot read exempts nothing.
-    """
-    try:
-        payload = json.loads(
-            (Path(origin["CWD"]) / ".dispatch_baseline_test_checked").read_text(
-                encoding="utf-8"
-            )
-        )
-        baseline_ids = set(payload["failed_node_ids"])
-    except Exception:  # noqa: BLE001 (an unreadable baseline exempts nothing)
-        return False
-    if not baseline_ids:
-        return False
-    try:
-        run_ids = origin["p"].failed_node_ids(stdout)
-    except Exception:  # noqa: BLE001 (an unparseable run exempts nothing)
-        return False
-    return bool(run_ids) and set(run_ids) <= baseline_ids
 def _baseline_only_failures(origin, stdout: str) -> bool:
     """Whether every failure in ``stdout`` was already failing in the
     pre-dispatch baseline snapshot recorded for this worktree.

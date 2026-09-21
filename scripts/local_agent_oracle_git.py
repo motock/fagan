@@ -22,6 +22,9 @@ module or its config module (no cycles, ever). It is the oracle twin of
 scripts/local_agent_git.py: near-identical, but separately maintained —
 the bodies here are the oracle module's own (auto_commit's message shape
 and _full_suite_result's subprocess.run calls differ from the la twin's).
+
+``_baseline_only_failures`` below was added after that move and is not one of
+the verbatim relocations.
 """
 from __future__ import annotations
 
@@ -108,6 +111,8 @@ def _full_suite_result_impl(origin) -> tuple[bool, str, str | None]:
         if lr.returncode != 0:
             return False, (lr.stdout + lr.stderr)[-500:], "lint"
     return True, "", None
+
+
 def _baseline_only_failures(origin, stdout: str) -> bool:
     """Whether every failure in ``stdout`` was already failing in the
     pre-dispatch baseline snapshot recorded for this worktree.

@@ -127,6 +127,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         f"watchdog killed after {elapsed:.0f}s with no completion"
                     )
                 if watchdog_summary is not None:
+                    # OA2-03: every termination path must increment a counter
+                    # that participates in a streak/cap, or a story that keeps
+                    # hanging resumes the same struggling model forever.
+                    # Increment BEFORE the checkpoint so the persisted state
+                    # carries the new value - incrementing after would lag by
+                    # one kill and the threshold escalation would never fire.
+                    story["watchdog_streak"] = story.get("watchdog_streak", 0) + 1
                     _terminate_and_checkpoint(
                         manifest,
                         manifest_path,
@@ -143,6 +150,53 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         plan_name=plan_name,
                         story_key=story_key)
                     story["dispatch_error"] = dispatch_error
+                    # OA2-03 convergence: at the threshold, stop resuming the
+                    # same struggling local model. Produce the SAME
+                    # fallback/escalation signal the step-cap streak path
+                    # produces at STEP_CAP_FALLBACK_THRESHOLD - a plain resume
+                    # here would let a story that keeps hanging loop forever.
+                    # The counter is deliberately NOT reset on this path: a
+                    # later kill must keep escalating, not restart the count.
+                    fallback_model = manifest.get("local_model_fallback")
+                    current_model = story.get("dispatched_model") or story.get("model")
+                    if story["watchdog_streak"] >= STEP_CAP_FALLBACK_THRESHOLD:
+                        if (
+                            fallback_model
+                            and current_model != fallback_model
+                            and story.get("backend", "local") == "local"
+                        ):
+                            story["model"] = fallback_model
+                            _notify_user(  # noqa: F821
+                                plan_name,
+                                f"{story_key} hit the watchdog kill {STEP_CAP_FALLBACK_THRESHOLD}x "
+                                f"on {current_model}; switching to fallback model "
+                                f"{fallback_model} for the next resume.",
+                                story_key=story_key,
+                                event="model_fallback",
+                                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+                            )
+                        elif (
+                            not fallback_model
+                            and _auto_escalation_enabled()  # noqa: F821
+                            and story.get("backend", "local") == "local"
+                            and not story.get("escalated")
+                        ):
+                            _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
+                            _notify_user(  # noqa: F821
+                                plan_name,
+                                f"{story_key} hit the watchdog kill {STEP_CAP_FALLBACK_THRESHOLD}x "
+                                f"on {current_model}; escalating to {_escalation_label()} (no "
+                                f"local_model_fallback configured).",
+                                story_key=story_key,
+                                event="escalated",
+                                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+                            )
+                            _atomic_write_json(manifest_path, manifest)
+                            return {
+                                "status": "todo",
+                                "reason": "step_cap_escalated_to_claude",
+                                "pid": pid,
+                            }
                     _atomic_write_json(manifest_path, manifest)
                     return {
                         "status": "interrupted",
@@ -818,13 +872,15 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
 
     # The agent produced real output and the tests ran: the launch worked, so
     # clear any failed-launch attempts accumulated by earlier infra blips.
-    # The step-cap and infra-failure streaks go too: both gate escalation on
-    # CONSECUTIVE failures, and a dispatch that got this far breaks any
-    # streak. Without this, non-consecutive failures accumulated across a
-    # story's whole life (two infra deaths early, one much later, real
-    # progress in between) would escalate as though they were consecutive.
+    # The step-cap, infra-failure and watchdog streaks go too: all gate
+    # escalation on CONSECUTIVE failures, and a dispatch that got this far
+    # breaks any streak. Without this, non-consecutive failures accumulated
+    # across a story's whole life (two infra deaths early, one much later,
+    # real progress in between) would escalate as though they were
+    # consecutive.
     for _streak_key in (
         "dispatch_attempts",
+        "watchdog_streak",
         "step_cap_streak",
         "step_cap_streak_model",
         "infra_failure_streak",

@@ -1055,7 +1055,7 @@ likewise per slot. Currently populated:
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` | `1` | Rework budget for a story carrying a non-empty `acceptance` block — lower than `PIPELINE_REWORK_MAX_ATTEMPTS` because an oracle-backed story already has an objective, pre-verified correctness signal (it only reaches review after tests, including the oracle, pass); a reviewer that keeps finding beyond-oracle issues mostly spends cycles rather than changing the outcome, so a lower cap parks it for human review faster. Falls back to `PIPELINE_REWORK_MAX_ATTEMPTS` for any story without a truthy `acceptance` list. Superseded by `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` once a story is escalated (see below). |
 | `PIPELINE_REWORK_MAX_ATTEMPTS_ESCALATED` | `3` | Rework budget for a story that has already been escalated to Claude (`story["escalated"]`), taking priority over `PIPELINE_REWORK_MAX_ATTEMPTS_ORACLE` regardless of whether the story also carries an acceptance oracle. `_ORACLE`'s tight cap exists to converge *local* review fast; once escalation has already paid its cost (real Claude usage, and per 2026-07-04's benchmark validation, sometimes real wall-clock time if the Claude reviewer gets rate-limited), reusing that same cap just throttles Claude's shot at the same feedback for no benefit — 6 of 11 escalated cells in that run parked after exactly one post-escalation cycle. |
 | `PIPELINE_LOCAL_MAX_RISK` | `low` | Highest story risk the `auto` router sends to the local agent: `low` \| `medium` \| `high`. Stories above this threshold go straight to Claude. Security-persona stories always go to Claude regardless of this setting. |
-| `PIPELINE_STEP_CAP_FALLBACK_THRESHOLD` | `3` | Consecutive same-model step-cap interrupts before a story's `model` is switched to the plan's `local_model_fallback` (see below). Only takes effect on plans that set that manifest field. On a plan with **no** `local_model_fallback` set, the same threshold instead gates escalation **to Claude** under `PIPELINE_BACKEND_DISPATCH=auto` (see routing item 2 below) — a story with no fallback configured no longer hits the step cap indefinitely on the same model under `auto`; outside `auto` (explicit `local`/`claude`), behavior is unchanged. |
+| `PIPELINE_STEP_CAP_FALLBACK_THRESHOLD` | `3` | Consecutive same-model step-cap interrupts before a story's `model` is switched to the plan's `local_model_fallback` (see below). Only takes effect on plans that set that manifest field. On a plan with **no** `local_model_fallback` set, the same threshold instead gates escalation **to Claude** under `PIPELINE_BACKEND_DISPATCH=auto` (see routing item 2 below) — a story with no fallback configured no longer hits the step cap indefinitely on the same model under `auto`; outside `auto` (explicit `local`/`claude`), behavior is unchanged. The same threshold and streak machinery also covers **watchdog kills** (stale-activity/wall-clock terminations): each watchdog kill increments the story's own `watchdog_streak`, and once that streak reaches this threshold the watchdog path produces the same fallback/escalation signal as the step-cap path (switch to `local_model_fallback`, or escalate to Claude under `auto`) — see "On repeated watchdog kills" below. A successful grade resets `watchdog_streak` to `0`. |
 | `PIPELINE_BACKEND_DIAGNOSIS` | *(unset)* | Backend for the **diagnosis** role, which turns a step-capped or failed attempt's evidence into a root-cause statement folded into the next attempt's `agent_instructions` (see "Step-cap rebrief" below): `claude` \| `ollama` \| `lmstudio` \| `mlx` \| `local`. Resolution priority: a plan's `role_config.diagnosis` → this env var → `model_registry.json`'s `roles.diagnosis` → **the story's own local backend and model**. That last default never selects `claude`/`auto`, so an unconfigured diagnosis role can't quietly spend Claude budget; set this to give a struggling local story a stronger diagnoser than the model that got stuck. |
 | `PIPELINE_REBRIEF_TEST_RERUN` | `1` | Whether the rebrief re-runs the specific tests the last recorded run reported failing (up to 3 node ids, 180s cap, pytest-style runners only) to capture a real traceback for the next attempt. The stored `last_test_check.stdout_tail` is only the last 2000 characters of test output, which on a multi-failure run is the `FAILED <name>` summary and nothing else — the tracebacks scrolled past long before, so the diagnosis role and the resumed agent never saw the actual failing line. Set `0` to skip the re-run (the rest of the measured-facts block still applies). |
 
@@ -1148,6 +1148,26 @@ enables a layered routing strategy:
      starting over. Once a story is already running on the fallback model,
      further step-cap hits are a no-op (there is no fallback past the
      fallback), and this path only ever applies to a `local`-backend story.
+   - **On repeated watchdog kills:** the stale-activity/wall-clock watchdog
+     terminates a hung attempt, checkpoints, rebriefs and resumes it as
+     `interrupted` — the same "never reaches the test-failure path" shape as
+     the step-cap case above, so it carries its own `watchdog_streak` counter
+     and participates in the **same** `PIPELINE_STEP_CAP_FALLBACK_THRESHOLD`
+     (default `3`) machinery: once the streak reaches the threshold the
+     watchdog path produces the same signal the step-cap path does — switch
+     `story["model"]` to the plan's `local_model_fallback` for the next
+     resume, or, on a plan with no `local_model_fallback` set under
+     `PIPELINE_BACKEND_DISPATCH=auto`, escalate to Claude via
+     `_escalate_to_claude` (the same clean-slate teardown as (2), reported
+     with the `step_cap_escalated_to_claude` verdict). Below the threshold a
+     watchdog kill is a plain resume, exactly as before. The counter is
+     deliberately **not** reset on the fallback/escalation path (later kills
+     keep escalating rather than looping) and is reset to `0` by a successful
+     grade, in the same place `dispatch_attempts` is cleared. It is a
+     separate counter from `step_cap_streak`/`infra_failure_streak`: a
+     watchdog kill does not advance either of those, and unlike
+     `step_cap_streak` it has no model-tracking counterpart, so a model change
+     does not reset it.
 
    **Step-cap rebrief (what the next attempt is told).** Whichever of those
    paths a stalled attempt takes, `pipeline/rebrief.py` folds two blocks into

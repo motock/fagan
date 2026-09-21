@@ -65,6 +65,26 @@ def _resolve_story_branch(worktree: str, story_key: str) -> str:
     return convention
 
 
+def _pr_title(story_key: str, summary: str) -> str:
+    """The PR title for a story: ``<key>: <summary>``, without repeating a key
+    the summary already opens with.
+
+    Plan authors routinely title a story summary with its own key, so the
+    blind ``f"{story_key}: {summary}"`` this replaces produced doubled titles
+    like ``TGE-1: TGE-1: Exempt baseline failures from the tick-side grade``
+    -- which ``gh pr merge --squash`` then promotes to the PERMANENT subject
+    of the commit on the default branch (``_merge_pr`` recovers the PR title
+    for exactly that reason). The comparison is case-insensitive because the
+    branch and key may be lower-cased while the summary keeps the author's
+    original spelling.
+    """
+    summary = summary or ""
+    if summary.lower().startswith(f"{story_key.lower()}:"):
+        return summary
+    return f"{story_key}: {summary}"
+
+
+
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
     """Push the story's branch and open a PR for it via the gh CLI.
 
@@ -72,7 +92,7 @@ def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
     subprocess.run) rather than hitting a real remote.
     """
     branch = _resolve_story_branch(worktree, story_key)
-    title = f"{story_key}: {story['summary']}"
+    title = _pr_title(story_key, story["summary"])
     body = story.get("pr_body") or (
         f"Automated PR for {story_key} produced by the agent pipeline."
     )

@@ -64,8 +64,9 @@ def _outbox_path(tmp_path):
 
 def _write_records(path, ids):
     with open(path, "w", encoding="utf-8") as fh:
-        for record_id in ids:
-            fh.write(json.dumps({"id": record_id}) + "\n")
+        fh.writelines(
+            json.dumps({"id": record_id}) + "\n" for record_id in ids
+        )
 
 
 def _append_record(path, record_id):

@@ -120,7 +120,7 @@ def test_call_delegates_args_and_kwargs(probe, monkeypatch):
         calls.append((args, kwargs))
         return "result"
 
-    monkeypatch.setattr(probe, "fn", fn)
+    monkeypatch.setattr(probe, "fn", fn, raising=False)
     ref = _ModuleRef(PROBE, "fn")
 
     assert ref(1, 2, key="value") == "result"
@@ -129,18 +129,18 @@ def test_call_delegates_args_and_kwargs(probe, monkeypatch):
 
 def test_value_is_read_live_not_cached(probe, monkeypatch):
     """A patch applied AFTER construction is seen on the next use."""
-    monkeypatch.setattr(probe, "fn", lambda: "first")
+    monkeypatch.setattr(probe, "fn", lambda: "first", raising=False)
     ref = _ModuleRef(PROBE, "fn")
     assert ref() == "first"
 
-    monkeypatch.setattr(probe, "fn", lambda: "second")
+    monkeypatch.setattr(probe, "fn", lambda: "second", raising=False)
     assert ref() == "second"
     assert ref._value()() == "second"
 
 
 def test_attribute_access_delegates(probe, monkeypatch):
     """``ref.<attr>`` resolves against the live target value."""
-    monkeypatch.setattr(probe, "text", "hello")
+    monkeypatch.setattr(probe, "text", "hello", raising=False)
     ref = _ModuleRef(PROBE, "text")
 
     assert ref.upper() == "HELLO"
@@ -148,7 +148,7 @@ def test_attribute_access_delegates(probe, monkeypatch):
 
 def test_container_protocols_delegate(probe, monkeypatch):
     """``in``, iteration, ``len()`` and ``ref[0]`` delegate on a list target."""
-    monkeypatch.setattr(probe, "items", [10, 20, 30])
+    monkeypatch.setattr(probe, "items", [10, 20, 30], raising=False)
     ref = _ModuleRef(PROBE, "items")
 
     assert 20 in ref
@@ -161,7 +161,7 @@ def test_container_protocols_delegate(probe, monkeypatch):
 
 def test_comparisons_delegate_both_operand_orders(probe, monkeypatch):
     """``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=`` delegate both ways."""
-    monkeypatch.setattr(probe, "n", 5)
+    monkeypatch.setattr(probe, "n", 5, raising=False)
     ref = _ModuleRef(PROBE, "n")
 
     assert ref == 5
@@ -181,7 +181,7 @@ def test_comparisons_delegate_both_operand_orders(probe, monkeypatch):
 
 def test_hash_str_and_repr_match_the_target(probe, monkeypatch):
     """``hash``, ``str`` and ``repr`` equal the target's."""
-    monkeypatch.setattr(probe, "n", 7)
+    monkeypatch.setattr(probe, "n", 7, raising=False)
     ref = _ModuleRef(PROBE, "n")
 
     assert hash(ref) == hash(7)
@@ -191,7 +191,7 @@ def test_hash_str_and_repr_match_the_target(probe, monkeypatch):
 
 def test_truediv_delegates_on_path_target(probe, monkeypatch):
     """``ref / "x"`` delegates on a ``pathlib.Path`` target."""
-    monkeypatch.setattr(probe, "base", pathlib.Path("/tmp/base"))
+    monkeypatch.setattr(probe, "base", pathlib.Path("/tmp/base"), raising=False)
     ref = _ModuleRef(PROBE, "base")
 
     assert ref / "x" == pathlib.Path("/tmp/base/x")
@@ -199,7 +199,7 @@ def test_truediv_delegates_on_path_target(probe, monkeypatch):
 
 def test_sub_and_rsub_delegate_on_int_target(probe, monkeypatch):
     """``ref - n`` and ``n - ref`` delegate on an int target."""
-    monkeypatch.setattr(probe, "n", 10)
+    monkeypatch.setattr(probe, "n", 10, raising=False)
     ref = _ModuleRef(PROBE, "n")
 
     assert ref - 3 == 7
@@ -210,9 +210,9 @@ def test_chained_module_ref_still_delegates_a_call(probe, monkeypatch):
     """A ref whose target is itself a ref still delegates a call."""
     inner = types.ModuleType(INNER_PROBE)
     monkeypatch.setitem(sys.modules, INNER_PROBE, inner)
-    monkeypatch.setattr(inner, "fn", lambda: "deep")
+    monkeypatch.setattr(inner, "fn", lambda: "deep", raising=False)
 
-    monkeypatch.setattr(probe, "inner", _ModuleRef(INNER_PROBE, "fn"))
+    monkeypatch.setattr(probe, "inner", _ModuleRef(INNER_PROBE, "fn"), raising=False)
     ref = _ModuleRef(PROBE, "inner")
 
     assert ref() == "deep"
@@ -226,7 +226,7 @@ def test_chained_module_ref_still_delegates_a_call(probe, monkeypatch):
 @pytest.mark.parametrize("value", [[], 0, ""])
 def test_bool_is_false_for_falsy_targets(probe, monkeypatch, value):
     """``bool(ref)`` is False for ``[]``, ``0`` and ``""``."""
-    monkeypatch.setattr(probe, "v", value)
+    monkeypatch.setattr(probe, "v", value, raising=False)
     ref = _ModuleRef(PROBE, "v")
 
     assert bool(ref) is False
@@ -238,7 +238,7 @@ def test_bool_is_true_for_callable_target(probe, monkeypatch):
     Without an explicit ``__bool__`` this would fall back to the inherited
     ``__len__`` and raise ``TypeError`` for a callable.
     """
-    monkeypatch.setattr(probe, "fn", lambda: None)
+    monkeypatch.setattr(probe, "fn", lambda: None, raising=False)
     ref = _ModuleRef(PROBE, "fn")
 
     assert bool(ref) is True
@@ -246,7 +246,7 @@ def test_bool_is_true_for_callable_target(probe, monkeypatch):
 
 def test_bool_is_true_for_truthy_target(probe, monkeypatch):
     """``bool(ref)`` is True for a non-empty container target."""
-    monkeypatch.setattr(probe, "items", [1])
+    monkeypatch.setattr(probe, "items", [1], raising=False)
     ref = _ModuleRef(PROBE, "items")
 
     assert bool(ref) is True
@@ -265,7 +265,7 @@ def test_missing_module_does_not_raise_at_construction(monkeypatch):
 
 def test_missing_attribute_raises_on_use_not_at_construction(probe, monkeypatch):
     """A ref to a missing attribute raises AttributeError only on use."""
-    monkeypatch.setattr(probe, "present", 1)
+    monkeypatch.setattr(probe, "present", 1, raising=False)
 
     ref = _ModuleRef(PROBE, "absent")
 
@@ -277,7 +277,7 @@ def test_missing_attribute_raises_on_use_not_at_construction(probe, monkeypatch)
 
 def test_ne_is_false_when_equal_and_true_when_not(probe, monkeypatch):
     """``ref != value`` is False when equal and True when not."""
-    monkeypatch.setattr(probe, "n", 3)
+    monkeypatch.setattr(probe, "n", 3, raising=False)
     ref = _ModuleRef(PROBE, "n")
 
     assert (ref != 3) is False

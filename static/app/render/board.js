@@ -69,17 +69,19 @@ function isWedged(story) {
   if (!story || story.status !== "in_progress") return false;
   return Boolean(story.wedge && story.wedge.wedged === true);
 }
-function isFinished(story) {
-  if (!story || story.status !== "in_progress") return false;
-  return Boolean(story.wedge && story.wedge.measured && story.wedge.measured.agent_done === true);
-}
-  if (!story || story.status !== "in_progress") return false;
-  return Boolean(story.wedge && story.wedge.measured && story.wedge.measured.agent_done === true);
-}
-
 // True only once the SERVER has reported the executor's completion marker for
 // this story (story.wedge.measured.agent_done === true). pipeline.wedge_io
-// derives that flag from the new...
+// derives that flag from the worktree's .agent_done / .agent_done.consumed and
+// wedge_verdict forwards it when the dispatch pid is dead -- which is exactly
+// when the marker exists, since the driver writes it as its run exits. A story
+// in this state has finished, so its scratchpad PROGRESS: line is stale and the
+// bar must not be drawn from it. The status guard mirrors isWedged's shape so a
+// finished story that has already left in_progress is not flagged.
+function isFinished(story) {
+  if (!story || story.status !== "in_progress") return false;
+  return Boolean(story.wedge && story.wedge.measured
+    && story.wedge.measured.agent_done === true);
+}
 
 // Build the wedged badge markup for a story the server flagged as wedged.
 // Returns "" for anything else, so callers can push unconditionally. The
@@ -202,7 +204,7 @@ function renderBoard(stories, existingBoardEl) {
       // Progress bar for in_progress stories with checklist data
       const pct = (s.status === "in_progress" && s.progress && s.progress.total > 0)
         ? Math.round(s.progress.done / s.progress.total * 100) : 0;
-      const progressHtml = (s.status === "instr...
+      const progressHtml = (s.status === "in_progress" && !isFinished(s) && s.progress && s.progress.total > 0)
         ? `<div class="card-progress">
              <div class="card-progress-track"><div class="card-progress-fill" style="width: ${pct}%"></div></div>
              <span class="card-progress-label">${s.progress.done}/${s.progress.total}</span>

@@ -89,6 +89,11 @@ _SCAN_JOIN_TIMEOUT_ENV = "PIPELINE_SCAN_JOIN_TIMEOUT_SECONDS"
 _DEFAULT_SCAN_JOIN_TIMEOUT_S = 900.0
 
 
+# Ceiling on the notification outbox drain phase. See the drain block in
+# ``run_once`` for why this is not routed through ``_run_with_watchdog``.
+_DRAIN_JOIN_TIMEOUT_SECONDS = 120.0
+
+
 def _scan_join_timeout_seconds() -> float:
     """Read the scan join deadline from the environment, per call.
 
@@ -702,7 +707,40 @@ class SchedulerDaemon:
             from pipeline.notification_email import send_notification_email
             from pipeline.notification_outbox import ALL_PLANS, drain_outbox
 
-            drain_outbox(ALL_PLANS, send_notification_email)
+            def _drain_outbox_worker() -> None:
+                # Caught here rather than in the enclosing ``except`` below:
+                # this body runs on ``drain_worker``, so a raise would escape
+                # to that thread's excepthook instead of reaching the
+                # caller's handler. Same log-and-swallow contract as before
+                # the drain became bounded.
+                try:
+                    drain_outbox(ALL_PLANS, send_notification_email)
+                except Exception:
+                    logger.exception(
+                        "notification outbox drain failed during tick"
+                    )
+
+            drain_worker = threading.Thread(
+                target=_drain_outbox_worker,
+                name="scheduler-drain-worker",
+                daemon=True,
+            )
+            drain_worker.start()
+            drain_worker.join(_DRAIN_JOIN_TIMEOUT_SECONDS)
+            if drain_worker.is_alive():
+                # A wedged drain (an unreachable SMTP host, say) must not hold
+                # the tick open: the liveness and streak checks below only run
+                # once this phase returns, so an unbounded drain makes a stuck
+                # daemon look alive. Deliberately NOT routed through
+                # _run_with_watchdog: a slow drain is not evidence of a leaked
+                # plan lock, and feeding it into _consecutive_abandons would
+                # let an SMTP outage trip the abandon-restart SystemExit and
+                # bounce the scheduler.
+                logger.warning(
+                    "notification outbox drain exceeded %.1fs; abandoning the "
+                    "worker and continuing the tick",
+                    _DRAIN_JOIN_TIMEOUT_SECONDS,
+                )
         except Exception:
             logger.exception("notification outbox drain failed during tick")
 

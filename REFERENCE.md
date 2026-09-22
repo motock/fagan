@@ -893,7 +893,9 @@ The launchd plist files in this repository are templates. The running daemon rea
 
 The change has **no effect until this reload** happens.
 
-**Drift warning**: The installed agent can differ from the repo copy. On this machine the installed plist sets `PIPELINE_AUTO_TRIAGE` and `PIPELINE_MAX_CONCURRENT_AGENTS=2`, along with several other knobs the repo template does not carry, and it does **not** pin `PIPELINE_LOCAL_NUM_CTX` at all (locally-dispatched models take the per-model tuning table values instead — see above). A wholesale regenerate-and-install would silently drop these local overrides.
+**Drift warning**: The installed agent can differ from the repo copy. On this machine the installed plist sets `PIPELINE_MAX_CONCURRENT_AGENTS=2`, along with several other knobs the repo template does not carry, and it does **not** pin `PIPELINE_LOCAL_NUM_CTX` at all (locally-dispatched models take the per-model tuning table values instead — see above). A wholesale regenerate-and-install would silently drop these local overrides.
+
+`PIPELINE_AUTO_TRIAGE` is now enabled (`PIPELINE_AUTO_TRIAGE=1`) in the shipped `launchd/com.fagan.pipeline.advance-scheduler.plist.template`, so a fresh install gets the triage sweep on by default. **Existing installs must add `<key>PIPELINE_AUTO_TRIAGE</key><string>1</string>` to their installed `~/Library/LaunchAgents/com.fagan.pipeline.advance-scheduler.plist` and restart the scheduler** (see Launchd Install & Reload above) for it to take effect — the installed plist is operator-local and is not updated by this repository.
 
 Set global vars in your shell profile; set per-project overrides in the project's
 `.mcp.json` `env` block.

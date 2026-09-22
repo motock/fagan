@@ -200,7 +200,29 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
             "error": (r.stdout + r.stderr).strip()[:500]}
 
 
+def _sync_branch_remote(worktree: str, branch: str) -> dict[str, Any]:
+    """Push the rebased story branch so origin matches its rewritten history.
+
+    A resume-time rebase rewrites the branch's commit SHAs while the remote
+    copy keeps the pre-rebase history, so the resumed agent's own push is
+    rejected as non-fast-forward and the agent recovers by merging the stale
+    remote back in. Called only after a successful rebase. Never raises:
+    returns {"ok": bool, "error": str}.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "push", "--force-with-lease", "origin", branch],
+            cwd=worktree, check=False, capture_output=True, text=True,
+        )
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    if r.returncode == 0:
+        return {"ok": True, "error": ""}
+    return {"ok": False, "error": (r.stdout + r.stderr).strip()[:500]}
+
+
 __all__ = [
     "_rebase_onto_master",
+    "_sync_branch_remote",
     "_try_auto_resolve_conflict",
 ]

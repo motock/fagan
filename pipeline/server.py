@@ -323,6 +323,7 @@ from .pr import (
 # _default_branch via lazy imports from the server (circular-avoidance).
 from .rebase import (  # noqa: F401
     _rebase_onto_master,
+    _sync_branch_remote,
     _try_auto_resolve_conflict,
 )
 

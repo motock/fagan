@@ -54,6 +54,7 @@ _atomic_write_json = _ServerRef("_atomic_write_json")
 _count_in_progress_agents = _ServerRef("_count_in_progress_agents")
 _default_branch = _ServerRef("_default_branch")
 _rebase_onto_master = _ServerRef("_rebase_onto_master")
+_sync_branch_remote = _ServerRef("_sync_branch_remote")
 _rework_requires_new_tests = _ServerRef("_rework_requires_new_tests")
 _run_planner = _ServerRef("_run_planner")
 _run_rework_planner = _ServerRef("_run_rework_planner")
@@ -463,6 +464,14 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
                                     story_key, _default_branch(), behind,
                                     _default_branch(),
                                 )
+                                _sync = _sync_branch_remote(worktree_path, branch)
+                                if not _sync.get("ok"):
+                                    logging.getLogger("pipeline").warning(
+                                        "remote sync for resumed story %s "
+                                        "failed; dispatching anyway (fail "
+                                        "open): %s",
+                                        story_key, _sync.get("error"),
+                                    )
                             elif result["conflict"]:
                                 # Fail-secure: never dispatch an agent on a
                                 # base that would revert merged work. Park the

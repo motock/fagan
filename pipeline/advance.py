@@ -887,14 +887,7 @@ def _readjudicate_parked_merge_hold(
     """
     if story["status"] != "parked":
         return None
-    parked_reason = story.get("parked_reason")
-    if not (
-        parked_reason == _MERGE_HOLD_REASON
-        or (
-            parked_reason is not None
-            and parked_reason.startswith("risk above threshold")
-        )
-    ):
+    if story.get("parked_reason") != _MERGE_HOLD_REASON:
         return None
     if story.get("review_verdict") != "APPROVE":
         return None
@@ -941,6 +934,7 @@ def _readjudicate_parked_merge_hold(
         decision = _merge_decision(story)
     if decision["action"] == "merge":
         story.pop("merge_park_evidence", None)
+        story.pop("merge_parked_at", None)
         # Flip FIRST, so a merge path that then blocks (pending CI, failed
         # rebase) leaves the story in the ordinary pr_open state that path
         # already knows how to retry.
@@ -950,6 +944,7 @@ def _readjudicate_parked_merge_hold(
         # flap guard - the next tick compares equal and never re-invokes the
         # gate, so the cost is one overlord call per evidence TRANSITION.
         story["merge_park_evidence"] = {"pr_checks": story.get("pr_checks")}
+        story["merge_parked_at"] = datetime.now(timezone.utc).isoformat()
     return decision
 
 
@@ -993,6 +988,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
             # being terminal. Written in every mode: a gated park is
             # re-adjudicable too if autonomy is ever full again.
             story["merge_park_evidence"] = {"pr_checks": story.get("pr_checks")}
+            story["merge_parked_at"] = datetime.now(timezone.utc).isoformat()
             _notify_user(
                 plan_name,
                 f"{key} parked: {decision['reason']}",

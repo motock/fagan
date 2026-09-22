@@ -925,6 +925,32 @@ def _auto_triage_enabled() -> bool:
     return False
 
 
+def _merge_hold_is_stale(story: dict) -> bool:
+    """True once a merge-gate hold is older than the triage grace window.
+
+    Fail-secure: a missing, unparseable, or future ``merge_parked_at`` is
+    never stale, so a legacy park keeps today's exclusion exactly.
+    """
+    ts = story.get("merge_parked_at")
+    if not isinstance(ts, str):
+        return False
+    try:
+        parked_at = datetime.fromisoformat(ts)
+    except ValueError:
+        return False
+    try:
+        grace = int(os.environ.get("PIPELINE_TRIAGE_MERGE_HOLD_GRACE_SECONDS", "86400"))
+    except ValueError:
+        grace = 86400
+    if grace < 0:
+        grace = 86400
+    try:
+        age = (datetime.now(timezone.utc) - parked_at).total_seconds()
+    except TypeError:
+        return False
+    return age > grace
+
+
 def triage_candidates(stories: dict) -> list[str]:
     """Return the sorted list of story keys the triage sweep should consider.
 
@@ -941,7 +967,12 @@ def triage_candidates(stories: dict) -> list[str]:
     only by the merge gate and is the immutable record of an unrefreshed
     merge‑gate ruling, whereas ``parked_reason`` is a mutable label that the
     per‑tick cap path already overwrote on the damaged stories (so keying on
-    the label would leave them eligible). The streak rule below is unaffected:
+    the label would leave them eligible). The one exception is a STALE hold:
+    once the story's ``merge_parked_at`` timestamp is older than the triage
+    grace window (``PIPELINE_TRIAGE_MERGE_HOLD_GRACE_SECONDS``, default
+    86400s; fail-secure on a missing/unparseable timestamp), the hold is
+    handed to the triage ladder instead of dead-ending forever. The streak
+    rule below is unaffected:
     it is checked after this branch, so a story with no snapshot is still
     picked up by the streak rule.
 
@@ -959,6 +990,12 @@ def triage_candidates(stories: dict) -> list[str]:
         if status in ("parked", "failed", "blocked_oracle"):
             evidence = story.get("merge_park_evidence")
             if isinstance(evidence, dict) and "pr_checks" in evidence:
+                if _merge_hold_is_stale(story):
+                    # G5: a merge-gate hold untouched longer than the grace
+                    # window is handed to the triage ladder instead of
+                    # dead-ending forever.
+                    candidates.append(key)
+                    continue
                 # merge‑gate‑owned park; the merge gate owns it, not triage
                 continue
             candidates.append(key)

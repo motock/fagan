@@ -70,6 +70,10 @@ function isWedged(story) {
   return Boolean(story.wedge && story.wedge.wedged === true);
 }
 
+// True only once the SERVER has reported the executor's completion marker for
+// this story (story.wedge.measured.agent_done === true). pipeline.wedge_io
+// derives that flag from the new...
+
 // Build the wedged badge markup for a story the server flagged as wedged.
 // Returns "" for anything else, so callers can push unconditionally. The
 // reasons list is HTML-escaped because it is interpolated into a title
@@ -441,6 +445,6 @@ function renderFilterBar(stories) {
 
 export {
   STALE_IN_PROGRESS_MINUTES, _diffBoardCards, ageLabelFor, applyFilters, chip,
-  escapeHtml, isStaleInProgress, isWedged, relativeAgeLabel, renderBoard,
+  escapeHtml, isFinished, isStaleInProgress, isWedged, relativeAgeLabel, renderBoard,
   renderFilterBar,
 };

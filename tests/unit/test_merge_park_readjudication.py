@@ -74,6 +74,11 @@ PENDING_CHECKS = {"ci": "pending", "lint": "pass"}
 GREEN_CHECKS = {"ci": "pass", "lint": "pass"}
 
 ADVANCE_PATH = Path(__file__).resolve().parents[2] / "pipeline" / "advance.py"
+# The re-adjudication pass lives in advance_merge.py; the source-level guards
+# below scan both files so they keep checking the moved code.
+ADVANCE_MERGE_PATH = (
+    Path(__file__).resolve().parents[2] / "pipeline" / "advance_merge.py"
+)
 
 
 def _story(**overrides):
@@ -771,7 +776,7 @@ def test_gather_failure_leaves_the_old_snapshot_intact(
 
 
 def test_advance_source_writes_the_snapshot_and_reads_it_back():
-    src = ADVANCE_PATH.read_text()
+    src = ADVANCE_PATH.read_text() + "\n" + ADVANCE_MERGE_PATH.read_text()
     assert src.count("merge_park_evidence") >= 2, (
         "pipeline/advance.py must both write merge_park_evidence at park time "
         "and read it in the re-adjudication predicate"

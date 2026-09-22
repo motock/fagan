@@ -7,6 +7,7 @@ sites use bare names -> re-export -> patch lands.
 """
 
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -21,6 +22,97 @@ from .config import (
     REVIEWER_INLINE_DIFF_MAX_CHARS,
 )
 from .persona import _persona_body, _persona_default_model
+
+# Story-context injection (PLD90-W2-CTX): the reviewer prompt carries the
+# story's own brief plus its siblings' status so the reviewer can tell
+# out-of-scope work (assigned to a named sibling) from genuinely missing
+# work. REVIEW_CONTEXT_SCOPE_RULE is appended to every non-None context
+# string build_review_story_context returns - it is the rule that keeps
+# sibling-assigned work out of Blocking findings without weakening the
+# Blocking status of docs/comments made stale by THIS diff.
+REVIEW_BRIEF_MAX_CHARS = 12000
+REVIEW_SIBLINGS_MAX = 40
+REVIEW_CONTEXT_SCOPE_RULE = (
+    "Work that this story's brief explicitly assigns to another named sibling story "
+    "(a `Deferred to <sibling> — not a finding:` line above) is out of scope for this diff: "
+    "if you mention its absence at all, label it Suggestion, never Blocking. Documentation "
+    "or comments made stale BY THIS DIFF remain Blocking under criterion (3)."
+)
+
+_DEFERRED_LINE_RE = re.compile(r"^Deferred to .+?\s+(?:—|--)\s+not a finding:")
+
+
+def _deferred_lines(text: str) -> list[str]:
+    """Return every Deferred line in `text`, stripped, in order.
+
+    A Deferred line is one that, after stripping, starts with
+    ``Deferred to <sibling> — not a finding:`` (an em dash or a double
+    hyphen). Lines that merely mention "Deferred to" mid-sentence, or use a
+    single hyphen, do not count. Empty or None text yields [].
+    """
+    if not text:
+        return []
+    return [
+        stripped
+        for line in text.splitlines()
+        if (stripped := line.strip()) and _DEFERRED_LINE_RE.match(stripped)
+    ]
+
+
+def build_review_story_context(story_key: str, manifest: dict) -> str | None:
+    """Render the story's brief, sibling status and Deferred lines for the
+    reviewer prompt.
+
+    Returns None when the story is missing from ``manifest["stories"]`` or
+    its ``agent_instructions`` is missing/blank - in that case the reviewer
+    prompt is left unchanged. Otherwise returns the brief (truncated to
+    REVIEW_BRIEF_MAX_CHARS), one line per sibling story (capped at
+    REVIEW_SIBLINGS_MAX), the brief's own Deferred lines, and
+    REVIEW_CONTEXT_SCOPE_RULE. The scope rule is appended unconditionally
+    whenever a non-None string is returned: it governs how the reviewer
+    treats sibling-assigned work, which matters even when this particular
+    brief defers nothing (the rule also protects this diff's own stale-doc
+    Blocking status). Pure function - no caching, no module state.
+    """
+    stories = manifest.get("stories") or {}
+    story = stories.get(story_key)
+    if not story:
+        return None
+    brief = (story.get("agent_instructions") or "").strip()
+    if not brief:
+        return None
+
+    sections: list[str] = [
+        "--- This story's brief (what the diff was asked to do) ---",
+        (
+            brief[:REVIEW_BRIEF_MAX_CHARS] + "\n[... brief truncated ...]"
+            if len(brief) > REVIEW_BRIEF_MAX_CHARS
+            else brief
+        ),
+    ]
+
+    siblings = [key for key in stories if key != story_key]
+    if siblings:
+        lines = []
+        for key in sorted(siblings):
+            sibling = stories[key]
+            summary = sibling.get("summary") or key
+            status = sibling.get("status") or "unknown"
+            lines.append(f"- {summary} — {status}")
+        shown = lines[:REVIEW_SIBLINGS_MAX]
+        extra = len(lines) - len(shown)
+        if extra:
+            shown.append(f"- (+{extra} more)")
+        sections.append("--- Sibling stories in this plan (summary — status) ---")
+        sections.extend(shown)
+
+    deferred = _deferred_lines(brief)
+    if deferred:
+        sections.append("--- Work this brief defers to named sibling stories ---")
+        sections.extend(deferred)
+
+    sections.append(REVIEW_CONTEXT_SCOPE_RULE)
+    return "\n".join(sections)
 
 
 def _review_git(worktree: str, args: list[str], timeout: int = 15) -> str | None:
@@ -72,6 +164,7 @@ def _run_reviewer(
     since_sha: str | None = None,
     risk: str = "low",
     prior_feedback: str | None = None,
+    story_context: str | None = None,
 ) -> str:
     """Run the code-reviewer persona over a branch and return its raw output.
 
@@ -117,6 +210,13 @@ def _run_reviewer(
     one, and got APPROVEd because the suite was green and the file had been
     touched. Only per-finding verification catches that, and only the
     reviewer can do it - no suite-gate can, since nothing fails.
+
+    story_context (PLD90-W2-CTX) carries the story's own brief, its
+    siblings' status, and the brief's Deferred lines (see
+    build_review_story_context) into the prompt so the reviewer can tell
+    work the brief assigned to a named sibling story - out of scope for
+    this diff, Suggestion at most - from genuinely missing work. None or
+    blank leaves the prompt unchanged.
     """
     body = _persona_body("code-reviewer")
     # Provider/model fall through role_registry (PIPELINE_BACKEND_REVIEW /
@@ -279,6 +379,9 @@ def _run_reviewer(
         )
     else:
         prior_findings_note = ""
+    story_context_note = (
+        f"{story_context.strip()}\n\n" if story_context and story_context.strip() else ""
+    )
     # Irrelevant once the full diff is already embedded in `lead` above -
     # nothing was truncated, so there's nothing to warn about re-fetching.
     large_diff_note = "" if inline_diff else (
@@ -319,6 +422,7 @@ def _run_reviewer(
         f"{no_rerun_note}"
         f"{auto_fix_note}"
         f"{prior_findings_note}"
+        f"{story_context_note}"
         f"Report EVERY Blocking finding you notice in this single "
         f"pass, not just the first one - the implementer is a weak local "
         f"model and each REQUEST_CHANGES cycle is a full rework redispatch, "

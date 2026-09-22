@@ -697,6 +697,7 @@ _INGEST_AUTHORED_STORY_FIELDS = (
     "risk",
     "backend",
     "tdd_split",
+    "files",
 )
 
 # Valid story["backend"] values at ingest time: every registered driver name

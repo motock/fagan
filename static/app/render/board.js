@@ -68,6 +68,9 @@ function isStaleInProgress(story) {
 function isWedged(story) {
   if (!story || story.status !== "in_progress") return false;
   return Boolean(story.wedge && story.wedge.wedged === true);
+function isFinished(story) {
+  if (!story || story.status !== "in_progress") return false;
+  return Boolean(story.wedge && story.wedge.measured && story.wedge.measured.agent_done === true);
 }
 
 // True only once the SERVER has reported the executor's completion marker for

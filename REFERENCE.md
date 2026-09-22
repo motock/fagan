@@ -720,6 +720,34 @@ treat it as a prompt to re-check the fixture, not a hard gate.
 
 ---
 
+## Story file scope (`files`)
+
+A story may declare the exact set of PRODUCTION files (including docs) it is
+allowed to change, via the optional story field `files`: a list of
+repo-relative POSIX paths, e.g. `"files": ["pipeline/foo.py", "REFERENCE.md"]`.
+
+Semantics:
+
+- Entries are exact repo-relative paths from the repository root — never
+  absolute (no leading `/`), never Windows-style (no `\`), and never escaping
+  the repo (no `..` path component). `pipeline/..x.py` is a valid filename and
+  is allowed; `pipeline/../x.py` is not.
+- Test files are never listed and are always allowed: the field scopes
+  production changes only.
+- Absent means "not declared" — the story carries no file-scope constraint.
+- An empty list means no production file may change.
+- Duplicates are rejected.
+
+Validation: `ingest_plan` validates `files` up front, before any side effect
+(no manifest write, no epic/story creation), and rejects the whole ingest with
+an error naming the story summary and the offending entry when the value is
+not a list whose every entry is a non-empty `str` satisfying the rules above.
+The declared list is persisted verbatim in the manifest story and refreshed on
+re-ingest: a changed list replaces the old one, and dropping the field from
+the plan story removes the key.
+
+---
+
 ## Per-role provider/model configuration
 
 Every pipeline role — **overlord**, **planner** (the guided-decomposition

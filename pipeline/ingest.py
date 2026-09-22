@@ -150,6 +150,48 @@ def _preflight_dispatch_provider(story: dict, plan_role_config: dict | None) -> 
     return "claude"
 
 
+def _files_field_error(story: dict) -> str | None:
+    """Return an error string when ``story["files"]`` is invalid, else None.
+
+    ``files`` (optional) declares the exact repo-relative POSIX paths of the
+    PRODUCTION files (including docs) a story may change; test files are never
+    listed and are always allowed. ``None`` when the field is absent or
+    explicitly ``None`` (an empty list is VALID: it means no production file
+    may change). Otherwise the value must be a ``list`` whose every entry is a
+    non-empty ``str`` that does not start with ``"/"``, contains no
+    ``"\\"``, and has no ``".."`` path component (components are compared
+    after splitting on ``"/"``, so ``pipeline/..x.py`` is fine). Duplicates
+    are rejected. The error names the story summary and the offending entry.
+    """
+    files = story.get("files")
+    if files is None:
+        return None
+    if not isinstance(files, list):
+        return (
+            f"story {story.get('summary', '?')!r}: `files` must be a list of "
+            f"repo-relative paths, got {files!r}"
+        )
+    seen: set[str] = set()
+    for entry in files:
+        if not isinstance(entry, str) or not entry:
+            return (
+                f"story {story.get('summary', '?')!r}: `files` entries must be "
+                f"non-empty strings, got {entry!s}"
+            )
+        if entry.startswith("/") or "\\" in entry or ".." in entry.split("/"):
+            return (
+                f"story {story.get('summary', '?')!r}: `files` entry must be a "
+                f"repo-relative POSIX path, got {entry!s}"
+            )
+        if entry in seen:
+            return (
+                f"story {story.get('summary', '?')!r}: `files` contains "
+                f"duplicate entry {entry!s}"
+            )
+        seen.add(entry)
+    return None
+
+
 def _ingest_plan_impl(
     plan_name: str,
     only_epics: list[str] | None = None,
@@ -208,6 +250,9 @@ def _ingest_plan_impl(
                         f"{sorted(_VALID_STORY_BACKENDS)}"
                     ),
                 }
+            files_error = _files_field_error(story)
+            if files_error is not None:
+                return {"ok": False, "error": files_error}
             # .claude/rules/local-dispatch-preflight.md: a story dispatched to
             # a non-Claude provider must carry a real `Preflight:` line (a
             # conflict/impact run against the base commit), so the executor
@@ -307,6 +352,8 @@ def _ingest_plan_impl(
                     "tdd_split": bool(story.get("tdd_split", False)),
                     "status": "todo",
                 }
+                if "files" in story and story["files"] is not None:
+                    manifest["stories"][issue_id]["files"] = list(story["files"])
 
         # Translate dependencies expressed as local plan keys into the issue IDs
         # just created. Dependencies that don't match a known local key (e.g.
@@ -335,6 +382,16 @@ def _ingest_plan_impl(
                 combined = dict(old_story)
                 for field in _INGEST_AUTHORED_STORY_FIELDS:
                     if field == "risk" and old_story.get("status") != "todo":
+                        continue
+                    if field == "files":
+                        # `files` is the only authored field allowed to be
+                        # absent from a re-ingested story: present -> copied;
+                        # absent -> the key is removed (dropping `files` from
+                        # the plan clears it). Every other field is required.
+                        if "files" in new_story:
+                            combined["files"] = new_story["files"]
+                        else:
+                            combined.pop("files", None)
                         continue
                     combined[field] = new_story[field]
                 merged_stories[key] = combined

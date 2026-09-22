@@ -24,6 +24,7 @@
           "model": "sonnet",
           "risk": "low",
           "backend": "optional: claude | local | ollama | lmstudio | mlx | litellm | auto",
+          "files": ["pipeline/foo.py", "REFERENCE.md"],
           "key": "optional explicit story key; omit to auto-mint a UUID"
         }
       ]
@@ -39,6 +40,7 @@
 - Fields that reach the agent and the review gate: `agent_instructions` (the brief, seeded into the dispatch prompt), `acceptance` (optional array of `{path, source}` read-only test fixtures — when present, the harness materializes them into the worktree and the oracle grades the run on whether the impl makes them pass; when absent, the story runs on the base harness with a "tests pass" bar), `persona`/`model`/`risk` (routing and merge gating), and `dependencies`.
 - `description` is read only for the Plane issue body when Plane is enabled; the manifest and dispatch prompt do not use it — treat it as optional human context for plan review.
 - `backend` (optional) pins this one story's dispatch provider, independent of the process-wide `PIPELINE_BACKEND_DISPATCH`. `ingest_plan` rejects an unrecognized value at ingest time. Omit to use the process-wide default.
+- `files` (optional): exact repo-relative POSIX paths of the PRODUCTION files (including docs) the story may change. Test files are never listed and are always allowed. Absent means "not declared"; an empty list means no production file may change. `ingest_plan` validates the value up front: it must be a list whose every entry is a non-empty `str` that does not start with `/`, contains no `\`, and has no `..` path component; duplicates are rejected.
 - `role_config` (optional, plan-level — a sibling of `epics`, not a story field): per-role provider/model overrides for `overlord`/`planner`/`dispatch`/`review`/`decompose`, e.g. `{"review": {"provider": "mlx", "model": "qwen"}}`. See the README's "Per-role provider/model configuration" section and `model_registry.json` for the full priority chain and available providers/models.
 - `preflight_override` (optional, plan-level): a non-empty reason string that admits non-Claude stories whose brief lacks a real `Preflight:` line. Every use is notified as event `preflight_override`. `ingest_plan` rejects non-Claude stories that have no such line and no override.
 - `dispatch_lease_expires_at` / `dispatch_lease_owner_pid` (runtime, written by `pipeline/dispatch_lease.py` — do NOT set these by hand in a plan file): the dispatch lease that stops a released plan lock from double-dispatching a story (LOCKSTARVE-B2). `dispatch_lease_expires_at` is an ISO-8601 UTC timestamp string (`now + PIPELINE_DISPATCH_LEASE_TTL_SECONDS`, default 1800); `dispatch_lease_owner_pid` is the claimer's `os.getpid()` (diagnostic only, never trusted for ownership). A missing/malformed/expired lease is re-claimable (fail secure); a live lease is never stolen.

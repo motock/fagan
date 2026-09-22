@@ -71,7 +71,16 @@ def test_ingest_plan_carries_backend_into_manifest(plan_dir, monkeypatch, tmp_pa
     monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
-        "epics": [{"summary": "E1", "stories": [_story(backend="mlx")]}],
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(
+                backend="mlx",
+                agent_instructions=(
+                    "Preflight: test fixture — not a real plan\n"
+                    "Build it with tests."
+                ),
+            )],
+        }],
     }
     (plan_dir / "ing2.json").write_text(json.dumps(plan))
     result = p.ingest_plan("ing2")
@@ -116,7 +125,16 @@ def test_ingest_plan_accepts_auto_backend_value(plan_dir, monkeypatch, tmp_path)
     monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
-        "epics": [{"summary": "E1", "stories": [_story(backend="auto")]}],
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(
+                backend="auto",
+                agent_instructions=(
+                    "Preflight: test fixture — not a real plan\n"
+                    "Build it with tests."
+                ),
+            )],
+        }],
     }
     (plan_dir / "ing5.json").write_text(json.dumps(plan))
     result = p.ingest_plan("ing5")
@@ -131,12 +149,29 @@ def test_ingest_plan_reingest_refreshes_backend_field(plan_dir, monkeypatch, tmp
     monkeypatch.setattr(pt, "plane_request", _fake_plane)
     plan = {
         "repo_root": str(tmp_path),
-        "epics": [{"summary": "E1", "stories": [_story(key="S1", backend="ollama")]}],
+        "epics": [{
+            "summary": "E1",
+            "stories": [_story(
+                key="S1",
+                backend="ollama",
+                agent_instructions=(
+                    "Preflight: test fixture — not a real plan\n"
+                    "Build it with tests."
+                ),
+            )],
+        }],
     }
     (plan_dir / "ing6.json").write_text(json.dumps(plan))
     p.ingest_plan("ing6")
 
-    plan["epics"][0]["stories"] = [_story(key="S1", backend="mlx")]
+    plan["epics"][0]["stories"] = [_story(
+        key="S1",
+        backend="mlx",
+        agent_instructions=(
+            "Preflight: test fixture — not a real plan\n"
+            "Build it with tests."
+        ),
+    )]
     (plan_dir / "ing6.json").write_text(json.dumps(plan))
     result = p.ingest_plan("ing6")
 

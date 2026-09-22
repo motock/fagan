@@ -673,6 +673,14 @@ Graceful degradation for optional components — absence is never an error:
 
 ---
 
+## Preflight ingest gate
+
+`ingest_plan` gates stories that will be dispatched to a non-Claude provider. The provider is resolved from the story's `backend`, then the plan-level `role_config.dispatch.provider`, then `PIPELINE_BACKEND_DISPATCH`, then the registry's `roles.dispatch.provider`; anything other than `claude` (including `auto`) is gated.
+
+A gated story must carry a `Preflight:` line in its `agent_instructions` whose remainder is non-empty and does not start with `NOT RUN`. Otherwise `ingest_plan` returns `ok: False` with an error naming the story, the provider, the status, and `.claude/rules/local-dispatch-preflight.md`, and writes no manifest.
+
+For emergencies, a plan may set `preflight_override` to a non-empty reason string; the story is then admitted and every use is notified as event `preflight_override`.
+
 ## Acceptance fixture grading
 
 An `acceptance` fixture that calls the changed function directly — never

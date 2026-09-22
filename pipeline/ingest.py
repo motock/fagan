@@ -114,6 +114,42 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
     )
 
 
+def _preflight_status(agent_instructions: str | None) -> str:
+    """Return "ok", "missing" or "not_run" for a story's Preflight: line."""
+    if not agent_instructions:
+        return "missing"
+    for line in agent_instructions.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("Preflight:"):
+            remainder = stripped[len("Preflight:"):].strip()
+            if not remainder:
+                return "missing"
+            if remainder.upper().startswith("NOT RUN"):
+                return "not_run"
+            return "ok"
+    return "missing"
+
+
+def _preflight_dispatch_provider(story: dict, plan_role_config: dict | None) -> str:
+    """Resolve the dispatch provider for a story; "claude" means not gated."""
+    candidates = (
+        story.get("backend"),
+        ((plan_role_config or {}).get("dispatch") or {}).get("provider"),
+        os.environ.get("PIPELINE_BACKEND_DISPATCH"),
+    )
+    for candidate in candidates:
+        if candidate:
+            return str(candidate).lower()
+    try:
+        registry = role_registry.load_registry() or {}
+    except (OSError, ValueError, KeyError):
+        registry = {}
+    provider = ((registry.get("roles") or {}).get("dispatch") or {}).get("provider")
+    if provider:
+        return str(provider).lower()
+    return "claude"
+
+
 def _ingest_plan_impl(
     plan_name: str,
     only_epics: list[str] | None = None,
@@ -141,6 +177,20 @@ def _ingest_plan_impl(
             "error": f"Plan repo_root is missing or not a directory: {repo_root!r}",
         }
 
+    # A plan-level preflight_override admits non-Claude stories whose brief
+    # lacks a real `Preflight:` line (.claude/rules/local-dispatch-preflight.md).
+    # Validated once, up front, before any side effect: a present-but-invalid
+    # value must fail the ingest even when every story is Claude-provider.
+    override = plan.get("preflight_override")
+    if "preflight_override" in plan and (
+        not isinstance(override, str) or not override.strip()
+    ):
+        return {
+            "ok": False,
+            "error": "preflight_override must be a non-empty reason string",
+        }
+    overrides = []
+
     # Validate story["backend"] upfront, before any Plane side effects, so a
     # typo'd provider name fails closed here rather than surfacing as a
     # NotImplementedError deep inside get_backend at dispatch time.
@@ -158,6 +208,32 @@ def _ingest_plan_impl(
                         f"{sorted(_VALID_STORY_BACKENDS)}"
                     ),
                 }
+            # .claude/rules/local-dispatch-preflight.md: a story dispatched to
+            # a non-Claude provider must carry a real `Preflight:` line (a
+            # conflict/impact run against the base commit), so the executor
+            # does not discover a stale base or a conflicting sibling change
+            # mid-dispatch. Claude-provider stories are never gated.
+            provider = _preflight_dispatch_provider(story, plan.get("role_config"))
+            if provider != "claude":
+                status = _preflight_status(story.get("agent_instructions"))
+                if status != "ok":
+                    if override is None:
+                        phrase = (
+                            "says `Preflight: NOT RUN`"
+                            if status == "not_run"
+                            else "has no `Preflight:` line"
+                        )
+                        return {
+                            "ok": False,
+                            "error": (
+                                f"story {story.get('summary')!r} is gated for "
+                                f"provider {provider!r}: it {phrase}; see "
+                                f".claude/rules/local-dispatch-preflight.md; set "
+                                f'a plan-level "preflight_override": "<reason>" '
+                                f"for emergencies"
+                            ),
+                        }
+                    overrides.append((story.get("key"), status, override))
             # OPSA-8: lint the .py acceptance fixture sources upfront, before
             # any Plane side effect. A lint-violating fixture is a read-only
             # oracle the dispatched agent can never fix (PR #235), so it must
@@ -274,6 +350,15 @@ def _ingest_plan_impl(
         )
 
         _atomic_write_json(manifest_path, final_manifest)
+
+        # A plan-level preflight_override admitted these non-Claude stories
+        # despite a missing or not-run `Preflight:` line
+        # (.claude/rules/local-dispatch-preflight.md). Every use is notified:
+        # the override is an emergency escape hatch, never a silent default.
+        for key, status, reason in overrides:
+            message = f"{key}: preflight gate overridden ({status}): {reason}"
+            _notify_user(plan_name, message, event="preflight_override")
+            logging.getLogger("pipeline").warning(message)
 
         # Non-blocking authoring nudge: flag acceptance fixtures that grade
         # only the unit in isolation while the brief requires integration

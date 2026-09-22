@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Any
 
 from . import merge as _merge_mod
-from .advance_merge import _MERGE_HOLD_REASON, _readjudicate_parked_merge_hold
+from .advance_merge import (
+    _MERGE_HOLD_REASON,  # noqa: F401  (re-exported for existing readers)
+    _readjudicate_parked_merge_hold,
+)
 from .concurrency import PlanLockReacquireTimeout, _released_plan_lock
 from .config import PIPELINE_MAX_DISPATCH_PER_TICK as _CFG_MAX_DISPATCH_PER_TICK
 from .dispatch import _resolve_dispatch_target

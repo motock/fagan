@@ -198,7 +198,7 @@ function renderBoard(stories, existingBoardEl) {
       // Progress bar for in_progress stories with checklist data
       const pct = (s.status === "in_progress" && s.progress && s.progress.total > 0)
         ? Math.round(s.progress.done / s.progress.total * 100) : 0;
-      const progressHtml = (s.status === "in_progress" && s.progress && s.progress.total > 0)
+      const progressHtml = (s.status === "instr...
         ? `<div class="card-progress">
              <div class="card-progress-track"><div class="card-progress-fill" style="width: ${pct}%"></div></div>
              <span class="card-progress-label">${s.progress.done}/${s.progress.total}</span>
@@ -342,7 +342,7 @@ const existing = Array.from(columnBodyEl.querySelectorAll('.card')).reduce((m, e
     const pct = (s.status === 'in_progress' && s.progress && s.progress.total > 0)
       ? Math.round(s.progress.done / s.progress.total * 100)
       : 0;
-    const progressHtml = (s.status === 'in_progress' && s.progress && s.progress.total > 0)
+    const progressHtml = (s.status === 'in_progress' && !isFinished(s) && s.progress && s.progress.total > 0)
       ? `<div class="card-progress"><div class="card-progress-track"><div class="card-progress-fill" style="width: ${pct}%"></div></div><span class="card-progress-label">${s.progress.done}/${s.progress.total}</span></div>`
       : '';
      const cardInnerHtml = `

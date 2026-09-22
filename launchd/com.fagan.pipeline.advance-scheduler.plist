@@ -16,6 +16,8 @@
 		<string>full</string>
 		<key>PIPELINE_AUTO_ESCALATE</key>
 		<string>1</string>
+		<key>PIPELINE_AUTO_TRIAGE</key>
+		<string>1</string>
 		<key>PIPELINE_DECOMPOSE_SCRATCHPAD</key>
 		<string>on</string>
 		<key>PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS</key>

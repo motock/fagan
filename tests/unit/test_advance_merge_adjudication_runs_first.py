@@ -43,6 +43,7 @@ import json
 from pathlib import Path
 
 import pipeline.advance as adv
+import pipeline.advance_merge as adv_merge
 from pipeline import server as p
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _hermetic_ollama_seams,
@@ -60,7 +61,9 @@ _DISPATCH_COMMENT = "# 1. Dispatch ready"
 
 
 def _advance_source() -> str:
-    return Path(adv.__file__).read_text()
+    # The adjudication pass lives in advance_merge.py; scan both files so the
+    # source-level pins below keep checking the moved code.
+    return Path(adv.__file__).read_text() + "\n" + Path(adv_merge.__file__).read_text()
 
 
 class _FakeBackend:

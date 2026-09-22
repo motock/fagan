@@ -253,6 +253,7 @@ def test_ingest_notifies_once_for_an_oversized_story(
     )
     plan = _plan(
         tmp_path,
+        "Preflight: test fixture — not a real plan\n"
         "Touch `app/a.py`, `app/b.py` and `app/c.py`.",
     )
     (sizing_plan_dir / "sizing.json").write_text(json.dumps(plan))
@@ -276,7 +277,10 @@ def test_ingest_is_silent_for_a_well_scoped_story(
     monkeypatch.setattr(
         ingest_mod, "_notify_user", lambda plan, msg: notices.append((plan, msg))
     )
-    plan = _plan(tmp_path, "Touch `app/a.py`.")
+    plan = _plan(
+        tmp_path,
+        "Preflight: test fixture — not a real plan\nTouch `app/a.py`.",
+    )
     (sizing_plan_dir / "sizing2.json").write_text(json.dumps(plan))
 
     result = p.ingest_plan("sizing2")
@@ -292,7 +296,10 @@ def test_ingest_still_persists_the_story_unchanged(
     or block the ingest."""
     monkeypatch.setattr(pt, "plane_request", _fake_plane)
     monkeypatch.setattr(ingest_mod, "_notify_user", lambda plan, msg: None)
-    instructions = "Touch `app/a.py`, `app/b.py` and `app/c.py`."
+    instructions = (
+        "Preflight: test fixture — not a real plan\n"
+        "Touch `app/a.py`, `app/b.py` and `app/c.py`."
+    )
     plan = _plan(tmp_path, instructions)
     (sizing_plan_dir / "sizing3.json").write_text(json.dumps(plan))
 

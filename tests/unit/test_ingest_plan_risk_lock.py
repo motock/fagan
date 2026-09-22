@@ -300,7 +300,11 @@ def test_reingest_still_refreshes_other_authored_fields_on_dispatched_story(
 
     plan["epics"][0]["stories"][0].update({
         "risk": "low",  # must be locked
-        "agent_instructions": "Build v2, with edge cases.",  # must refresh
+        # Preflight: test fixture — not a real plan (the ollama backend makes
+        # this ingest hit the local-dispatch preflight gate).
+        "agent_instructions": (
+            "Preflight: test fixture — not a real plan\nBuild v2, with edge cases."
+        ),  # must refresh
         "persona": "code-reviewer",  # must refresh
         "backend": "ollama",  # must refresh
     })
@@ -312,7 +316,9 @@ def test_reingest_still_refreshes_other_authored_fields_on_dispatched_story(
     # risk locked.
     assert merged["stories"]["S1"]["risk"] == "high"
     # other authored fields refreshed.
-    assert merged["stories"]["S1"]["agent_instructions"] == "Build v2, with edge cases."
+    assert merged["stories"]["S1"]["agent_instructions"] == (
+        "Preflight: test fixture — not a real plan\nBuild v2, with edge cases."
+    )
     assert merged["stories"]["S1"]["persona"] == "code-reviewer"
     assert merged["stories"]["S1"]["backend"] == "ollama"
     # runtime state untouched.

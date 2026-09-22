@@ -636,3 +636,167 @@ def test_module_imports_only_the_standard_library():
     assert roots <= set(sys.stdlib_module_names), sorted(roots)
     assert "pipeline" not in roots
     assert "app" not in roots
+
+
+# --------------------------------------------------------------------------
+# step-cap rebrief blocks
+#
+# When an executor hits the step cap, pipeline/dispatch.py folds a root-cause
+# block into the story's agent_instructions via pipeline/rebrief.py.  Those
+# blocks persist in the manifest's agent_instructions and there is no separate
+# brief-history field, so agent_instructions is the only place to look.  A
+# story whose brief carries such a block is NOT first-pass clean.
+# --------------------------------------------------------------------------
+_DIAGNOSIS_HEADER = "=== PRIOR-ATTEMPT DIAGNOSIS (read this FIRST) ==="
+_FACTS_HEADER = "=== PRIOR-ATTEMPT FACTS (measured from the worktree, not guessed) ==="
+
+
+def test_step_cap_rebrief_headers_constant_exists_with_both_headers():
+    headers = _ls()._STEP_CAP_REBRIEF_HEADERS
+    assert isinstance(headers, tuple)
+    assert _DIAGNOSIS_HEADER in headers
+    assert _FACTS_HEADER in headers
+
+
+def test_diagnosis_block_in_instructions_is_not_clean():
+    story = _story(agent_instructions=f"GOAL: x\n\n{_DIAGNOSIS_HEADER}\nroot cause")
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert out["clean"] is False
+    assert "step_cap_rebrief" in out["reasons"]
+    assert out["reasons"] == ["step_cap_rebrief"]
+
+
+def test_facts_block_in_instructions_is_not_clean():
+    story = _story(agent_instructions=f"GOAL: x\n\n{_FACTS_HEADER}\nmeasured facts")
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert out["clean"] is False
+    assert "step_cap_rebrief" in out["reasons"]
+    assert out["reasons"] == ["step_cap_rebrief"]
+
+
+def test_both_blocks_yield_the_reason_once():
+    story = _story(
+        agent_instructions=(
+            f"GOAL: x\n\n{_DIAGNOSIS_HEADER}\nroot cause\n\n{_FACTS_HEADER}\nfacts"
+        )
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert out["clean"] is False
+    assert out["reasons"].count("step_cap_rebrief") == 1
+
+
+def test_plain_done_story_with_merge_records_stays_clean():
+    out = classify_story(
+        "S1",
+        _story(),
+        [
+            _rec(story_key="S1", event="story_merged"),
+            _rec(story_key="S1", event="plan_completed"),
+        ],
+    )
+    assert out["clean"] is True
+    assert out["reasons"] == []
+
+
+def test_interrupted_story_without_a_diagnosis_block_stays_clean():
+    """A deliberate or resource-gate interrupt is not the agent's fault."""
+    story = _story(interrupted_at="2026-09-18T11:00:00Z")
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert out["clean"] is True
+    assert out["reasons"] == []
+
+
+def test_interrupted_story_with_a_diagnosis_block_is_not_clean():
+    """The block, not the interrupt field, is what flags the story."""
+    story = _story(
+        interrupted_at="2026-09-18T11:00:00Z",
+        agent_instructions=f"GOAL: x\n\n{_DIAGNOSIS_HEADER}\nroot cause",
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert out["clean"] is False
+    assert "step_cap_rebrief" in out["reasons"]
+
+
+def test_none_instructions_do_not_flag():
+    out = classify_story(
+        "S1",
+        _story(agent_instructions=None),
+        [_rec(story_key="S1", event="story_merged")],
+    )
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_empty_instructions_do_not_flag():
+    out = classify_story(
+        "S1",
+        _story(agent_instructions=""),
+        [_rec(story_key="S1", event="story_merged")],
+    )
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_non_string_instructions_do_not_crash_or_flag():
+    out = classify_story(
+        "S1",
+        _story(agent_instructions=12345),
+        [_rec(story_key="S1", event="story_merged")],
+    )
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_partial_header_does_not_flag():
+    """Only the full literal header counts, not a truncated prefix."""
+    story = _story(
+        agent_instructions="GOAL: x\n\n=== PRIOR-ATTEMPT DIAGNOSIS ===\nroot cause"
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert "step_cap_rebrief" not in out["reasons"]
+    assert out["clean"] is True
+
+
+def test_step_cap_rebrief_reason_does_not_require_records():
+    story = _story(agent_instructions=f"GOAL: x\n\n{_DIAGNOSIS_HEADER}\nroot cause")
+    out = classify_story("S1", story, [])
+    assert out["clean"] is False
+    assert "step_cap_rebrief" in out["reasons"]
+
+
+def test_not_done_story_with_a_diagnosis_block_reports_both_reasons():
+    story = _story(
+        status="parked",
+        agent_instructions=f"GOAL: x\n\n{_DIAGNOSIS_HEADER}\nroot cause",
+    )
+    out = classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    assert out["clean"] is False
+    assert {"not_done", "step_cap_rebrief"} <= set(out["reasons"])
+    assert out["reasons"] == sorted(out["reasons"])
+
+
+def test_step_cap_rebrief_reason_is_aggregated_by_rolling_rate():
+    story = _story(agent_instructions=f"GOAL: x\n\n{_DIAGNOSIS_HEADER}\nroot cause")
+    classified = [
+        classify_story("S1", story, [_rec(story_key="S1", event="story_merged")])
+    ]
+    out = rolling_rate(classified, window=30)
+    assert out["count"] == 1
+    assert out["clean"] == 0
+    assert out["rate"] == 0.0
+    assert out["reasons"]["step_cap_rebrief"] == 1
+
+
+def test_step_cap_headers_match_the_rebrief_module():
+    """Drift guard: the classifier's headers must be the rebrief module's."""
+    from pipeline import rebrief
+
+    assert _ls()._STEP_CAP_REBRIEF_HEADERS == (
+        rebrief.DIAGNOSIS_HEADER,
+        rebrief.FACTS_HEADER,
+    )
+
+
+def test_module_docstring_names_step_cap_rebrief_blocks():
+    doc = _ls().__doc__ or ""
+    assert "step-cap rebrief" in doc.lower() or "step_cap_rebrief" in doc

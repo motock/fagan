@@ -309,7 +309,7 @@ def _bounded_bash_run(cmd: str, cwd: Path) -> subprocess.CompletedProcess:
     )
 
 
-# original function line
+
 
 def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
     """Execute a review (read-only) tool: bash (run commands) or view_file."""
@@ -347,16 +347,6 @@ def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
         return (pr.stdout + pr.stderr)[:3000] or "(no output)"
 
 
-# original block
-
-        if argv0 and _p._is_heavy([argv0]):
-            with _p._heavy_lock():
-                pr = subprocess.run(cmd, check=False, shell=True, cwd=cwd,
-                                    capture_output=True, text=True)
-        else:
-            pr = subprocess.run(cmd, check=False, shell=True, cwd=cwd,
-                                capture_output=True, text=True)
-        return (pr.stdout + pr.stderr)[:3000] or "(no output)"
 
     return f"unknown tool {fn}"
 

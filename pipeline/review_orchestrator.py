@@ -22,73 +22,7 @@ from typing import Any
 import pipeline.server as _server
 
 from .parsers import _is_transient_backend_exception
-
-
-class _ServerRef:
-    """Delegates to the *current* ``pipeline.server`` binding for a name.
-
-    The moved body references server-sourced names as bare module globals.
-    The test suite patches ``pipeline.server`` for those names, so these
-    bindings must read the live ``pipeline.server`` value at call time rather
-    than hold a copy imported at module load.
-    """
-
-    def __init__(self, name: str):
-        self._name = name
-
-    def _value(self):
-        return getattr(_server, self._name)
-
-    def __getattr__(self, attr: str):
-        return getattr(self._value(), attr)
-
-    def __call__(self, *args, **kwargs):
-        return self._value()(*args, **kwargs)
-
-    def __truediv__(self, other):
-        return self._value() / other
-
-    def __contains__(self, item):
-        return item in self._value()
-
-    def __iter__(self):
-        return iter(self._value())
-
-    def __sub__(self, other):
-        return self._value() - other
-
-    def __rsub__(self, other):
-        return other - self._value()
-
-    def __len__(self):
-        return len(self._value())
-
-    def __eq__(self, other):
-        if isinstance(other, _ServerRef):
-            return self._value() == other._value()
-        return self._value() == other
-
-    def __lt__(self, other):
-        return self._value() < other
-
-    def __le__(self, other):
-        return self._value() <= other
-
-    def __gt__(self, other):
-        return self._value() > other
-
-    def __ge__(self, other):
-        return self._value() >= other
-
-    def __hash__(self):
-        return hash(self._value())
-
-    def __str__(self):
-        return str(self._value())
-
-    def __repr__(self):
-        return repr(self._value())
-
+from .review_refs import _ServerRef
 
 # Server-sourced names the moved body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so

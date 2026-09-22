@@ -1,87 +1,28 @@
 """Lazily-resolved references to attributes of ``pipeline.server``.
 
-WHY this proxy exists: the review-orchestration body moved out of
-``pipeline/server.py`` reads server-sourced names (``_store``,
+WHY this indirection exists: the review-orchestration body in
+``pipeline.review_orchestrator`` reads server-sourced names (``_store``,
 ``_run_reviewer``, ``_open_pr``, ``_validate_key``, ...) as bare module
 globals, and the test suite patches those names on ``pipeline.server``. A
 module-load copy (``from pipeline.server import _run_reviewer``) would freeze
-the real function into this module and every
+the real function into the importing module and every
 ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` would be silently
 ignored. ``_ServerRef`` re-reads ``pipeline.server.<name>`` on every access,
 so patches land and the value is always the current one.
 
-WHY it is a separate class rather than ``pipeline.service._ServerRef``: the
-two are deliberately independent copies so that this module depends only on
-``pipeline.server``. ``pipeline.service._ServerRef`` re-imports
-``pipeline.server`` inside ``_value``; this one binds it once at module
-import. Both resolve the name against ``pipeline.server`` at call time, so a
-``monkeypatch.setattr(pipeline.server, ...)`` lands either way.
+WHY this module re-exports rather than declaring its own class:
+``pipeline.service._ServerRef`` is the shared implementation of this proxy and
+already carries every dunder the review body needs — ``__gt__``, ``__ge__``,
+``__contains__``, ``__iter__``, ``__len__``, ``__eq__``, ... — so the review
+body's ``files_changed > REVIEWER_AUTO_FIX_MAX_FILES``,
+``fallback_mode in _LOCAL_BACKEND_NAMES`` and
+``inconclusive >= REVIEW_INCONCLUSIVE_MAX`` comparisons all resolve against
+the live ``pipeline.server`` value. ``pipeline.dispatch`` reuses the same
+class the same way. ``pipeline.live_ref.LiveRef`` is the other shared proxy,
+but it is not a drop-in here: it lacks those comparison and container
+dunders. Re-exporting keeps one implementation instead of another copy.
 """
 
-import pipeline.server as _server
+from .service import _ServerRef
 
-
-class _ServerRef:
-    """Delegates to the *current* ``pipeline.server`` binding for a name.
-
-    The moved body references server-sourced names as bare module globals.
-    The test suite patches ``pipeline.server`` for those names, so these
-    bindings must read the live ``pipeline.server`` value at call time rather
-    than hold a copy imported at module load.
-    """
-
-    def __init__(self, name: str):
-        self._name = name
-
-    def _value(self):
-        return getattr(_server, self._name)
-
-    def __getattr__(self, attr: str):
-        return getattr(self._value(), attr)
-
-    def __call__(self, *args, **kwargs):
-        return self._value()(*args, **kwargs)
-
-    def __truediv__(self, other):
-        return self._value() / other
-
-    def __contains__(self, item):
-        return item in self._value()
-
-    def __iter__(self):
-        return iter(self._value())
-
-    def __sub__(self, other):
-        return self._value() - other
-
-    def __rsub__(self, other):
-        return other - self._value()
-
-    def __len__(self):
-        return len(self._value())
-
-    def __eq__(self, other):
-        if isinstance(other, _ServerRef):
-            return self._value() == other._value()
-        return self._value() == other
-
-    def __lt__(self, other):
-        return self._value() < other
-
-    def __le__(self, other):
-        return self._value() <= other
-
-    def __gt__(self, other):
-        return self._value() > other
-
-    def __ge__(self, other):
-        return self._value() >= other
-
-    def __hash__(self):
-        return hash(self._value())
-
-    def __str__(self):
-        return str(self._value())
-
-    def __repr__(self):
-        return repr(self._value())
+__all__ = ["_ServerRef"]

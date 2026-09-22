@@ -234,3 +234,4 @@ if a precise date is needed when writing one of these up.
 - agent-side-baseline-exemption — completed 2026-09-21, 2 stories
 - review-feedback-rework-done-bar — completed 2026-09-21, 2 stories
 - overlord-autonomy-round-2 — completed 2026-09-22, 8 stories
+- resume-rebase-remote-sync — completed 2026-09-22, 2 stories

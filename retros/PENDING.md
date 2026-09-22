@@ -14,19 +14,6 @@ section added here may be the last one in the file.
 One-off harness defects observed during incident work that still need
 either a plan or a retro write-up. Remove a line once one exists.
 
-- **Resume rebase never force-pushes the remote story branch** (observed
-  2026-09-22, OA2-01). `advance` rebases a worktree onto origin/master
-  before resuming an interrupted story — its own log line in
-  `advance-scheduler.err.log` reads `story <KEY> worktree base predated
-  origin/master by N commit(s); rebased onto origin/master before
-  resume` — but the story's remote branch keeps the pre-rebase history.
-  The resumed agent then merges that stale remote back in, duplicating
-  commits and resurrecting the conflict class: OA2-01's merge gate failed
-  4x on a deterministic rebase `add/add` of its own test file, parked,
-  and required manual history linearization (`git checkout -B` on
-  origin/master, check out the two changed files, `--force-with-lease`).
-  A `git push --force-with-lease` of the story branch before resume closes
-  the whole class.
 - **A rescoped story keeps its round-1 commit message, and nothing checks
   it** (observed 2026-09-22, OA2-05). `3cb71a5` on master reads "Widen
   merge-park re-adjudication to the risk-threshold park reasons the gate

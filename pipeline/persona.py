@@ -125,7 +125,10 @@ def _build_dispatch_command(
             f"{rework_instruction}"
             f"{checkpoint_instruction}"
             f"{no_wakeup_instruction}"
-            f"When finished, commit your work, push the branch, and exit."
+            f"The pipeline owns this branch's remote state: never run git pull, "
+            f"git merge, or git rebase against origin — just commit and push. "
+            f"If a push is rejected, stop and report it rather than merging.\n\n"
+            f"When finished, commit your work, push the branch, and exit.",
         )
     else:
         prompt = (
@@ -134,7 +137,10 @@ def _build_dispatch_command(
             f"{rework_instruction}"
             f"{checkpoint_instruction}"
             f"{no_wakeup_instruction}"
-            f"When finished, commit your work, push the branch, and exit."
+            f"The pipeline owns this branch's remote state: never run git pull, "
+            f"git merge, or git rebase against origin — just commit and push. "
+            f"If a push is rejected, stop and report it rather than merging.\n\n"
+            f"When finished, commit your work, push the branch, and exit.",
         )
     model = (
         story.get("model")

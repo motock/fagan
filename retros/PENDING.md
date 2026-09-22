@@ -6,6 +6,42 @@ Durable backlog for the retro process described in
 completion date) whenever a pipeline-self-repo plan's last story goes
 done. **Remove a plan's line once its retro is written and added to
 `retros/INDEX.md`** — this file is a to-do list, not an archive.
+`_record_retro_pending` writes those markers at end-of-file, so no
+section added here may be the last one in the file.
+
+## Harness gaps with no plan yet
+
+One-off harness defects observed during incident work that still need
+either a plan or a retro write-up. Remove a line once one exists.
+
+- **Resume rebase never force-pushes the remote story branch** (observed
+  2026-09-22, OA2-01). `advance` rebases a worktree onto origin/master
+  before resuming an interrupted story — its own log line in
+  `advance-scheduler.err.log` reads `story <KEY> worktree base predated
+  origin/master by N commit(s); rebased onto origin/master before
+  resume` — but the story's remote branch keeps the pre-rebase history.
+  The resumed agent then merges that stale remote back in, duplicating
+  commits and resurrecting the conflict class: OA2-01's merge gate failed
+  4x on a deterministic rebase `add/add` of its own test file, parked,
+  and required manual history linearization (`git checkout -B` on
+  origin/master, check out the two changed files, `--force-with-lease`).
+  A `git push --force-with-lease` of the story branch before resume closes
+  the whole class.
+- **A rescoped story keeps its round-1 commit message, and nothing checks
+  it** (observed 2026-09-22, OA2-05). `3cb71a5` on master reads "Widen
+  merge-park re-adjudication to the risk-threshold park reasons the gate
+  actually emits", but that widening was reverted on the branch after it
+  was found to contradict
+  `tests/unit/test_merge_park_readjudication.py::test_guard_rails_never_re_adjudicate`
+  — the shipped change is the triage-side staleness escape
+  (`pipeline/triage.py::_merge_hold_is_stale`). The content is correct;
+  only the log entry misdescribes it, so `git log --grep`/`git blame` on
+  that file mislead. Not worth rewriting merged history, but it is a real
+  harness gap: when a story's brief is rewritten and the deliverable
+  changes, neither the review gate nor the merge gate compares the PR
+  title/commit message against the final diff.
+
+## Plan completion markers
 
 The entries below are a one-time backfill (2026-08-12) of every
 pipeline-repo plan that was already fully done before the automated

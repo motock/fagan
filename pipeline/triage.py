@@ -530,6 +530,14 @@ def _execute_patch_acceptance(plan_name, story_key, story, ruling, manifest, man
     story.pop("parked_reason", None)
     if story is not manifest_story:
         manifest_story.pop("parked_reason", None)
+    # The recovery is a fresh start: clear the triage loop-breaker counter so a
+    # story that relapses later re-qualifies for the full triage budget instead
+    # of staying permanently capped by the attempts it burned before recovery.
+    # Only the SUCCESS path resets it -- a failed patch_acceptance must keep the
+    # counter, or a story that keeps failing would get unlimited triage.
+    story["triage_attempts"] = 0
+    if story is not manifest_story:
+        manifest_story["triage_attempts"] = 0
 
     try:
         from .server import PIPELINE_AUTONOMY as mode

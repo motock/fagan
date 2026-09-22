@@ -67,8 +67,12 @@ function isStaleInProgress(story) {
 // object is not flagged.
 function isWedged(story) {
   if (!story || story.status !== "in_progress") return false;
-  return Boolean(story.isWedged && story.wedge.wedged === true);
+  return Boolean(story.wedge && story.wedge.wedged === true);
+}
 function isFinished(story) {
+  if (!story || story.status !== "in_progress") return false;
+  return Boolean(story.wedge && story.wedge.measured && story.wedge.measured.agent_done === true);
+}
   if (!story || story.status !== "in_progress") return false;
   return Boolean(story.wedge && story.wedge.measured && story.wedge.measured.agent_done === true);
 }

@@ -22,6 +22,7 @@ from typing import Any
 import pipeline.server as _server
 
 from .parsers import _is_transient_backend_exception
+from .review import build_review_story_context
 from .review_autofix import _verify_reviewer_auto_fix  # noqa: F401
 from .review_refs import _ServerRef
 
@@ -188,6 +189,9 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # none), so the common path's call signature is unchanged.
         _prior_fb = story.get("review_feedback")
         prior_kw = {"prior_feedback": _prior_fb} if _prior_fb else {}
+        _story_context = build_review_story_context(story_key, manifest)
+        if _story_context:
+            prior_kw = {**prior_kw, "story_context": _story_context}
         try:
             # Once a story is escalated (see _escalate_review_to_claude below),
             # every subsequent review must go to the escalation target

@@ -28,7 +28,7 @@ from functools import lru_cache
 
 import pytest
 
-from pipeline import advance
+from pipeline import advance, advance_merge
 
 # --- the vocabulary (exact strings; the metrics story depends on them) -----
 
@@ -60,7 +60,7 @@ ALL_EVENTS = frozenset(
 
 @lru_cache(maxsize=1)
 def _source() -> str:
-    return inspect.getsource(advance)
+    return inspect.getsource(advance) + "\n" + inspect.getsource(advance_merge)
 
 
 @lru_cache(maxsize=1)

@@ -40,6 +40,7 @@ import pytest
 from pipeline import server as p  # noqa: F401
 
 import pipeline.advance as adv
+import pipeline.advance_merge as adv_merge
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _read_manifest,
     _write_manifest,
@@ -122,7 +123,7 @@ def _notify_calls_by_event(notify_calls):
 
 def _notify_user_calls():
     """Every ``_notify_user(...)`` call node in ``pipeline.advance``'s source."""
-    tree = ast.parse(inspect.getsource(adv))
+    tree = ast.parse(inspect.getsource(adv) + "\n" + inspect.getsource(adv_merge))
     calls = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):

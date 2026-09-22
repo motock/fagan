@@ -154,8 +154,9 @@ def test_advance_merge_gate_does_not_compute_or_pass_convention_branch():
     import inspect
 
     import pipeline.advance as adv
+    import pipeline.advance_merge as adv_merge
 
-    src = inspect.getsource(adv)
+    src = inspect.getsource(adv) + "\n" + inspect.getsource(adv_merge)
     # The merge-adjudication block must not compute the convention branch
     # name at all - the resolver inside the gate is the single source of
     # truth, and a locally computed fallback is the exact mistake the

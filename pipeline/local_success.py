@@ -12,7 +12,8 @@ dependencies on other parts of the pipeline.
 
 The definitions below match the recorded baseline method and the unit tests.
 They include population membership, clean status, tier resolution, and reason
-codes for legacy messages, escalations, and brief rewrite markers.
+codes for legacy messages, escalations, and brief rewrite markers.  A brief
+carrying a step-cap rebrief block (``step_cap_rebrief``) is not clean either.
 """
 
 from __future__ import annotations
@@ -25,6 +26,16 @@ __all__ = ["classify_story", "rolling_rate"]
 # Regular expressions used by the classifier.
 _RE_LEGACY_MESSAGE = re.compile(r"escalat|parked|fallback|triage|wedge", re.IGNORECASE)
 _RE_BRIEF_REWRITE = re.compile(r"(?<![A-Za-z_])(REWORK|AMENDMENT)(?![A-Za-z_])")
+
+# Step-cap rebrief headers folded into agent_instructions by
+# pipeline/dispatch.py::_rebrief_step_cap_struggle (via pipeline/rebrief.py).
+# Hardcoded here because this module is stdlib-only and must not import
+# pipeline.rebrief; tests/unit/test_ld90_local_success_classifier.py guards
+# the strings against drifting from that module.
+_STEP_CAP_REBRIEF_HEADERS = (
+    "=== PRIOR-ATTEMPT DIAGNOSIS (read this FIRST) ===",
+    "=== PRIOR-ATTEMPT FACTS (measured from the worktree, not guessed) ===",
+)
 
 # Helper to find records that belong to a story.
 
@@ -136,6 +147,12 @@ def classify_story(story_key: str, story: dict, records: list[dict]) -> dict:
     instr = str(story.get("agent_instructions", ""))
     if _RE_BRIEF_REWRITE.search(instr):
         reasons.add("brief_rewrite_marker")
+        clean = False
+
+    # A brief carrying a step-cap rebrief block is not first-pass clean: the
+    # executor needed a prior-attempt diagnosis, so this was not a clean pass.
+    if any(header in instr for header in _STEP_CAP_REBRIEF_HEADERS):
+        reasons.add("step_cap_rebrief")
         clean = False
 
     

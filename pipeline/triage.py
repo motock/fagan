@@ -928,8 +928,8 @@ def _auto_triage_enabled() -> bool:
 def triage_candidates(stories: dict) -> list[str]:
     """Return the sorted list of story keys the triage sweep should consider.
 
-    A story is a candidate if its ``status`` is ``"parked"`` or ``"failed"``,
-    OR its ``step_cap_streak`` is at or above
+    A story is a candidate if its ``status`` is ``"parked"``, ``"failed"`` or
+    ``"blocked_oracle"``, OR its ``step_cap_streak`` is at or above
     ``STEP_CAP_FALLBACK_THRESHOLD``. A missing or non‑integer
     ``step_cap_streak`` counts as 0, and a story dict with no ``status`` key
     is treated as having no status (never raises).
@@ -956,7 +956,7 @@ def triage_candidates(stories: dict) -> list[str]:
     candidates = []
     for key, story in stories.items():
         status = story.get("status")
-        if status in ("parked", "failed"):
+        if status in ("parked", "failed", "blocked_oracle"):
             evidence = story.get("merge_park_evidence")
             if isinstance(evidence, dict) and "pr_checks" in evidence:
                 # merge‑gate‑owned park; the merge gate owns it, not triage

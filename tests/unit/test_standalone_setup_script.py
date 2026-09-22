@@ -734,14 +734,18 @@ def test_up_prints_which_dispatch_outcome_happened():
 def test_dispatch_py_env_first_resolution_stays_intact():
     """Tripwire (out-of-scope guard): this story only makes standalone-setup.sh
     populate the env var on a fresh install; the env-first dispatch resolution
-    in pipeline/dispatch.py is deliberate and must not be touched."""
-    dispatch_py = _REPO_ROOT / "pipeline" / "dispatch.py"
-    assert dispatch_py.exists(), "pipeline/dispatch.py is missing"
-    assert "PIPELINE_BACKEND_DISPATCH" in dispatch_py.read_text(encoding="utf-8"), (
-        "pipeline/dispatch.py no longer references PIPELINE_BACKEND_DISPATCH; "
-        "if the env-first resolution moved elsewhere, re-point this tripwire -- "
-        "but do NOT change the resolution priority as part of the "
-        "standalone-setup story"
+    is deliberate and must not be touched. The resolution lives in
+    pipeline/dispatch_routing.py: the routing helpers were moved there verbatim,
+    so the tripwire follows the code."""
+    dispatch_routing_py = _REPO_ROOT / "pipeline" / "dispatch_routing.py"
+    assert dispatch_routing_py.exists(), "pipeline/dispatch_routing.py is missing"
+    assert "PIPELINE_BACKEND_DISPATCH" in dispatch_routing_py.read_text(
+        encoding="utf-8"
+    ), (
+        "pipeline/dispatch_routing.py no longer references "
+        "PIPELINE_BACKEND_DISPATCH; if the env-first resolution moved elsewhere, "
+        "re-point this tripwire -- but do NOT change the resolution priority as "
+        "part of the standalone-setup story"
     )
 
 

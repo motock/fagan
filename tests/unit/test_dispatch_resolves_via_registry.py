@@ -430,10 +430,14 @@ def test_no_raw_env_read_for_dispatch_provider(rel):
 
 
 def test_dispatch_role_goes_through_resolve_role():
-    dispatch_src = (_REPO_ROOT / "pipeline/dispatch.py").read_text()
+    # The dispatch-role resolution lives in pipeline/dispatch_routing.py: the
+    # routing helpers were moved there verbatim, so the invariant is asserted
+    # at the module that now owns it.
+    dispatch_src = (_REPO_ROOT / "pipeline/dispatch_routing.py").read_text()
     assert re.search(r'resolve_role\(\s*["\']dispatch["\']', dispatch_src), (
-        "pipeline/dispatch.py must call role_registry.resolve_role('dispatch', "
-        "plan_role_config=..., ...) - the same resolver every other role uses"
+        "pipeline/dispatch_routing.py must call "
+        "role_registry.resolve_role('dispatch', plan_role_config=..., ...) - the "
+        "same resolver every other role uses"
     )
 
     advance_src = (_REPO_ROOT / "pipeline/advance.py").read_text()

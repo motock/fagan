@@ -89,6 +89,51 @@ _SCAN_JOIN_TIMEOUT_ENV = "PIPELINE_SCAN_JOIN_TIMEOUT_SECONDS"
 _DEFAULT_SCAN_JOIN_TIMEOUT_S = 900.0
 
 
+# Ceiling on the notification outbox drain phase. See the drain block in
+# ``run_once`` for why this is not routed through ``_run_with_watchdog``.
+_DRAIN_JOIN_TIMEOUT_SECONDS = 120.0
+# Operator override for the drain ceiling, read per call like the scan and
+# reconcile join deadlines (``_drain_join_timeout_seconds`` below); when the
+# variable is unset the module constant above is the default — and it stays
+# the monkeypatch seam tests use to shrink the ceiling.
+_DRAIN_JOIN_TIMEOUT_ENV = "PIPELINE_DRAIN_JOIN_TIMEOUT_SECONDS"
+
+
+def _drain_join_timeout_seconds() -> float:
+    """Read the drain join deadline from the environment, per call.
+
+    Mirrors :func:`_scan_join_timeout_seconds` and
+    :func:`_reconcile_join_timeout_seconds`: malformed, non-finite, and
+    non-positive overrides degrade to the default instead of crashing the
+    loop (a non-finite deadline would silently disable the bound, and
+    ``Thread.join`` on one is unspecified). When the variable is unset the
+    module constant :data:`_DRAIN_JOIN_TIMEOUT_SECONDS` is the default —
+    which is also the seam tests monkeypatch to shrink the ceiling.
+    """
+    raw = os.environ.get(_DRAIN_JOIN_TIMEOUT_ENV)
+    if raw is None:
+        return _DRAIN_JOIN_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s must be a number, got %r; using default %gs",
+            _DRAIN_JOIN_TIMEOUT_ENV,
+            raw,
+            _DRAIN_JOIN_TIMEOUT_SECONDS,
+        )
+        return _DRAIN_JOIN_TIMEOUT_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        logger.warning(
+            "%s must be a finite positive number, got %r; using default %gs",
+            _DRAIN_JOIN_TIMEOUT_ENV,
+            raw,
+            _DRAIN_JOIN_TIMEOUT_SECONDS,
+        )
+        return _DRAIN_JOIN_TIMEOUT_SECONDS
+    return value
+
+
 def _scan_join_timeout_seconds() -> float:
     """Read the scan join deadline from the environment, per call.
 
@@ -381,6 +426,12 @@ class SchedulerDaemon:
         # each tick and raises SystemExit(1) once a survivor outlives the
         # grace window (``_abandon_worker_grace_seconds``).
         self._abandoned_workers = []
+        # The most recent drain worker (story SWH-03): kept across ticks so a
+        # worker abandoned by the join timeout below can be recognized as
+        # still alive on the next tick, which must skip its drain rather than
+        # start a second drainer that would race the outbox merge and drop a
+        # spooled notification. Overwritten only when a new worker is started.
+        self._drain_worker = None
 
     def start(self) -> None:
         """Perform an immediate reconcile sweep on startup.
@@ -702,7 +753,60 @@ class SchedulerDaemon:
             from pipeline.notification_email import send_notification_email
             from pipeline.notification_outbox import ALL_PLANS, drain_outbox
 
-            drain_outbox(ALL_PLANS, send_notification_email)
+            def _drain_outbox_worker() -> None:
+                # Caught here rather than in the enclosing ``except`` below:
+                # this body runs on ``drain_worker``, so a raise would escape
+                # to that thread's excepthook instead of reaching the
+                # caller's handler. Same log-and-swallow contract as before
+                # the drain became bounded.
+                try:
+                    drain_outbox(ALL_PLANS, send_notification_email)
+                except Exception:
+                    logger.exception(
+                        "notification outbox drain failed during tick"
+                    )
+
+            if self._drain_worker is not None and self._drain_worker.is_alive():
+                # A previous tick's drain worker was abandoned by the join
+                # timeout below and is STILL running (a wedged SMTP send,
+                # say). Starting a second drainer now would race it:
+                # ``_drain_one_outbox``'s merge assumes its snapshot is a
+                # prefix of the current file, so a drainer that rewrites the
+                # file shorter while another is mid-drain makes the second
+                # one silently drop a record the sink spooled in between.
+                # Skip this tick's drain instead; the still-running worker
+                # (or the next tick, once it has exited) picks the queue up.
+                logger.warning(
+                    "previous notification outbox drain worker is still "
+                    "alive; skipping this tick's drain to avoid two "
+                    "concurrent drainers racing the outbox merge"
+                )
+            else:
+                drain_worker = threading.Thread(
+                    target=_drain_outbox_worker,
+                    name="scheduler-drain-worker",
+                    daemon=True,
+                )
+                # Remember the worker BEFORE joining it: the join below may
+                # abandon it while it is still alive, and the next tick needs
+                # this reference to skip rather than overlap the drain.
+                self._drain_worker = drain_worker
+                drain_worker.start()
+                drain_worker.join(_drain_join_timeout_seconds())
+                if drain_worker.is_alive():
+                    # A wedged drain (an unreachable SMTP host, say) must not hold
+                    # the tick open: the liveness and streak checks below only run
+                    # once this phase returns, so an unbounded drain makes a stuck
+                    # daemon look alive. Deliberately NOT routed through
+                    # _run_with_watchdog: a slow drain is not evidence of a leaked
+                    # plan lock, and feeding it into _consecutive_abandons would
+                    # let an SMTP outage trip the abandon-restart SystemExit and
+                    # bounce the scheduler.
+                    logger.warning(
+                        "notification outbox drain exceeded %.1fs; abandoning the "
+                        "worker and continuing the tick",
+                        _drain_join_timeout_seconds(),
+                    )
         except Exception:
             logger.exception("notification outbox drain failed during tick")
 

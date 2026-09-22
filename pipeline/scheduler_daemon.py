@@ -622,6 +622,17 @@ class SchedulerDaemon:
             # Update health metrics for scan.
             self._scan_count += 1
             self._last_scan_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            # Write health at the END of the scan phase rather than only at
+            # the end of the tick: the scan is the cheap, event-driven path,
+            # and the phases after it (reconcile, drain) can each hold a tick
+            # open for minutes. Refreshing here means a daemon that is stuck
+            # in a later phase still shows a live scan_count instead of a
+            # timestamp frozen at the previous complete tick.
+            if self._health_path is not None:
+                try:
+                    self.write_health(self._health_path)
+                except Exception:  # pragma: no cover - must never kill the loop
+                    logger.exception("write_health failed after scan phase")
 
         now = self._clock()
         # Boundary tolerance: ``now - self._last_reconcile`` is a difference

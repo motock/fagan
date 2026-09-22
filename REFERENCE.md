@@ -393,8 +393,12 @@ notification path.** Each scheduler tick runs a drain phase
 (`pipeline.notification_outbox.drain_outbox`, wired from
 `pipeline.scheduler_daemon.run_once`) that reads every plan's outbox file and
 hands each queued record to
-`pipeline.notification_email.send_notification_email`, an SMTP sender. This
-is sink rule 2 ("No inline network I/O"): posting to an external service
+`pipeline.notification_email.send_notification_email`, an SMTP sender. The
+drain is bounded: the scheduler joins its drain worker for at most 120s
+(`PIPELINE_DRAIN_JOIN_TIMEOUT_SECONDS`), abandons a wedged worker and
+continues the tick, and the next tick skips its own drain while that worker
+is still alive so two drainers never race the outbox merge. This is sink
+rule 2 ("No inline network I/O"): posting to an external service
 inside the notification path would block the sequential pipeline tick, so
 the spooling sink performs no network I/O at all and only the scheduler's
 drain pays that cost, on its own schedule. A record the sender accepts is
@@ -553,7 +557,11 @@ hands each queued record to
 by its own credential/config env vars). A record the sender accepts is
 removed; a record it rejects or that raises is retained for the next tick's
 drain, so a transient SMTP outage never loses a notification. The drain runs
-in its own try/except inside the tick and never propagates a failure. No
+in its own try/except inside the tick and never propagates a failure. The
+drain is bounded at 120s: a wedged drain worker is abandoned and the tick
+continues, and the next tick skips its own drain while that worker is still
+alive (retrying once it has exited), so two drainers never race the outbox
+merge and drop a record. No
 Slack or generic webhook sink is implemented yet.
 
 

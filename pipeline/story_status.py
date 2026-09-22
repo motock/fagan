@@ -5,7 +5,7 @@ worktree, and report pass/fail without auto-merging.
 Extracted verbatim from pipeline/server.py (behavior-preserving file move).
 """
 
-import json
+import json  # noqa: F401
 import os
 import subprocess
 import sys
@@ -23,7 +23,7 @@ from .build_detect import (
     _added_pytest_test_paths,
     _is_pytest_cmd,
     _scope_test_cmd_to_acceptance,
-    failed_node_ids,
+    failed_node_ids,  # noqa: F401
 )
 from .checkpoint import _terminate_and_checkpoint
 from .ci import _acceptance_tampered
@@ -41,7 +41,7 @@ from .config import (
     STEP_CAP_MARKERS,
 )
 from .detached_grade import (
-    GRADE_WRAPPER,
+    GRADE_WRAPPER,  # noqa: F401
     _baseline_exempted_failures,
     collect_detached_grade,
     start_detached_grade,

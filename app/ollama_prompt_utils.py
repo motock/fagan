@@ -286,6 +286,31 @@ def _append_review_log(cwd: str, text: str) -> None:
         pass
 
 
+# Reviewer bash commands are bounded. An unbounded
+# ``find / -name "*.json" | xargs grep -l ...`` emitted by a reviewer wedged
+# the scheduler for 34 minutes on 2026-09-22: the daemon held the plan's lock
+# for the whole block, so every tick returned "skipped: locked" and nothing
+# recovered without human intervention. Generous enough that no legitimate
+# build or test run is cut off, but finite.
+_BASH_TIMEOUT_S = 1800
+
+
+def _bounded_bash_run(cmd: str, cwd: Path) -> subprocess.CompletedProcess:
+    """Run a reviewer bash command with a hard ceiling.
+
+    ``_BASH_TIMEOUT_S`` is read at call time (not default-bound) so tests can
+    shrink it. Only the shell is signalled on timeout; a pipeline's orphaned
+    children may outlive this call, but the caller -- which is what wedged --
+    is always released.
+    """
+    return subprocess.run(
+        cmd, check=False, shell=True, cwd=cwd,
+        capture_output=True, text=True, timeout=_BASH_TIMEOUT_S,
+    )
+
+
+# original function line
+
 def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
     """Execute a review (read-only) tool: bash (run commands) or view_file."""
     if fn == "view_file":
@@ -310,6 +335,20 @@ def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
             argv0 = shlex.split(cmd)[0] if cmd.strip() else ""
         except ValueError:
             argv0 = ""
+        try:
+            if argv0 and _p._is_heavy([argv0]):
+                with _p._heavy_lock():
+                    pr = _bounded_bash_run(cmd, cwd)
+            else:
+                pr = _bounded_bash_run(cmd, cwd)
+        except subprocess.TimeoutExpired:
+            return (f"ERROR: bash command timed out after {_BASH_TIMEOUT_S}s "
+                    f"without returning: {cmd[:200]}")
+        return (pr.stdout + pr.stderr)[:3000] or "(no output)"
+
+
+# original block
+
         if argv0 and _p._is_heavy([argv0]):
             with _p._heavy_lock():
                 pr = subprocess.run(cmd, check=False, shell=True, cwd=cwd,
@@ -318,6 +357,7 @@ def _run_readonly_tool(fn: str, args: dict, cwd: Path) -> str:
             pr = subprocess.run(cmd, check=False, shell=True, cwd=cwd,
                                 capture_output=True, text=True)
         return (pr.stdout + pr.stderr)[:3000] or "(no output)"
+
     return f"unknown tool {fn}"
 
 

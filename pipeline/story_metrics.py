@@ -280,6 +280,7 @@ def compute_plan_rollup(stories: list[dict[str, Any]]) -> dict[str, Any]:
     missing the ``first_pass_clean`` key counts as not clean.  It is ``None``
     when there are zero eligible payloads.  The inputs are read only; nothing
     is written back into the payloads.
+    Payloads are first collapsed per ``story_key`` (``_collapse_shared_story_keys``), so a story the producer split across a correlation_id group and a story_key group counts once.
     """
     stories = _collapse_shared_story_keys(stories)
     stories = [

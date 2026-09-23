@@ -1067,9 +1067,9 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .toast { animation: none; }
 }
-.toast-row { display: flex; align-items: center; gap: var(--sp-2); }
-.toast-key { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--stripe, var(--text-muted)); }
-.toast-msg { flex: 1; }
+.toast-row { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.toast-key { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--stripe, var(--text-muted)); flex-shrink: 0; white-space: nowrap; }
+.toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-line; max-height: 40vh; overflow-y: auto; }
 .toast-dismiss {
   background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer;
 }

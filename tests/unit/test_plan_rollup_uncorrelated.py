@@ -14,17 +14,6 @@ from pathlib import Path
 from pipeline import story_metrics
 from pipeline.story_metrics import compute_plan_rollup, compute_story_metrics
 
-ROLLUP_KEYS = [
-    "stories_total",
-    "stories_merged",
-    "total_rework_cycles",
-    "total_escalations",
-    "total_dispatch_failures",
-    "total_cost",
-    "cost_per_merged_story",
-    "first_pass_clean_rate",
-]
-
 
 def _story(story_key, **overrides):
     payload = {
@@ -44,9 +33,7 @@ def _story(story_key, **overrides):
 
 
 def _uncorrelated(**overrides):
-    payload = _story(None, **overrides)
-    payload["correlation_id"] = None
-    return payload
+    return _story(None, **overrides)
 
 
 def test_rollup_drops_uncorrelated_payload_from_totals():
@@ -155,7 +142,16 @@ def test_rollup_first_pass_clean_rate_unchanged_by_filter():
 def test_rollup_returned_key_order_is_unchanged():
     rollup = compute_plan_rollup([_story("S-1", merged=True)])
 
-    assert list(rollup.keys()) == ROLLUP_KEYS
+    assert list(rollup.keys()) == [
+        "stories_total",
+        "stories_merged",
+        "total_rework_cycles",
+        "total_escalations",
+        "total_dispatch_failures",
+        "total_cost",
+        "cost_per_merged_story",
+        "first_pass_clean_rate",
+    ]
 
 
 def test_rollup_filters_before_the_first_sum():

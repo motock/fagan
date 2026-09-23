@@ -143,12 +143,14 @@ def _rebrief_step_cap_struggle(
     evidence is the tail of its agent.log."""
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
+    previous_instructions = story.get("agent_instructions", "")
     try:
         unsat_reason = detect_unsatisfiable_signal(evidence)
         if unsat_reason is not None:
             _notify_user(
                 plan_name,
                 f"Story may be unsatisfiable as specified: {unsat_reason}. Story {story_key} may need re-planning rather than another retry.",
+                story_key=story_key,
             )
     except Exception:
         logging.getLogger("pipeline").debug(
@@ -162,6 +164,19 @@ def _rebrief_step_cap_struggle(
     # of it with no replacement.
     story["agent_instructions"] = compose_attempt_facts(
         story.get("agent_instructions", ""), facts)
+    if story["agent_instructions"] != previous_instructions:
+        try:
+            _notify_user(
+                plan_name,
+                f"{story_key} brief rewritten after a step-cap struggle; the "
+                f"resume carries the folded diagnosis.",
+                story_key=story_key,
+                event="brief_patched",
+                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+            )
+        except Exception:
+            logging.getLogger("pipeline").debug(
+                "brief_patched notify failed during step-cap rebrief", exc_info=True)
 
 
 def _transcript_ends_with_done(transcript_path: Path) -> bool:

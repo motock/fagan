@@ -74,8 +74,8 @@ class _CallRecorder:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, plan_name, message):
-        self.calls.append((plan_name, message))
+    def __call__(self, plan_name, message, **kwargs):
+        self.calls.append((plan_name, message, kwargs))
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +93,12 @@ def test_positive_unsatisfiable_signal_notifies_user(monkeypatch, tmp_path):
     p._rebrief_step_cap_struggle(story, str(tmp_path), plan_name="myplan",
                                 story_key="story-7")
 
-    # _notify_user called exactly once.
-    assert len(recorder.calls) == 1, (
+    unsat_calls = [c for c in recorder.calls if "unsatisfiable" in c[1].lower()]
+    assert len(unsat_calls) == 1, (
         f"_notify_user should be called exactly once for unsatisfiable evidence, "
-        f"got {len(recorder.calls)} calls"
+        f"got {len(unsat_calls)} unsatisfiable notices"
     )
-    plan_name, message = recorder.calls[0]
+    plan_name, message, _kwargs = unsat_calls[0]
     assert plan_name == "myplan"
     # The message must name the story key.
     assert "story-7" in message, (
@@ -125,9 +125,10 @@ def test_negative_ordinary_failure_does_not_notify(monkeypatch, tmp_path):
     p._rebrief_step_cap_struggle(story, str(tmp_path), plan_name="myplan",
                                 story_key="story-7")
 
-    assert recorder.calls == [], (
-        f"_notify_user must NOT be called for ordinary failing-test evidence, "
-        f"got {recorder.calls}"
+    unsat_calls = [c for c in recorder.calls if "unsatisfiable" in c[1].lower()]
+    assert unsat_calls == [], (
+        f"_notify_user must NOT send an unsatisfiable notice for ordinary "
+        f"failing-test evidence, got {unsat_calls}"
     )
 
 
@@ -206,9 +207,10 @@ def test_fail_open_detector_raises_still_completes(monkeypatch, tmp_path):
     assert "GOAL: x" in story["agent_instructions"], (
         "original brief must be preserved when the detector raises"
     )
-    # A raising detector must not trigger a (spurious) notification.
-    assert recorder.calls == [], (
-        "a raising detector must not trigger _notify_user"
+    # A raising detector must not trigger a (spurious) unsatisfiable notice.
+    unsat_calls = [c for c in recorder.calls if "unsatisfiable" in c[1].lower()]
+    assert unsat_calls == [], (
+        "a raising detector must not trigger the unsatisfiable notice"
     )
 
 
@@ -223,3 +225,118 @@ def test_call_site_threads_plan_name_and_story_key():
     # The call must pass plan_name and story_key through (by keyword or position).
     assert "plan_name" in src, "call site must thread plan_name"
     assert "story_key" in src, "call site must thread story_key"
+
+
+# ---------------------------------------------------------------------------
+# 5. The rebrief must emit its own brief_patched record when the brief changes.
+# ---------------------------------------------------------------------------
+
+def test_brief_patched_record_is_emitted_when_the_brief_changes(monkeypatch, tmp_path):
+    """A rewritten brief is a brief_patched event, attributed to its story."""
+    evidence = "AssertionError: expected 2 but got 1"
+    _patch_collectors(monkeypatch, evidence)
+
+    recorder = _CallRecorder()
+    monkeypatch.setattr(p, "_notify_user", recorder)
+
+    story = {"agent_instructions": "GOAL: x", "correlation_id": "corr-1"}
+    p._rebrief_step_cap_struggle(story, str(tmp_path), plan_name="myplan",
+                                story_key="story-7")
+
+    patched = [c for c in recorder.calls if c[2].get("event") == "brief_patched"]
+    assert len(patched) == 1, (
+        f"exactly one brief_patched record must be emitted when the brief "
+        f"changes, got {patched}"
+    )
+    plan_name, _message, kwargs = patched[0]
+    assert plan_name == "myplan"
+    assert kwargs["story_key"] == "story-7"
+    assert kwargs["correlation_id"] == "corr-1"
+
+
+def test_no_brief_patched_record_when_the_rebrief_is_a_noop(monkeypatch, tmp_path):
+    """A no-op diagnosis with no facts leaves the brief byte-identical."""
+    monkeypatch.setattr(p, "collect_attempt_facts", lambda *a, **k: "")
+    monkeypatch.setattr(
+        p, "collect_failure_evidence",
+        lambda *a, **k: "AssertionError: expected 2 but got 1")
+    monkeypatch.setattr(p, "diagnose_failure", lambda *a, **k: None)
+
+    recorder = _CallRecorder()
+    monkeypatch.setattr(p, "_notify_user", recorder)
+
+    story = {"agent_instructions": "GOAL: x"}
+    p._rebrief_step_cap_struggle(story, str(tmp_path), plan_name="myplan",
+                                story_key="story-7")
+
+    assert story["agent_instructions"] == "GOAL: x", (
+        "a no-op rebrief must leave the brief unchanged"
+    )
+    patched = [c for c in recorder.calls if c[2].get("event") == "brief_patched"]
+    assert patched == [], (
+        f"a no-op rebrief must not emit brief_patched, got {patched}"
+    )
+
+
+def test_brief_patched_record_omits_correlation_id_when_absent(monkeypatch, tmp_path):
+    """No correlation_id on the story -> the key is absent, not None."""
+    evidence = "AssertionError: expected 2 but got 1"
+    _patch_collectors(monkeypatch, evidence)
+
+    recorder = _CallRecorder()
+    monkeypatch.setattr(p, "_notify_user", recorder)
+
+    story = {"agent_instructions": "GOAL: x"}
+    p._rebrief_step_cap_struggle(story, str(tmp_path), plan_name="myplan",
+                                story_key="story-7")
+
+    patched = [c for c in recorder.calls if c[2].get("event") == "brief_patched"]
+    assert len(patched) == 1, f"expected one brief_patched record, got {patched}"
+    kwargs = patched[0][2]
+    assert "correlation_id" not in kwargs, (
+        f"correlation_id must be absent (not None) when the story has none, "
+        f"got {kwargs!r}"
+    )
+
+
+def test_unsatisfiable_notice_is_attributed_to_the_story(monkeypatch, tmp_path):
+    """The unsatisfiable notice must carry story_key so it is attributable."""
+    evidence = "TypeError: got an unexpected keyword argument 'foo'"
+    _patch_collectors(monkeypatch, evidence)
+
+    recorder = _CallRecorder()
+    monkeypatch.setattr(p, "_notify_user", recorder)
+
+    story = {"agent_instructions": "GOAL: x"}
+    p._rebrief_step_cap_struggle(story, str(tmp_path), plan_name="myplan",
+                                story_key="story-7")
+
+    unsat_calls = [c for c in recorder.calls if "unsatisfiable" in c[1].lower()]
+    assert len(unsat_calls) == 1, (
+        f"expected exactly one unsatisfiable notice, got {unsat_calls}"
+    )
+    assert unsat_calls[0][2].get("story_key") == "story-7", (
+        f"the unsatisfiable notice must be attributed to its story, "
+        f"got kwargs {unsat_calls[0][2]!r}"
+    )
+
+
+def test_brief_patched_record_disqualifies_first_pass_clean():
+    """Metrics must agree with the classifier: a rewritten brief is not clean."""
+    from pipeline.story_metrics import compute_story_metrics
+
+    merged_only = compute_story_metrics(
+        [{"event": "story_merged", "story_key": "story-7"}])
+    assert merged_only["story-7"]["first_pass_clean"] is True, (
+        "a lone story_merged record is a clean first pass"
+    )
+
+    with_patch = compute_story_metrics([
+        {"event": "story_merged", "story_key": "story-7"},
+        {"event": "brief_patched", "story_key": "story-7"},
+    ])
+    payload = with_patch["story-7"]
+    assert payload["first_pass_clean"] is False, (
+        "a brief_patched record for the same story must disqualify first_pass_clean"
+    )
+    assert payload["disqualifying_events"] == 1

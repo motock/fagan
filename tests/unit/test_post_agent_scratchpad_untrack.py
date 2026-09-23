@@ -39,6 +39,23 @@ PLAN_NAME = "su1"
 STORY_KEY = "S1"
 
 
+def _ss_source() -> str:
+    """Both modules: PLD90-SS-2 carved check_story_status's detached-grade
+    lifecycle block -- including the scratchpad-untrack call site -- verbatim
+    into ``_detached_grade_lifecycle`` in pipeline/detached_grade.py, so a
+    source scan of the status module must include the module the block now
+    lives in.
+
+    Imported here rather than at module level: pipeline.detached_grade is
+    reached through pipeline.story_status, so importing it first would
+    re-enter the partially-initialised module and die on the cycle.
+    """
+    from pipeline import detached_grade as dg
+
+    return (Path(ss.__file__).read_text() + "\n"
+            + Path(dg.__file__).read_text())
+
+
 # ---------------------------------------------------------------------------
 # 1. The helper: pipeline.git_ops._untrack_scratchpad (REAL git)
 # ---------------------------------------------------------------------------
@@ -335,7 +352,7 @@ def test_the_helper_is_exported_only_outside_pytest():
 def test_the_call_site_precedes_the_detached_grade_spawn():
     """Edit order matters: the untrack must land BEFORE the grade runs, or a
     tracked scratchpad fails the repo's guard tests and rejects the story."""
-    src = Path(ss.__file__).read_text()
+    src = _ss_source()
     call = 'untrack = globals().get("_untrack_scratchpad")'
     spawn = 'starter = globals().get("start_detached_grade")'
     assert call in src
@@ -347,7 +364,7 @@ def test_the_call_site_tolerates_the_helper_being_absent():
     """Absent under pytest (the guard skipped the export), so the grade body
     resolves it the way it resolves ``start_detached_grade``: a ``globals()``
     lookup plus a ``None`` check, never a bare call that would raise."""
-    src = Path(ss.__file__).read_text()
+    src = _ss_source()
     lookup = 'untrack = globals().get("_untrack_scratchpad")'
     assert lookup in src
     assert "if untrack is not None:" in src

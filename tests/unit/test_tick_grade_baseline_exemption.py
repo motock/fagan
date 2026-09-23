@@ -290,8 +290,15 @@ def test_the_export_line_precedes_the_pytest_guard():
 
 def test_the_helper_is_module_level_and_above_the_grade_wrapper():
     """Edit 3b: module level (not nested in a function), immediately above
-    the GRADE_WRAPPER assignment."""
-    src = Path(ss.__file__).read_text()
+    the GRADE_WRAPPER assignment.
+
+    Both modules: the helper and GRADE_WRAPPER moved verbatim out of
+    pipeline/story_status.py into pipeline/detached_grade.py, so the scan
+    must include the module they now live in.
+    """
+    from pipeline import detached_grade as dg
+
+    src = Path(ss.__file__).read_text() + "\n" + Path(dg.__file__).read_text()
     assert "\ndef _baseline_exempted_failures(" in src
     assert src.index("def _baseline_exempted_failures(") < src.index("GRADE_WRAPPER = ")
 

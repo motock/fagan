@@ -856,15 +856,28 @@ def test_grading_pid_bookkeeping_confined_to_dead_pid_region():
         if isinstance(n, ast.FunctionDef) and n.name == "check_story_status"
     )
     lo, hi = fn.lineno, fn.end_lineno
+    # PLD90-SS-2 carved check_story_status's detached-grade lifecycle block
+    # verbatim into _detached_grade_lifecycle in pipeline/detached_grade.py, so
+    # the bookkeeping now lives in that helper too.  The guard is unchanged --
+    # same markers, same "nowhere else" assertion -- it just spans both regions.
+    helper = next(
+        n for n in tree.body
+        if isinstance(n, ast.FunctionDef)
+        and n.name == "_detached_grade_lifecycle"
+    )
+    regions = ((lo, hi), (helper.lineno, helper.end_lineno))
     markers = ("grading_pid", "grading_started_at", "grading_result_path")
     offenders = []
     for node in ast.walk(tree):
         if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                and node.value in markers and not lo <= node.lineno <= hi):
+                and node.value in markers
+                and not any(a <= node.lineno <= b for a, b in regions)):
             offenders.append((node.lineno, node.value))
     assert offenders == [], (
         "grading bookkeeping field names must appear only inside "
-        f"check_story_status (lines {lo}-{hi}); found outside: {offenders}"
+        f"check_story_status (lines {lo}-{hi}) and its carved helper "
+        f"_detached_grade_lifecycle (lines {helper.lineno}-"
+        f"{helper.end_lineno}); found outside: {offenders}"
     )
 
 

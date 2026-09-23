@@ -296,6 +296,11 @@ def run_wedge_scan(plan_name: str) -> int:
                 severity="warning",
                 event="wedge",
                 dedup_key=dedup_key,
+                **(
+                    {"correlation_id": story["correlation_id"]}
+                    if story.get("correlation_id")
+                    else {}
+                ),
             )
             if reason == "stale_activity":
                 stale_activity_notified = True

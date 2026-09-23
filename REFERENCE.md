@@ -386,7 +386,7 @@ guard is the `<plan>.plan_completed` marker file in `PLAN_DIR`
 (`~/.claude/plans` by default). The marker is written only after the
 notification has been emitted, so a failed emission is retried by a later
 tick instead of being lost; once the marker exists the plan stays all-done
-but no second notification is ever emitted.
+but no second notification is ever emitted. The same summary is also written to `<plan>.report.md` in `PLAN_DIR` as a durable per-plan report (best effort: a write failure is logged and never blocks the notification).
 
 **Outbox sink.** `pipeline.notification_outbox.outbox_sink` spools selected
 notifications to a per-plan `<plan>.outbox.jsonl` spool file in `PLAN_DIR`

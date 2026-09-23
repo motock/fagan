@@ -13,6 +13,9 @@ be retried by a later tick.
 
 The function never raises: it runs inside a scheduler tick and must not break
 the story transition that triggered it.
+
+The summary is also written to ``<plan>.report.md`` in ``PLAN_DIR``; this is
+best effort: a write failure is logged and does not block the notification.
 """
 
 import logging
@@ -51,6 +54,14 @@ def notify_if_plan_completed(plan_name: str, manifest: dict) -> bool:
             PLAN_DIR / f"{plan_name}.notifications.jsonl"
         )[0]
         summary = format_plan_summary(plan_name, manifest, records)
+        # A durable copy for retros; the notification is the delivery, this
+        # file is the record. Never blocks the notification.
+        try:
+            (PLAN_DIR / f"{plan_name}.report.md").write_text(
+                summary + "\n", encoding="utf-8"
+            )
+        except OSError:
+            logger.warning("plan report write failed for %s", plan_name, exc_info=True)
         _notify_user(
             plan_name,
             summary,

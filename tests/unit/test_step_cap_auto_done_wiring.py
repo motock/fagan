@@ -231,6 +231,17 @@ def test_reference_documents_step_cap_auto_done_bullet():
         i for i, ln in enumerate(lines)
         if ln.strip().startswith("- **On repeated step-cap interrupts:**")
     )
+    # LDC-9 inserted the No-new-commit rework bullet between the Step-cap
+    # auto-done bullet and this anchor, so the Step-cap bullet's tail is no
+    # longer the anchor's immediate predecessor: the No-new-commit bullet now
+    # sits between them. The Step-cap bullet itself is still unique (pinned
+    # above) and still precedes the anchor.
     prev = lines[i_anchor - 1].strip()
-    assert prev.startswith("for a step-cap rebrief."), prev
-    assert prev.endswith("Otherwise the step-cap path below runs unchanged."), prev
+    assert prev.startswith("prior-attempt diagnosis is folded into"), prev
+    i_stepcap_tail = next(
+        i for i, ln in enumerate(lines)
+        if ln.strip().endswith(
+            "Otherwise the step-cap path below runs unchanged."))
+    assert lines[i_stepcap_tail].strip().startswith("for a step-cap rebrief."), (
+        lines[i_stepcap_tail])
+    assert i_stepcap_tail < i_anchor, (i_stepcap_tail, i_anchor)

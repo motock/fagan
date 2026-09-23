@@ -181,7 +181,12 @@ def test_no_new_commit_rework_rebrief_matches_step_cap_call_shape(
     # diagnose_failure(evidence, story, plan_role_config)
     assert len(args) == 3, f"expected (evidence, story, plan_role_config), got {args!r}"
     evidence, story_arg, role_config = args
-    assert isinstance(evidence, dict)
+    # diagnose_failure's evidence is the collect_failure_evidence STRING the
+    # step-cap branch passes (rebrief.diagnose_failure annotates it `str` and
+    # calls .strip() on it), not a dict.
+    assert isinstance(evidence, str)
+    assert "STORY: thing" in evidence
+    assert "stuck re-running the same failing test" in evidence
     assert story_arg["pid"] == 4242
     assert story_arg["worktree"] == str(worktree)
     # No role_config in this manifest -> None, matching the step-cap branch's

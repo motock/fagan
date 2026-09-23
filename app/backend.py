@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Protocol
 
 try:
-    import httpx  # noqa: F401 (re-exported: backend.httpx, used by tests/unit/test_backend.py)
+    import httpx
 except ImportError:  # pragma: no cover
     httpx = None  # type: ignore
 

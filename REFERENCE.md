@@ -1000,6 +1000,14 @@ against the committed tests rather than rewriting them.
 
 ---
 
+## Test-author skip for doc/config-only stories
+
+In addition to the TDD-split gates above, the test-author phase is skipped
+(with a notification) when a story declares `files` and every path ends in
+`.md`, `.plist`, `.template`, `.json`, `.toml`, `.yaml` or `.yml`. A
+structural test for a doc or config edit belongs in the brief itself. A
+story with no `files`, or with any other path, is unaffected.
+
 ## Configuration (environment variables)
 ### Launchd Install & Reload
 

@@ -213,6 +213,28 @@ def _story_opts_out_of_test_author(story: dict) -> bool:
         start = index + len(_TEST_AUTHOR_OPT_OUT_MARKER)
 
 
+# Paths whose content a structural test cannot meaningfully grade before the
+# change exists; a story that only edits these gets its one small test from
+# the brief instead of a test-author oracle (LD90 W4).
+_DOC_OR_CONFIG_SUFFIXES = (
+    ".md", ".plist", ".template", ".json", ".toml", ".yaml", ".yml",
+)
+
+
+def _story_is_doc_or_config_only(story: dict) -> bool:
+    """True iff the story declares a non-empty ``files`` list and every
+    entry ends with one of ``_DOC_OR_CONFIG_SUFFIXES`` (case-insensitive).
+    A missing, empty, or non-list ``files`` returns False: an undeclared
+    scope is never assumed to be doc-only."""
+    files = story.get("files")
+    if not isinstance(files, list) or not files:
+        return False
+    return all(
+        isinstance(f, str) and f.lower().endswith(_DOC_OR_CONFIG_SUFFIXES)
+        for f in files
+    )
+
+
 def _test_author_prompt(agent_instructions: str) -> str:
     """Build the test-authoring dispatch's prompt from the story's own
     agent_instructions (generalized from tests/benchmark/tdd_split_
@@ -399,6 +421,14 @@ def _run_test_author_phase(
     # -- forcing it to invent a redundant structural-assertion oracle is what
     # produced the unsatisfiable, parked-mid-write oracle. Fall open to
     # monolithic dispatch against the existing suite (the correct grade).
+    if _story_is_doc_or_config_only(story):
+        _notify_user(
+            plan_name,
+            f"{story_key} test-author phase skipped (every declared file is "
+            "doc/config); dispatching monolithically against the existing "
+            "test suite",
+        )
+        return False
     if _story_opts_out_of_test_author(story):
         _notify_user(
             plan_name,

@@ -154,3 +154,72 @@ def _baseline_only_failures(origin, stdout: str) -> bool:
     except Exception:  # noqa: BLE001 (an unparseable run exempts nothing)
         return False
     return bool(run_ids) and set(run_ids) <= baseline_ids
+
+_TEST_FILE_PREFIXES = ("test_,")
+
+
+def _changed_production_paths(paths: list[str]) -> list[str]:
+    """Return the entries of ``paths`` that are production files.
+
+    A path is NOT production when it is empty, lies under a ``tests/``
+    directory at any depth, has a basename starting with ``test_`` or equal
+    to ``conftest.py``, or has any path component starting with ``.`` (the
+    agent's runtime artifacts: ``.agent_scratchpad.md``,
+    ``.agent_transcript.json``, ``.dispatch_baseline_test_checked``).
+    Order is preserved.
+    """
+    if not paths:
+        return []
+    result: list[str] = []
+    for p in paths:
+        if not p or not p.strip():
+            continue
+        parts = p.split("/")
+        # skip any component starting with '.'
+        if any(part.startswith(".") for part in parts):
+            continue
+        # skip any component equal to 'tests'
+        if any(part == "tests" for part in parts):
+            continue
+        base = parts[-1]
+        if base == "conftest.py":
+            continue
+        if any(base.startswith(prefix) for prefix in _TEST_FILE_PREFIXES):
+            continue
+        result.append(p)
+    return result
+
+
+def _step_cap_auto_done_impl(origin) -> bool:
+    """Whether a run that reached the step cap already finished its work.
+
+    True only when BOTH hold:
+    1. the branch changes at least one production file relative to its
+       merge-base with the default branch, and
+    2. ``origin["_full_suite_result"]()`` reports the full suite and lint
+       green (its first tuple element is truthy).
+    Fails closed: any unresolvable base or git error returns False.
+    """
+    try:
+        refs = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
+        base = None
+        for ref in refs:
+            res = origin["git"]("merge-base", "HEAD", ref)
+            if res.returncode == 0:
+                out = res.stdout.strip()
+                if out:
+                    base = out
+                    break
+        if not base:
+            return False
+        diff_res = origin["git"]("diff", "--name-only", base, "HEAD")
+        if diff_res.returncode != 0:
+            return False
+        paths = [line.strip() for line in diff_res.stdout.splitlines()]
+        prod = _changed_production_paths(paths)
+        if not prod:
+            return False
+        return bool(origin["_full_suite_result"]()[0])
+    except Exception:  # noqa: BLE001
+        return False
+

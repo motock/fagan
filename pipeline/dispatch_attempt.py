@@ -177,7 +177,6 @@ def _rebrief_step_cap_struggle(
         except Exception:
             logging.getLogger("pipeline").debug(
                 "brief_patched notify failed during step-cap rebrief", exc_info=True)
-    
 
 
 def _transcript_ends_with_done(transcript_path: Path) -> bool:

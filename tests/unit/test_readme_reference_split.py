@@ -87,6 +87,21 @@ _GET_EFFECTIVE_CONFIG_BULLET = (
     "  on *before* executing it."
 )
 
+# MCPHYG-5 added the patch_plan MCP tool (plan-level sibling of patch_story,
+# allowlisted to role_config) and documented it in the "MCP tools reference"
+# section. The pre-split README at 2cca309~1 predates the tool, so the verbatim
+# guard for that section normalizes the new bullet away — and separately
+# requires it to be present, so the normalization can never mask its removal.
+_PATCH_PLAN_BULLET = (
+    "- `patch_plan(plan_name, fields)` — edit a plan manifest's top-level fields\n"
+    "  without hand-editing the manifest JSON. Allowlisted to exactly `role_config`\n"
+    "  for now; any other top-level field (`repo_root`, `epics`, `stories`, ...) is\n"
+    "  rejected fail-closed before the lock is taken. Acquires the same per-plan\n"
+    "  lock the scheduler and `dispatch_story` use, so the read-modify-write is\n"
+    "  atomic with respect to the 60s `advance_all_plans` tick; when the lock is\n"
+    '  held it returns `{ok: true, skipped: "locked"}` without touching the manifest.'
+)
+
 
 # ---------------------------------------------------------------------------
 # REFERENCE.md existence & title
@@ -632,6 +647,20 @@ def test_moved_section_body_is_verbatim(title):
                 )
                 reference_body = reference_body.replace(
                     _CHECKPOINT_DEPRECATED_ALIAS_LINE, ""
+                )
+                # MCPHYG-5 added the patch_plan MCP tool (the plan-level sibling
+                # of patch_story, allowlisted to role_config) and documented it
+                # in this section. The pre-split README at 2cca309~1 predates the
+                # tool, so require the new bullet to be present and then
+                # normalize it (plus the blank line that separates it from the
+                # preceding bullet) away — the presence assertion means the
+                # normalization can never mask its removal.
+                assert _PATCH_PLAN_BULLET in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must document "
+                    f"the new patch_plan(plan_name, fields) tool."
+                )
+                reference_body = reference_body.replace(
+                    "\n\n" + _PATCH_PLAN_BULLET, ""
                 )
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "

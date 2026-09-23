@@ -145,6 +145,12 @@ _PATCHABLE_STORY_FIELDS = frozenset(
         "backend",
     )
 )
+# The plan-manifest TOP-LEVEL fields patch_plan may edit. Deliberately tiny
+# and fail-closed: anything not listed here (repo_root, epics, stories, ...)
+# is rejected before the lock is taken or disk is touched. role_config is the
+# only entry today because it is the one plan-level field a caller legitimately
+# needs to retune without hand-editing the manifest JSON.
+_PATCHABLE_PLAN_FIELDS = frozenset(("role_config",))
 _VALID_STORY_BACKENDS = frozenset(
     {"claude", "local", "ollama", "lmstudio", "mlx", "litellm", "auto"}
 )
@@ -998,6 +1004,42 @@ class PipelineService:
                     ),
                 )
             return {"ok": True, "story_key": story_key, "story": story}
+
+    def patch_plan(self, plan_name: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """
+        Edit a plan manifest's top-level fields (currently only role_config)
+        without hand-editing the manifest JSON.
+
+        Hand-editing the manifest directly races the scheduler's 60s
+        advance_all_plans tick - a read-modify-write on either side can silently
+        clobber the other's write. This tool acquires the same _plan_lock the
+        scheduler and dispatch_story use, so the edit is atomic with respect to
+        it. Only the fields in _PATCHABLE_PLAN_FIELDS may be set; everything
+        else (repo_root, epics, stories, ...) is rejected fail-closed before the
+        lock is taken, so an unknown field can never reach disk.
+        """
+        _validate_key(plan_name)
+        unknown = set(fields) - _PATCHABLE_PLAN_FIELDS
+        if unknown:
+            return {
+                "ok": False,
+                "error": f"cannot patch field(s) {sorted(unknown)}: "
+                f"only {sorted(_PATCHABLE_PLAN_FIELDS)} are editable",
+            }
+
+        with _store.transaction(plan_name) as acquired:
+            if not acquired:
+                return {
+                    "ok": True,
+                    "skipped": "locked",
+                    "reason": "another dispatch/ingest/interrupt is in progress for this plan",
+                }
+            if not _store.manifest_path(plan_name).exists():
+                return {"ok": False, "error": f"No such plan {plan_name!r}"}
+            manifest = _store.get_manifest(plan_name)
+            manifest.update(fields)
+            _store.save_manifest(plan_name, manifest)
+            return {"ok": True, "plan_name": plan_name}
 
     def dispatch_story(self, plan_name: str, story_key: str) -> dict[str, Any]:
         try:

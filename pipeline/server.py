@@ -833,6 +833,22 @@ def patch_story(
     return _service.patch_story(plan_name, story_key, fields)
 
 @mcp.tool()
+def patch_plan(plan_name: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """
+    Edit a plan manifest's top-level fields (currently only role_config)
+    without hand-editing the manifest JSON.
+
+    Hand-editing the manifest directly races the scheduler's 60s
+    advance_all_plans tick - a read-modify-write on either side can silently
+    clobber the other's write. This tool acquires the same _plan_lock the
+    scheduler and dispatch_story use, so the edit is atomic with respect to
+    it. Only role_config may be set; every other top-level field (repo_root,
+    epics, stories, ...) is rejected fail-closed before the lock is taken, so
+    an unknown field can never reach disk.
+    """
+    return _service.patch_plan(plan_name, fields)
+
+@mcp.tool()
 def set_story_status(plan_name: str, story_key: str, status: str) -> dict[str, Any]:
     """
     Transition a story to an explicit status without hand-editing the

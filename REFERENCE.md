@@ -168,6 +168,14 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   `REPO_ROOT`, which is only correct if that plan happens to be the one the
   env var was set for.
 
+- `patch_plan(plan_name, fields)` — edit a plan manifest's top-level fields
+  without hand-editing the manifest JSON. Allowlisted to exactly `role_config`
+  for now; any other top-level field (`repo_root`, `epics`, `stories`, ...) is
+  rejected fail-closed before the lock is taken. Acquires the same per-plan
+  lock the scheduler and `dispatch_story` use, so the read-modify-write is
+  atomic with respect to the 60s `advance_all_plans` tick; when the lock is
+  held it returns `{ok: true, skipped: "locked"}` without touching the manifest.
+
 ### Manual status (kept for the human-driven flow)
 - `mark_story_in_progress(plan_name, story_key)`, `mark_story_done(...)`.
 

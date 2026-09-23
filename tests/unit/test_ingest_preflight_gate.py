@@ -779,3 +779,90 @@ def test_story_schema_rule_documents_preflight_override():
     bullet = "\n".join(lines[ovr_idx : ovr_idx + 6])
     assert "non-empty" in bullet
     assert "reject" in bullet.lower()
+
+
+# ---------------------------------------------------------------------------
+# RPT-4: the override notice must carry the admitted story's key
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_override_notice_carries_the_story_key(
+    preflight_plan_dir, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("PIPELINE_TICKET_PROVIDER", "none")
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
+    notices = []
+
+    def _capture(plan, msg, **kw):
+        notices.append((plan, msg, kw))
+
+    monkeypatch.setattr(ingest_mod, "_notify_user", _capture)
+    plan = _plan(
+        tmp_path,
+        [
+            _story(
+                key="S1",
+                backend="ollama",
+                agent_instructions="Preflight: NOT RUN\nDo it.",
+            )
+        ],
+        preflight_override="emergency: hotfix for the release",
+    )
+    _write_plan(preflight_plan_dir, "ovrkey", plan)
+
+    result = p.ingest_plan("ovrkey")
+
+    assert result["ok"] is True
+    overrides = [n for n in notices if n[2].get("event") == OVERRIDE_EVENT]
+    assert len(overrides) == 1
+    plan_name, msg, kw = overrides[0]
+    assert plan_name == "ovrkey"
+    # The record names the admitted story instead of landing in the synthetic
+    # "<uncorrelated>" bucket.
+    assert kw.get("story_key") == "S1"
+    assert msg.startswith("S1:")
+
+
+def test_preflight_override_notice_carries_the_story_key_without_a_correlation_id(
+    preflight_plan_dir, monkeypatch, tmp_path
+):
+    """The boundary the fix is for: no correlation_id, still a story_key."""
+    monkeypatch.setenv("PIPELINE_TICKET_PROVIDER", "none")
+    monkeypatch.setattr(pt, "plane_request", _explode_plane)
+    notices = []
+
+    def _capture(plan, msg, **kw):
+        notices.append((plan, msg, kw))
+
+    monkeypatch.setattr(ingest_mod, "_notify_user", _capture)
+    story = _story(
+        key="S2",
+        backend="ollama",
+        agent_instructions="Preflight: NOT RUN\nDo it.",
+    )
+    assert "correlation_id" not in story
+    plan = _plan(
+        tmp_path,
+        [story],
+        preflight_override="emergency: hotfix for the release",
+    )
+    _write_plan(preflight_plan_dir, "ovrkey2", plan)
+
+    result = p.ingest_plan("ovrkey2")
+
+    assert result["ok"] is True
+    overrides = [n for n in notices if n[2].get("event") == OVERRIDE_EVENT]
+    assert len(overrides) == 1
+    _plan_name, _msg, kw = overrides[0]
+    assert kw.get("story_key") == "S2"
+    assert kw.get("correlation_id") is None
+
+
+def test_preflight_override_notify_call_passes_the_loop_key_as_story_key():
+    """The ``preflight_override`` call site passes ``story_key=key``."""
+    source = Path(ingest_mod.__file__).read_text()
+    idx = source.index(f'event="{OVERRIDE_EVENT}"')
+    start = source.rindex("_notify_user(", 0, idx)
+    end = source.index(")", idx)
+    call = source[start : end + 1]
+    assert "story_key=key" in call.replace(" ", ""), call

@@ -241,8 +241,9 @@ def _gate_function_sources():
 
 def test_advance_merge_gate_receives_no_hardcoded_convention_branch():
     import pipeline.advance as adv_mod
+    import pipeline.advance_merge as adv_merge
 
-    src = inspect.getsource(adv_mod)
+    src = inspect.getsource(adv_mod) + "\n" + inspect.getsource(adv_merge)
     # (a) The original hardcoded form is banned outright.
     assert 'f"agent/{key.lower()}"' not in src, (
         "advance.py still contains the hardcoded convention branch literal "

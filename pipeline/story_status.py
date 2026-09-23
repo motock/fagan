@@ -60,6 +60,7 @@ from .parsers import (
     _is_give_up_summary,
     _validate_key,
 )
+from .plan_conflict_ruling import _plan_conflict_intercept
 from .rebrief import append_cleanup_guidance
 from .wedge_io import collect_story_wedge_signals
 
@@ -68,6 +69,51 @@ from .wedge_io import collect_story_wedge_signals
 # decisions (no new env var — see DETACHED_GRADE_WATCHDOG_SECONDS's use in
 # check_story_status's dead-pid recovery path).
 DETACHED_GRADE_WATCHDOG_SECONDS = DISPATCH_WATCHDOG_SECONDS
+
+
+def _record_test_check(
+    story: dict, test_cmd: list[str], test_dir, test_result, worktree: str
+) -> str | None:
+    """Persist this run's test result on the story, regardless of pass/fail.
+
+    Returns the worktree's HEAD sha (or None when it cannot be read) so the
+    caller can stamp the lint/dead-code caches with the same revision.
+    """
+    check_sha = None
+    if worktree and os.path.isdir(worktree):
+        try:
+            check_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, OSError):
+            check_sha = None
+    story["last_test_check"] = {
+        "cmd": test_cmd,
+        "cwd": str(test_dir),
+        "returncode": test_result.returncode,
+        "stdout_tail": (test_result.stdout or "")[-2000:],
+        "stderr_tail": (getattr(test_result, "stderr", "") or "")[-2000:],
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "sha": check_sha,
+    }
+    return check_sha
+
+
+def _clear_failure_streaks(story: dict) -> None:
+    """Clear the consecutive-failure streaks a completed grade breaks."""
+    for _streak_key in (
+        "dispatch_attempts",
+        "watchdog_streak",
+        "step_cap_streak",
+        "step_cap_streak_model",
+        "infra_failure_streak",
+        "infra_failure_streak_model",
+    ):
+        story.pop(_streak_key, None)
 
 
 def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
@@ -664,27 +710,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # The worktree's current HEAD sha is recorded alongside so later
     # dispatch/review/rebrief logic can detect when this cache is stale
     # (recorded at a past commit) and refuse to reuse it.
-    check_sha = None
-    if worktree and os.path.isdir(worktree):
-        try:
-            check_sha = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=worktree,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-        except (subprocess.CalledProcessError, OSError):
-            check_sha = None
-    story["last_test_check"] = {
-        "cmd": test_cmd,
-        "cwd": str(test_dir),
-        "returncode": test_result.returncode,
-        "stdout_tail": (test_result.stdout or "")[-2000:],
-        "stderr_tail": (getattr(test_result, "stderr", "") or "")[-2000:],
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "sha": check_sha,
-    }
+    check_sha = _record_test_check(story, test_cmd, test_dir, test_result, worktree)
     if passed:
         lint = _run_lint_gate(worktree, test_env)  # noqa: F821
         if lint is not None:
@@ -709,15 +735,28 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     # across a story's whole life (two infra deaths early, one much later,
     # real progress in between) would escalate as though they were
     # consecutive.
-    for _streak_key in (
-        "dispatch_attempts",
-        "watchdog_streak",
-        "step_cap_streak",
-        "step_cap_streak_model",
-        "infra_failure_streak",
-        "infra_failure_streak_model",
-    ):
-        story.pop(_streak_key, None)
+    _clear_failure_streaks(story)
+
+    # A red grade confined to pre-existing test files the branch never touched
+    # is a PLAN CONFLICT, not a failed attempt: the brief and those tests
+    # contradict each other, so the overlord role rules on it. Returning here,
+    # before the status/rework assignment below, is what keeps a conflict from
+    # being charged as a failed attempt. The helper resolves through globals()
+    # for the same reason as _untrack_scratchpad: this body's globals ARE
+    # pipeline.server's namespace, so the probe sees the pytest-conditional
+    # export (absent under pytest, where every pre-existing grade test pins
+    # subprocess.run's call sequence). The test result and the streaks above
+    # are recorded first: a security-relevant ruling must still leave a
+    # test-run record on the manifest.
+    if not passed:
+        _intercept = globals().get("_plan_conflict_intercept")
+        if _intercept is not None:
+            _conflict = _intercept(
+                plan_name, story_key, story, test_result, worktree,
+                manifest, manifest_path, pid,
+            )
+            if _conflict is not None:
+                return _conflict
 
     # False-positive guard: tests passing against an untouched worktree
     # (e.g. main's suite against an empty branch because the agent parked
@@ -920,13 +959,26 @@ _server.collect_story_wedge_signals = collect_story_wedge_signals
 # exported.
 _server._baseline_exempted_failures = _baseline_exempted_failures
 
+# The rebound body's test-result bookkeeping and streak clearing are pure
+# manifest mutations (the same ones it performed inline before they were
+# extracted), so they are exported unconditionally: the grade path must record
+# its test run and clear its streaks on every outcome, including a
+# plan-conflict verdict.
+_server._record_test_check = _record_test_check
+_server._clear_failure_streaks = _clear_failure_streaks
+
 # The post-agent scratchpad untrack has the detached-grade primitives'
 # reason AND one of its own: it shells out to git, so exporting the real
 # function under pytest would run it inside every pre-existing test that
 # drives the dead-pid grade path (they stub subprocess.run and pin its call
 # sequence). The untrack wiring tests patch p._untrack_scratchpad directly -
-# the surface the rebound body reads via globals().
+# the surface the rebound body reads via globals(). The plan-conflict
+# intercept is exported on the same terms: it shells out to git and calls the
+# overlord role, so under pytest it stays absent from pipeline.server and
+# every pre-existing check_story_status test keeps its exact subprocess.run
+# call sequence.
 if "pytest" not in sys.modules:
     _server.start_detached_grade = start_detached_grade
     _server.collect_detached_grade = collect_detached_grade
     _server._untrack_scratchpad = _untrack_scratchpad
+    _server._plan_conflict_intercept = _plan_conflict_intercept

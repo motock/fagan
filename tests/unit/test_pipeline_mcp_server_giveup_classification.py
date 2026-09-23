@@ -357,8 +357,8 @@ def test_ingest_plan_overwrite_true_drops_role_config_when_absent(
 def test_get_role_config_reports_ingested_role_config_override(
     plan_dir, agents_dir, monkeypatch, tmp_path,
 ):
-    """The actual user-visible symptom: get_role_config(plan_name=...) must
-    report the role_config authored in the plan and carried onto the
+    """The actual user-visible symptom: get_effective_config(plan_name=...)
+    must report the role_config authored in the plan and carried onto the
     manifest by ingest_plan, not the env/registry/persona default - verified
     via the tool function directly, not just the raw manifest dict.
 
@@ -381,8 +381,10 @@ def test_get_role_config_reports_ingested_role_config_override(
 
     p.ingest_plan("p")
 
-    result = p.get_role_config(plan_name="p")
-    assert result["roles"]["review"] == {"provider": "claude", "model": "opus"}
+    result = p.get_effective_config(plan_name="p")
+    review = next(r for r in result["roles"] if r["role"] == "review")
+    assert review["provider"] == "claude"
+    assert review["model"] == "opus"
 
 
 def test_dispatch_story_writes_oracle_files_into_worktree(

@@ -580,24 +580,6 @@ def check_usage() -> dict[str, Any]:
     return _service.check_usage()
 
 # ---------- Tools ----------
-@mcp.tool()
-def get_role_config(plan_name: str | None = None) -> dict[str, Any]:
-    """
-    Show the resolved (provider, model) for every pipeline role - overlord,
-    planner, dispatch, review, decompose - given the current env vars and
-    model_registry.json, optionally layered with a specific plan's
-    role_config (pass plan_name to include it). Lets you check what a plan
-    will actually run on *before* executing it. Pure read; makes no changes.
-
-    "planner" here reports its own explicit configuration layer (env var /
-    plan role_config / registry) using the same "claude" bottom-of-chain
-    default as the other roles - it does NOT reproduce the extra "mirror
-    dispatch's own backend when nothing else is configured" fallback that
-    _resolve_planner_backend applies at actual dispatch time (that fallback
-    depends on a specific story's already-resolved dispatch backend, which
-    doesn't exist outside of a real dispatch call).
-    """
-    return _service.get_role_config(plan_name)
 
 
 @mcp.tool()
@@ -625,7 +607,7 @@ def get_effective_config(
     normally.
 
     Pass plan_name to additionally layer in that plan's role_config
-    overrides (same effect as get_role_config's plan_name); a plan_name
+    overrides (same effect as get_effective_config's plan_name); a plan_name
     whose manifest doesn't exist degrades to "no plan overrides" rather
     than raising."""
     return _service.get_effective_config(plan_name)

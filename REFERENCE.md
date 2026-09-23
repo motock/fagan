@@ -22,11 +22,12 @@ This is a detailed reference for Fagan's quickstart guide (README.md). It contai
   `litellm` \| `auto`) pins its dispatch provider from the plan itself, independent of the
   process-wide `PIPELINE_BACKEND_DISPATCH` — an unknown value is rejected at
   ingest time with a clear error, before any Plane side effects.
-- `get_role_config(plan_name=None)` — show the resolved `(provider, model)`
-  for every role (`overlord`, `planner`, `dispatch`, `review`, `decompose`)
-  given the current env vars and `model_registry.json`, optionally layered
-  with a specific plan's `role_config` (see below). Pure read — check what a
-  plan will actually run on *before* executing it.
+- `get_effective_config(plan_name=None)` — show the resolved `(provider, model)`
+  and provenance for every pipeline role given the current env vars and
+  `model_registry.json`, optionally layered with a specific plan's `role_config`
+  (see below). Also reports each cataloged env var's resolved value and which
+  config files were consulted. Pure read — check what a plan will actually run
+  on *before* executing it.
 
 ### Dispatch & status
 - `list_ready_stories(plan_name)` — stories whose dependencies are all `done`.
@@ -866,7 +867,7 @@ same for provider and model independently:
 4. The role's existing hardcoded/persona-frontmatter default — for
    dispatch/review this is the `claude` backend.
 
-Use `get_role_config(plan_name=None)` to see what actually resolves right
+Use `get_effective_config(plan_name=None)` to see what actually resolves right
 now (optionally layered with a specific plan's `role_config`) before
 running that plan.
 
@@ -896,7 +897,7 @@ The `dispatch` role in "Per-role provider/model configuration" above is the
 - **`role_config.dispatch` / `model_registry.json` `roles.dispatch`** —
   consulted only for the planner / tech-lead tier classification and the
   decompose strength-tier guidance (`pipeline/planner.py::_dispatch_strength_tier`)
-  and by `get_role_config`'s display. It never selects the executor backend
+  and by `get_effective_config`'s display. It never selects the executor backend
   or model. (It DOES directly drive the review/overlord/test_author roles.)
 
 Practical consequence: to pin an implementer model for one plan, set

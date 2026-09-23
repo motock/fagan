@@ -854,24 +854,6 @@ class PipelineService:
                 plans[plan_name] = {"ok": False, "error": str(e)}
         return {"ok": True, "plans": plans}
 
-    def get_role_config(self, plan_name: str | None = None) -> dict[str, Any]:
-        plan_role_config = _plan_role_config(plan_name) if plan_name else None
-        role_fallbacks = {
-            "overlord": lambda: _persona_default_model("overlord") or "opus",
-            "planner": lambda: DEFAULT_MODEL,
-            "dispatch": lambda: DEFAULT_MODEL,
-            "review": lambda: _persona_default_model("code-reviewer") or DEFAULT_MODEL,
-            "decompose": lambda: _persona_default_model("product-analyst") or "opus",
-        }
-        roles = {}
-        for role, fallback in role_fallbacks.items():
-            resolution = role_registry.resolve_role(
-                role,
-                plan_role_config=plan_role_config,
-                model_fallback=fallback,
-            )
-            roles[role] = {"provider": resolution.provider, "model": resolution.model}
-        return {"ok": True, "roles": roles}
 
     def get_journal(self, plan_name: str, story_key: str) -> tuple[bool, list[dict]]:
         return _store.get_journal(plan_name, story_key)

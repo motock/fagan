@@ -31,7 +31,11 @@ import re
 from enum import Enum
 from typing import Protocol
 
-import httpx
+try:
+    import httpx
+except Exception:  # noqa: F401
+    httpx = None  # type: ignore
+
 
 from .config import PLANE_MAX_ATTEMPTS
 

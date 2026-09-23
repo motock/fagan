@@ -92,6 +92,35 @@ def _dispatch_fallback_provider(plan_role_config: dict[str, Any] | None) -> str:
         ).provider
 
 
+def _registry_tag_for(provider: str, model: str) -> str:
+    """Translate a bare registry model NAME to its concrete tag.
+
+    ``model`` is returned unchanged when it already looks like a tag
+    (contains ':' or '/'), or when the live registry has no
+    ``providers.<provider>.models.<model>.tag`` entry, or when the registry
+    cannot be loaded. A bare name that is neither a registry name nor one of
+    the tier names ``opus``/``sonnet``/``haiku`` is logged as a warning,
+    because the local driver would otherwise run the default model instead.
+    """
+    if ":" in model or "/" in model:
+        return model
+    try:
+        registry = role_registry.load_registry()
+        return registry["providers"][provider]["models"][model]["tag"]
+    except role_registry.RoleRegistryError:
+        return model
+    except (KeyError, TypeError):
+        pass
+    if model not in ("opus", "sonnet", "haiku"):
+        logging.getLogger("pipeline").warning(
+            "story model %s is not a registry name for provider %s; "
+            "the local driver will run its default model",
+            model,
+            provider,
+        )
+    return model
+
+
 def _resolve_dispatch_target(
     story: dict[str, Any], plan_role_config: dict[str, Any] | None = None
 ) -> tuple[str, str | None]:
@@ -180,6 +209,8 @@ def _resolve_dispatch_target(
 
     provider = _resolve_dispatch_backend(story, resolution.provider)
     model = story.get("model")
+    if model:
+        model = _registry_tag_for(provider, model)
     if not model and provider == resolution.provider:
         model = resolution.model
     return provider, model or None

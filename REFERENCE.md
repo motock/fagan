@@ -829,6 +829,16 @@ that sizing and the `sizing_auto_routed` auto-route consume, and it leaves
 
 ---
 
+## Story model pins
+
+A story's `model` may be a Claude tier (`opus | sonnet | haiku`), a
+concrete model tag (e.g. `glm-5.3-flash:cloud`), or a model name declared
+in the live registry's `providers.<provider>.models` (e.g.
+`deepseek-v4.1-flash`). Dispatch resolves a registry name to that entry's
+`tag` for the provider the story dispatches on. A bare name that is none of
+these is logged as a warning, because the local driver would otherwise run
+its default model instead of the pin.
+
 ## Per-role provider/model configuration
 
 Every pipeline role — **overlord**, **planner** (the guided-decomposition

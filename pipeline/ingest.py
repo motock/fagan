@@ -257,6 +257,35 @@ def _files_field_error(story: dict) -> str | None:
     return None
 
 
+def _keyless_reingest_error(
+    plan: dict, only_epics: list[str] | None, already_ingested: bool, overwrite: bool
+) -> str | None:
+    """Error text when re-ingesting would mint duplicate stories, else None.
+
+    Without an explicit ``key`` a story is keyed by a fresh UUID (or a new
+    ticket id) on every ingest, so re-ingesting a plan whose manifest already
+    exists adds a second copy of that story next to the first, and both
+    dispatch. Only ``overwrite=True`` (wholesale replace) is safe then.
+    """
+    if overwrite or not already_ingested:
+        return None
+    for epic in plan["epics"]:
+        if only_epics and epic["summary"] not in only_epics:
+            continue
+        for story in epic.get("stories", []):
+            key = story.get("key")
+            if not isinstance(key, str) or not key:
+                summary = story.get("summary")
+                return (
+                    f"story {summary!r} has no explicit `key` and plan is "
+                    "already ingested: re-ingesting would mint a duplicate "
+                    "story that dispatches alongside the original. Give every "
+                    "story a `key`, or pass overwrite=True to replace the "
+                    "manifest."
+                )
+    return None
+
+
 def _ingest_plan_impl(
     plan_name: str,
     only_epics: list[str] | None = None,
@@ -356,6 +385,11 @@ def _ingest_plan_impl(
                 return {"ok": False, "error": lint_msg}
 
     manifest_path = _store.manifest_path(plan_name)
+    keyless_error = _keyless_reingest_error(
+        plan, only_epics, manifest_path.exists(), overwrite
+    )
+    if keyless_error is not None:
+        return {"ok": False, "error": keyless_error}
 
     with _store.transaction(plan_name) as acquired:
         if not acquired:

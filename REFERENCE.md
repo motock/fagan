@@ -723,6 +723,14 @@ A gated story must carry a `Preflight:` line in its `agent_instructions` whose r
 
 For emergencies, a plan may set `preflight_override` to a non-empty reason string; the story is then admitted and every use is notified as event `preflight_override`.
 
+## Re-ingest requires explicit story keys
+
+Re-ingesting a plan whose manifest already exists is rejected with
+`ok: False` if any story (within `only_epics`, when given) has no explicit
+`key`, unless `overwrite=True`. A keyless story gets a fresh key on every
+ingest, so a re-ingest would add a duplicate that dispatches alongside the
+original. The first ingest of a plan never needs keys.
+
 ## Acceptance fixture grading
 
 An `acceptance` fixture that calls the changed function directly — never

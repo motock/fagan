@@ -741,7 +741,7 @@ def test_ingest_never_routes_a_running_story_on_reingest(
     monkeypatch.setattr(pt, "plane_request", _fake_plane)
     monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", "devstral:24b")
     notices = _capture_notices(monkeypatch)
-    plan = _plan(tmp_path, [_oversized_story()])
+    plan = _plan(tmp_path, [{**_oversized_story(), "key": "S1"}])
     (sizing_plan_dir / "route6.json").write_text(json.dumps(plan))
 
     assert p.ingest_plan("route6")["ok"] is True

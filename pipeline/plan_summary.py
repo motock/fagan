@@ -14,8 +14,7 @@ It reuses the existing metrics helpers instead of recomputing:
 Data minimisation (hard requirement): notification ``message`` text in this
 codebase can carry raw CI stderr, gate errors, branch names and absolute
 worktree paths, so the summary derives ONLY counts/outcomes from the records.
-No record's ``message`` value and no filesystem path (``manifest["repo_root"]``
-or otherwise) is ever embedded in the returned string.
+No record's ``message`` value and no filesystem path (``manifest["repo_root"]`` or otherwise) is ever embedded in the returned string.
 
 Public surface (exactly one function): ``format_plan_summary``.
 """

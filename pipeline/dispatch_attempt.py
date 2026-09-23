@@ -143,6 +143,7 @@ def _rebrief_step_cap_struggle(
     evidence is the tail of its agent.log."""
     facts = collect_attempt_facts(worktree, story)
     evidence = collect_failure_evidence(worktree, story, facts=facts)
+    previous_instructions = story.get("agent_instructions", "")
     try:
         unsat_reason = detect_unsatisfiable_signal(evidence)
         if unsat_reason is not None:

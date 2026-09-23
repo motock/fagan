@@ -57,7 +57,7 @@ _CONCRETE_TAG = "deepseek-v4.1-flash:cloud"
 _REGISTRY_PROVIDERS = {
     "ollama": {"models": {_BARE_NAME: {"tag": _CONCRETE_TAG}}},
 }
-_REGISTRY_DISPATCH = {"provider": "ollama", "model": _CONCRETE_TAG}
+_REGISTRY_DISPATCH = {"provider": "ollama", "model": _BARE_NAME}
 # The driver's own env default - the value the bug makes every agent boot on.
 _DRIVER_ENV_DEFAULT = "llama3:8b"
 # The spec default (DEFAULT_MODEL) - the other wrong value the bug degrades to.

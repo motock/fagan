@@ -14,7 +14,7 @@ It reuses the existing metrics helpers instead of recomputing:
 Data minimisation (hard requirement): notification ``message`` text in this
 codebase can carry raw CI stderr, gate errors, branch names and absolute
 worktree paths, so the summary derives ONLY counts/outcomes from the records.
-No record's ``message`` value and no filesystem path (``manifest["repo_root"]``
+No record's ``message`` value and no filesystem path (``manifest["repo_root"``
 or otherwise) is ever embedded in the returned string.
 
 Public surface (exactly one function): ``format_plan_summary``.
@@ -24,16 +24,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from pipeline.local_success import classify_story
 from pipeline.story_metrics import compute_plan_rollup, compute_story_metrics
 
 __all__ = ["format_plan_summary"]
 
 
-def _story_line(key: str, story: dict[str, Any]) -> str:
-    """Render one manifest story: key, summary, and pr_url when present.
-
-    Missing/empty fields are omitted rather than rendered as ``None``.
-    """
+def _story_line(key: str, story: dict[str, Any], records: list[dict]) -> str:
+    """Render one manifest story: key, summary, pr_url when present, and the local first-pass verdict for local-tier stories."""
     line = f"- {key}"
     summary = story.get("summary")
     if isinstance(summary, str) and summary:
@@ -41,6 +39,12 @@ def _story_line(key: str, story: dict[str, Any]) -> str:
     pr_url = story.get("pr_url")
     if isinstance(pr_url, str) and pr_url:
         line += f" (pr: {pr_url})"
+    verdict = classify_story(key, story, records)
+    if verdict["in_population"]:
+        if verdict["clean"]:
+            line += " [first-pass clean]"
+        else:
+            line += f" [not first-pass clean: {', '.join(verdict['reasons'])}]"
     return line
 
 
@@ -78,7 +82,7 @@ def format_plan_summary(plan_name: str, manifest: dict, records: list[dict]) -> 
             story = stories.get(key)
             if not isinstance(story, dict):
                 story = {}
-            lines.append(_story_line(key, story))
+            lines.append(_story_line(key, story, records))
         lines.append("")
 
     lines.append("Plan rollup:")

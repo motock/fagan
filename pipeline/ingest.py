@@ -49,6 +49,31 @@ role_registry = _ServerRef("role_registry")
 _SIZING_MAX_PRODUCTION_FILES = 2
 _SIZING_MAX_FILE_LINES = 1000
 
+# Appended to a sizing warning when the story is oversized but cannot be
+# auto-routed because the host default is not a :cloud tag.
+_AUTO_ROUTE_SKIPPED_SUFFIX = (
+    "; auto-route skipped: PIPELINE_LOCAL_MODEL_DEFAULT is not a :cloud tag"
+)
+
+
+def _is_test_path(path: str) -> bool:
+    """True when `path` points at a test file rather than production code.
+
+    A path is a test path when its basename matches ``test_*.py``,
+    ``*_test.py`` or ``conftest.py``, or when it lies under a ``tests/``
+    directory. Test paths are excluded from story sizing entirely: the
+    production-file caps grade the code a story touches, not its tests.
+    """
+    p = str(path).replace("\\", "/")
+    basename = p.rsplit("/", 1)[-1]
+    return (
+        basename.startswith("test_")
+        or basename.endswith("_test.py")
+        or basename == "conftest.py"
+        or p.startswith("tests/")
+        or "/tests/" in p
+    )
+
 
 def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
     """Return a non-blocking warning string when a story's own
@@ -70,7 +95,7 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
     instructions = story.get("agent_instructions") or ""
     # Reuse the same backtick-quoted-repo-path convention every brief in
     # this codebase already follows (see any story's "Files:" line).
-    paths = sorted(
+    regex_paths = sorted(
         set(
             re.findall(
                 r"`((?:app|pipeline|static|scripts|tests|docs|src|systemd)/[\w/.\-]+)`",
@@ -78,13 +103,28 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
             )
         )
     )
-    production_paths = [
-        p
-        for p in paths
-        if not p.split("/")[-1].startswith("test_")
-        and "/test" not in p
-        and not p.endswith(".md")
-    ]
+    # A declared `files` list is authoritative when present (even empty);
+    # otherwise fall back to the backtick-regex derivation above.
+    files = story.get("files")
+    if isinstance(files, list):
+        paths = sorted({str(p) for p in files if isinstance(p, str)})
+        # Test paths are ignored entirely; docs travel with code, so `.md`
+        # paths never count toward the production-file COUNT cap -- but the
+        # file-SIZE cap checks every non-test path, `.md` files and
+        # repo-root files (README.md, pyproject.toml) included.
+        production_paths = [
+            p for p in paths if not _is_test_path(p) and not p.endswith(".md")
+        ]
+        size_paths = [p for p in paths if not _is_test_path(p)]
+    else:
+        production_paths = [
+            p
+            for p in regex_paths
+            if not p.split("/")[-1].startswith("test_")
+            and "/test" not in p
+            and not p.endswith(".md")
+        ]
+        size_paths = production_paths
     reasons = []
     if len(production_paths) > _SIZING_MAX_PRODUCTION_FILES:
         reasons.append(
@@ -93,7 +133,7 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
             f"{_SIZING_MAX_PRODUCTION_FILES}-file cap for a non-Claude "
             f"dispatch tier"
         )
-    for p in production_paths:
+    for p in size_paths:
         try:
             full = Path(repo_root) / p
             if full.is_file():
@@ -112,6 +152,31 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
         "story sizing risk (see .claude/rules/agent-dispatch-story-sizing.md): "
         + "; ".join(reasons)
     )
+
+
+def _on_device_route_target(story: dict) -> str | None:
+    """Return the :cloud model tag an oversized on-device story should be
+    routed to, or None when the story must not be re-routed.
+
+    All four conditions must hold: the story is still ``todo`` (a running
+    or finished story is never re-routed mid-flight); its backend is a
+    local/on-device tier; its effective model (the story's own ``model``,
+    else the host default) is not already a ``:cloud`` tag; and the host
+    default ``PIPELINE_LOCAL_MODEL_DEFAULT`` IS a ``:cloud`` tag -- the
+    route target is that default. Reading the env var once keeps the two
+    checks from disagreeing if it changes mid-call."""
+    if story.get("status") != "todo":
+        return None
+    backend = (story.get("backend") or "").strip().lower()
+    if backend not in ("local", "ollama", "lmstudio", "mlx", "litellm"):
+        return None
+    default_model = os.environ.get("PIPELINE_LOCAL_MODEL_DEFAULT", "")
+    effective_model = story.get("model") or default_model
+    if effective_model.endswith(":cloud"):
+        return None
+    if not default_model.endswith(":cloud"):
+        return None
+    return default_model
 
 
 def _preflight_status(agent_instructions: str | None) -> str:
@@ -406,7 +471,43 @@ def _ingest_plan_impl(
             "role_config", prior.get("role_config", {})
         )
 
+        # Auto-route oversized on-device stories to the host's :cloud default
+        # model before the manifest is written: an oversized story is still
+        # dispatched, just not to a local executor that would choke on it.
+        # Mutate the story dicts final_manifest holds so the route is
+        # persisted; the routed-key set is per-ingest only (a re-ingested
+        # story already on a :cloud model fails _on_device_route_target and
+        # is never re-routed).
+        routed_keys: set[str] = set()
+        routed: list[tuple[str, str, str]] = []
+        for key, story in final_manifest["stories"].items():
+            warning = _story_sizing_warning(story, repo_root)
+            if warning is None:
+                continue
+            tag = _on_device_route_target(story)
+            if tag is None:
+                continue
+            from_backend = story.get("backend")
+            from_model = story.get("model")
+            story["backend"] = "ollama"
+            story["model"] = tag
+            story["sizing_auto_routed"] = {
+                "from_backend": from_backend,
+                "from_model": from_model,
+                "to_model": tag,
+                "reason": warning,
+            }
+            routed_keys.add(key)
+            routed.append((key, tag, warning))
+
         _atomic_write_json(manifest_path, final_manifest)
+
+        # One notification per routed story, after the write: the route
+        # notice replaces the plain advisory sizing warning for that story.
+        for key, tag, warning in routed:
+            message = f"{key}: auto-routed to {tag}: {warning}"
+            _notify_user(plan_name, message, event="sizing_auto_routed")
+            logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {message}")
 
         # A plan-level preflight_override admitted these non-Claude stories
         # despite a missing or not-run `Preflight:` line
@@ -434,8 +535,17 @@ def _ingest_plan_impl(
         # file-size cap. Advisory only -- a human plan author may have
         # deliberately authorized a larger story, so this never blocks.
         for key, story in final_manifest["stories"].items():
-            warning = _story_sizing_warning(story, repo_root)
+            if key in routed_keys:
+                # Already notified with the sizing_auto_routed event above;
+                # a second plain warning would double-notify the same story.
+                warning = None
+            else:
+                warning = _story_sizing_warning(story, repo_root)
             if warning:
+                if not os.environ.get(
+                    "PIPELINE_LOCAL_MODEL_DEFAULT", ""
+                ).endswith(":cloud"):
+                    warning += _AUTO_ROUTE_SKIPPED_SUFFIX
                 _notify_user(plan_name, f"{key}: {warning}")
                 logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {warning}")
             # Non-blocking authoring nudge: flag acceptance fixtures that

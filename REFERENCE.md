@@ -746,6 +746,24 @@ The declared list is persisted verbatim in the manifest story and refreshed on
 re-ingest: a changed list replaces the old one, and dropping the field from
 the plan story removes the key.
 
+Sizing also reads `files` when it is a list: test paths (anything under
+`tests/`, or whose basename matches `test_*.py`, `*_test.py` or
+`conftest.py`) are ignored entirely, the production-file COUNT cap counts
+non-test, non-`.md` paths (docs travel with code), and the file-SIZE cap
+checks every non-test path — `.md` files and repo-root files such as
+`README.md` or `pyproject.toml` included. When `files` is absent the
+backtick-regex derivation is used unchanged. An oversized on-device story
+(`backend` in local/ollama/lmstudio/mlx/litellm, status `todo`, effective
+model not already `:cloud`) is auto-routed at ingest to the host's
+`PIPELINE_LOCAL_MODEL_DEFAULT` when that default ends with `:cloud`: the
+story's `backend` becomes `ollama`, its `model` becomes the default tag, and
+the story records a `sizing_auto_routed` object (`from_backend`, `from_model`,
+`to_model`, `reason`) while ingest notifies once with the `sizing_auto_routed`
+event instead of the plain advisory warning. When the default is not a
+`:cloud` tag the story is left as authored and the advisory warning carries an
+`; auto-route skipped: PIPELINE_LOCAL_MODEL_DEFAULT is not a :cloud tag`
+suffix.
+
 ---
 
 ## Per-role provider/model configuration

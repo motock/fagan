@@ -52,6 +52,14 @@ def _init_git_repo(path):
         cwd=str(path), capture_output=True, check=True,
     )
     subprocess.run(
+        ["git", "config", "maintenance.auto", "false"],
+        cwd=str(path), capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "gc.auto", "0"],
+        cwd=str(path), capture_output=True, check=True,
+    )
+    subprocess.run(
         ["git", "commit", "--allow-empty", "-m", "init"],
         cwd=str(path), capture_output=True, check=True,
     )

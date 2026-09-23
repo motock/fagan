@@ -94,7 +94,9 @@ INDEX_HTML_SHA256 = "0bc3e070dcfce293ad1ba0c7d0df0ddf5fdceadccc83817cd22b2dbeec0
 # pin.
 PREFIX_BEFORE_COMMS_SHA256 = "b6ceb89d74a21034ea7e8f60dd1c056e5c97cb8fb90500d0eb13d00b0c5e382e"
 # Re-pinned post-#467 (toast severity stripe color fix) - see note above.
-TOAST_REGION_SHA256 = "dbfb98e7ac5c90643e9560c45faa9d8d04e8487c11ab55c4af82cb7c2593550c"
+# Re-pinned for the toast long-text fix (2026-09-23): this story's whole job
+# is to edit exactly this toast region, so the self-guard moves with it.
+TOAST_REGION_SHA256 = "ac70e1f2f7b8589264ec773f87e80e4f57b26b9c544cbf112027aebfa5b661e8"
 # Re-pinned for the story-modal Replay timeline (9639ae41, 2026-09-05): that
 # story's brief explicitly authorizes appending new CSS at the END of
 # style.css only ("APPEND-AT-END ONLY"), which necessarily falls after the

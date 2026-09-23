@@ -55,6 +55,9 @@ _REWORK_EVENTS = frozenset(
 )
 _ESCALATION_EVENTS = frozenset({"escalated", "model_fallback"})
 
+# Standing invariant: rework events in _REWORK_EVENTS are deliberately not first-pass disqualifying:
+# a merge-gate rework is usually environment-caused (a platform-specific CI failure the executor's own suite
+# cannot see), so a rework counts toward total_rework_cycles and the story's cost, but never against first-pass clean.
 _FIRST_PASS_DISQUALIFYING_EVENTS = frozenset(
     {"escalated", "model_fallback", "story_parked", "brief_patched"}
 )
@@ -216,6 +219,11 @@ def compute_plan_rollup(stories: list[dict[str, Any]]) -> dict[str, Any]:
     when there are zero eligible payloads.  The inputs are read only; nothing
     is written back into the payloads.
     """
+    stories = [
+        story
+        for story in stories
+        if story.get("story_key") is not None or story.get("correlation_id") is not None
+    ]
     stories_total = len(stories)
     stories_merged = sum(1 for story in stories if story.get("merged"))
     total_dispatch_failures = sum(story.get("dispatch_failures", 0) or 0 for story in stories)

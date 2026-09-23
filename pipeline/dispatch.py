@@ -1033,3 +1033,11 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             "branch": branch,
             "resumed": resuming,
         }
+
+
+# build_detect owns the single test-failure parser; dispatch imports it rather
+# than carrying a second copy. This import sits at the end of the module because
+# pipeline.build_detect eagerly imports pipeline.server, which imports back into
+# pipeline.dispatch (via pipeline.story_status) - a top-of-file import would
+# re-enter this half-initialized module and raise ImportError.
+from .build_detect import detect_test_command, failed_node_ids  # noqa: F401

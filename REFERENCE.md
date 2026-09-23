@@ -1310,6 +1310,11 @@ enables a layered routing strategy:
      its merge-base with the default branch AND the full suite and lint pass. If
      both hold, the run exits as done and goes to review instead of being parked
      for a step-cap rebrief. Otherwise the step-cap path below runs unchanged.
+   - **No-new-commit rework:** when a rework redispatch ends with HEAD still
+     at the last reviewed commit (and the no-commit cap is not yet reached),
+     the worktree's `.agent_transcript.json` is deleted, so the next rework
+     starts from the brief instead of resuming the transcript, and a
+     prior-attempt diagnosis is folded into `agent_instructions`.
    - **On repeated step-cap interrupts:** a story that hits the step cap
      lands on `interrupted`, not `failed` — so it never reaches the
      test-failure path above and could otherwise loop on the same struggling

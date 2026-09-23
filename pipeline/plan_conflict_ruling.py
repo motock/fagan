@@ -26,6 +26,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from .build_detect import failed_node_ids
+from .plan_conflict import branch_file_sets, classify_plan_conflict, failing_test_files
+from .review import _first_review_base
 from .service import _ServerRef
 
 logger = logging.getLogger("pipeline")
@@ -34,6 +37,7 @@ PLAN_CONFLICT_HEADER = "=== PLAN-CONFLICT RULING (pre-authorized test edit) ==="
 
 _notify_user = _ServerRef("_notify_user")
 _invoke_overlord = _ServerRef("_invoke_overlord")
+_atomic_write_json = _ServerRef("_atomic_write_json")
 
 __all__ = [
     "PLAN_CONFLICT_HEADER",
@@ -322,3 +326,74 @@ def apply_plan_conflict_ruling(
         return "regression"
 
     return "regression"
+
+
+def _plan_conflict_intercept(
+    plan_name: str,
+    story_key: str,
+    story: dict,
+    test_result,
+    worktree: str,
+    manifest: dict,
+    manifest_path,
+    pid: int,
+) -> dict | None:
+    """Rule on a red grade that is a plan conflict, or return ``None``.
+
+    A red grade whose only failing tests are pre-existing files the branch
+    never touched is a PLAN CONFLICT: the brief and those tests contradict
+    each other, so the overlord role rules on it rather than the story being
+    charged a failed rework attempt.  Returns the verdict dict the caller
+    should return (this function owns the manifest write), or ``None`` to
+    keep today's path.
+
+    Fail open: any unexpected exception is logged at WARNING with the story
+    key only -- never the test output or the brief -- and returns ``None``,
+    so a defect here can never abort a grade.
+    """
+    try:
+        node_ids = failed_node_ids(test_result.stdout or "")
+        files = failing_test_files(node_ids)
+        if not files:
+            # Nothing to classify, so do not shell out to git for an empty set.
+            return None
+        base_ref = _first_review_base(worktree)
+        if base_ref is None:
+            return None
+        sets = branch_file_sets(worktree, base_ref)
+        if sets is None:
+            return None
+        conflict = classify_plan_conflict(files, *sets)
+        if conflict is None:
+            return None
+        # Already ruled on this exact conflict: today's path takes over, so a
+        # repeat grade can never loop through the overlord role.  Keyed on the
+        # conflict file list, never a blanket latch, so a genuinely new
+        # conflict is still ruled on.
+        if story.get("plan_conflict_ruling", {}).get("files") == conflict:
+            return None
+        ruling = rule_on_plan_conflict(
+            story,
+            conflict,
+            node_ids,
+            test_result.stdout or "",
+            manifest.get("role_config"),
+        )
+        if ruling is None:
+            return None
+        outcome = apply_plan_conflict_ruling(
+            plan_name, story_key, story, ruling, conflict
+        )
+        if outcome == "regression":
+            # The ruling is recorded on the story, but a regression is an
+            # ordinary failure: the caller keeps today's path.
+            return None
+        _atomic_write_json(manifest_path, manifest)
+        return {"status": story["status"], "pid": pid, "plan_conflict": outcome}
+    except Exception as exc:  # noqa: BLE001 - fail open: never abort a grade
+        logger.warning(
+            "plan-conflict intercept failed for %s (%s); keeping today's path",
+            story_key,
+            type(exc).__name__,
+        )
+        return None

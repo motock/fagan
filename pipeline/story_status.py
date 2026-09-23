@@ -60,6 +60,7 @@ from .parsers import (
     _is_give_up_summary,
     _validate_key,
 )
+from .plan_conflict_ruling import _plan_conflict_intercept
 from .rebrief import append_cleanup_guidance
 from .wedge_io import collect_story_wedge_signals
 
@@ -653,6 +654,25 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
 
+    # A red grade confined to pre-existing test files the branch never touched
+    # is a PLAN CONFLICT, not a failed attempt: the brief and those tests
+    # contradict each other, so the overlord role rules on it. Returning here,
+    # before the status/rework assignment below, is what keeps a conflict from
+    # being charged as a failed attempt. The helper resolves through globals()
+    # for the same reason as _untrack_scratchpad: this body's globals ARE
+    # pipeline.server's namespace, so the probe sees the pytest-conditional
+    # export (absent under pytest, where every pre-existing grade test pins
+    # subprocess.run's call sequence).
+    if not passed:
+        _intercept = globals().get("_plan_conflict_intercept")
+        if _intercept is not None:
+            _conflict = _intercept(
+                plan_name, story_key, story, test_result, worktree,
+                manifest, manifest_path, pid,
+            )
+            if _conflict is not None:
+                return _conflict
+
     # Diagnostic gap found live 2026-07-22 (MODE-29-REVIEW-STORY-LOCK-GUARD):
     # this test-run result was only ever returned transiently from the tool
     # call - nothing persisted it, so a status that later turned out to be
@@ -925,8 +945,13 @@ _server._baseline_exempted_failures = _baseline_exempted_failures
 # function under pytest would run it inside every pre-existing test that
 # drives the dead-pid grade path (they stub subprocess.run and pin its call
 # sequence). The untrack wiring tests patch p._untrack_scratchpad directly -
-# the surface the rebound body reads via globals().
+# the surface the rebound body reads via globals(). The plan-conflict
+# intercept is exported on the same terms: it shells out to git and calls the
+# overlord role, so under pytest it stays absent from pipeline.server and
+# every pre-existing check_story_status test keeps its exact subprocess.run
+# call sequence.
 if "pytest" not in sys.modules:
     _server.start_detached_grade = start_detached_grade
     _server.collect_detached_grade = collect_detached_grade
     _server._untrack_scratchpad = _untrack_scratchpad
+    _server._plan_conflict_intercept = _plan_conflict_intercept

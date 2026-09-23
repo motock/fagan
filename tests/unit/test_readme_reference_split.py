@@ -92,6 +92,27 @@ _GET_EFFECTIVE_CONFIG_BULLET = (
 # REFERENCE.md existence & title
 # ---------------------------------------------------------------------------
 
+# MCPHYG-4 renamed the checkpoint MCP tool to checkpoint_story, keeping
+# `checkpoint` as a deprecated alias for the same code path. The pre-split
+# README at 2cca309~1 predates that rename and still uses the old tool name, so
+# the verbatim guard for the two sections that document the tool-call syntax
+# compares with the rename normalized back to the original wording (see
+# _CHECKPOINT_CALL) while separately requiring the new name to be present and
+# the old call syntax to be gone — so the normalization can never mask a revert
+# to the old name.
+_CHECKPOINT_STORY_CALL = (
+    'checkpoint_story(plan_name, story_key, step, summary, next_hint="")'
+)
+_CHECKPOINT_CALL = 'checkpoint(plan_name, story_key, step, summary, next_hint="")'
+_CHECKPOINT_STORY_CALL_BARE = (
+    "checkpoint_story(plan_name, story_key, step, summary, next_hint)"
+)
+_CHECKPOINT_CALL_BARE = "checkpoint(plan_name, story_key, step, summary, next_hint)"
+_CHECKPOINT_DEPRECATED_ALIAS_LINE = (
+    "  `checkpoint` remains available as a deprecated alias for the same tool.\n"
+)
+
+
 def test_reference_md_exists():
     assert REFERENCE.is_file(), "REFERENCE.md must exist at the repo root"
 
@@ -576,6 +597,42 @@ def test_moved_section_body_is_verbatim(title):
                 f"renamed com.fagan.pipeline launchd label."
             )
             reference_body = reference_body.replace("com.fagan.pipeline", "com.claude.pipeline")
+        if title in ("MCP tools reference", "Usage gate & resumability"):
+            # MCPHYG-4 renamed the checkpoint MCP tool to checkpoint_story and
+            # kept `checkpoint` as a deprecated alias for the same code path.
+            # The pre-split README at 2cca309~1 predates the rename and still
+            # uses the old tool name, so compare with the rename normalized back
+            # to the original wording — and require the new name to actually be
+            # present and the old call syntax to be gone, so the normalization
+            # can never mask a revert to the old tool name.
+            assert (
+                _CHECKPOINT_STORY_CALL in reference_body
+                or _CHECKPOINT_STORY_CALL_BARE in reference_body
+            ), (
+                f"Section body for {title!r} in REFERENCE.md must document the "
+                f"renamed checkpoint_story tool."
+            )
+            assert (
+                _CHECKPOINT_CALL not in reference_body
+                and _CHECKPOINT_CALL_BARE not in reference_body
+            ), (
+                f"Section body for {title!r} in REFERENCE.md must not use the old "
+                f"checkpoint(...) call syntax as the primary tool name."
+            )
+            reference_body = reference_body.replace(
+                _CHECKPOINT_STORY_CALL, _CHECKPOINT_CALL
+            )
+            reference_body = reference_body.replace(
+                _CHECKPOINT_STORY_CALL_BARE, _CHECKPOINT_CALL_BARE
+            )
+            if title == "MCP tools reference":
+                assert _CHECKPOINT_DEPRECATED_ALIAS_LINE in reference_body, (
+                    f"Section body for {title!r} in REFERENCE.md must note that "
+                    f"checkpoint remains available as a deprecated alias."
+                )
+                reference_body = reference_body.replace(
+                    _CHECKPOINT_DEPRECATED_ALIAS_LINE, ""
+                )
         assert reference_body == original_body, (
             f"Section body for {title!r} in REFERENCE.md is not byte-for-byte "
             f"identical to the original README.md section. The move was supposed "

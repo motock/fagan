@@ -786,6 +786,12 @@ def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def checkpoint_story(plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "") -> dict[str, Any]:
+    """Record a durable checkpoint for a dispatched agent's progress. Commits any uncommitted work in the story's worktree as a WIP commit and appends an entry to the story's journal (plan.story.journal.json). Call this after completing each idempotent step of a story so a killed agent can resume from the last checkpoint instead of starting over."""
+    return _service.checkpoint(plan_name, story_key, step, summary, next_hint)
+
+
+@mcp.tool()
 def checkpoint(plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "") -> dict[str, Any]:
     """Record a durable checkpoint for a dispatched agent's progress. Commits any uncommitted work in the story's worktree as a WIP commit and appends an entry to the story's journal (plan.story.journal.json). Call this after completing each idempotent step of a story so a killed agent can resume from the last checkpoint instead of starting over."""
     return _service.checkpoint(plan_name, story_key, step, summary, next_hint)

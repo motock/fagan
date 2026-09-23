@@ -124,7 +124,12 @@ def test_pause_plan_definition_count_is_two():
     import pathlib
     server_src = inspect.getsource(p)
     service_src = pathlib.Path(p.__file__).with_name("service.py").read_text()
-    count = server_src.count("def pause_plan") + service_src.count("def pause_plan")
+    tools_src = pathlib.Path(p.__file__).with_name("server_tools_lifecycle.py").read_text()
+    count = (
+        server_src.count("def pause_plan")
+        + service_src.count("def pause_plan")
+        + tools_src.count("def pause_plan")
+    )
     assert count == 2, (
         "expected exactly 2 'def pause_plan' (method in service.py + tool), "
         f"got {count}"
@@ -137,7 +142,12 @@ def test_resume_plan_definition_count_is_two():
     import pathlib
     server_src = inspect.getsource(p)
     service_src = pathlib.Path(p.__file__).with_name("service.py").read_text()
-    count = server_src.count("def resume_plan") + service_src.count("def resume_plan")
+    tools_src = pathlib.Path(p.__file__).with_name("server_tools_lifecycle.py").read_text()
+    count = (
+        server_src.count("def resume_plan")
+        + service_src.count("def resume_plan")
+        + tools_src.count("def resume_plan")
+    )
     assert count == 2, (
         "expected exactly 2 'def resume_plan' (method in service.py + tool), "
         f"got {count}"

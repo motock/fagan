@@ -33,7 +33,7 @@ from typing import Protocol
 
 try:
     import httpx
-except Exception:
+except Exception:  # noqa: BLE001
     httpx = None  # type: ignore
 
 

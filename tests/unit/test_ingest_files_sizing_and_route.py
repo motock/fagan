@@ -828,3 +828,99 @@ def test_reference_documents_files_sizing_and_the_auto_route():
     paragraphs = [para.strip() for para in body.split("\n\n") if para.strip()]
     assert "sizing_auto_routed" in paragraphs[-1]
     assert "PIPELINE_LOCAL_MODEL_DEFAULT" in paragraphs[-1]
+
+
+# ---------------------------------------------------------------------------
+# RPT-4: the auto-route notice must carry the routed story's key
+# ---------------------------------------------------------------------------
+
+
+def _capture_notices_with_kwargs(monkeypatch):
+    """Replace the notification seam and record ``(plan, msg, kwargs)``.
+
+    The shared ``_capture_notices`` helper above keeps only the event, so it
+    cannot see the ``story_key`` this story adds.
+    """
+    notices = []
+
+    def _fake_notify(plan, msg, **kwargs):
+        notices.append((plan, msg, kwargs))
+
+    monkeypatch.setattr(ingest_mod, "_notify_user", _fake_notify)
+    return notices
+
+
+def _routed_notices(notices):
+    return [n for n in notices if n[2].get("event") == "sizing_auto_routed"]
+
+
+def test_ingest_auto_route_notice_carries_the_story_key(
+    sizing_plan_dir, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", _CLOUD_TAG)
+    notices = _capture_notices_with_kwargs(monkeypatch)
+    plan = _plan(tmp_path, [_oversized_story()])
+    (sizing_plan_dir / "routekey.json").write_text(json.dumps(plan))
+
+    result = p.ingest_plan("routekey")
+
+    assert result["ok"] is True
+    routed = _routed_notices(notices)
+    assert len(routed) == 1
+    plan_name, msg, kw = routed[0]
+    assert plan_name == "routekey"
+    assert kw.get("event") == "sizing_auto_routed"
+    # The record names the routed story instead of landing in the synthetic
+    # "<uncorrelated>" bucket.
+    assert kw.get("story_key") == "issue-1"
+    # The message text is untouched by the fix.
+    assert msg.startswith("issue-1: auto-routed to ")
+
+
+def test_ingest_auto_route_notice_carries_the_story_key_without_a_correlation_id(
+    sizing_plan_dir, monkeypatch, tmp_path
+):
+    """The boundary the fix is for: no correlation_id, still a story_key."""
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", _CLOUD_TAG)
+    notices = _capture_notices_with_kwargs(monkeypatch)
+    story = _oversized_story()
+    assert "correlation_id" not in story
+    plan = _plan(tmp_path, [story])
+    (sizing_plan_dir / "routekey2.json").write_text(json.dumps(plan))
+
+    result = p.ingest_plan("routekey2")
+
+    assert result["ok"] is True
+    routed = _routed_notices(notices)
+    assert len(routed) == 1
+    _plan_name, _msg, kw = routed[0]
+    assert kw.get("story_key") == "issue-1"
+    assert kw.get("correlation_id") is None
+
+
+def test_ingest_auto_route_notice_is_absent_for_a_story_already_on_cloud(
+    sizing_plan_dir, monkeypatch, tmp_path
+):
+    """A story that is not routed gets no route notice, so no story_key claim."""
+    monkeypatch.setattr(pt, "plane_request", _fake_plane)
+    monkeypatch.setenv("PIPELINE_LOCAL_MODEL_DEFAULT", _CLOUD_TAG)
+    notices = _capture_notices_with_kwargs(monkeypatch)
+    plan = _plan(tmp_path, [_oversized_story(model=_CLOUD_TAG)])
+    (sizing_plan_dir / "routekey3.json").write_text(json.dumps(plan))
+
+    result = p.ingest_plan("routekey3")
+
+    assert result["ok"] is True
+    assert _routed_notices(notices) == []
+
+
+def test_auto_route_notify_call_passes_the_loop_key_as_story_key():
+    """The ``sizing_auto_routed`` call site passes ``story_key=key``."""
+    source = Path(ingest_mod.__file__).read_text()
+    idx = source.index('event="sizing_auto_routed"')
+    start = source.rindex("_notify_user(", 0, idx)
+    end = source.index(")", idx)
+    call = source[start : end + 1]
+    assert "story_key=key" in call.replace(" ", ""), call

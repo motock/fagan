@@ -540,7 +540,7 @@ def _ingest_plan_impl(
         # notice replaces the plain advisory sizing warning for that story.
         for key, tag, warning in routed:
             message = f"{key}: auto-routed to {tag}: {warning}"
-            _notify_user(plan_name, message, event="sizing_auto_routed")
+            _notify_user(plan_name, message, story_key=key, event="sizing_auto_routed")
             logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {message}")
 
         # A plan-level preflight_override admitted these non-Claude stories
@@ -549,7 +549,7 @@ def _ingest_plan_impl(
         # the override is an emergency escape hatch, never a silent default.
         for key, status, reason in overrides:
             message = f"{key}: preflight gate overridden ({status}): {reason}"
-            _notify_user(plan_name, message, event="preflight_override")
+            _notify_user(plan_name, message, story_key=key, event="preflight_override")
             logging.getLogger("pipeline").warning(message)
 
         # Non-blocking authoring nudge: flag acceptance fixtures that grade

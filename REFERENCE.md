@@ -780,7 +780,10 @@ the normal REQUEST_CHANGES handling (the `rework_attempts` increment and the
 `REWORK_MAX_ATTEMPTS` check) applies exactly as for an LLM REQUEST_CHANGES.
 The gate fails open — a git failure, `OSError` or timeout yields no violations
 — and a story that declares no `files`, or whose worktree is missing, is never
-gated and always reaches the reviewer.
+gated and always reaches the reviewer. Unlike the ingest-time sizing path
+above, the gate is a review-time check only: it reads the same `files` list
+that sizing and the `sizing_auto_routed` auto-route consume, and it leaves
+`PIPELINE_LOCAL_MODEL_DEFAULT` routing untouched.
 
 ---
 

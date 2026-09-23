@@ -369,9 +369,13 @@ class TestTestsFailedNotificationPath:
         )
         assert record["event"] == "tests_failed"
         assert record["correlation_id"] == "cid-abc"
-        # The conditional correlation_id dict is byte-for-byte unchanged: the
-        # record gains ONLY the event name - no attempt kwarg, nothing else.
-        assert set(record) == {"plan_name", "message", "event", "correlation_id"}
+        # The conditional correlation_id dict is byte-for-byte unchanged, and
+        # the record always carries its story_key so the metrics layer can
+        # attribute the event to the story.
+        assert record["story_key"] == "S1"
+        assert set(record) == {
+            "plan_name", "message", "event", "correlation_id", "story_key"
+        }
         assert summary["failed"] == ["S1"]
 
     def test_without_correlation_id_the_dict_stays_empty(
@@ -381,7 +385,8 @@ class TestTestsFailedNotificationPath:
             monkeypatch, tmp_path, notify_spy, {"status": "in_progress", "pid": 4242}
         )
         assert record["event"] == "tests_failed"
-        assert set(record) == {"plan_name", "message", "event"}
+        assert record["story_key"] == "S1"
+        assert set(record) == {"plan_name", "message", "event", "story_key"}
 
 
 class TestStoryMergedBehavioralPath:
@@ -475,3 +480,151 @@ class TestStoryMergedBehavioralPath:
             )
         ]
         assert gate, f"merge-gate failure path was not exercised: {notify_spy}"
+
+
+# --- (c) story_key attribution on every metric-relevant notification ---------
+
+# The 8 metric-relevant _notify_user call sites that must carry an
+# UNCONDITIONAL story_key=key keyword.  At every one of them the story key
+# lives in the local variable `key`.
+STORY_KEY_EVENT_SITES = (
+    "dispatch_failed",
+    "agent_gave_up",
+    "tests_failed",
+    "merge_ci_rework",
+    "merge_gate_failed",
+    "merge_gate_retry",
+    "merge_failed",
+    "merge_retry",
+)
+
+
+def _calls_for_event(event):
+    return tuple(
+        call for call in _notify_calls() if _kwarg_value(call, "event") == event
+    )
+
+
+class TestStoryKeyAttributionSourceLevel:
+    """Each metric-relevant site passes story_key=key OUTSIDE the ** dict."""
+
+    def test_each_site_passes_story_key_at_call_level(self):
+        problems = []
+        for event in STORY_KEY_EVENT_SITES:
+            calls = _calls_for_event(event)
+            if not calls:
+                problems.append(f'no _notify_user(..., event="{event}") call found')
+                continue
+            for call in calls:
+                where = f'line {call.lineno}: event="{event}"'
+                kw = next((k for k in call.keywords if k.arg == "story_key"), None)
+                if kw is None:
+                    problems.append(f"{where} must pass story_key=key")
+                elif not (isinstance(kw.value, ast.Name) and kw.value.id == "key"):
+                    problems.append(f"{where} story_key must be the local `key`")
+                spreads = [k for k in call.keywords if k.arg is None]
+                if not spreads:
+                    problems.append(f"{where} lost its ** correlation_id spread")
+                    continue
+                src = ast.get_source_segment(_source(), spreads[0].value) or ""
+                if "story_key" in src:
+                    problems.append(
+                        f"{where} puts story_key inside the conditional ** dict "
+                        "(a silent no-op for stories without a correlation_id)"
+                    )
+                if event == "dispatch_failed":
+                    if "_cid_kwargs" not in src:
+                        problems.append(f"{where} must keep spreading **_cid_kwargs")
+                elif "correlation_id" not in src or "else" not in src:
+                    problems.append(f"{where} correlation_id must stay conditional")
+                call_src = ast.get_source_segment(_source(), call) or ""
+                if not any(
+                    line.strip() == "story_key=key," for line in call_src.splitlines()
+                ):
+                    problems.append(
+                        f"{where} must write story_key=key on its own line"
+                    )
+        assert not problems, "\n".join(problems)
+
+    def test_merge_ci_rework_keeps_attempt_key(self):
+        calls = _calls_for_event("merge_ci_rework")
+        assert calls, 'no event="merge_ci_rework" call site found'
+        for call in calls:
+            spreads = [kw for kw in call.keywords if kw.arg is None]
+            assert spreads, (
+                f"line {call.lineno}: merge_ci_rework lost its conditional ** dict"
+            )
+            src = ast.get_source_segment(_source(), spreads[0].value) or ""
+            assert "attempt" in src, (
+                f"line {call.lineno}: merge_ci_rework's conditional dict must "
+                f"still carry the attempt key (found {src!r})"
+            )
+
+    def test_messages_still_interpolate_the_story_key(self):
+        problems = []
+        for event in STORY_KEY_EVENT_SITES:
+            for call in _calls_for_event(event):
+                message = _static_message(call)
+                if message is None or "{}" not in message:
+                    problems.append(
+                        f'line {call.lineno}: event="{event}" message must still '
+                        f"interpolate the story key (found {message!r})"
+                    )
+        assert not problems, "\n".join(problems)
+
+    def test_survivors_in_the_merge_blocks_are_intact(self):
+        merge_src = inspect.getsource(advance_merge)
+        for needle in (
+            'story["ci_rework"] = True',
+            'story["review_feedback"] = _ci_rework_feedback(',
+            'story["status"] = "changes_requested"',
+            'summary["notify"].append(key)',
+        ):
+            assert needle in merge_src, f"advance_merge.py lost {needle!r}"
+        assert "_cid_kwargs" in inspect.getsource(advance), (
+            "pipeline/advance.py lost its _cid_kwargs helper"
+        )
+
+
+class TestStoryKeyAttributionBehavioral:
+    """The emitted record always carries story_key, correlation_id or not."""
+
+    def test_tests_failed_without_correlation_id_carries_story_key(
+        self, tmp_path, monkeypatch, notify_spy
+    ):
+        _, record = TestTestsFailedNotificationPath._drive(
+            monkeypatch, tmp_path, notify_spy, {"status": "in_progress", "pid": 4242}
+        )
+        assert record["event"] == "tests_failed"
+        assert record["story_key"] == "S1"
+        assert "correlation_id" not in record
+
+    def test_tests_failed_with_correlation_id_carries_both(
+        self, tmp_path, monkeypatch, notify_spy
+    ):
+        _, record = TestTestsFailedNotificationPath._drive(
+            monkeypatch,
+            tmp_path,
+            notify_spy,
+            {"status": "in_progress", "pid": 4242, "correlation_id": "cid-abc"},
+        )
+        assert record["event"] == "tests_failed"
+        assert record["story_key"] == "S1"
+        assert record["correlation_id"] == "cid-abc"
+
+    def test_merge_gate_retry_without_correlation_id_carries_story_key(
+        self, tmp_path, monkeypatch, notify_spy
+    ):
+        plan = "evretry"
+        _write_manifest(tmp_path, plan, {"S1": {"status": "pr_open"}})
+        _stub_tick(monkeypatch, tmp_path, plan)
+        monkeypatch.delenv("PIPELINE_REWORK_ON_CI_FAIL", raising=False)
+        TestStoryMergedBehavioralPath._merge_stubs(monkeypatch, ci_state="fail")
+        advance._advance_pipeline_locked(plan)
+
+        retries = [r for r in notify_spy if r.get("event") == "merge_gate_retry"]
+        assert len(retries) == 1, notify_spy
+        record = retries[0]
+        assert record["message"].startswith("S1 merge gate attempt")
+        assert record["story_key"] == "S1"
+        assert "correlation_id" not in record

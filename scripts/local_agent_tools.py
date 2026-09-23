@@ -288,6 +288,9 @@ def run_tool_impl(origin, fn, args) -> str:
         if result.returncode != 0:
             return (f"ERROR: could not restore {path_str} to HEAD: "
                      f"{result.stderr.strip()[:300]}")
+        restores[path_str] = restores.get(path_str, 0) + 1
+        return (f"restored {path_str} to its last commit (HEAD) — any "
+                  f"uncommitted changes to this file are gone. Other files are untouched.")
         return (f"restored {path_str} to its last commit (HEAD) — any "
                  f"uncommitted changes to this file are gone. Other files are untouched.")
     if fn == "bash":

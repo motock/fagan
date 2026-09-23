@@ -63,6 +63,31 @@ def _without_litellm(text: str) -> str:
     )
 
 
+# MCPHYG-3 removed the get_role_config MCP tool (a thin delegation to
+# PipelineService.get_role_config) and consolidated its documentation onto
+# get_effective_config, the surviving tool. The pre-split README at 2cca309~1
+# predates that removal and still lists get_role_config, so the verbatim guard
+# for the "MCP tools reference" section compares with the corrected bullet
+# normalized back to the original wording (see _GET_ROLE_CONFIG_BULLET) while
+# separately requiring the correction to be present — so the normalization can
+# never mask a revert to the removed tool.
+_GET_ROLE_CONFIG_BULLET = (
+    "- `get_role_config(plan_name=None)` — show the resolved `(provider, model)`\n"
+    "  for every role (`overlord`, `planner`, `dispatch`, `review`, `decompose`)\n"
+    "  given the current env vars and `model_registry.json`, optionally layered\n"
+    "  with a specific plan's `role_config` (see below). Pure read — check what a\n"
+    "  plan will actually run on *before* executing it."
+)
+_GET_EFFECTIVE_CONFIG_BULLET = (
+    "- `get_effective_config(plan_name=None)` — show the resolved `(provider, model)`\n"
+    "  and provenance for every pipeline role given the current env vars and\n"
+    "  `model_registry.json`, optionally layered with a specific plan's `role_config`\n"
+    "  (see below). Also reports each cataloged env var's resolved value and which\n"
+    "  config files were consulted. Pure read — check what a plan will actually run\n"
+    "  on *before* executing it."
+)
+
+
 # ---------------------------------------------------------------------------
 # REFERENCE.md existence & title
 # ---------------------------------------------------------------------------
@@ -511,6 +536,26 @@ def test_moved_section_body_is_verbatim(title):
                 f"litellm among the accepted backend values."
             )
             reference_body = _without_litellm(reference_body)
+        if title == "MCP tools reference":
+            # MCPHYG-3 removed the get_role_config tool and consolidated its
+            # documentation onto get_effective_config. The pre-split README at
+            # 2cca309~1 predates that removal and still lists get_role_config,
+            # so normalize the corrected bullet back to the original wording —
+            # and require the correction to actually be present (the surviving
+            # tool documented, the removed one gone), so the normalization can
+            # never mask a revert to the removed tool.
+            assert "get_role_config" not in reference_body, (
+                f"Section body for {title!r} in REFERENCE.md must not mention "
+                f"the removed get_role_config tool."
+            )
+            assert _GET_EFFECTIVE_CONFIG_BULLET in reference_body, (
+                f"Section body for {title!r} in REFERENCE.md must document "
+                f"get_effective_config(plan_name=None) in place of the removed "
+                f"get_role_config bullet."
+            )
+            reference_body = reference_body.replace(
+                _GET_EFFECTIVE_CONFIG_BULLET, _GET_ROLE_CONFIG_BULLET
+            )
         if title == "Unattended operation & logs":
             # The launchd label was renamed com.claude.pipeline.* ->
             # com.fagan.pipeline.* (the plist/template files and generator

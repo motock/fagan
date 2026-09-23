@@ -6,8 +6,6 @@ story, so the plan rollup must drop it before it computes any total - while
 ``first_pass_clean_rate`` (which already filtered it) keeps its exact value.
 """
 
-from __future__ import annotations
-
 import inspect
 from pathlib import Path
 
@@ -184,7 +182,10 @@ def test_disqualifying_events_definition_carries_a_rework_comment():
 
     assert comment_lines, "expected a comment immediately above the definition"
     assert "rework" in block
+    assert "first" in block and "clean" in block
     assert "for now" not in block
+    assert "rpt-1" not in block
+    assert "this task" not in block
 
 
 def test_plan_summary_still_counts_manifest_stories():

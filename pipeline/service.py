@@ -103,6 +103,7 @@ class _ServerRef:
 # resolves to the live ``pipeline.server`` binding at call time so
 # ``monkeypatch.setattr(pipeline.server, "NAME", ...)`` still lands.
 _store = _ServerRef("_store")
+_VALID_STORY_STATUSES = _ServerRef("_VALID_STORY_STATUSES")
 _notify_user = _ServerRef("_notify_user")
 PLAN_DIR = _ServerRef("PLAN_DIR")
 config_provenance = _ServerRef("config_provenance")
@@ -130,21 +131,6 @@ DEFAULT_MODEL = _ServerRef("DEFAULT_MODEL")
 _run_decompose = _ServerRef("_run_decompose")
 _run_decompose_detailed = _ServerRef("_run_decompose_detailed")
 _extract_json_block = _ServerRef("_extract_json_block")
-_VALID_STORY_STATUSES = frozenset(
-    (
-        "todo",
-        "in_progress",
-        "running",
-        "interrupted",
-        "failed",
-        "tests_passed",
-        "pr_open",
-        "changes_requested",
-        "parked",
-        "done",
-        "done",
-    )
-)
 _PATCHABLE_STORY_FIELDS = frozenset(
     (
         "agent_instructions",
@@ -745,15 +731,22 @@ class PipelineService:
     def mark_story_in_progress(self, plan_name: str, story_key: str) -> dict[str, Any]:
         _validate_key(plan_name)
         _validate_key(story_key)
-        get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
+        with _store.transaction(plan_name) as acquired:
+            if not acquired:
+                return {
+                    "ok": True,
+                    "skipped": "locked",
+                    "reason": "another dispatch/ingest/interrupt is in progress for this plan",
+                }
+            get_ticket_provider().set_state(story_key, LogicalState.IN_PROGRESS, plan_name)
 
-        manifest = _store.get_manifest(plan_name)
-        if story_key not in manifest["stories"]:
-            return {"ok": False, "error": f"No such story {story_key}"}
-        manifest["stories"][story_key]["status"] = "in_progress"
-        _store.save_manifest(plan_name, manifest)
-        # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json", _atomic_write_json
-        return {"ok": True}
+            manifest = _store.get_manifest(plan_name)
+            if story_key not in manifest["stories"]:
+                return {"ok": False, "error": f"No such story {story_key}"}
+            manifest["stories"][story_key]["status"] = "in_progress"
+            _store.save_manifest(plan_name, manifest)
+            # manifest_path = PLAN_DIR / f"{plan_name}.manifest.json", _atomic_write_json
+            return {"ok": True}
     def checkpoint(self,
                    plan_name: str,
                    story_key: str,

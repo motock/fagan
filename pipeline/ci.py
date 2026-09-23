@@ -758,35 +758,42 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     _validate_key(plan_name)  # noqa: F821
     _validate_key(story_key)  # noqa: F821
-    get_ticket_provider().set_state(  # noqa: F821
-        story_key, LogicalState.DONE, plan_name  # noqa: F821
-    )
-
-    manifest = _store.get_manifest(plan_name)  # noqa: F821
-    manifest["stories"][story_key]["status"] = "done"
-    manifest["stories"][story_key].pop("parked_reason", None)
-    _store.save_manifest(plan_name, manifest)  # noqa: F821
-
-    from .plan_completion import notify_if_plan_completed
-
-    try:
-        notify_if_plan_completed(plan_name, manifest)
-    except Exception:
-        logging.getLogger(__name__).exception(
-            "notify_if_plan_completed failed for %s", plan_name
+    with _store.transaction(plan_name) as acquired:  # noqa: F821
+        if not acquired:
+            return {
+                "ok": True,
+                "skipped": "locked",
+                "reason": "another dispatch/ingest/interrupt is in progress for this plan",
+            }
+        get_ticket_provider().set_state(  # noqa: F821
+            story_key, LogicalState.DONE, plan_name  # noqa: F821
         )
 
-    # Check if all stories are now done
-    all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
-    if all_done:
-        if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):  # noqa: F821
-            _record_retro_pending(plan_name, len(manifest["stories"]))
-        return {
-            "ok": True,
-            "plan_completed": True,
-            "stories": list(manifest["stories"].keys()),
-        }
-    return {"ok": True}
+        manifest = _store.get_manifest(plan_name)  # noqa: F821
+        manifest["stories"][story_key]["status"] = "done"
+        manifest["stories"][story_key].pop("parked_reason", None)
+        _store.save_manifest(plan_name, manifest)  # noqa: F821
+
+        from .plan_completion import notify_if_plan_completed
+
+        try:
+            notify_if_plan_completed(plan_name, manifest)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "notify_if_plan_completed failed for %s", plan_name
+            )
+
+        # Check if all stories are now done
+        all_done = all(s.get("status") == "done" for s in manifest["stories"].values())
+        if all_done:
+            if manifest.get("repo_root") == str(PIPELINE_SELF_REPO_ROOT):  # noqa: F821
+                _record_retro_pending(plan_name, len(manifest["stories"]))
+            return {
+                "ok": True,
+                "plan_completed": True,
+                "stories": list(manifest["stories"].keys()),
+            }
+        return {"ok": True}
 
 
 # Story fields patch_story may edit. Deliberately excludes "status" (use
@@ -823,7 +830,6 @@ _VALID_STORY_STATUSES = frozenset(
         "pr_open",
         "changes_requested",
         "parked",
-        "done",
         "done",
     )
 )

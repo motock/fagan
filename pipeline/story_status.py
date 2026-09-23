@@ -43,9 +43,11 @@ from .config import (
 from .detached_grade import (
     GRADE_WRAPPER,  # noqa: F401
     _baseline_exempted_failures,
-    _detached_grade_lifecycle_unbound,
     collect_detached_grade,
     start_detached_grade,
+)
+from .detached_grade import (
+    _detached_grade_lifecycle as _detached_grade_lifecycle_unbound,
 )
 from .escalation import (
     _escalate_review_to_claude,
@@ -604,12 +606,13 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     #                        through a subprocess.run-shaped shim; the
     #                        bookkeeping is consumed so a future re-grade
     #                        starts clean.
-    _early, test_result = _detached_grade_lifecycle(  # noqa: F821
+    _early, test_result = _detached_grade_lifecycle(
         story, story_key, pid, worktree, manifest, manifest_path,
         test_cmd, test_dir, test_env,
     )
     if _early is not None:
         return _early
+
     if test_result is None:
         # Heavy build/test commands (cargo, npm, mvn, gradle, etc.) can run GB-
         # seconds of memory each. Serialize against other in-flight agents so

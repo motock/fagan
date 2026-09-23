@@ -10,8 +10,11 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
 from .build_detect import failed_node_ids
+from .parsers import _atomic_write_json
 
 
 def _baseline_exempted_failures(story: dict, test_result) -> list[str] | None:
@@ -311,12 +314,12 @@ def _detached_grade_lifecycle(story, story_key, pid, worktree, manifest, manifes
                     age = (
                         datetime.now(timezone.utc) - started
                     ).total_seconds()
-            if age is not None and age > DETACHED_GRADE_WATCHDOG_SECONDS:
+            if age is not None and age > DETACHED_GRADE_WATCHDOG_SECONDS:  # noqa: F821
                 collected = dict(fail_closed)
                 collected["stderr"] = (
                     f"{fail_closed['stderr']}; grading watchdog fired after "
                     f"{age:.0f}s without a collectable result (threshold "
-                    f"{DETACHED_GRADE_WATCHDOG_SECONDS}s)"
+                    f"{DETACHED_GRADE_WATCHDOG_SECONDS}s)"  # noqa: F821
                 )
         # Hand the collected result to the EXISTING post-grade logic below in
         # the shape it already reads (subprocess.run's return value).

@@ -102,6 +102,12 @@ class _ServerRef:
     def __getitem__(self, key):
         return self._value()[key]
 
+    def __str__(self):
+        return str(self._value())
+
+    def __repr__(self):
+        return repr(self._value())
+
 
 # Server-sourced members the moved functions reference as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so

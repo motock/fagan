@@ -582,6 +582,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         f"{key} dispatch failed {attempts}x "
                         f"({e}); giving up - needs human intervention.",
                         event="dispatch_failed",
+                        story_key=key,
                         **_cid_kwargs,
                     )
                     summary["failed"].append(key)
@@ -721,6 +722,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         f"scope) rather than a model-capability gap; needs human "
                         f"clarification before another dispatch.",
                         event="agent_gave_up",
+                        story_key=key,
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")
@@ -778,6 +780,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                         plan_name,
                         f"{key} tests failed",
                         event="tests_failed",
+                        story_key=key,
                         **(
                             {"correlation_id": story["correlation_id"]}
                             if story.get("correlation_id")

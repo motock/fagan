@@ -22,9 +22,10 @@ from typing import Any
 import pipeline.server as _server
 
 from .parsers import _is_transient_backend_exception
-from .review import build_review_story_context
+from .review import _first_review_base, build_review_story_context
 from .review_autofix import _verify_reviewer_auto_fix  # noqa: F401
 from .review_refs import _ServerRef
+from .scope_gate import SCOPE_GATE_HEADER, check_branch_scope
 
 # Server-sourced names the moved body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -180,7 +181,28 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         and last_test_check.get("returncode") not in (0, None)
         and last_test_check.get("sha") == before_sha
     )
-    if skip_llm_reviewer:
+    # Invariant: a story that declares `files` is never LLM-reviewed while its
+    # branch changes production paths outside them.
+    _scope_violations = (
+        check_branch_scope(worktree, _first_review_base(worktree), story["files"])
+        if isinstance(story.get("files"), list) and worktree and os.path.isdir(worktree)
+        else []
+    )
+    if _scope_violations:
+        reviewer_output = (
+            SCOPE_GATE_HEADER + "\n"
+            + "\n".join(f"- Blocking: {v}" for v in _scope_violations)
+            + "\nRevert each listed change (git checkout <base> -- <path> for an edit, git rm for an added file) unless the brief requires it; if it does, stop and report the conflict.\n"
+            + "VERDICT: REQUEST_CHANGES"
+        )
+        _notify_user(
+            plan_name,
+            f"{story_key} scope gate: {len(_scope_violations)} out-of-scope path(s); sent back without an LLM review.",
+            event="scope_gate_failed",
+            story_key=story_key,
+            **_cid_kwargs,
+        )
+    elif skip_llm_reviewer:
         reviewer_output = _synthesize_test_failure_feedback(last_test_check)
     else:
         # Mode 47: carry the prior cycle's findings into a RE-review so the

@@ -461,6 +461,30 @@ comma-separated, an operator who wants merge notices by e-mail can add
 mail can remove `story_parked`. A notification emitted without a structured
 `event` at all is never spooled, whatever its message says.
 
+## Plan-conflict rulings
+
+When the grade fails only in pre-existing untouched tests, the pipeline asks
+the overlord role to rule on the plan conflict: the brief and those tests
+contradict each other, so an ordinary rework cycle cannot fix it. The ruling
+is one of three values:
+
+- `PREAUTHORIZE_TEST_EDIT` — the overlord specifies a minimal edit to one of
+  the conflicting pre-existing tests (exact BEFORE/AFTER text plus a
+  replacement assertion that grades the story's real deliverable). The ruling
+  is appended to the story's `agent_instructions` as a
+  `=== PLAN-CONFLICT RULING (pre-authorized test edit) ===` block, replacing
+  any earlier ruling block rather than stacking, and the story is set to
+  `changes_requested` with `review_feedback` pointing at the block.
+- `PARK` — the story is parked for a human with a `park_reason` naming the
+  conflicting files.
+- `REGRESSION` — the failure is a regression the story introduced; the ruling
+  is recorded on the story and the story's status and brief are left alone.
+
+Neither a pre-authorization nor a park charges the story's rework budget: the
+rework counters are untouched, because a plan conflict is not a failed attempt
+by the story. A pre-authorization emits the `plan_conflict_preauthorized`
+notification event; a park reuses the existing `story_parked` event.
+
 ## Notification records
 
 The pipeline writes two notification artifacts per plan: a legacy free‑text log

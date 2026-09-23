@@ -226,3 +226,6 @@ if a precise date is needed when writing one of these up.
 - post-ld90-priorities — completed 2026-09-23, 22 stories
 - mcp-tool-hygiene — completed 2026-09-23, 5 stories
 - ld90-closeout — completed 2026-09-23, 11 stories
+- pr-title-sync — completed 2026-09-23, 1 stories
+- oversized-module-split — completed 2026-09-23, 5 stories
+- reporting-attribution-fix — completed 2026-09-23, 4 stories

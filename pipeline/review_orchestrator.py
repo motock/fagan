@@ -186,12 +186,18 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         # Mode 47: carry the prior cycle's findings into a RE-review so the
         # reviewer must discharge each one individually. Passed as a kwarg
         # only when there is actually prior feedback (a first review has
-        # none), so the common path's call signature is unchanged.
+        # none), so the common path's call signature is unchanged. The
+        # story's brief/sibling context rides in the same kwargs dict, so
+        # the call signature is likewise unchanged when a story has no
+        # brief.
         _prior_fb = story.get("review_feedback")
         prior_kw = {"prior_feedback": _prior_fb} if _prior_fb else {}
         _story_context = build_review_story_context(story_key, manifest)
         if _story_context:
-            prior_kw = {**prior_kw, "story_context": _story_context}
+            # In-place key add, not a dict rebuild: every _run_reviewer call
+            # site below spreads this same dict, so it stays the single
+            # carrier of both kwargs.
+            prior_kw["story_context"] = _story_context
         try:
             # Once a story is escalated (see _escalate_review_to_claude below),
             # every subsequent review must go to the escalation target

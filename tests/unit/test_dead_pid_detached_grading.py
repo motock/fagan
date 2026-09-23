@@ -113,7 +113,19 @@ def _read_manifest(plan_dir, plan_name):
 
 
 def _story_status_source() -> str:
-    return Path(ss.__file__).read_text()
+    """Both modules: the detached-grade primitives (GRADE_WRAPPER,
+    start_detached_grade, collect_detached_grade) moved verbatim out of
+    pipeline/story_status.py into pipeline/detached_grade.py, so a source scan
+    of the status module must include the module they now live in.
+
+    Imported here rather than at module level: pipeline.detached_grade is
+    reached through pipeline.story_status, so importing it first would
+    re-enter the partially-initialised module and die on the cycle.
+    """
+    from pipeline import detached_grade as dg
+
+    return (Path(ss.__file__).read_text() + "\n"
+            + Path(dg.__file__).read_text())
 
 
 def _watchdog_seconds() -> int:

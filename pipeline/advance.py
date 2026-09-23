@@ -741,6 +741,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     # role, unreadable manifest) degrades to the notify-only
                     # behaviour above - a diagnosis must never crash the tick.
                     try:
+                        previous_instructions = story.get("agent_instructions", "")
                         evidence = collect_failure_evidence(
                             story.get("worktree", ""), story
                         )
@@ -751,6 +752,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                                 f"Story may be unsatisfiable as specified: "
                                 f"{unsat_reason}. Story {key} may need "
                                 f"re-planning rather than another retry.",
+                                story_key=key,
                             )
                         diagnosis = diagnose_failure(
                             evidence, story, manifest.get("role_config")
@@ -768,6 +770,20 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                             "agent_instructions"
                         ]
                         _atomic_write_json(manifest_path, fresh)
+                        if story["agent_instructions"] != previous_instructions:
+                            _notify_user(
+                                plan_name,
+                                f"{key} brief rewritten from the give-up "
+                                f"diagnosis; the re-dispatch carries the "
+                                f"folded diagnosis.",
+                                story_key=key,
+                                event="brief_patched",
+                                **(
+                                    {"correlation_id": story["correlation_id"]}
+                                    if story.get("correlation_id")
+                                    else {}
+                                ),
+                            )
                     except Exception:  # fallback: notify-only, never crash the tick
                         logging.getLogger("pipeline").debug(
                             "give_up rebrief diagnosis failed for %s; "

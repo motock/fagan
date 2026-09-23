@@ -205,6 +205,68 @@ def _group_id_for(payload: dict[str, Any]) -> str:
     return UNCORRELATED_KEY
 
 
+def _merge_payload(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """Fold a second payload for the same story into the first, in place.
+
+    Counters are summed and ``cost``/``first_pass_clean`` recomputed FROM the
+    summed counters: each payload's ``cost`` already includes its own base 1,
+    so summing costs would double-count the story.
+    """
+    for counter in (
+        "dispatch_failures",
+        "rework_cycles",
+        "escalations",
+        "disqualifying_events",
+    ):
+        target[counter] = (target.get(counter) or 0) + (source.get(counter) or 0)
+    if target.get("correlation_id") is None and source.get("correlation_id") is not None:
+        target["correlation_id"] = source["correlation_id"]
+    if not target.get("merged") and source.get("merged"):
+        target["merged"] = True
+    if target.get("merged_ts") is None and source.get("merged_ts") is not None:
+        target["merged_ts"] = source["merged_ts"]
+    target["cost"] = (
+        1
+        + target["dispatch_failures"]
+        + target["rework_cycles"]
+        + target["escalations"]
+    )
+    target["first_pass_clean"] = (
+        bool(target["merged"]) and target["disqualifying_events"] == 0
+    )
+
+
+def _collapse_shared_story_keys(stories: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge payloads that describe the same story into a single payload.
+
+    ``compute_story_metrics`` groups a record by ``correlation_id``
+    when present, else by ``story_key``, else the literal key
+    ``"<uncorrelated>"``, and returns one payload per group sorted by
+    ``story_key``.  Records whose ``event`` is absent/unrecognized are still
+    attributed to their group but change no counter: the metrics are raw counts
+    of the known events, and deduplication of repeated ``dedup_key`` values is
+    the sink's job, not ours.
+
+    Payloads with no ``story_key`` are returned untouched: two correlation_id
+    groups are two stories, and the keyless bucket is not a story at all.
+    Merged payloads are copies, so the inputs are never mutated.
+    """
+    collapsed: list[dict[str, Any]] = []
+    position_by_key: dict[str, int] = {}
+    for story in stories:
+        story_key = story.get("story_key")
+        if story_key is None:
+            collapsed.append(dict(story))
+            continue
+        position = position_by_key.get(str(story_key))
+        if position is None:
+            position_by_key[str(story_key)] = len(collapsed)
+            collapsed.append(dict(story))
+            continue
+        _merge_payload(collapsed[position], story)
+    return collapsed
+
+
 def compute_plan_rollup(stories: list[dict[str, Any]]) -> dict[str, Any]:
     """Reduce per-story payloads to plan-level totals.
 
@@ -219,6 +281,7 @@ def compute_plan_rollup(stories: list[dict[str, Any]]) -> dict[str, Any]:
     when there are zero eligible payloads.  The inputs are read only; nothing
     is written back into the payloads.
     """
+    stories = _collapse_shared_story_keys(stories)
     stories = [
         story
         for story in stories

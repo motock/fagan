@@ -225,3 +225,4 @@ if a precise date is needed when writing one of these up.
 - scheduler-wedge-hardening — completed 2026-09-22, 3 stories
 - post-ld90-priorities — completed 2026-09-23, 22 stories
 - mcp-tool-hygiene — completed 2026-09-23, 5 stories
+- ld90-closeout — completed 2026-09-23, 11 stories

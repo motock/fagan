@@ -21,6 +21,8 @@ from __future__ import annotations
 import shlex
 import subprocess
 
+RESTORE_FILE_MAX_PER_PATH = 2
+
 
 def run_tool_impl(origin, fn, args) -> str:
     if fn in ("create_file", "str_replace") and origin["is_oracle_path"](args.get("path", "")):
@@ -250,6 +252,19 @@ def run_tool_impl(origin, fn, args) -> str:
         path_str = args.get("path", "")
         if not path_str:
             return "ERROR: restore_file requires a path."
+        # A run that keeps restoring the same file is undoing its own work
+        # (live: ASB-2 and the board.js story each restored 3x and ended
+        # with nothing landed). Two restores per path is enough for a real
+        # clean slate; refuse the third and point at anchored edits.
+        restores = origin.setdefault("_RESTORES_THIS_RUN", {})
+        if restores.get(path_str, 0) >= RESTORE_FILE_MAX_PER_PATH:
+            return (
+                f"ERROR: restore_file refused - {path_str} has already been "
+                f"restored {RESTORE_FILE_MAX_PER_PATH} times this run, which "
+                f"undoes your own progress. Do not restore it again. Read the "
+                f"exact lines you need and fix them with a small anchored "
+                f"str_replace instead."
+            )
         result = subprocess.run(
             ["git", "checkout", "HEAD", "--", path_str],
             check=False, cwd=origin["CWD"], capture_output=True, text=True,

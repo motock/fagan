@@ -221,3 +221,8 @@ if a precise date is needed when writing one of these up.
 - agent-side-baseline-exemption — completed 2026-09-21, 2 stories
 - review-feedback-rework-done-bar — completed 2026-09-21, 2 stories
 - overlord-autonomy-round-2 — completed 2026-09-22, 8 stories
+- DASHBOARD_PROGRESS_STALE_BAR — completed 2026-09-22, 1 stories
+- scheduler-wedge-hardening — completed 2026-09-22, 3 stories
+- post-ld90-priorities — completed 2026-09-23, 22 stories
+- mcp-tool-hygiene — completed 2026-09-23, 5 stories
+- ld90-closeout — completed 2026-09-23, 11 stories

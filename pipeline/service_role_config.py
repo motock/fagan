@@ -8,13 +8,6 @@ pipeline.server still land.
 import json
 import os
 
-from .service import _ServerRef
-
-_store = _ServerRef("_store")
-_validate_key = _ServerRef("_validate_key")
-config_provenance = _ServerRef("config_provenance")
-role_registry = _ServerRef("role_registry")
-
 
 def _set_plan_role_config_impl(self, plan_name: str, role: str, provider: str | None=None, model: str | None=None):
     _validate_key(plan_name)
@@ -131,3 +124,11 @@ def _set_role_default_impl(self, role: str, provider: str | None, model: str | N
         raise
 
     return {"ok": True, "role": role, "provider": provider, "model": model}
+
+
+from .service import _ServerRef  # noqa: I001 - must follow the defs: service.py back-imports _set_plan_role_config_impl/_set_role_default_impl (line 164), so defining them first keeps both import directions cycle-free
+
+_store = _ServerRef("_store")
+_validate_key = _ServerRef("_validate_key")
+config_provenance = _ServerRef("config_provenance")
+role_registry = _ServerRef("role_registry")

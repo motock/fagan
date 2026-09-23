@@ -360,6 +360,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                     f"{key} merge-gate CI failed ({gate_error}); "
                     f"routed to rework ({attempts}/{MERGE_MAX_ATTEMPTS}).",
                     event="merge_ci_rework",
+                    story_key=key,
                     **(
                         {
                             "correlation_id": story["correlation_id"],
@@ -382,6 +383,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                     f"{key} merge gate failed {attempts}x "
                     f"({gate_error}); giving up - needs human intervention.",
                     event="merge_gate_failed",
+                    story_key=key,
                     **(
                         {"correlation_id": story["correlation_id"]}
                         if story.get("correlation_id")
@@ -396,6 +398,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                     f"{key} merge gate attempt {attempts}/"
                     f"{MERGE_MAX_ATTEMPTS} failed ({gate_error}); will retry.",
                     event="merge_gate_retry",
+                    story_key=key,
                     **(
                         {"correlation_id": story["correlation_id"]}
                         if story.get("correlation_id")
@@ -423,6 +426,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                     f"{key} merge failed {attempts}x "
                     f"({e}); giving up - needs human intervention.",
                     event="merge_failed",
+                    story_key=key,
                     **(
                         {"correlation_id": story["correlation_id"]}
                         if story.get("correlation_id")
@@ -437,6 +441,7 @@ def _adjudicate_merges(plan_name: str, summary: dict[str, Any]) -> None:
                     f"{key} merge attempt {attempts}/"
                     f"{MERGE_MAX_ATTEMPTS} failed ({e}); will retry.",
                     event="merge_retry",
+                    story_key=key,
                     **(
                         {"correlation_id": story["correlation_id"]}
                         if story.get("correlation_id")

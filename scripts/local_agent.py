@@ -329,6 +329,12 @@ def _full_suite_result() -> tuple[bool, str, str | None]:
     return _full_suite_result_impl(globals())
 
 
+def _step_cap_auto_done() -> bool:
+    """See scripts/local_agent_git.py::_step_cap_auto_done_impl."""
+    from scripts.local_agent_git import _step_cap_auto_done_impl
+    return _step_cap_auto_done_impl(globals())
+
+
 def _reject_done_for_suite(messages: list, step: int, suite_tail: str, gate: str | None) -> None:
     """L1: feed a full-suite failure back as a user turn and announce the rejection. Used at both `done`-rejection sites (clean tree, and the dirty-tree auto-accept escape) so the raised rework done-bar holds and the agent can't dodge it by interleaving dirty/clean done calls. The caller increments `suite_rejections` and `break`s out of the tool-call loop so the next step re-enters with this fed-back excerpt."""
     return _reject_done_for_suite_impl(globals(), messages, step, suite_tail, gate)
@@ -1018,9 +1024,19 @@ def _main_impl() -> int:
                         return 3
                     recent_tools.clear()
 
-    print("[ended without done — step cap reached]", flush=True)
+    # Commit first: the auto-done check diffs HEAD against the default
+    # branch, so uncommitted work must be in HEAD before it is measured.
     if worktree_dirty():
         auto_wip_commit("step cap reached")
+    if _step_cap_auto_done():
+        emit_step_line(
+            MAX_STEPS,
+            "DONE: step cap reached with the work already landed - "
+            "production changes present and the full suite and lint pass",
+            correlation_id=read_correlation_id(),
+        )
+        return 0
+    print("[ended without done — step cap reached]", flush=True)
     return 2
 
 

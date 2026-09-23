@@ -1294,6 +1294,12 @@ enables a layered routing strategy:
      and hasn't already tried the fallback gets one retry on it —
      `_escalate_to_local_fallback_model` wipes the worktree/branch/journal for
      a clean start, same teardown as (2) but the backend never changes.
+   - **Step-cap auto-done:** when a local run reaches the step cap, the agent
+     first commits any uncommitted work, then checks whether the branch changes
+     at least one production file (tests and dotfiles do not count) relative to
+     its merge-base with the default branch AND the full suite and lint pass. If
+     both hold, the run exits as done and goes to review instead of being parked
+     for a step-cap rebrief. Otherwise the step-cap path below runs unchanged.
    - **On repeated step-cap interrupts:** a story that hits the step cap
      lands on `interrupted`, not `failed` — so it never reaches the
      test-failure path above and could otherwise loop on the same struggling

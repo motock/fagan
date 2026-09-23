@@ -602,9 +602,10 @@ def test_check_story_status_watchdog_timeout_two_rebrief_call_sites(
     call_sites = re.findall(r"\b_rebrief_step_cap_struggle\(", src)
     # Subtract the def line itself (def _rebrief_step_cap_struggle().
     def_lines = re.findall(r"def _rebrief_step_cap_struggle\(", src)
-    assert len(call_sites) - len(def_lines) == 2, (
-        f"expected 2 _rebrief_step_cap_struggle call sites (step-cap + "
-        f"watchdog), found {len(call_sites) - len(def_lines)}: {call_sites}")
+    assert len(call_sites) - len(def_lines) == 3, (
+        f"expected 3 _rebrief_step_cap_struggle call sites (step-cap + "
+        f"watchdog + no-new-commit rework), found "
+        f"{len(call_sites) - len(def_lines)}: {call_sites}")
 
 
 def test_check_story_status_running_within_watchdog_window_is_not_killed(

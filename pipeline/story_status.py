@@ -881,6 +881,15 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                     "status": "parked",
                     "reason": "no_new_commit_rework_budget_exhausted",
                 }
+            # LD90 W6: resuming the same transcript after a round that wrote
+            # nothing replays the confusion that produced it. Drop the
+            # transcript so the next rework starts cold from the brief at the
+            # last commit, and fold a root-cause diagnosis into the brief
+            # (same fail-open rebrief the step-cap path uses).
+            (worktree / ".agent_transcript.json").unlink(missing_ok=True)
+            _rebrief_step_cap_struggle(  # noqa: F821
+                story, str(worktree), plan_role_config=manifest.get("role_config"),
+                plan_name=plan_name, story_key=story_key)
             story["status"] = "changes_requested"
             _atomic_write_json(manifest_path, manifest)
             return {

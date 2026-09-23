@@ -443,7 +443,6 @@ def test_list_decisions_empty_then_populated(plan_dir, agents_dir, monkeypatch):
     assert {i["story_key"] for i in items} == {"S1", "S2"}
 
 
-# ---------- _plan_role_config / get_role_config (discoverability) ----------
 def test_plan_role_config_returns_empty_dict_when_manifest_missing(plan_dir):
     assert p._plan_role_config("does-not-exist") == {}
 
@@ -470,52 +469,6 @@ def test_plan_role_config_reads_role_config_block(plan_dir):
 def test_plan_role_config_survives_malformed_manifest(plan_dir):
     (plan_dir / "broken.manifest.json").write_text("{not valid json")
     assert p._plan_role_config("broken") == {}
-
-
-def test_get_role_config_reports_all_five_roles_with_no_config(agents_dir, monkeypatch):
-    monkeypatch.delenv("PIPELINE_BACKEND_OVERLORD", raising=False)
-    monkeypatch.delenv("PIPELINE_BACKEND_PLANNER", raising=False)
-    monkeypatch.delenv("PIPELINE_BACKEND_DISPATCH", raising=False)
-    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
-    monkeypatch.delenv("PIPELINE_BACKEND_DECOMPOSE", raising=False)
-    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
-
-    result = p.get_role_config()
-
-    assert result["ok"] is True
-    assert set(result["roles"]) == {"overlord", "planner", "dispatch", "review", "decompose"}
-    assert result["roles"]["overlord"]["provider"] == "claude"
-    assert result["roles"]["review"]["provider"] == "claude"
-
-
-def test_get_role_config_reflects_registry_override(agents_dir, monkeypatch):
-    registry = {
-        "providers": {"mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}}},
-        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
-    }
-    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
-    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
-    monkeypatch.delenv("PIPELINE_BACKEND_OVERLORD", raising=False)
-
-    result = p.get_role_config()
-
-    assert result["roles"]["review"] == {
-        "provider": "mlx", "model": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit",
-    }
-    # Unrelated roles are unaffected by review's override.
-    assert result["roles"]["overlord"]["provider"] == "claude"
-
-
-def test_get_role_config_reflects_plan_role_config(plan_dir, agents_dir, monkeypatch):
-    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: {})
-    (plan_dir / "cfgplan.manifest.json").write_text(json.dumps({
-        "epics": {}, "stories": {}, "repo_root": "/tmp",
-        "role_config": {"overlord": {"provider": "ollama"}},
-    }))
-
-    result = p.get_role_config(plan_name="cfgplan")
-
-    assert result["roles"]["overlord"]["provider"] == "ollama"
 
 
 # ---------- Persona/model-aware dispatch ----------

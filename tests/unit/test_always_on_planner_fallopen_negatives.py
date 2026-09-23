@@ -265,10 +265,10 @@ def test_dispatch_story_scratchpad_env_still_respected(
     assert captured.get("include_scratchpad") is False
 
 
-# ---------- get_role_config shows planner resolving to the registry entry ----------
+# ---------- get_effective_config shows planner resolving to the registry entry ----------
 
 def test_get_role_config_planner_resolves_to_registry_planner_entry(monkeypatch):
-    """get_role_config(plan_name=None) must show the planner role resolving
+    """get_effective_config(plan_name=None) must show the planner role resolving
     to whatever roles.planner says in the registry - stubbed here so the
     test doesn't depend on which provider/model model_registry.json
     currently configures (see
@@ -280,9 +280,9 @@ def test_get_role_config_planner_resolves_to_registry_planner_entry(monkeypatch)
         "roles": {"planner": {"provider": "acme", "model": "widget"}},
     }
     monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: fake_registry)
-    result = p.get_role_config(plan_name=None)
+    result = p.get_effective_config(plan_name=None)
     assert result["ok"] is True
-    planner = result["roles"]["planner"]
+    planner = next(r for r in result["roles"] if r["role"] == "planner")
     assert planner["provider"] == "acme"
     assert planner["model"] == "widget-v1"
 

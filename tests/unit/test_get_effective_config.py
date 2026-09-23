@@ -123,6 +123,38 @@ def test_plan_role_config_override_reports_provider_and_source(
     assert review["provider_source"] == "plan_role_config"
 
 
+# ---------- 4b. registry role override is reflected ----------
+
+
+def test_registry_role_override_reports_provider_and_source(agents_dir, monkeypatch):
+    """A role pinned in model_registry.json's ``roles`` block resolves to that
+    entry, and unrelated roles are unaffected.
+
+    Ported forward from the removed get_role_config's
+    ``test_get_role_config_reflects_registry_override`` (MCPHYG-3): the
+    registry-override scenario was the one case the other
+    get_effective_config tests did not already assert."""
+    monkeypatch.delenv("PIPELINE_BACKEND_REVIEW", raising=False)
+    monkeypatch.delenv("PIPELINE_BACKEND_OVERLORD", raising=False)
+    registry = {
+        "providers": {
+            "mlx": {"models": {"qwen": {"tag": "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"}}},
+        },
+        "roles": {"review": {"provider": "mlx", "model": "qwen"}},
+    }
+    monkeypatch.setattr(role_registry, "load_registry", lambda *a, **k: registry)
+
+    result = p.get_effective_config()
+
+    roles_by_name = {entry["role"]: entry for entry in result["roles"]}
+    review = roles_by_name["review"]
+    assert review["provider"] == "mlx"
+    assert review["model"] == "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
+    assert review["provider_source"] == "model_registry.json"
+    # Unrelated roles are unaffected by review's override.
+    assert roles_by_name["overlord"]["provider"] == "claude"
+
+
 # ---------- 5. Negative: nonexistent plan resolves with no overrides ----------
 
 
@@ -159,13 +191,3 @@ def test_fail_open_when_one_role_raises_role_registry_error(
         if name == "test_author":
             continue
         assert entry is not None
-
-
-# ---------- 7. get_role_config is unchanged (regression guard) ----------
-
-
-def test_get_role_config_still_works_after_addition(agents_dir, known_registry):
-    result = p.get_role_config()
-
-    assert result["ok"] is True
-    assert set(result["roles"]) == {"overlord", "planner", "dispatch", "review", "decompose"}

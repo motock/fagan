@@ -84,6 +84,15 @@ def _pr_title(story_key: str, summary: str) -> str:
     return f"{story_key}: {summary}"
 
 
+def _sync_pr_title(worktree: str, branch: str, title: str) -> None:
+    try:
+        subprocess.run(
+            ["gh", "pr", "edit", branch, "--title", title],
+            cwd=worktree, check=True, capture_output=True, text=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
 
 def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
     """Push the story's branch and open a PR for it via the gh CLI.
@@ -124,6 +133,7 @@ def _open_pr(worktree: str, story_key: str, story: dict[str, Any]) -> str:
             ["gh", "pr", "view", branch, "--json", "url", "-q", ".url"],
             cwd=worktree, check=True, capture_output=True, text=True,
         )
+        _sync_pr_title(worktree, branch, title)
         return proc.stdout.strip()
 
 

@@ -63,10 +63,11 @@ When `PIPELINE_REVIEW_ON_ACCEPTANCE_FAIL=1`, an acceptance-failing dispatch that
   APPROVE'd-but-failing merge.
 
 ### Resumability (checkpoint / interrupt)
-- `checkpoint(plan_name, story_key, step, summary, next_hint="")` — commits
+- `checkpoint_story(plan_name, story_key, step, summary, next_hint="")` — commits
   any uncommitted work in the story's worktree as `wip(<key>): <step>` and
   appends an entry to `<plan>.<story>.journal.json`. The dispatch prompt
   instructs the agent to call this after each meaningful, idempotent step.
+  `checkpoint` remains available as a deprecated alias for the same tool.
 - `interrupt_story(plan_name, story_key)` — sends `SIGTERM` to the agent's
   process (a no-op if it already exited), checkpoints whatever is
   uncommitted, and sets the story to `interrupted` rather than `failed`.
@@ -1438,7 +1439,7 @@ to stop spending more on that backend without losing whatever a story has
 already done. Two mechanisms make that possible:
 
 **Checkpointing.** Every dispatch prompt instructs the agent to call
-`checkpoint(plan_name, story_key, step, summary, next_hint)` after each
+`checkpoint_story(plan_name, story_key, step, summary, next_hint)` after each
 meaningful, idempotent step. Each call commits any uncommitted worktree
 changes (`wip(<key>): <step>`) and appends to the story's journal. This is
 the durable record a killed agent can't erase — the loss window on a kill is

@@ -20,10 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-try:
-    import httpx  # re-exported: backend.httpx, used by tests/unit/test_backend.py
-except ImportError:  # pragma: no cover
-    httpx = None  # type: ignore
+import httpx  # noqa: F401 (re-exported: backend.httpx, used by tests/unit/test_backend.py)
 
 from app import (
     inference_providers,  # noqa: F401 (re-exported: backend.inference_providers, used by tests/unit/test_backend.py)

@@ -118,12 +118,6 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         journal = _read_journal(plan_name, story_key) if resuming else []
 
         if not resuming:
-            # The fresh-dispatch git setup (fetch + `git worktree add`) and its
-            # `except subprocess.CalledProcessError` handler - which returns the
-            # structured "git setup failed" {"ok": False, "error": ...} dict
-            # rather than letting the error escape - live in
-            # pipeline.dispatch_worktree._create_fresh_worktree. A non-None
-            # result is that failure dict and must be returned unchanged.
             setup_error = _create_fresh_worktree(plan_name, branch, worktree_path)
             if setup_error is not None:
                 return setup_error

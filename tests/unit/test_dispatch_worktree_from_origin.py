@@ -585,8 +585,8 @@ def test_dispatch_story_backstop_plumbing_lives_in_service_module():
     an `import logging` alongside the existing stdlib imports, a module-level
     `logger = logging.getLogger(__name__)`, and a dispatch_story body that
     re-raises ValueError before the broad Exception handler. DISPATCHGITFAIL-1's
-    git-specific handler must still exist in pipeline/dispatch.py (membership
-    check only - later stories may extend that module)."""
+    git-specific handler must still exist in pipeline/dispatch_worktree.py
+    (membership check only - later stories may extend that module)."""
     service_src = Path(psvc.__file__).read_text()
     assert "import logging" in service_src
     assert "logger = logging.getLogger(__name__)" in service_src
@@ -595,6 +595,14 @@ def test_dispatch_story_backstop_plumbing_lives_in_service_module():
     assert "logger.exception(" in service_src
     assert 'f"dispatch failed: {type(e).__name__}: {e}"' in service_src
 
-    dispatch_src = Path(pdisp.__file__).read_text()
+    # PLD90-DSP-4 moved the git-specific handler verbatim out of
+    # pipeline/dispatch.py into pipeline/dispatch_worktree.py, so the source
+    # scan covers both modules - the same widening the story_status ->
+    # detached_grade move used. Imported here rather than at module level:
+    # pipeline.dispatch_worktree is reached through pipeline.dispatch.
+    from pipeline import dispatch_worktree as pdisp_wt
+
+    dispatch_src = (Path(pdisp.__file__).read_text() + "\n"
+                    + Path(pdisp_wt.__file__).read_text())
     assert "except subprocess.CalledProcessError" in dispatch_src
     assert "git setup failed" in dispatch_src

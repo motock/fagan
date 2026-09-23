@@ -764,6 +764,27 @@ event instead of the plain advisory warning. When the default is not a
 `; auto-route skipped: PIPELINE_LOCAL_MODEL_DEFAULT is not a :cloud tag`
 suffix.
 
+Before the LLM reviewer runs, `review_story` grades the branch's changed paths
+against the story's declared `files` list: `check_branch_scope(worktree,
+_first_review_base(worktree), files)` reports every changed path that is
+neither a test path (anything under `tests/`, or a `test_*.py` / `*_test.py` /
+`conftest.py` basename) nor one of the declared entries, plus any new
+top-level package — a changed path whose first segment is a directory absent
+from the base tree and that carries a `<dir>/__init__.py` — because a per-file
+`files` list cannot name a directory that did not exist. When the gate finds
+violations the story is sent back without an LLM review: `review_feedback`
+carries the `SCOPE GATE:` header, one `- Blocking: <path>: outside this
+story's \`files\` scope` line per offending path, and `VERDICT:
+REQUEST_CHANGES`, the run notifies once with the `scope_gate_failed` event, and
+the normal REQUEST_CHANGES handling (the `rework_attempts` increment and the
+`REWORK_MAX_ATTEMPTS` check) applies exactly as for an LLM REQUEST_CHANGES.
+The gate fails open — a git failure, `OSError` or timeout yields no violations
+— and a story that declares no `files`, or whose worktree is missing, is never
+gated and always reaches the reviewer. Unlike the ingest-time sizing path
+above, the gate is a review-time check only: it reads the same `files` list
+that sizing and the `sizing_auto_routed` auto-route consume, and it leaves
+`PIPELINE_LOCAL_MODEL_DEFAULT` routing untouched.
+
 ---
 
 ## Per-role provider/model configuration

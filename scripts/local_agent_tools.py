@@ -291,8 +291,6 @@ def run_tool_impl(origin, fn, args) -> str:
         restores[path_str] = restores.get(path_str, 0) + 1
         return (f"restored {path_str} to its last commit (HEAD) — any "
                   f"uncommitted changes to this file are gone. Other files are untouched.")
-        return (f"restored {path_str} to its last commit (HEAD) — any "
-                 f"uncommitted changes to this file are gone. Other files are untouched.")
     if fn == "bash":
         cmd = args.get("command", "")
         # Refuse destructive git ops before they reach the shell — they discard

@@ -163,7 +163,7 @@ def _rebrief_step_cap_struggle(
     # brief at DIAGNOSIS_HEADER, which would take a facts block appended ahead
     # of it with no replacement.
     story["agent_instructions"] = compose_attempt_facts(
-        story.get("agent_instructions", "+"), facts)
+        story.get("agent_instructions", ""), facts)
     if story["agent_instructions"] != previous_instructions:
         try:
             _notify_user(

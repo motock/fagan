@@ -11,7 +11,10 @@ Structural requirements:
 * ``checkpoint_story`` exists as a module-level function.
 * It carries the ``@mcp.tool()`` decorator.
 * It is registered with the MCP server.
-* Its docstring is identical to ``checkpoint``'s.
+* ``checkpoint_story`` carries the full behavioral docstring; ``checkpoint``
+  carries a short deprecation pointer to it (documentation-quality pass,
+  2026-09-23 -- the two names are no longer required to share one docstring,
+  only one implementation).
 
 Behavioural requirements (parametrized over ``checkpoint`` and
 ``checkpoint_story``):
@@ -92,35 +95,43 @@ def test_module_level_checkpoint_story_signature_matches_checkpoint():
 
 
 def test_module_level_checkpoint_story_docstring_matches_checkpoint():
-    """The alias docstring is byte-identical to ``checkpoint``'s."""
+    """``checkpoint_story`` carries the full docstring; ``checkpoint`` carries
+    a short pointer back to it rather than duplicating the text."""
     assert p.checkpoint_story.__doc__ is not None, (
         "checkpoint_story must carry a docstring"
     )
-    assert p.checkpoint_story.__doc__ == p.checkpoint.__doc__
+    assert p.checkpoint.__doc__ is not None, "checkpoint must carry a docstring"
+    assert p.checkpoint_story.__doc__ != p.checkpoint.__doc__, (
+        "checkpoint's docstring should point to checkpoint_story's, not "
+        "duplicate it verbatim"
+    )
+    assert "checkpoint_story" in p.checkpoint.__doc__, (
+        "checkpoint's docstring must name checkpoint_story as the preferred name"
+    )
+    assert "deprecat" in p.checkpoint.__doc__.lower(), (
+        "checkpoint's docstring must say it is deprecated"
+    )
 
 
 def test_module_level_checkpoint_story_body_is_single_delegation():
     """The body is exactly one statement delegating to the same service call."""
+    import ast
+
     src = inspect.getsource(p.checkpoint_story)
-    lines = src.splitlines()
-    body = []
-    in_body = False
-    for line in lines:
-        stripped = line.strip()
-        if not in_body:
-            if stripped.startswith("def checkpoint_story("):
-                in_body = True
-            continue
-        if stripped.startswith(('"""', "'''")):
-            continue
-        if stripped == "":
-            continue
-        body.append(stripped)
-    non_doc = [b for b in body if not b.startswith('"""') and not b.startswith("'''")]
-    assert len(non_doc) == 1, (
-        f"checkpoint_story body must be exactly one statement, got {non_doc}"
+    fn_def = ast.parse(src).body[0]
+    assert isinstance(fn_def, ast.FunctionDef)
+    body = fn_def.body
+    # A docstring surfaces as a leading ast.Expr(ast.Constant(str)) node;
+    # strip it (however many source lines it spans) before counting
+    # executable statements.
+    if body and isinstance(body[0], ast.Expr) and isinstance(
+        getattr(body[0], "value", None), ast.Constant
+    ) and isinstance(body[0].value.value, str):
+        body = body[1:]
+    assert len(body) == 1, (
+        f"checkpoint_story body must be exactly one statement, got {len(body)}"
     )
-    stmt = non_doc[0]
+    stmt = ast.unparse(body[0])
     assert stmt == (
         "return _service.checkpoint(plan_name, story_key, step, summary, next_hint)"
     ), f"body must delegate to _service.checkpoint, got: {stmt}"
@@ -137,8 +148,12 @@ def test_checkpoint_story_is_mcp_registered():
     )
 
 
-def test_checkpoint_remains_byte_identical():
-    """The original tool is untouched: same name, signature, docstring, body."""
+def test_checkpoint_remains_a_deprecated_delegating_alias():
+    """The original tool still exists, still delegates to the same service
+    call, and its docstring now points to checkpoint_story instead of
+    duplicating it (documentation-quality pass, 2026-09-23 -- see the
+    module docstring). It is no longer required to be byte-identical to
+    its pre-alias text."""
     assert hasattr(p, "checkpoint")
     assert callable(p.checkpoint)
     src = inspect.getsource(p.checkpoint)
@@ -147,13 +162,19 @@ def test_checkpoint_remains_byte_identical():
     assert "def checkpoint_story(" not in src, (
         "checkpoint's source must not be altered by the alias addition"
     )
-    assert p.checkpoint.__doc__ == (
-        "Record a durable checkpoint for a dispatched agent's progress. Commits "
-        "any uncommitted work in the story's worktree as a WIP commit and "
-        "appends an entry to the story's journal (plan.story.journal.json). "
-        "Call this after completing each idempotent step of a story so a killed "
-        "agent can resume from the last checkpoint instead of starting over."
+    assert "return _service.checkpoint(plan_name, story_key, step, summary, next_hint)" in src
+    # The mcp SDK's docstring dedenting differs between CI's Python 3.12
+    # and 3.13+ (see test_module_level_list_ready_stories_docstring_present_
+    # and_accurate in test_list_ready_stories_migration.py for the same
+    # note), so compare whitespace-collapsed text, not raw bytes.
+    expected = (
+        "Deprecated alias for checkpoint_story — identical behavior and "
+        "parameters (see checkpoint_story's docstring for the full description "
+        "of plan_name/story_key/step/summary/next_hint). Kept only for backward "
+        "compatibility with agents/prompts still calling the old name; prefer "
+        "checkpoint_story in new code."
     )
+    assert " ".join(p.checkpoint.__doc__.split()) == " ".join(expected.split())
 
 
 # ---------- Behavioural requirements (parametrized over both names) ----------

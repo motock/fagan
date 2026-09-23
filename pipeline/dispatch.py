@@ -380,7 +380,15 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         # belongs to the backend that actually won (a claude dispatch is
         # never handed an ollama tag - _resolve_dispatch_target already
         # drops it, so dispatch_model is None there).
-        if not story.get("model") and dispatch_model:
+        # LDC-7: when the story DOES carry a pin, dispatch_model is that pin
+        # run through _registry_tag_for - a bare registry NAME (e.g.
+        # "deepseek-v4.1-flash") comes back as its concrete tag, which the
+        # driver must receive because _resolve_local_model only knows the
+        # tiers opus/sonnet/haiku and would otherwise degrade the bare name
+        # to PIPELINE_LOCAL_MODEL_DEFAULT. A pin that is not a registry name
+        # comes back unchanged, so an explicit non-registry pin (e.g.
+        # "my-pinned-tag") still reaches the driver verbatim.
+        if dispatch_model:
             spec["model"] = dispatch_model
         # HARDEN-1: the executor must be told its cwd is authoritative on
         # EVERY dispatch - fresh or resumed - before any plan-authored brief

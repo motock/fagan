@@ -660,9 +660,22 @@ def save_plan(plan_name: str, plan_json: str, workspace: str | None = None) -> d
 
 @mcp.tool()
 def list_plans() -> list[str]:
+    """
+    List plan names found in the plan directory (~/.claude/plans, or
+    $PLAN_DIR). No parameters.
 
+    Returns the '.json' stem of every file in that directory, not just
+    fresh, ingestable plan sources — an already-ingested plan's
+    '<name>.manifest.json' surfaces as '<name>.manifest', and a story
+    journal or notification log contributes its own noisy stem too. Treat
+    a returned name as a candidate to inspect, not a guarantee it is a
+    valid target for save_plan/ingest_plan.
+
+    Call this to check whether a plan name is already taken before
+    save_plan, or to confirm a plan file actually landed on disk after
+    saving it.
+    """
     return _service.list_plans()
-list_plans.__doc__ = "List saved plans available for ingestion."
 
 # Story fields the plan authors and that a re-ingest should refresh. Every
 # other field on an already-tracked story (status, pr_url, worktree,
@@ -719,8 +732,21 @@ from pipeline.ingest import _ingest_plan_impl
 @mcp.tool()
 def list_ready_stories(plan_name: str) -> list[dict]:
     """
-    Return stories whose dependencies are satisfied and that are still in
-        To Do. Use this to decide what to dispatch next.
+    Return the stories in this plan that are unblocked and available to
+    dispatch: status == "todo" and every entry in the story's own
+    dependencies list refers to an already-completed story.
+
+    plan_name: the plan's name, as returned by list_plans or passed to
+        save_plan/ingest_plan. Returns [] if the plan has no manifest yet
+        (not yet ingested) rather than raising.
+
+    Returns a list of {"key": ..., "summary": ...} — just enough to choose
+    a story key for dispatch_story or check_story_status, not the full
+    story record (agent_instructions, acceptance, etc. are omitted; use
+    check_story_status for those). A story already in_progress, parked, or
+    done is never included, and neither is a "todo" story whose
+    dependencies aren't all done yet — call this again after a dependency
+    completes rather than assuming today's list stays valid.
     """
     return _service.list_ready_stories(plan_name)
 
@@ -779,28 +805,87 @@ def interrupt_story(plan_name: str, story_key: str) -> dict[str, Any]:
 @mcp.tool()
 def mark_story_in_progress(plan_name: str, story_key: str) -> dict[str, Any]:
     """
-    Transition the ticket to In Progress and update the local manifest.
-    Use this before writing any code for a story.
+    Transition the ticket to In Progress and update the local manifest's
+    story status.
+
+    plan_name: the plan's name, as returned by list_plans or passed to
+        save_plan/ingest_plan.
+    story_key: the story's key within that plan's manifest, as returned by
+        list_ready_stories or dispatch_story.
+
+    Use this before writing any code for a story. Call it once, right
+    after dispatch_story (or after claiming a story for manual work) — it
+    only records status, it does not create a worktree/branch or start an
+    agent itself (dispatch_story does that). Calling it on a story that
+    doesn't exist in the local manifest returns {"ok": False, "error": ...}
+    rather than raising. If another dispatch/ingest/interrupt holds the
+    plan's lock, this is a no-op that returns
+    {"ok": True, "skipped": "locked", ...} — retry rather than assuming the
+    status change happened.
     """
     return _service.mark_story_in_progress(plan_name, story_key)
 
 
 @mcp.tool()
 def checkpoint_story(plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "") -> dict[str, Any]:
-    """Record a durable checkpoint for a dispatched agent's progress. Commits any uncommitted work in the story's worktree as a WIP commit and appends an entry to the story's journal (plan.story.journal.json). Call this after completing each idempotent step of a story so a killed agent can resume from the last checkpoint instead of starting over."""
+    """
+    Record a durable checkpoint for a dispatched agent's own progress on a
+    story. Commits any uncommitted work in the story's worktree as a WIP
+    commit and appends an entry to the story's journal
+    (<plan_name>.<story_key>.journal.json).
+
+    plan_name: the plan's name this story belongs to.
+    story_key: the story's key within that plan's manifest — the same key
+        this agent was dispatched with.
+    step: a short label identifying this step (e.g. "wrote-failing-test",
+        "implemented-fix") — becomes part of the WIP commit message, so
+        keep it terse and distinct from other steps in this story.
+    summary: a sentence describing what was actually done in this step, for
+        whoever (human or resumed agent) reads the journal later.
+    next_hint: optional — what to do next if this run is interrupted right
+        after this checkpoint. Leave empty if there's nothing beyond
+        "continue the story normally."
+
+    Call this after completing each idempotent step of a story (not mid-
+    step) so a killed or interrupted agent resumes from the last checkpoint
+    via dispatch_story instead of starting the story over from scratch.
+    """
     return _service.checkpoint(plan_name, story_key, step, summary, next_hint)
 
 
 @mcp.tool()
 def checkpoint(plan_name: str, story_key: str, step: str, summary: str, next_hint: str = "") -> dict[str, Any]:
-    """Record a durable checkpoint for a dispatched agent's progress. Commits any uncommitted work in the story's worktree as a WIP commit and appends an entry to the story's journal (plan.story.journal.json). Call this after completing each idempotent step of a story so a killed agent can resume from the last checkpoint instead of starting over."""
+    """
+    Deprecated alias for checkpoint_story — identical behavior and
+    parameters (see checkpoint_story's docstring for the full description
+    of plan_name/story_key/step/summary/next_hint). Kept only for backward
+    compatibility with agents/prompts still calling the old name; prefer
+    checkpoint_story in new code.
+    """
     return _service.checkpoint(plan_name, story_key, step, summary, next_hint)
 
 @mcp.tool()
 def mark_story_done(plan_name: str, story_key: str) -> dict[str, Any]:
     """
-    Transition the ticket to Done and update the local manifest.
-    Use after you've reviewed and merged the agent's PR.
+    Mark a story finished: sets its ticket (Plane, when enabled) to Done,
+    sets manifest["stories"][story_key]["status"] to "done", and clears any
+    stale parked_reason. If this was the plan's last remaining story, fires
+    the plan-completion notification.
+
+    plan_name: the plan's name, as returned by list_plans or passed to
+        save_plan/ingest_plan.
+    story_key: the story's key within that plan's manifest, as returned by
+        list_ready_stories, check_story_status, or dispatch_story.
+
+    Call this only after the story's PR has actually been reviewed and
+    merged — approve_merge already calls this internally as its last step,
+    so you normally only need to call mark_story_done directly for a
+    merge that happened outside the pipeline (e.g. a manual `gh pr merge`
+    you've already confirmed passed CI). It does not merge or verify
+    anything itself; it only records that the work is done. If another
+    dispatch/ingest/interrupt holds the plan's lock, this is a no-op that
+    returns {"ok": True, "skipped": "locked", ...} rather than blocking or
+    raising — retry the call rather than assuming failure.
     """
     return _service.mark_story_done(plan_name, story_key)
 
@@ -875,12 +960,30 @@ def request_decision(
     """
     Escalate a blocking decision to the overlord, which rules on the user's
     behalf per the decision policy. The ruling is appended to the plan's
-    decisions log (audit trail) and returned. Call this from a story agent
-    when you are blocked on a choice the user would normally make.
+    decisions log (audit trail, readable via list_decisions) and returned.
+
+    plan_name: the plan's name this story belongs to.
+    story_key: the story's key within that plan's manifest — the story
+        that's actually blocked.
+    question: the specific question you need answered, stated so a ruling
+        of "pick one of these options" fully resolves it.
+    options: the mutually exclusive choices the overlord may rule between,
+        as plain strings (e.g. ["hand-roll a parser", "add a dependency"]).
+        Not free text — the ruling should select one of these verbatim.
+    context: optional — anything the overlord needs to rule correctly that
+        isn't in `question` itself (constraints, tradeoffs you've already
+        found, why the choice matters). Defaults to empty; provide it
+        whenever the bare question is ambiguous without it.
+
+    On success returns a dict with at least "ruling" (the chosen option's
+    text), "rationale", "risk", "tier", "action", and "notify_user" — act on
+    "ruling", not on your own preference. Call this from a story agent when
+    you are blocked on a choice the user would normally make; do not guess.
 
     Fails open: if the overlord backend errors, the story is parked for a
-    human and a single-line escalation message (a plain string) is returned
-    instead of raising.
+    human and a single-line escalation message (a plain string, not the
+    dict above) is returned instead of raising — check whether the return
+    value is a str before reading dict keys off it.
     """
     return _service.request_decision(
         plan_name,
@@ -893,7 +996,23 @@ def request_decision(
 
 @mcp.tool()
 def list_decisions(plan_name: str) -> list[dict]:
-    """Return the overlord decision log for a plan (audit trail)."""
+    """
+    Return the overlord's decision log for a plan: every ruling ever made
+    by request_decision on this plan, oldest first, as an audit trail.
+    Read-only — makes no changes to the plan or any story.
+
+    plan_name: the plan's name, as returned by list_plans or passed to
+        save_plan/ingest_plan.
+
+    Each entry corresponds one-to-one with a prior request_decision call
+    and carries at least the story_key, question, the ruling made, and a
+    timestamp. Returns an empty list if the plan has no decisions logged
+    yet — this is normal for a plan with no blocked stories, not an error.
+
+    Call this to check for precedent before escalating a similar decision
+    with request_decision, or when a human wants to review what the
+    overlord has ruled on so far for a plan.
+    """
     return _service.list_decisions(plan_name)
 
 
@@ -953,7 +1072,36 @@ from pipeline.advance import _advance_pipeline_locked, _advance_pipeline_locked_
 
 @mcp.tool()
 def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
-    """Approve a merge by delegating to PipelineService."""
+    """
+    Merge a reviewed story's PR into the default branch, right now, on the
+    caller's explicit approval — this is the human/overlord merge decision
+    itself, not a status check.
+
+    plan_name: the plan's name, as returned by list_plans or passed to
+        save_plan/ingest_plan.
+    story_key: the story's key within that plan's manifest. Must currently
+        be "parked" or "pr_open" with review_verdict == "APPROVE" — any
+        other state (not yet reviewed, still in progress, already merged)
+        returns {"ok": False, "error": ...} without changing anything.
+
+    On success this: rebases the story's branch onto the current default
+    branch, force-pushes it (--force-with-lease) to origin, polls real CI
+    (gh pr checks) — auto-retrying once on a cancelled run, and failing
+    closed on a fail/cancelled/still-pending result — re-runs the story's
+    acceptance fixtures and a build check against the rebased code, then
+    merges the PR, deletes the branch/worktree, marks the story "done" in
+    the manifest and its ticket, and notifies the user to restart the MCP
+    server if the story touched the pipeline's own source. Any failure at
+    any of those steps aborts the merge and returns the specific reason
+    instead of partially completing it.
+
+    This does more than a plain `gh pr merge` (which skips the rebase,
+    force-push, and re-verification) — prefer this tool over a manual
+    merge for exactly that reason. It force-pushes and merges regardless
+    of any local test run you've done yourself, so only call it once you
+    actually want this specific story merged now; there is no separate
+    confirmation step after this call.
+    """
     return _service.approve_merge(plan_name, story_key)
 
 

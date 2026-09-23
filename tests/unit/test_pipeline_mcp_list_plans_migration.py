@@ -104,38 +104,46 @@ def test_module_level_list_plans_signature_unchanged():
 
 
 def test_module_level_list_plans_docstring_unchanged():
-    """C2/R3: the module-level tool's docstring must be byte-for-byte
-    unchanged: ``List saved plans available for ingestion.``"""
-    assert p.list_plans.__doc__ == "List saved plans available for ingestion.", (
-        f"list_plans docstring changed: {p.list_plans.__doc__!r}"
-    )
+    """C2/R3: the module-level tool must carry a real docstring.
+
+    Documentation-quality pass (2026-09-23): the previous pinned text here,
+    ``"List saved plans available for ingestion."``, was never actually
+    seen by FastMCP -- it was assigned to ``list_plans.__doc__`` on the line
+    *after* ``@mcp.tool()`` had already run, so the registered tool's
+    description was empty (this is the exact defect a TDQS quality pass
+    caught: "list_plans" scored 1.0/5, "Tool has no description"). The
+    docstring is now written inside the function body, where the decorator
+    actually captures it, and is deliberately longer/more accurate --
+    byte-identity with the old (effectively-unused) text is no longer the
+    right invariant.
+    """
+    assert p.list_plans.__doc__, "list_plans must carry a non-empty docstring"
+    assert "plan directory" in p.list_plans.__doc__ or "PLAN_DIR" in p.list_plans.__doc__
 
 
 def test_module_level_list_plans_body_is_single_delegation():
     """C2: the module-level tool's executable body must be exactly one
     statement delegating to ``_service.list_plans()``."""
+    import ast
+
     src = inspect.getsource(p.list_plans)
-    # Strip the decorator line(s), def line and docstring, leaving the body.
-    lines = src.splitlines()
-    body_lines = []
-    seen_docstring = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("@"):
-            continue
-        if stripped.startswith("def list_plans"):
-            continue
-        if stripped.startswith(('"""', "'''")):
-            seen_docstring = not seen_docstring if not seen_docstring else seen_docstring
-            continue
-        if seen_docstring:
-            continue
-        if stripped == "":
-            continue
-        body_lines.append(stripped)
-    assert body_lines == ["return _service.list_plans()"], (
+    fn_def = ast.parse(src).body[0]
+    assert isinstance(fn_def, ast.FunctionDef)
+    body = fn_def.body
+    # A docstring surfaces as a leading ast.Expr(ast.Constant(str)) node,
+    # however many source lines it spans; strip it via the AST rather than
+    # a naive per-line text scan, which mis-handles a multi-line docstring.
+    if body and isinstance(body[0], ast.Expr) and isinstance(
+        getattr(body[0], "value", None), ast.Constant
+    ) and isinstance(body[0].value.value, str):
+        body = body[1:]
+    assert len(body) == 1, (
+        f"module-level list_plans body must be exactly one statement, got {len(body)}"
+    )
+    stmt = ast.unparse(body[0])
+    assert stmt == "return _service.list_plans()", (
         f"module-level list_plans body must be exactly "
-        f"`return _service.list_plans()`, got {body_lines}"
+        f"`return _service.list_plans()`, got {stmt!r}"
     )
 
 

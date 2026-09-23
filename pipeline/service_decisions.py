@@ -7,17 +7,6 @@ pipeline.service, so tests patching pipeline.server still land.
 import logging
 from datetime import datetime, timezone
 
-from .service import _ServerRef
-
-_invoke_overlord = _ServerRef("_invoke_overlord")
-_load_policy = _ServerRef("_load_policy")
-_notify_user = _ServerRef("_notify_user")
-_parse_ruling = _ServerRef("_parse_ruling")
-_plan_role_config = _ServerRef("_plan_role_config")
-_scoped_repo_root = _ServerRef("_scoped_repo_root")
-_store = _ServerRef("_store")
-_validate_key = _ServerRef("_validate_key")
-
 
 def _request_decision_impl(self, plan_name: str, story_key: str, question: str, options: list[str], context: str=''):
     _validate_key(plan_name)
@@ -109,3 +98,15 @@ def _request_decision_impl(self, plan_name: str, story_key: str, question: str, 
     }
     _store.append_decision(plan_name, record)
     return record
+
+
+from .service import _ServerRef  # noqa: I001 - must follow the def: service.py back-imports _request_decision_impl (line 163), so defining it first keeps both import directions cycle-free
+
+_invoke_overlord = _ServerRef("_invoke_overlord")
+_load_policy = _ServerRef("_load_policy")
+_notify_user = _ServerRef("_notify_user")
+_parse_ruling = _ServerRef("_parse_ruling")
+_plan_role_config = _ServerRef("_plan_role_config")
+_scoped_repo_root = _ServerRef("_scoped_repo_root")
+_store = _ServerRef("_store")
+_validate_key = _ServerRef("_validate_key")

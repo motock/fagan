@@ -155,9 +155,7 @@ def _baseline_only_failures(origin, stdout: str) -> bool:
         return False
     return bool(run_ids) and set(run_ids) <= baseline_ids
 
-_TEST_FILE_PREFIXES = ("test_,")
-_TEST_FILE_PREFIXES = ("test_,")
-
+_TEST_FILE_PREFIXES = ('test_',)
 def _changed_production_paths(paths: list[str]) -> list[str]:
     """Return the entries of ``paths`` that are production files.
 

@@ -136,9 +136,11 @@ def test_exactly_two_advance_all_plans_definitions():
     import pathlib
     server_text = pathlib.Path(p.__file__).read_text()
     service_text = pathlib.Path(p.__file__).with_name("service.py").read_text()
+    tools_text = pathlib.Path(p.__file__).with_name("server_tools_lifecycle.py").read_text()
     count = (
         len(re.findall(r"def advance_all_plans\b", server_text))
         + len(re.findall(r"def advance_all_plans\b", service_text))
+        + len(re.findall(r"def advance_all_plans\b", tools_text))
     )
     assert count == 2, (
         f"expected exactly 2 `def advance_all_plans` (method in service.py "

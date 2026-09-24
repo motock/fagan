@@ -30,16 +30,19 @@ from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escal
 from .repo_health import format_findings, classify_repo_health
 from .git_ops import _worktree_has_new_commits
 from .triage_story_actions import _MARK_DONE_UNCORROBORATED_REASON, _SUITE_PASSES_SENTINEL, _execute_mark_done, _execute_split_story  # noqa: E402,F401
+from .triage_repo_issue import _execute_repo_issue  # noqa: E402
 from .triage_patch_acceptance import _FIXTURE_END_MARKER, _FIXTURE_START_MARKER, _acceptance_with_source, _execute_patch_acceptance, _parse_fixture_rewrite, _story_checkout  # noqa: E402,F401
 
 SIBLING_NOTE = "this is one half of a split; the sibling story owns the other half"
 TRIAGE_MAX_PER_TICK = 1
 
-# E6/E7: repo_issue alone remains deferred until implemented; split_story is
-# implemented by _execute_split_story (see
-# docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md for implementation details).
+# Deferred actions: rulings the overlord may return before their executor
+# exists; execute_ruling records them and parks for a human. Empty since E7
+# gave repo_issue its executor (_execute_repo_issue), as E6 did for
+# split_story (see docs/plans/OVERLORD_FAILURE_TRIAGE_PLAN.md). Kept as the
+# extension point for the next action added to the output contract.
 # Exported via __all__; handled in execute_ruling.
-DEFERRED_ACTIONS = frozenset({"repo_issue"})
+DEFERRED_ACTIONS = frozenset()
 # ---------------------------------------------------------------------------
 # Triage executor helpers
 # ---------------------------------------------------------------------------
@@ -126,6 +129,10 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
         )
     if action == "patch_acceptance":
         return _execute_patch_acceptance(
+            plan_name, story_key, story, ruling, manifest, manifest_path
+        )
+    if action == "repo_issue":
+        return _execute_repo_issue(
             plan_name, story_key, story, ruling, manifest, manifest_path
         )
     if action == "park_for_human":

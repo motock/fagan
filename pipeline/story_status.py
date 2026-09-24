@@ -199,6 +199,15 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         step="dispatch_watchdog_timeout",
                         summary=watchdog_summary,
                     )
+                    _notify_user(  # noqa: F821
+                        plan_name,
+                        f"{story_key} killed by the dispatch watchdog; the "
+                        f"re-dispatch counts as a rework cycle.",
+                        story_key=story_key,
+                        severity="warning",
+                        event="dispatch_watchdog_timeout",
+                        **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+                    )
                     _rebrief_step_cap_struggle(  # noqa: F821
                         story, str(Path(story["worktree"])),
                         plan_role_config=manifest.get("role_config"),

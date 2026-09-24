@@ -51,7 +51,13 @@ _DISPATCH_FAILED_EVENT = "dispatch_failed"
 _MERGED_EVENT = "story_merged"
 
 _REWORK_EVENTS = frozenset(
-    {"tests_failed", "merge_ci_rework", "merge_gate_retry", "merge_retry"}
+    {
+        "tests_failed",
+        "merge_ci_rework",
+        "merge_gate_retry",
+        "merge_retry",
+        "dispatch_watchdog_timeout",
+    }
 )
 _ESCALATION_EVENTS = frozenset({"escalated", "model_fallback"})
 

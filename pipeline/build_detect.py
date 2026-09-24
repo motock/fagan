@@ -968,19 +968,6 @@ def _run_lint_gate_lazy(*args, **kwargs):
 # it used to be); callers only ever call it, never inspect its identity.
 _run_lint_gate = _run_lint_gate_lazy
 
-# Prime pipeline.server eagerly for every import order EXCEPT the one that
-# cycles. pipeline.ci imports this module at its own module level, before it
-# has defined the names (e.g. _PATCHABLE_STORY_FIELDS) that pipeline.server
-# imports back from it -- so importing server here while ci is mid-import
-# re-enters the half-initialized ci and raises ImportError. Every other order
-# is safe, and companion_server's _ColdOracleGateImport hook depends on
-# importing pipeline.build_detect to pull in pipeline.server (and, through
-# it, pipeline.oracle_gate), so the eager import is kept whenever ci is not
-# in flight. The lazy wrapper above covers the in-flight case.
-if "pipeline.ci" not in sys.modules:
-    import pipeline.server as _server  # noqa: F401  (priming side effect only)
-
-
 __all__ = [
     "_acceptance_rel_paths",
     "_added_pytest_test_paths",

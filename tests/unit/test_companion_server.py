@@ -268,20 +268,18 @@ class TestNoWholeServerImport:
         )
         assert probe.stdout.strip().endswith("False"), probe.stderr
 
-    def test_cold_oracle_gate_import_hook_primes_and_delegates(self):
-        """Regression (B5 review, blocking): the ``_ColdOracleGateImport``
-        sys.meta_path hook must survive a COLD ``import pipeline.oracle_gate``.
+    def test_cold_oracle_gate_import_after_companion_import_delegates(self):
+        """Regression: a COLD ``import pipeline.oracle_gate`` after importing only the
+        companion must succeed and delegate.
 
         This must be a subprocess: under pytest, tests/unit/conftest.py
-        pre-imports pipeline.server, so the hook's guard returns None
-        in-process and any in-process test would pass vacuously even with a
-        broken hook. A foreign harness adopting only the companion hits the
-        cold order — companion_server imported first, then oracle_gate as the
-        first pipeline module — which dies with the documented ImportError
-        ("cannot import name 'acceptance_digests' ...") unless the hook primes
-        build_detect first. The probe asserts hook priming, the lazy
-        ``from pipeline import oracle_gate`` inside the tool body, and real
-        delegation (returncode 0 -> "passes").
+        pre-imports pipeline.server, so an in-process import would pass vacuously.
+        A foreign harness adopting only the companion imports oracle_gate as the
+        first pipeline module, which used to die with the ImportError
+        ("cannot import name 'acceptance_digests' ...") until pipeline.build_detect
+        stopped importing pipeline.server eagerly. The probe asserts the cold
+        import, the lazy ``from pipeline import oracle_gate`` inside the tool body,
+        and real delegation (returncode 0 -> "passes").
         """
         import os
 

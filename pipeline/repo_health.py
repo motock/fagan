@@ -164,7 +164,9 @@ def ci_finding(ci_status) -> dict | None:
     """Pure CI finding helper.
 
     This function is deliberately free of any imports that pull in
-    :mod:`pipeline.ci` or :mod:`pipeline.server` to avoid circular imports.
+    :mod:`pipeline.ci` or :mod:`pipeline.server`: the helper stays usable
+    from the bare CI/server stack, and :mod:`pipeline.server` imports this
+    module, so importing it back would cycle.
     It operates purely on the ``ci_status`` dict supplied by the caller.
     """
     if not isinstance(ci_status, dict):

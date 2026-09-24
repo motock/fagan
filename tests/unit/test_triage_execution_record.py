@@ -370,14 +370,14 @@ def test_append_failure_does_not_propagate_from_the_dry_run_branch(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_deferred_actions_still_contains_the_deferred_actions():
-    """``DEFERRED_ACTIONS`` still contains every action that remains deferred.
+def test_repo_issue_is_no_longer_a_deferred_action():
+    """``repo_issue`` left ``DEFERRED_ACTIONS`` when E7 gave it an executor.
 
-    Membership (not equality) so a later sibling story may still add to it.
-    OPSA-5 executed ``split_story`` (it now creates child stories instead of
-    parking for a human), so only ``repo_issue`` remains deferred.
+    Membership (not equality) so a later story may still add a deferred
+    action. OPSA-5 executed ``split_story`` and RIX-1 executed ``repo_issue``
+    (it now files a follow-up story instead of parking for a human).
     """
-    assert "repo_issue" in triage.DEFERRED_ACTIONS
+    assert "repo_issue" not in triage.DEFERRED_ACTIONS
 
 
 def test_execute_ruling_dispatch_is_unchanged_for_deferred_actions(monkeypatch):

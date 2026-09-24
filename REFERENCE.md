@@ -735,6 +735,16 @@ Re-ingesting a plan whose manifest already exists is rejected with
 ingest, so a re-ingest would add a duplicate that dispatches alongside the
 original. The first ingest of a plan never needs keys.
 
+## Direct dispatch refuses finished stories
+
+`dispatch_story` (the MCP tool and the dashboard's dispatch button) refuses a
+story whose status is `done` or `pr_open` and returns `ok: False` naming the
+status, before any worktree work. Its work is already merged or awaiting
+merge, so a fresh worktree would be cut from a base that may already contain
+it. To re-run such a story deliberately, change its status with
+`set_story_status` first. The scheduler tick is unaffected: it only ever
+dispatches `todo`, `interrupted` and `changes_requested` stories.
+
 ## Acceptance fixture grading
 
 An `acceptance` fixture that calls the changed function directly — never

@@ -48,7 +48,8 @@ def wake_handler(event: dict) -> dict:
         # Return the dict unchanged – a stale or redelivered event.
         return precond
 
-    # Lazy import to avoid circular dependency.
+    # Resolved at call time (not at module load) so tests patching
+    # ``pipeline.server.advance_pipeline`` land on this call site.
     from .server import advance_pipeline
 
     result = advance_pipeline(plan_name)

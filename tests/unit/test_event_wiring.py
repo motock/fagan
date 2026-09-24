@@ -241,8 +241,7 @@ def test_advance_pipeline_exception_propagates(patched_plan_dir, monkeypatch):
 def test_advance_pipeline_imported_lazily():
     """``pipeline.server.advance_pipeline`` must not be imported at module load.
 
-    A module-level ``from .server import advance_pipeline`` would create a
-    circular import. The implementation must import it inside wake_handler.
+    A module-level ``from .server import advance_pipeline`` would bind the function object before tests have a chance to patch ``pipeline.server.advance_pipeline``, so the patch would miss this call site. The implementation must import it inside wake_handler.
     """
     # The module must be importable without server.advance_pipeline being
     # resolved as a bound name at import time. We assert by checking that the
@@ -261,7 +260,7 @@ def test_advance_pipeline_imported_lazily():
     # not be a module attribute.
     assert not hasattr(event_wiring, "advance_pipeline"), (
         "advance_pipeline must be imported lazily inside wake_handler, not "
-        "bound at module level (circular import)."
+        "bound at module level (a module-level binding would survive monkeypatching pipeline.server)."
     )
 
 

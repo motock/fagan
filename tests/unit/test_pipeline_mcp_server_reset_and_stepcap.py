@@ -532,7 +532,7 @@ def test_review_story_genuine_request_changes_still_increments_rework(plan_dir, 
     })
     monkeypatch.setattr(p, "_run_reviewer",
                         lambda wt, br, **k: "The error path is untested.\nVERDICT: REQUEST_CHANGES")
-    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
 
     p.review_story("rl_regression", "S1")
 
@@ -768,7 +768,7 @@ def test_advance_pipeline_does_not_report_genuine_verdict_as_deferred(plan_dir, 
     })
     monkeypatch.setattr(p, "_run_reviewer",
                         lambda wt, br, **k: "The error path is untested.\nVERDICT: REQUEST_CHANGES")
-    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
 
     result = p.advance_pipeline("no_defer")
 
@@ -913,7 +913,7 @@ def test_review_story_deferred_count_resets_on_genuine_verdict(plan_dir, agents_
         return "The error path is untested.\nVERDICT: REQUEST_CHANGES"
 
     monkeypatch.setattr(p, "_run_reviewer", _stub)
-    monkeypatch.setattr(p, "_notify_user", lambda *a: None)
+    monkeypatch.setattr(p, "_notify_user", lambda *a, **k: None)
 
     result1 = p.review_story("fb_reset", "S1")
     assert result1.get("deferred") == "rate_limited"

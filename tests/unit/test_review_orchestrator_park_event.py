@@ -204,7 +204,8 @@ def test_rework_budget_park_status_reason_and_event(plan_dir, agents_dir,
 
     assert result["ok"] is True
     assert result["status"] == "parked"
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert calls[0]["kwargs"].get("event") == "review_changes_requested"
     assert calls[-1]["kwargs"].get("event") == "story_parked"
     on_disk = _read_story(plan_dir, "pe", "S1")
     assert on_disk["status"] == "parked"

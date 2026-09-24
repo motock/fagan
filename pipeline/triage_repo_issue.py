@@ -63,7 +63,7 @@ def _execute_repo_issue(plan_name, story_key, story, ruling, manifest, manifest_
             f"not because of its own scope. Fix the repository condition described "
             f"below. Do not implement {story_key}'s own deliverable.\n"
             f"ruling: {ruling.get('ruling', '')}\n"
-            f"rationale: {ruling.get('rationale', '')[:300]}\n"
+            f"rationale: {(ruling.get('rationale') or '')[:300]}\n"
         ),
     }
     for field in ("persona", "risk", "backend"):

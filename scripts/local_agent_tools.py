@@ -43,6 +43,18 @@ import subprocess
 RESTORE_FILE_MAX_PER_PATH = 2
 
 
+def _cut_view_at_line_boundary(formatted: str, cap: int = 3000) -> tuple[str, int]:
+    """Longest prefix of ``formatted`` that ends on a line boundary within ``cap``
+    characters, plus how many whole lines it holds. When even the first line is
+    longer than ``cap`` there is no boundary to cut at: hard-cut at ``cap`` and
+    report 0 lines, so the caller can say the cut fell inside a line."""
+    boundary = formatted.rfind("\n", 0, cap)
+    if boundary == -1:
+        return formatted[:cap], 0
+    kept = formatted[: boundary + 1]
+    return kept, kept.count("\n")
+
+
 def run_tool_impl(origin, fn, args) -> str:
     if fn == "create_file":
         path = origin["CWD"] / args["path"]

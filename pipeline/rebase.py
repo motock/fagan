@@ -87,6 +87,39 @@ def _try_auto_resolve_conflict(worktree: str) -> list[str]:
     return list(resolutions.keys())
 
 
+def _ensure_on_branch(worktree: str, branch: str) -> dict[str, Any]:
+    """Re-attach a detached worktree HEAD to ``branch`` without losing commits.
+
+    A detached HEAD makes every later commit (WIP checkpoints, the agent's own
+    work) land on no branch, so the pushed PR branch silently goes stale and
+    the merge gate is blocked on old content. Re-attach only when the branch
+    tip is an ancestor of HEAD (a pure fast-forward, nothing lost); refuse when
+    the histories diverge, since moving the branch would orphan its commits.
+    Returns ``{"ok": bool, "error": str}``. Never raises.
+    """
+    def _run(argv: list[str]) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(argv, check=False, cwd=worktree, capture_output=True, text=True)
+        except OSError as e:
+            return subprocess.CompletedProcess(argv, 127, "", str(e))
+
+    # symbolic-ref -q exits 1 only for a detached HEAD. Any other failure (git
+    # missing, not a repository) means we cannot tell, so leave it to the rebase
+    # below to report its own error rather than mislabel it as a detached HEAD.
+    if _run(["git", "symbolic-ref", "-q", "HEAD"]).returncode != 1:
+        return {"ok": True, "error": ""}
+    ancestor = _run(["git", "merge-base", "--is-ancestor", f"refs/heads/{branch}", "HEAD"])
+    if ancestor.returncode != 0:
+        return {"ok": False, "error": (
+            f"worktree HEAD is detached and does not contain branch {branch}'s tip "
+            f"(or the branch is missing); refusing to re-attach: {(ancestor.stderr or '').strip()[:200]}"
+        )}
+    moved = _run(["git", "checkout", "-q", "-B", branch, "HEAD"])
+    if moved.returncode != 0:
+        return {"ok": False, "error": (moved.stdout + moved.stderr).strip()[:500]}
+    return {"ok": True, "error": ""}
+
+
 def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
     """Rebase `branch` onto current origin/master inside its worktree so the
     merge gate sees the branch against current master, not the stale base the
@@ -158,6 +191,13 @@ def _rebase_onto_master(worktree: str, branch: str) -> dict[str, Any]:
             "pre-rebase WIP checkpoint failed in %s; attempting rebase anyway",
             worktree, exc_info=True,
         )
+    # A detached HEAD would send the rebased work to no branch. Re-attach first
+    # (after the checkpoint above, so detached commits are already captured);
+    # when it cannot be done without orphaning commits, report conflict=True so
+    # callers take their existing park-for-a-human path instead of failing open.
+    attached = _ensure_on_branch(worktree, branch)
+    if not attached["ok"]:
+        return {"ok": False, "conflict": True, "error": attached["error"]}
     # Full `git fetch origin` (not `fetch origin <branch>`) so every
     # remote-tracking ref is updated on configs with a narrow/custom refspec,
     # keeping the rebase target current. The rebase target itself must follow
@@ -222,6 +262,7 @@ def _sync_branch_remote(worktree: str, branch: str) -> dict[str, Any]:
 
 
 __all__ = [
+    "_ensure_on_branch",
     "_rebase_onto_master",
     "_sync_branch_remote",
     "_try_auto_resolve_conflict",

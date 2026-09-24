@@ -269,8 +269,8 @@ def resolve_route(
 
     # Risk ranking for the max_risk predicate — a local copy of
     # pipeline.config._RISK_ORDER rather than an import: pipeline.* modules
-    # import app.role_registry (dispatch, overlord, planner, review, ...), so
-    # importing pipeline back from here would create a circular import.
+    # import app.role_registry eagerly (dispatch, overlord, planner, review,
+    # ...), so this module deliberately imports nothing from ``pipeline``.
     risk_order = {"low": 0, "medium": 1, "high": 2}
 
     # Fail closed on the WHOLE block before evaluating anything: a typo in a

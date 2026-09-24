@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pipeline import server as _server
 from pipeline.dispatch import _find_dead_new_functions
 
 from .build_detect import (
@@ -929,74 +928,81 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
     return result
 
 
-# Rebind the function's globals to pipeline.server's namespace so that
-# bare-name reads inside the body (e.g. `detect_test_command`,
-# `_worktree_has_new_commits`, `_store`) resolve against pipeline.server at
-# call time. This preserves the original behavior where the function lived in
-# pipeline.server and saw monkeypatched module globals (LOAD_GLOBAL does not
-# consult a module-level __getattr__, so a plain re-export would not).
-check_story_status = types.FunctionType(
-    check_story_status.__code__,
-    _server.__dict__,
-    check_story_status.__name__,
-    check_story_status.__defaults__,
-    check_story_status.__closure__,
-)
-# check_story_status's own logic (not a primitive): rebound onto pipeline.server's
-# globals so its globals().get(...) probes see the same pytest-conditional exports
-# check_story_status sees, and exported unconditionally.
-_detached_grade_lifecycle = types.FunctionType(
-    _detached_grade_lifecycle_unbound.__code__,
-    _server.__dict__,
-    _detached_grade_lifecycle_unbound.__name__,
-    _detached_grade_lifecycle_unbound.__defaults__,
-    _detached_grade_lifecycle_unbound.__closure__,
-)
-_server._detached_grade_lifecycle = _detached_grade_lifecycle
+def bind_to_server(_server: Any) -> None:
+    """Rebind check_story_status and export its collaborators onto ``_server``.
 
-# The rebound body resolves bare names against pipeline.server's namespace, so
-# the grading watchdog constant it reads must be reachable there. (The
-# detached-grade primitives are exported further down, after their defs.)
-_server.DETACHED_GRADE_WATCHDOG_SECONDS = DETACHED_GRADE_WATCHDOG_SECONDS
-_server.DISPATCH_STALE_ACTIVITY_SECONDS = DISPATCH_STALE_ACTIVITY_SECONDS
-_server.collect_story_wedge_signals = collect_story_wedge_signals
+    Called by pipeline.server right after it imports this module, so this module
+    itself never imports the server and can be imported cold."""
+    global check_story_status, _detached_grade_lifecycle
+
+    # Rebind the function's globals to pipeline.server's namespace so that
+    # bare-name reads inside the body (e.g. `detect_test_command`,
+    # `_worktree_has_new_commits`, `_store`) resolve against pipeline.server at
+    # call time. This preserves the original behavior where the function lived in
+    # pipeline.server and saw monkeypatched module globals (LOAD_GLOBAL does not
+    # consult a module-level __getattr__, so a plain re-export would not).
+    check_story_status = types.FunctionType(
+        check_story_status.__code__,
+        _server.__dict__,
+        check_story_status.__name__,
+        check_story_status.__defaults__,
+        check_story_status.__closure__,
+    )
+    # check_story_status's own logic (not a primitive): rebound onto pipeline.server's
+    # globals so its globals().get(...) probes see the same pytest-conditional exports
+    # check_story_status sees, and exported unconditionally.
+    _detached_grade_lifecycle = types.FunctionType(
+        _detached_grade_lifecycle_unbound.__code__,
+        _server.__dict__,
+        _detached_grade_lifecycle_unbound.__name__,
+        _detached_grade_lifecycle_unbound.__defaults__,
+        _detached_grade_lifecycle_unbound.__closure__,
+    )
+    _server._detached_grade_lifecycle = _detached_grade_lifecycle
+
+    # The rebound body resolves bare names against pipeline.server's namespace, so
+    # the grading watchdog constant it reads must be reachable there. (The
+    # detached-grade primitives are exported further down, after their defs.)
+    _server.DETACHED_GRADE_WATCHDOG_SECONDS = DETACHED_GRADE_WATCHDOG_SECONDS
+    _server.DISPATCH_STALE_ACTIVITY_SECONDS = DISPATCH_STALE_ACTIVITY_SECONDS
+    _server.collect_story_wedge_signals = collect_story_wedge_signals
 
 
-# The rebound check_story_status body resolves bare names against
-# pipeline.server's namespace, so the detached-grade primitives it calls must
-# be reachable there. Export them into _server.__dict__ at import time — but
-# NOT under pytest: the pre-existing check_story_status test files pin the
-# SYNCHRONOUS dead-pid grade (they stub subprocess.run and never stub these
-# primitives), and exporting the real spawner under pytest would flip those
-# runs to detached grades and break them. The detached-grading tests patch
-# p.start_detached_grade / p.collect_detached_grade directly — exactly the
-# surface the rebound body reads via globals().
-# The rebound check_story_status body resolves bare names against
-# pipeline.server's namespace, so the helper its verdict block calls must
-# be reachable there - same reason the detached-grade primitives below are
-# exported.
-_server._baseline_exempted_failures = _baseline_exempted_failures
+    # The rebound check_story_status body resolves bare names against
+    # pipeline.server's namespace, so the detached-grade primitives it calls must
+    # be reachable there. Export them into _server.__dict__ at import time — but
+    # NOT under pytest: the pre-existing check_story_status test files pin the
+    # SYNCHRONOUS dead-pid grade (they stub subprocess.run and never stub these
+    # primitives), and exporting the real spawner under pytest would flip those
+    # runs to detached grades and break them. The detached-grading tests patch
+    # p.start_detached_grade / p.collect_detached_grade directly — exactly the
+    # surface the rebound body reads via globals().
+    # The rebound check_story_status body resolves bare names against
+    # pipeline.server's namespace, so the helper its verdict block calls must
+    # be reachable there - same reason the detached-grade primitives below are
+    # exported.
+    _server._baseline_exempted_failures = _baseline_exempted_failures
 
-# The rebound body's test-result bookkeeping and streak clearing are pure
-# manifest mutations (the same ones it performed inline before they were
-# extracted), so they are exported unconditionally: the grade path must record
-# its test run and clear its streaks on every outcome, including a
-# plan-conflict verdict.
-_server._record_test_check = _record_test_check
-_server._clear_failure_streaks = _clear_failure_streaks
+    # The rebound body's test-result bookkeeping and streak clearing are pure
+    # manifest mutations (the same ones it performed inline before they were
+    # extracted), so they are exported unconditionally: the grade path must record
+    # its test run and clear its streaks on every outcome, including a
+    # plan-conflict verdict.
+    _server._record_test_check = _record_test_check
+    _server._clear_failure_streaks = _clear_failure_streaks
 
-# The post-agent scratchpad untrack has the detached-grade primitives'
-# reason AND one of its own: it shells out to git, so exporting the real
-# function under pytest would run it inside every pre-existing test that
-# drives the dead-pid grade path (they stub subprocess.run and pin its call
-# sequence). The untrack wiring tests patch p._untrack_scratchpad directly -
-# the surface the rebound body reads via globals(). The plan-conflict
-# intercept is exported on the same terms: it shells out to git and calls the
-# overlord role, so under pytest it stays absent from pipeline.server and
-# every pre-existing check_story_status test keeps its exact subprocess.run
-# call sequence.
-if "pytest" not in sys.modules:
-    _server.start_detached_grade = start_detached_grade
-    _server.collect_detached_grade = collect_detached_grade
-    _server._untrack_scratchpad = _untrack_scratchpad
-    _server._plan_conflict_intercept = _plan_conflict_intercept
+    # The post-agent scratchpad untrack has the detached-grade primitives'
+    # reason AND one of its own: it shells out to git, so exporting the real
+    # function under pytest would run it inside every pre-existing test that
+    # drives the dead-pid grade path (they stub subprocess.run and pin its call
+    # sequence). The untrack wiring tests patch p._untrack_scratchpad directly -
+    # the surface the rebound body reads via globals(). The plan-conflict
+    # intercept is exported on the same terms: it shells out to git and calls the
+    # overlord role, so under pytest it stays absent from pipeline.server and
+    # every pre-existing check_story_status test keeps its exact subprocess.run
+    # call sequence.
+    if "pytest" not in sys.modules:
+        _server.start_detached_grade = start_detached_grade
+        _server.collect_detached_grade = collect_detached_grade
+        _server._untrack_scratchpad = _untrack_scratchpad
+        _server._plan_conflict_intercept = _plan_conflict_intercept

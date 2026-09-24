@@ -52,6 +52,7 @@ from mcp.server.mcpserver import MCPServer
 
 from app import backend, role_registry
 
+from . import ci as _ci_module
 from . import config_provenance
 from .build_detect import (  # noqa: F401
     _acceptance_rel_paths,
@@ -111,6 +112,9 @@ from .ci import (  # noqa: F401
     _reverify_acceptance,
     _reverify_build,
 )
+
+# Rebind the ci helpers that read server globals (see ci.bind_to_server).
+_ci_module.bind_to_server(sys.modules[__name__])
 
 # Concurrency: slot accounting, zombie reaping, plan lock, heavy lock.
 # PLAN_DIR is read as a free var; plan_dir fixture patches both p.PLAN_DIR
@@ -774,10 +778,13 @@ def dispatch_story(plan_name: str, story_key: str) -> dict[str, Any]:
     return _service.dispatch_story(plan_name, story_key)
 
 
-from pipeline.story_status import check_story_status
+from pipeline import story_status as _story_status
 
-# check_story_status is already rebound onto this module's __dict__ by
-# story_status.py (types.FunctionType trick, see there) so its globals
+_story_status.bind_to_server(sys.modules[__name__])
+check_story_status = _story_status.check_story_status
+
+# check_story_status is rebound onto this module's __dict__ by
+# story_status.bind_to_server (types.FunctionType trick, see there) so its globals
 # resolve against pipeline.server. mcp.tool() only registers it -- it does
 # not wrap or copy the function -- so identity/__code__/__globals__ survive.
 check_story_status = mcp.tool()(check_story_status)

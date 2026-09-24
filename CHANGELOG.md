@@ -7,6 +7,80 @@ This is a single-maintainer research project rather than a maintained product
 with an SLA - see the README's "Reliability & limitations" for what that means
 in practice.
 
+## [0.5.0] - 2026-09-24
+
+### Added
+
+**Local-dispatch convergence (LDC)**
+
+- A local agent that reaches its step cap now finishes as done when its
+  branch carries production changes against the default branch and the
+  full suite and lint pass, instead of burning a rework cycle on work that
+  already landed. A rework redispatch that produced no new commit starts
+  the next attempt from a fresh context seeded with a root-cause
+  diagnosis, and a third `restore_file` on the same path in one run is
+  refused (#932, #933, #937, #938).
+- The test-author phase is skipped for stories whose declared `files` are
+  all docs or config, and its prompt now carries a size budget and asks
+  for structural assertions rather than prose wording (#928, #934).
+- Each completed plan's summary, including a per-story first-pass-clean
+  verdict, is written to `<plan>.report.md` in `PLAN_DIR` (#931, #936).
+
+### Changed
+
+- **Re-ingesting an already-ingested plan is rejected when any story lacks
+  an explicit `key`.** Such a re-ingest used to mint duplicate stories
+  that dispatched concurrently; give every story a `key` to re-ingest
+  (#929).
+- `triage.py`, `service.py` and `server.py` were each brought under 1000
+  lines, extracting `triage_patch_acceptance`, `triage_story_actions`,
+  `service_decisions`, `service_role_config` and
+  `server_tools_lifecycle` as their own modules. No behavior change
+  (#941-#944, #946).
+- Every `pipeline` module now imports cold, in any order - the remaining
+  import-order dependencies on `pipeline.server` were removed and the
+  stale comments that described them corrected (#966-#969, #971-#974).
+- Improved the descriptions of the lowest-scoring MCP tools (#927).
+
+### Fixed
+
+**Dispatch & merge**
+
+- A story's bare registry model name now resolves to its tag instead of
+  silently falling back to the default local model (#930).
+- A worktree whose HEAD is detached is re-attached to the story branch
+  before the rebase, or the story is parked when re-attaching would
+  orphan commits (#965).
+- A rescoped story's PR title is refreshed when the PR already exists, so
+  the squash commit subject describes the final work (#945).
+
+**Local harness**
+
+- A capped `view_file` result is cut on a line boundary and says the file
+  on disk is intact, so a weak executor no longer "repairs" a file that
+  only looked truncated; the scope gate's revert advice is now runnable on
+  the local harness (#958, #961).
+
+**Reporting accuracy**
+
+- The plan rollup no longer counts the synthetic uncorrelated bucket as a
+  story, collapses metric groups that share a story key, and counts
+  watchdog kills and reviewer send-backs as rework cycles (and a reviewer
+  send-back as a dirty first pass). Per-story metric, sizing-auto-route
+  and preflight-override notices carry their story key; step-cap and
+  give-up rebriefs emit `brief_patched`; retry-cap notices render the cap
+  instead of an object address (#948-#951, #954-#957, #959, #960).
+
+**Dashboard**
+
+- A long multi-line notification toast now renders cleanly (#953).
+
+**Test determinism**
+
+- Two tests that raced git's background auto-maintenance or the shared
+  advisory fetch lock across xdist workers are now deterministic (#935,
+  #975).
+
 ## [0.4.0] - 2026-09-23
 
 ### Added

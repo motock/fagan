@@ -19,21 +19,15 @@ Workflow / this story's brief for the rationale.
 The source-level guard is membership-only per module (not a total count),
 since a later story may legitimately add more references.
 """
-# ruff: noqa: I001 - import order below is deliberate, not disorganized:
-# `from pipeline import server as p` must run BEFORE `import pipeline.ci`
-# et al. so pipeline.server (which transitively imports ci/advance/merge at
-# module load) finishes initializing first; isort's alphabetical sort would
-# put pipeline.ci ahead of pipeline.server and reintroduce the circular
-# import this ordering avoids.
+# ruff: noqa: I001
+# Import order below is kept as authored; it is not load-bearing (every pipeline
+# module imports cold, see tests/unit/test_hub_satellite_cold_imports.py).
 import inspect
 import json
 from pathlib import Path
 
 import pytest
 
-# pipeline.server transitively imports ci/advance/merge/plan_completion at
-# module load; import it first so those submodule imports below resolve
-# against already-initialized modules instead of tripping a circular import.
 from pipeline import server as p
 
 import pipeline.advance as adv

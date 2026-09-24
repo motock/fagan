@@ -36,9 +36,9 @@ from pathlib import Path
 
 import pytest
 
-# Import pipeline.server FIRST: pipeline.triage -> build_detect -> server ->
-# triage is a circular import, so importing pipeline.triage standalone raises
-# ImportError. Importing the server module first breaks the cycle.
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server
 import pipeline.triage
 from pipeline import triage as triage_mod

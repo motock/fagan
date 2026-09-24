@@ -26,12 +26,8 @@ is removed from ``advance.py``.
 """
 
 # ruff: noqa: I001
-# Import order below is deliberate, not disorganized: ``pipeline.server``
-# transitively imports advance/ci/merge at module load, so importing it before
-# ``pipeline.advance`` keeps that submodule import resolving against an
-# already-initialized module (the same ordering test_advance_park_event.py
-# documents). isort's alphabetical sort would put ``pipeline.advance`` first
-# and reintroduce the circular import this ordering avoids.
+# Import order below is kept as authored; it is not load-bearing (every pipeline
+# module imports cold, see tests/unit/test_hub_satellite_cold_imports.py).
 import copy
 import json
 import re

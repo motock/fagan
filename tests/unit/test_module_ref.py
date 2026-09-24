@@ -18,9 +18,9 @@ import types
 
 import pytest
 
-# Import pipeline.server FIRST: pipeline.advance -> server -> advance is a
-# circular import, so importing a pipeline submodule standalone can raise
-# ImportError. Importing the server module first breaks the cycle.
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server
 import pipeline.service
 from pipeline import module_ref as module_ref_mod

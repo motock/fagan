@@ -47,11 +47,6 @@ from pathlib import Path
 
 import pytest
 
-# Import pipeline.server FIRST: pipeline.triage imports pipeline.build_detect,
-# which imports pipeline.server, which imports pipeline.triage.run_triage_sweep.
-# Importing pipeline.triage first therefore trips a circular import; importing
-# the server first lets that chain resolve (same reason the sibling triage test
-# modules import server before triage).
 import pipeline.server
 import pipeline.triage
 from pipeline import server

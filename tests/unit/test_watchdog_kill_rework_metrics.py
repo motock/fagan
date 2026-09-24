@@ -41,9 +41,8 @@ from pathlib import Path
 
 import pytest
 
-# Import server BEFORE story_status: story_status rebinds check_story_status
-# against pipeline.server's namespace, and importing story_status first trips
-# the module-level import cycle (story_status <-> server).
+# Import the server: it binds story_status onto its own namespace at load
+# (story_status.bind_to_server), which these tests rely on.
 from pipeline import server as p
 from pipeline import story_metrics, story_status
 

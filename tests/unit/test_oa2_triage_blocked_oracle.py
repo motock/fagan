@@ -11,11 +11,10 @@ candidate statuses. These tests therefore assert MEMBERSHIP only - never the
 exact set, the total count, or the ordering of candidates.
 """
 
-# Import pipeline.server FIRST: pipeline.triage -> build_detect -> server ->
-# triage is a circular import, so importing pipeline.triage standalone raises
-# ImportError. Importing the server module first breaks the cycle. Same idiom as
-# tests/unit/test_triage_cap_silent_skip.py.
-import pipeline.server  # noqa: F401  (breaks the triage <-> server cycle)
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
+import pipeline.server  # noqa: F401
 from pipeline import triage as triage_mod
 
 

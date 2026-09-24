@@ -17,10 +17,6 @@ import subprocess
 
 import pytest
 
-# Import pipeline.server FIRST: pipeline.review_orchestrator -> server ->
-# review_orchestrator is a circular import, so importing the orchestrator
-# standalone raises ImportError. Importing the server module first breaks the
-# cycle (same idiom as tests/unit/test_triage_cap_silent_skip.py).
 import pipeline.server as p
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers

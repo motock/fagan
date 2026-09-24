@@ -33,10 +33,10 @@ import subprocess
 
 import pytest
 
-# Import pipeline.server FIRST: pipeline.scope_gate is imported through the
-# same package whose submodules form a circular import (pipeline.advance on its
-# own raises ImportError). Importing the server module first breaks the cycle.
-import pipeline.server  # noqa: F401  (import-order side effect only)
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
+import pipeline.server  # noqa: F401
 from pipeline import scope_gate
 
 # ---------------------------------------------------------------------------

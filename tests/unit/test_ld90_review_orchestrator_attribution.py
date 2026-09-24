@@ -23,8 +23,7 @@ from tests.unit._pipeline_mcp_server_test_helpers import (
 )
 
 # pipeline.server imports pipeline.review_orchestrator at module load, so the
-# module object is already in sys.modules. Importing it directly here instead
-# would re-enter that circular import from the other side and fail.
+# module object is already in sys.modules.
 ro = sys.modules["pipeline.review_orchestrator"]
 
 

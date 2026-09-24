@@ -16,11 +16,9 @@ from pathlib import Path
 
 import pytest
 
-# Import pipeline.server alongside pipeline.review: pipeline.* modules
-# participate in a circular import, so importing a pipeline submodule
-# standalone can raise ImportError. Importing the server module in the same
-# block breaks the cycle (pipeline.review itself imports cleanly, so the
-# alphabetical order ruff enforces is safe here).
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.review as review_mod
 import pipeline.server  # noqa: F401
 

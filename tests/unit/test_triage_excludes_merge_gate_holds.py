@@ -23,11 +23,9 @@ import importlib
 
 import pytest
 
-# pipeline.triage -> build_detect -> server -> triage is a circular import, so
-# importing pipeline.triage standalone raises ImportError. Importing the server
-# module first breaks the cycle (same trick as
-# tests/unit/test_triage_cap_silent_skip.py); importlib keeps the side-effect
-# import explicit and lint-clean.
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 importlib.import_module("pipeline.server")
 
 from pipeline import triage

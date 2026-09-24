@@ -816,12 +816,15 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
     or parsing results in a default ruling that parks the story for a human
     and logs a warning containing only the exception type.
     """
+    stage = "policy"
     try:
         policy = _load_policy()
         # Build prompt
         prompt = f"{policy}\nTRIAGE QUESTION: this story is terminal (status={story.get('status', '?')}). Decide what to do about it.\nEVIDENCE:\n{evidence}\nPlease respond with the following format:\nRULING: ...\nTIER: ...\nRISK: ...\nRATIONALE: ...\nNOTIFY_USER: yes/no\nACTION: ..."
+        stage = "overlord"
         # Call overlord
         raw = _invoke_overlord(prompt, plan_role_config=_plan_role_config(plan_name))
+        stage = "parse"
         # Parse ruling
         ruling = _parse_ruling(raw or "")
     except Exception as exc:  # pragma: no cover - fail open
@@ -829,12 +832,20 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
             "ruling": "",
             "tier": "",
             "risk": "",
-            "rationale": f"triage failed open: {type(exc).__name__}",
+            "rationale": f"triage failed open at {stage}: {type(exc).__name__}",
             "notify_user": True,
             "action": "park_for_human",
             "failed_open": True,
+            "failed_stage": stage,
         }
-        logging.getLogger("pipeline").warning(type(exc).__name__)
+        logging.getLogger("pipeline").warning(
+            "triage failed open for story %s in plan %s at stage %s: %s (correlation_id=%s)",
+            story_key,
+            plan_name,
+            stage,
+            _exception_type_chain(exc),
+            story.get("correlation_id") or "-",
+        )
     else:
         ruling["failed_open"] = False
     # Append decision record

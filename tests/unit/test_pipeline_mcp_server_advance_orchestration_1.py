@@ -2,6 +2,7 @@
 
 Split out of test_pipeline_mcp_server.py to keep it under the project's line-count target; shared fixtures/helpers moved to tests.unit._pipeline_mcp_server_test_helpers.
 """
+import contextlib
 import json
 import subprocess
 
@@ -894,6 +895,14 @@ def test_dispatch_story_fresh_creates_worktree_and_dispatches(
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")),
     )
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    # Pin the advisory git lock as acquired: this test asserts the command
+    # sequence of a fresh dispatch, not lock arbitration. Left real, the
+    # fetch is legitimately skipped whenever another xdist worker holds the
+    # shared repo lock at that instant.
+    monkeypatch.setattr(
+        p, "_try_acquire_git_lock",
+        lambda root: contextlib.nullcontext(True),
+    )
 
     result = p.dispatch_story("ds", "S1")
 

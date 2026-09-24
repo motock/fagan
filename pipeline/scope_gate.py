@@ -32,6 +32,25 @@ SCOPE_GATE_HEADER = (
     "declared `files` scope."
 )
 
+# The remedy appended to the gate's REQUEST_CHANGES feedback. Its reader may be
+# a local agent whose bash tool refuses destructive git commands and whose
+# restore_file tool restores from the LAST COMMIT, which already contains the
+# out-of-scope change. So the remedy must be runnable there: it names only
+# commands that harness allows and never spells out a blocked one.
+SCOPE_GATE_REMEDY = (
+    "Revert each listed change so the branch matches the base again. "
+    "For a file that exists on the base branch, restore its exact base "
+    "content with `git show origin/<default-branch>:<path> > <path>` (the "
+    "default branch as fetched from origin, e.g. origin/master; never a "
+    "possibly stale local branch). "
+    "For a file this branch added, run `git rm <path>`. "
+    "Do not use restore_file for this: it restores from the last commit, "
+    "which already contains the out-of-scope change. "
+    "Then commit the revert in the same step, so the last commit stops "
+    "carrying it. "
+    "If the brief requires a listed change, stop and report the conflict."
+)
+
 # Upper bound for each git invocation; the gate fails open on timeout.
 _GIT_TIMEOUT_SECONDS = 30
 

@@ -24,6 +24,18 @@ import subprocess
 RESTORE_FILE_MAX_PER_PATH = 2
 
 
+def _cut_view_at_line_boundary(formatted: str, cap: int = 3000) -> tuple[str, int]:
+    """Longest prefix of ``formatted`` that ends on a line boundary within ``cap``
+    characters, plus how many whole lines it holds. When even the first line is
+    longer than ``cap`` there is no boundary to cut at: hard-cut at ``cap`` and
+    report 0 lines, so the caller can say the cut fell inside a line."""
+    boundary = formatted.rfind("\n", 0, cap)
+    if boundary == -1:
+        return formatted[:cap], 0
+    kept = formatted[: boundary + 1]
+    return kept, kept.count("\n")
+
+
 def run_tool_impl(origin, fn, args) -> str:
     if fn in ("create_file", "str_replace") and origin["is_oracle_path"](args.get("path", "")):
         return (f"ERROR: {args['path']} is the read-only acceptance suite and "
@@ -235,18 +247,32 @@ def run_tool_impl(origin, fn, args) -> str:
             formatted = "".join(f"{start + i:4d}| {ln}" for i, ln in enumerate(selected))
             if len(formatted) <= 3000:
                 return formatted
+            kept, shown = _cut_view_at_line_boundary(formatted)
+            if shown == 0:
+                return (
+                    kept
+                    + f"\n... [truncated inside line {start}, which is longer than the view cap; "
+                      f"the file itself is intact - call view_file again with a narrower line_start/line_end range]"
+                )
             return (
-                formatted[:3000]
-                + f"\n... [truncated; showing {args['path']} lines {start}-{end} — "
-                  f"call view_file again with a narrower line_start/line_end range to see more]"
+                kept
+                + f"... [truncated after line {start + shown - 1} of the requested {start}-{end}; "
+                  f"the file itself is intact - call view_file again with line_start={start + shown} to continue]"
             )
         formatted = "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))
         if len(formatted) <= 3000:
             return formatted
+        kept, shown = _cut_view_at_line_boundary(formatted)
+        if shown == 0:
+            return (
+                kept
+                + f"\n... [truncated inside line 1, which is longer than the view cap; the file itself is intact "
+                  f"({len(lines)} lines) - call view_file again with line_start/line_end to narrow the view]"
+            )
         return (
-            formatted[:3000]
-            + f"\n... [truncated; {args['path']} has {len(lines)} lines total — "
-              f"call view_file again with line_start/line_end to see more]"
+            kept
+            + f"... [truncated after line {shown} of {len(lines)}; the file itself is intact - "
+              f"call view_file again with line_start={shown + 1} (and line_end) to continue]"
         )
     if fn == "restore_file":
         path_str = args.get("path", "")

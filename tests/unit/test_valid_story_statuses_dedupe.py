@@ -4,9 +4,8 @@
 ``pipeline/service.py`` each defined their own frozenset, and both listed
 ``"done"`` twice. ``pipeline/server.py`` imports the name FROM ``pipeline.ci``,
 so ci.py's copy is canonical; service.py must resolve the same object lazily
-through its ``_ServerRef`` idiom (a plain cross-module import would create a
-circular import -- ci.py has a late ``from . import server as _server`` and
-server.py imports ``_VALID_STORY_STATUSES`` back from ci.py at load time).
+through its ``_ServerRef`` idiom (a plain cross-module import would be circular:
+server.py imports ``_VALID_STORY_STATUSES`` from ci.py at load time).
 
 These tests fail until the duplicate is removed and service.py delegates.
 """

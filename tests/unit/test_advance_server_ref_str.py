@@ -7,14 +7,13 @@ message that interpolates one rendered ``<pipeline.advance._ServerRef object at
 DISPATCH_MAX_ATTEMPTS retry notice) and ``pipeline/advance_merge.py`` x3 (the
 MERGE_MAX_ATTEMPTS notices, reached through the ``_ModuleRef`` chain).
 
-The import order below is load-bearing: ``pipeline.advance`` -> ``pipeline.dispatch``
--> ``pipeline.build_detect`` -> ``pipeline.server`` -> ``pipeline.advance`` is a
-circular import, so ``pipeline.server`` must be primed first.
+The import order below is kept as authored; it is not load-bearing (every pipeline
+module imports cold, see tests/unit/test_hub_satellite_cold_imports.py).
 """
 
-import json  # noqa: I001  (the priming import below must stay first)
+import json  # noqa: I001
 
-import pipeline.server  # primes the package before pipeline.advance
+import pipeline.server
 
 import pipeline.advance
 import pipeline.advance_merge

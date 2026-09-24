@@ -44,14 +44,10 @@ import inspect
 
 import pytest
 
-# ``pipeline.triage`` imports ``pipeline.build_detect``, which imports
-# ``pipeline.server``, which imports ``run_triage_sweep`` back out of
-# ``pipeline.triage``.  Importing ``pipeline.triage`` first therefore trips a
-# pre-existing circular import (the same thing happens to
-# tests/unit/test_triage_execute_deferred.py when it is run on its own).
-# Importing ``pipeline.server`` first resolves the cycle, so this module can be
-# run standalone as well as as part of the whole suite.
-import pipeline.server  # noqa: F401  (imported for its side effect: breaks the cycle)
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
+import pipeline.server  # noqa: F401
 from pipeline import triage
 
 # ---------------------------------------------------------------------------

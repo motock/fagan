@@ -32,9 +32,9 @@ from pathlib import Path
 
 import pytest
 
-# Import pipeline.server FIRST: pipeline.ingest -> build_detect -> server ->
-# ingest is a circular import, so importing a pipeline submodule standalone can
-# raise ImportError. Importing the server module first breaks the cycle.
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server  # noqa: F401
 from pipeline import ingest as ingest_mod
 from pipeline import server as p

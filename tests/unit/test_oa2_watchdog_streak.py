@@ -41,13 +41,12 @@ from pathlib import Path
 
 import pytest
 
-# Import server BEFORE story_status: story_status rebinds check_story_status
-# against pipeline.server's namespace, and importing story_status first trips
-# the module-level import cycle (story_status <-> server).
+# Import the server: it binds story_status onto its own namespace at load
+# (story_status.bind_to_server), which these tests rely on.
 from pipeline import concurrency as pcon
 from pipeline import persistence as ppers
 from pipeline import server as p
-from pipeline import story_status  # noqa: F401  (triggers the rebinding/export)
+from pipeline import story_status  # noqa: F401
 from tests.unit._pipeline_mcp_server_test_helpers import (  # noqa: F401
     _STEP_CAP_MARKER_LOCAL,
     _clear_caches,

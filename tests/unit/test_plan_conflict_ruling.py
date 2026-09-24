@@ -28,9 +28,9 @@ from pathlib import Path
 
 import pytest
 
-# Import pipeline.server FIRST: pipeline.* modules form an import cycle, so
-# importing a leaf module standalone can raise ImportError.  Importing the
-# server module first breaks the cycle (see tests/unit/test_triage_cap_silent_skip.py).
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server
 from pipeline import plan_conflict_ruling as pcr
 from pipeline.service import _ServerRef

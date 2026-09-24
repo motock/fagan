@@ -23,13 +23,10 @@ No real backend, git repo or network is ever contacted.
 """
 
 # ruff: noqa: I001, F811
-# Import order below is deliberate, not disorganized: `from pipeline import
-# server as p` must run BEFORE `import pipeline.advance` so pipeline.server
-# (which transitively imports advance/ci/merge at module load) finishes
-# initializing first; isort's alphabetical sort would put pipeline.advance
-# ahead of pipeline.server and reintroduce the circular import this ordering
-# avoids.  F811 is disabled because the imported `plan_dir` fixture is used
-# only as a test-function parameter name.
+# Import order below is kept as authored; it is not load-bearing (every pipeline
+# module imports cold, see tests/unit/test_hub_satellite_cold_imports.py).
+# F811 is disabled because the imported `plan_dir` fixture is used only as a
+# test-function parameter name.
 import ast
 import inspect
 import json

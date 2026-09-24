@@ -31,11 +31,9 @@ import json
 
 import pytest
 
-# Import pipeline.server first: pipeline.triage -> build_detect -> server ->
-# triage is a pre-existing import cycle that only bites when triage is the
-# first pipeline module imported (tests/unit/test_triage_sweep.py has the same
-# standalone-collection failure). Importing server first initializes triage
-# fully, so this module is runnable on its own as well as in the full suite.
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server
 import pipeline.triage
 from pipeline import triage as triage_mod

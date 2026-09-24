@@ -15,15 +15,13 @@ boundary) with canned ``CompletedProcess`` objects keyed on argv.
 import subprocess
 import typing
 
-# Import pipeline.server FIRST: the pipeline package has a pre-existing import
-# cycle (e.g. `import pipeline.advance` on its own raises ImportError), so the
-# server module must initialize before any other pipeline.* import here. Same
-# idiom as tests/unit/test_triage_cap_silent_skip.py.
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server
 from pipeline import plan_conflict as plan_conflict_mod
 
-# The mandated server-first import is itself the assertion that the cycle is
-# broken: importing this test module at all would raise ImportError otherwise.
+# Sanity check that the server module resolved.
 assert pipeline.server.__name__ == "pipeline.server"
 
 # ---------------------------------------------------------------------------

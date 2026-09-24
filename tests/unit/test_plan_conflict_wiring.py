@@ -22,10 +22,9 @@ import subprocess
 
 import pytest
 
-# Import pipeline.server FIRST: pipeline.story_status -> build_detect -> server
-# -> ... is a circular import, so importing a pipeline submodule standalone can
-# raise ImportError. Importing the server module first breaks the cycle; the
-# import is for that side effect, hence the F401 exemption.
+# pipeline.server is imported explicitly; import order is not required for
+# cold-importability (every pipeline module imports cold, see
+# tests/unit/test_hub_satellite_cold_imports.py).
 import pipeline.server  # noqa: F401
 from pipeline import plan_conflict_ruling as pcr
 from pipeline import server as p

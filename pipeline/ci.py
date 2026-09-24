@@ -836,27 +836,32 @@ _VALID_STORY_STATUSES = frozenset(
 )
 
 
-# Rebind the functions' globals to pipeline.server's namespace so that
-# bare-name reads inside the bodies (e.g. ``_store``, ``_validate_key``,
-# ``get_ticket_provider``, ``_record_retro_pending``) resolve against
-# pipeline.server at call time. This preserves the original behavior where the
-# functions lived in pipeline.server and saw monkeypatched module globals.
-from . import server as _server
+def bind_to_server(server: Any) -> None:
+    """Rebind the two server-global-reading functions onto ``server``'s namespace.
 
-_mark_story_done_impl = types.FunctionType(
-    _mark_story_done_impl.__code__,
-    _server.__dict__,
-    _mark_story_done_impl.__name__,
-    _mark_story_done_impl.__defaults__,
-    _mark_story_done_impl.__closure__,
-)
-_record_retro_pending = types.FunctionType(
-    _record_retro_pending.__code__,
-    _server.__dict__,
-    _record_retro_pending.__name__,
-    _record_retro_pending.__defaults__,
-    _record_retro_pending.__closure__,
-)
+    Bare-name reads inside their bodies (``_store``, ``_validate_key``,
+    ``get_ticket_provider``, ``_record_retro_pending``) resolve against
+    pipeline.server at call time, so tests patching pipeline.server still land.
+    pipeline.server calls this right after importing this module, so this module
+    itself never imports the server and can be imported cold.
+    """
+    global _mark_story_done_impl, _record_retro_pending
+    _mark_story_done_impl = types.FunctionType(
+        _mark_story_done_impl.__code__,
+        server.__dict__,
+        _mark_story_done_impl.__name__,
+        _mark_story_done_impl.__defaults__,
+        _mark_story_done_impl.__closure__,
+    )
+    _record_retro_pending = types.FunctionType(
+        _record_retro_pending.__code__,
+        server.__dict__,
+        _record_retro_pending.__name__,
+        _record_retro_pending.__defaults__,
+        _record_retro_pending.__closure__,
+    )
+    server._mark_story_done_impl = _mark_story_done_impl
+    server._record_retro_pending = _record_retro_pending
 
 
 __all__ = [

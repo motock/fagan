@@ -1,11 +1,13 @@
 """The decision, review, merge and plan-control MCP tools, moved verbatim
 from pipeline/server.py (line-count target).
 
-They register on pipeline.server's own FastMCP instance (mcp is a
-_ModuleRef to it) when pipeline.server imports this module, and
-pipeline.server re-exports every tool name, so p.request_decision is still
-the registered object. _service resolves through pipeline.server at call
-time, so tests patching pipeline.server._service keep landing.
+They are plain functions here: pipeline.server registers each one on its own
+FastMCP instance (``mcp.tool()(fn)``, which returns ``fn`` itself) and
+re-exports every tool name, so p.request_decision is still the registered
+object. Keeping the registration in pipeline.server means this module never
+imports the server at import time and can be imported cold. _service resolves
+through pipeline.server at call time, so tests patching pipeline.server._service
+keep landing.
 """
 
 from typing import Any
@@ -13,10 +15,8 @@ from typing import Any
 from .module_ref import _ModuleRef
 
 _service = _ModuleRef("pipeline.server", "_service")
-mcp = _ModuleRef("pipeline.server", "mcp")
 
 
-@mcp.tool()
 def request_decision(
     plan_name: str,
     story_key: str,
@@ -61,7 +61,6 @@ def request_decision(
     )
 
 
-@mcp.tool()
 def list_decisions(plan_name: str) -> list[dict]:
     """
     Return the overlord's decision log for a plan: every ruling ever made
@@ -83,7 +82,6 @@ def list_decisions(plan_name: str) -> list[dict]:
     return _service.list_decisions(plan_name)
 
 
-@mcp.tool()
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
@@ -97,7 +95,6 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     return _service.review_story(plan_name, story_key)
 
 
-@mcp.tool()
 def advance_pipeline(plan_name: str) -> dict[str, Any]:
     """
     Run one orchestration tick: dispatch every ready story (deps satisfied),
@@ -128,7 +125,6 @@ def advance_pipeline(plan_name: str) -> dict[str, Any]:
     return _service.advance_pipeline(plan_name)
 
 
-@mcp.tool()
 def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Merge a reviewed story's PR into the default branch, right now, on the
@@ -165,7 +161,6 @@ def approve_merge(plan_name: str, story_key: str) -> dict[str, Any]:
 
 
 
-@mcp.tool()
 def pause_plan(plan_name: str) -> dict[str, Any]:
     """
     Stop advance_pipeline/advance_all_plans from touching this one plan -
@@ -177,14 +172,12 @@ def pause_plan(plan_name: str) -> dict[str, Any]:
     return _service.pause_plan(plan_name)
 
 
-@mcp.tool()
 def resume_plan(plan_name: str) -> dict[str, Any]:
     """Clear a pause set by pause_plan so this plan's stories are eligible
     for dispatch/review/merge on the next advance_pipeline tick again."""
     return _service.resume_plan(plan_name)
 
 
-@mcp.tool()
 def advance_all_plans() -> dict[str, Any]:
     """
     Run advance_pipeline on every plan that has been ingested (has a

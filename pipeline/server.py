@@ -967,16 +967,18 @@ from pipeline.review_orchestrator import (  # verbatim move; re-export for monke
     _verify_reviewer_auto_fix,
 )
 
-from .server_tools_lifecycle import (  # noqa: E402,F401
-    advance_all_plans,
-    advance_pipeline,
-    approve_merge,
-    list_decisions,
-    pause_plan,
-    request_decision,
-    resume_plan,
-    review_story,
-)
+# The lifecycle tools are plain functions; registering them here keeps that
+# module free of an import-time dependency on this one.
+from . import server_tools_lifecycle as _lifecycle_tools
+
+request_decision = mcp.tool()(_lifecycle_tools.request_decision)
+list_decisions = mcp.tool()(_lifecycle_tools.list_decisions)
+review_story = mcp.tool()(_lifecycle_tools.review_story)
+advance_pipeline = mcp.tool()(_lifecycle_tools.advance_pipeline)
+approve_merge = mcp.tool()(_lifecycle_tools.approve_merge)
+pause_plan = mcp.tool()(_lifecycle_tools.pause_plan)
+resume_plan = mcp.tool()(_lifecycle_tools.resume_plan)
+advance_all_plans = mcp.tool()(_lifecycle_tools.advance_all_plans)
 
 if __name__ == "__main__":
     mcp.run()

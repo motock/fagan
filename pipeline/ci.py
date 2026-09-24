@@ -747,8 +747,9 @@ def _record_retro_pending(plan_name: str, story_count: int) -> None:
     if any(line.startswith(marker) for line in existing_lines):
         return
     date = datetime.now(timezone.utc).date().isoformat()
+    noun = "story" if story_count == 1 else "stories"
     with RETRO_PENDING_PATH.open("a") as f:  # noqa: F821
-        f.write(f"- {plan_name} \u2014 completed {date}, {story_count} stories\n")
+        f.write(f"- {plan_name} \u2014 completed {date}, {story_count} {noun}\n")
 
 
 def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:

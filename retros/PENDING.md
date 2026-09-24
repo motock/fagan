@@ -231,3 +231,4 @@ if a precise date is needed when writing one of these up.
 - reporting-attribution-fix — completed 2026-09-23, 4 stories
 - reporting-layer-followups — completed 2026-09-24, 5 stories
 - post-rlf-hardening — completed 2026-09-24, 4 stories
+- detached-head-guard — completed 2026-09-24, 1 story

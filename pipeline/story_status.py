@@ -52,6 +52,7 @@ from .escalation import (
     _escalate_review_to_claude,
     _escalate_to_claude,
     _escalation_label,
+    _escalation_target,
 )
 from .git_ops import _commit_wip, _untrack_scratchpad
 from .parsers import (
@@ -226,7 +227,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         if (
                             fallback_model
                             and current_model != fallback_model
-                            and story.get("backend", "local") == "local"
+                            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
                         ):
                             story["model"] = fallback_model
                             _notify_user(  # noqa: F821
@@ -241,8 +242,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
                         elif (
                             not fallback_model
                             and _auto_escalation_enabled()  # noqa: F821
-                            and story.get("backend", "local") == "local"
+                            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
                             and not story.get("escalated")
+                            and _escalation_target() != (story.get("backend"), story.get("model"))
                         ):
                             _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
                             _notify_user(  # noqa: F821
@@ -379,7 +381,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         if (
             fallback_model
             and current_model != fallback_model
-            and story.get("backend", "local") == "local"
+            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
             and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
         ):
             story["model"] = fallback_model
@@ -397,8 +399,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         elif (
             not fallback_model
             and _auto_escalation_enabled()  # noqa: F821
-            and story.get("backend", "local") == "local"
+            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
             and not story.get("escalated")
+            and _escalation_target() != (story.get("backend"), story.get("model"))
             and story["infra_failure_streak"] >= INFRA_FAILURE_FALLBACK_THRESHOLD
         ):
             _escalate_to_claude(manifest, plan_name, story_key, manifest_path)
@@ -471,7 +474,7 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         if (
             fallback_model
             and current_model != fallback_model
-            and story.get("backend", "local") == "local"
+            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
         ):
             if story.get("step_cap_streak_model") == current_model:
                 story["step_cap_streak"] = story.get("step_cap_streak", 0) + 1
@@ -494,8 +497,9 @@ def check_story_status(plan_name: str, story_key: str) -> dict[str, Any]:
         elif (
             not fallback_model
             and _auto_escalation_enabled()  # noqa: F821
-            and story.get("backend", "local") == "local"
+            and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
             and not story.get("escalated")
+            and _escalation_target() != (story.get("backend"), story.get("model"))
         ):
             # No local_model_fallback opt-in for this plan: under auto
             # dispatch, escalate to Claude instead of cycling on the same

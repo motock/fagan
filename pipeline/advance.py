@@ -139,6 +139,8 @@ _default_branch = _ServerRef("_default_branch")
 _escalate_to_claude = _ServerRef("_escalate_to_claude")
 _escalate_to_local_fallback_model = _ServerRef("_escalate_to_local_fallback_model")
 _escalation_label = _ServerRef("_escalation_label")
+_escalation_target = _ServerRef("_escalation_target")
+_LOCAL_BACKEND_NAMES = _ServerRef("_LOCAL_BACKEND_NAMES")
 _mark_plane_done = _ServerRef("_mark_plane_done")
 _maybe_record_retro = _ServerRef("_maybe_record_retro")
 _mcp_restart_notice = _ServerRef("_mcp_restart_notice")
@@ -660,8 +662,9 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                 # non-auto backend, is terminal.
                 if (
                     _auto_escalation_enabled()
-                    and story.get("backend") == "local"
+                    and story.get("backend") in _LOCAL_BACKEND_NAMES
                     and not story.get("escalated")
+                    and _escalation_target() != (story.get("backend"), story.get("model"))
                 ):
                     manifest = json.loads(manifest_path.read_text())
                     _escalate_to_claude(manifest, plan_name, key, manifest_path)
@@ -679,7 +682,7 @@ def _advance_pipeline_locked_impl(plan_name: str) -> dict[str, Any]:
                     summary["notify"].append(key)
                 elif (
                     fallback_model
-                    and story.get("backend") == "local"
+                    and story.get("backend") in _LOCAL_BACKEND_NAMES
                     and story.get("model") != fallback_model
                     and not story.get("tried_fallback_model")
                 ):

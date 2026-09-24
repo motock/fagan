@@ -25,7 +25,7 @@ from .parsers import _is_transient_backend_exception
 from .review import _first_review_base, build_review_story_context
 from .review_autofix import _verify_reviewer_auto_fix  # noqa: F401
 from .review_refs import _ServerRef
-from .scope_gate import SCOPE_GATE_HEADER, check_branch_scope
+from .scope_gate import SCOPE_GATE_HEADER, SCOPE_GATE_REMEDY, check_branch_scope
 
 # Server-sourced names the moved body references as free variables. Each
 # resolves to the live ``pipeline.server`` binding at call time so
@@ -192,7 +192,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
         reviewer_output = (
             SCOPE_GATE_HEADER + "\n"
             + "\n".join(f"- Blocking: {v}" for v in _scope_violations)
-            + "\nRevert each listed change (git checkout <base> -- <path> for an edit, git rm for an added file) unless the brief requires it; if it does, stop and report the conflict.\n"
+            + "\n" + SCOPE_GATE_REMEDY + "\n"
             + "VERDICT: REQUEST_CHANGES"
         )
         _notify_user(

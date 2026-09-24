@@ -169,12 +169,12 @@ class TestDeferredActionsConstant:
     def test_deferred_actions_is_frozenset(self):
         assert isinstance(triage_mod.DEFERRED_ACTIONS, frozenset)
 
-    def test_deferred_actions_excludes_split_and_contains_repo(self):
+    def test_deferred_actions_excludes_split_and_repo(self):
         assert "split_story" not in triage_mod.DEFERRED_ACTIONS
-        assert "repo_issue" in triage_mod.DEFERRED_ACTIONS
+        assert "repo_issue" not in triage_mod.DEFERRED_ACTIONS
 
-    def test_deferred_actions_contains_only_repo_issue(self):
-        assert triage_mod.DEFERRED_ACTIONS == frozenset({"repo_issue"})
+    def test_deferred_actions_is_empty(self):
+        assert triage_mod.DEFERRED_ACTIONS == frozenset()
 
     def test_deferred_actions_in_all(self):
         assert "DEFERRED_ACTIONS" in pipeline.triage.__all__
@@ -263,40 +263,6 @@ class TestSplitStoryBranch:
 # ---------------------------------------------------------------------------
 
 class TestRepoIssueBranch:
-    def test_repo_issue_parks_and_marks_deferred(
-        self, base_story, repo_ruling, manifest, manifest_path, patched
-    ):
-        result = pipeline.triage.execute_ruling(
-            "cap1", "S2", base_story, repo_ruling, manifest, manifest_path
-        )
-
-        assert result == "park_for_human"
-        assert base_story["status"] == "parked"
-        assert base_story["triage_deferred_action"] == "repo_issue"
-
-    def test_repo_issue_notifies_with_key_and_action(
-        self, base_story, repo_ruling, manifest, manifest_path, patched
-    ):
-        pipeline.triage.execute_ruling(
-            "cap1", "S2", base_story, repo_ruling, manifest, manifest_path
-        )
-
-        assert len(patched["notify_calls"]) >= 1
-        msgs = [c["message"] for c in patched["notify_calls"]]
-        assert any("S2" in m and "repo_issue" in m for m in msgs)
-
-    def test_repo_issue_parked_reason_names_action_not_implemented(
-        self, base_story, repo_ruling, manifest, manifest_path, patched
-    ):
-        pipeline.triage.execute_ruling(
-            "cap1", "S2", base_story, repo_ruling, manifest, manifest_path
-        )
-
-        reason = base_story["parked_reason"]
-        assert "repo_issue" in reason
-        assert "not implemented" in reason.lower()
-        assert "human" in reason.lower()
-
     def test_repo_issue_does_not_escalate(
         self, base_story, repo_ruling, manifest, manifest_path, patched
     ):

@@ -205,8 +205,8 @@ class TestDeferredActionsConstant:
     def test_split_story_is_no_longer_deferred(self):
         assert "split_story" not in triage_mod.DEFERRED_ACTIONS
 
-    def test_repo_issue_is_still_deferred(self):
-        assert "repo_issue" in triage_mod.DEFERRED_ACTIONS
+    def test_repo_issue_is_no_longer_deferred(self):
+        assert "repo_issue" not in triage_mod.DEFERRED_ACTIONS
 
     def test_comment_no_longer_claims_split_story_is_deferred(self):
         block = _deferred_actions_comment_block()
@@ -626,49 +626,6 @@ class TestSplitBudgetExhausted:
 
 
 class TestRepoIssueUnchanged:
-    def test_repo_issue_parks_and_marks_deferred(
-        self, parent_story, repo_ruling, manifest, manifest_path, patched
-    ):
-        result = pipeline.triage.execute_ruling(
-            "cap1", "S2", parent_story, repo_ruling, manifest, manifest_path
-        )
-
-        assert result == "park_for_human"
-        assert parent_story["status"] == "parked"
-        assert parent_story["triage_deferred_action"] == "repo_issue"
-
-    def test_repo_issue_parked_reason_names_action_not_implemented(
-        self, parent_story, repo_ruling, manifest, manifest_path, patched
-    ):
-        pipeline.triage.execute_ruling(
-            "cap1", "S2", parent_story, repo_ruling, manifest, manifest_path
-        )
-
-        reason = parent_story["parked_reason"]
-        assert "repo_issue" in reason
-        assert "not implemented" in reason.lower()
-        assert "human" in reason.lower()
-
-    def test_repo_issue_notifies_with_key_and_action(
-        self, parent_story, repo_ruling, manifest, manifest_path, patched
-    ):
-        pipeline.triage.execute_ruling(
-            "cap1", "S2", parent_story, repo_ruling, manifest, manifest_path
-        )
-
-        msgs = _notify_messages(patched)
-        assert any("S2" in m and "repo_issue" in m for m in msgs)
-
-    def test_repo_issue_creates_no_children(
-        self, parent_story, repo_ruling, manifest, manifest_path, patched
-    ):
-        pipeline.triage.execute_ruling(
-            "cap1", "S2", parent_story, repo_ruling, manifest, manifest_path
-        )
-
-        assert manifest["stories"] == {}
-        assert manifest.get("triage_created_stories", 0) == 0
-
     def test_repo_issue_does_not_escalate(
         self, parent_story, repo_ruling, manifest, manifest_path, patched
     ):

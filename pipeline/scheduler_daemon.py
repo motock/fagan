@@ -4,10 +4,9 @@ Historically an external clock (a launchd plist) fired ``advance_all_plans``
 on a fixed interval. ``SchedulerDaemon`` takes ownership of that cadence so
 the pipeline no longer depends on an external scheduler.
 
-This module must not import from ``pipeline.server`` at module import time —
-``pipeline.server`` imports from this package, and importing it here would
-create a circular import. Any use of ``advance_all_plans`` for a ``__main__``
-entrypoint must import it lazily, inside a function.
+Any use of ``advance_all_plans`` for a ``__main__`` entrypoint must import it
+lazily, inside a function: tests patch ``pipeline.server.advance_all_plans``,
+and a module-level binding would not see the patch.
 """
 import datetime as _dt
 import fcntl
@@ -1005,8 +1004,8 @@ def run_daemon() -> int:
     # the RuntimeError complete() raises today).
     _apply_scheduler_role_call_clamp()
 
-    # Lazy import: pipeline.server imports from this module at import time,
-    # so importing it here at module level would be circular.
+    # Resolved at call time (not at module load) so tests patching
+    # ``pipeline.server.advance_all_plans`` land on this call site.
     from .server import advance_all_plans
 
     daemon = SchedulerDaemon(

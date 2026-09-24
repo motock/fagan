@@ -24,9 +24,7 @@ companion picks up the patched binding at call time.
 Run with: python -m pipeline.companion_server
 """
 
-import importlib.util
 import logging
-import sys
 
 from mcp.server.mcpserver import MCPServer
 
@@ -39,73 +37,6 @@ mcp = MCPServer("pipeline-companion")
 # but routine request chatter doesn't (same suppression as pipeline/server.py).
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-
-class _ColdOracleGateImport:
-    """Import hook that breaks the pipeline's latent oracle_gate import cycle.
-
-    The cycle is pre-existing and latent: pipeline.oracle_gate imports
-    pipeline.build_detect, build_detect imports pipeline.server (to rebind
-    _run_lint_gate's globals), and server imports oracle_gate back - so a
-    COLD ``import pipeline.oracle_gate`` (oracle_gate being the very first
-    pipeline module loaded) dies with "cannot import name
-    'acceptance_digests' from partially initialized module". Production never
-    hits it because oracle_gate is always reached via pipeline.server or
-    pipeline.build_detect, which walk the cycle in a completing order; the
-    full test suite masks it the same way. A foreign harness adopting only
-    this companion (or mock.patch resolving a ``pipeline.oracle_gate.*``
-    target) does hit it, so this hook primes build_detect first - the
-    completing order - whenever oracle_gate would otherwise be the first
-    pipeline module imported, then hands the import system the
-    already-initialized module without executing it a second time (a second
-    exec would re-run server's module body and break the re-export identity
-    tests rely on). The hook is inert once any of the three cycle members is
-    already in sys.modules, and it never fires for this module's own import
-    (companion_server's module scope imports no pipeline submodule).
-    """
-
-    _TARGET = "pipeline.oracle_gate"
-
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname != self._TARGET:
-            return None
-        # Cold only when NONE of the cycle's members is loaded yet; otherwise
-        # the plain import cannot cycle (build_detect partial on disk is
-        # enough for oracle_gate's two names, and a loaded server implies
-        # oracle_gate is already initialized).
-        if any(
-            name in sys.modules
-            for name in (
-                "pipeline.oracle_gate",
-                "pipeline.build_detect",
-                "pipeline.server",
-            )
-        ):
-            return None
-        # Prime the cycle in the order that completes: build_detect ->
-        # server -> oracle_gate (fully initialized) -> back to build_detect.
-        # The re-entrant oracle_gate import this triggers lands here again
-        # with build_detect now in sys.modules, so the guard above returns
-        # None and the nested import proceeds normally.
-        import pipeline.build_detect  # noqa: F401 (the cycle break itself)
-
-        module = sys.modules[self._TARGET]
-        # Hand the already-initialized module to the import system without
-        # re-executing it.
-        return importlib.util.spec_from_loader(
-            self._TARGET, _AlreadyInitializedLoader(), origin=module.__spec__.origin
-        )
-
-
-class _AlreadyInitializedLoader:
-    """Loader that serves an already-initialized module from sys.modules."""
-
-    def create_module(self, spec):
-        return sys.modules[spec.name]
-
-    def exec_module(self, module):
-        # Fully initialized by the priming import; nothing to execute.
-        pass
 
 
 @mcp.tool()
@@ -169,9 +100,6 @@ def acceptance_digests(story: dict) -> dict:
     from pipeline import oracle_gate
 
     return oracle_gate.acceptance_digests(story)
-
-
-sys.meta_path.insert(0, _ColdOracleGateImport())
 
 
 if __name__ == "__main__":

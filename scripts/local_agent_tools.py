@@ -263,18 +263,32 @@ def run_tool_impl(origin, fn, args) -> str:
             formatted = "".join(f"{start + i:4d}| {ln}" for i, ln in enumerate(selected))
             if len(formatted) <= 3000:
                 return formatted
+            kept, shown = _cut_view_at_line_boundary(formatted)
+            if shown == 0:
+                return (
+                    kept
+                    + f"\n... [truncated inside line {start}, which is longer than the view cap; "
+                      f"the file itself is intact - call view_file again with a narrower line_start/line_end range]"
+                )
             return (
-                formatted[:3000]
-                + f"\n... [truncated; showing {args['path']} lines {start}-{end} — "
-                  f"call view_file again with a narrower line_start/line_end range to see more]"
+                kept
+                + f"... [truncated after line {start + shown - 1} of the requested {start}-{end}; "
+                  f"the file itself is intact - call view_file again with line_start={start + shown} to continue]"
             )
         formatted = "".join(f"{i + 1:4d}| {ln}" for i, ln in enumerate(lines))
         if len(formatted) <= 3000:
             return formatted
+        kept, shown = _cut_view_at_line_boundary(formatted)
+        if shown == 0:
+            return (
+                kept
+                + f"\n... [truncated inside line 1, which is longer than the view cap; the file itself is intact "
+                  f"({len(lines)} lines) - call view_file again with line_start/line_end to narrow the view]"
+            )
         return (
-            formatted[:3000]
-            + f"\n... [truncated; {args['path']} has {len(lines)} lines total — "
-              f"call view_file again with line_start/line_end to see more]"
+            kept
+            + f"... [truncated after line {shown} of {len(lines)}; the file itself is intact - "
+              f"call view_file again with line_start={shown + 1} (and line_end) to continue]"
         )
     if fn == "restore_file":
         path_str = args.get("path", "")

@@ -8,6 +8,7 @@ change removes entirely).
 Fixtures (`plan_dir`, `worktree_root`, `agents_dir`) are copied locally per
 this repo's convention - there is no shared conftest.py.
 """
+import contextlib
 import inspect
 import json
 import logging
@@ -240,6 +241,14 @@ def test_dispatch_git_commands_are_fetch_and_worktree_add_from_origin_no_pull(
     monkeypatch.setattr(pt, "plane_request",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no plane")))
     monkeypatch.setattr(p, "_default_branch", lambda: "main")
+    # Pin the advisory git lock as acquired: this test asserts the command
+    # sequence of a fresh dispatch, not lock arbitration. Left real, the
+    # fetch is legitimately skipped whenever another xdist worker holds the
+    # shared repo lock at that instant.
+    monkeypatch.setattr(
+        p, "_try_acquire_git_lock",
+        lambda root: contextlib.nullcontext(True),
+    )
 
     result = p.dispatch_story("cmdshape", "S1")
 

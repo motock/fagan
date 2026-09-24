@@ -19,8 +19,6 @@ patch it land too.
 
 from typing import Any
 
-import pipeline.server as _server
-
 from .parsers import _is_transient_backend_exception
 from .review import _first_review_base, build_review_story_context
 from .review_autofix import _verify_reviewer_auto_fix  # noqa: F401
@@ -409,6 +407,8 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     # unverified -> REQUEST_CHANGES (counts against the rework budget like
     # any other rejection, so an unverifiable self-fix can't loop forever).
     if verdict == "APPROVE_WITH_FIX":
+        import pipeline.server as _server
+
         verdict, reviewer_output = _server._verify_reviewer_auto_fix(
             worktree,
             story,

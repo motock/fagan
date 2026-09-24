@@ -695,7 +695,10 @@ def test_review_story_parks_after_rework_budget_exhausted(plan_dir, agents_dir, 
     assert story["status"] == "parked"
     assert story["rework_attempts"] == 3
     assert result["status"] == "parked"
-    assert len(notes) == 1 and "S1" in notes[0]
+    # The bounce that exhausts the budget also notifies review_changes_requested,
+    # ahead of the park notice.
+    assert len(notes) == 2 and all("S1" in note for note in notes)
+    assert "parked" in notes[-1]
 
 
 def test_review_story_oracle_backed_story_parks_after_lower_rework_cap(

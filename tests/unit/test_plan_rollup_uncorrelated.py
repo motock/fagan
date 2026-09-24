@@ -162,7 +162,9 @@ def test_rollup_filters_before_the_first_sum():
 
 
 def test_rework_events_are_not_first_pass_disqualifying():
-    assert story_metrics._REWORK_EVENTS.isdisjoint(
+    # review_changes_requested is the one deliberate exception: a reviewer bounce
+    # is a dirty first pass (see the comment above the disqualifying set).
+    assert (story_metrics._REWORK_EVENTS - {"review_changes_requested"}).isdisjoint(
         story_metrics._FIRST_PASS_DISQUALIFYING_EVENTS
     )
 

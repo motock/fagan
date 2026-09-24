@@ -258,7 +258,9 @@ def test_rework_event_counts_toward_cost_but_never_disqualifies_first_pass():
 def test_event_is_not_first_pass_disqualifying():
     """Membership, not exact contents: later stories may extend the set."""
     assert EVENT in story_metrics._REWORK_EVENTS
-    assert story_metrics._REWORK_EVENTS.isdisjoint(
+    # review_changes_requested is the one deliberate exception (a reviewer bounce
+    # is a dirty first pass); every other rework event must stay non-disqualifying.
+    assert (story_metrics._REWORK_EVENTS - {"review_changes_requested"}).isdisjoint(
         story_metrics._FIRST_PASS_DISQUALIFYING_EVENTS
     )
     # The four pre-existing members must survive.

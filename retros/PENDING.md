@@ -233,3 +233,4 @@ if a precise date is needed when writing one of these up.
 - post-rlf-hardening — completed 2026-09-24, 4 stories
 - detached-head-guard — completed 2026-09-24, 1 story
 - pipeline-cold-imports — completed 2026-09-24, 1 story
+- pipeline-cold-imports-phase2 — completed 2026-09-24, 3 stories

@@ -828,6 +828,13 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
                     pass
         attempts = story.get("rework_attempts", 0) + 1
         story["rework_attempts"] = attempts
+        _notify_user(
+            plan_name,
+            f"{story_key} sent back by review: changes requested (rework cycle {attempts}).",
+            event="review_changes_requested",
+            story_key=story_key,
+            **_rework_kwargs,
+        )
         if story.get("escalated"):
             rework_cap = REWORK_MAX_ATTEMPTS_ESCALATED
         elif story.get("acceptance"):

@@ -57,6 +57,7 @@ _REWORK_EVENTS = frozenset(
         "merge_gate_retry",
         "merge_retry",
         "dispatch_watchdog_timeout",
+        "review_changes_requested",
     }
 )
 _ESCALATION_EVENTS = frozenset({"escalated", "model_fallback"})
@@ -64,8 +65,10 @@ _ESCALATION_EVENTS = frozenset({"escalated", "model_fallback"})
 # Standing invariant: rework events in _REWORK_EVENTS are deliberately not first-pass disqualifying:
 # a merge-gate rework is usually environment-caused (a platform-specific CI failure the executor's own suite
 # cannot see), so a rework counts toward total_rework_cycles and the story's cost, but never against first-pass clean.
+# The one exception is review_changes_requested: a reviewer sending a story back is a dirty first pass by
+# definition, not an environment fluke, so it is deliberately in BOTH sets.
 _FIRST_PASS_DISQUALIFYING_EVENTS = frozenset(
-    {"escalated", "model_fallback", "story_parked", "brief_patched"}
+    {"escalated", "model_fallback", "story_parked", "brief_patched", "review_changes_requested"}
 )
 
 

@@ -824,6 +824,10 @@ story's \`files\` scope` line per offending path, and `VERDICT:
 REQUEST_CHANGES`, the run notifies once with the `scope_gate_failed` event, and
 the normal REQUEST_CHANGES handling (the `rework_attempts` increment and the
 `REWORK_MAX_ATTEMPTS` check) applies exactly as for an LLM REQUEST_CHANGES.
+That handling notifies once with the `review_changes_requested` event, for the
+gate and the LLM reviewer alike; in the story metrics it counts as one rework
+cycle and disqualifies the story from first-pass clean. `scope_gate_failed` is
+informational only and is not counted, so a gate rejection is not counted twice.
 The gate fails open — a git failure, `OSError` or timeout yields no violations
 — and a story that declares no `files`, or whose worktree is missing, is never
 gated and always reaches the reviewer. Unlike the ingest-time sizing path

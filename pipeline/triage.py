@@ -23,7 +23,7 @@ from .build_detect import detect_test_command
 from .build_detect import _lint_acceptance_fixtures, _pytest_acceptance_fixtures
 from .oracle_gate import acceptance_digests, validate_acceptance_fixtures
 from .concurrency import _heavy_lock, _is_heavy
-from .config import STEP_CAP_FALLBACK_THRESHOLD, INFRA_FAILURE_LOG_SUBSTRING
+from .config import STEP_CAP_FALLBACK_THRESHOLD, INFRA_FAILURE_LOG_SUBSTRING, _LOCAL_BACKEND_NAMES
 from .rebrief import collect_failure_evidence
 from .escalation import (_auto_escalation_enabled, _escalate_to_claude, _escalate_to_local_fallback_model, _escalation_label)
 from .escalation import (_escalate_to_claude as _orig_escalate_to_claude, _escalate_to_local_fallback_model as _orig_escalate_to_local_fallback_model)
@@ -169,7 +169,7 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
                 fallback
                 and story.get("model") != fallback
                 and not story.get("tried_fallback_model")
-                and story.get("backend", "local") == "local"
+                and story.get("backend", "local") in _LOCAL_BACKEND_NAMES
             ):
                 _escalate_to_local_fallback_model(
                     manifest, plan_name, story_key, manifest_path, fallback

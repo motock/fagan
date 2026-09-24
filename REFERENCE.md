@@ -1343,7 +1343,10 @@ enables a layered routing strategy:
      the resumed run picks up from its last WIP checkpoint instead of
      starting over. Once a story is already running on the fallback model,
      further step-cap hits are a no-op (there is no fallback past the
-     fallback), and this path only ever applies to a `local`-backend story.
+     fallback), and this path applies to a story on any local driver
+     (`local`, `ollama`, `lmstudio` or `mlx`). Escalation never fires for a
+     story that already runs on the escalation target: it would only wipe the
+     worktree and restart the story on the same model.
    - **On repeated watchdog kills:** the stale-activity/wall-clock watchdog
      terminates a hung attempt, checkpoints, rebriefs and resumes it as
      `interrupted` — the same "never reaches the test-failure path" shape as

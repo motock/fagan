@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/motock/fagan/master/scripts/remote-
 ```
 
 That clones to `~/.fagan` and runs the installer. Prefer to read before you
-pipe: download the script, read it, then run it (it is 39 lines of bash and
+pipe: download the script, read it, then run it (it is 84 lines of bash and
 fails closed — see its [source](../scripts/remote-install.sh)).
 
 Then check the prerequisites — this builds nothing and calls no model:

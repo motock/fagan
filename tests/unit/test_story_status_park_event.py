@@ -288,7 +288,7 @@ def test_notify_failure_does_not_lose_the_park(plan_dir, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# The `# noqa: F821` marker on the edited call must survive
+# The F821 noqa marker on the edited call must survive
 # --------------------------------------------------------------------------
 
 def test_park_notify_call_keeps_noqa_f821_marker():

@@ -85,6 +85,12 @@ get_ticket_provider = _ServerRef("get_ticket_provider")
 # blocking. Generous enough for a real full suite (the grading gate's own
 # full-suite runs are ~19 min on the pipeline repo, but the snapshot only
 # needs to be long enough to observe an ALREADY-failing suite).
+# Statuses a direct dispatch_story call must refuse: the story's work is
+# already merged or awaiting merge, so a fresh worktree would be cut from a
+# base that may already contain it. set_story_status is the explicit way back.
+_NON_DISPATCHABLE_STATUSES = frozenset({"done", "pr_open"})
+
+
 def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
     _validate_key(plan_name)
     _validate_key(story_key)
@@ -100,6 +106,14 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         story = manifest["stories"].get(story_key)
         if not story:
             return {"ok": False, "error": f"No such story {story_key}"}
+        if story.get("status") in _NON_DISPATCHABLE_STATUSES:
+            return {
+                "ok": False,
+                "error": (
+                    f"{story_key} is {story['status']}; refusing to re-dispatch it. "
+                    "Use set_story_status first if a re-run is really intended."
+                ),
+            }
 
         # W4-logging slice: mint this story's correlation ID once, on its
         # first dispatch, and persist it immediately — before ANY subprocess

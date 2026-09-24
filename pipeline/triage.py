@@ -803,6 +803,21 @@ def collect_triage_evidence(worktree: str, story: dict, findings: list | None = 
 # Rule on story – the core triage decision logic
 # ---------------------------------------------------------------------------
 
+def _exception_type_chain(exc: BaseException) -> str:
+    """Return the class names along ``exc``'s cause/context chain, outermost
+    first, joined by ``" <- "`` (at most 5 links). Names only - never the
+    exception message, which can carry tokens, paths or payload data."""
+    names = []
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen and len(names) < 5:
+        seen.add(id(current))
+        names.append(type(current).__name__)
+        current = current.__cause__ or current.__context__
+    return " <- ".join(names)
+
+
+
 def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) -> dict:
     """Return a ruling for a terminal story.
 

@@ -229,3 +229,4 @@ if a precise date is needed when writing one of these up.
 - pr-title-sync — completed 2026-09-23, 1 stories
 - oversized-module-split — completed 2026-09-23, 5 stories
 - reporting-attribution-fix — completed 2026-09-23, 4 stories
+- reporting-layer-followups — completed 2026-09-24, 5 stories

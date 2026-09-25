@@ -201,9 +201,9 @@ def test_deferred_action_direct_notification_is_not_stamped(notify_calls):
     assert len(other_calls) == 1
     other = other_calls[0]
     assert other["kwargs"].get("event") != "story_parked"
-    assert "event" not in other["kwargs"], (
-        "only the park notification may be stamped with event=; "
-        f"the direct notification got {other['kwargs']!r}"
+    assert other["kwargs"].get("event") == "triage_ruling", (
+        "the direct notification must be attributed as triage_ruling, never an "
+        f"e-mailed event; got {other['kwargs']!r}"
     )
     # The direct notification's message text is untouched.
     assert "split_story" in other["args"][1]

@@ -1,19 +1,18 @@
-"""Implementation of global rules bundle installation.
+"""Global rules installation utilities.
 
-This module provides the public API required by the tests for the
-``GR-4`` story.  It is intentionally self‑contained and imports only
-``pipeline.global_rules_targets`` and ``pipeline.managed_block``.
+This module implements the functions required by the unit tests for
+``pipeline.global_rules_install``.  It is intentionally lightweight and
+pure‑Python so that it can be imported without side effects.
 
-The public symbols are:
+The public API consists of:
 
-* :class:`InstallResult` – a frozen dataclass describing the result of an
+* :class:`InstallResult` – a frozen dataclass describing the outcome of an
   installation.
-* :func:`render_block` – renders the two source files and appends a line
-  containing the absolute ``rules_dir``.
+* :func:`render_block` – concatenates the two source files and appends the
+  absolute ``rules_dir``.
 * :func:`install_for_tool` – orchestrates copying the rule files, applying the
-  managed block to the target file, handling backups, warnings and dry‑run
-  semantics.
-* :func:`_write_atomic` – helper that writes a file atomically.
+  managed block, writing backups, warnings and dry‑run semantics.
+* :func:`_write_atomic` – writes a file atomically.
 
 The implementation follows the behaviour exercised by the unit tests.
 """
@@ -64,12 +63,12 @@ class InstallResult:
 def _write_atomic(path: Path, text: str) -> None:
     """Write *text* to *path* atomically.
 
-    The function creates a temporary file in the same directory as ``path`` and
-    then replaces ``path`` with the temporary file using :func:`os.replace`.
-    The temporary file is removed regardless of success.
+    The temporary file is created in the same directory as *path* to avoid
+    cross‑filesystem ``EXDEV`` errors.  On success ``path`` is replaced
+    atomically; on failure the temporary file is removed.
     """
-    tmp_dir = path.parent
-    fd, tmp_path = os.mkstemp(dir=str(tmp_dir))
+    dir_path = path.parent
+    fd, tmp_path = os.mkstemp(dir=str(dir_path))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)

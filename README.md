@@ -82,7 +82,7 @@ bash remote-install.sh
 ```
 
 Either way, `cd` into the install directory it reports (`~/.fagan` by
-default); it has already done steps 1–3 below, so restart Claude Code (step 4). Prefer a manual clone? Use the
+default); it has already done steps 1–3 below, so restart Claude Code (step 5). Prefer a manual clone? Use the
 steps below instead.
 
 This gets the MCP server registered and a first plan running end-to-end.
@@ -127,7 +127,7 @@ on every run; a `--dev` install uses `requirements-dev.txt`, which already
 includes the dashboard deps), and reports on the tools the pipeline shells out
 to — required: `git`, `gh`, and the `claude` CLI; optional: `ollama` and
 `docker` — with graceful-degradation messaging, and is safe to re-run. It does **not** register the MCP server, set environment
-variables, or install the persona subagents — steps 2–4 above cover those. With
+variables, or install the persona subagents — steps 2–3 above cover those. With
 nothing but the `claude` backend configured, `ollama`/`docker` being absent is
 expected, not an error.
 

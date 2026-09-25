@@ -20,7 +20,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-
 # Public constants
 SUPPORTED_TOOLS = ("claude", "codex", "opencode")
 

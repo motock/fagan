@@ -363,7 +363,7 @@ def test_clamp_comment_states_the_sizing_arithmetic():
         None,
     )
     assert def_idx is not None, (
-        "pipeline/scheduler_daemon.py must define _apply_scheduler_role_call_clamp"
+        "pipeline/scheduler_timeouts.py must define _apply_scheduler_role_call_clamp"
     )
     window = "\n".join(lines[max(0, def_idx - 40):def_idx + 60])
     lowered = window.lower()

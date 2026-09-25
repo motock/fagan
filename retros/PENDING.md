@@ -238,3 +238,7 @@ if a precise date is needed when writing one of these up.
 - flaky-fetch-lock-determinism — completed 2026-09-24, 1 story
 - exposure-install-oneliner — completed 2026-09-25, 1 story
 - post-050-hardening — completed 2026-09-25, 8 stories
+- scheduler-timeouts-extraction — completed 2026-09-25, 1 story
+- exposure-readme-hero — completed 2026-09-25, 1 story
+- exposure-registry-release-step — completed 2026-09-25, 1 story
+- plan-summary-reviewer-bounce — completed 2026-09-25, 1 story

@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.motock/fagan",
-  "description": "Autonomous coding pipeline: frontier models plan and review, a local model implements, gated by TDD.",
+  "description": "Autonomous coding pipeline: frontier models plan and review, open-weight models write the code.",
   "repository": {
     "url": "https://github.com/motock/fagan",
     "source": "github"

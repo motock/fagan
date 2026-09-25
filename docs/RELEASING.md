@@ -3,7 +3,7 @@
 How a release is cut in this repo. This is a manual procedure, written down so
 the next release does not depend on anyone's memory. There is no release
 automation: the only GitHub Actions workflow is `ci.yml`, and releases are made
-by hand with `git` and `gh`.
+by hand with `git`, `gh` and `mcp-publisher`.
 
 Like the project itself, this is a single-maintainer research project rather
 than a maintained product with an SLA: releases happen when there is something
@@ -82,6 +82,24 @@ gh release create vX.Y.Z --title "vX.Y.Z - <title>" --notes-file <notes>
 - Write the release notes to a temporary file and pass it with `--notes-file`;
   the notes usually start from the same text as the `CHANGELOG.md` section for
   this version.
+
+### The MCP registry entry
+
+`server.json` is fagan's listing in the official MCP registry
+(`io.github.motock/fagan`). Its `version` must match the new `CHANGELOG.md`
+section (`tests/unit/test_server_json.py` enforces this), so bump it in the
+same commit as the changelog entry. After the tag is pushed, publish it from
+the repo root:
+
+```bash
+mcp-publisher login github   # only when the saved token has expired
+mcp-publisher publish
+```
+
+The registry keeps every published version and will not accept the same
+version twice, so publish exactly once per release. Confirm the new version is
+live with
+`curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=fagan"`.
 
 ## After the release
 

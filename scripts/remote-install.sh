@@ -42,6 +42,42 @@ fi
 echo "==> Running install.sh"
 bash "$INSTALLER"
 
+# Copy persona subagents and the decision policy into ~/.claude, never overwriting.
+copy_if_absent() {
+  if [ -e "$2" ]; then
+    echo "    kept existing $2"
+  else
+    cp "$1" "$2"
+    echo "    installed $2"
+  fi
+}
+if [ -d "$FAGAN_INSTALL_DIR/agents" ]; then
+  echo "==> Installing persona subagents into $HOME/.claude/agents"
+  mkdir -p "$HOME/.claude/agents"
+  for src in "$FAGAN_INSTALL_DIR"/agents/*.md; do
+    copy_if_absent "$src" "$HOME/.claude/agents/$(basename "$src")"
+  done
+fi
+if [ -f "$FAGAN_INSTALL_DIR/overlord-policy.md" ]; then
+  copy_if_absent "$FAGAN_INSTALL_DIR/overlord-policy.md" "$HOME/.claude/overlord-policy.md"
+fi
+
+# Register the MCP server with Claude Code, unless it is already registered.
+PY="$FAGAN_INSTALL_DIR/.venv/bin/python3"
+SERVER="$FAGAN_INSTALL_DIR/app/pipeline_mcp_server.py"
+MANUAL="claude mcp add -s user pipeline \"$PY\" \"$SERVER\""
+if [ -x "$PY" ] && [ -f "$SERVER" ]; then
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "remote-install: claude CLI not found; once installed, run: $MANUAL" >&2
+  elif claude mcp get pipeline >/dev/null 2>&1; then
+    echo "==> MCP server 'pipeline' already registered with Claude Code; left unchanged"
+  elif claude mcp add -s user pipeline "$PY" "$SERVER"; then
+    echo "==> Registered MCP server 'pipeline' with Claude Code"
+  else
+    echo "remote-install: MCP registration failed; run it by hand: $MANUAL" >&2
+  fi
+fi
+
 # Success summary.
 echo
 echo "==> Installed to $FAGAN_INSTALL_DIR"

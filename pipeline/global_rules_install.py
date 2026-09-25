@@ -20,8 +20,8 @@ The implementation follows the behaviour exercised by the unit tests.
 from __future__ import annotations
 
 import os
-import tempfile
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path

@@ -18,6 +18,7 @@ from .overlord import _invoke_overlord, _load_policy
 from .persistence import _notify_user
 from .parsers import _parse_ruling
 from .parsers import _is_transient_backend_exception
+from .parsers import _is_transient_backend_exception
 from .parsers import _atomic_write_json
 from .persistence import _append_decision, _plan_role_config
 from .build_detect import detect_test_command
@@ -295,6 +296,9 @@ globals()["subprocess.run"] = subprocess.run
 # ---------------------------------------------------------------------------
 TRIAGE_MAX_ATTEMPTS = 2
 TRIAGE_MAX_CREATED_STORIES = 3
+# How many sweeps may skip a story whose triage ruling failed open on a
+# transient overlord backend error before triage rules on it anyway.
+TRIAGE_MAX_TRANSIENT_DEFERRALS = 3
 # How many sweeps may skip a story whose triage ruling failed open on a
 # transient overlord backend error before triage rules on it anyway.
 TRIAGE_MAX_TRANSIENT_DEFERRALS = 3

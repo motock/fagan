@@ -68,7 +68,7 @@ def _write_atomic(path: Path, text: str) -> None:
     atomically; on failure the temporary file is removed.
     """
     dir_path = path.parent
-    fd, tmp_path = os.mkstemp(dir=str(dir_path))
+    fd, tmp_path = tempfile.mkstemp(dir=str(dir_path))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
@@ -176,11 +176,7 @@ def install_for_tool(tool: str, source_root: Path, env: dict[str, str], *, dry_r
 
     # Render block and apply managed block.
     block = render_block(source_root, rules_dir)
-    try:
-        new_text = apply_managed_block(existing, block)
-    except ValueError:
-        # Propagate marker errors without modifying the file.
-        raise
+    new_text = apply_managed_block(existing, block)
 
     # Determine if anything changed.
     if new_text == existing:

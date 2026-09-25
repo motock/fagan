@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""CLI for installing global rules bundles for supported tools.
+"""Opt-in CLI that installs the global rules bundle for supported agent CLIs.
 
-This script is a thin wrapper around :func:`pipeline.global_rules_install.install_for_tool`.
-It parses command‑line arguments, validates the requested tools, and reports the
-status of each installation.
+Thin wrapper around :func:`pipeline.global_rules_install.install_for_tool`.
+Nothing is written unless ``--tools`` is passed, so importing this module or
+running it without arguments is always safe.
 
-The public API is a single function ``main(argv: list[str] | None = None) -> int``
-which returns an exit code suitable for ``sys.exit``.
+Exit codes:
+    0  success (including ``--dry-run``)
+    1  the install engine raised (message on stderr, no traceback)
+    2  usage error (missing/invalid ``--tools``)
 """
 
 from __future__ import annotations
@@ -16,90 +18,111 @@ import os
 import sys
 from pathlib import Path
 
-# Import the engine.  The test monkeypatches this import target.
+from pipeline import global_rules_targets
 from pipeline.global_rules_install import install_for_tool
 
-# Supported tools.
 TOOLS = ("claude", "codex", "opencode")
 
-
-def _parse_tools(tools_str: str) -> list[str]:
-    """Parse comma‑separated tool list, validating each entry.
-
-    Raises ``ValueError`` if the string is empty, contains an empty entry, or
-    contains an unknown tool.
-    """
-    parts = [t.strip() for t in tools_str.split(",")]
-    if not parts or any(not p for p in parts):
-        raise ValueError("empty tool entry")
-    for p in parts:
-        if p not in TOOLS:
-            raise ValueError(f"unknown tool: {p}")
-    return parts
+_WARNING_INDENT = "  "
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Entry point for the CLI.
-
-    Parameters
-    ----------
-    argv:
-        Argument list, or ``None`` to use ``sys.argv[1:]``.
-
-    Returns
-    -------
-    int
-        Exit code: 0 on success, 1 if the engine raised, 2 for usage errors.
-    """
-    parser = argparse.ArgumentParser(description="Install global rules bundles.")
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser. ``--tools`` is required: opt-in by default."""
+    parser = argparse.ArgumentParser(
+        description="Install the global rules bundle for agent CLIs.",
+    )
     parser.add_argument(
         "--tools",
         required=True,
-        help="Comma‑separated list of tools (claude,codex,opencode)",
+        help="comma-separated tools to install: claude,codex,opencode",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Show what would happen without writing files")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would happen without writing any file",
+    )
     parser.add_argument(
         "--source-root",
         default=str(Path(__file__).resolve().parent.parent),
-        help="Root directory containing the source files (default: repo root)",
+        help="repository root holding global-rules/ (default: this repo)",
     )
+    return parser
 
+
+def _parse_tools(raw: str) -> list[str]:
+    """Split *raw* on commas and validate every entry.
+
+    The whole list is validated before any install runs, so an empty or
+    unknown entry can never leave a partially installed bundle behind.
+
+    Raises ``ValueError`` for an empty entry or an unknown tool.
+    """
+    tools = [entry.strip() for entry in raw.split(",")]
+    if not tools or any(not entry for entry in tools):
+        raise ValueError("--tools must not contain an empty entry")
+    unknown = [entry for entry in tools if entry not in TOOLS]
+    if unknown:
+        raise ValueError(f"unknown tool(s): {', '.join(unknown)}")
+    return tools
+
+
+def _result_status(result: object, *, existed: bool, dry_run: bool) -> str:
+    """Report status for one install result.
+
+    Prefers the engine's own ``status``; otherwise derives it from the
+    result's ``changed`` flag plus whether the target existed beforehand.
+    """
+    status = getattr(result, "status", None)
+    if isinstance(status, str) and status:
+        return status
+    if not getattr(result, "changed", False):
+        return "unchanged"
+    if dry_run:
+        return "would-update" if existed else "would-create"
+    return "updated" if existed else "created"
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Install the global rules bundle for each requested tool.
+
+    Returns 0 on success, 1 when the engine raises, 2 on usage errors.
+    """
+    parser = _build_parser()
     try:
         args = parser.parse_args(argv)
-    except SystemExit as exc:  # argparse uses SystemExit
-        return exc.code if isinstance(exc.code, int) else 1
+    except SystemExit as exc:  # argparse reports usage errors itself
+        code = exc.code
+        return code if isinstance(code, int) else 0
 
     try:
-        tool_list = _parse_tools(args.tools)
-    except ValueError:
+        tools = _parse_tools(args.tools)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
 
     env = os.environ
     source_root = Path(args.source_root)
     dry_run = args.dry_run
 
-    for tool in tool_list:
-        target = install_for_tool(tool, source_root, env, dry_run=dry_run).target
-        # Determine status
-        # We need to know if target existed before the call
-        # Since install_for_tool may have created it, we check existence after
-        # but we can infer from the result: if dry_run, changed indicates would-create or would-update
-        # For non-dry_run, changed indicates created or updated
-        # We can check existence before calling by inspecting the target path
-        # but install_for_tool already returned target; we can check if target existed before by
-        # using target.exists() after the call and comparing with changed flag.
-        # Simpler: call install_for_tool again? No.
-        # Instead, we can compute status based on dry_run and changed flag.
-        # For dry_run: if target existed before? We can't know. But we can check target.exists() after call: if changed and not dry_run, it was created or updated.
-        # For dry_run, changed True means would-create if target did not exist before, would-update if it did.
-        # We can check target.exists() before calling by storing a flag.
-        # Let's redo: we need to call install_for_tool but we need existence before.
-        # We'll modify: before calling, compute target path via global_rules_targets.instructions_path.
-        pass
-
+    for tool in tools:
+        existed = global_rules_targets.instructions_path(tool, env).exists()
+        try:
+            result = install_for_tool(
+                tool,
+                source_root=source_root,
+                env=env,
+                dry_run=dry_run,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            # Engine failure: message only, no traceback, no extra paths.
+            print(str(exc), file=sys.stderr)
+            return 1
+        status = _result_status(result, existed=existed, dry_run=dry_run)
+        print(f"{tool}: {result.target} ({status})")
+        if result.warning:
+            print(f"{_WARNING_INDENT}{result.warning}")
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
-

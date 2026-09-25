@@ -589,7 +589,7 @@ def test_ingest_does_not_route_when_default_is_not_cloud(
     assert "sizing_auto_routed" not in persisted
     assert len(notices) == 1
     _plan_name, msg, event = notices[0]
-    assert event is None
+    assert event == "sizing_risk"
     assert "production files" in msg
     assert msg.endswith(_SKIP_SUFFIX)
 
@@ -686,7 +686,7 @@ def test_ingest_does_not_route_when_default_is_unset(
     assert "sizing_auto_routed" not in persisted
     assert len(notices) == 1
     _plan_name, msg, event = notices[0]
-    assert event is None
+    assert event == "sizing_risk"
     assert msg.endswith(_SKIP_SUFFIX)
 
 
@@ -708,7 +708,7 @@ def test_ingest_warns_but_does_not_route_when_model_is_already_cloud(
     assert "sizing_auto_routed" not in persisted
     assert len(notices) == 1
     _plan_name, msg, event = notices[0]
-    assert event is None
+    assert event == "sizing_risk"
     assert "production files" in msg
     # The default IS a :cloud tag, so the skip suffix does not apply.
     assert "auto-route skipped" not in msg
@@ -794,7 +794,7 @@ def test_ingest_files_absent_behaviour_is_unchanged(
     assert "sizing_auto_routed" not in persisted
     assert len(notices) == 1
     _plan_name, msg, event = notices[0]
-    assert event is None
+    assert event == "sizing_risk"
     assert "production files" in msg
 
 

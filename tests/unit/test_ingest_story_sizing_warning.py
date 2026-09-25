@@ -249,7 +249,9 @@ def test_ingest_notifies_once_for_an_oversized_story(
     monkeypatch.setattr(pt, "plane_request", _fake_plane)
     notices = []
     monkeypatch.setattr(
-        ingest_mod, "_notify_user", lambda plan, msg: notices.append((plan, msg))
+        ingest_mod,
+        "_notify_user",
+        lambda plan, msg, **_kwargs: notices.append((plan, msg)),
     )
     plan = _plan(
         tmp_path,
@@ -275,7 +277,9 @@ def test_ingest_is_silent_for_a_well_scoped_story(
     monkeypatch.setattr(pt, "plane_request", _fake_plane)
     notices = []
     monkeypatch.setattr(
-        ingest_mod, "_notify_user", lambda plan, msg: notices.append((plan, msg))
+        ingest_mod,
+        "_notify_user",
+        lambda plan, msg, **_kwargs: notices.append((plan, msg)),
     )
     plan = _plan(
         tmp_path,
@@ -295,7 +299,7 @@ def test_ingest_still_persists_the_story_unchanged(
     """The warning is advisory: it must not alter what lands in the manifest
     or block the ingest."""
     monkeypatch.setattr(pt, "plane_request", _fake_plane)
-    monkeypatch.setattr(ingest_mod, "_notify_user", lambda plan, msg: None)
+    monkeypatch.setattr(ingest_mod, "_notify_user", lambda plan, msg, **_kwargs: None)
     instructions = (
         "Preflight: test fixture — not a real plan\n"
         "Touch `app/a.py`, `app/b.py` and `app/c.py`."

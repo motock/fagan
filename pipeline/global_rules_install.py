@@ -76,7 +76,7 @@ def _write_atomic(path: Path, text: str) -> None:
     finally:
         try:
             os.unlink(tmp_path)
-        except Exception:
+        except OSError:
             pass
 
 

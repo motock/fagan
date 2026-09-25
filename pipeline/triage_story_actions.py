@@ -56,7 +56,13 @@ def _execute_split_story(plan_name, story_key, story, ruling, manifest, manifest
         reason = "split_story ruled but SPLIT payload invalid; parked for a human"
         result = _park(plan_name, story_key, story, reason)
         try:
-            _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
+            _notify_user(
+                plan_name,
+                f"{story_key} triage: {action} – {rationale}",
+                event="triage_ruling",
+                story_key=story_key,
+                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+            )
         except Exception:
             pass
         return result
@@ -67,7 +73,13 @@ def _execute_split_story(plan_name, story_key, story, ruling, manifest, manifest
         reason = "plan triage budget exhausted"
         result = _park(plan_name, story_key, story, reason)
         try:
-            _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
+            _notify_user(
+                plan_name,
+                f"{story_key} triage: {action} – {rationale}",
+                event="triage_ruling",
+                story_key=story_key,
+                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+            )
         except Exception:
             pass
         return result
@@ -190,7 +202,13 @@ def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_p
     if not corroborated:
         result = _park(plan_name, story_key, story, _MARK_DONE_UNCORROBORATED_REASON)
         try:
-            _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
+            _notify_user(
+                plan_name,
+                f"{story_key} triage: {action} – {rationale}",
+                event="triage_ruling",
+                story_key=story_key,
+                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+            )
         except Exception:  # pragma: no cover – notification failures are ignored
             pass
         return result

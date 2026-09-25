@@ -862,6 +862,7 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
             "notify_user": True,
             "action": "park_for_human",
             "failed_open": True,
+            "failed_stage": stage,
             "transient": _is_transient_backend_exception(exc),
         }
         logging.getLogger("pipeline").warning(

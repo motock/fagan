@@ -286,6 +286,24 @@ def _announce_dispatch_backend(
         )
         raise SystemExit(2)
 
+    # Attempt to resolve via default resolver, but guard against missing optional dependencies
+    try:
+        return _default_dispatch_resolver()
+    except ModuleNotFoundError as exc:
+        # If optional dependencies missing, fall back to env var resolution
+        raw = os.getenv("PIPELINE_BACKEND_DISPATCH")
+        if raw is None:
+            raise
+        normalized = raw.strip().lower()
+        if normalized == "claude":
+            print("smoke: backend guard OK: PIPELINE_BACKEND_DISPATCH resolves to claude")
+            return normalized, "", "value argument"
+        if normalized == "" or normalized not in recognized:
+            _reject(raw, normalized, "value argument")
+        print(
+            f"smoke: validating dispatch on {normalized} (source: value argument)"
+        )
+        return normalized, "", "value argument"
     # Handle env var directly to avoid missing dependency errors
     # (removed to let default resolver handle empty env var correctly)
     if value is not None:

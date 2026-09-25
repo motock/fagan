@@ -80,19 +80,13 @@ def _install_env() -> dict[str, str]:
     """Return the environment mapping forwarded to the install engine.
 
     A copy of the live ``os.environ`` taken at call time (never at import
-    time, so test/runner overrides are seen) with one key removed:
-    ``XDG_CONFIG_HOME``. That is a generic desktop/CI environment variable,
-    not an opencode install directive; letting it through would silently
-    redirect opencode's bundle away from the ``$HOME/.config/opencode``
-    default this CLI installs to (observed on CI runners, 2026-09-25).
-    Explicit per-tool overrides (``CLAUDE_CONFIG_DIR``, ``CODEX_HOME``,
-    ``OPENCODE_CONFIG_DIR``) are forwarded unchanged.
+    time, so test/runner overrides are seen), forwarded unchanged. Every
+    variable that selects where a tool reads its instructions
+    (``CLAUDE_CONFIG_DIR``, ``CODEX_HOME``, ``OPENCODE_CONFIG_DIR`` and
+    ``XDG_CONFIG_HOME``) must reach the engine, or the bundle lands
+    somewhere the tool never looks.
     """
-    return {
-        key: value
-        for key, value in os.environ.items()
-        if key != "XDG_CONFIG_HOME"
-    }
+    return dict(os.environ)
 
 
 def main(argv: list[str] | None = None) -> int:

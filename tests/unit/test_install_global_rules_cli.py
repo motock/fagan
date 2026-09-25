@@ -61,6 +61,23 @@ def _assert_line(out: str, tool: str, target: Path, status: str) -> None:
     assert match.group(2) == status, lines[0]
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_config_env(monkeypatch) -> None:
+    """Clear ambient per-tool config-dir overrides for every test here.
+
+    The CLI forwards the live environment, so a variable set by the runner
+    (CI sets ``XDG_CONFIG_HOME``) would move a tool's target away from the
+    ``HOME``-only path these tests derive it from.
+    """
+    for name in (
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "OPENCODE_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 # --- module shape / executable bit -----------------------------------------
 
 def test_module_shape_and_executable_bit() -> None:

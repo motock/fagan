@@ -1605,13 +1605,11 @@ scripts/install_global_rules.py --tools=codex --dry-run         # report only
 
 Environment overrides: `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and
 `OPENCODE_CONFIG_DIR` replace the config directory for their tool (each must be
-an absolute path). For opencode, `XDG_CONFIG_HOME` is also honored when
-`OPENCODE_CONFIG_DIR` is unset, giving `$XDG_CONFIG_HOME/opencode`; the CLI
-wrapper deliberately does not forward `XDG_CONFIG_HOME`, because that generic
-desktop/CI variable would silently redirect the install away from the
-`~/.config/opencode` default. Call
-`pipeline.global_rules_install.install_for_tool` directly if you need the XDG
-behavior.
+an absolute path). For opencode, `XDG_CONFIG_HOME` is honored when
+`OPENCODE_CONFIG_DIR` is unset, giving `$XDG_CONFIG_HOME/opencode` -- which is
+where opencode itself looks, so the bundle lands on the path it reads. The CLI
+forwards the environment unchanged, so a tool's own config-directory variables
+always win.
 
 ### What gets written
 

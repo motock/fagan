@@ -533,7 +533,12 @@ Each record has the following keys:
   `dispatch_failed`, `escalated`, `model_fallback`, `agent_gave_up`,
   `tests_failed`, `story_parked`, `merge_ci_rework`, `merge_gate_failed`,
   `merge_gate_retry`, `merge_failed`, `merge_retry`, and `story_merged` (emitted on the
-  successful‑merge path only, immediately after the story is marked done).
+  successful‑merge path immediately after the story is marked done, and by
+  `mark_story_done` when it closes a story that has a `pr_url` and is not yet
+  done - a PR merged outside the pipeline).
+  Two advisory events are attributed to a story but never disqualify its first
+  pass: `triage_ruling` (triage's note of the action it ruled, sent alongside
+  the `story_parked` notice) and `sizing_risk` (ingest's story-sizing warning).
   `brief_patched` is emitted whenever a story's `agent_instructions` are
   rewritten after it has already been dispatched (its manifest entry carries
   `dispatched_at`), so the metrics sidecar and the local-success classifier

@@ -57,6 +57,7 @@ import time
 import pytest
 
 from pipeline import scheduler_daemon as mod
+from pipeline import scheduler_timeouts
 from pipeline.events import InProcessEventBus
 
 GRACE_ENV = "PIPELINE_ABANDON_WORKER_GRACE_SECONDS"
@@ -268,7 +269,10 @@ def advance_past_grace(clock, grace=TEST_GRACE_S):
 
 
 def _module_source() -> str:
-    return pathlib.Path(mod.__file__).read_text(encoding="utf-8")
+    return "\n".join(
+        pathlib.Path(m.__file__).read_text(encoding="utf-8")
+        for m in (mod, scheduler_timeouts)
+    )
 
 
 # ---------------------------------------------------------------------------

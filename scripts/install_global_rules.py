@@ -76,6 +76,25 @@ def _result_status(result: object, *, existed: bool, dry_run: bool) -> str:
     return "updated" if existed else "created"
 
 
+def _install_env() -> dict[str, str]:
+    """Return the environment mapping forwarded to the install engine.
+
+    A copy of the live ``os.environ`` taken at call time (never at import
+    time, so test/runner overrides are seen) with one key removed:
+    ``XDG_CONFIG_HOME``. That is a generic desktop/CI environment variable,
+    not an opencode install directive; letting it through would silently
+    redirect opencode's bundle away from the ``$HOME/.config/opencode``
+    default this CLI installs to (observed on CI runners, 2026-09-25).
+    Explicit per-tool overrides (``CLAUDE_CONFIG_DIR``, ``CODEX_HOME``,
+    ``OPENCODE_CONFIG_DIR``) are forwarded unchanged.
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key != "XDG_CONFIG_HOME"
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """Install the global rules bundle for each requested tool.
 
@@ -94,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    env = os.environ
+    env = _install_env()
     source_root = Path(args.source_root)
     dry_run = args.dry_run
 

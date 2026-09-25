@@ -28,6 +28,25 @@ from pipeline.story_metrics import compute_plan_rollup, compute_story_metrics
 
 __all__ = ["format_plan_summary"]
 
+_REVIEWER_BOUNCE_SUFFIX = " [first-pass clean (baseline definition); reviewer requested changes]"
+_RATE_DEFINITION_NOTE = (
+    "Note: first_pass_clean_rate also counts a reviewer change request as not clean; "
+    "the per-story verdicts use the baseline definition "
+    "(no escalation, park, triage or brief patch)."
+)
+
+
+def _reviewer_requested_changes(key: str, records: list[dict]) -> bool:
+    """True when the strict metric disqualifies ``key`` although the baseline verdict passed it.
+
+    The strict disqualifying set is the baseline set plus ``review_changes_requested``,
+    so for a story the baseline calls clean, a disqualifying event can only be that one.
+    """
+    return any(
+        payload["story_key"] == key and payload["disqualifying_events"] > 0
+        for payload in compute_story_metrics(records).values()
+    )
+
 
 def _story_line(key: str, story: dict[str, Any], records: list[dict]) -> str:
     """Render one manifest story: key, summary, pr_url when present, and the local first-pass verdict for local-tier stories."""
@@ -40,7 +59,9 @@ def _story_line(key: str, story: dict[str, Any], records: list[dict]) -> str:
         line += f" (pr: {pr_url})"
     verdict = classify_story(key, story, records)
     if verdict["in_population"]:
-        if verdict["clean"]:
+        if verdict["clean"] and _reviewer_requested_changes(key, records):
+            line += _REVIEWER_BOUNCE_SUFFIX
+        elif verdict["clean"]:
             line += " [first-pass clean]"
         else:
             line += f" [not first-pass clean: {', '.join(verdict['reasons'])}]"
@@ -74,6 +95,7 @@ def format_plan_summary(plan_name: str, manifest: dict, records: list[dict]) -> 
         "",
     ]
 
+    story_lines: list[str] = []
     if stories:
         lines.append("Per story:")
         # sorted() builds a new list; the caller's manifest is not mutated.
@@ -81,9 +103,12 @@ def format_plan_summary(plan_name: str, manifest: dict, records: list[dict]) -> 
             story = stories.get(key)
             if not isinstance(story, dict):
                 story = {}
-            lines.append(_story_line(key, story, records))
+            story_lines.append(_story_line(key, story, records))
+        lines.extend(story_lines)
         lines.append("")
 
     lines.append("Plan rollup:")
     lines.extend(_rollup_lines(rollup))
+    if any(line.endswith(_REVIEWER_BOUNCE_SUFFIX) for line in story_lines):
+        lines.extend(["", _RATE_DEFINITION_NOTE])
     return "\n".join(lines)

@@ -110,7 +110,15 @@ mkdir -p ~/.claude/agents
 cp -n agents/*.md ~/.claude/agents/
 cp -n overlord-policy.md ~/.claude/overlord-policy.md
 
-# 4. Restart Claude Code (or start a new session) so it picks up the MCP server
+# 4. (Optional) Install the global rules bundle for your agent CLIs
+#    scripts/install_global_rules.py --tools=claude,codex,opencode
+#    Opt-in: nothing is written unless --tools is passed. It writes the bundle into
+#    ~/.claude/CLAUDE.md, ~/.codex/AGENTS.md and ~/.config/opencode/AGENTS.md, copies
+#    the rule files into the sibling fagan-rules/ directory, and backs up an existing
+#    file as <name>.fagan-bak-<UTC timestamp>. Re-running refreshes only the fenced
+#    block between the fagan:begin and fagan:end markers.
+
+# 5. Restart Claude Code (or start a new session) so it picks up the MCP server
 ```
 
 `scripts/install.sh` creates the `.venv`, installs `requirements.txt` and

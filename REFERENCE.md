@@ -1583,6 +1583,88 @@ the server (`advance-scheduler{,.err}.log`, `usage-poller{,.err}.log`).
 
 ---
 
+## Global rules bundle
+
+`scripts/install_global_rules.py` installs the pipeline's global rules into the
+instruction files of the agent CLIs you use, so an agent working outside this
+repo still knows the story-sizing and review rules. It is **opt-in**: nothing is
+written unless you pass `--tools`.
+
+```bash
+scripts/install_global_rules.py --tools=claude,codex,opencode   # any subset
+scripts/install_global_rules.py --tools=codex --dry-run         # report only
+```
+
+### Target files
+
+| Tool | Instruction file | Rules directory |
+| --- | --- | --- |
+| `claude` | `$CLAUDE_CONFIG_DIR/CLAUDE.md` (default `~/.claude/CLAUDE.md`) | `~/.claude/fagan-rules/` |
+| `codex` | `$CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`) | `~/.codex/fagan-rules/` |
+| `opencode` | `$OPENCODE_CONFIG_DIR/AGENTS.md` (default `~/.config/opencode/AGENTS.md`) | `~/.config/opencode/fagan-rules/` |
+
+Environment overrides: `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and
+`OPENCODE_CONFIG_DIR` replace the config directory for their tool (each must be
+an absolute path). For opencode, `XDG_CONFIG_HOME` is also honored when
+`OPENCODE_CONFIG_DIR` is unset, giving `$XDG_CONFIG_HOME/opencode`; the CLI
+wrapper deliberately does not forward `XDG_CONFIG_HOME`, because that generic
+desktop/CI variable would silently redirect the install away from the
+`~/.config/opencode` default. Call
+`pipeline.global_rules_install.install_for_tool` directly if you need the XDG
+behavior.
+
+### What gets written
+
+The installer copies the rule files from this repo's `.claude/rules/`
+(`agent-dispatch-story-sizing.md`, `code-review.md`,
+`local-dispatch-preflight.md`, `pipeline-story-schema.md`,
+`testing-config-gates.md`) into the tool's `fagan-rules/` directory, then writes
+a fenced block into the instruction file:
+
+```
+<!-- fagan:begin (managed block - edits inside are overwritten on update) -->
+...global-rules/standards.md + global-rules/pipeline-workflow.md...
+/absolute/path/to/fagan-rules
+<!-- fagan:end -->
+```
+
+Everything outside the markers is preserved verbatim. Re-running the installer
+refreshes **only** the fenced block (and re-copies the rule files); it is
+idempotent. If the instruction file already existed, it is backed up first as
+`<name>.fagan-bak-<UTC timestamp>` — for example
+`CLAUDE.md.fagan-bak-20260925T120000Z`.
+
+### Codex precedence and the 32 KiB cap
+
+Codex reads `~/.codex/AGENTS.override.md` in preference to `~/.codex/AGENTS.md`.
+If that override file exists, our bundle is inert; the installer prints a
+warning (`codex: <path> exists and takes precedence, so this bundle will not be
+read`) and you should merge the block into the override file instead.
+
+Codex caps the merged instruction text at 32 KiB (`project_doc_max_bytes`). If
+the bundle plus a project's own `AGENTS.md` is truncated, raise the limit in
+`~/.codex/config.toml`:
+
+```toml
+project_doc_max_bytes = 65536
+```
+
+### opencode
+
+opencode V2 reads `AGENTS.md` only — it has no `~/.claude/CLAUDE.md` fallback —
+so install the bundle for `opencode` separately if you use it.
+
+### Removing the bundle
+
+Delete the fenced block (everything between and including the `fagan:begin` and
+`fagan:end` markers) from the instruction file, then delete the tool's
+`fagan-rules/` directory. Any `.fagan-bak-*` backup can be restored or deleted.
+
+The dashboard chat needs no separate install: it gets the same sizing rules
+through the `decompose` tool.
+
+---
+
 ## Development & testing
 
 ```bash

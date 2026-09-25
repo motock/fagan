@@ -5,6 +5,16 @@
 
 **Spend tokens on judgment, not typing.**
 
+![Time-lapse of the Fagan dashboard: a story moves from todo, is sent back once by review, then passes its tests and merges](docs/screenshots/demo.gif)
+
+*A real story ([STE-1, PR #986](https://github.com/motock/fagan/pull/986)) crossing the board: implemented by an open-weight model, sent back once by review, merged. 14 minutes, time-lapsed.*
+
+**Try it** (macOS; Linux via Ollama or LM Studio), then see the [Quickstart](#quickstart):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/motock/fagan/master/scripts/remote-install.sh | bash
+```
+
 Frontier models cost money per token and are excellent at judgment. Local models
 run free and are adequate at typing. This pipeline splits software engineering
 along exactly that line: a frontier model decomposes the work, plans it, reviews

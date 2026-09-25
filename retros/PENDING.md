@@ -242,3 +242,5 @@ if a precise date is needed when writing one of these up.
 - exposure-readme-hero — completed 2026-09-25, 1 story
 - exposure-registry-release-step — completed 2026-09-25, 1 story
 - plan-summary-reviewer-bounce — completed 2026-09-25, 1 story
+- global-rules-bundle — completed 2026-09-25, 8 stories
+- global-rules-xdg-fix — completed 2026-09-25, 1 story

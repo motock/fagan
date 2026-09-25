@@ -23,7 +23,7 @@ COMMS_CSS_TEST = Path(__file__).resolve().parent / "test_dashboard_comms_css.py"
 # region pin lives in test_dashboard_comms_css.py; this is the value it must
 # carry after the re-pin.
 EXPECTED_TOAST_REGION_SHA256 = (
-    "ac70e1f2f7b8589264ec773f87e80e4f57b26b9c544cbf112027aebfa5b661e8"
+    "c4f2d06b9bd68cfc7e444a535bf2b5398b776097dd013f774213384c9c29b91e"
 )
 
 

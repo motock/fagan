@@ -1067,15 +1067,18 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .toast { animation: none; }
 }
-.toast-row { display: flex; align-items: flex-start; gap: var(--sp-2); }
-.toast-key { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--stripe, var(--text-muted)); flex-shrink: 0; white-space: nowrap; }
-.toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-line; max-height: 40vh; overflow-y: auto; }
+.toast-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-1) var(--sp-2); }
+.toast-key { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--stripe, var(--text-muted)); flex-shrink: 0; white-space: nowrap; min-width: 0; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
+/* The message sits on its own full-width line below the key/dismiss header,
+   so a long key (a plan name fallback) never squeezes it into a thin column. */
+.toast-msg { flex: 1 1 100%; order: 3; min-width: 0; overflow-wrap: anywhere; white-space: pre-line; max-height: 40vh; overflow-y: auto; font-size: var(--fs-sm); line-height: 1.45; }
 .toast-dismiss {
-  background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer;
+  background: none; border: none; color: var(--text-dim); font-size: 14px; line-height: 16px; padding: 0 2px; margin-left: auto; cursor: pointer;
 }
 .toast-dismiss:hover { color: var(--accent); }
 .toast-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .toast-actions { display: flex; gap: var(--sp-2); }
+.toast-actions:not(:empty) { margin-top: var(--sp-2); }
 .toast-ask {
   background: none; border: 1px solid var(--accent); color: var(--accent); padding: var(--sp-1) var(--sp-2); border-radius: var(--radius-sm);
   font-family: var(--font-mono); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em;

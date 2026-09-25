@@ -96,7 +96,9 @@ PREFIX_BEFORE_COMMS_SHA256 = "b6ceb89d74a21034ea7e8f60dd1c056e5c97cb8fb90500d0eb
 # Re-pinned post-#467 (toast severity stripe color fix) - see note above.
 # Re-pinned for the toast long-text fix (2026-09-23): this story's whole job
 # is to edit exactly this toast region, so the self-guard moves with it.
-TOAST_REGION_SHA256 = "ac70e1f2f7b8589264ec773f87e80e4f57b26b9c544cbf112027aebfa5b661e8"
+# Re-pinned for the toast header layout fix (2026-09-25): the message moves
+# to its own full-width line under the key/dismiss header.
+TOAST_REGION_SHA256 = "c4f2d06b9bd68cfc7e444a535bf2b5398b776097dd013f774213384c9c29b91e"
 # Re-pinned for the story-modal Replay timeline (9639ae41, 2026-09-05): that
 # story's brief explicitly authorizes appending new CSS at the END of
 # style.css only ("APPEND-AT-END ONLY"), which necessarily falls after the

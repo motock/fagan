@@ -6,7 +6,7 @@ once it returns -- so an unbounded drain leaves a wedged daemon looking alive.
 import threading
 import time
 
-from pipeline import notification_outbox
+from pipeline import notification_outbox, scheduler_timeouts
 from pipeline import scheduler_daemon as mod
 from pipeline.events import InProcessEventBus
 
@@ -26,7 +26,7 @@ def test_wedged_drain_does_not_hold_the_tick_open(monkeypatch):
     monkeypatch.setattr(
         notification_outbox, "drain_outbox", lambda *a, **k: release.wait(30)
     )
-    monkeypatch.setattr(mod, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(scheduler_timeouts, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
 
     daemon = _daemon()
     started = time.monotonic()
@@ -46,7 +46,7 @@ def test_wedged_drain_is_not_counted_as_an_abandoned_worker(monkeypatch):
     monkeypatch.setattr(
         notification_outbox, "drain_outbox", lambda *a, **k: release.wait(30)
     )
-    monkeypatch.setattr(mod, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(scheduler_timeouts, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
 
     daemon = _daemon()
     daemon.run_once()

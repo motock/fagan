@@ -355,7 +355,7 @@ def test_clamp_comment_states_the_sizing_arithmetic():
     The comment may sit inside the function or immediately above its ``def``,
     so the window spans both.
     """
-    module_src = (REPO_ROOT / "pipeline" / "scheduler_daemon.py").read_text()
+    module_src = (REPO_ROOT / "pipeline" / "scheduler_timeouts.py").read_text()
     lines = module_src.splitlines()
     def_idx = next(
         (i for i, ln in enumerate(lines)
@@ -363,7 +363,7 @@ def test_clamp_comment_states_the_sizing_arithmetic():
         None,
     )
     assert def_idx is not None, (
-        "pipeline/scheduler_daemon.py must define _apply_scheduler_role_call_clamp"
+        "pipeline/scheduler_timeouts.py must define _apply_scheduler_role_call_clamp"
     )
     window = "\n".join(lines[max(0, def_idx - 40):def_idx + 60])
     lowered = window.lower()

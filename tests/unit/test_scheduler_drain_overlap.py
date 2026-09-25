@@ -24,7 +24,7 @@ import logging
 import threading
 import time
 
-from pipeline import notification_email, notification_outbox
+from pipeline import notification_email, notification_outbox, scheduler_timeouts
 from pipeline import scheduler_daemon as mod
 from pipeline.events import InProcessEventBus
 
@@ -114,7 +114,7 @@ def test_tick_two_does_not_start_a_second_drain_while_the_first_is_wedged(
                 active -= 1
 
     monkeypatch.setattr(notification_outbox, "drain_outbox", wedged_drain)
-    monkeypatch.setattr(mod, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(scheduler_timeouts, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
 
     daemon = _daemon()
     with caplog.at_level(logging.WARNING, logger=mod.logger.name):
@@ -183,7 +183,7 @@ def test_a_notification_appended_while_the_drain_is_wedged_is_not_lost(
 
     monkeypatch.setattr(notification_outbox, "drain_outbox", counting_drain)
     monkeypatch.setattr(notification_email, "send_notification_email", sender)
-    monkeypatch.setattr(mod, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(scheduler_timeouts, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
 
     daemon = _daemon()
     daemon.run_once()  # tick 1: the drain wedges inside sender(r1)
@@ -231,7 +231,7 @@ def test_drain_resumes_once_the_abandoned_worker_finishes(monkeypatch, tmp_path)
 
     monkeypatch.setattr(notification_outbox, "drain_outbox", counting_drain)
     monkeypatch.setattr(notification_email, "send_notification_email", sender)
-    monkeypatch.setattr(mod, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(scheduler_timeouts, "_DRAIN_JOIN_TIMEOUT_SECONDS", 0.5)
 
     daemon = _daemon()
     daemon.run_once()  # tick 1: the drain wedges

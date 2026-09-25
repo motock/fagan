@@ -17,6 +17,7 @@ import json
 from .overlord import _invoke_overlord, _load_policy
 from .persistence import _notify_user
 from .parsers import _parse_ruling
+from .parsers import _is_transient_backend_exception
 from .parsers import _atomic_write_json
 from .persistence import _append_decision, _plan_role_config
 from .build_detect import detect_test_command
@@ -294,7 +295,9 @@ globals()["subprocess.run"] = subprocess.run
 # ---------------------------------------------------------------------------
 TRIAGE_MAX_ATTEMPTS = 2
 TRIAGE_MAX_CREATED_STORIES = 3
-
+# How many sweeps may skip a story whose triage ruling failed open on a
+# transient overlord backend error before triage rules on it anyway.
+TRIAGE_MAX_TRANSIENT_DEFERRALS = 3
 
 def _coerce_int(value: object, default: int = 0) -> int:
     return value if isinstance(value, int) else default
@@ -416,6 +419,14 @@ def run_triage_sweep(plan_name: str) -> dict:
                 # this tick; do not spend a triage attempt or park the story.
                 continue
             ruling = rule_on_story(plan_name, key, story, evidence)
+            if ruling.get("failed_open") and ruling.get("transient"):
+                deferrals = _coerce_int(story.get("triage_transient_deferrals", 0)) + 1
+                story["triage_transient_deferrals"] = deferrals
+                changed = True
+                if deferrals <= TRIAGE_MAX_TRANSIENT_DEFERRALS:
+                    # A transport blip on the overlord call is not a ruling:
+                    # skip this tick without spending an attempt or parking.
+                    continue
             if action_already_tried(story, ruling["action"]):
                 ruling = {"action": "park_for_human", "rationale": f"action {ruling['action']} already tried"}
             record_triage_attempt(story, ruling["action"])
@@ -852,6 +863,7 @@ def rule_on_story(plan_name: str, story_key: str, story: dict, evidence: str) ->
             "action": "park_for_human",
             "failed_open": True,
             "failed_stage": stage,
+            "transient": _is_transient_backend_exception(exc),
         }
         logging.getLogger("pipeline").warning(
             "triage failed open for story %s in plan %s at stage %s: %s (correlation_id=%s)",

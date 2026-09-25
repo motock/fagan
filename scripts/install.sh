@@ -61,3 +61,7 @@ echo "    model_registry.json; see scripts/choose_providers.py."
 echo "  - Or choose a provider per role interactively:"
 echo "    .venv/bin/python scripts/choose_providers.py"
 echo "  - Run the tests (after a --dev install):  .venv/bin/python -m pytest -q"
+if command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || command -v opencode >/dev/null 2>&1; then
+  echo "Optional: share these engineering + pipeline rules with your other projects (opt-in; nothing is written until you run it):"
+  echo "  scripts/install_global_rules.py --tools=claude [--dry-run]"
+fi

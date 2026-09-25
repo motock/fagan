@@ -580,7 +580,7 @@ def _ingest_plan_impl(
                     "PIPELINE_LOCAL_MODEL_DEFAULT", ""
                 ).endswith(":cloud"):
                     warning += _AUTO_ROUTE_SKIPPED_SUFFIX
-                _notify_user(plan_name, f"{key}: {warning}")
+                _notify_user(plan_name, f"{key}: {warning}", event="sizing_risk", story_key=key)
                 logging.getLogger("pipeline").warning(f"{plan_name}/{key}: {warning}")
             # Non-blocking authoring nudge: flag acceptance fixtures that
             # depend on macOS-only tooling. Dispatch, the done-bar and the

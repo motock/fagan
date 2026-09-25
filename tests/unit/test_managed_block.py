@@ -25,9 +25,9 @@ import sys
 from pathlib import Path
 
 import pytest
-from pipeline.managed_block import BEGIN_MARKER, END_MARKER, apply_managed_block
 
 from pipeline import managed_block
+from pipeline.managed_block import BEGIN_MARKER, END_MARKER, apply_managed_block
 
 BLOCK = "## Managed\n\n- alpha\n- beta"
 FENCED = "before\n\n" + BEGIN_MARKER + "\nOLD BODY\n" + END_MARKER + "\nafter\n"

@@ -166,7 +166,13 @@ def execute_ruling(plan_name, story_key, story, ruling, manifest, manifest_path)
         reason = f"triage ruled {action}, which is not implemented yet; parked for a human"
         _park(plan_name, story_key, story, reason)
         try:
-            _notify_user(plan_name, f"{story_key} triage: {action} – {rationale}")
+            _notify_user(
+                plan_name,
+                f"{story_key} triage: {action} – {rationale}",
+                event="triage_ruling",
+                story_key=story_key,
+                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+            )
         except Exception:
             pass
         return "park_for_human"

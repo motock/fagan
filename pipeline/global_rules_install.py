@@ -29,9 +29,6 @@ from pathlib import Path
 from . import global_rules_targets
 from .managed_block import apply_managed_block
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class InstallResult:
@@ -67,10 +64,9 @@ class InstallResult:
 def _write_atomic(path: Path, text: str) -> None:
     """Write *text* to *path* atomically.
 
-    The function creates a temporary file in the same directory as
-    ``path`` and then replaces ``path`` with the temporary file using
-    :func:`os.replace`.  If an exception occurs the temporary file is
-    removed.
+    The function creates a temporary file in the same directory as ``path`` and
+    then replaces ``path`` with the temporary file using :func:`os.replace`.
+    The temporary file is removed regardless of success.
     """
     tmp_dir = path.parent
     fd, tmp_path = os.mkstemp(dir=str(tmp_dir))
@@ -78,12 +74,11 @@ def _write_atomic(path: Path, text: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
         os.replace(tmp_path, path)
-    except Exception:
+    finally:
         try:
             os.unlink(tmp_path)
         except Exception:
             pass
-        raise
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +114,6 @@ def render_block(source_root: Path, rules_dir: Path) -> str:
     std_text = std_path.read_text(encoding="utf-8")
     wf_text = wf_path.read_text(encoding="utf-8")
     # Append a final line with the absolute rules_dir.
-    # The tests accept either the path string or its resolved form.
     final_line = str(rules_dir)
     return f"{std_text}{wf_text}{final_line}\n"
 

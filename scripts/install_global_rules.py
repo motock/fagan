@@ -67,14 +67,8 @@ def _parse_tools(raw: str) -> list[str]:
 
 
 def _result_status(result: object, *, existed: bool, dry_run: bool) -> str:
-    """Report status for one install result.
-
-    Prefers the engine's own ``status``; otherwise derives it from the
-    result's ``changed`` flag plus whether the target existed beforehand.
-    """
-    status = getattr(result, "status", None)
-    if isinstance(status, str) and status:
-        return status
+    """Derive the status word from the result's ``changed`` flag plus whether
+    the target existed beforehand."""
     if not getattr(result, "changed", False):
         return "unchanged"
     if dry_run:
@@ -105,8 +99,11 @@ def main(argv: list[str] | None = None) -> int:
     dry_run = args.dry_run
 
     for tool in tools:
-        existed = global_rules_targets.instructions_path(tool, env).exists()
         try:
+            # The target pre-check lives inside the guard too: resolving the
+            # target can itself raise (missing HOME, relative config-dir
+            # override) and must surface as exit 1, never a traceback.
+            existed = global_rules_targets.instructions_path(tool, env).exists()
             result = install_for_tool(
                 tool,
                 source_root=source_root,

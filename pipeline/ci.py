@@ -771,9 +771,24 @@ def _mark_story_done_impl(plan_name: str, story_key: str) -> dict[str, Any]:
         )
 
         manifest = _store.get_manifest(plan_name)  # noqa: F821
-        manifest["stories"][story_key]["status"] = "done"
-        manifest["stories"][story_key].pop("parked_reason", None)
+        story = manifest["stories"][story_key]
+        merged_outside_pipeline = story.get("status") != "done" and bool(story.get("pr_url"))
+        story["status"] = "done"
+        story.pop("parked_reason", None)
         _store.save_manifest(plan_name, manifest)  # noqa: F821
+
+        # The pipeline's own merge path marks a story done and emits
+        # story_merged itself. A story that reaches here with a pr_url and is
+        # not yet done was merged outside the pipeline: record the merge
+        # before the completion report below reads the sidecar.
+        if merged_outside_pipeline:
+            _notify_user(  # noqa: F821
+                plan_name,
+                f"{story_key} merged (closed via mark_story_done)",
+                event="story_merged",
+                story_key=story_key,
+                **({"correlation_id": story["correlation_id"]} if story.get("correlation_id") else {}),
+            )
 
         from .plan_completion import notify_if_plan_completed
 

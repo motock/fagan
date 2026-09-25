@@ -171,7 +171,7 @@ def test_park_via_exhausted_escalation_ladder_is_stamped(notify_calls, monkeypat
 
 
 def test_deferred_action_direct_notification_is_not_stamped(notify_calls):
-    """The extra, non-park notification in ``execute_ruling`` stays unstamped.
+    """The extra, non-park notification in ``execute_ruling`` is never stamped story_parked.
 
     A ``split_story`` ruling parks the story via ``_park`` (here the SPLIT
     payload is invalid, so the executor parks for a human) *and* then sends
@@ -201,6 +201,8 @@ def test_deferred_action_direct_notification_is_not_stamped(notify_calls):
     assert len(other_calls) == 1
     other = other_calls[0]
     assert other["kwargs"].get("event") != "story_parked"
+    # The direct notification is attributed to the story (event="triage_ruling")
+    # but never with an e-mailed event such as story_parked.
     assert other["kwargs"].get("event") == "triage_ruling", (
         "the direct notification must be attributed as triage_ruling, never an "
         f"e-mailed event; got {other['kwargs']!r}"

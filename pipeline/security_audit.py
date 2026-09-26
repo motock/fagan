@@ -11,8 +11,11 @@ never collide. Reads are forgiving - a missing, unreadable, malformed or
 wrong-shaped file is treated as "no audit recorded" - while writes are strict
 and atomic, so a crash can never leave a half-written record behind.
 
-Thresholds, git commit counting and the scheduler wiring live in sibling
-modules; this one deliberately has no externally visible behavior yet.
+The module also owns the pure decision logic for "is this repo due an audit":
+the two thresholds read from the environment, the count of commits since the
+last audited commit, and the reason (if any) the repo is due. The decision
+itself takes no environment, clock, git or file access, so it is trivially
+testable; the scheduler wiring lives in a sibling module.
 """
 
 import hashlib
@@ -20,13 +23,20 @@ import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _SHA_PATTERN = re.compile(r"[0-9a-f]{7,64}")
+
+COMMITS_ENV = "PIPELINE_SECURITY_AUDIT_EVERY_COMMITS"
+DAYS_ENV = "PIPELINE_SECURITY_AUDIT_EVERY_DAYS"
+
+_GIT_TIMEOUT_SECONDS = 30
 
 
 def state_path(state_dir, repo_root) -> Path:
@@ -107,3 +117,79 @@ def record_audit(state_dir, repo_root, sha, now: datetime) -> dict:
         raise
 
     return state
+
+
+def audit_thresholds(environ: Mapping) -> tuple[int, int]:
+    """Return ``(every_commits, every_days)`` read from ``environ``.
+
+    A value that is not a non-negative integer - absent, empty, negative or
+    fractional - yields 0, which means "that check is off". Both checks off is
+    the default, so an unconfigured pipeline never reports a repo as due.
+    """
+
+    def _read(name: str) -> int:
+        raw = environ.get(name)
+        if not isinstance(raw, str) or not raw.isdecimal():
+            return 0
+        return int(raw)
+
+    return _read(COMMITS_ENV), _read(DAYS_ENV)
+
+
+def commits_since(repo_root, sha) -> int | None:
+    """Return the number of commits in ``repo_root`` after ``sha``.
+
+    ``None`` means the count could not be determined: ``sha`` is unknown, the
+    directory is not a git repository, git is unavailable, or it did not
+    finish within the timeout.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", f"{sha}..HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.warning("could not count commits since %s in %s", sha, repo_root)
+        return None
+
+    if result.returncode != 0:
+        logger.warning("could not count commits since %s in %s", sha, repo_root)
+        return None
+
+    try:
+        return int(result.stdout.decode("utf-8", errors="replace").strip())
+    except ValueError:
+        logger.warning("unexpected git output counting commits since %s in %s", sha, repo_root)
+        return None
+
+
+def audit_due_reason(state, commits, now, every_commits, every_days) -> str | None:
+    """Return why the repo is due a security audit, or ``None`` if it is not.
+
+    Pure: it reads no environment, clock, git or files. ``state`` is the record
+    written by :func:`record_audit` (or ``None``), ``commits`` the count from
+    :func:`commits_since` (or ``None``), and the thresholds come from
+    :func:`audit_thresholds`. Both thresholds are inclusive.
+    """
+    if every_commits <= 0 and every_days <= 0:
+        return None
+    if state is None:
+        return "no security audit on record for this repo"
+    if commits is None:
+        return "the last audited commit is no longer in this repo's history"
+    if every_commits > 0 and commits >= every_commits:
+        return f"{commits} commits since the last audit (threshold {every_commits})"
+    if every_days > 0:
+        try:
+            audited_at = datetime.fromisoformat(state["last_audited_at"])
+        except (KeyError, TypeError, ValueError):
+            return "no security audit on record for this repo"
+        if audited_at.tzinfo is None or audited_at.utcoffset() is None:
+            return "no security audit on record for this repo"
+        elapsed = now - audited_at
+        if elapsed >= timedelta(days=every_days):
+            return f"{elapsed.days} days since the last audit (threshold {every_days})"
+    return None

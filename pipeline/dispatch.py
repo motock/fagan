@@ -387,15 +387,15 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             resume_journal=journal or None,
             review_feedback=None if resume_via_transcript else review_feedback,
         )
-        # REG-1: a story with no explicit model runs on the model the
-        # registry resolved for the dispatch role, not on the driver's env
-        # default. spec["model"] already carries story["model"]/persona
-        # precedence from _build_dispatch_command; only fill the gap when
-        # nothing more specific won, and only when the resolved model
-        # belongs to the backend that actually won (a claude dispatch is
+        # REG-1: dispatch_model is the resolved model for this story - the
+        # story's own pin translated to a concrete tag, else the registry's
+        # dispatch model - and it always wins over the raw spec value
+        # (spec["model"] carries story["model"]/persona precedence from
+        # _build_dispatch_command). It is None when the resolved model does
+        # not belong to the backend that actually won (a claude dispatch is
         # never handed an ollama tag - _resolve_dispatch_target already
-        # drops it, so dispatch_model is None there).
-        if not story.get("model") and dispatch_model:
+        # drops it), so the guard keeps spec["model"] intact there.
+        if dispatch_model:
             spec["model"] = dispatch_model
         # HARDEN-1: the executor must be told its cwd is authoritative on
         # EVERY dispatch - fresh or resumed - before any plan-authored brief

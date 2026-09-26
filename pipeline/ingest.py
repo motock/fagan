@@ -215,6 +215,22 @@ def _preflight_dispatch_provider(story: dict, plan_role_config: dict | None) -> 
     return "claude"
 
 
+_SECURITY_REVIEW_RE = re.compile(r"security[- ](?:engineer[- ])?review", re.IGNORECASE)
+
+
+def _security_review_unenforced_warning(story) -> str | None:
+    if story.get("risk") == "high":
+        return None
+    haystack = f"{story.get('summary', '')}\n{story.get('agent_instructions', '')}"
+    if not _SECURITY_REVIEW_RE.search(haystack):
+        return None
+    risk = story.get("risk") or "low"
+    return (
+        "This brief asks for a security review, but the pipeline's "
+        f"security-engineer pass only runs for risk: high (this story is risk: {risk})."
+    )
+
+
 def _files_field_error(story: dict) -> str | None:
     """Return an error string when ``story["files"]`` is invalid, else None.
 
@@ -587,6 +603,9 @@ def _ingest_plan_impl(
             # merge-gate reverify all run on macOS, but CI runs ubuntu-latest
             # only, so such a fixture passes every local gate and fails only
             # after the PR is open (observed live 2026-07-30). Advisory only.
+            msg = _security_review_unenforced_warning(story)
+            if msg is not None:
+                _notify_user(plan_name, f"{key}: {msg}", event="security_review_unenforced", story_key=key)
             platform_msg = _platform_locked_fixture_warning(story)
             if platform_msg is not None:
                 _notify_user(plan_name, f"{key}: {platform_msg}")

@@ -201,6 +201,6 @@ def scan_all_plans(bus):
     # Advisory check must never break the sweep or change its return value.
     try:
         _scan_security_audits(repo_plans)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("security audit due check failed")
     return events

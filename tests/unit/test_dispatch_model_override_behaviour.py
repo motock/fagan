@@ -402,3 +402,43 @@ def test_second_dispatch_of_same_story_keeps_the_registry_model(
         "story['model'] - only story['dispatched_model'] records it, so a "
         "later registry change is still observed"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test D: a story pinned to a registry model NAME runs on that name's TAG
+# ---------------------------------------------------------------------------
+def test_story_pinned_to_a_registry_name_reaches_the_driver_as_its_tag(
+    plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
+):
+    """``story["model"]`` may be a bare registry name (``friendly-pin``), not
+    a tag. Dispatch resolves it to the registry tag (``_resolve_dispatch_target``
+    already does) and the driver must be launched with that TAG.
+
+    RED today: the override only fires for a story with no pin, so the raw
+    bare name reaches the driver, which cannot resolve it (no ':' or '/') and
+    silently boots ``PIPELINE_LOCAL_MODEL_DEFAULT`` instead.
+    """
+    monkeypatch.setitem(
+        _REGISTRY_PROVIDERS["claude"]["models"],
+        "friendly-pin",
+        {"tag": "friendly-pin:cloud"},
+    )
+    _origin, repo, branch = _make_origin_and_repo(tmp_path)
+    _make_resumed_worktree(tmp_path, worktree_root, repo, branch, "S1")
+
+    captured = _arm_dispatch(
+        monkeypatch, tmp_path, plan_dir, repo, branch, "reg4", "S1",
+        _story(persona="security-engineer", model="friendly-pin"),
+    )
+
+    result = p.dispatch_story("reg4", "S1")
+    assert result["ok"] is True, f"dispatch did not reach the launch: {result}"
+    assert captured, "the dispatch driver was never invoked"
+
+    assert captured[0]["model"] == "friendly-pin:cloud"
+    story = _read_story(plan_dir, "reg4", "S1")
+    assert story["dispatched_model"] == "friendly-pin:cloud"
+    assert story["model"] == "friendly-pin", (
+        "the plan-authored pin must stay the registry NAME; only "
+        "dispatched_model records the resolved tag"
+    )

@@ -10,8 +10,13 @@ through pipeline.server at call time, so tests patching pipeline.server._service
 keep landing.
 """
 
+import os
+import re
+import subprocess
+from datetime import datetime, timezone
 from typing import Any
 
+from . import paths, security_audit
 from .module_ref import _ModuleRef
 
 _service = _ModuleRef("pipeline.server", "_service")
@@ -197,3 +202,37 @@ def advance_all_plans() -> dict[str, Any]:
     one-shot cleanup (e.g. tests, ops CLI) but is NOT wired in here.
     """
     return _service.advance_all_plans()
+
+
+def record_security_audit(repo_root: str, sha: str | None = None) -> dict[str, Any]:
+    """Record that a repository was security-audited at a given commit.
+
+    Parameters:
+        repo_root: Absolute path to an existing directory containing the git repo.
+        sha: Optional 4-64 hex-character commit id. Defaults to HEAD.
+
+    Returns:
+        On success, ``{"ok": True, "repo_root": ..., "last_audited_sha": ...,
+        "last_audited_at": ...}``. On failure, ``{"ok": False, "error": ...}``.
+    """
+    if not isinstance(repo_root, str) or not os.path.isabs(repo_root) or not os.path.isdir(repo_root):
+        return {"ok": False, "error": f"repo_root must be an absolute path to an existing directory: {repo_root!r}"}
+    if sha is not None and (not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{4,64}", sha)):
+        return {"ok": False, "error": f"sha must be 4-64 hex characters: {sha!r}"}
+    target = sha if sha is not None else "HEAD"
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{target}^{{commit}}"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": f"could not resolve sha {target!r}: {exc}"}
+    if proc.returncode != 0:
+        return {"ok": False, "error": f"could not resolve sha {target!r}"}
+    full_sha = proc.stdout.strip()
+    state = security_audit.record_audit(paths.PLAN_DIR, repo_root, full_sha, datetime.now(timezone.utc))
+    return {"ok": True, **state}

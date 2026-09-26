@@ -1474,6 +1474,10 @@ request.
 
 ---
 
+## Periodic security-audit reminder
+
+`record_security_audit(repo_root, sha=None)` stamps a repo as security-audited at `sha` (default HEAD, recorded in full) and returns `{ok, repo_root, last_audited_sha, last_audited_at}` or `{ok: false, error}`.
+
 ## End-to-end workflow
 
 1. **Plan.** Use the `product-analyst` persona to produce a plan, then

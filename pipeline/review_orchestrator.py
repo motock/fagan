@@ -66,6 +66,16 @@ REWORK_MAX_ATTEMPTS_ORACLE = _ServerRef("REWORK_MAX_ATTEMPTS_ORACLE")
 _LOCAL_BACKEND_NAMES = _ServerRef("_LOCAL_BACKEND_NAMES")
 
 
+_SECURITY_COMMENT_MAX_CHARS = 8_000
+
+
+def _format_security_comment(report: str) -> str:
+    header = "## Security review (security-engineer): APPROVE\n\n"
+    if len(report) > _SECURITY_COMMENT_MAX_CHARS:
+        return header + report[:_SECURITY_COMMENT_MAX_CHARS] + "\n\n[report truncated]"
+    return header + report
+
+
 def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
     """
     Run the code-reviewer persona over a dispatched story's branch. On APPROVE,
@@ -421,6 +431,7 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
 
     # High-risk stories require an additional security-engineer pass; both
     # must APPROVE before the story proceeds to pr_open.
+    security_output = None
     if verdict == "APPROVE" and story.get("risk") == "high":
         try:
             security_output = _run_security_reviewer(
@@ -688,6 +699,20 @@ def review_story(plan_name: str, story_key: str) -> dict[str, Any]:
             return {"ok": True, "verdict": verdict, "status": story["status"]}
         story["pr_url"] = pr_url
         story["status"] = "pr_open"
+        # The security-engineer pass's verdict otherwise lives only in the
+        # manifest, so a reader of the PR sees no evidence it ran. Post it now
+        # that the PR exists. A failed post must never change the story's
+        # status: the PR is already open and the verdict is already recorded.
+        if security_output is not None and worktree and os.path.isdir(worktree):
+            try:
+                _post_pr_comment(worktree, _format_security_comment(security_output))
+            except (subprocess.CalledProcessError, OSError):
+                _notify_user(
+                    plan_name,
+                    "security review comment not posted: the PR is already open and "
+                    "the security verdict is recorded in the manifest.",
+                    **_cid_kwargs,
+                )
         # The work passed: drop any stale rework state from earlier cycles.
         story.pop("review_feedback", None)
         story.pop("rework_attempts", None)

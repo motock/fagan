@@ -1261,8 +1261,11 @@ never touches the others. Two drivers exist today:
     verdict). Routing review local is best kept to low-risk stories; see the
     tiering note in `Local_LLM_Port_Plan.md`. **Exception:** the additional
     security-engineer pass run for `risk: "high"` stories (`_run_security_reviewer`)
-    always uses the Claude backend regardless of `PIPELINE_BACKEND_REVIEW` —
-    unlike the ordinary code-reviewer pass, it is never routed local. This is
+    resolves its own `security` role — the plan's `role_config`, then
+    `PIPELINE_BACKEND_SECURITY`, then the registry, defaulting to Claude —
+    independent of `PIPELINE_BACKEND_REVIEW`, so it may be routed local on its
+    own. An approving verdict is posted as a PR comment once the PR is open.
+    This is
     distinct from (and in addition to) the `auto`-only, dispatch-side
     security-persona guarantee described below.
   - **dispatch** — a native-tool-calling **write** agent loop

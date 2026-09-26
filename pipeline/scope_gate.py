@@ -48,7 +48,10 @@ SCOPE_GATE_REMEDY = (
     "which already contains the out-of-scope change. "
     "Then commit the revert in the same step, so the last commit stops "
     "carrying it. "
-    "If the brief requires a listed change, stop and report the conflict."
+    "If the brief requires a listed change, call request_decision naming the "
+    "path and why the brief needs it; if that tool is unavailable, end your "
+    "turn stating the conflict. Never delete a test or fixture to satisfy "
+    "this gate."
 )
 
 # Upper bound for each git invocation; the gate fails open on timeout.
@@ -56,16 +59,22 @@ _GIT_TIMEOUT_SECONDS = 30
 
 
 def is_test_path(path: str) -> bool:
-    """True for test paths: under ``tests/`` or a test/conftest basename."""
+    """Return True if *path* denotes a test file.
+
+    A path is a test path when ``tests`` is a whole directory component
+    (``"tests" in path.split("/")[:-1]``), or when its basename is
+    ``test_*.py``, ``*_test.py``, ``*_test.rs`` or ``conftest.py``.
+    ``contests/x.rs`` and ``src/tests.rs`` are production files.
+    """
     parts = path.split("/")
-    if parts[0] == "tests":
+    if "tests" in parts[:-1]:
         return True
     base = parts[-1]
-    return (
-        (base.startswith("test_") and base.endswith(".py"))
-        or base.endswith("_test.py")
-        or base == "conftest.py"
-    )
+    if base == "conftest.py":
+        return True
+    if base.startswith("test_") and base.endswith(".py"):
+        return True
+    return base.endswith(("_test.py", "_test.rs"))
 
 
 def scope_violations(

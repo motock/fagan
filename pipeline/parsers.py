@@ -20,6 +20,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .scope_gate import is_test_path
+
 
 def _extract_json_block(text: str) -> str:
     """Strip a ```json ... ``` / ``` ... ``` fence around a JSON payload, if
@@ -339,10 +341,8 @@ def _is_give_up_summary(summary: str) -> bool:
     return any(phrase in lowered for phrase in _GIVE_UP_PHRASES)
 
 def _is_test_file_path(path: str) -> bool:
-    """True iff `path`'s basename follows this repo's test-file naming
-    convention (test_*.py or *_test.py), regardless of directory."""
-    name = path.rsplit("/", 1)[-1]
-    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+    """Return True if *path* is a test file, following the scope gate's rule."""
+    return is_test_path(path)
 
 
 def _extract_blocking_finding_files(text: str) -> list[str]:

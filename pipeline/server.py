@@ -717,15 +717,15 @@ def ingest_plan(
     to their parent epic. Optionally restrict to specific epic summaries via
     only_epics. Returns a manifest mapping local IDs to Plane UUIDs.
 
-    Re-ingesting an already-ingested plan merges into the existing manifest
-    rather than replacing it: epics/stories not touched this call (including
-    everything only_epics excludes) are preserved verbatim, a story whose key
-    already exists gets its authored fields (summary, agent_instructions,
-    dependencies, persona, model, acceptance, risk) refreshed while its
-    runtime state (status, pr_url, ...) is kept, and top-level manifest keys
-    outside epics/stories/repo_root (paused, local_model_fallback, final_rework_escalation, ...) carry
-    over untouched. Pass overwrite=True to restore the old wholesale-replace
-    behavior (drops anything not produced by this call).
+    Re-ingesting an already-ingested plan merges into the existing manifest rather
+    than replacing it: epics/stories not touched this call (including everything
+    only_epics excludes) are preserved verbatim, a story whose key already exists gets
+    its authored fields (summary, agent_instructions, dependencies, persona, model,
+    acceptance, risk (only while todo), backend, tdd_split, files) refreshed while its
+    runtime state (status, pr_url, escalated, ...) is kept, and top-level manifest
+    keys outside epics/stories/repo_root (paused, local_model_fallback,
+    final_rework_escalation, ...) carry over untouched. Pass overwrite=True to restore
+    the old wholesale-replace behavior (drops anything not produced by this call).
     """
     return _service.ingest_plan(plan_name, only_epics=only_epics, overwrite=overwrite)
 
@@ -912,15 +912,15 @@ def patch_story(
 ) -> dict[str, Any]:
     """
     Edit a story's plan-authored fields (agent_instructions, model, persona,
-    risk, dependencies, acceptance, pr_url, summary) without hand-editing the
-    manifest JSON.
+    risk, dependencies, acceptance, pr_url, summary, tdd_split, backend)
+    without hand-editing the manifest JSON. `files` is not patchable: change
+    the plan's file list via ingest_plan and re-ingest.
 
-    Hand-editing the manifest directly races the scheduler's 60s
-    advance_all_plans tick - a read-modify-write on either side can silently
-    clobber the other's write. This tool acquires the same _plan_lock the
-    scheduler and dispatch_story use, so the edit is atomic with respect to
-    it. Only the fields above may be set; status transitions go through
-    set_story_status, not this tool.
+    Hand-editing the manifest races the scheduler's 60s advance_all_plans
+    tick - a read-modify-write on either side can clobber the other's write.
+    This tool takes the same _plan_lock the scheduler and dispatch_story use,
+    so the edit is atomic with respect to it. Only the fields above may be
+    set; status transitions go through set_story_status, not this tool.
     """
     return _service.patch_story(plan_name, story_key, fields)
 

@@ -536,9 +536,11 @@ Each record has the following keys:
   successful‑merge path immediately after the story is marked done, and by
   `mark_story_done` when it closes a story that has a `pr_url` and is not yet
   done - a PR merged outside the pipeline).
-  Two advisory events are attributed to a story but never disqualify its first
+  Three advisory events are attributed to a story but never disqualify its first
   pass: `triage_ruling` (triage's note of the action it ruled, sent alongside
-  the `story_parked` notice) and `sizing_risk` (ingest's story-sizing warning).
+  the `story_parked` notice), `sizing_risk` (ingest's story-sizing warning), and
+  `security_review_unenforced` (ingest's notice that a brief asks for a security
+  review on a story below `risk: high`).
   `brief_patched` is emitted whenever a story's `agent_instructions` are
   rewritten after it has already been dispatched (its manifest entry carries
   `dispatched_at`), so the metrics sidecar and the local-success classifier

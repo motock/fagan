@@ -1478,6 +1478,19 @@ request.
 
 `record_security_audit(repo_root, sha=None)` stamps a repo as security-audited at `sha` (default HEAD, recorded in full) and returns `{ok, repo_root, last_audited_sha, last_audited_at}` or `{ok: false, error}`.
 
+The reminder is optional and off unless a threshold is set. The scheduler sweep
+checks each repo named by an ingested, unpaused plan and sends a
+`security_audit_due` notice filed under the first such plan, at most once per 24
+hours per process.
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `PIPELINE_SECURITY_AUDIT_EVERY_COMMITS` | `0` (off) | Notify when at least this many commits landed on HEAD since the last recorded audit. |
+| `PIPELINE_SECURITY_AUDIT_EVERY_DAYS` | `0` (off) | Notify when at least this many days passed since the last recorded audit. |
+
+A repo with no recorded audit is due as soon as either threshold is on, and a
+value that is not a non-negative integer disables that check.
+
 ## End-to-end workflow
 
 1. **Plan.** Use the `product-analyst` persona to produce a plan, then

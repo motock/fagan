@@ -11,9 +11,12 @@ touches any external processes.
 import json
 import logging
 import os
+import time
+from datetime import datetime, timezone
 
-from . import paths
+from . import paths, security_audit
 from .events import make_event
+from .persistence import _notify_user
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +133,41 @@ def scan_done_markers(manifest: dict, plan: str, bus) -> list[dict]:
 
     return events
 
+_SECURITY_DUE_COOLDOWN_SECONDS = 24 * 3600
+_SECURITY_DUE_LAST_EMIT: dict[str, float] = {}
+
+
+def _scan_security_audits(repo_plans: dict[str, str]) -> None:
+    every_commits, every_days = security_audit.audit_thresholds(os.environ)
+    if every_commits == 0 and every_days == 0:
+        return
+    for repo_root, plan_name in repo_plans.items():
+        state = security_audit.read_audit_state(paths.PLAN_DIR, repo_root)
+        commits = (
+            security_audit.commits_since(repo_root, state["last_audited_sha"])
+            if state
+            else None
+        )
+        reason = security_audit.audit_due_reason(
+            state, commits, datetime.now(timezone.utc), every_commits, every_days
+        )
+        if reason is None:
+            continue
+        last_sha = state["last_audited_sha"] if state else None
+        dedup_key = f"security_audit_due:{repo_root}:{last_sha or 'none'}"
+        last_emit = _SECURITY_DUE_LAST_EMIT.get(dedup_key)
+        now_mono = time.monotonic()
+        if last_emit is not None and now_mono - last_emit < _SECURITY_DUE_COOLDOWN_SECONDS:
+            continue
+        _notify_user(
+            plan_name,
+            f"security audit due for {repo_root}: {reason}. Review it, then call record_security_audit to reset.",
+            event="security_audit_due",
+            dedup_key=dedup_key,
+        )
+        _SECURITY_DUE_LAST_EMIT[dedup_key] = now_mono
+
+
 def scan_all_plans(bus):
     """Scan all plan manifests in :data:`PLAN_DIR` and publish events.
 
@@ -145,6 +183,7 @@ def scan_all_plans(bus):
     into a single list.
     """
     events: list[dict] = []
+    repo_plans: dict[str, str] = {}
     for path in sorted(paths.PLAN_DIR.glob("*.manifest.json")):
         plan_name = path.name.removesuffix(".manifest.json")
         try:
@@ -156,4 +195,12 @@ def scan_all_plans(bus):
         if manifest.get("paused"):
             continue
         events.extend(scan_done_markers(manifest, plan_name, bus))
+        repo_root = manifest.get("repo_root")
+        if repo_root and os.path.isdir(repo_root):
+            repo_plans.setdefault(repo_root, plan_name)
+    # Advisory check must never break the sweep or change its return value.
+    try:
+        _scan_security_audits(repo_plans)
+    except Exception:
+        logger.exception("security audit due check failed")
     return events

@@ -974,8 +974,7 @@ from pipeline.review_orchestrator import (  # verbatim move; re-export for monke
     _verify_reviewer_auto_fix,
 )
 
-# The lifecycle tools are plain functions; registering them here keeps that
-# module free of an import-time dependency on this one.
+# The lifecycle tools are plain functions; registering them here avoids an import cycle.
 from . import server_tools_lifecycle as _lifecycle_tools
 
 request_decision = mcp.tool()(_lifecycle_tools.request_decision)
@@ -986,6 +985,7 @@ approve_merge = mcp.tool()(_lifecycle_tools.approve_merge)
 pause_plan = mcp.tool()(_lifecycle_tools.pause_plan)
 resume_plan = mcp.tool()(_lifecycle_tools.resume_plan)
 advance_all_plans = mcp.tool()(_lifecycle_tools.advance_all_plans)
+record_security_audit = mcp.tool()(_lifecycle_tools.record_security_audit)
 
 if __name__ == "__main__":
     mcp.run()

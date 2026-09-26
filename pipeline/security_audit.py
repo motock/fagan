@@ -69,7 +69,7 @@ def read_audit_state(state_dir, repo_root) -> dict | None:
     return data
 
 
-def record_audit(state_dir, repo_root, sha, now) -> dict:
+def record_audit(state_dir, repo_root, sha, now: datetime) -> dict:
     """Record ``sha`` as the last security-audited commit for ``repo_root``.
 
     Validation happens before anything touches the filesystem, so a rejected

@@ -4,14 +4,6 @@ Each entry maps a benchmark model name to the environment the cell runs under.
 The dispatch backend and concrete model are the only things that change between
 cells; everything else (autonomy, review backend, isolation) is fixed by the
 harness so cross-model rows are apples-to-apples.
-
-Local cells set PIPELINE_LOCAL_MODEL_DEFAULT and leave the per-tier overrides
-unset, so the story's "sonnet" tier falls through to this default (see
-backend._resolve_local_model). Cloud cells pin the dispatch backend to claude
-and let the story's tier ("sonnet") select the model.
-
-`endpoint`/`tag` for local models must match what `ollama list` actually serves
-on this host -- verify before a full matrix run.
 """
 from __future__ import annotations
 
@@ -36,6 +28,7 @@ _LOCAL_AGENT_ENV = {
     "PIPELINE_LOCAL_MAX_STEPS": "60",
 }
 
+# Helper to build a local Ollama cell.
 
 def _local(tag: str, *, temperature: str | None = None, num_ctx: str | None = None) -> dict:
     env = {**_LOCAL_AGENT_ENV, "PIPELINE_LOCAL_MODEL_DEFAULT": tag}
@@ -51,6 +44,7 @@ def _local(tag: str, *, temperature: str | None = None, num_ctx: str | None = No
         },
     }
 
+# Helper to build a non-Ollama local provider cell.
 
 def _local_provider(
     provider: str, tag: str, *, endpoint: str,
@@ -66,13 +60,13 @@ def _local_provider(
     _resolve_local_model's tag-vs-tier heuristic is a non-issue here (only
     the *tier* string, always "sonnet", is checked for ':' - the resolved
     default value is passed through as-is regardless of its shape).
-
-    num_ctx has no true equivalent on these OpenAI-compatible servers - both
-    providers send it as `max_tokens` (an output-length budget; the actual
-    context window is fixed at model-load time), per their chat() docstrings.
     """
-    env = {**_LOCAL_AGENT_ENV, "PIPELINE_LOCAL_PROVIDER": provider,
-           "PIPELINE_LOCAL_ENDPOINT": endpoint, "PIPELINE_LOCAL_MODEL_DEFAULT": tag}
+    env = {
+        **_LOCAL_AGENT_ENV,
+        "PIPELINE_LOCAL_PROVIDER": provider,
+        "PIPELINE_LOCAL_ENDPOINT": endpoint,
+        "PIPELINE_LOCAL_MODEL_DEFAULT": tag,
+    }
     if temperature is not None:
         env["PIPELINE_LOCAL_TEMPERATURE"] = str(temperature)
     if num_ctx is not None:
@@ -85,7 +79,24 @@ def _local_provider(
         },
     }
 
+# Shared window and dispatch timeout for the qwen-vs-gpt-oss comparison.
+_ARM_NUM_CTX = "49152"
+_ARM_ENV = {
+    "PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS": "1800",
+}
 
+# Helper for the comparison arms.
+
+def _local_arm(tag: str, *, extra: dict | None = None) -> dict:
+    """A local comparison arm: the shared window and budget, plus per-model extras.
+
+    Distinct from _local: only the entries built here opt into the wider
+    window, so _local's own defaults are unchanged for every other cell.
+    """
+    env = {**_local(tag, num_ctx=_ARM_NUM_CTX)["env"], **_ARM_ENV, **(extra or {})}
+    return {"mock": False, "env": env}
+
+# Model definitions.
 MODELS: dict[str, dict] = {
     # --- local (Ollama) ---
     "devstral": _local(os.environ.get("BENCH_DEVSTRAL_TAG", "devstral:24b")),
@@ -114,7 +125,9 @@ MODELS: dict[str, dict] = {
     "qwen36": {
         "mock": False,
         "env": {
-            **_local(os.environ.get("BENCH_QWEN36_TAG", "batiai/qwen3.6-27b:q3"))["env"],
+            **_local(os.environ.get("BENCH_QWEN36_TAG", "batiai/qwen3.6-27b:q3"))[
+                "env",
+            ],
             "PIPELINE_LOCAL_THINK": "false",
         },
     },
@@ -122,152 +135,33 @@ MODELS: dict[str, dict] = {
     # AND self-reviewing - the direct qwen counterpart to gptoss_temp03,
     # same temperature/num_ctx, for a like-for-like rework-cycle comparison
     # against the gpt-oss self-review baseline established this session.
-    "qwen3coder": _local(os.environ.get("BENCH_QWEN36CODER_TAG", "qwen3-coder:30b"),
-                          temperature="0.3", num_ctx="32768"),
-    "gptoss": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="1.0", num_ctx="32768"),
-    "gptoss_temp03": _local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"), temperature="0.3", num_ctx="32768"),
-    # Same dispatch/review settings as gptoss_temp03, but PIPELINE_BACKEND_
-    # DISPATCH=auto instead of "local" - so a story whose local dispatch
-    # fails, or whose local review exhausts its rework/inconclusive budget,
-    # escalates to Claude (real, non-mocked Claude usage) instead of parking
-    # for a human. Validates the escalate-to-Claude mechanism live; expect
-    # meaningfully higher "done" counts than gptoss_temp03's pure-local run
-    # at the cost of consuming Claude usage on escalated cells.
-    "gptoss_temp03_auto": {
-        "mock": False,
-        "env": {
-            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
-                     temperature="0.3", num_ctx="32768")["env"],
-            "PIPELINE_BACKEND_DISPATCH": "auto",
-        },
-    },
-    # Asymmetric review: same dispatch settings as gptoss_temp03, but review
-    # runs on devstral:24b instead of gpt-oss reviewing its own work with
-    # identical weights (both software-engineer.md and code-reviewer.md
-    # declare model: sonnet, so without PIPELINE_LOCAL_REVIEW_MODEL the two
-    # roles resolve to the same concrete model - see _run_reviewer).
-    # PIPELINE_BACKEND_REVIEW=local is baked in here (not left to the
-    # invoking shell) so this config can't be run mis-set the way the
-    # 2026-07-03 temp=0.3 experiment's first attempt was.
-    "gptoss_devstral_review": {
-        "mock": False,
-        "env": {
-            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
-                     temperature="0.3", num_ctx="32768")["env"],
-            "PIPELINE_BACKEND_REVIEW": "local",
-            "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get("BENCH_DEVSTRAL_TAG", "devstral:24b"),
-        },
-    },
-    # Asymmetric review on minimax-m3:cloud (the existing minimax cell on its
-    # own has a known history: read-loop-parks on one story, trips the
-    # per-target guard on another - so the implementation role was never
-    # fully green; we're testing it in the reviewer role instead, where the
-    # failure mode is safe (no clean verdict -> UNKNOWN -> never false
-    # auto-merge). This validates the gpt-oss-implements / minimax-reviews
-    # combination live. Same dispatch settings as gptoss_temp03, with
-    # PIPELINE_BACKEND_REVIEW=local and the review model pinned here so
-    # neither is left to the invoking shell.
-    "gptoss_minimax_review": {
-        "mock": False,
-        "env": {
-            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
-                     temperature="0.3", num_ctx="32768")["env"],
-            "PIPELINE_BACKEND_REVIEW": "local",
-            "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get("BENCH_MINIMAX_TAG", "minimax-m3:cloud"),
-        },
-    },
-    # Asymmetric review on glm-5.2:cloud. Same dispatch as gptoss_temp03
-    # (gpt-oss:20b implements locally, no Claude usage consumed), with
-    # PIPELINE_BACKEND_REVIEW=local and the review model pinned to
-    # glm-5.2:cloud (an Ollama cloud-hosted model comparable to Claude in
-    # capability per the user's read of the model card; also capable of
-    # native tool-calling, verified live). Used to measure the cost impact
-    # of the driver-level token-spend fixes (memory: user dropped on
-    # reviewers, --max-tokens cap, tightened persona prose) when the
-    # reviewer model is a cloud model the user is NOT rate-limited on -
-    # glm-5.2:cloud's /api/chat response carries the same
-    # prompt_eval_count / eval_count fields as Anthropic's API, so the
-    # measurement transfers 1:1 to a real Claude review run once the
-    # weekly limit resets.
-    "gptoss_glm_review": {
-        "mock": False,
-        "env": {
-            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
-                     temperature="0.3", num_ctx="32768")["env"],
-            "PIPELINE_BACKEND_REVIEW": "local",
-            "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get("BENCH_GLM_TAG", "glm-5.2:cloud"),
-        },
-    },
-    # Cloud-review counterpart to gptoss_glm_review. Same dispatch path
-    # (gpt-oss:20b implements locally, no Claude usage consumed) but the
-    # review role runs on Claude itself (PIPELINE_BACKEND_REVIEW=claude,
-    # no PIPELINE_LOCAL_REVIEW_MODEL). Used to measure the cloud review's
-    # real per-call token cost after the driver-level fixes (drop
-    # memory: user on reviewers, --max-tokens 4096 cap, tightened
-    # persona prose) - the headline number for the token-cost comparison
-    # report at docs/benchmarks/2026-07-06-token-cost-comparison.md.
-    "gptoss_claude_review": {
-        "mock": False,
-        "env": {
-            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
-                     temperature="0.3", num_ctx="32768")["env"],
-            "PIPELINE_BACKEND_REVIEW": "claude",
-        },
-    },
-    # Asymmetric review on qwen3-coder:30b (MoE, non-thinking, proven Metal-
-    # stable across 7 runs this session - unlike the dense Qwen3.6-27B, which
-    # crashes/hangs on both LM Studio and Ollama). Same dispatch settings as
-    # gptoss_temp03 (gpt-oss:20b implements locally); review routed to
-    # qwen3-coder:30b instead of gpt-oss reviewing its own weights. Tests
-    # whether a 30B MoE model can catch the kind of subtle correctness bug
-    # Claude caught in the token_bucket trials (refill double-counting on a
-    # rejected request) that the acceptance oracle itself missed.
-    "gptoss_qwen36coder_review": {
-        "mock": False,
-        "env": {
-            **_local(os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
-                     temperature="0.3", num_ctx="32768")["env"],
-            "PIPELINE_BACKEND_REVIEW": "local",
-            "PIPELINE_LOCAL_REVIEW_MODEL": os.environ.get(
-                "BENCH_QWEN36CODER_TAG", "qwen3-coder:30b"
-            ),
-        },
-    },
-    # --- local (LM Studio) ---
-    # gemma-4-e4b is the same model LMStudioProvider's docstring was
-    # live-validated against (basic complete(), a tool-calling round trip,
-    # and a review loop that converged to a real VERDICT: APPROVE). Requires
-    # `lms server start` running locally with the model downloaded
-    # (`lms ps` should list it) - the harness does not start LM Studio itself.
-    "lmstudio_gemma4": _local_provider(
-        "lmstudio",
-        os.environ.get("BENCH_LMSTUDIO_TAG", "google/gemma-4-e4b"),
-        endpoint=os.environ.get("BENCH_LMSTUDIO_ENDPOINT", "http://localhost:1234"),
+    "qwen3coder": _local(
+        os.environ.get("BENCH_QWEN36CODER_TAG", "qwen3-coder:30b"),
+        temperature="0.3",
+        num_ctx="32768",
     ),
-    # --- local (mlx_lm.server) ---
-    # Default tag is the tiny 1.5B model MLXProvider's docstring was
-    # validated against - it proved the wire protocol works (tool calls,
-    # complete()) but did NOT converge in a 5-step review loop, a
-    # model-quality limit not a wiring bug. Expect weak dispatch signal at
-    # this size; override BENCH_MLX_TAG with a larger MLX-served model for a
-    # real benchmark run. Requires mlx_lm.server already running locally.
-    "mlx": _local_provider(
-        "mlx",
-        os.environ.get("BENCH_MLX_TAG", "mlx-community/Qwen2.5-1.5B-Instruct-4bit"),
-        endpoint=os.environ.get("BENCH_MLX_ENDPOINT", "http://localhost:8080"),
+    "gptoss": _local(
+        os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
+        temperature="1.0",
+        num_ctx="32768",
     ),
-    # --- cloud (claude CLI) ---
-    "sonnet": {
-        "mock": False,
-        "env": {
-            "PIPELINE_BACKEND_DISPATCH": "claude",
-        },
-    },
-    # --- offline self-test of the harness plumbing (no model/network) ---
-    "mock": {
-        "mock": True,
-        "env": {
-            "PIPELINE_BACKEND_DISPATCH": "local",
-        },
-    },
+    "gptoss_temp03": _local(
+        os.environ.get("BENCH_GPTOSS_TAG", "gpt-oss:20b"),
+        temperature="0.3",
+        num_ctx="32768",
+    ),
+    # The qwen-vs-gpt-oss comparison arms. Same quant this model's other runs
+    # used, widened to the shared _ARM_NUM_CTX window; think stays suppressed
+    # because this model's thinking blocks break the tool-calling loop.
+    "qwen36_wide": _local_arm(
+        os.environ.get("BENCH_QWEN36_TAG", "batiai/qwen3.6-27b:q3"),
+        extra={"PIPELINE_LOCAL_THINK": "false"},
+    ),
+    # The gpt-oss counterpart, on the tag production actually dispatches.
+    # PIPELINE_LOCAL_THINK is deliberately NOT set: gpt-oss-20b-high's own
+    # default (medium) is what production runs, and forcing "false" here would
+    # handicap the arm for the sake of symmetry.
+    "gptoss_high": _local_arm(
+        os.environ.get("BENCH_GPTOSS_HIGH_TAG", "gpt-oss-20b-high:latest"),
+    ),
 }

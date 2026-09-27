@@ -170,7 +170,7 @@ def main() -> int:
     )
 
     p.save_plan(plan_name, json.dumps(plan))
-    p.ingest_plan(plan_name)
+    harness.ingest_or_raise(p, plan_name)
 
     started = time.time()
     deadline = started + args.timeout

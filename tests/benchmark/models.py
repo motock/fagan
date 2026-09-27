@@ -52,6 +52,29 @@ def _local(tag: str, *, temperature: str | None = None, num_ctx: str | None = No
     }
 
 
+_ARM_NUM_CTX = "49152"
+
+# Both local arms of the qwen-vs-gpt-oss comparison (tests/benchmark/_runs/
+# qwen38_iq3s_*) run at an identical window and dispatch budget so that the
+# model is the only variable between them. 49152 is the largest num_ctx that
+# keeps this host's qwen35 KV cache 100% on GPU - 65536 already spills 256 MiB
+# to CPU KV. Raising the window also means the local agent loop stops trimming
+# its transcript, so the per-dispatch budget rises with it.
+_ARM_ENV = {
+    "PIPELINE_LOCAL_DISPATCH_TIMEOUT_SECONDS": "1800",
+}
+
+
+def _local_arm(tag: str, *, extra: dict | None = None) -> dict:
+    """A local comparison arm: the shared window and budget, plus per-model extras.
+
+    Distinct from _local: only the entries built here opt into the wider
+    window, so _local's own defaults are unchanged for every other cell.
+    """
+    env = {**_local(tag, num_ctx=_ARM_NUM_CTX)["env"], **_ARM_ENV, **(extra or {})}
+    return {"mock": False, "env": env}
+
+
 def _local_provider(
     provider: str, tag: str, *, endpoint: str,
     temperature: str | None = None, num_ctx: str | None = None,
@@ -118,6 +141,20 @@ MODELS: dict[str, dict] = {
             "PIPELINE_LOCAL_THINK": "false",
         },
     },
+    # The qwen-vs-gpt-oss comparison arms. Same quant this model's other runs
+    # used, widened to the shared _ARM_NUM_CTX window; think stays suppressed
+    # because this model's thinking blocks break the tool-calling loop.
+    "qwen36_wide": _local_arm(
+        os.environ.get("BENCH_QWEN36_TAG", "batiai/qwen3.6-27b:q3"),
+        extra={"PIPELINE_LOCAL_THINK": "false"},
+    ),
+    # The gpt-oss counterpart, on the tag production actually dispatches.
+    # PIPELINE_LOCAL_THINK is deliberately NOT set: gpt-oss-20b-high's own
+    # default (medium) is what production runs, and forcing "false" here would
+    # handicap the arm for the sake of symmetry.
+    "gptoss_high": _local_arm(
+        os.environ.get("BENCH_GPTOSS_HIGH_TAG", "gpt-oss-20b-high:latest")
+    ),
     # qwen3-coder:30b (MoE, non-thinking, proven Metal-stable) implementing
     # AND self-reviewing - the direct qwen counterpart to gptoss_temp03,
     # same temperature/num_ctx, for a like-for-like rework-cycle comparison

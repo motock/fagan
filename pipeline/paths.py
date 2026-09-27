@@ -18,6 +18,7 @@ because tests don't patch them and they're a pure leaf helper.
 """
 
 import os
+from collections.abc import Iterable
 from pathlib import Path
 
 PLAN_DIR = Path(os.environ.get("PLAN_DIR", "~/.claude/plans")).expanduser()
@@ -74,7 +75,9 @@ _WORKTREE_LOG_EXCLUDES = (
 )
 
 
-def _exclude_worktree_logs_from_tracking(repo_root: Path) -> None:
+def _exclude_worktree_logs_from_tracking(
+    repo_root: Path, extra: Iterable[str] = ()
+) -> None:
     """Best-effort: append _WORKTREE_LOG_EXCLUDES to repo_root/.git/info/exclude
     if not already present. Never raises - this is a hygiene fix, not a
     correctness requirement, and must not break dispatch if the repo's .git
@@ -85,7 +88,8 @@ def _exclude_worktree_logs_from_tracking(repo_root: Path) -> None:
         info_dir.mkdir(parents=True, exist_ok=True)
         exclude_path = info_dir / "exclude"
         existing = exclude_path.read_text() if exclude_path.exists() else ""
-        missing = [name for name in _WORKTREE_LOG_EXCLUDES if name not in existing]
+        names = (*_WORKTREE_LOG_EXCLUDES, *extra)
+        missing = [name for name in names if name not in existing]
         if missing:
             with exclude_path.open("a") as f:
                 if existing and not existing.endswith("\n"):

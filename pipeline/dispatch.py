@@ -130,6 +130,17 @@ def _dispatch_story_impl(plan_name: str, story_key: str) -> dict[str, Any]:
             story.get("status") in ("interrupted", "changes_requested")
             or worktree_path.exists()
         )
+        # The story's acceptance fixtures are materialized into the worktree
+        # below as plain untracked files, so a `git add -A` would sweep the
+        # read-only grading oracle into the story commit. Exclude them here -
+        # this writes the repo-level .git/info/exclude, so it needs no
+        # worktree and must simply run before the first commit.
+        _acceptance_paths = _acceptance_rel_paths(story)
+        if _acceptance_paths:
+            with _scoped_repo_root(plan_name) as _oracle_repo_root:
+                _exclude_worktree_logs_from_tracking(
+                    _oracle_repo_root, _acceptance_paths
+                )
         journal = _read_journal(plan_name, story_key) if resuming else []
 
         if not resuming:

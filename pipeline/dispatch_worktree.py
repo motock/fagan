@@ -35,6 +35,20 @@ def _create_fresh_worktree(
     """
     try:
         with _scoped_repo_root(plan_name) as repo_root:
+            if not Path(repo_root).is_dir():
+                # repo_root is recorded at ingest and then trusted forever, so
+                # it can be gone by dispatch time (a plan ingested against a
+                # temp directory, a moved checkout). Every git command below
+                # runs with it as its cwd, where subprocess raises
+                # FileNotFoundError - not the CalledProcessError this function
+                # handles - so fail closed here, before running any git at all.
+                return {
+                    "ok": False,
+                    "error": (
+                        f"repo_root {str(repo_root)!r} does not exist - refusing "
+                        "to set up a worktree for a missing repository"
+                    ),
+                }
             with _try_acquire_git_lock(repo_root) as acquired:
                 if acquired:
                     subprocess.run(

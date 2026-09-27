@@ -69,6 +69,7 @@ _WORKTREE_LOG_EXCLUDES = (
     # _commit_wip `git add -A` tracks it, and the pre-merge rebase then
     # replays it and refuses on the dirty tree, terminal-failing an
     # otherwise-green story.
+    ".tdd_split_test_author_done",
     ".dispatch_baseline_test_checked",
 )
 

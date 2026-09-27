@@ -59,15 +59,17 @@ _WORKTREE_LOG_EXCLUDES = (
     # other four untracked-and-unignored, so _commit_wip's `git add -A` swept
     # them into story commits (a stray test_author.log.ts reached
     # agent/chatreload-1 on 2026-09-11).
-    "agent.log", "*.log.ts", "*.log.raw", "review.log", ".agent_plan.md",
+    # spawn_local opens a bare .log for every phase it runs; exclude them here
+    # rather than relying on the host repo's .gitignore.
+    "*.log", "agent.log", "*.log.ts", "*.log.raw", "review.log", ".agent_plan.md",
     ".agent_scratchpad.md", ".agent_scratchpad*.md", "*agent_scratchpad*.md", ".agent_plan_src_hash",
     # The baseline-snapshot marker dispatch.py writes into a freshly created
     # worktree BEFORE the test-author phase and the executor run. Same Mode 17
-    # exposure as .agent_plan_src_hash above (and the same reason
-    # .tdd_split_test_author_done is in .gitignore): the story's first
+    # exposure as .agent_plan_src_hash above (and the same reason .tdd_split_test_author_done is excluded above): the story's first
     # _commit_wip `git add -A` tracks it, and the pre-merge rebase then
     # replays it and refuses on the dirty tree, terminal-failing an
     # otherwise-green story.
+    ".tdd_split_test_author_done",
     ".dispatch_baseline_test_checked",
 )
 

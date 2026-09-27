@@ -665,6 +665,7 @@ def test_dispatch_story_uses_manifest_repo_root_for_git_commands(
     plan_dir, worktree_root, agents_dir, monkeypatch, tmp_path,
 ):
     real_repo = tmp_path / "real-repo"
+    real_repo.mkdir()
     _write_manifest(plan_dir, "rrds", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},
@@ -708,6 +709,7 @@ def test_dispatch_story_records_resolved_model_on_manifest(
     tier ('sonnet'). The declared story['model'] is left unchanged (it's a
     routing hint the plan specified)."""
     real_repo = tmp_path / "real-repo"
+    real_repo.mkdir()
     _write_manifest(plan_dir, "drm", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": [], "model": "sonnet"},
@@ -744,6 +746,7 @@ def test_dispatch_story_records_dispatched_at_timestamp(
     can bound how long a dispatch is allowed to run before its subprocess is
     treated as hung (see the watchdog tests on check_story_status)."""
     real_repo = tmp_path / "real-repo"
+    real_repo.mkdir()
     _write_manifest(plan_dir, "dat", {
         "S1": {"summary": "Do thing", "agent_instructions": "Build it.",
                "status": "todo", "dependencies": []},

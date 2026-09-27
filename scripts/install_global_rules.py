@@ -18,6 +18,11 @@ import os
 import sys
 from pathlib import Path
 
+# Repo root: this file lives in scripts/ alongside the pipeline package, and is
+# documented to be run directly (`python scripts/install_global_rules.py`),
+# which puts scripts/ - not the repo root - on sys.path[0].
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from pipeline import global_rules_targets
 from pipeline.global_rules_install import install_for_tool
 

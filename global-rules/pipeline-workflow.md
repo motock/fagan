@@ -4,7 +4,8 @@ Applies when the `pipeline` MCP server (fagan) is registered with your client.
 If it is not registered, skip this file: the engineering standards still apply.
 
 Tool names below are the bare names. Your client may prefix them
-(`mcp__pipeline__save_plan` in Claude Code); match on the suffix.
+(`mcp__pipeline__save_plan` in Claude Code, `pipeline_save_plan` in opencode);
+match on the suffix.
 
 ## 1. Drive work through the pipeline
 Do not start coding against an ad hoc, untracked request. Register it first,

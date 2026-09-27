@@ -81,8 +81,8 @@ def _exclude_worktree_logs_from_tracking(
     """Best-effort: append _WORKTREE_LOG_EXCLUDES to repo_root/.git/info/exclude
     if not already present. Never raises - this is a hygiene fix, not a
     correctness requirement, and must not break dispatch if the repo's .git
-    layout is unexpected (e.g. a submodule, or repo_root not actually a git
-    repo yet in some caller)."""
+    layout is unexpected (e.g. a submodule, or repo_root not actually a git repo yet in some caller). Callers may also pass ``extra``, an iterable of additional path names to exclude alongside _WORKTREE_LOG_EXCLUDES; it defaults to ``()`` and is never mutated.
+    """
     try:
         info_dir = repo_root / ".git" / "info"
         info_dir.mkdir(parents=True, exist_ok=True)

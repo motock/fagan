@@ -316,6 +316,12 @@ def setup_workspace(cell: Path, task: dict | None = None) -> dict[str, Path]:
             "worktrees": worktrees, "init_sha": init_sha}
 
 
+# ingest_plan rejects a non-Claude story that has no `Preflight:` line
+# unless the plan carries a plan-level preflight_override. Benchmark stories
+# are synthetic, so no impact run against a base commit applies to them.
+_PREFLIGHT_OVERRIDE_REASON = "benchmark harness: synthetic story, no base commit to impact-run"
+
+
 def build_plan(repo: Path, task: dict) -> dict:
     """One epic, one story carrying the acceptance fixture as a read-only oracle.
     The acceptance path and the file the agent must write are dispatched on
@@ -338,6 +344,7 @@ def build_plan(repo: Path, task: dict) -> dict:
         raise ValueError(f"build_plan: unknown ecosystem {ecosystem!r}")
     return {
         "repo_root": str(repo),
+        "preflight_override": _PREFLIGHT_OVERRIDE_REASON,
         "epics": [{
             "summary": f"benchmark: {task['name']}",
             "stories": [{
@@ -363,11 +370,25 @@ def build_plan_from_stories(repo: Path, epic_summary: str, stories: list[dict]) 
     drive_plan(), not drive()."""
     return {
         "repo_root": str(repo),
+        "preflight_override": _PREFLIGHT_OVERRIDE_REASON,
         "epics": [{
             "summary": epic_summary,
             "stories": stories,
         }],
     }
+
+
+def ingest_or_raise(p, plan_name: str) -> dict:
+    """Ingest the plan, raising when ingest_plan rejects it.
+
+    ingest_plan reports rejection as {"ok": False, "error": ...} rather than
+    raising, so an unchecked call leaves no manifest and the failure surfaces
+    later as an unrelated FileNotFoundError.
+    """
+    result = p.ingest_plan(plan_name)
+    if not result.get("ok"):
+        raise RuntimeError(f"ingest_plan rejected {plan_name!r}: {result.get('error')}")
+    return result
 
 
 def install_merge_stubs(p, repo: Path) -> None:
@@ -781,7 +802,7 @@ def main() -> int:
     plan = build_plan(repo, task)
 
     p.save_plan(plan_name, json.dumps(plan))
-    p.ingest_plan(plan_name)
+    ingest_or_raise(p, plan_name)
 
     started = time.time()
     deadline = started + args.timeout

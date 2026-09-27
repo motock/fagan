@@ -244,7 +244,7 @@ def setup_workspace(cell: Path, task: dict | None = None) -> dict[str, Path]:
         )
         (repo / "README.md").write_text("# benchmark task workspace\n")
         (repo / ".venv").symlink_to(PIPELINE_REPO / ".venv")
-        (repo / ".gitignore").write_text(".venv/\n__pycache__/\n")
+        (repo / ".gitignore").write_text(".venv\n__pycache__/\n")
     elif ecosystem == "cargo":
         # Cargo.toml at the root makes `detect_test_command` pick `cargo test`.
         # Edition 2021 is the modern default; src/lib.rs is the conventional

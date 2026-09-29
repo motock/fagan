@@ -139,3 +139,41 @@ def test_should_not_touch_other_worktree_files(tmp_path, spawn_recorder):
     assert tmp_marker.exists()
     assert tmp_marker.read_text() == "in flight"
     assert not (tmp_path / CONSUMED).exists()
+
+
+def test_should_propagate_non_filenotfound_oserror(tmp_path, spawn_recorder, monkeypatch):
+    """A worktree we cannot write to is a real fault, not a silent skip."""
+    (tmp_path / UNCONSUMED).write_text("done")
+
+    def deny(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(type(tmp_path), "unlink", deny)
+
+    with pytest.raises(PermissionError):
+        _spawn(tmp_path)
+
+    assert spawn_recorder == []
+
+
+def test_should_not_clear_markers_on_ssh_dispatch(tmp_path, spawn_recorder, monkeypatch):
+    """The ssh early-return happens before the clear, so remote is untouched."""
+    monkeypatch.setenv("PIPELINE_EXEC_DISPATCH", "ssh")
+    consumed = tmp_path / CONSUMED
+    unconsumed = tmp_path / UNCONSUMED
+    consumed.write_text("done")
+    unconsumed.write_text("done")
+
+    ssh_calls = []
+
+    def fake_ssh(cmd, *, cwd, log_path, append, env=None):
+        ssh_calls.append(cwd)
+        return SimpleNamespace(pid=4242, model="")
+
+    monkeypatch.setattr(execution, "_spawn_ssh", fake_ssh)
+
+    _spawn(tmp_path)
+
+    assert len(ssh_calls) == 1
+    assert consumed.exists()
+    assert unconsumed.exists()

@@ -181,6 +181,8 @@ def _terminate_and_checkpoint(
         "commit": sha,
         "ts": interrupted_at,
     }
+    if pid_reused:
+        record["pid_reused"] = True
     # Completion evidence (LOCKSTARVE-D2): distinguish a run that actually
     # finished (last log line, branch commits, .agent_done) from one that
     # genuinely stalled. Each lookup fails open individually and the fields

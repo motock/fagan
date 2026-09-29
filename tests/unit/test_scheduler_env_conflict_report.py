@@ -87,9 +87,11 @@ class TestReportEnvConflicts:
         _import_daemon()._report_env_conflicts()
         assert _stderr_lines(capsys) == []
 
-    def test_should_ignore_var_set_in_only_one_layer(
+    def test_should_warn_when_var_is_set_in_only_one_layer(
         self, tmp_path, monkeypatch, capsys
     ):
+        """A key set in only one layer IS a divergence: the two code paths run
+        with different behaviour.  The absent side is named as ``<unset>``."""
         monkeypatch.delenv("PIPELINE_MAX_CONCURRENT_AGENTS", raising=False)
         # plist only
         _point_at_fixtures(
@@ -99,7 +101,12 @@ class TestReportEnvConflicts:
             {},
         )
         _import_daemon()._report_env_conflicts()
-        assert _stderr_lines(capsys) == []
+        lines = _stderr_lines(capsys)
+        assert len(lines) == 1
+        assert lines[0].startswith("scheduler_daemon: WARNING ")
+        assert "PIPELINE_MAX_CONCURRENT_AGENTS" in lines[0]
+        assert "launchd_plist=2" in lines[0]
+        assert "mcp_server_env=<unset>" in lines[0]
         # claude.json only
         _point_at_fixtures(
             monkeypatch,
@@ -108,11 +115,31 @@ class TestReportEnvConflicts:
             {"PIPELINE_MAX_CONCURRENT_AGENTS": "4"},
         )
         _import_daemon()._report_env_conflicts()
-        assert _stderr_lines(capsys) == []
+        lines = _stderr_lines(capsys)
+        assert len(lines) == 1
+        assert lines[0].startswith("scheduler_daemon: WARNING ")
+        assert "PIPELINE_MAX_CONCURRENT_AGENTS" in lines[0]
+        assert "launchd_plist=<unset>" in lines[0]
+        assert "mcp_server_env=4" in lines[0]
         # neither layer has anything at all
         _point_at_fixtures(monkeypatch, tmp_path, {}, {})
         _import_daemon()._report_env_conflicts()
         assert _stderr_lines(capsys) == []
+
+    def test_should_stay_silent_for_benign_one_sided_diffs(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Every name in the explicit benign allow-list is subtracted from the
+        one-sided diff, so it produces no warning."""
+        daemon = _import_daemon()
+        benign = getattr(daemon, "_BENIGN_ONE_SIDED_DIFFS", None)
+        assert isinstance(benign, (set, frozenset))
+        assert all(isinstance(name, str) for name in benign)
+        for name in sorted(benign):
+            monkeypatch.delenv(name, raising=False)
+            _point_at_fixtures(monkeypatch, tmp_path, {name: "plist-value"}, {})
+            daemon._report_env_conflicts()
+            assert _stderr_lines(capsys) == [], name
 
     def test_should_mask_secret_values(self, tmp_path, monkeypatch, capsys):
         monkeypatch.delenv("PIPELINE_NOTIFY_EMAIL_PASSWORD", raising=False)
@@ -136,7 +163,7 @@ class TestReportEnvConflicts:
         def _boom(*args, **kwargs):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(provenance, "effective_env_config", _boom)
+        monkeypatch.setattr(provenance, "read_plist_env", _boom)
         _import_daemon()._report_env_conflicts()  # must not raise
         lines = _stderr_lines(capsys)
         assert len(lines) == 1

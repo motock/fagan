@@ -730,6 +730,8 @@ def run_daemon() -> int:
         os.close(lock_fd)
         return 1
 
+    _report_env_conflicts()
+
     health_path = os.environ.get("PIPELINE_SCHEDULER_HEALTH_PATH") or str(
         PLAN_DIR / ".scheduler_health.json"
     )

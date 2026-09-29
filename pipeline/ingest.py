@@ -62,6 +62,17 @@ _AUTO_ROUTE_SKIPPED_SUFFIX = (
     "; auto-route skipped: PIPELINE_LOCAL_MODEL_DEFAULT is not a :cloud tag"
 )
 
+# Matches a backticked RELATIVE repo path with at least one ``/`` and a final
+# component carrying a file extension: segments of ``[\w.\-]+`` separated by
+# ``/``, the first character not ``/`` or ``.``, and the last segment shaped
+# ``name.ext``. Deliberately language-agnostic (LAG-8): any
+# ``dir/.../name.ext`` counts, not just the old hard-coded
+# ``app|pipeline|static|scripts|tests|docs|src|systemd/`` prefixes. Test paths
+# are filtered out afterwards by ``_is_test_path`` (LAG-2).
+_BACKTICK_REPO_PATH_RE = re.compile(
+    r"`((?!\.|/)[\w.\-]+(?:/[\w.\-]+)*/[\w.\-]+\.[\w.\-]+)`"
+)
+
 
 def _is_test_path(path) -> bool:
     """Return True if *path* looks like a test file in any supported language.
@@ -93,14 +104,7 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
     instructions = story.get("agent_instructions") or ""
     # Reuse the same backtick-quoted-repo-path convention every brief in
     # this codebase already follows (see any story's "Files:" line).
-    regex_paths = sorted(
-        set(
-            re.findall(
-                r"`((?:app|pipeline|static|scripts|tests|docs|src|systemd)/[\w/.\-]+)`",
-                instructions,
-            )
-        )
-    )
+    regex_paths = sorted(set(_BACKTICK_REPO_PATH_RE.findall(instructions)))
     # A declared `files` list is authoritative when present (even empty);
     # otherwise fall back to the backtick-regex derivation above.
     files = story.get("files")

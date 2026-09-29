@@ -90,7 +90,7 @@ brief or its siblings. It grades every PR as if it were a complete change.
   description must carry it verbatim.
 
 ### 3. Size the tests to the change
-- **Doc-only or config-only stories:** set `"tdd_split": false` and
+- **Doc-only or config-only stories:** put the `[no-new-tests]` token in `agent_instructions` (the per-story `tdd_split` opt-in was removed; see pipeline-story-schema.md) and
   prescribe at most one small test (locate the row/key by unique text and
   assert its cells/value). The always-on test-author phase otherwise writes
   hundreds of lines of prose assertions (661 lines for a 3-row table edit on

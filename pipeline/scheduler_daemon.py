@@ -724,10 +724,6 @@ def _report_env_conflicts() -> None:
             f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
             file=sys.stderr,
         )
-        print(
-            f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
-            file=sys.stderr,
-        )
 
 def run_daemon() -> int:
     """Production composition root: build real collaborators and run.

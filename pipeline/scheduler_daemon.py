@@ -687,6 +687,29 @@ class SchedulerDaemon:
             if stop_event.is_set():
                 break
 
+def _report_env_conflicts() -> None:
+    """Warn about env var conflicts between launchd plist and MCP server."""
+    try:
+        from .config_provenance import effective_env_config
+        for entry in effective_env_config():
+            if entry.get("conflict"):
+                launchd_val = None
+                mcp_val = None
+                for layer in entry.get("layers", []):
+                    if layer.get("layer") == "launchd_plist":
+                        launchd_val = layer.get("value")
+                    elif layer.get("layer") == "mcp_server_env":
+                        mcp_val = layer.get("value")
+                if launchd_val is not None and mcp_val is not None:
+                    print(
+                        f"scheduler_daemon: WARNING {entry['name']} differs between config layers: launchd_plist={launchd_val} mcp_server_env={mcp_val} (this scheduler uses launchd_plist)",
+                        file=sys.stderr,
+                    )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
+            file=sys.stderr,
+        )
 
 def run_daemon() -> int:
     """Production composition root: build real collaborators and run.
@@ -729,6 +752,8 @@ def run_daemon() -> int:
         )
         os.close(lock_fd)
         return 1
+
+    _report_env_conflicts()
 
     health_path = os.environ.get("PIPELINE_SCHEDULER_HEALTH_PATH") or str(
         PLAN_DIR / ".scheduler_health.json"

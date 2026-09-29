@@ -135,6 +135,28 @@ def _snapshot_agent_log(plan_name: str, story_key: str, worktree: Any) -> str | 
         return None
 
 
+def _pid_started_after_dispatch(pid: int, dispatched_at: str | None) -> bool:
+    if not dispatched_at:
+        return False
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        out = proc.stdout.strip()
+        if not out:
+            return False
+        started = datetime.strptime(out, "%a %b %d %H:%M:%S %Y").astimezone(timezone.utc)
+        dispatched = datetime.fromisoformat(dispatched_at)
+        return (started - dispatched).total_seconds() > 5
+    except Exception:  # noqa: BLE001 - unknown identity keeps today's kill behavior
+        return False
+
+
 def _terminate_and_checkpoint(
     manifest: dict[str, Any], manifest_path: Path, plan_name: str, story_key: str,
     story: dict[str, Any], *, pid: int, step: str, summary: str,
@@ -143,10 +165,12 @@ def _terminate_and_checkpoint(
     event, and mark the story interrupted (dispatch-eligible for resume).
     Shared by interrupt_story (manual) and check_story_status's dispatch
     watchdog (automatic, on a hung process past DISPATCH_WATCHDOG_SECONDS)."""
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        pass
+    pid_reused = _pid_started_after_dispatch(pid, story.get("dispatched_at"))
+    if not pid_reused:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
 
     sha = _commit_wip(story["worktree"], story_key, step, guard_against_deletion=True)
     interrupted_at = datetime.now(timezone.utc).isoformat()
@@ -157,6 +181,8 @@ def _terminate_and_checkpoint(
         "commit": sha,
         "ts": interrupted_at,
     }
+    if pid_reused:
+        record["pid_reused"] = True
     # Completion evidence (LOCKSTARVE-D2): distinguish a run that actually
     # finished (last log line, branch commits, .agent_done) from one that
     # genuinely stalled. Each lookup fails open individually and the fields

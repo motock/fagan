@@ -13,6 +13,12 @@ distinguishable from "no idea". These tests build a real throwaway repo under
 ``tmp_path`` with ``git init`` (an accepted external-boundary fixture, same
 pattern as ``tests/unit/test_triage_evidence_changed_files.py``). No existing
 test file is touched.
+
+The helpers are reached through the module (``git_ops._rev_parses``) rather
+than imported by name: the new names do not exist yet, and a module-level
+``from ... import`` would make bare ``pytest --collect-only`` exit non-zero,
+breaking unrelated collection tests. Attribute access keeps the failure
+localised to this file.
 """
 import inspect
 import subprocess
@@ -20,12 +26,6 @@ import subprocess
 import pytest
 
 from pipeline import git_ops
-from pipeline.git_ops import (
-    _resolve_base_branch,
-    _rev_parses,
-    _worktree_has_new_commits,
-    _worktree_new_commits,
-)
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -54,10 +54,10 @@ def _init_repo(tmp_path):
     return repo
 
 
-def _add_origin_head(repo):
+def _add_origin_head(repo, target="refs/remotes/origin/master"):
     """Model a real clone: ``origin/master`` plus ``origin/HEAD`` -> it."""
     _git(repo, "update-ref", "refs/remotes/origin/master", "master")
-    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", target)
 
 
 def _agent_branch(repo, commit=True):
@@ -78,8 +78,8 @@ def test_passed_base_resolves_and_branch_has_commit(tmp_path):
     _add_origin_head(repo)
     _agent_branch(repo, commit=True)
 
-    assert _worktree_new_commits(repo, "s1", "master") == ("yes", "master")
-    assert _worktree_has_new_commits(repo, "s1", "master") is True
+    assert git_ops._worktree_new_commits(repo, "s1", "master") == ("yes", "master")
+    assert git_ops._worktree_has_new_commits(repo, "s1", "master") is True
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +92,8 @@ def test_absent_base_falls_back_to_worktree_origin_head(tmp_path):
     _add_origin_head(repo)
     _agent_branch(repo, commit=True)
 
-    assert _worktree_new_commits(repo, "s1", "main") == ("yes", "master")
-    assert _worktree_has_new_commits(repo, "s1", "main") is True
+    assert git_ops._worktree_new_commits(repo, "s1", "main") == ("yes", "master")
+    assert git_ops._worktree_has_new_commits(repo, "s1", "main") is True
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +105,8 @@ def test_branch_at_base_tip_is_a_genuine_no(tmp_path):
     _add_origin_head(repo)
     _agent_branch(repo, commit=False)
 
-    assert _worktree_new_commits(repo, "s1", "master") == ("no", "master")
-    assert _worktree_has_new_commits(repo, "s1", "master") is False
+    assert git_ops._worktree_new_commits(repo, "s1", "master") == ("no", "master")
+    assert git_ops._worktree_has_new_commits(repo, "s1", "master") is False
 
 
 # ---------------------------------------------------------------------------
@@ -117,8 +117,8 @@ def test_no_origin_head_and_absent_base_is_unknown(tmp_path):
     repo = _init_repo(tmp_path)
     _agent_branch(repo, commit=True)
 
-    assert _worktree_new_commits(repo, "s1", "main") == ("unknown", "")
-    assert _worktree_has_new_commits(repo, "s1", "main") is False
+    assert git_ops._worktree_new_commits(repo, "s1", "main") == ("unknown", "")
+    assert git_ops._worktree_has_new_commits(repo, "s1", "main") is False
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +129,8 @@ def test_missing_agent_branch_is_unknown_with_base(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
 
-    assert _worktree_new_commits(repo, "s1", "master") == ("unknown", "master")
-    assert _worktree_has_new_commits(repo, "s1", "master") is False
+    assert git_ops._worktree_new_commits(repo, "s1", "master") == ("unknown", "master")
+    assert git_ops._worktree_has_new_commits(repo, "s1", "master") is False
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ def test_empty_rev_is_false_without_spawning_git(tmp_path, monkeypatch):
         raise AssertionError("git must not be spawned for an empty rev")
 
     monkeypatch.setattr(git_ops.subprocess, "run", _boom)
-    assert _rev_parses(repo, "") is False
+    assert git_ops._rev_parses(repo, "") is False
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ def test_unresolvable_base_is_unknown_not_no(tmp_path):
     repo = _init_repo(tmp_path)
     _agent_branch(repo, commit=True)
 
-    state, _base = _worktree_new_commits(repo, "s1", "main")
+    state, _base = git_ops._worktree_new_commits(repo, "s1", "main")
     assert state == "unknown"
 
 
@@ -168,7 +168,7 @@ def test_returned_base_is_the_one_actually_compared(tmp_path):
     _add_origin_head(repo)
     _agent_branch(repo, commit=True)
 
-    state, base = _worktree_new_commits(repo, "s1", "main")
+    state, base = git_ops._worktree_new_commits(repo, "s1", "main")
     assert state == "yes"
     assert base == "master"
     assert base != "main"
@@ -182,34 +182,42 @@ def test_resolve_base_branch_prefers_the_passed_base(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
 
-    assert _resolve_base_branch(repo, "master") == "master"
+    assert git_ops._resolve_base_branch(repo, "master") == "master"
 
 
 def test_resolve_base_branch_falls_back_to_origin_head(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
 
-    assert _resolve_base_branch(repo, "main") == "master"
+    assert git_ops._resolve_base_branch(repo, "main") == "master"
+
+
+def test_resolve_base_branch_strips_only_the_origin_prefix(tmp_path):
+    # origin/HEAD may point at a local ref; the branch name must come back bare.
+    repo = _init_repo(tmp_path)
+    _add_origin_head(repo, target="refs/heads/master")
+
+    assert git_ops._resolve_base_branch(repo, "main") == "master"
 
 
 def test_resolve_base_branch_returns_empty_when_nothing_resolves(tmp_path):
     repo = _init_repo(tmp_path)
 
-    assert _resolve_base_branch(repo, "main") == ""
+    assert git_ops._resolve_base_branch(repo, "main") == ""
 
 
 def test_resolve_base_branch_returns_passed_base_when_git_unconsultable(tmp_path):
     # A cwd that does not exist makes subprocess raise OSError (FileNotFoundError).
     missing = tmp_path / "not-a-repo"
 
-    assert _resolve_base_branch(missing, "main") == "main"
+    assert git_ops._resolve_base_branch(missing, "main") == "main"
 
 
 def test_rev_parses_raises_oserror_when_git_unconsultable(tmp_path):
     missing = tmp_path / "not-a-repo"
 
     with pytest.raises(OSError):
-        _rev_parses(missing, "master")
+        git_ops._rev_parses(missing, "master")
 
 
 # ---------------------------------------------------------------------------
@@ -217,10 +225,10 @@ def test_rev_parses_raises_oserror_when_git_unconsultable(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_has_new_commits_signature_is_unchanged():
-    sig = inspect.signature(_worktree_has_new_commits)
+    sig = inspect.signature(git_ops._worktree_has_new_commits)
 
     assert list(sig.parameters) == ["worktree", "story_key", "base_branch"]
-    assert sig.return_annotation is bool
+    assert sig.return_annotation in (bool, "bool")
 
 
 def test_has_new_commits_stays_reachable_through_triage():
@@ -228,4 +236,4 @@ def test_has_new_commits_stays_reachable_through_triage():
     # so the name must survive the rewrite and still be the same function.
     from pipeline import triage
 
-    assert triage._worktree_has_new_commits is _worktree_has_new_commits
+    assert triage._worktree_has_new_commits is git_ops._worktree_has_new_commits

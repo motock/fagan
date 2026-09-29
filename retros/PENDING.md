@@ -9,6 +9,16 @@ done. **Remove a plan's line once its retro is written and added to
 `_record_retro_pending` writes those markers at end-of-file, so no
 section added here may be the last one in the file.
 
+**Drain policy (set 2026-09-29).** A *window* retro —
+`retros/harness-review_<date>.md`, covering a stated dispatch window at
+family level — discharges every plan-completion marker whose plan finished
+inside that window. Per-plan retros remain the richer option when a single
+plan warrants one, but they cannot keep pace with the arrival rate (43 new
+markers in the week of Sep 22–29 against zero removals), and a backlog that
+only grows stops being a to-do list. A window retro must state its window
+and its coverage in its own body. Backfilled markers predating 2026-08-12
+are discharged by family as the relevant subsystem is reviewed.
+
 ## Harness gaps with no plan yet
 
 One-off harness defects observed during incident work that still need
@@ -34,11 +44,8 @@ Plans stopped before completion. `mark_story_done` never fires for
 these, so no marker is written automatically. Remove a line once its
 retro is written.
 
-- **bench-test-author** — abandoned 2026-09-27. TA-1 ("Mutation corpus
-  and grader for authored test suites", PR #1020) was closed unmerged:
-  its grader (`tests/benchmark/test_author_grade.py`) was never
-  implemented, and the mutant corpus's requirement labels did not match
-  `spec.json` numbering. Nothing from the plan is on master.
+_None outstanding_ — `bench-test-author` was discharged by
+`retros/harness-review_2026-09-29.md`.
 
 ## Plan completion markers
 
@@ -232,34 +239,3 @@ if a precise date is needed when writing one of these up.
 - harness-rework-gates — completed 2026-09-21, 2 stories
 - agent-side-baseline-exemption — completed 2026-09-21, 2 stories
 - review-feedback-rework-done-bar — completed 2026-09-21, 2 stories
-- overlord-autonomy-round-2 — completed 2026-09-22, 8 stories
-- DASHBOARD_PROGRESS_STALE_BAR — completed 2026-09-22, 1 stories
-- scheduler-wedge-hardening — completed 2026-09-22, 3 stories
-- post-ld90-priorities — completed 2026-09-23, 22 stories
-- mcp-tool-hygiene — completed 2026-09-23, 5 stories
-- ld90-closeout — completed 2026-09-23, 11 stories
-- pr-title-sync — completed 2026-09-23, 1 stories
-- oversized-module-split — completed 2026-09-23, 5 stories
-- reporting-attribution-fix — completed 2026-09-23, 4 stories
-- reporting-layer-followups — completed 2026-09-24, 5 stories
-- post-rlf-hardening — completed 2026-09-24, 4 stories
-- detached-head-guard — completed 2026-09-24, 1 story
-- pipeline-cold-imports — completed 2026-09-24, 1 story
-- pipeline-cold-imports-phase2 — completed 2026-09-24, 3 stories
-- cycle-comment-accuracy — completed 2026-09-24, 3 stories
-- flaky-fetch-lock-determinism — completed 2026-09-24, 1 story
-- exposure-install-oneliner — completed 2026-09-25, 1 story
-- post-050-hardening — completed 2026-09-25, 8 stories
-- scheduler-timeouts-extraction — completed 2026-09-25, 1 story
-- exposure-readme-hero — completed 2026-09-25, 1 story
-- exposure-registry-release-step — completed 2026-09-25, 1 story
-- plan-summary-reviewer-bounce — completed 2026-09-25, 1 story
-- global-rules-bundle — completed 2026-09-25, 8 stories
-- global-rules-xdg-fix — completed 2026-09-25, 1 story
-- nsfix-ns3a-findings — completed 2026-09-26, 10 stories
-- worktree-runtime-marker-exclusion — completed 2026-09-27, 3 stories
-- repo-root-existence-check — completed 2026-09-27, 1 story
-- bench-arm-window — completed 2026-09-27, 1 story
-- bench-ingest-guard — completed 2026-09-27, 1 story
-- global-rules-opencode-prefix — completed 2026-09-27, 1 story
-- gr-install-syspath — completed 2026-09-28, 1 story

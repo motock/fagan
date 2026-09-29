@@ -22,6 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from . import testfiles
 from .build_detect import _lint_acceptance_fixtures
 from .service import _ServerRef
 
@@ -56,23 +57,14 @@ _AUTO_ROUTE_SKIPPED_SUFFIX = (
 )
 
 
-def _is_test_path(path: str) -> bool:
-    """True when `path` points at a test file rather than production code.
+def _is_test_path(path) -> bool:
+    """Return True if *path* looks like a test file in any supported language.
 
-    A path is a test path when its basename matches ``test_*.py``,
-    ``*_test.py`` or ``conftest.py``, or when it lies under a ``tests/``
-    directory. Test paths are excluded from story sizing entirely: the
-    production-file caps grade the code a story touches, not its tests.
+    Delegates to :func:`pipeline.testfiles.is_test_path`.  Test paths are
+    excluded from story sizing entirely: the production-file caps grade
+    the code a story touches, not its tests.
     """
-    p = str(path).replace("\\", "/")
-    basename = p.rsplit("/", 1)[-1]
-    return (
-        basename.startswith("test_")
-        or basename.endswith("_test.py")
-        or basename == "conftest.py"
-        or p.startswith("tests/")
-        or "/tests/" in p
-    )
+    return testfiles.is_test_path(str(path))
 
 
 def _story_sizing_warning(story: dict, repo_root: str) -> str | None:

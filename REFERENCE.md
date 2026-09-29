@@ -809,9 +809,9 @@ The declared list is persisted verbatim in the manifest story and refreshed on
 re-ingest: a changed list replaces the old one, and dropping the field from
 the plan story removes the key.
 
-Sizing also reads `files` when it is a list: test paths (anything under
-`tests/`, or whose basename matches `test_*.py`, `*_test.py` or
-`conftest.py`) are ignored entirely, the production-file COUNT cap counts
+Sizing also reads `files` when it is a list: test paths (recognised by
+directory or basename; see the test-path patterns list at the end of this
+section) are ignored entirely, the production-file COUNT cap counts
 non-test, non-`.md` paths (docs travel with code), and the file-SIZE cap
 checks every non-test path — `.md` files and repo-root files such as
 `README.md` or `pyproject.toml` included. When `files` is absent the
@@ -830,8 +830,9 @@ suffix.
 Before the LLM reviewer runs, `review_story` grades the branch's changed paths
 against the story's declared `files` list: `check_branch_scope(worktree,
 _first_review_base(worktree), files)` reports every changed path that is
-neither a test path (anything under `tests/`, or a `test_*.py` / `*_test.py` /
-`conftest.py` basename) nor one of the declared entries, plus any new
+neither a test path (recognised by directory or basename; see the test-path
+patterns list at the end of this section) nor one of the declared entries,
+plus any new
 top-level package — a changed path whose first segment is a directory absent
 from the base tree and that carries a `<dir>/__init__.py` — because a per-file
 `files` list cannot name a directory that did not exist. When the gate finds
@@ -851,6 +852,22 @@ gated and always reaches the reviewer. Unlike the ingest-time sizing path
 above, the gate is a review-time check only: it reads the same `files` list
 that sizing and the `sizing_auto_routed` auto-route consume, and it leaves
 `PIPELINE_LOCAL_MODEL_DEFAULT` routing untouched.
+
+Test paths are recognised by directory or basename:
+
+- Test directories: `tests/`, `test/`, `__tests__/`, `spec/`, `Tests/`, any
+  `*.Tests/` C# test project, and any `src/test/` Maven/Gradle layout
+  (including nested modules).
+- Python: `test_*.py`, `*_test.py`, `conftest.py`.
+- Rust: `*_test.rs`.
+- Go: `*_test.go`.
+- Java: `*Test.java`, `*Tests.java`, `*IT.java`.
+- Kotlin: `*Test.kt`, `*Tests.kt`, `*IT.kt`.
+- JavaScript/TypeScript: `*.test.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` and
+  `*.spec.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`.
+- Ruby: `*_spec.rb`.
+- Swift: `*Tests.swift`.
+- C#: `*Test.cs`, `*Tests.cs`.
 
 ---
 

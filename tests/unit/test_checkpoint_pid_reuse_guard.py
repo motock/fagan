@@ -1,17 +1,12 @@
 """Tests for the pid-reuse guard in pipeline/checkpoint.py.
 
-ROOT CAUSE: ``_terminate_and_checkpoint`` SIGTERMs the stored pid with no
-identity check. Up to four worktrees run ``pytest -n auto`` at once, so a pid
-can be reused between dispatch and the watchdog firing; the SIGTERM would then
-hit an unrelated process. A reused pid always belongs to a process that STARTED
-AFTER the story's ``dispatched_at``, so comparing the process start time
-(``ps -o lstart=``) with ``dispatched_at`` detects reuse without recording
-anything new.
-
-These tests stub the process boundary (``subprocess.run`` for the ``ps`` probe,
-``os.kill``) and ``_commit_wip``; PLAN_DIR comes from the shared ``plan_dir``
-fixture. lstart strings are built from a known UTC instant converted to local
-time, so the tests hold in any timezone.
+``_terminate_and_checkpoint`` SIGTERMs the stored pid with no identity check,
+so a pid reused between dispatch and the watchdog firing would hit an unrelated
+process. A reused pid always belongs to a process that STARTED AFTER the
+story's ``dispatched_at``, so comparing ``ps -o lstart=`` with ``dispatched_at``
+detects reuse. The process boundary (``subprocess.run``, ``os.kill``) and
+``_commit_wip`` are stubbed; lstart strings come from a known UTC instant
+converted to local time, so these tests hold in any timezone.
 """
 
 import json
@@ -180,19 +175,16 @@ def test_should_kill_when_ps_probe_raises(harness):
     assert _last_record().get("pid_reused") is not True
 
 
-def test_should_kill_when_dispatched_at_missing(harness):
-    h = harness(ps_stdout=_lstart(BASE + timedelta(hours=1)))
-    _run(h)
-    assert h.kills == [(PID, signal.SIGTERM)]
-    assert h.ps.ps_calls == []
-    assert _last_record().get("pid_reused") is not True
-
-
-def test_should_kill_when_dispatched_at_empty(harness):
-    h = harness(ps_stdout=_lstart(BASE + timedelta(hours=1)), dispatched_at="")
-    _run(h)
-    assert h.kills == [(PID, signal.SIGTERM)]
-    assert h.ps.ps_calls == []
+def test_should_kill_when_dispatched_at_missing_or_empty(harness):
+    for dispatched_at in (None, ""):
+        h = harness(
+            ps_stdout=_lstart(BASE + timedelta(hours=1)),
+            dispatched_at=dispatched_at,
+        )
+        _run(h)
+        assert h.kills == [(PID, signal.SIGTERM)]
+        assert h.ps.ps_calls == []
+        assert _last_record().get("pid_reused") is not True
 
 
 # ---------- probe shape and per-step visibility ----------

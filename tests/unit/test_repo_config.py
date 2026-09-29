@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from pipeline.repo_config import (
     RepoConfigError,
     invalid_config_command,

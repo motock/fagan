@@ -877,10 +877,23 @@ Fagan detects how a repo is tested, linted and built from build markers.
 `_test_command_for` checks markers in this order: `pom.xml`, then
 `build.gradle` / `build.gradle.kts`, then `package.json`, then a `Makefile`
 that declares a `test:` target, then `pyproject.toml` / `setup.py`, then
-`Cargo.toml`. The repo root (`cwd`) is checked first; if no marker is found
+`Cargo.toml`, then `go.mod` (`go test ./...`), then any `*.sln` or `*.csproj`
+(`dotnet test`). The repo root (`cwd`) is checked first; if no marker is found
 there, the first immediate subdirectory that has a marker is used. A repo
 with no marker anywhere gets a portable no-op command that exits 0, so the
 test gate never blocks a repo that has nothing to test.
+
+### Unsupported ecosystems
+
+A repo whose only marker is one fagan has no test command for — a `Gemfile`
+(Ruby), `composer.json` (PHP), `Package.swift` (Swift) or `mix.exs` (Elixir) —
+must not silently pass the test gate with nothing run. `detect_test_command`
+returns a command that exits non-zero naming the marker and pointing at the
+fix: declare `test_cmd` in `.fagan.json`. `ingest` rejects such a plan up
+front (same `{"ok": False, "error": ...}` shape as its other validation
+failures), so dispatch/rework budget is never burned on a gate no executor
+can satisfy. Only a repo with none of the recognised or unsupported markers
+keeps the no-op.
 
 ### Declaring commands in `.fagan.json`
 

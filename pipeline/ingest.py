@@ -24,6 +24,12 @@ from typing import Any
 
 from . import testfiles
 from .build_detect import _lint_acceptance_fixtures
+from .ecosystem_detect import (
+    UNSUPPORTED_MARKERS,
+    detect_test_command,
+    fail_loud_exit_message,
+    is_unsupported_ecosystem_command,
+)
 from .service import _ServerRef
 
 # Server-sourced names the function body references as free variables. Each
@@ -319,6 +325,53 @@ def _ingest_plan_impl(
         return {
             "ok": False,
             "error": f"Plan repo_root is missing or not a directory: {repo_root!r}",
+        }
+
+    # LAG-5: a repo whose ecosystem fagan cannot test (Ruby, PHP, Swift,
+    # Elixir) would otherwise ingest fine and burn dispatch/rework budget on
+    # a test gate that always fails with "unsupported ecosystem". Rejecting
+    # here surfaces the fix (declare test_cmd in .fagan.json) before any
+    # executor is dispatched. A README-only repo (no marker at all) still
+    # keeps detect_test_command's no-op and ingests normally.
+    #
+    # detect_test_command lists repo_root (cwd.iterdir and its subdir scan),
+    # which raises OSError on a directory that exists but cannot be read
+    # (permissions, a stale NFS mount). The is_dir() check above only proves
+    # it stat()s, so keep this rejection in the same {"ok": False} shape
+    # instead of letting the OSError escape _ingest_plan_impl.
+    try:
+        test_dir, test_cmd = detect_test_command(Path(repo_root))
+    except OSError as error:
+        return {
+            "ok": False,
+            "error": f"Plan repo_root {repo_root!r} is not readable: {error}",
+        }
+    if is_unsupported_ecosystem_command(test_cmd):
+        # fail_loud_exit_message is also True for repo_config's
+        # invalid_config_command: a repo_root with a malformed .fagan.json is
+        # NOT an unsupported ecosystem, so its rejection must name the actual
+        # RepoConfigError reason instead of a marker that does not exist.
+        message = fail_loud_exit_message(test_cmd) or ""
+        if message.startswith("fagan: invalid .fagan.json: "):
+            reason = message[len("fagan: invalid .fagan.json: "):]
+            return {
+                "ok": False,
+                "error": (
+                    f"Plan repo_root {repo_root!r} has an invalid .fagan.json: "
+                    f"{reason}"
+                ),
+            }
+        marker = next(
+            (m for m in UNSUPPORTED_MARKERS if (Path(test_dir) / m).exists()),
+            "unsupported ecosystem",
+        )
+        return {
+            "ok": False,
+            "error": (
+                f"Plan repo_root {repo_root!r} uses an unsupported ecosystem "
+                f"({marker}): its test gate would exit non-zero with nothing "
+                f"run. Add a .fagan.json with a test_cmd to {repo_root!r}."
+            ),
         }
 
     # A plan-level preflight_override admits non-Claude stories whose brief

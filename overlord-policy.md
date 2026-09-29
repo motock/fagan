@@ -105,7 +105,7 @@ All four ACTION values are defined:
 - `split_story` – the scope is wrong for any implementer at this tier; the story needs to be broken up.
 - `repo_issue` – the failure is environmental, not the story's fault (a red lint baseline, a red suite at a clean baseline, a born‑broken acceptance oracle, CI unavailable). The overlord NEVER edits the repo; a detected repo issue becomes a normal pipeline story that goes through TDD, review and CI like anything else.
 - `park_for_human` – genuinely ambiguous; hold it.
-- `mark_done` – correct the story record to `done` only when live git/suite evidence corroborates it (new commits vs base, a merged `pr_url`, or the suite passing at HEAD); never on `parked_reason` text. An uncorroborated `mark_done` fails closed: the story stays parked and a human is notified.
+- `mark_done` – correct the story record to `done` only when live evidence corroborates that the work landed: `gh` reports the story's `pr_url` as MERGED. New commits, a green suite or an open PR never corroborate on their own, and branch ancestry proves nothing because the pipeline squash-merges; never act on `parked_reason` text. An uncorroborated `mark_done` fails closed: the story stays parked and a human is notified.
 - `patch_acceptance` – the story's acceptance fixture is demonstrably broken at a clean baseline (a born-broken oracle: it cannot pass no matter what an implementer writes), so the fixture itself is the defect. The overlord returns a corrected fixture source between `===FIXTURE-START===` and `===FIXTURE-END===` markers plus a one-line `DIAGNOSIS:`. The executor validates BEFORE writing: the rewrite must pass the ingest lint/collection helper AND must still FAIL at a clean baseline (a rewrite that passes with no implementation is isolation-only and is rejected). Any failure to parse, lint, or stay born-broken parks the story loudly with the manifest's acceptance source untouched; on success the manifest is rewritten, the previous digests are snapshotted into the decisions log, and the story returns to `todo` for a fresh dispatch.
 
 The overlord should choose the honest action even when the pipeline cannot execute it yet: `repo_issue` executes by filing one follow-up story (`<key>-repo-issue`) while the original is left parked for a human with a reason naming it, `split_story` executes by creating two child stories in the manifest, and a ruling that misrepresents the situation to fit what is implemented is worse than an honest one that parks;
@@ -123,7 +123,7 @@ and every executed action is reviewable post-hoc via the decisions log.
 
 | Live evidence signal | Ruling |
 | --- | --- |
-| stale bookkeeping — live state contradicts the recorded reason (suite green at HEAD, branch has new commits vs base, PR merged) | `mark_done` |
+| stale bookkeeping — live state contradicts the recorded reason (the story's PR is merged) | `mark_done` |
 | rework exhaustion with mechanical leftovers | `escalate_model` |
 | repeated step-caps on oversized scope | `split_story` |
 | acceptance fixture demonstrably broken at a clean baseline | `patch_acceptance` |

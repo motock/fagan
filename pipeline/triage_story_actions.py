@@ -7,16 +7,14 @@ resolved at call time, so monkeypatch.setattr(pipeline.triage, NAME, ...)
 keeps landing on the moved code. pipeline.triage re-exports the moved names.
 """
 
-from pathlib import Path
+import subprocess
 
 from .module_ref import _ModuleRef
 
 SIBLING_NOTE = _ModuleRef("pipeline.triage", "SIBLING_NOTE")
 _coerce_int = _ModuleRef("pipeline.triage", "_coerce_int")
-_current_suite_state = _ModuleRef("pipeline.triage", "_current_suite_state")
 _notify_user = _ModuleRef("pipeline.triage", "_notify_user")
 _park = _ModuleRef("pipeline.triage", "_park")
-_worktree_has_new_commits = _ModuleRef("pipeline.triage", "_worktree_has_new_commits")
 plan_triage_budget_exhausted = _ModuleRef("pipeline.triage", "plan_triage_budget_exhausted")
 
 
@@ -121,11 +119,29 @@ def _execute_split_story(plan_name, story_key, story, ruling, manifest, manifest
 _MARK_DONE_UNCORROBORATED_REASON = (
     "mark_done ruled but live evidence does not corroborate"
 )
-# The PASS sentinel returned by _current_suite_state (compared by equality,
-# never by truthiness - the FAIL/empty shapes are also truthy strings).
+# The PASS sentinel returned by pipeline.triage._current_suite_state. No
+# longer used to corroborate mark_done (only a MERGED PR corroborates now),
+# but pipeline.triage re-exports this name, so it stays defined here.
 _SUITE_PASSES_SENTINEL = (
     "CURRENT STATE: full test suite PASSES at the worktree's current HEAD."
 )
+
+
+def _pr_is_merged(pr_url: str) -> bool:
+    """Return True only when `gh pr view` reports the PR state as MERGED."""
+    if not pr_url:
+        return False
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", pr_url, "--json", "state", "--jq", ".state"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and result.stdout.strip() == "MERGED"
 
 
 def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_path) -> str:
@@ -134,16 +150,15 @@ def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_p
     Fail-closed corroboration comes FIRST, before any mutation: an
     uncorroborated ``mark_done`` is the dangerous direction, so the executor
     acts only on corroborated LIVE evidence - never on the overlord's word
-    alone and never on ``parked_reason`` text. The live predicates mirror the
-    facts :func:`_current_git_state` surfaces:
-
-      1. the story's branch has NEW COMMITS vs the base branch, via
-         :func:`pipeline.git_ops._worktree_has_new_commits` with the base
-         resolved the way its existing callers do (lazy
-         :func:`pipeline.server._default_branch` import);
-      2. the story carries a ``pr_url`` (a merged PR);
-      3. :func:`_current_suite_state` reports the suite PASSES at HEAD
-         (equality against the PASS sentinel, not truthiness).
+    alone and never on ``parked_reason`` text. There is exactly one live
+    predicate: :func:`_pr_is_merged` asks ``gh pr view <pr_url> --json state
+    --jq .state`` and corroboration requires it to report the story's
+    ``pr_url`` as ``MERGED``. An open PR corroborates nothing - ``pr_url`` is
+    set as soon as a PR is OPENED, so new commits, a green suite and an open
+    PR can all coexist with work that never landed (the anagram DSG-1
+    incident). Branch ancestry proves nothing either: the pipeline
+    squash-merges (``gh pr merge --squash``, see pipeline/pr.py), so a merged
+    branch head is never an ancestor of the base branch.
 
     Uncorroborated -> the story is parked loudly with
     ``_MARK_DONE_UNCORROBORATED_REASON`` (status ``parked`` + notify) and
@@ -166,37 +181,11 @@ def _execute_mark_done(plan_name, story_key, story, ruling, manifest, manifest_p
     rationale = ruling.get("rationale", "")[:300]
 
     # (a) Corroborate FIRST - no story mutation before this point.
-    worktree = story.get("worktree")
-    has_new_commits = False
-    suite_green = False
-    if isinstance(worktree, str) and worktree:
-        base = ""
-        try:
-            # Lazy import: pipeline.server imports this module at module
-            # level, so a module-level import here would be circular. This is
-            # how the existing callers resolve the base branch.
-            from .server import _default_branch
-
-            base = _default_branch()
-        except Exception:  # noqa: BLE001 - unresolved base fails closed
-            base = ""
-        if base:
-            try:
-                has_new_commits = bool(
-                    _worktree_has_new_commits(
-                        Path(worktree),
-                        str(story.get("story_key") or story.get("key") or ""),
-                        base,
-                    )
-                )
-            except Exception:  # noqa: BLE001 - probe failure fails closed
-                has_new_commits = False
-        try:
-            suite_green = _current_suite_state(worktree) == _SUITE_PASSES_SENTINEL
-        except Exception:  # noqa: BLE001 - probe failure fails closed
-            suite_green = False
-    has_merged_pr = bool(story.get("pr_url"))
-    corroborated = has_new_commits or has_merged_pr or suite_green
+    pr_url = story.get("pr_url")
+    if isinstance(pr_url, str) and pr_url:
+        corroborated = _pr_is_merged(pr_url)
+    else:
+        corroborated = False
 
     # (b) Not corroborated -> park loudly; the record stays as-is.
     if not corroborated:

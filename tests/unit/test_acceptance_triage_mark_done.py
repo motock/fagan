@@ -28,7 +28,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pipeline import git_ops, parsers, server, triage
+from pipeline import git_ops, parsers, server, triage, triage_story_actions
 
 _POLICY = Path(__file__).resolve().parents[2] / "overlord-policy.md"
 
@@ -109,7 +109,7 @@ def harness(monkeypatch, tmp_path):
     worktree = tmp_path / "wt"
     worktree.mkdir()
     calls = {"notify": [], "decisions": [], "commits": [], "suite": []}
-    state = {"new_commits": False, "suite": ""}
+    state = {"new_commits": False, "suite": "", "pr_merged": False}
 
     def fake_has_new_commits(worktree=None, story_key=None, base_branch=None, **kwargs):
         # Faithful to pipeline.git_ops._worktree_has_new_commits: no worktree or
@@ -130,6 +130,11 @@ def harness(monkeypatch, tmp_path):
 
     monkeypatch.setattr(triage, "_worktree_has_new_commits", fake_has_new_commits)
     monkeypatch.setattr(triage, "_current_suite_state", fake_suite_state)
+    monkeypatch.setattr(
+        triage_story_actions,
+        "_pr_is_merged",
+        lambda pr_url: bool(pr_url) and state["pr_merged"],
+    )
     monkeypatch.setattr(
         triage, "_notify_user", lambda *a, **k: calls["notify"].append((a, k))
     )
@@ -241,49 +246,55 @@ def test_mark_done_is_not_a_deferred_action():
 # ---------------------------------------------------------------------------
 
 
-def test_new_commits_vs_base_corroborates_and_marks_done(harness):
+def test_new_commits_alone_do_not_corroborate(harness):
     harness.state["new_commits"] = True
     story = _story(harness, triage_deferred_action="mark_done")
 
     result = _run(harness, story)
 
-    assert result == "mark_done"
-    assert story["status"] == "done"
-    assert "triage_deferred_action" not in story
-    # The git probe is the live evidence: it must be consulted with the story's
-    # worktree and a resolved base branch.
-    assert harness.calls["commits"], "the new-commits probe must be consulted"
-    assert str(_probe_worktree(harness.calls["commits"][0])) == harness.worktree
-    assert _probe_base_branch(harness.calls["commits"][0]) == "master"
+    assert result == "park_for_human"
+    assert story["status"] == "parked"
+    assert story["parked_reason"] == _PARK_REASON
 
 
-def test_pr_url_corroborates_and_marks_done(harness):
+def test_open_pr_url_does_not_corroborate(harness):
     harness.state["new_commits"] = False
     harness.state["suite"] = ""
     story = _story(harness, pr_url="https://github.com/o/r/pull/123")
 
     result = _run(harness, story)
 
+    assert result == "park_for_human"
+    assert story["status"] == "parked"
+    assert story["parked_reason"] == _PARK_REASON
+
+
+def test_merged_pr_url_corroborates_and_marks_done(harness):
+    harness.state["pr_merged"] = True
+    story = _story(harness, pr_url="https://github.com/o/r/pull/123")
+
+    result = _run(harness, story)
+
     assert result == "mark_done"
     assert story["status"] == "done"
+    assert "triage_deferred_action" not in story
 
 
-def test_suite_green_at_head_corroborates_and_marks_done(harness):
+def test_suite_green_alone_does_not_corroborate(harness):
     harness.state["new_commits"] = False
     harness.state["suite"] = _SUITE_PASSES
     story = _story(harness)
 
     result = _run(harness, story)
 
-    assert result == "mark_done"
-    assert story["status"] == "done"
-    assert harness.calls["suite"], "the live suite probe must be consulted"
-    assert harness.calls["suite"][0] == harness.worktree
+    assert result == "park_for_human"
+    assert story["status"] == "parked"
+    assert story["parked_reason"] == _PARK_REASON
 
 
 def test_mark_done_without_a_deferred_action_does_not_raise(harness):
-    harness.state["new_commits"] = True
-    story = _story(harness)
+    harness.state["pr_merged"] = True
+    story = _story(harness, pr_url="https://github.com/o/r/pull/7")
     assert "triage_deferred_action" not in story
 
     result = _run(harness, story)
@@ -379,8 +390,12 @@ def test_suite_probe_exception_fails_closed_to_park(harness, monkeypatch):
 
 
 def test_execution_record_captures_prior_state_before_mutation(harness, monkeypatch):
-    harness.state["new_commits"] = True
-    story = _story(harness, parked_reason="no new commits vs master")
+    harness.state["pr_merged"] = True
+    story = _story(
+        harness,
+        pr_url="https://github.com/o/r/pull/7",
+        parked_reason="no new commits vs master",
+    )
 
     # The execution record is written by the production entry point
     # _apply_ruling_for_mode - which snapshots the priors BEFORE the mutation
@@ -432,8 +447,8 @@ def test_execution_record_is_written_for_the_pr_url_path(harness, monkeypatch):
 
 
 def test_execute_ruling_routes_mark_done_to_the_executor(harness):
-    harness.state["new_commits"] = True
-    story = _story(harness)
+    harness.state["pr_merged"] = True
+    story = _story(harness, pr_url="https://github.com/o/r/pull/7")
     manifest = {"stories": {story["key"]: story}}
 
     result = triage.execute_ruling(

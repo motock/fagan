@@ -908,6 +908,9 @@ optional; any other top-level key is an error.
   (e.g. `"backend"`). Defaults to the repo root.
 - `test_globs` — list of glob strings selecting the test files to run
   (e.g. `["src/it/**/*.java"]`); validated here, consumed by test scoping.
+  The story file-scope gate also treats any changed path matching a
+  `test_globs` entry as a test path (fnmatch semantics, `*` crosses `/`),
+  so it is always allowed to change.
 - `lint_cmd` — list of strings, the command that lints the repo
   (e.g. `["./mvnw", "-B", "spotless:check"]`). Overrides lint detection.
 - `build_cmd` — list of strings, the command that builds the repo

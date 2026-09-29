@@ -25,9 +25,12 @@ The module is a pure classifier plus a thin git adapter:
 
 from __future__ import annotations
 
+import fnmatch
 import subprocess
+from pathlib import Path, PurePosixPath
 
 from pipeline import testfiles
+from pipeline.repo_config import RepoConfigError, load_repo_config
 
 SCOPE_GATE_HEADER = (
     "SCOPE GATE: this branch changes production paths outside the story's "
@@ -68,21 +71,42 @@ def is_test_path(path: str) -> bool:
     return testfiles.is_test_path(path)
 
 
+def _matches_test_glob(path: str, test_globs: tuple[str, ...]) -> bool:
+    """Return True if *path* matches any of the repo's declared test globs.
+
+    Uses ``PurePosixPath.full_match`` (Python 3.13+); on older interpreters
+    falls back to ``fnmatch.fnmatchcase``, where ``**`` then matches across
+    ``/`` just as it does here.
+    """
+    pure = PurePosixPath(path)
+    try:
+        return any(pure.full_match(g) for g in test_globs)
+    except AttributeError:  # Python 3.10-3.12: no PurePath.full_match
+        return any(fnmatch.fnmatchcase(path, g) for g in test_globs)
+
+
 def scope_violations(
     changed_paths: list[str],
     allowed: list[str],
     base_top_level: set[str],
+    test_globs: tuple[str, ...] = (),
 ) -> list[str]:
     """Grade changed paths against the story's declared ``files`` scope.
 
     Pure: builds new collections, never mutates the arguments and never
     shells out.  Returns sorted, de-duplicated violation lines; ``[]`` when
     clean.
+
+    ``test_globs`` are the repo's declared ``.fagan.json`` ``test_globs``: a
+    changed path matching any glob is a test path and is always allowed, in
+    addition to what :func:`is_test_path` recognises.
     """
     lines = [
         f"{p}: outside this story's `files` scope"
         for p in changed_paths
-        if not is_test_path(p) and p not in allowed
+        if not is_test_path(p)
+        and not _matches_test_glob(p, test_globs)
+        and p not in allowed
     ]
 
     top_dirs = {p.split("/")[0] for p in changed_paths if "/" in p}
@@ -138,4 +162,10 @@ def check_branch_scope(
 
     changed = [line.strip() for line in diff.stdout.splitlines() if line.strip()]
     base_top_level = {line.strip() for line in tree.stdout.splitlines() if line.strip()}
-    return scope_violations(changed, allowed, base_top_level)
+
+    try:
+        config = load_repo_config(Path(worktree))
+    except RepoConfigError as exc:
+        return [f".fagan.json: invalid - {exc}"]
+    globs = tuple((config or {}).get("test_globs", ()))
+    return scope_violations(changed, allowed, base_top_level, test_globs=globs)

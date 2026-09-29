@@ -42,7 +42,8 @@ def test_no_config_still_detects_pom_xml(tmp_path):
     (tmp_path / "pom.xml").write_text("<project/>")
     cwd, cmd = detect_test_command(tmp_path)
     assert cwd == tmp_path
-    assert cmd == ["mvn", "test"]
+    # LAG-6: pom.xml now grades the full verify lifecycle (Surefire + Failsafe).
+    assert cmd == ["mvn", "-B", "verify"]
 
 
 def test_invalid_config_test_command_fails_loudly(tmp_path):

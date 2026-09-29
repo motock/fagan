@@ -79,7 +79,8 @@ def test_pom_xml_still_wins_over_go_mod(tmp_path: Path) -> None:
     (tmp_path / "go.mod").write_text("module example.com/x\n")
     cwd_out, cmd = _detect(tmp_path)
     assert cwd_out == tmp_path
-    assert cmd == ["mvn", "test"]
+    # LAG-6: pom.xml now grades the full verify lifecycle (Surefire + Failsafe).
+    assert cmd == ["mvn", "-B", "verify"]
 
 
 # --- unsupported ecosystems fail loudly instead of silently passing --------- #

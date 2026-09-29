@@ -909,8 +909,12 @@ optional; any other top-level key is an error.
 - `test_globs` — list of glob strings selecting the test files to run
   (e.g. `["src/it/**/*.java"]`); validated here, consumed by test scoping.
   The story file-scope gate also treats any changed path matching a
-  `test_globs` entry as a test path (fnmatch semantics, `*` crosses `/`),
-  so it is always allowed to change.
+  `test_globs` entry as a test path, so it is always allowed to change.
+  Globs use `**` to cross `/` while `*` stays within one path segment
+  (on Python 3.10–3.12 the fallback `fnmatch` semantics differ: `*` crosses
+  `/` there), so write `src/it/**` rather than `src/it/*` for nested files.
+  Note that `test_globs: ["**"]` matches every path and thereby disables the
+  gate's production-path checks for that repo.
 - `lint_cmd` — list of strings, the command that lints the repo
   (e.g. `["./mvnw", "-B", "spotless:check"]`). Overrides lint detection.
 - `build_cmd` — list of strings, the command that builds the repo

@@ -316,6 +316,17 @@ def spawn_local(
     return AgentHandle(pid=proc.pid, model="")
 
 
+def _clear_stale_done_markers(cwd: Path) -> None:
+    try:
+        (cwd / ".agent_done").unlink()
+    except FileNotFoundError:
+        pass
+    try:
+        (cwd / ".agent_done.consumed").unlink()
+    except FileNotFoundError:
+        pass
+
+
 def spawn_harness(
     cmd: list[str],
     *,
@@ -337,6 +348,8 @@ def spawn_harness(
     mode = resolve_execution_mode(role)
     if mode == "ssh":
         return _spawn_ssh(cmd, cwd=cwd, log_path=log_path, append=append, env=env)
+    if role == "dispatch":
+        _clear_stale_done_markers(Path(cwd))
     sandbox = resolve_sandbox()
     if sandbox == "docker":
         if not docker_binary_available():

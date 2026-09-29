@@ -165,10 +165,12 @@ def _terminate_and_checkpoint(
     event, and mark the story interrupted (dispatch-eligible for resume).
     Shared by interrupt_story (manual) and check_story_status's dispatch
     watchdog (automatic, on a hung process past DISPATCH_WATCHDOG_SECONDS)."""
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        pass
+    pid_reused = _pid_started_after_dispatch(pid, story.get("dispatched_at"))
+    if not pid_reused:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
 
     sha = _commit_wip(story["worktree"], story_key, step, guard_against_deletion=True)
     interrupted_at = datetime.now(timezone.utc).isoformat()

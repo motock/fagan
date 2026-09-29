@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import subprocess
 
+from pipeline import testfiles
+
 SCOPE_GATE_HEADER = (
     "SCOPE GATE: this branch changes production paths outside the story's "
     "declared `files` scope."
@@ -59,22 +61,11 @@ _GIT_TIMEOUT_SECONDS = 30
 
 
 def is_test_path(path: str) -> bool:
-    """Return True if *path* denotes a test file.
+    """Return True if *path* looks like a test file in any supported language.
 
-    A path is a test path when ``tests`` is a whole directory component
-    (``"tests" in path.split("/")[:-1]``), or when its basename is
-    ``test_*.py``, ``*_test.py``, ``*_test.rs`` or ``conftest.py``.
-    ``contests/x.rs`` and ``src/tests.rs`` are production files.
+    Delegates to :func:`pipeline.testfiles.is_test_path`.
     """
-    parts = path.split("/")
-    if "tests" in parts[:-1]:
-        return True
-    base = parts[-1]
-    if base == "conftest.py":
-        return True
-    if base.startswith("test_") and base.endswith(".py"):
-        return True
-    return base.endswith(("_test.py", "_test.rs"))
+    return testfiles.is_test_path(path)
 
 
 def scope_violations(

@@ -36,6 +36,7 @@ import logging
 import subprocess
 from datetime import datetime, timezone
 
+from . import testfiles
 from .build_detect import failed_node_ids
 from .plan_conflict import (
     _GIT_TIMEOUT_SECONDS,
@@ -251,21 +252,18 @@ def _fence_untrusted(label: str, text: str) -> str:
     return f"{open_marker}\n{body}\n{close_marker}"
 
 
-def _is_test_path(path: str) -> bool:
-    """True when ``path`` is a test module rather than production code.
+def _is_test_path(path) -> bool:
+    """Return True only if the basename looks like a test module.
 
-    A branch that changed only test modules cannot have broken a pre-existing
-    test through production code, which is the positive evidence the intercept
-    needs before it will call a red grade a plan conflict.  The check is
-    deliberately narrow: only ``test_*.py`` / ``*_test.py`` modules count, so
-    anything else that can affect a test's execution -- production code,
-    ``conftest.py``, a shared ``tests/helpers.py`` -- counts as production and
-    fails closed to today's rework path.
+    A branch that changed only test modules cannot have broken a
+    pre-existing test through production code, which is the positive
+    evidence the intercept needs before it will call a red grade a plan
+    conflict.  Deliberately strict (fail closed): directory components
+    are ignored and ``conftest.py`` counts as production code, so the
+    plan-conflict intercept never suppresses a real conflict.  Delegates
+    to :func:`pipeline.testfiles.is_test_module`.
     """
-    name = path.replace("\\", "/").rsplit("/", 1)[-1]
-    if name.startswith("test_") and name.endswith(".py"):
-        return True
-    return name.endswith("_test.py")
+    return testfiles.is_test_module(path)
 
 
 def _production_diff(worktree: str, base_ref: str, paths: list[str]) -> str | None:

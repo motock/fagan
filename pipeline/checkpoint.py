@@ -112,6 +112,29 @@ def _watchdog_evidence(story: dict[str, Any], story_key: str) -> dict[str, Any]:
     return evidence
 
 
+def _snapshot_agent_log(plan_name: str, story_key: str, worktree: Any) -> str | None:
+    """Copy the tail of a killed agent's log into PLAN_DIR for post-mortem."""
+    try:
+        from .server import PLAN_DIR
+
+        if not worktree:
+            return None
+        log_path = Path(worktree) / "agent.log"
+        if not log_path.is_file():
+            return None
+        size = log_path.stat().st_size
+        with log_path.open("rb") as fh:
+            if size > 65536:
+                fh.seek(-65536, os.SEEK_END)
+            tail = fh.read(65536)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dest = Path(PLAN_DIR) / f"{plan_name}.{story_key}.watchdog-{stamp}.log"
+        dest.write_bytes(tail)
+        return str(dest)
+    except Exception:  # noqa: BLE001 (fail-open by design: evidence must never gate the watchdog)
+        return None
+
+
 def _terminate_and_checkpoint(
     manifest: dict[str, Any], manifest_path: Path, plan_name: str, story_key: str,
     story: dict[str, Any], *, pid: int, step: str, summary: str,
@@ -143,6 +166,9 @@ def _terminate_and_checkpoint(
     # function and keeps its existing contract.
     if step == "dispatch_watchdog_timeout":
         record.update(_watchdog_evidence(story, story_key))
+        snapshot = _snapshot_agent_log(plan_name, story_key, story.get("worktree"))
+        if snapshot is not None:
+            record["log_snapshot"] = snapshot
     _append_journal(plan_name, story_key, record)
 
     story["status"] = "interrupted"

@@ -21,6 +21,10 @@ The module is a pure classifier plus a thin git adapter:
   <base_ref>..HEAD`` and ``git ls-tree --name-only <base_ref>`` in a
   worktree and delegates to ``scope_violations``.  It fails open: any git
   failure, ``OSError`` or timeout yields ``[]`` so the reviewer still runs.
+  It also loads the repo's ``.fagan.json`` (via
+  :func:`pipeline.repo_config.load_repo_config`) and passes its
+  ``test_globs`` to ``scope_violations``; an invalid config is reported as
+  a ``".fagan.json: invalid - ..."`` violation line instead of crashing.
 """
 
 from __future__ import annotations

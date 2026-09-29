@@ -141,18 +141,19 @@ def test_should_not_touch_other_worktree_files(tmp_path, spawn_recorder):
     assert not (tmp_path / CONSUMED).exists()
 
 
-def test_should_propagate_non_filenotfound_oserror(tmp_path, spawn_recorder, monkeypatch):
-    """A worktree we cannot write to is a real fault, not a silent skip."""
-    (tmp_path / UNCONSUMED).write_text("done")
+def test_should_propagate_non_filenotfound_oserror(tmp_path, spawn_recorder):
+    """A worktree we cannot write to is a real fault, not a silent skip.
 
-    def deny(self, *args, **kwargs):
-        raise PermissionError(13, "Permission denied")
+    A directory in the marker's place makes the removal raise a non-
+    FileNotFoundError OSError, which must propagate out of spawn_harness
+    instead of being swallowed.
+    """
+    (tmp_path / UNCONSUMED).mkdir()
 
-    monkeypatch.setattr(type(tmp_path), "unlink", deny)
-
-    with pytest.raises(PermissionError):
+    with pytest.raises(OSError) as excinfo:
         _spawn(tmp_path)
 
+    assert not isinstance(excinfo.value, FileNotFoundError)
     assert spawn_recorder == []
 
 

@@ -97,13 +97,13 @@ def main(argv: list[str] | None = None) -> int:
         default=30,
         help="Size of the rolling window; 0 means all stories",
     )
+    args = parser.parse_args(argv)
+
     # Repo filter
     if args.all_repos:
         repo_filter = None
     else:
         repo_filter = Path(args.repo).expanduser().resolve()
-    
-    args = parser.parse_args(argv)
 
     
     def _repo_matches(plan: dict) -> bool:
@@ -114,10 +114,9 @@ def main(argv: list[str] | None = None) -> int:
             return False
         try:
             return Path(raw).expanduser().resolve() == repo_filter
-        except Exception:
+        except (OSError, ValueError):
             return False
 
-    args = parser.parse_args(argv)
 
     plan_dir = Path(args.plan_dir).expanduser()
     if not plan_dir.is_dir():
@@ -133,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Header
     print(f"window: {args.window}")
+    print(f"repo: {'all' if repo_filter is None else repo_filter}")
 
     # One cohort for every block: the newest N population stories, selected
     # once here so the tier blocks partition the overall block instead of each

@@ -544,6 +544,11 @@ def _main_impl() -> int:
     global _measured_chars_per_token, _last_prompt_eval_count
     _measured_chars_per_token = None
     _last_prompt_eval_count = None
+    print(
+        f"[boot] pid={os.getpid()} model={MODEL} endpoint={ENDPOINT} "
+        f"provider={PROVIDER} steps={MAX_STEPS} timeout={TIMEOUT}s",
+        flush=True,
+    )
     system = os.environ.get("LOCAL_AGENT_SYSTEM", "").strip()
     task = os.environ.get("LOCAL_AGENT_TASK", "")
     # Initialize messages list with optional persistence support.

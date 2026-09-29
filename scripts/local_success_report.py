@@ -128,6 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     for path in sorted(plan_dir.glob("*.manifest.json")):
         plan_name = path.name.removesuffix(".manifest.json")
         records, _malformed = load_notification_records(plan_dir / f"{plan_name}.notifications.jsonl")
+        plan = _load_manifest(path)
+        if plan is None or not _repo_matches(plan):
+            continue
         all_classified.extend(_classify_plan(plan_dir, plan_name, records))
 
     # Header

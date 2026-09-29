@@ -9,7 +9,10 @@ rollup ("What's left as of 2026-09-08") repeats all four as outstanding.
 
 This grades the refresh structurally -- anchors and evidence tokens, never
 the exact prose -- so the implementer keeps editorial latitude while the
-six genuinely-open bullets are protected from drive-by flipping.
+genuinely-open bullets are protected from drive-by flipping. "Protected"
+means by name: the guard asserts that no unchecked bullet appears outside
+the named open set, never that the document's total stayed at five. A total
+pin made the retro-feedback sink (see ``RETRO_FEEDBACK_HEADING``) unwritable.
 """
 
 import re
@@ -36,6 +39,25 @@ def _bullet_block(text: str, anchor: str) -> str:
     match = pattern.search(text)
     assert match, f"could not locate a bullet block anchored on {anchor!r}"
     return match.group(0)
+
+
+# The subsection the retro process appends its P0/P1 items to, exempt from the
+# drive-by open-item guard below (see that test for why).
+RETRO_FEEDBACK_HEADING = "### A5. Retro-derived harness improvements"
+
+
+def _without_retro_feedback_sink(text: str) -> str:
+    """``text`` with the retro-feedback subsection removed, if it is present.
+
+    Returns the text unchanged when the subsection has not been added yet, so
+    the guard degrades to grading the whole document rather than failing to
+    collect.
+    """
+    start = text.find(RETRO_FEEDBACK_HEADING)
+    if start == -1:
+        return text
+    end = text.find("\n## ", start)
+    return text[:start] + (text[end:] if end != -1 else "")
 
 
 # --- the four bullets that must now be checked, with their evidence ---------
@@ -150,13 +172,27 @@ class TestOpenItemsAreProtected:
                 "in-progress ([~]), neither open nor closed"
             )
 
-    def test_exactly_five_unchecked_bullets_remain(self):
-        text = _text()
-        unchecked = re.findall(r"^- \[ \] ", text, re.MULTILINE)
-        assert len(unchecked) == len(STILL_OPEN), (
-            f"expected the {len(STILL_OPEN)} genuinely-open bullets, found "
-            f"{len(unchecked)}"
-        )
+    def test_no_unchecked_bullets_outside_the_retro_feedback_sink(self):
+        """Guard against drive-by open items: every unchecked bullet in the
+        document body must be one of the named ``STILL_OPEN`` items.
+
+        The retro-feedback subsection is exempted, not counted: it is the
+        process's designated sink for a retro's P0/P1 items
+        (`PLAN_RETROSPECTIVE_PROCESS_PLAN.md` §2), so it is *expected* to grow
+        unchecked bullets over time. Pinning the document's total instead made
+        that sink unwritable, which is why no retro's items reached this doc
+        between 2026-07-21 and this change.
+        """
+        text = _without_retro_feedback_sink(_text())
+        for line in text.splitlines():
+            if not line.startswith("- [ ] "):
+                continue
+            assert any(anchor in line for anchor in STILL_OPEN), (
+                f"unexpected new open item outside the retro-feedback sink: "
+                f"{line!r} — the document's open set is pinned to the "
+                f"{len(STILL_OPEN)} named items; a retro's P0/P1 items belong "
+                f"in the retro-feedback subsection"
+            )
 
     def test_bullets_pinned_by_other_tests_are_untouched(self):
         text = _text()

@@ -183,16 +183,13 @@ def test_matrix_names_the_stale_bookkeeping_evidence_signals():
         "stale bookkeeping must be defined as live state contradicting the "
         "recorded reason",
     )
-    _assert_any(
-        low,
-        ("suite green at head", "green suite at head", "suite is green at head"),
-        "stale bookkeeping must include the 'suite green at HEAD' signal",
-    )
-    _assert_any(
-        low,
-        ("new commits", "commits vs base", "commits against base", "commits ahead of base"),
-        "stale bookkeeping must include the 'branch has new commits vs base' signal",
-    )
+    # LAG-1: the stale-bookkeeping row no longer lists the old corroborators
+    # ("suite green at HEAD", "branch has new commits vs base") - mark_done
+    # corroboration is now the single merged-PR predicate, and branch ancestry
+    # proves nothing because the pipeline squash-merges. The row's remaining
+    # signal is asserted below; the removed signals are pinned as absent by
+    # test_triage_mark_done_requires_merged_pr.py::
+    # test_policy_stale_bookkeeping_row_no_longer_lists_the_old_corroborators.
     _assert_any(
         low,
         ("pr merged", "pull request merged", "pr is merged", "merged pr"),

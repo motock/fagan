@@ -14,8 +14,8 @@ distinguishable from "no idea". These tests build a real throwaway repo under
 pattern as ``tests/unit/test_triage_evidence_changed_files.py``). No existing
 test file is touched.
 
-The helpers are reached through the module (``git_ops._rev_parses``) rather
-than imported by name: the new names do not exist yet, and a module-level
+Helpers are reached through the module (``git_ops._rev_parses``) rather than
+imported by name: the new names do not exist yet, and a module-level
 ``from ... import`` would make bare ``pytest --collect-only`` exit non-zero,
 breaking unrelated collection tests. Attribute access keeps the failure
 localised to this file.
@@ -27,9 +27,6 @@ import pytest
 
 from pipeline import git_ops
 
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
 
 def _git(repo, *args):
     """Run git in ``repo``; raise on failure (fixture setup only)."""
@@ -43,8 +40,8 @@ def _init_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
-    # Pin the default branch name: `git init` may pick `main` on newer gits,
-    # and this story is precisely about master-vs-main confusion.
+    # Pin the branch name: `git init` may pick `main` on newer gits, and this
+    # story is precisely about master-vs-main confusion.
     _git(repo, "symbolic-ref", "HEAD", "refs/heads/master")
     _git(repo, "config", "user.email", "git-ops-test@example.test")
     _git(repo, "config", "user.name", "Git Ops Test")
@@ -69,10 +66,7 @@ def _agent_branch(repo, commit=True):
         _git(repo, "commit", "-qm", "work")
 
 
-# ---------------------------------------------------------------------------
-# 1. passed base resolves here, branch has a commit
-# ---------------------------------------------------------------------------
-
+# 1. passed base resolves here, branch has a commit.
 def test_passed_base_resolves_and_branch_has_commit(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
@@ -82,11 +76,8 @@ def test_passed_base_resolves_and_branch_has_commit(tmp_path):
     assert git_ops._worktree_has_new_commits(repo, "s1", "master") is True
 
 
-# ---------------------------------------------------------------------------
-# 2. passed base ABSENT here -> fall back to the worktree's own origin/HEAD
-#    (the live bug: on master today the bool is False)
-# ---------------------------------------------------------------------------
-
+# 2. passed base ABSENT here -> fall back to the worktree's own origin/HEAD.
+#    The live bug: on master today the bool is False.
 def test_absent_base_falls_back_to_worktree_origin_head(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
@@ -96,10 +87,7 @@ def test_absent_base_falls_back_to_worktree_origin_head(tmp_path):
     assert git_ops._worktree_has_new_commits(repo, "s1", "main") is True
 
 
-# ---------------------------------------------------------------------------
-# 3. resolvable base, branch at base's tip -> a genuine "no"
-# ---------------------------------------------------------------------------
-
+# 3. resolvable base, branch at base's tip -> a genuine "no".
 def test_branch_at_base_tip_is_a_genuine_no(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
@@ -109,10 +97,7 @@ def test_branch_at_base_tip_is_a_genuine_no(tmp_path):
     assert git_ops._worktree_has_new_commits(repo, "s1", "master") is False
 
 
-# ---------------------------------------------------------------------------
-# 4. no origin/HEAD and the passed base is absent -> "unknown", not "no"
-# ---------------------------------------------------------------------------
-
+# 4. no origin/HEAD and the passed base is absent -> "unknown", not "no".
 def test_no_origin_head_and_absent_base_is_unknown(tmp_path):
     repo = _init_repo(tmp_path)
     _agent_branch(repo, commit=True)
@@ -121,10 +106,7 @@ def test_no_origin_head_and_absent_base_is_unknown(tmp_path):
     assert git_ops._worktree_has_new_commits(repo, "s1", "main") is False
 
 
-# ---------------------------------------------------------------------------
-# 5. base resolves but the agent branch does not exist -> "unknown", base kept
-# ---------------------------------------------------------------------------
-
+# 5. base resolves but the agent branch does not exist -> "unknown", base kept.
 def test_missing_agent_branch_is_unknown_with_base(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
@@ -133,10 +115,7 @@ def test_missing_agent_branch_is_unknown_with_base(tmp_path):
     assert git_ops._worktree_has_new_commits(repo, "s1", "master") is False
 
 
-# ---------------------------------------------------------------------------
-# 6. empty rev never spawns git and is not a commit
-# ---------------------------------------------------------------------------
-
+# 6. empty rev never spawns git and is not a commit.
 def test_empty_rev_is_false_without_spawning_git(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
 
@@ -147,10 +126,7 @@ def test_empty_rev_is_false_without_spawning_git(tmp_path, monkeypatch):
     assert git_ops._rev_parses(repo, "") is False
 
 
-# ---------------------------------------------------------------------------
-# 7. an unresolvable base is "unknown", never "no"
-# ---------------------------------------------------------------------------
-
+# 7. an unresolvable base is "unknown", never "no".
 def test_unresolvable_base_is_unknown_not_no(tmp_path):
     repo = _init_repo(tmp_path)
     _agent_branch(repo, commit=True)
@@ -159,10 +135,7 @@ def test_unresolvable_base_is_unknown_not_no(tmp_path):
     assert state == "unknown"
 
 
-# ---------------------------------------------------------------------------
-# 8. the returned base names the branch actually compared
-# ---------------------------------------------------------------------------
-
+# 8. the returned base names the branch actually compared.
 def test_returned_base_is_the_one_actually_compared(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
@@ -174,10 +147,7 @@ def test_returned_base_is_the_one_actually_compared(tmp_path):
     assert base != "main"
 
 
-# ---------------------------------------------------------------------------
-# _resolve_base_branch: preference, fallback, and the OSError contract
-# ---------------------------------------------------------------------------
-
+# _resolve_base_branch: preference, fallback, and the OSError contract.
 def test_resolve_base_branch_prefers_the_passed_base(tmp_path):
     repo = _init_repo(tmp_path)
     _add_origin_head(repo)
@@ -220,10 +190,7 @@ def test_rev_parses_raises_oserror_when_git_unconsultable(tmp_path):
         git_ops._rev_parses(missing, "master")
 
 
-# ---------------------------------------------------------------------------
-# The bool wrapper's name/signature are load-bearing (~60 tests patch it)
-# ---------------------------------------------------------------------------
-
+# The bool wrapper's name/signature are load-bearing (~60 tests patch it).
 def test_has_new_commits_signature_is_unchanged():
     sig = inspect.signature(git_ops._worktree_has_new_commits)
 

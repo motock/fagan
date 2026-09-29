@@ -24,6 +24,11 @@ from typing import Any
 
 from . import testfiles
 from .build_detect import _lint_acceptance_fixtures
+from .ecosystem_detect import (
+    UNSUPPORTED_MARKERS,
+    detect_test_command,
+    is_unsupported_ecosystem_command,
+)
 from .service import _ServerRef
 
 # Server-sourced names the function body references as free variables. Each
@@ -319,6 +324,27 @@ def _ingest_plan_impl(
         return {
             "ok": False,
             "error": f"Plan repo_root is missing or not a directory: {repo_root!r}",
+        }
+
+    # LAG-5: a repo whose ecosystem fagan cannot test (Ruby, PHP, Swift,
+    # Elixir) would otherwise ingest fine and burn dispatch/rework budget on
+    # a test gate that always fails with "unsupported ecosystem". Rejecting
+    # here surfaces the fix (declare test_cmd in .fagan.json) before any
+    # executor is dispatched. A README-only repo (no marker at all) still
+    # keeps detect_test_command's no-op and ingests normally.
+    test_dir, test_cmd = detect_test_command(Path(repo_root))
+    if is_unsupported_ecosystem_command(test_cmd):
+        marker = next(
+            (m for m in UNSUPPORTED_MARKERS if (Path(test_dir) / m).exists()),
+            "unsupported ecosystem",
+        )
+        return {
+            "ok": False,
+            "error": (
+                f"Plan repo_root {repo_root!r} uses an unsupported ecosystem "
+                f"({marker}): its test gate would exit non-zero with nothing "
+                f"run. Add a .fagan.json with a test_cmd to {repo_root!r}."
+            ),
         }
 
     # A plan-level preflight_override admits non-Claude stories whose brief

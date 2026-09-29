@@ -1,5 +1,6 @@
 """which command builds, tests and lints a repo, by build marker"""
 
+import ast
 import json
 import shutil
 import subprocess
@@ -11,6 +12,54 @@ from pipeline.repo_config import (
     invalid_config_command,
     load_repo_config,
 )
+
+#: Markers for ecosystems fagan has no test command for. A repo holding one
+#: of these (and no recognised marker, and no declared ``test_cmd``) must fail
+#: visibly instead of silently passing a gate that ran nothing.
+UNSUPPORTED_MARKERS = ("Gemfile", "composer.json", "Package.swift", "mix.exs")
+
+
+def unsupported_ecosystem_command(marker: str) -> list[str]:
+    """Return a shell-free command that exits non-zero naming the marker.
+
+    Used so a Go/.NET-adjacent repo whose ecosystem fagan cannot test (Ruby,
+    PHP, Swift, Elixir) goes visibly red instead of silently passing the test
+    gate with nothing run. The message tells the operator the supported way
+    out: declare ``test_cmd`` in ``.fagan.json``.
+    """
+    message = (
+        f"fagan: unsupported ecosystem ({marker}): declare test_cmd in .fagan.json"
+    )
+    return [sys.executable, "-c", f"import sys; sys.exit({message!r})"]
+
+
+def is_unsupported_ecosystem_command(cmd: list[str]) -> bool:
+    """True when cmd is exactly a command produced by
+    unsupported_ecosystem_command or repo_config.invalid_config_command - i.e.
+    a command whose only job is to exit non-zero with an operator-facing
+    reason, so callers (ingest) can reject a plan instead of dispatching work
+    against a gate no executor can satisfy."""
+    if not isinstance(cmd, list) or len(cmd) != 3:
+        return False
+    if cmd[0] != sys.executable or cmd[1] != "-c":
+        return False
+    body = cmd[2]
+    prefix, suffix = "import sys; sys.exit(", ")"
+    if not isinstance(body, str) or not (body.startswith(prefix) and body.endswith(suffix)):
+        return False
+    try:
+        message = ast.literal_eval(body[len(prefix):-1])
+    except ValueError:
+        return False
+    if not isinstance(message, str) or not message.startswith("fagan: "):
+        return False
+    if message.startswith("fagan: invalid .fagan.json: "):
+        return True
+    return any(
+        message
+        == f"fagan: unsupported ecosystem ({marker}): declare test_cmd in .fagan.json"
+        for marker in UNSUPPORTED_MARKERS
+    )
 
 
 def _venv_python_for(cwd: Path) -> Path | None:
@@ -70,6 +119,10 @@ def _test_command_for(cwd: Path) -> list[str] | None:
         return ["pytest"]
     if (cwd / "Cargo.toml").exists():
         return ["cargo", "test"]
+    if (cwd / "go.mod").exists():
+        return ["go", "test", "./..."]
+    if any(cwd.glob("*.sln")) or any(cwd.glob("*.csproj")):
+        return ["dotnet", "test"]
     return None
 
 
@@ -152,10 +205,19 @@ def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
     if cmd is not None:
         return cwd, _apply_pytest_collection_overrides(cmd)
 
-    for child in sorted(p for p in cwd.iterdir() if p.is_dir() and not p.name.startswith(".")):
+    subdirs = sorted(p for p in cwd.iterdir() if p.is_dir() and not p.name.startswith("."))
+    for child in subdirs:
         cmd = _test_command_for(child)
         if cmd is not None:
             return child, _apply_pytest_collection_overrides(cmd)
+
+    # No recognised marker anywhere. Before falling back to the no-op, check
+    # for an ecosystem fagan knows it cannot test: that repo must fail
+    # visibly, not pass a gate that ran nothing.
+    for directory in (cwd, *subdirs):
+        for marker in UNSUPPORTED_MARKERS:
+            if (directory / marker).exists():
+                return directory, unsupported_ecosystem_command(marker)
 
     return cwd, [sys.executable, "-c", "pass"]  # no-op: no build system detected
 

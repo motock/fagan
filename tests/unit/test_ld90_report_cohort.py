@@ -36,7 +36,13 @@ def _story(**over):
 def _plan(plan_dir, plan, stories, records=None):
     """Write ``<plan>.manifest.json`` and, when given, its JSONL sidecar."""
     (plan_dir / f"{plan}.manifest.json").write_text(
-        json.dumps({"stories": stories}), encoding="utf-8"
+        json.dumps(
+            {
+                "stories": stories,
+                "repo_root": str(Path(__file__).resolve().parents[2]),
+            }
+        ),
+        encoding="utf-8",
     )
     if records is not None:
         (plan_dir / f"{plan}.notifications.jsonl").write_text(

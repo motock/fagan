@@ -113,12 +113,13 @@ def test_should_ignore_lines_that_merely_contain_failed():
     assert bd.failed_node_ids("see FAILED tests/a.py::test_x above\n") == []
 
 
-def test_the_parser_sits_above_detect_test_command():
-    """Placement requirement: the single parser both call sites use lives
-    immediately above ``detect_test_command`` in the same module."""
-    src = Path(bd.__file__).read_text()
-    assert "def failed_node_ids(" in src
-    assert src.index("def failed_node_ids(") < src.index("def detect_test_command(")
+def test_both_call_sites_share_one_parser():
+    """The single parser both call sites use lives in build_detect."""
+    from pipeline import dispatch, plan_conflict_ruling
+
+    assert bd.failed_node_ids.__module__ == "pipeline.build_detect"
+    assert dispatch.failed_node_ids is bd.failed_node_ids
+    assert plan_conflict_ruling.failed_node_ids is bd.failed_node_ids
 
 
 # ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def _module_source() -> str:
-    return Path(bd.__file__).read_text()
+    return Path(inspect.getsourcefile(bd.detect_test_command)).read_text()
 
 
 def _function_source(name: str) -> str:

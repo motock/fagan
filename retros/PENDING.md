@@ -263,3 +263,4 @@ if a precise date is needed when writing one of these up.
 - bench-ingest-guard — completed 2026-09-27, 1 story
 - global-rules-opencode-prefix — completed 2026-09-27, 1 story
 - gr-install-syspath — completed 2026-09-28, 1 story
+- stall-evidence-watchdog-safety — completed 2026-09-29, 5 stories

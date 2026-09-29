@@ -43,11 +43,25 @@ def provider(monkeypatch):
     prov = _RecordingProvider()
     monkeypatch.setattr(p, "get_ticket_provider", lambda: prov)
     monkeypatch.setattr(ingest_mod, "_notify_user", lambda *a, **k: None)
+    # Pin the dispatch provider to "claude" so the non-Claude preflight gate
+    # never fires (it would consult the operator's real role registry).
+    monkeypatch.setenv("PIPELINE_BACKEND_DISPATCH", "claude")
     return prov
 
 
 def _write_plan(plan_dir: Path, name: str, repo_root: Path) -> dict:
-    plan = {"name": name, "repo_root": str(repo_root), "epics": []}
+    plan = {
+        "name": name,
+        "repo_root": str(repo_root),
+        "epics": [
+            {
+                "summary": "E1",
+                "stories": [
+                    {"summary": "S1", "agent_instructions": "Do the thing."}
+                ],
+            }
+        ],
+    }
     (plan_dir / f"{name}.json").write_text(json.dumps(plan))
     return plan
 

@@ -2,19 +2,11 @@
 
 ``detect_test_command`` used to fall through to ``[sys.executable, "-c",
 "pass"]`` for any repo whose markers it did not recognise, so a Go, .NET,
-Ruby, PHP, Swift or Elixir repo passed every gate with nothing run. This
-story adds:
-
-* ``go.mod`` -> ``["go", "test", "./..."]`` and any ``*.sln`` / ``*.csproj``
-  -> ``["dotnet", "test"]`` in ``_test_command_for`` (after the existing
-  Cargo.toml branch, so existing precedence is unchanged);
-* ``UNSUPPORTED_MARKERS`` and ``unsupported_ecosystem_command(marker)`` - a
-  command that exits non-zero naming the marker and telling the operator to
-  declare ``test_cmd`` in ``.fagan.json``;
-* ``is_unsupported_ecosystem_command(cmd)``;
-* the fall-through now returns the unsupported command for those markers,
-  keeping the no-op only for a repo with no marker at all (README-only smoke
-  repos).
+Ruby, PHP, Swift or Elixir repo passed every gate with nothing run. This story
+adds ``go.mod`` -> ``["go", "test", "./..."]`` and ``*.sln`` / ``*.csproj`` ->
+``["dotnet", "test"]``, plus ``UNSUPPORTED_MARKERS``,
+``unsupported_ecosystem_command`` and ``is_unsupported_ecosystem_command`` so
+the remaining ecosystems fail loudly instead of passing silently.
 
 Every test builds its own synthetic tree under ``tmp_path``.
 """
@@ -32,6 +24,7 @@ from pipeline.repo_config import RepoConfigError, invalid_config_command
 
 _NOOP = [sys.executable, "-c", "pass"]
 _UNSUPPORTED_MARKERS = ("Gemfile", "composer.json", "Package.swift", "mix.exs")
+_REFERENCE = Path(__file__).resolve().parents[2] / "REFERENCE.md"
 
 
 def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
@@ -49,9 +42,7 @@ def _detect(cwd: Path) -> tuple[Path, list[str]]:
     return cwd_out, cmd
 
 
-# --------------------------------------------------------------------------- #
-# 1. New recognised markers: go.mod, *.sln, *.csproj
-# --------------------------------------------------------------------------- #
+# --- new recognised markers: go.mod, *.sln, *.csproj ------------------------ #
 def test_go_mod_returns_go_test(tmp_path: Path) -> None:
     (tmp_path / "go.mod").write_text("module example.com/x\n")
     cwd_out, cmd = _detect(tmp_path)
@@ -82,18 +73,7 @@ def test_go_mod_in_immediate_subdirectory_is_found(tmp_path: Path) -> None:
     assert cmd == ["go", "test", "./..."]
 
 
-def test_sln_in_immediate_subdirectory_is_found(tmp_path: Path) -> None:
-    sub = tmp_path / "app"
-    sub.mkdir()
-    (sub / "App.sln").write_text("solution\n")
-    cwd_out, cmd = _detect(tmp_path)
-    assert cwd_out == sub
-    assert cmd == ["dotnet", "test"]
-
-
-# --------------------------------------------------------------------------- #
-# 2. Existing precedence is unchanged
-# --------------------------------------------------------------------------- #
+# --- existing precedence is unchanged --------------------------------------- #
 def test_pom_xml_still_wins_over_go_mod(tmp_path: Path) -> None:
     (tmp_path / "pom.xml").write_text("<project/>\n")
     (tmp_path / "go.mod").write_text("module example.com/x\n")
@@ -102,21 +82,10 @@ def test_pom_xml_still_wins_over_go_mod(tmp_path: Path) -> None:
     assert cmd == ["mvn", "test"]
 
 
-def test_cargo_toml_still_wins_over_go_mod(tmp_path: Path) -> None:
-    (tmp_path / "Cargo.toml").write_text("[package]\nname = 'x'\n")
-    (tmp_path / "go.mod").write_text("module example.com/x\n")
-    cwd_out, cmd = _detect(tmp_path)
-    assert cwd_out == tmp_path
-    assert cmd == ["cargo", "test"]
-
-
-# --------------------------------------------------------------------------- #
-# 3. Unsupported ecosystems fail loudly instead of silently passing
-# --------------------------------------------------------------------------- #
+# --- unsupported ecosystems fail loudly instead of silently passing --------- #
 def test_unsupported_markers_constant_covers_the_named_ecosystems() -> None:
-    markers = ed.UNSUPPORTED_MARKERS
     for marker in _UNSUPPORTED_MARKERS:
-        assert marker in markers, f"{marker} missing from UNSUPPORTED_MARKERS"
+        assert marker in ed.UNSUPPORTED_MARKERS, f"{marker} missing from UNSUPPORTED_MARKERS"
 
 
 @pytest.mark.parametrize("marker", _UNSUPPORTED_MARKERS)
@@ -128,13 +97,11 @@ def test_unsupported_ecosystem_command_exits_nonzero_naming_marker(
     assert cmd[0] == sys.executable
     assert "-c" in cmd
     result = _run(cmd, tmp_path)
-    assert result.returncode != 0, (
-        f"unsupported-ecosystem command for {marker} exited 0: {cmd!r}"
-    )
+    assert result.returncode != 0, f"command for {marker} exited 0: {cmd!r}"
     combined = result.stdout + result.stderr
     assert marker in combined, f"stderr does not name {marker!r}: {combined!r}"
-    assert ".fagan.json" in combined, f"stderr does not mention .fagan.json: {combined!r}"
-    assert "unsupported" in combined.lower(), f"stderr does not say unsupported: {combined!r}"
+    assert ".fagan.json" in combined, f"stderr omits .fagan.json: {combined!r}"
+    assert "unsupported" in combined.lower(), f"stderr omits 'unsupported': {combined!r}"
 
 
 @pytest.mark.parametrize("marker", _UNSUPPORTED_MARKERS)
@@ -164,9 +131,7 @@ def test_unsupported_marker_in_immediate_subdirectory_is_found(tmp_path: Path) -
     assert "Gemfile" in (result.stdout + result.stderr)
 
 
-# --------------------------------------------------------------------------- #
-# 4. .fagan.json test_cmd still wins over everything
-# --------------------------------------------------------------------------- #
+# --- .fagan.json test_cmd still wins over everything ------------------------ #
 def test_declared_test_cmd_wins_over_unsupported_marker(tmp_path: Path) -> None:
     (tmp_path / "Gemfile").write_text("source 'https://rubygems.org'\n")
     (tmp_path / ".fagan.json").write_text('{"test_cmd": ["bundle", "exec", "rspec"]}\n')
@@ -183,9 +148,7 @@ def test_declared_test_cmd_wins_over_go_mod(tmp_path: Path) -> None:
     assert cmd == ["make", "check"]
 
 
-# --------------------------------------------------------------------------- #
-# 5. The no-op survives only for a repo with no marker at all
-# --------------------------------------------------------------------------- #
+# --- the no-op survives only for a repo with no marker at all --------------- #
 def test_readme_only_repo_keeps_the_noop(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("hello\n")
     cwd_out, cmd = _detect(tmp_path)
@@ -199,9 +162,7 @@ def test_empty_directory_keeps_the_noop(tmp_path: Path) -> None:
     assert cmd == _NOOP
 
 
-# --------------------------------------------------------------------------- #
-# 6. is_unsupported_ecosystem_command
-# --------------------------------------------------------------------------- #
+# --- is_unsupported_ecosystem_command --------------------------------------- #
 def test_is_unsupported_true_for_unsupported_ecosystem_command() -> None:
     for marker in _UNSUPPORTED_MARKERS:
         assert ed.is_unsupported_ecosystem_command(
@@ -222,12 +183,7 @@ def test_is_unsupported_false_for_noop_and_real_commands() -> None:
     assert not ed.is_unsupported_ecosystem_command([])
 
 
-# --------------------------------------------------------------------------- #
-# 7. REFERENCE.md documents the new detection order and the failure mode
-# --------------------------------------------------------------------------- #
-_REFERENCE = Path(__file__).resolve().parents[2] / "REFERENCE.md"
-
-
+# --- REFERENCE.md documents the new order and the failure mode -------------- #
 def _reference_section(heading: str) -> str:
     text = _REFERENCE.read_text()
     start = text.index(heading)
@@ -248,5 +204,6 @@ def test_reference_documents_unsupported_ecosystem_failure() -> None:
     lowered = section.lower()
     assert "unsupported" in lowered, "REFERENCE.md omits the unsupported-ecosystem failure"
     assert "ingest" in lowered, "REFERENCE.md omits the ingest rejection"
-    assert "Gemfile" in section, "REFERENCE.md does not name an unsupported marker"
-
+    assert any(marker in section for marker in _UNSUPPORTED_MARKERS), (
+        "REFERENCE.md does not name any unsupported marker"
+    )

@@ -45,6 +45,8 @@ _EDIT_TOOLS = frozenset({"create_file", "str_replace", "replace_lines", "restore
 _TEST_COMMAND_TOKENS = (
     "pytest", "py.test", "npm test", "yarn test", "cargo test",
     "go test", "mvn test", "gradlew test", "make test",
+    "mvn verify", "mvn -B verify", "mvnw", "gradle check", "gradlew check",
+    "gradle test", "dotnet test", "pnpm test",
 )
 
 # Facts are prepended to the next dispatch's prompt alongside the diagnosis, so

@@ -874,14 +874,20 @@ suffix.
 ## Test, lint and build commands
 
 Fagan detects how a repo is tested, linted and built from build markers.
-`_test_command_for` checks markers in this order: `pom.xml`, then
-`build.gradle` / `build.gradle.kts`, then `package.json`, then a `Makefile`
+`_test_command_for` checks markers in this order: `pom.xml` (running
+`./mvnw -B verify` when the repo ships a `mvnw` wrapper, else `mvn -B
+verify`), then `build.gradle` / `build.gradle.kts` (running `./gradlew
+check` when a `gradlew` wrapper is present, else `gradle check`), then
+`package.json`, then a `Makefile`
 that declares a `test:` target, then `pyproject.toml` / `setup.py`, then
 `Cargo.toml`, then `go.mod` (`go test ./...`), then any `*.sln` or `*.csproj`
 (`dotnet test`). The repo root (`cwd`) is checked first; if no marker is found
 there, the first immediate subdirectory that has a marker is used. A repo
 with no marker anywhere gets a portable no-op command that exits 0, so the
-test gate never blocks a repo that has nothing to test.
+test gate never blocks a repo that has nothing to test. `verify` and `check`
+are used rather than `test` because they also run the integration tests
+(Maven's Failsafe `*IT` classes and Gradle's `check` lifecycle), which `test`
+alone skips.
 
 ### Unsupported ecosystems
 

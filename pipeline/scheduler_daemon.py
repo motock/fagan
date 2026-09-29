@@ -694,9 +694,7 @@ def _report_env_conflicts() -> None:
         from .config_provenance import read_mcp_server_env, read_plist_env
         plist = read_plist_env()
         mcp = read_mcp_server_env()
-        # Helper to mask secrets using same logic as resolve_env_var
         def _mask(name: str, value: str | None) -> str:
-            # Secret if name contains any of the substrings
             if any(sub in name for sub in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")):
                 return "***"
             return value if value is not None else "<unset>"
@@ -705,7 +703,6 @@ def _report_env_conflicts() -> None:
                 continue
             p_val = plist.get(name)
             m_val = mcp.get(name)
-            # One-sided diff
             if p_val is None or m_val is None:
                 p_str = _mask(name, p_val)
                 m_str = _mask(name, m_val)
@@ -714,7 +711,6 @@ def _report_env_conflicts() -> None:
                     file=sys.stderr,
                 )
                 continue
-            # Both present and equal
             if p_val == m_val:
                 continue
             p_str = _mask(name, p_val)
@@ -724,6 +720,10 @@ def _report_env_conflicts() -> None:
                 file=sys.stderr,
             )
     except Exception as exc:  # noqa: BLE001
+        print(
+            f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
+            file=sys.stderr,
+        )
         print(
             f"scheduler_daemon: WARNING env conflict check failed: {type(exc).__name__}",
             file=sys.stderr,

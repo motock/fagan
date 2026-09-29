@@ -30,8 +30,6 @@ def load_repo_config(repo_root: Path) -> dict | None:
         raise RepoConfigError(f".fagan.json is not a regular file: {path}")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except UnicodeDecodeError as error:
-        raise RepoConfigError(f".fagan.json is not valid UTF-8: {error}") from error
     except (OSError, json.JSONDecodeError) as error:
         raise RepoConfigError(f"invalid JSON in .fagan.json: {error}") from error
     if not isinstance(data, dict):

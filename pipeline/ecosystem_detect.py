@@ -119,9 +119,13 @@ def _venv_python_for(cwd: Path) -> Path | None:
 def _test_command_for(cwd: Path) -> list[str] | None:
     """Return the test command for cwd if a recognized build marker is present."""
     if (cwd / "pom.xml").exists():
-        return ["mvn", "test"]
+        if (cwd / "mvnw").exists():
+            return ["./mvnw", "-B", "verify"]
+        return ["mvn", "-B", "verify"]
     if (cwd / "build.gradle").exists() or (cwd / "build.gradle.kts").exists():
-        return ["./gradlew", "test"]
+        if (cwd / "gradlew").exists():
+            return ["./gradlew", "check"]
+        return ["gradle", "check"]
     if (cwd / "package.json").exists():
         if (cwd / "yarn.lock").exists():
             return ["yarn", "test"]

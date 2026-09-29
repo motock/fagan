@@ -88,6 +88,8 @@ _DIGEST_MAX_CHARS = int(os.environ.get("LOCAL_AGENT_DIGEST_MAX_CHARS", "600"))
 _TEST_COMMAND_MARKERS = (
     "pytest", "npm test", "yarn test", "cargo test", "go test",
     "mvn test", "gradlew test", "gradle test", "make test", "unittest",
+    "mvn verify", "mvn -B verify", "mvnw", "gradle check", "gradlew check",
+    "dotnet test", "pnpm test",
 )
 
 

@@ -15,7 +15,7 @@ Usage:
 
 ::
 
-    .venv/bin/python scripts/local_success_report.py [--window 30] [--plan-dir DIR]
+    .venv/bin/python scripts/local_success_report.py [--window 30] [--plan-dir DIR] [--repo PATH] [--all-repos]
 
 The ``--window`` flag selects how many of the newest stories in the
 population to report; every tier block is computed over that same cohort
@@ -81,11 +81,42 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory containing plan sidecars",
     )
     parser.add_argument(
+        "--repo",
+        type=Path,
+        default=ROOT,
+        help="Restrict to manifests whose repo_root matches PATH (default: this repo).",
+    )
+    parser.add_argument(
+        "--all-repos",
+        action="store_true",
+        help="Ignore the repo filter and report every manifest.",
+    )
+    parser.add_argument(
         "--window",
         type=int,
         default=30,
         help="Size of the rolling window; 0 means all stories",
     )
+    # Repo filter
+    if args.all_repos:
+        repo_filter = None
+    else:
+        repo_filter = Path(args.repo).expanduser().resolve()
+    
+    args = parser.parse_args(argv)
+
+    
+    def _repo_matches(plan: dict) -> bool:
+        if repo_filter is None:
+            return True
+        raw = plan.get("repo_root")
+        if not raw:
+            return False
+        try:
+            return Path(raw).expanduser().resolve() == repo_filter
+        except Exception:
+            return False
+
     args = parser.parse_args(argv)
 
     plan_dir = Path(args.plan_dir).expanduser()

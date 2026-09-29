@@ -174,26 +174,86 @@ def _commit_wip(worktree: str, story_key: str, step: str,
     ).stdout.strip()
 
 
+def _rev_parses(worktree: Path, rev: str) -> bool:
+    """True iff ``rev`` names a commit in the worktree's own repo.
+
+    Raises OSError when git cannot be consulted there at all (no binary, no
+    such cwd) — the caller decides what an unknowable repo means.
+    """
+    if not rev:
+        return False
+    r = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"],
+        check=False, cwd=str(worktree), capture_output=True, text=True,
+    )
+    return r.returncode == 0
+
+
+def _resolve_base_branch(worktree: Path, base_branch: str) -> str:
+    """The branch to diff against, resolved in THIS worktree's own repo.
+
+    Callers pass a base resolved against the orchestrator's process-global
+    repo root, which need not be this worktree's repo. A base that does not
+    exist here makes every new-commits probe answer "not reachable", which
+    reads as "no new commits" for a branch that has plenty — the false fact
+    the overlord then rules on (live 2026-09-29: triage ran under a sentinel
+    repo root, resolved ``main`` for a worktree whose base is ``master``, and
+    reported "0 new commits" for a branch carrying five).
+
+    So: prefer ``base_branch`` when it resolves here, else the worktree's own
+    ``origin/HEAD``. Returns "" when neither resolves, and ``base_branch``
+    unchanged when git cannot be consulted at all — every caller must treat
+    both as "unknown", never as "no commits".
+    """
+    try:
+        if _rev_parses(worktree, base_branch):
+            return base_branch
+        r = subprocess.run(
+            ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            check=False, cwd=str(worktree), capture_output=True, text=True,
+        )
+        raw = (r.stdout or "").strip() if r.returncode == 0 else ""
+        own = raw.split("/", 1)[1] if raw.startswith("origin/") else raw
+        return own if _rev_parses(worktree, own) else ""
+    except OSError:
+        return base_branch
+
+
+def _worktree_new_commits(worktree: Path, story_key: str, base_branch: str) -> tuple[str, str]:
+    """``(state, base)`` for commits on the agent branch beyond ``base``.
+
+    ``state`` is ``"yes"``, ``"no"``, or ``"unknown"``; ``base`` is the branch
+    actually diffed against ("" when none could be resolved). "unknown" is a
+    distinct answer, not a synonym for "no": it says nothing about the branch
+    either way, and no caller may render it as a new-commits fact.
+
+    ``git log <base>..<branch> --oneline`` lists commits reachable from the
+    branch that aren't reachable from <base>; an empty list is a genuine "no".
+    The branch name follows the orchestrator's convention.
+    """
+    base = _resolve_base_branch(worktree, base_branch)
+    if not base:
+        return "unknown", ""
+    branch = f"agent/{story_key.lower()}"
+    r = subprocess.run(
+        ["git", "log", f"{base}..{branch}", "--oneline"],
+        check=False, cwd=str(worktree), capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        return "unknown", base
+    return ("yes" if r.stdout.strip() else "no"), base
+
+
 def _worktree_has_new_commits(worktree: Path, story_key: str, base_branch: str) -> bool:
     """True iff the agent branch has any commits not on base_branch.
 
-    ``git log <base>..HEAD --oneline`` lists commits reachable from HEAD
-    that aren't reachable from <base>. For an empty branch (agent
-    parked without writing code), this list is empty even though the test
-    command would pass against main's untouched suite. That's the
-    false-positive trap this guards against in check_story_status.
-
-    Returns False on any git error — a broken worktree is the
-    orchestrator's problem to surface elsewhere; we'd rather mark a
-    real attempt failed than let a transient git hiccup silently
-    re-dispatch. The branch name follows the same convention as the
-    rest of the orchestrator (line 521 et seq.)."""
-    branch = f"agent/{story_key.lower()}"
-    r = subprocess.run(
-        ["git", "log", f"{base_branch}..{branch}", "--oneline"],
-        check=False, cwd=str(worktree), capture_output=True, text=True,
-    )
-    return r.returncode == 0 and bool(r.stdout.strip())
+    A thin wrapper over :func:`_worktree_new_commits`: only ``"yes"`` is True,
+    so an unresolvable base fails closed exactly like any other git error — a
+    broken worktree is the orchestrator's problem to surface elsewhere; we'd
+    rather mark a real attempt failed than let a transient git hiccup silently
+    re-dispatch.
+    """
+    return _worktree_new_commits(worktree, story_key, base_branch)[0] == "yes"
 
 
 def _worktree_has_non_wip_commits(

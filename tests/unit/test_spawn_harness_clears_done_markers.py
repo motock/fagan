@@ -7,8 +7,10 @@ Contract, exercised through the public ``spawn_harness`` seam:
   spawn happens, so a marker always describes the CURRENT attempt.
 - The removal happens before ``spawn_local`` is called (ordering is graded
   from inside the recorder).
-- Non-dispatch roles leave both markers untouched.
+- Non-dispatch roles leave both markers untouched; the ssh path is untouched.
 - Unrelated worktree files (``agent.log``, ``.agent_done.tmp``) survive.
+- A non-FileNotFoundError OSError propagates (a worktree we cannot write to
+  is a real fault, not a silent skip).
 
 ``pipeline.execution.spawn_local`` is patched to a recorder so no process
 starts, and ``resolve_sandbox`` is pinned to ``"none"`` so docker is never
@@ -34,17 +36,7 @@ def spawn_recorder(monkeypatch):
 
     def fake_spawn_local(cmd, *, cwd, log_path, append, env=None, line_filter=None,
                          _fd_redirect=False):
-        calls.append(
-            {
-                "cmd": list(cmd),
-                "cwd": cwd,
-                "log_path": log_path,
-                "append": append,
-                "env": env,
-                "line_filter": line_filter,
-                "_fd_redirect": _fd_redirect,
-            }
-        )
+        calls.append(cwd)
         return SimpleNamespace(pid=4242, model="")
 
     monkeypatch.setattr(execution, "spawn_local", fake_spawn_local)
@@ -54,11 +46,7 @@ def spawn_recorder(monkeypatch):
 
 def _spawn(cwd, *, role="dispatch"):
     return spawn_harness(
-        ["agent", "run"],
-        cwd=cwd,
-        log_path=cwd / "agent.log",
-        append=True,
-        role=role,
+        ["agent", "run"], cwd=cwd, log_path=cwd / "agent.log", append=True, role=role
     )
 
 
@@ -69,7 +57,7 @@ def _recorder_asserting_marker_gone(monkeypatch, calls, marker):
     def recorder(cmd, *, cwd, log_path, append, env=None, line_filter=None,
                  _fd_redirect=False):
         observed["gone_at_spawn"] = not marker.exists()
-        calls.append({"cwd": cwd})
+        calls.append(cwd)
         return SimpleNamespace(pid=4242, model="")
 
     monkeypatch.setattr(execution, "spawn_local", recorder)
@@ -81,7 +69,6 @@ def test_should_remove_consumed_marker_before_dispatch_spawn(
 ):
     marker = tmp_path / CONSUMED
     marker.write_text("done")
-
     observed = _recorder_asserting_marker_gone(monkeypatch, spawn_recorder, marker)
 
     _spawn(tmp_path)
@@ -95,7 +82,6 @@ def test_should_remove_unconsumed_marker_before_dispatch_spawn(
 ):
     marker = tmp_path / UNCONSUMED
     marker.write_text("done")
-
     observed = _recorder_asserting_marker_gone(monkeypatch, spawn_recorder, marker)
 
     _spawn(tmp_path)
@@ -120,9 +106,9 @@ def test_should_leave_markers_for_non_dispatch_roles(tmp_path, spawn_recorder):
 
     _spawn(tmp_path, role="review")
 
+    assert len(spawn_recorder) == 1
     assert consumed.exists()
     assert unconsumed.exists()
-    assert len(spawn_recorder) == 1
 
 
 def test_should_not_touch_other_worktree_files(tmp_path, spawn_recorder):
@@ -134,20 +120,14 @@ def test_should_not_touch_other_worktree_files(tmp_path, spawn_recorder):
 
     _spawn(tmp_path)
 
-    assert log.exists()
     assert log.read_text() == "previous output"
-    assert tmp_marker.exists()
     assert tmp_marker.read_text() == "in flight"
     assert not (tmp_path / CONSUMED).exists()
 
 
 def test_should_propagate_non_filenotfound_oserror(tmp_path, spawn_recorder):
-    """A worktree we cannot write to is a real fault, not a silent skip.
-
-    A directory in the marker's place makes the removal raise a non-
-    FileNotFoundError OSError, which must propagate out of spawn_harness
-    instead of being swallowed.
-    """
+    """A directory in the marker's place makes removal raise a non-FileNotFound
+    OSError, which must propagate instead of being swallowed."""
     (tmp_path / UNCONSUMED).mkdir()
 
     with pytest.raises(OSError) as excinfo:

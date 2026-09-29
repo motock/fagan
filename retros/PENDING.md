@@ -28,6 +28,18 @@ either a plan or a retro write-up. Remove a line once one exists.
   changes, neither the review gate nor the merge gate compares the PR
   title/commit message against the final diff.
 
+## Abandoned plans
+
+Plans stopped before completion. `mark_story_done` never fires for
+these, so no marker is written automatically. Remove a line once its
+retro is written.
+
+- **bench-test-author** — abandoned 2026-09-27. TA-1 ("Mutation corpus
+  and grader for authored test suites", PR #1020) was closed unmerged:
+  its grader (`tests/benchmark/test_author_grade.py`) was never
+  implemented, and the mutant corpus's requirement labels did not match
+  `spec.json` numbering. Nothing from the plan is on master.
+
 ## Plan completion markers
 
 The entries below are a one-time backfill (2026-08-12) of every
@@ -244,3 +256,10 @@ if a precise date is needed when writing one of these up.
 - plan-summary-reviewer-bounce — completed 2026-09-25, 1 story
 - global-rules-bundle — completed 2026-09-25, 8 stories
 - global-rules-xdg-fix — completed 2026-09-25, 1 story
+- nsfix-ns3a-findings — completed 2026-09-26, 10 stories
+- worktree-runtime-marker-exclusion — completed 2026-09-27, 3 stories
+- repo-root-existence-check — completed 2026-09-27, 1 story
+- bench-arm-window — completed 2026-09-27, 1 story
+- bench-ingest-guard — completed 2026-09-27, 1 story
+- global-rules-opencode-prefix — completed 2026-09-27, 1 story
+- gr-install-syspath — completed 2026-09-28, 1 story

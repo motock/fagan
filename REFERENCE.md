@@ -854,6 +854,43 @@ that sizing and the `sizing_auto_routed` auto-route consume, and it leaves
 
 ---
 
+## Test, lint and build commands
+
+Fagan detects how a repo is tested, linted and built from build markers.
+`_test_command_for` checks markers in this order: `pom.xml`, then
+`build.gradle` / `build.gradle.kts`, then `package.json`, then a `Makefile`
+that declares a `test:` target, then `pyproject.toml` / `setup.py`, then
+`Cargo.toml`. The repo root (`cwd`) is checked first; if no marker is found
+there, the first immediate subdirectory that has a marker is used. A repo
+with no marker anywhere gets a portable no-op command that exits 0, so the
+test gate never blocks a repo that has nothing to test.
+
+### Declaring commands in `.fagan.json`
+
+A repo can override detection by placing a `.fagan.json` file at its root.
+When present, the declared commands win over marker detection. All keys are
+optional; any other top-level key is an error.
+
+- `test_cmd` — list of strings, the command that runs the test suite
+  (e.g. `["mvn", "-B", "verify"]`). Overrides the detected test command; no
+  pytest overrides are applied to it.
+- `test_cwd` — relative directory (inside the repo) the test command runs in
+  (e.g. `"backend"`). Defaults to the repo root.
+- `test_globs` — list of glob strings selecting the test files to run
+  (e.g. `["src/it/**/*.java"]`); validated here, consumed by test scoping.
+- `lint_cmd` — list of strings, the command that lints the repo
+  (e.g. `["./mvnw", "-B", "spotless:check"]`). Overrides lint detection.
+- `build_cmd` — list of strings, the command that builds the repo
+  (e.g. `["./mvnw", "-B", "package", "-DskipTests"]`). Overrides build
+  detection.
+
+An invalid `.fagan.json` (bad JSON, an unknown key, or a malformed value)
+does not fall back to detection: the affected gate fails visibly with the
+reason printed, so the misconfiguration is obvious instead of silently
+ignored.
+
+---
+
 ## Story model pins
 
 A story's `model` may be a Claude tier (`opus | sonnet | haiku`), a

@@ -6,6 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from pipeline.repo_config import (
+    RepoConfigError,
+    invalid_config_command,
+    load_repo_config,
+)
+
 
 def _venv_python_for(cwd: Path) -> Path | None:
     """Locate a project venv interpreter for running pytest, or None.
@@ -98,6 +104,13 @@ def detect_build_command(cwd: Path) -> tuple[Path, list[str]] | None:
     portable no-op instead), because there is no reasonable universal
     fallback for "build" - and, as the 2026-09-16 npm-ENOENT failure showed,
     none for "test" either."""
+    try:
+        config = load_repo_config(cwd)
+    except RepoConfigError as error:
+        return (cwd, invalid_config_command(error))
+    if config is not None and "build_cmd" in config:
+        return (cwd, list(config["build_cmd"]))
+
     cmd = _build_command_for(cwd)
     if cmd is not None:
         return cwd, cmd
@@ -128,6 +141,13 @@ def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
     (callers persist it into the manifest's last_test_check.cmd), so an
     operator can always see that a no-op ran rather than a real suite.
     """
+    try:
+        config = load_repo_config(cwd)
+    except RepoConfigError as error:
+        return (cwd, invalid_config_command(error))
+    if config is not None and "test_cmd" in config:
+        return (cwd / config.get("test_cwd", "."), list(config["test_cmd"]))
+
     cmd = _test_command_for(cwd)
     if cmd is not None:
         return cwd, _apply_pytest_collection_overrides(cmd)
@@ -224,6 +244,13 @@ def detect_lint_command(cwd: Path) -> tuple[Path, list[str]] | None:
     with no recognized lint signal (or a signal but no runnable tool) must
     not be blocked by a lint gate.
     """
+    try:
+        config = load_repo_config(cwd)
+    except RepoConfigError as error:
+        return (cwd, invalid_config_command(error))
+    if config is not None and "lint_cmd" in config:
+        return (cwd, list(config["lint_cmd"]))
+
     cmd = _lint_command_for(cwd)
     return (cwd, cmd) if cmd is not None else None
 

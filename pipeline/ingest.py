@@ -67,8 +67,11 @@ _AUTO_ROUTE_SKIPPED_SUFFIX = (
 # ``/``, the first character not ``/`` or ``.``, and the last segment shaped
 # ``name.ext``. Deliberately language-agnostic (LAG-8): any
 # ``dir/.../name.ext`` counts, not just the old hard-coded
-# ``app|pipeline|static|scripts|tests|docs|src|systemd/`` prefixes. Test paths
-# are filtered out afterwards by ``_is_test_path`` (LAG-2).
+# ``app|pipeline|static|scripts|tests|docs|src|systemd/`` prefixes. Because
+# this regex now also matches test files in any language (``internal/foo_test.go``,
+# ``src/main/java/com/x/FooTest.java``, ...), the regex-derived branch of
+# ``_story_sizing_warning`` filters them with ``_is_test_path`` (LAG-2), the
+# same exclusion the declared-``files`` branch already applies.
 _BACKTICK_REPO_PATH_RE = re.compile(
     r"`((?!\.|/)[\w.\-]+(?:/[\w.\-]+)*/[\w.\-]+\.[\w.\-]+)`"
 )
@@ -120,11 +123,7 @@ def _story_sizing_warning(story: dict, repo_root: str) -> str | None:
         size_paths = [p for p in paths if not _is_test_path(p)]
     else:
         production_paths = [
-            p
-            for p in regex_paths
-            if not p.split("/")[-1].startswith("test_")
-            and "/test" not in p
-            and not p.endswith(".md")
+            p for p in regex_paths if not _is_test_path(p) and not p.endswith(".md")
         ]
         size_paths = production_paths
     reasons = []

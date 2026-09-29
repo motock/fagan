@@ -509,7 +509,8 @@ def compose_rebriefed_instructions(agent_instructions: str, diagnosis: str | Non
         return agent_instructions
 
     base = agent_instructions
-    existing = base.find(DIAGNOSIS_HEADER)
+    match = re.search('^' + re.escape(DIAGNOSIS_HEADER), base, re.MULTILINE)
+    existing = match.start() if match else -1
     if existing != -1:
         base = base[:existing].rstrip()
 

@@ -33,25 +33,45 @@ def unsupported_ecosystem_command(marker: str) -> list[str]:
     return [sys.executable, "-c", f"import sys; sys.exit({message!r})"]
 
 
+def fail_loud_exit_message(cmd: list[str]) -> str | None:
+    """Return the operator-facing exit message embedded in cmd, or None.
+
+    Both fail-loud producers - ``unsupported_ecosystem_command`` here and
+    ``repo_config.invalid_config_command`` - build
+    ``[sys.executable, "-c", "import sys; sys.exit(<message!r>)"]``; this
+    unpacks the message structurally so a caller (ingest) can tell the two
+    producers apart without re-deriving the repr. Returns None for anything
+    else: a real test command, the no-op, or a non-command.
+    """
+    if not isinstance(cmd, list) or len(cmd) != 3:
+        return None
+    if cmd[0] != sys.executable or cmd[1] != "-c":
+        return None
+    body = cmd[2]
+    prefix, suffix = "import sys; sys.exit(", ")"
+    if not isinstance(body, str) or not (body.startswith(prefix) and body.endswith(suffix)):
+        return None
+    try:
+        message = ast.literal_eval(body[len(prefix):-1])
+    except (ValueError, SyntaxError):
+        # ValueError: not a Python literal. SyntaxError: a truncated/garbled
+        # body that is not code this module produced.
+        return None
+    if not isinstance(message, str) or not message.startswith("fagan: "):
+        return None
+    return message
+
+
 def is_unsupported_ecosystem_command(cmd: list[str]) -> bool:
     """True when cmd is exactly a command produced by
     unsupported_ecosystem_command or repo_config.invalid_config_command - i.e.
     a command whose only job is to exit non-zero with an operator-facing
     reason, so callers (ingest) can reject a plan instead of dispatching work
-    against a gate no executor can satisfy."""
-    if not isinstance(cmd, list) or len(cmd) != 3:
-        return False
-    if cmd[0] != sys.executable or cmd[1] != "-c":
-        return False
-    body = cmd[2]
-    prefix, suffix = "import sys; sys.exit(", ")"
-    if not isinstance(body, str) or not (body.startswith(prefix) and body.endswith(suffix)):
-        return False
-    try:
-        message = ast.literal_eval(body[len(prefix):-1])
-    except ValueError:
-        return False
-    if not isinstance(message, str) or not message.startswith("fagan: "):
+    against a gate no executor can satisfy. Callers that must name the actual
+    reason (an invalid .fagan.json is not an unsupported ecosystem) should use
+    fail_loud_exit_message and inspect the message."""
+    message = fail_loud_exit_message(cmd)
+    if message is None:
         return False
     if message.startswith("fagan: invalid .fagan.json: "):
         return True
@@ -193,6 +213,14 @@ def detect_test_command(cwd: Path) -> tuple[Path, list[str]]:
     a repo that has nothing to test. The no-op stays visible in the record
     (callers persist it into the manifest's last_test_check.cmd), so an
     operator can always see that a no-op ran rather than a real suite.
+
+    Exception to that no-op: if cwd or an immediate subdirectory holds one of
+    UNSUPPORTED_MARKERS (an ecosystem fagan has no test command for - Ruby,
+    PHP, Swift, Elixir), the returned command instead exits non-zero naming
+    the marker and pointing at the fix (declare ``test_cmd`` in
+    ``.fagan.json``), so such a repo fails visibly rather than silently
+    passing a gate that ran nothing. Only a repo with none of the recognised
+    or unsupported markers keeps the no-op.
     """
     try:
         config = load_repo_config(cwd)

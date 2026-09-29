@@ -106,3 +106,32 @@ def test_readme_only_repo_root_is_not_rejected(
         f"README-only repo_root was rejected by the unsupported-ecosystem check: {error!r}"
     )
     assert result["ok"] is True, f"README-only repo_root was rejected: {result!r}"
+
+
+# Reviewer follow-up: is_unsupported_ecosystem_command is also True for
+# repo_config.invalid_config_command, so a repo_root with a MALFORMED
+# .fagan.json must be rejected naming the actual RepoConfigError reason - not
+# "unsupported ecosystem" with a marker that does not exist.
+def test_plan_with_malformed_fagan_json_names_the_real_reason(
+    plan_dir: Path, provider: _RecordingProvider, tmp_path: Path
+) -> None:
+    repo = tmp_path / "broken_config_repo"
+    repo.mkdir()
+    (repo / "Gemfile").write_text("source 'https://rubygems.org'\n")
+    (repo / ".fagan.json").write_text('{"test_cmd": "not-a-list"}\n')
+    _write_plan(plan_dir, "broken-config-plan", repo)
+
+    result = ingest_mod._ingest_plan_impl("broken-config-plan")
+
+    assert result["ok"] is False, f"malformed .fagan.json plan was not rejected: {result!r}"
+    error = result["error"]
+    assert "unsupported ecosystem" not in error, (
+        f"malformed .fagan.json misreported as an unsupported ecosystem: {error!r}"
+    )
+    assert "invalid .fagan.json" in error, (
+        f"error does not name the actual .fagan.json problem: {error!r}"
+    )
+    assert "must be a non-empty list" in error, (
+        f"error drops the real RepoConfigError text: {error!r}"
+    )
+    assert provider.calls == [], f"side effects ran before rejection: {provider.calls!r}"

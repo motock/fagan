@@ -135,6 +135,28 @@ def _snapshot_agent_log(plan_name: str, story_key: str, worktree: Any) -> str | 
         return None
 
 
+def _pid_started_after_dispatch(pid: int, dispatched_at: str | None) -> bool:
+    if not dispatched_at:
+        return False
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        out = proc.stdout.strip()
+        if not out:
+            return False
+        started = datetime.strptime(out, "%a %b %d %H:%M:%S %Y").astimezone(timezone.utc)
+        dispatched = datetime.fromisoformat(dispatched_at)
+        return (started - dispatched).total_seconds() > 5
+    except Exception:  # noqa: BLE001 - unknown identity keeps today's kill behavior
+        return False
+
+
 def _terminate_and_checkpoint(
     manifest: dict[str, Any], manifest_path: Path, plan_name: str, story_key: str,
     story: dict[str, Any], *, pid: int, step: str, summary: str,

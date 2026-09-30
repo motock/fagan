@@ -46,6 +46,7 @@ import subprocess
 import sys
 import time
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -110,6 +111,7 @@ from scripts.local_agent_oracle_repair import (  # noqa: F401 (re-exported: run_
     _try_repair_indentation,
     _var_drop_is_confirmed_loss,
 )
+from scripts.local_agent_oracle_tamper import restore_tampered_oracle_files_impl
 
 # _answer_orphaned_calls, _DIGEST_MAX_CHARS, _dropped_span_digest,
 # _evict_tool_outputs, _EVICT_HEAD_CHARS, _EVICT_KEEP_RECENT,
@@ -423,25 +425,7 @@ def _restore_tampered_oracle_files() -> str:
     """Restore any acceptance path whose on-disk content no longer matches
     its snapshot. Returns a warning to append to the bash tool's result, or
     "" if nothing was tampered with."""
-    restored = []
-    for rel, original in _ORACLE_SNAPSHOT.items():
-        path = CWD / rel
-        current = path.read_text() if path.exists() else None
-        if current != original:
-            if original is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(original)
-            restored.append(rel)
-    if not restored:
-        return ""
-    names = ", ".join(restored)
-    return (f"\n\nWARNING: {names} is the read-only acceptance suite and was "
-            f"restored after being modified via bash. It must NOT be edited "
-            f"or deleted by any means, including shell commands. Change the "
-            f"implementation file instead.")
-
+    return restore_tampered_oracle_files_impl(_ORACLE_SNAPSHOT, CWD)
 
 
 # Paths successfully written via create_file THIS process run - lets the
@@ -967,10 +951,7 @@ def _main_impl() -> int:
     return 2
 
 
-from scripts.local_agent_oracle_done_marker import (  # noqa: F401 (_DONE_REASONS re-exported for tests)
-    _DONE_REASONS,
-    write_done_marker_impl,
-)
+_DONE_REASONS = {0: "done", 1: "error", 2: "parked", 3: "infra_failure"}
 
 
 def main() -> int:
@@ -990,7 +971,24 @@ def write_done_marker(rc: int) -> None:
     marker failure never changes the run's exit code. Idempotent-safe: main()
     calls this again on the way out, and a non-zero rc must never downgrade an
     already-written done (rc 0) marker."""
-    write_done_marker_impl(CWD, rc)
+    try:
+        existing_path = CWD / ".agent_done"
+        existing = json.loads(existing_path.read_text(encoding="utf-8"))
+        if isinstance(existing, dict) and existing.get("exit_code") == 0 and rc != 0:
+            return  # keep the proof of completion; a deliberate skip is not a failure
+    except (OSError, ValueError):  # no readable done marker: fall through and write
+        pass
+    try:
+        marker = {
+            "reason": _DONE_REASONS.get(rc, "error"),
+            "exit_code": rc,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp = CWD / ".agent_done.tmp"
+        tmp.write_text(json.dumps(marker) + "\n", encoding="utf-8")
+        os.replace(tmp, CWD / ".agent_done")
+    except Exception as e:  # noqa: BLE001 - a marker failure must never mask the run's exit code
+        print(f"[warn] .agent_done marker not written: {e}", flush=True)
 
 
 if __name__ == "__main__":
